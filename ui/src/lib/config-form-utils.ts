@@ -3,9 +3,13 @@ import type { ConfigUiHint, ConfigUiHints } from "../api/types.ts";
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import { translateActive } from "../i18n/lib/translate.ts";
 
+export function isEnvPlaceholder(value: string): boolean {
+  return /^\$\{[^}]*\}$/.test(value.trim());
+}
+
 export function isSensitiveLeafValue(value: unknown): boolean {
   if (typeof value === "string") {
-    return value.trim().length > 0 && !/^\$\{[^}]*\}$/.test(value.trim());
+    return value.trim().length > 0 && !isEnvPlaceholder(value);
   }
   return value !== undefined && value !== null;
 }
@@ -153,90 +157,37 @@ export function containsRedactedSentinel(value: unknown): boolean {
   const children = Array.isArray(value) ? value : isRecord(value) ? Object.values(value) : [];
   return value === REDACTED_SENTINEL || children.some(containsRedactedSentinel);
 }
-const OMIT_VALUE = Symbol("omit-redacted-config-value");
-
-function sanitizeRedactedValue(params: {
-  value: unknown;
-  originalFormValue: unknown;
-  originalRawValue: unknown;
-  originalRawPathExists: boolean;
-  canOmit: boolean;
-}): unknown {
-  if (params.value === REDACTED_SENTINEL) {
-    return params.originalFormValue === REDACTED_SENTINEL &&
-      !params.originalRawPathExists &&
-      params.canOmit
-      ? OMIT_VALUE
-      : params.value;
+function pruneEmptyConfigValue(value: unknown, originalValue: unknown): unknown {
+  if (Array.isArray(value)) {
+    const originalItems = Array.isArray(originalValue) ? originalValue : [];
+    return value.map((item, index) => pruneEmptyConfigValue(item, originalItems[index]));
   }
-
-  if (Array.isArray(params.value)) {
-    const originalFormItems = Array.isArray(params.originalFormValue)
-      ? params.originalFormValue
-      : [];
-    const originalRawItems = Array.isArray(params.originalRawValue) ? params.originalRawValue : [];
-    return params.value.map((item, index) =>
-      sanitizeRedactedValue({
-        value: item,
-        originalFormValue: originalFormItems[index],
-        originalRawValue: originalRawItems[index],
-        originalRawPathExists: index in originalRawItems,
-        canOmit: false,
-      }),
-    );
+  if (!isRecord(value)) {
+    return value;
   }
-
-  if (!isRecord(params.value)) {
-    return params.value;
-  }
-
-  const originalFormRecord = isRecord(params.originalFormValue) ? params.originalFormValue : null;
-  const originalRawRecord = isRecord(params.originalRawValue) ? params.originalRawValue : null;
+  const original = isRecord(originalValue) ? originalValue : null;
   const next: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(params.value)) {
-    const originalFormValue =
-      originalFormRecord != null && Object.hasOwn(originalFormRecord, key)
-        ? originalFormRecord[key]
-        : undefined;
-    const originalRawPathExists =
-      originalRawRecord != null && Object.hasOwn(originalRawRecord, key);
-    const sanitized = sanitizeRedactedValue({
-      value: item,
-      originalFormValue,
-      originalRawValue: originalRawPathExists ? originalRawRecord?.[key] : undefined,
-      originalRawPathExists,
-      canOmit: true,
-    });
-    if (sanitized !== OMIT_VALUE) {
-      next[key] = sanitized;
+  for (const [key, item] of Object.entries(value)) {
+    const existed = original !== null && Object.hasOwn(original, key);
+    const pruned = pruneEmptyConfigValue(item, existed ? original[key] : undefined);
+    if (!existed && isRecord(pruned) && Object.keys(pruned).length === 0) {
+      continue;
     }
-  }
-
-  if (params.canOmit && Object.keys(next).length === 0 && !params.originalRawPathExists) {
-    return OMIT_VALUE;
+    next[key] = pruned;
   }
   return next;
 }
 
-export function sanitizeRedactedFormForSubmit(
+/** Prune newly empty objects without removing authored empties or array positions. */
+export function pruneEmptyConfigForm(
   form: Record<string, unknown>,
-  originalForm: Record<string, unknown> | null | undefined,
-  parsedOriginalRaw: Record<string, unknown> | null,
+  original: Record<string, unknown> | null | undefined,
 ): Record<string, unknown> {
-  // Callers parse the original raw once at snapshot ingestion so this submit
-  // path stays synchronous and never races the lazy JSON5 parser.
-  if (!originalForm || !parsedOriginalRaw) {
+  if (!original) {
     return form;
   }
-
-  const sanitized = sanitizeRedactedValue({
-    value: form,
-    originalFormValue: originalForm,
-    originalRawValue: parsedOriginalRaw,
-    originalRawPathExists: true,
-    canOmit: false,
-  });
-  return isRecord(sanitized) ? sanitized : form;
+  const pruned = pruneEmptyConfigValue(form, original);
+  return isRecord(pruned) ? pruned : form;
 }
 
 const FORBIDDEN_KEYS = new Set(["__proto__", "prototype", "constructor"]);

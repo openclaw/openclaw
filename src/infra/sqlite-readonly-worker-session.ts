@@ -5,7 +5,9 @@ import { BrokerChild } from "../process/spawn-broker/child.js";
 import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { recordChildProcessSpawn } from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
+import { tryProcessCwd } from "./safe-cwd.js";
 import {
   createSqliteAuthTransferReceiver,
   createSqliteOperationTransferReceiver,
@@ -74,6 +76,7 @@ export function createSqliteReadOnlyWorkerSession(
 ): SqliteReadOnlyWorkerSession {
   const env = { ...host.env };
   const cwd = host.cwd;
+  const executable = process.execPath;
   const transport: SqliteReadOnlyWorkerLaunch["transport"] =
     host.transport.kind === "broker"
       ? { kind: "broker", owner: host.transport.owner }
@@ -82,14 +85,15 @@ export function createSqliteReadOnlyWorkerSession(
   const argv = [...host.argv];
   const spawnOptions: SpawnOptions = {
     env,
-    cwd,
+    // Inheriting the current directory avoids a redundant chdir that can fail under sudo -u.
+    ...(transport.kind === "native" && cwd === tryProcessCwd() ? {} : { cwd }),
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   };
   const child: ChildProcess =
     transport.kind === "broker"
-      ? transport.owner.spawn(process.execPath, argv, spawnOptions)
-      : spawn(process.execPath, argv, spawnOptions);
-  recordChildProcessSpawn(process.execPath, child);
+      ? transport.owner.spawn(executable, argv, spawnOptions)
+      : spawn(executable, argv, spawnOptions);
+  recordChildProcessSpawn(executable, child);
   let retired = false;
   let sequence = 0;
   let pendingOperation: Promise<SqliteReadOnlyWorkerValue> | undefined;
@@ -143,7 +147,12 @@ export function createSqliteReadOnlyWorkerSession(
         ? error
         : Object.assign(
             new Error(
-              `SQLite read-only worker failed to start (executable ${process.execPath}, cwd ${cwd}): ${error.message}`,
+              [
+                ["EACCES", "ENOENT", "EPERM"].includes(error.code ?? "")
+                  ? `SQLite read-only worker runtime binary not executable: ${executable} (${error.code}, cwd ${cwd}). Check runtime execute permissions and access to the working directory`
+                  : `SQLite read-only worker failed to start (executable ${executable}, cwd ${cwd})`,
+                error.message,
+              ].join(": "),
               { cause: error },
             ),
             { code: error.code },
@@ -156,6 +165,7 @@ export function createSqliteReadOnlyWorkerSession(
     if (pending) {
       const request = pending;
       pending = undefined;
+      pendingOperation = undefined;
       request.cleanup();
       request.reject(
         request.failure ??
@@ -225,12 +235,13 @@ export function createSqliteReadOnlyWorkerSession(
         value = reply.value;
       } else {
         value = readSqliteReadOnlyWorkerValue(
-          { stdout: JSON.stringify(message.result), stderr },
+          { kind: "launched", stdout: JSON.stringify(message.result), stderr, status: 0 },
           pending.mode,
         );
       }
       const request = pending;
       pending = undefined;
+      pendingOperation = undefined;
       request.cleanup();
       request.resolve(value);
     } catch (error) {
@@ -243,6 +254,7 @@ export function createSqliteReadOnlyWorkerSession(
       ) {
         const request = pending;
         pending = undefined;
+        pendingOperation = undefined;
         request.cleanup();
         request.reject(error);
         return;
@@ -261,13 +273,15 @@ export function createSqliteReadOnlyWorkerSession(
       return child instanceof BrokerChild ? child.notStarted : nativeClosed && !spawned;
     },
     createNativeReplacement() {
-      return createSqliteReadOnlyWorkerSession({
-        ...host,
-        env,
-        cwd,
-        argv,
-        transport: { kind: "native" },
-      });
+      return runInDetachedAsyncContext(() =>
+        createSqliteReadOnlyWorkerSession({
+          ...host,
+          env,
+          cwd,
+          argv,
+          transport: { kind: "native" },
+        }),
+      );
     },
     compatible(launch: SqliteReadOnlyWorkerLaunch) {
       return !retired && isSameSqliteReadOnlyWorkerLaunch(capturedLaunch, launch);

@@ -8,7 +8,7 @@ import {
 import type { LifecycleControllerFixtureOptions } from "./subagent-registry-lifecycle-controller.test-support.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function registerTerminalStateSignalAuthorityTests({
@@ -125,11 +125,13 @@ export function registerTerminalStateSignalAuthorityTests({
           await expect(completion).rejects.toMatchObject({ outcome: "not-committed" });
         }
         expect(observed).toBe(true);
-        const events = sessionStateEvents.listSessionStateEventsSince(
-          entry.childSessionKey,
-          "main",
-          0,
-          200,
+        const events = (
+          await sessionStateEvents.listSessionStateEventsSince(
+            entry.childSessionKey,
+            "main",
+            0,
+            200,
+          )
         ).events;
         const stored = loadSubagentRegistryFromSqlite().get(entry.runId);
         if (change === "none" || serializedSuccessor) {

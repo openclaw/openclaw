@@ -25,7 +25,6 @@ function resolveNonNegativeTokenCount(value: number | undefined): number | undef
   return resolved === undefined ? undefined : Math.floor(resolved);
 }
 
-/** Persists usage accounting and selected runtime metadata to the session store. */
 export async function persistSessionUsageUpdate(params: {
   agentId?: string;
   storePath?: string;
@@ -203,15 +202,15 @@ export async function persistSessionUsageUpdate(params: {
                 },
               }
             : {}),
-          ...(authorize
-            ? {
-                assertCommitAllowed: () => {
+          workerGuard: {
+            assertCurrent: authorize
+              ? () => {
                   if (!authorize()) {
                     throw new Error("session usage accounting authority revoked");
                   }
-                },
-              }
-            : {}),
+                }
+              : undefined,
+          },
         },
       );
     } catch (err) {

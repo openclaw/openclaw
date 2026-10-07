@@ -10,6 +10,7 @@ import {
   readSessionEntryInWorker,
   withSessionStoreReaderInWorker,
 } from "./session-entry-read-runtime.js";
+import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import { readMemorySessionTargets } from "./session-memory-targets.js";
 import type { MemorySessionSelectors } from "./session-memory-targets.types.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
@@ -97,6 +98,48 @@ export async function resolveMemorySessionTargetsInWorker(input: MemorySessionSe
     return [];
   }
   const storePath = resolveSessionStorePathForScope(scope);
+  const binding = captureIncognitoSessionBinding({ ...scope, storePath });
+  if (binding) {
+    const { actor } = binding;
+    const sessions = actor.sessions.deadlines().map(({ sessionKey, sessionId }) => ({
+      sessionKey,
+      sessionId,
+      lifecycleRevision: actor.sessions.readSharing(sessionKey)?.entry?.lifecycleRevision,
+    }));
+    const claims = new Map(
+      sessions.map(({ sessionKey }) => [sessionKey, actor.sessions.captureCurrent(sessionKey)]),
+    );
+    const snapshots = new Map<string, ReturnType<typeof actor.sessions.captureSnapshot>>();
+    const assertCurrent = () => {
+      binding.admissionSignal?.throwIfAborted();
+      actor.assertReadable();
+      const current = actor.sessions.deadlines();
+      if (
+        current.length !== claims.size ||
+        current.some(({ sessionKey }) => !claims.has(sessionKey))
+      ) {
+        throw new Error("Incognito Memory selection changed during preparation");
+      }
+      for (const [key, claim] of claims) {
+        claim.assertCurrent();
+        snapshots.get(key)?.assertCurrent();
+      }
+    };
+    const result = await actor.sessions.withSharedState(() =>
+      actor.sessions.history(
+        { assertCurrent },
+        { type: "session.history.memory-targets", input: { selectors: scope, sessions } },
+        binding.admissionSignal,
+        () => {
+          for (const key of claims.keys()) {
+            snapshots.set(key, actor.sessions.captureSnapshot(key));
+          }
+        },
+      ),
+    );
+    assertCurrent();
+    return result;
+  }
   if (isIncognitoOpenClawAgentSqlitePath(storePath, scope)) {
     return readMemorySessionTargets({ ...scope, storePath });
   }

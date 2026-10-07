@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { readAgentRosterProperty } from "../agents/agent-roster.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
-import { readConfigFileSnapshot } from "../config/config.js";
+import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/config.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { saveCronJobsStore } from "../cron/store.js";
@@ -53,8 +54,20 @@ describe("Doctor workspace persistence", () => {
               },
             },
           },
+          models: {
+            providers: {
+              custom: {
+                api: "openai-codex-responses",
+                models: [{ id: "legacy-model", api: "openai-codex-responses" }],
+              },
+            },
+          },
           session: { typingMode: "thinking", parentForkMaxTokens: 200_000 },
-          browser: { relayBindHost: "127.0.0.1", ssrfPolicy: { allowPrivateNetwork: true } },
+          browser: {
+            relayBindHost: "127.0.0.1",
+            ssrfPolicy: { allowPrivateNetwork: true },
+            profiles: { relay: { driver: "extension", cdpUrl: "http://127.0.0.1:18792" } },
+          },
           messages: {
             queue: {
               mode: "queue",
@@ -86,6 +99,9 @@ describe("Doctor workspace persistence", () => {
           "agents.entries.ops.subagents.model.timeoutMs",
           "parentForkMaxTokens",
           "relayBindHost",
+          "browser.profiles.relay.cdpUrl",
+          "models.providers.custom.api",
+          "models.providers.custom.models.0.api",
           "allowPrivateNetwork",
           "messages.queue.mode",
           "messages.queue.byChannel.discord",
@@ -178,6 +194,7 @@ describe("Doctor workspace persistence", () => {
               research: { memory: { search: { provider: "auto" } } },
             };
             const configPath = await writeOpenClawConfig(home, {
+              meta: { migrations: { webhookListeners: true } },
               agents: {
                 ownership: "explicit",
                 defaults: {
@@ -267,7 +284,10 @@ describe("Doctor workspace persistence", () => {
             });
             const before = await readConfigFileSnapshot();
             expect(before.valid).toBe(false);
-            expect(before.sourceConfig.agents?.list?.[0]?.id).toBe(legacyId);
+            expect(readAgentRosterProperty(before.sourceConfig)).toEqual({
+              kind: "list",
+              value: [{ id: legacyId }, { id: "other" }],
+            });
 
             const ctx = await prepareDoctorContext(configPath);
             await runInitialConfigWriteHealth(ctx);
@@ -305,7 +325,7 @@ describe("Doctor workspace persistence", () => {
         });
         const before = await readConfigFileSnapshot();
         expect(before.valid).toBe(false);
-        expect(before.sourceConfig.agents?.list).toHaveLength(1);
+        expect(readAgentRosterProperty(before.sourceConfig)?.value).toHaveLength(1);
 
         const ctx = await prepareDoctorContext(configPath);
         expect(ctx.configResult.shouldWriteConfig).toBe(true);
@@ -426,4 +446,48 @@ describe("Doctor workspace persistence", () => {
       );
     });
   });
+
+  it.each(["parsed", "prefixed"])(
+    "refuses retired Talk selectors in %s config before recovery",
+    async (kind) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+          const canonical = {
+            talk: { realtime: { provider: "openai", speakerVoice: "marin" } },
+            gateway: { mode: "local" },
+            plugins: { enabled: false },
+          };
+          const configPath = await writeOpenClawConfig(home, canonical);
+          expect(await promoteConfigSnapshotToLastKnownGood(await readConfigFileSnapshot())).toBe(
+            true,
+          );
+          const backup = await fs.readFile(configPath, "utf8");
+          await fs.writeFile(`${configPath}.bak`, backup);
+          const retired = {
+            ...canonical,
+            talk: {
+              ...canonical.talk,
+              mode: "realtime",
+              transport: "gateway-relay",
+              brain: "agent-consult",
+              model: "gpt-realtime",
+              voice: "alloy",
+            },
+          };
+          const original = `${kind === "prefixed" ? "Found and updated: False\n" : ""}${JSON.stringify(retired)}\n`;
+          await fs.writeFile(configPath, original);
+          await expect
+            .soft(async () => {
+              await runInitialConfigWriteHealth(await prepareDoctorContext(configPath));
+            })
+            .rejects.toThrow(
+              /talk\.mode, talk\.transport, talk\.brain, talk\.model, talk\.voice[\s\S]*2026\.9\.5[\s\S]*openclaw doctor --fix/,
+            );
+          expect.soft(await fs.readFile(configPath, "utf8")).toBe(original);
+          expect.soft(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(backup);
+          expect.soft(await fs.readFile(`${configPath}.last-good`, "utf8")).toBe(backup);
+        });
+      });
+    },
+  );
 });

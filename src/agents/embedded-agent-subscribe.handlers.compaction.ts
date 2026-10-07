@@ -1,8 +1,3 @@
-/**
- * Handles embedded-agent compaction lifecycle events. The handlers pause
- * liveness, emit agent events, run hooks, reconcile persisted counts, and
- * clear stale usage after compaction rewrites history.
- */
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { recordSessionCompacted } from "../sessions/session-state-events.js";
@@ -90,7 +85,6 @@ function runBestEffortCompactionHook(
   });
 }
 
-/** Handles compaction start events from an embedded agent session. */
 export function handleCompactionStart(
   ctx: EmbeddedAgentSubscribeContext,
   evt: CompactionStartEvent,
@@ -113,7 +107,6 @@ export function handleCompactionStart(
   runBestEffortCompactionHook(ctx, "before");
 }
 
-/** Handles compaction completion, retry, and incomplete events. */
 export function handleCompactionEnd(
   ctx: EmbeddedAgentSubscribeContext,
   evt: SessionCompactionEndEvent,
@@ -124,12 +117,13 @@ export function handleCompactionEnd(
   ctx.state.compactionInFlight = false;
   const completed = outcome.status === "completed";
   const willRetry = completed && outcome.willRetry;
+  let recording: Promise<void> | undefined;
   if (completed) {
     ctx.incrementCompactionCount();
     ctx.noteCompactionTokensAfter(outcome.tokensAfter);
     const observedCompactionCount = ctx.getCompactionCount();
     if (ctx.params.sessionPersistence !== "detached") {
-      recordSessionCompacted({
+      recording = recordSessionCompacted({
         sessionKey: ctx.params.sessionKey,
         operationId: `${ctx.params.runId}:${observedCompactionCount}`,
         agentId: ctx.params.agentId,
@@ -232,4 +226,5 @@ export function handleCompactionEnd(
   if (completed && !willRetry) {
     runBestEffortCompactionHook(ctx, "after");
   }
+  return recording;
 }

@@ -13,10 +13,10 @@ describe("promotion file budget resolution", () => {
   const cfg = {
     agents: {
       defaults: { bootstrapMaxChars: 9_500 },
-      list: [
-        { id: "alpha", bootstrapMaxChars: 12_000 },
-        { id: "beta", bootstrapMaxChars: 9_000 },
-      ],
+      entries: {
+        alpha: { bootstrapMaxChars: 12_000 },
+        beta: { bootstrapMaxChars: 9_000 },
+      },
     },
   } as OpenClawConfig;
 

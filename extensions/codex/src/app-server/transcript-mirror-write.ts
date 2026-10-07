@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { withCodexSessionTranscriptMirrorWriteLock } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import {
+  composeSessionTranscriptWriteAssertion,
   publishSessionTranscriptUpdateByIdentity,
   type TranscriptEntryAnchor,
   type SessionTranscriptTargetParams,
@@ -62,6 +63,7 @@ export async function mirror(params: {
   idempotencyScope?: string;
   runId?: string;
   runMirrorIdentityPrefix?: string;
+  onAssistantMessageOwned?: (mirrorIdentity: string) => void;
   terminalAssistantOwner?: {
     mirrorIdentity: string;
     runId: string;
@@ -101,10 +103,10 @@ export async function mirror(params: {
   const transcriptTarget = resolveCodexMirrorTranscriptTarget(params);
   // A queued terminal must still match its prepared outcome before committing.
   // Publication may trigger Stop afterward; that cannot erase a committed receipt.
-  const assertWritable = () => {
-    params.assertCurrent?.();
-    params.assertWriteCurrent?.();
-  };
+  const assertWritable = composeSessionTranscriptWriteAssertion([
+    params.assertCurrent,
+    params.assertWriteCurrent,
+  ]);
   assertWritable();
   const mirrorBatch = await withCodexSessionTranscriptMirrorWriteLock(
     { ...transcriptTarget, config: params.config },
@@ -117,6 +119,10 @@ export async function mirror(params: {
         messageSeq?: number;
       }> = [];
       const nextAssistantMirrorIdentitiesOwned = new Set<string>();
+      const recordAssistantOwnership = (identity: string) => {
+        nextAssistantMirrorIdentitiesOwned.add(identity);
+        params.onAssistantMessageOwned?.(identity);
+      };
       const nextAnchorsByMirrorIdentity = new Map<string, TranscriptEntryAnchor>();
       const nextMessagesPresent: MirroredAgentMessage[] = [];
       const nextUserMessageReceipts: MirroredUserMessageReceipt[] = [];
@@ -167,7 +173,7 @@ export async function mirror(params: {
             nextAnchorsByMirrorIdentity.set(dedupeIdentity, persistedAnchor);
           }
           if (message.role === "assistant") {
-            nextAssistantMirrorIdentitiesOwned.add(dedupeIdentity);
+            recordAssistantOwnership(dedupeIdentity);
           }
           continue;
         }
@@ -205,7 +211,7 @@ export async function mirror(params: {
             // A transcript hook deliberately blocked this logical assistant row.
             // Treat that as an authoritative persistence decision so delivery
             // does not bypass the hook with a fallback mirror.
-            nextAssistantMirrorIdentitiesOwned.add(dedupeIdentity);
+            recordAssistantOwnership(dedupeIdentity);
           }
           continue;
         }
@@ -261,10 +267,10 @@ export async function mirror(params: {
           message: messageToAppend,
           ...(params.assertCurrent || params.assertWriteCurrent
             ? {
-                prepareMessageAfterIdempotencyCheck: (preparedMessage: typeof messageToAppend) => {
-                  assertWritable();
-                  return preparedMessage;
-                },
+                prepareMessageAfterIdempotencyCheckAsync: async (
+                  preparedMessage: typeof messageToAppend,
+                ) => preparedMessage,
+                beforeFreshMessageCommit: assertWritable,
               }
             : {}),
           // Preliminary facts avoid hooks and payload work on normal retries.
@@ -272,6 +278,10 @@ export async function mirror(params: {
           idempotencyLookup: "scan",
           cwd: params.cwd,
         });
+        // A committed candidate remains owned even if the post-write authority check fails.
+        if (appended && message.role === "assistant") {
+          recordAssistantOwnership(dedupeIdentity);
+        }
         params.assertCurrent?.();
         if (!appended) {
           continue;
@@ -282,9 +292,6 @@ export async function mirror(params: {
           if (idempotencyKey) {
             mirrorFacts.messagesByIdempotencyKey.set(idempotencyKey, appendedMessage);
           }
-        }
-        if (message.role === "assistant") {
-          nextAssistantMirrorIdentitiesOwned.add(dedupeIdentity);
         }
         if (appended.anchor) {
           nextAnchorsByMirrorIdentity.set(dedupeIdentity, appended.anchor);

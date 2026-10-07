@@ -6,10 +6,7 @@ import type {
   WebPushNotificationPreferences,
 } from "../../../../packages/gateway-protocol/src/schema/push.js";
 import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
-import type {
-  NativeNotificationsPermission,
-  NativeNotificationTestOutcome,
-} from "../../app/native-notifications.ts";
+import type { NativeNotificationsCapability } from "../../app/native-notifications.ts";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import type { ChatFollowUpMode, ChatSendShortcut, CatalogOpenTarget } from "../../app/settings.ts";
 import type { ThemeCatalogSnapshot } from "../../app/theme-catalog.ts";
@@ -150,8 +147,8 @@ export type ConfigProps = {
   hiddenSessionCatalogIds: ReadonlySet<string>;
   hiddenSessionCatalogLabels: ReadonlyMap<string, string>;
   setSessionCatalogHidden: (catalogId: string, hidden: boolean) => void;
-  openLinksExternally?: boolean;
-  setOpenLinksExternally?: (enabled: boolean) => void;
+  openLinksExternally: boolean;
+  setOpenLinksExternally: (enabled: boolean) => void;
   chatMessageMaxWidth?: string;
   setChatMessageMaxWidth: (value: string | undefined) => void;
   chatShowTaskProgress: boolean;
@@ -170,12 +167,12 @@ export type ConfigProps = {
   sessionObserverDisabled?: boolean;
   setSessionObserverEnabled?: (enabled: boolean) => void;
   setSessionObserverUtilityModel?: (selection: SessionObserverModelSelection) => void;
-  lobsterPetVisits?: boolean;
-  setLobsterPetVisits?: (enabled: boolean) => void;
-  sessionDeleteConfirm?: boolean;
-  setSessionDeleteConfirm?: (enabled: boolean) => void;
-  lobsterPetSounds?: boolean;
-  setLobsterPetSounds?: (enabled: boolean) => void;
+  lobsterPetVisits: boolean;
+  setLobsterPetVisits: (enabled: boolean) => void;
+  sessionDeleteConfirm: boolean;
+  setSessionDeleteConfirm: (enabled: boolean) => void;
+  lobsterPetSounds: boolean;
+  setLobsterPetSounds: (enabled: boolean) => void;
   lobsterdexHref?: string;
   onOpenLobsterdex?: () => void;
   chatSendShortcut: ChatSendShortcut;
@@ -197,8 +194,8 @@ export type ConfigProps = {
   camera?: SettingsMediaDeviceState;
   onCameraRefresh?: () => void;
   onCameraSelect?: (deviceId: string) => void;
-  composerHoldToRecord?: boolean;
-  setComposerHoldToRecord?: (enabled: boolean) => void;
+  composerHoldToRecord: boolean;
+  setComposerHoldToRecord: (enabled: boolean) => void;
   gatewayUrl: string;
   pluginsHref?: string;
   installedSessionSourcePluginIds?: ReadonlySet<string> | null;
@@ -212,10 +209,7 @@ export type ConfigProps = {
   includeVirtualSections?: boolean;
   /** Layout mode: "tabs" (default flat scroll) or "accordion" (grouped collapsible). */
   settingsLayout?: "tabs" | "accordion";
-  nativeNotifications?: {
-    permission: NativeNotificationsPermission | "unknown";
-    test: NativeNotificationTestOutcome | null;
-  };
+  nativeNotifications?: NativeNotificationsCapability["snapshot"];
   onNativeNotificationsRequestPermission?: () => void;
   onNativeNotificationsSendTest?: () => void;
   webPush?: WebPushSnapshot;

@@ -69,6 +69,7 @@ describe("generateConversationLabel", () => {
 
       expect(runIsolatedCompletion).toHaveBeenCalledOnce();
       expect(runIsolatedCompletion).toHaveBeenCalledWith({
+        purpose: "conversation-label",
         config: cfg,
         provider: "openai",
         model: "gpt-mini",

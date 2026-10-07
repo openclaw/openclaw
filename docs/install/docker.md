@@ -272,11 +272,15 @@ confirmation. Older unrecorded `.bak` files are listed as protected. Keep these
 files with your pre-upgrade backups while you still need the matching rollback.
 
 On FUSE filesystems such as Unraid's `shfs`, a missing native no-replace rename
-does not require an operator step. The migration owner publishes a complete,
-exclusive hardlink, syncs it before removing the old name, and can recover an
-interrupted source/claim pair without replacing another file. This preserves the
-source inode and exact bytes. The filesystem must support same-directory hardlinks
-and directory synchronization when native no-replace rename is unavailable.
+does not require an operator step in native `auto` mode when same-directory
+hardlinks are supported. fs-safe preserves the source inode and bytes through
+exclusive hardlink publication and unlink. Native `require` mode still refuses
+the unsupported primitive. Doctor recovers interrupted source/claim pairs without
+replacing another file. Its separate missing-addon/native-off compatibility path
+syncs the source and directory before removing the old name; native moves do not
+promise per-move crash durability. Archive hardening and durable recovery
+checkpoints remain owned by Doctor.
+SQLite backup verification rechecks snapshot bytes when FUSE modification or change timestamps drift, while still rejecting changed contents or file identities.
 
 Readiness remains false while the default or system agent database is refused,
 and the readiness response includes the admission reason. A refused optional
@@ -415,7 +419,7 @@ The route is protected by Gateway authentication; don't expose a separate public
 
 ### Health checks
 
-Container probe endpoints (no auth required):
+Container check endpoints (no auth required):
 
 ```bash
 curl -fsS http://127.0.0.1:18789/healthz   # liveness
@@ -424,7 +428,7 @@ curl -fsS http://127.0.0.1:18789/readyz    # deep, channel-aware readiness
 ```
 
 The image's built-in `HEALTHCHECK` pings `/healthz`; repeated failures mark the container `unhealthy` so orchestrators can restart or replace it.
-Use `/startupz` for an orchestrator startup or readiness probe so a failed channel account does not remove the otherwise healthy Gateway and Control UI from service. Use `/readyz` for monitoring that intentionally treats hard channel failures as not ready. See [Health checks](/gateway/health#http-probes) for response details.
+Use `/startupz` for an orchestrator startup or readiness check so a failed channel account does not remove the otherwise healthy Gateway and Control UI from service. Use `/readyz` for monitoring that intentionally treats hard channel failures as not ready. See [Health checks](/gateway/health#http-probes) for response details.
 
 Authenticated deep health snapshot:
 

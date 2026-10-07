@@ -1,4 +1,3 @@
-// Aggregated runtime legacy config migration specs across agents, gateway, models, and tools.
 import type { LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS } from "./legacy-config-migrations.runtime.agents.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_CLI_BACKENDS } from "./legacy-config-migrations.runtime.cli-backends.js";
@@ -24,7 +23,6 @@ import { LEGACY_CONFIG_MIGRATION_RUNTIME_TOOL_SEARCH } from "./legacy-config-mig
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS } from "./legacy-config-migrations.runtime.tts.js";
 import { LEGACY_TALK_VOICE_CALL_INHERITANCE } from "./legacy-talk-config-normalizer.js";
 
-/** Ordered runtime legacy config migrations applied by doctor. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS,
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_CLI_BACKENDS,

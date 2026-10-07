@@ -209,16 +209,6 @@ export async function collectGatewayPlatformWarnings(
   ].filter((warning): warning is string => Boolean(warning));
 }
 
-function isTmpCompileCachePath(cachePath: string): boolean {
-  const normalized = cachePath.trim().replace(/\/+$/, "");
-  return (
-    normalized === "/tmp" ||
-    normalized.startsWith("/tmp/") ||
-    normalized === "/private/tmp" ||
-    normalized.startsWith("/private/tmp/")
-  );
-}
-
 export function noteStartupOptimizationHints(env: NodeJS.ProcessEnv = process.env) {
   const platform = process.platform;
   if (platform === "win32") {
@@ -243,7 +233,7 @@ export function noteStartupOptimizationHints(env: NodeJS.ProcessEnv = process.en
     lines.push(
       "- NODE_COMPILE_CACHE is not set; repeated CLI runs can be slower on small hosts (Raspberry Pi/VM).",
     );
-  } else if (isTmpCompileCachePath(compileCache)) {
+  } else if (/^\/(?:private\/)?tmp(?:\/|$)/.test(compileCache)) {
     lines.push(
       "- NODE_COMPILE_CACHE points to /tmp; use /var/tmp so cache survives reboots and warms startup reliably.",
     );

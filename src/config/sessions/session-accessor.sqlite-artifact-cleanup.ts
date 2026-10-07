@@ -31,10 +31,22 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
 import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import { reclaimIncognitoSessionLifecycle } from "./session-incognito-lifecycle-operations.js";
+import { maintenanceLane } from "./session-transcript-worker-resources.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 export async function cleanupSessionLifecycleArtifactsCore(
-  params: SessionLifecycleArtifactCleanupParams,
+  params:
+    | SessionLifecycleArtifactCleanupParams
+    | ({ kind: "incognito" } & Parameters<typeof reclaimIncognitoSessionLifecycle>[0]),
 ): Promise<SessionLifecycleArtifactCleanupResult> {
+  if ("kind" in params) {
+    const result = await reclaimIncognitoSessionLifecycle(params);
+    return {
+      removedEntries: result.removedEntries,
+      archivedTranscriptArtifacts: result.archivedTranscripts.length,
+    };
+  }
   const sessionKeySegmentPrefix = params.sessionKeySegmentPrefix.trim();
   const transcriptContentMarker = params.transcriptContentMarker;
   const pluginOwnerId = params.pluginOwnerId?.trim();
@@ -95,10 +107,6 @@ export async function cleanupSessionLifecycleArtifactsCore(
         }
         const continuation = opened ? captureCanonicalSessionReaderContinuation(opened) : undefined;
         try {
-          const [{ withSessionHistoryWorkerDatabase }, { maintenanceLane }] = await Promise.all([
-            import("./session-transcript-worker-runtime.js"),
-            import("./session-transcript-worker-resources.js"),
-          ]);
           assertSourceCurrent();
           const result = await withSessionHistoryWorkerDatabase(
             databaseOptions,

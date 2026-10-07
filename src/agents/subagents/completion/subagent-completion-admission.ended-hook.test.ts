@@ -9,7 +9,7 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { createSubagentRegistryContextCleanup } from "../registry/subagent-registry-context-cleanup.js";
 import * as registryDeps from "../registry/subagent-registry-deps.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import { mutateRequesterSettleWakeBatch } from "./subagent-completion-admission.store.js";
 import {
@@ -42,7 +42,8 @@ it.each(["transition", "complete"] as const)(
       });
       const warn = vi.fn();
       const cleanup = createSubagentRegistryContextCleanup({
-        isEndedHookOwnerCurrent: (id, entry) => isSameSubagentRunOwner(subagentRuns.get(id), entry),
+        isEndedHookOwnerCurrent: (entry) =>
+          isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry),
         warn,
       });
       const acknowledged = createDeferred();

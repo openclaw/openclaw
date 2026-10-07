@@ -121,42 +121,6 @@ const countCalendarDays = (
   return Math.floor((endDayMs - startDayMs) / (24 * 60 * 60 * 1000)) + 1;
 };
 
-function finishCostUsageSummary(params: {
-  daily: Map<string, CostUsageTotals>;
-  totals: CostUsageTotals;
-  startMs: number;
-  endMs: number;
-  formatDay: UsageDayKeyFormatter;
-  refreshing: boolean;
-  cachedFiles: number;
-  staleFiles: number;
-  refreshedAt: number | undefined;
-}): CostUsageSummary {
-  fillMissingDays(params.daily, params.startMs, params.endMs, params.formatDay);
-  const status = params.refreshing
-    ? "refreshing"
-    : params.staleFiles > 0
-      ? params.cachedFiles > 0
-        ? "partial"
-        : "stale"
-      : "fresh";
-  return {
-    updatedAt: Date.now(),
-    days: countCalendarDays(params.startMs, params.endMs, params.formatDay),
-    daily: Array.from(params.daily.entries())
-      .map(([date, bucket]) => Object.assign({ date }, bucket))
-      .toSorted((a, b) => a.date.localeCompare(b.date)),
-    totals: params.totals,
-    cacheStatus: {
-      status,
-      cachedFiles: params.cachedFiles,
-      pendingFiles: params.staleFiles,
-      staleFiles: params.staleFiles,
-      refreshedAt: params.refreshedAt,
-    },
-  };
-}
-
 function includeRemainingRollupScans(
   rows: Iterable<SessionCostUsageRollupRow>,
   pricingFingerprint: string,
@@ -179,7 +143,6 @@ export async function projectCostUsageSummary(
     startMs: number;
     endMs: number;
     dayBucket?: UsageDailyBucket;
-    refreshing: boolean;
   },
 ): Promise<CostUsageSummary> {
   const daily = new Map<string, CostUsageTotals>();
@@ -230,21 +193,27 @@ export async function projectCostUsageSummary(
       totals,
     });
   }
-  return finishCostUsageSummary({
-    daily,
-    totals,
-    startMs: params.startMs,
-    endMs: params.endMs,
-    formatDay,
-    refreshing: params.refreshing,
-    cachedFiles,
-    staleFiles,
-    refreshedAt: includeRemainingRollupScans(
-      params.remainingRows,
-      params.pricingFingerprint,
-      latestScan,
+  const refreshedAt = includeRemainingRollupScans(
+    params.remainingRows,
+    params.pricingFingerprint,
+    latestScan,
+  );
+  fillMissingDays(daily, params.startMs, params.endMs, formatDay);
+  return {
+    updatedAt: Date.now(),
+    days: countCalendarDays(params.startMs, params.endMs, formatDay),
+    daily: Array.from(daily, ([date, bucket]) => Object.assign({ date }, bucket)).toSorted((a, b) =>
+      a.date.localeCompare(b.date),
     ),
-  });
+    totals,
+    cacheStatus: {
+      status: staleFiles === 0 ? "fresh" : cachedFiles > 0 ? "partial" : "stale",
+      cachedFiles,
+      pendingFiles: staleFiles,
+      staleFiles,
+      refreshedAt,
+    },
+  };
 }
 
 export async function projectSessionCostSummaries(
@@ -256,7 +225,6 @@ export async function projectSessionCostSummaries(
     endMs?: number;
     includeUntimestamped?: boolean;
     dayBucket?: UsageDailyBucket;
-    refreshing: boolean;
   },
 ): Promise<{
   summaries: Array<SessionCostSummary | null>;
@@ -327,7 +295,7 @@ export async function projectSessionCostSummaries(
           formatDay,
         }),
         computedAt: entry.scannedAt,
-        ...(!fresh ? { refreshing: params.refreshing, staleSince: file.mtimeMs } : {}),
+        ...(!fresh ? { refreshing: false, staleSince: file.mtimeMs } : {}),
       };
     }
   }
@@ -340,14 +308,7 @@ export async function projectSessionCostSummaries(
   return {
     summaries,
     cacheStatus: {
-      status:
-        staleSessionFiles.size === 0
-          ? "fresh"
-          : params.refreshing
-            ? "refreshing"
-            : cachedFiles > 0
-              ? "partial"
-              : "stale",
+      status: staleSessionFiles.size === 0 ? "fresh" : cachedFiles > 0 ? "partial" : "stale",
       cachedFiles,
       pendingFiles: staleSessionFiles.size,
       staleFiles: staleSessionFiles.size,

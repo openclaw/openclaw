@@ -108,25 +108,6 @@ type ChatHistoryPaginationMetadata = Partial<
   }
 >;
 
-function truncateHistoryText(
-  text: string,
-  maxChars = SESSIONS_HISTORY_TEXT_MAX_CHARS,
-): {
-  text: string;
-  truncated: boolean;
-  redacted: boolean;
-} {
-  // sessions_history is a tool surface, not a log sink. Keep it redacted even
-  // when operators disable general-purpose log redaction.
-  const sanitized = redactToolPayloadText(text);
-  const redacted = sanitized !== text;
-  if (sanitized.length <= maxChars) {
-    return { text: sanitized, truncated: false, redacted };
-  }
-  const cut = truncateUtf16Safe(sanitized, maxChars);
-  return { text: `${cut}\n…(truncated)…`, truncated: true, redacted };
-}
-
 function sanitizeHistoryMessage(
   message: unknown,
   maxChars = SESSIONS_HISTORY_TEXT_MAX_CHARS,
@@ -142,10 +123,14 @@ function sanitizeHistoryMessage(
   let truncated = false;
   let redacted = false;
   const sanitizeText = (text: string) => {
-    const result = truncateHistoryText(text, maxChars);
-    truncated ||= result.truncated;
-    redacted ||= result.redacted;
-    return result.text;
+    // Tool output stays redacted even when general-purpose log redaction is disabled.
+    const sanitized = redactToolPayloadText(text);
+    redacted ||= sanitized !== text;
+    if (sanitized.length <= maxChars) {
+      return sanitized;
+    }
+    truncated = true;
+    return `${truncateUtf16Safe(sanitized, maxChars)}\n…(truncated)…`;
   };
   // Tool result details often contain very large nested payloads.
   for (const field of ["details", "usage", "cost"]) {

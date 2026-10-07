@@ -2,8 +2,7 @@ import type { Profiler } from "node:inspector";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { diagnosticProfileEntrypoints } from "./diagnostic-profile-runtime.test-support.js";
 
 const native = vi.hoisted(() => ({
@@ -518,8 +517,8 @@ assert.equal(process.pid, pid);
 console.log(JSON.stringify({ node: process.version, platform: process.platform, arch: process.arch, actualDurationMs: result.actualDurationMs, samples: result.profile.samples.length, nodes: result.profile.nodes.length, listener: false }));
 `;
       const result = await runNodeScript(
-        [
-          ...resolveRuntimeWorkerArgv(ownerUrl, resolveTestNodeExecPath()).slice(0, -1),
+        (workerArgv) => [
+          ...workerArgv(ownerUrl).slice(0, -1),
           "--input-type=module",
           "--eval",
           source,

@@ -141,9 +141,9 @@ vi.mock("../plugins/setup-registry.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Keep channel plugin loading and registry initialization outside config-flow repair coordination.
 vi.mock("./doctor/shared/channel-doctor.js", () => ({
   collectChannelDoctorCompatibilityMutations: vi.fn(() => []),
-  collectChannelDoctorEmptyAllowlistExtraWarnings: vi.fn(() => []),
   collectChannelDoctorMutableAllowlistWarnings: vi.fn(() => []),
   collectChannelDoctorPreviewWarnings: vi.fn(async () => []),
   collectChannelDoctorRepairMutations: vi.fn(async () => []),
@@ -154,10 +154,6 @@ vi.mock("./doctor/shared/channel-doctor.js", () => ({
       channelName === "googlechat" || channelName === "telegram",
   })),
   runChannelDoctorConfigSequences: vi.fn(async () => ({ changeNotes: [], warningNotes: [] })),
-  shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning: vi.fn(
-    ({ channelName }: { channelName: string }) =>
-      channelName === "googlechat" || channelName === "telegram",
-  ),
 }));
 
 vi.mock("./doctor/shared/preview-warnings.js", () => ({
@@ -692,9 +688,9 @@ describe("doctor config flow", () => {
 
     const result = await runConfig({ config, repair: true });
 
+    expect(result.pendingChangePanels).toContain("Discord allowlist ids normalized to strings.");
     expect(result.cfg.channels).toEqual(repaired.channels);
     expect(result.shouldWriteConfig).toBe(true);
-    expect(result.pendingChangePanels).toContain("Discord allowlist ids normalized to strings.");
   });
 
   it("does not restore top-level allowFrom when config is intentionally default-account scoped", async () => {
@@ -738,7 +734,7 @@ describe("doctor config flow", () => {
     expect(channel?.accounts).toEqual({ work: { enabled: true } });
   });
 
-  it("promotes covered legacy keys when an absent plugin has no declarations", async () => {
+  it("seeds an empty account map for covered legacy keys without plugin declarations", async () => {
     const result = await runConfig({
       repair: true,
       config: {
@@ -746,7 +742,7 @@ describe("doctor config flow", () => {
           "legacy-demo": {
             dmPolicy: "allowlist",
             appToken: "legacy-app-token",
-            accounts: { work: { enabled: true } },
+            accounts: {},
           },
         },
       },
@@ -755,11 +751,12 @@ describe("doctor config flow", () => {
     const channel = result.cfg.channels?.["legacy-demo"];
     expect(channel?.dmPolicy).toBeUndefined();
     expect(channel?.appToken).toBeUndefined();
-    expect(channel?.accounts?.default).toEqual({
-      dmPolicy: "allowlist",
-      appToken: "legacy-app-token",
+    expect(channel?.accounts).toEqual({
+      default: {
+        dmPolicy: "allowlist",
+        appToken: "legacy-app-token",
+      },
     });
-    expect(channel?.accounts?.work).toEqual({ enabled: true, dmPolicy: "allowlist" });
   });
 
   it('repairs open dmPolicy allowFrom variants with ["*"] in one pass', async () => {
@@ -898,9 +895,9 @@ describe("doctor config flow", () => {
   it("scaffolds custom profiles in both scopes while excluding interpreters", () => {
     const { config } = maybeRepairExecSafeBinProfiles({
       tools: { exec: { safeBins: ["myfilter", "python3"] } },
-      agents: { list: [{ id: "ops", tools: { exec: { safeBins: ["mytool", "node"] } } }] },
+      agents: { entries: { ops: { tools: { exec: { safeBins: ["mytool", "node"] } } } } },
     });
     expect(config.tools?.exec?.safeBinProfiles).toEqual({ myfilter: {} });
-    expect(config.agents?.list?.[0]?.tools?.exec?.safeBinProfiles).toEqual({ mytool: {} });
+    expect(config.agents?.entries?.ops?.tools?.exec?.safeBinProfiles).toEqual({ mytool: {} });
   });
 });

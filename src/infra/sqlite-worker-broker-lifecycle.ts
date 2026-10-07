@@ -1,5 +1,5 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
@@ -21,8 +21,6 @@ import type {
 } from "./sqlite-worker-broker.types.js";
 import { SqliteWorkerError, type SqliteWorkerReply } from "./sqlite-worker-contract.js";
 import { createCpuTrackedWorker } from "./worker-cpu.js";
-
-const runOutsideCaller = AsyncLocalStorage.snapshot();
 
 /** The broker retains these maps; this owner drains clients before native close custody. */
 export function createSqliteWorkerLifecycle({
@@ -98,14 +96,16 @@ export function createSqliteWorkerLifecycle({
   ): Slot {
     ensureSqliteLibrarySelected();
     options.assertCurrent?.();
-    const worker = runOutsideCaller(() =>
-      createCpuTrackedWorker(options.carrierUrl, {
+    // Slot listeners share this closure scope; never capture the opening admission in it.
+    const { carrierUrl } = options;
+    const { worker, exited } = runInDetachedAsyncContext(() => ({
+      worker: createCpuTrackedWorker(carrierUrl, {
         resourceLimits: { maxOldGenerationSizeMb: 512 },
         env: resolveNodeCompileCacheEnv(),
-        execArgv: resolveRuntimeWorkerThreadExecArgv(options.carrierUrl),
+        execArgv: resolveRuntimeWorkerThreadExecArgv(carrierUrl),
       }),
-    );
-    const exited = createDeferredCore();
+      exited: createDeferredCore(),
+    }));
     const slot: Slot = {
       ...(options.target ? { ephemeral: true as const } : {}),
       runtimeGeneration: options.runtimeGeneration,

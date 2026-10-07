@@ -37,6 +37,7 @@ import { registerPersonalInstructionsEnglish } from "../../ui/src/i18n/locales/e
 import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
 import { registerPluginManagementEnglish } from "../../ui/src/i18n/locales/en-plugin-management.ts";
 import { registerPortalsEnglish } from "../../ui/src/i18n/locales/en-portals.ts";
+import { registerProcessesEnglish } from "../../ui/src/i18n/locales/en-processes.ts";
 import { registerProfileEnglish } from "../../ui/src/i18n/locales/en-profile.ts";
 import { registerSessionPeopleEnglish } from "../../ui/src/i18n/locales/en-session-people.ts";
 import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
@@ -84,6 +85,7 @@ const sourceFiles = [
   "en-devices.ts",
   "en-dreaming.ts",
   "en-file-preview.ts",
+  "en-processes.ts",
   "en-labs.ts",
   "en-login.ts",
   "en-link-reader.ts",
@@ -192,6 +194,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerDevicesEnglish.catalog,
     registerDreamingEnglish.catalog,
     registerFilePreviewEnglish.catalog,
+    registerProcessesEnglish.catalog,
     registerLabsEnglish.catalog,
     registerLoginEnglish.catalog,
     registerLinkReaderEnglish.catalog,

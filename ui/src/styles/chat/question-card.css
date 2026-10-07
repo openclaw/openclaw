@@ -67,22 +67,28 @@ openclaw-chat-question-panel {
   font-variant-numeric: tabular-nums;
 }
 
-.chat-question-panel__request-nav button {
+.chat-question-panel__request-nav button,
+.chat-question-panel__collapse {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: inherit;
   cursor: var(--cursor-action);
 }
 
+.chat-question-panel__request-nav button {
+  width: 26px;
+  height: 26px;
+  color: inherit;
+}
+
 .chat-question-panel__request-nav button:hover,
-.chat-question-panel__request-nav button:focus-visible {
+.chat-question-panel__request-nav button:focus-visible,
+.chat-question-panel__collapse:hover,
+.chat-question-panel__collapse:focus-visible {
   background: var(--panel-hover);
   color: var(--text);
   outline: none;
@@ -115,24 +121,9 @@ openclaw-chat-question-panel {
 }
 
 .chat-question-panel__collapse {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 28px;
   height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
   color: var(--muted);
-  cursor: var(--cursor-action);
-}
-
-.chat-question-panel__collapse:hover,
-.chat-question-panel__collapse:focus-visible {
-  background: var(--panel-hover);
-  color: var(--text);
-  outline: none;
 }
 
 .chat-question-panel__collapse svg,
@@ -192,8 +183,7 @@ openclaw-chat-question-panel {
 }
 
 .chat-question-panel__option {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
   gap: 9px;
   width: 100%;
@@ -242,6 +232,7 @@ openclaw-chat-question-panel {
 
 .chat-question-panel__option-marker {
   display: inline-flex;
+  flex: 0 0 16px;
   align-items: center;
   justify-content: center;
   width: 16px;
@@ -281,6 +272,8 @@ openclaw-chat-question-panel {
 
 .chat-question-panel__option-copy {
   display: block;
+  flex: 1;
+  overflow-wrap: anywhere;
   min-width: 0;
 }
 

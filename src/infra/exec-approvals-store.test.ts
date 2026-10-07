@@ -279,6 +279,26 @@ describe("exec approvals SQLite store", () => {
     expect(updated?.file.defaults?.security).toBe("full");
   });
 
+  it("rolls back a policy replacement when current authority ends before commit", async () => {
+    const before = await ensureExecApprovalsSnapshot();
+    let current = true;
+    await expect(
+      updateExecApprovals({
+        baseHash: before.hash,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("request authority ended");
+          }
+        },
+        update: (file) => {
+          current = false;
+          return { ...file, defaults: { security: "deny" } };
+        },
+      }),
+    ).rejects.toThrow("request authority ended");
+    expect(readExecApprovalsSnapshot().hash).toBe(before.hash);
+  });
+
   it("mints one socket token and reuses it on later initialization", async () => {
     const first = (await ensureExecApprovalsSnapshot()).file;
     const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");

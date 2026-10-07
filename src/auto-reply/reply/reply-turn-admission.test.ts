@@ -7,6 +7,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   resetDiagnosticRunActivityForTest,
   RUN_STALE_TAKEOVER_MS,
@@ -82,7 +83,7 @@ function interruptedEntry(): SessionEntry {
   return {
     sessionId,
     updatedAt: 100,
-    status: "running",
+    status: "interrupted",
     abortedLastRun: true,
     mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
   };
@@ -106,7 +107,7 @@ function tombstoneEntry(): SessionEntry {
 async function holdMutation(storePath: string, run: () => Promise<unknown> = async () => {}) {
   const started = createDeferred();
   const release = createDeferred();
-  const mutation = runExclusiveSessionLifecycleMutation({
+  const mutation = runExclusiveSessionLifecycleMutation("patch", {
     scope: storePath,
     identities: [sessionKey, sessionId],
     run: async () => {
@@ -139,7 +140,7 @@ async function expectRecoveryReleased(storePath: string, key = sessionKey) {
 }
 function interrupt(storePath: string, run: () => Promise<void>) {
   const target = { scope: storePath, identities: [sessionKey, sessionId] };
-  return runExclusiveSessionLifecycleMutation({
+  return runExclusiveSessionLifecycleMutation("patch", {
     ...target,
     prepare: async () => {
       await interruptSessionWorkAdmissions(target);
@@ -274,18 +275,31 @@ it("does not treat resetTriggered alone as restart-tombstone authority", async (
     message: expect.stringMatching(/ended during restart recovery/i),
   });
 });
-it("clears orphaned restart-recovery fences before visible admission", async () => {
-  const storePath = store({
-    status: "running",
-    abortedLastRun: false,
-    restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "stale-generation" }],
-  });
-  const admitted = owned(await admit({ storePath, expectedSessionId: sessionId }));
-  const entry = loadSessionEntry({ storePath, sessionKey });
-  expect(entry?.restartRecoveryRuns).toBeUndefined();
-  expect(entry?.mainRestartRecovery).toBeUndefined();
-  admitted.complete();
-});
+it.each([true, false])(
+  "requires terminal evidence before retiring recovery fences at visible admission: %s",
+  async (terminal) => {
+    const storePath = store({
+      abortedLastRun: false,
+      restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "stale-generation" }],
+      ...(terminal ? { restartRecoveryTerminalRunIds: ["stale-run"] } : {}),
+    });
+    const before = loadSessionEntry({ storePath, sessionKey });
+    expect(before?.status).toBeUndefined();
+    if (!terminal) {
+      await expect(admit({ storePath, expectedSessionId: sessionId })).rejects.toMatchObject({
+        code: "SESSION_WORK_START_CHANGED",
+      });
+      expect(loadSessionEntry({ storePath, sessionKey })).toEqual(before);
+      return;
+    }
+    const admitted = owned(await admit({ storePath, expectedSessionId: sessionId }));
+    expect(admitted.sessionId).toBe(sessionId);
+    const entry = loadSessionEntry({ storePath, sessionKey });
+    expect(entry?.restartRecoveryRuns).toBeUndefined();
+    expect(entry?.mainRestartRecovery).toBeUndefined();
+    admitted.complete();
+  },
+);
 it("schedules released recovery only after retained admission exits", async () => {
   const storePath = store(interruptedEntry());
   const blocker = operation();
@@ -426,31 +440,26 @@ it("defers takeover to the blocked-tool floor while a quiet tool is active", asy
   result.complete();
   controller.abort();
 });
-it.each(["heartbeat", "queued_followup"] as const)(
-  "does not let %s turns reclaim a stale active operation",
-  async (kind) => {
-    vi.useFakeTimers();
-    const startedAt = Date.now();
-    const active = operation();
-    const cancel = vi.fn();
-    active.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
-    active.setPhase("running");
-    vi.setSystemTime(startedAt + RUN_STALE_TAKEOVER_MS + 1);
-    const admission = admit({ sessionId: "replacement", kind, waitTimeoutMs: 1 });
-    if (kind === "queued_followup") {
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(100);
-    }
-    await expect(admission).resolves.toMatchObject({
-      status: "skipped",
-      reason: "active-run",
-      activeOperation: active,
-    });
-    expect(cancel).not.toHaveBeenCalled();
-    expect(replyRunRegistry.get(sessionKey)).toBe(active);
-    active.complete();
-  },
-);
+it("does not let queued followups reclaim a stale active operation", async () => {
+  vi.useFakeTimers();
+  const startedAt = Date.now();
+  const active = operation();
+  const cancel = vi.fn();
+  active.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
+  active.setPhase("running");
+  vi.setSystemTime(startedAt + RUN_STALE_TAKEOVER_MS + 1);
+  const admission = admit({ sessionId: "replacement", kind: "queued_followup", waitTimeoutMs: 1 });
+  await Promise.resolve();
+  await vi.advanceTimersByTimeAsync(100);
+  await expect(admission).resolves.toMatchObject({
+    status: "skipped",
+    reason: "active-run",
+    activeOperation: active,
+  });
+  expect(cancel).not.toHaveBeenCalled();
+  expect(replyRunRegistry.get(sessionKey)).toBe(active);
+  active.complete();
+});
 it("lets visible turns reclaim terminal operations after settle grace elapsed", async () => {
   vi.useFakeTimers();
   const active = operation();
@@ -493,9 +502,14 @@ it("adopts a source-keyed command reservation into the target run slot", async (
   expect(mutationRan).toBe(true);
 });
 it("skips adoption without waiting when the target run slot is owned", async () => {
-  const storePath = store();
   const blocker = operation();
   blocker.setPhase("running");
+  const storePath = store({
+    restartRecoveryRuns: [
+      { runId: "active-run", lifecycleGeneration: getAgentEventLifecycleGeneration() },
+    ],
+  });
+  const before = loadSessionEntry({ storePath, sessionKey });
   const reservation = operation({ sessionKey: sourceKey, sessionId: "source-session" });
   const result = await admit({
     storePath,
@@ -513,6 +527,7 @@ it("skips adoption without waiting when the target run slot is owned", async () 
   expect(replyRunRegistry.get(sourceKey)).toBe(reservation);
   expect(replyRunRegistry.get(sessionKey)).toBe(blocker);
   expect(reservation.result).toBeNull();
+  expect(loadSessionEntry({ storePath, sessionKey })).toEqual(before);
   blocker.complete();
   reservation.complete();
 });

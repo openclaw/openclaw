@@ -42,7 +42,6 @@ import { createSessionMetadataChangeNotifier } from "./dispatch-from-config.sess
 import {
   captureDeliveredTranscriptMirror,
   mirrorDeliveredReplyToTranscript,
-  mirrorTranscriptAfterDispatcherSettled,
   transcriptMirrorForDeliveredPayload,
 } from "./dispatch-from-config.transcript.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply.js";
@@ -87,32 +86,37 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     sessionKey,
     sessionStoreEntry,
     sessionTtsAuto,
-    shouldEmitVerboseProgress,
+    shouldEmitVerboseProgressAsync,
     shouldRouteToOriginating,
     traceReplyPhase,
     trackDispatchLifecycleWork,
     turnLedger,
   } = state;
-  const shouldSuppressProgressDelivery = () =>
+  const shouldSuppressProgressDelivery = async () =>
     state.sendPolicyDenied ||
-    (state.suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
+    (state.suppressDelivery && !(await shouldDeliverVerboseProgressDespiteSourceSuppression()));
+  // The released reply_dispatch getter retains its synchronous contract.
   const shouldSendToolSummaries = () =>
-    params.replyOptions?.suppressToolProgressMessages !== true && shouldEmitVerboseProgress();
+    params.replyOptions?.suppressToolProgressMessages !== true && state.shouldEmitVerboseProgress();
+  const shouldSendToolSummariesAsync = async () =>
+    params.replyOptions?.suppressToolProgressMessages !== true &&
+    (await shouldEmitVerboseProgressAsync());
   const { notifySessionMetadataChanges, routeState } = createSessionMetadataChangeNotifier(
     params.onSessionMetadataChanges,
   );
-  const shouldDeliverVerboseProgressDespiteSourceSuppression = () =>
+  const allowsVerboseProgressDespiteSourceSuppression = () =>
     state.suppressAutomaticSourceDelivery &&
     state.sourceReplyDeliveryMode === "message_tool_only" &&
     ctx.InboundEventKind !== "room_event" &&
-    !state.sendPolicyDenied &&
-    shouldEmitVerboseProgress() &&
-    shouldSendToolSummaries();
+    !state.sendPolicyDenied;
+  const shouldDeliverVerboseProgressDespiteSourceSuppression = async () =>
+    allowsVerboseProgressDespiteSourceSuppression() && (await shouldSendToolSummariesAsync());
+  const shouldSuppressProgressDeliverySync = () =>
+    state.sendPolicyDenied ||
+    (state.suppressDelivery &&
+      !(allowsVerboseProgressDespiteSourceSuppression() && shouldSendToolSummaries()));
   const shouldDeliverForcedToolProgressDespiteSourceSuppression = () =>
-    state.suppressAutomaticSourceDelivery &&
-    state.sourceReplyDeliveryMode === "message_tool_only" &&
-    ctx.InboundEventKind !== "room_event" &&
-    !state.sendPolicyDenied &&
+    allowsVerboseProgressDespiteSourceSuppression() &&
     params.replyOptions?.forceToolResultProgress === true;
   let finalReplyDeliveryStarted = false;
   const isSessionWriterDeliveryAuthorized = (payload: ReplyPayload) =>
@@ -125,13 +129,17 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   // and flushed when the producer moves on, always before the final reply.
   let pendingCommentaryProgress: { itemId?: string; text: string } | null = null;
   const deliverCommentaryProgressMessage = async (text: string) => {
-    if (!shouldSendToolSummaries() || shouldSuppressProgressDelivery()) {
+    if (!(await shouldSendToolSummariesAsync()) || (await shouldSuppressProgressDelivery())) {
+      return;
+    }
+    if (state.isDispatchOperationAborted()) {
       return;
     }
     const payload: ReplyPayload = { text: `💬 ${text}` };
     if (shouldSuppressLateTextOnlyToolProgress(payload)) {
       return;
     }
+    state.assertProgressCurrent();
     if (shouldRouteToOriginating) {
       await sendPayloadAsync(payload, undefined, false);
     } else {
@@ -171,10 +179,10 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     }
     pendingCommentaryProgress = { itemId, text };
   };
-  const shouldSuppressMessageToolOnlyTextErrorProgress = (payload: ReplyPayload) => {
+  const shouldSuppressMessageToolOnlyTextErrorProgress = async (payload: ReplyPayload) => {
     if (
       state.sourceReplyDeliveryMode !== "message_tool_only" ||
-      state.shouldEmitFullVerboseProgress() ||
+      (await state.shouldEmitFullVerboseProgressAsync()) ||
       payload.isError !== true
     ) {
       return false;
@@ -184,6 +192,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   };
   const captionedFinalTtsContext = {
     cfg,
+    preparedTtsPreferences: state.preparedTtsPreferences,
     ttsAuto: sessionTtsAuto,
     agentId: sessionAgentId,
     channelId: deliveryChannel,
@@ -538,13 +547,11 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       // The common settle owner runs this after successful delivery or
       // cancellation. Keeping reconciliation out of the reply operation avoids
       // creating another operation/idle cycle during delivery settlement.
-      registerReplyDispatcherSettledTask(dispatcher, () =>
-        mirrorTranscriptAfterDispatcherSettled({
-          outcome: dispatcherOutcome,
-          metadata: deliveredTranscriptMirror,
-          cfg,
-        }),
-      );
+      registerReplyDispatcherSettledTask(dispatcher, async () => {
+        if ((await dispatcherOutcome) === "delivered") {
+          await mirrorDeliveredReplyToTranscript({ metadata: deliveredTranscriptMirror(), cfg });
+        }
+      });
     }
     return {
       blockDeliveryOutcome: sourceRecovery ? blockDeliveryOutcome : undefined,
@@ -654,7 +661,11 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     };
   }
 
-  const replyDispatchTakeover = await runReplyDispatchTakeover(state, shouldSendToolSummaries);
+  const replyDispatchTakeover = await runReplyDispatchTakeover(
+    state,
+    shouldSendToolSummaries,
+    shouldSendToolSummariesAsync,
+  );
   if (replyDispatchTakeover) {
     return replyDispatchTakeover;
   }
@@ -674,7 +685,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   }
   const nextState = Object.assign(state, {
     shouldSuppressProgressDelivery,
+    shouldSuppressProgressDeliverySync,
     shouldSendToolSummaries,
+    shouldSendToolSummariesAsync,
     notifySessionMetadataChanges,
     shouldDeliverVerboseProgressDespiteSourceSuppression,
     shouldDeliverForcedToolProgressDespiteSourceSuppression,

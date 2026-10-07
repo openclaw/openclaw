@@ -113,32 +113,6 @@ function resolveSessionBindingExpiryAt(baseMs: number, durationMs: number): numb
     : undefined;
 }
 
-type UpdatedLifecycleBinding = {
-  boundAt: number;
-  lastActivityAt: number;
-  idleTimeoutMs?: number;
-  maxAgeMs?: number;
-};
-
-function resolveUpdatedBindingExpiry(params: {
-  action: typeof SESSION_ACTION_IDLE | typeof SESSION_ACTION_MAX_AGE;
-  bindings: UpdatedLifecycleBinding[];
-}): number | undefined {
-  const expiries = params.bindings
-    .map((binding) => {
-      const isIdle = params.action === SESSION_ACTION_IDLE;
-      const durationMs = (isIdle ? binding.idleTimeoutMs : binding.maxAgeMs) ?? 0;
-      const baseMs = isIdle ? Math.max(binding.lastActivityAt, binding.boundAt) : binding.boundAt;
-      return resolveSessionBindingExpiryAt(baseMs, durationMs);
-    })
-    .filter((expiresAt): expiresAt is number => typeof expiresAt === "number");
-
-  if (expiries.length === 0) {
-    return undefined;
-  }
-  return Math.min(...expiries);
-}
-
 export const handleActivationCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -462,14 +436,14 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     );
   }
 
-  const nextExpiry = resolveUpdatedBindingExpiry({
-    action,
-    bindings: updatedBindings,
+  const expiries = updatedBindings.flatMap((binding) => {
+    const expiresAt = resolveSessionBindingExpiryAt(
+      isIdle ? Math.max(binding.lastActivityAt, binding.boundAt) : binding.boundAt,
+      (isIdle ? binding.idleTimeoutMs : binding.maxAgeMs) ?? 0,
+    );
+    return expiresAt === undefined ? [] : [expiresAt];
   });
-  const expiryLabel =
-    typeof nextExpiry === "number" && Number.isFinite(nextExpiry)
-      ? formatSessionExpiry(nextExpiry)
-      : "n/a";
+  const expiryLabel = formatSessionExpiry(Math.min(...expiries));
 
   return sessionCommandReply(
     `✅ ${settingLabel} set to ${formatThreadBindingDurationLabel(durationMs)} for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"} (${expiryDescription} at ${expiryLabel}).`,

@@ -2,7 +2,7 @@
 import type { Command } from "commander";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
-import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { AgentSelectionRequiredError, listAgentIds } from "../agents/agent-scope-config.js";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -40,6 +40,7 @@ import {
 } from "./exec-policy-diagnostics.js";
 import { addGatewayClientOptions, resolveGatewayRpcOptionsWithLocalPort } from "./gateway-rpc.js";
 import { formatDocsHelp } from "./help-format.js";
+import { runWithLocalStateOwner } from "./local-state-owner.js";
 
 type ExecPolicyPresetName = "yolo" | "cautious" | "deny-all";
 
@@ -83,23 +84,7 @@ type ExecPolicyShowPayload = {
   };
 };
 
-type ExecPolicyShowScope = Omit<
-  ExecPolicyScopeSnapshot,
-  "security" | "ask" | "askFallback" | "allowedDecisions"
-> & {
-  runtimeApprovalsSource: "local-file" | "node-runtime";
-  security: Omit<ExecPolicyScopeSnapshot["security"], "host" | "effective"> & {
-    host: ExecSecurity | "unknown";
-    effective: ExecSecurity | "unknown";
-  };
-  ask: Omit<ExecPolicyScopeSnapshot["ask"], "host" | "effective"> & {
-    host: ExecAsk | "unknown";
-    effective: ExecAsk | "unknown";
-  };
-  askFallback: Omit<ExecPolicyScopeSnapshot["askFallback"], "effective"> & {
-    effective: ExecSecurity | "unknown";
-  };
-};
+type ExecPolicyShowScope = ReturnType<typeof buildExecPolicyShowScope>;
 
 function formatExecPolicyError(err: unknown): string {
   return sanitizeExecPolicyMessage(err instanceof Error ? err.message : String(err));
@@ -129,33 +114,28 @@ function resolveExecPolicyInput(params: {
   askFallback?: string;
 }): ExecPolicyResolved {
   const resolved: ExecPolicyResolved = {};
-  if (params.host !== undefined) {
-    const host = normalizeExecTarget(params.host);
-    if (!host) {
-      throw new Error(`Invalid exec host: ${sanitizeExecPolicyMessage(params.host)}`);
+  const parse = <T extends string>(
+    value: string,
+    normalize: (value: string) => T | null,
+    label: string,
+  ): T => {
+    const parsed = normalize(value);
+    if (!parsed) {
+      throw new Error(`Invalid exec ${label}: ${sanitizeExecPolicyMessage(value)}`);
     }
-    resolved.host = host;
+    return parsed;
+  };
+  if (params.host !== undefined) {
+    resolved.host = parse(params.host, normalizeExecTarget, "host");
   }
   if (params.security !== undefined) {
-    const security = normalizeExecSecurity(params.security);
-    if (!security) {
-      throw new Error(`Invalid exec security: ${sanitizeExecPolicyMessage(params.security)}`);
-    }
-    resolved.security = security;
+    resolved.security = parse(params.security, normalizeExecSecurity, "security");
   }
   if (params.ask !== undefined) {
-    const ask = normalizeExecAsk(params.ask);
-    if (!ask) {
-      throw new Error(`Invalid exec ask mode: ${sanitizeExecPolicyMessage(params.ask)}`);
-    }
-    resolved.ask = ask;
+    resolved.ask = parse(params.ask, normalizeExecAsk, "ask mode");
   }
   if (params.askFallback !== undefined) {
-    const askFallback = normalizeExecSecurity(params.askFallback);
-    if (!askFallback) {
-      throw new Error(`Invalid exec askFallback: ${sanitizeExecPolicyMessage(params.askFallback)}`);
-    }
-    resolved.askFallback = askFallback;
+    resolved.askFallback = parse(params.askFallback, normalizeExecSecurity, "askFallback");
   }
   return resolved;
 }
@@ -291,45 +271,42 @@ async function buildLocalExecPolicyShowPayload(
   return payload;
 }
 
-function buildExecPolicyShowScope(snapshot: ExecPolicyScopeSnapshot): ExecPolicyShowScope {
+function buildExecPolicyShowScope(snapshot: ExecPolicyScopeSnapshot) {
   const { allowedDecisions: _allowedDecisions, ...baseScope } = snapshot;
   if (snapshot.host.requested !== "node") {
     return {
       ...baseScope,
-      runtimeApprovalsSource: "local-file",
+      runtimeApprovalsSource: "local-file" as const,
     };
   }
   return {
     ...baseScope,
-    runtimeApprovalsSource: "node-runtime",
+    runtimeApprovalsSource: "node-runtime" as const,
     security: {
       requested: snapshot.security.requested,
       requestedSource: snapshot.security.requestedSource,
-      host: "unknown",
+      host: "unknown" as const,
       hostSource: "node runtime approvals",
-      effective: "unknown",
+      effective: "unknown" as const,
       note: "runtime policy resolved by node approvals",
     },
     ask: {
       requested: snapshot.ask.requested,
       requestedSource: snapshot.ask.requestedSource,
-      host: "unknown",
+      host: "unknown" as const,
       hostSource: "node runtime approvals",
-      effective: "unknown",
+      effective: "unknown" as const,
       note: "runtime policy resolved by node approvals",
     },
     askFallback: {
-      effective: "unknown",
+      effective: "unknown" as const,
       source: "node runtime approvals",
     },
   };
 }
 
 function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
-  const rich = isRich();
-  const heading = (text: string) => (rich ? theme.heading(text) : text);
-  const muted = (text: string) => (rich ? theme.muted(text) : text);
-  defaultRuntime.log(heading("Exec Policy"));
+  defaultRuntime.log(theme.heading("Exec Policy"));
   defaultRuntime.log(
     renderTable({
       width: getTerminalTableWidth(),
@@ -350,7 +327,7 @@ function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
     }).trimEnd(),
   );
   defaultRuntime.log("");
-  defaultRuntime.log(heading("Effective Policy"));
+  defaultRuntime.log(theme.heading("Effective Policy"));
   defaultRuntime.log(
     renderTable({
       width: getTerminalTableWidth(),
@@ -379,11 +356,26 @@ function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
     }).trimEnd(),
   );
   defaultRuntime.log("");
-  defaultRuntime.log(muted(payload.effectivePolicy.note));
+  defaultRuntime.log(theme.muted(payload.effectivePolicy.note));
 }
 
-async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPolicyShowPayload> {
+function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPolicyShowPayload> {
+  return runWithLocalStateOwner({
+    method: "exec-policy.set",
+    params: { ...policy },
+    target: "local exec policy and approvals",
+    onForeignOwner: "refuse",
+    runLocal: ({ assertCurrent }) => applyOwnedExecPolicy(policy, assertCurrent),
+  });
+}
+
+async function applyOwnedExecPolicy(
+  policy: ExecPolicyResolved,
+  assertCurrent: () => void,
+): Promise<ExecPolicyShowPayload> {
+  assertCurrent();
   const configSnapshot = await readConfigFileSnapshot();
+  assertCurrent();
   const nextConfig = structuredClone(configSnapshot.config ?? {});
   applyConfigExecPolicy(nextConfig, policy);
   if (nextConfig.tools?.exec?.host === "node") {
@@ -395,20 +387,25 @@ async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPol
   const nextApprovals = applyApprovalsDefaults(approvalsSnapshot.file, policy);
   const writtenApprovals = await updateExecApprovals({
     baseHash: approvalsSnapshot.hash,
+    assertCurrent,
     update: () => nextApprovals,
   });
   if (!writtenApprovals) {
     throw new Error("Exec approvals changed; reload and retry.");
   }
   try {
+    assertCurrent();
     await replaceConfigFile({
       baseHash: configSnapshot.hash,
       nextConfig,
+      writeOptions: { assertCurrent },
     });
   } catch (err) {
     try {
+      assertCurrent();
       if (!(await restoreExecApprovalsSnapshotLocked(approvalsSnapshot, writtenApprovals.hash))) {
         await updateExecApprovals({
+          assertCurrent,
           update: (current) =>
             buildExecPolicyApprovalsRollback({
               current,
@@ -470,7 +467,7 @@ export function registerExecPolicyCli(program: Command) {
       } else if (payload.toolAccessSelectionRequired) {
         const { agentIds, hint } = payload.toolAccessSelectionRequired;
         const title = `TERMINAL ACCESS — ${agentIds.length ? "SELECT AGENT" : "NO AGENT CONFIGURED"}`;
-        defaultRuntime.log(isRich() ? theme.heading(title) : title);
+        defaultRuntime.log(theme.heading(title));
         if (agentIds.length > 0) {
           defaultRuntime.log(
             `Configured agents: ${agentIds.map(sanitizeExecPolicyTableCell).join(", ")}`,
@@ -478,7 +475,7 @@ export function registerExecPolicyCli(program: Command) {
         }
         defaultRuntime.log("");
         const approvalsTitle = "── COMMAND APPROVALS (LOCAL) ──────────────────";
-        defaultRuntime.log(isRich() ? theme.heading(approvalsTitle) : approvalsTitle);
+        defaultRuntime.log(theme.heading(approvalsTitle));
         defaultRuntime.log("");
         defaultRuntime.log(
           formatExecPolicyCommandApprovals({
@@ -489,7 +486,7 @@ export function registerExecPolicyCli(program: Command) {
         );
         defaultRuntime.log("");
         const nextStep = "── NEXT STEP ─────────────────────────────────";
-        defaultRuntime.log(isRich() ? theme.heading(nextStep) : nextStep);
+        defaultRuntime.log(theme.heading(nextStep));
         defaultRuntime.log("");
         defaultRuntime.log(sanitizeExecPolicyTableCell(hint));
         if (!opts.verbose) {

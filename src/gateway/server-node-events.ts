@@ -22,7 +22,6 @@ import { getRuntimeConfig } from "../config/io.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions/main-session.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
 import { updatePairedDevicePresence, type NodePairingGeneration } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -34,10 +33,6 @@ import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
-import {
-  ApnsRegistrationPairingChangedError,
-  registerApnsRegistration,
-} from "../infra/push-apns.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -1007,12 +1002,7 @@ export const handleNodeEvent = async (
       if (!obj) {
         return undefined;
       }
-      const result = await registerNodeApnsEvent(ctx, nodeId, obj, opts, {
-        ApnsRegistrationPairingChangedError,
-        registerApnsRegistration,
-        loadOrCreateProcessDeviceIdentity,
-        formatForLog,
-      });
+      const result = await registerNodeApnsEvent(ctx, nodeId, obj, opts);
       return result === "pairing-changed" ? pairingChangedResult(evt.event) : undefined;
     }
     case NODE_HOST_STATS_EVENT: {

@@ -226,7 +226,11 @@ describe("Telegram prompt composition", () => {
     };
     const { runtime, cfg } = createRuntime(telegramCfg);
     await runtime.recordMessageForReplyChain(message(10, "older DM"));
-    await runtime.recordMessageForReplyChain(message(11, "latest DM"));
+    const latestReply = {
+      ...message(11, "latest DM", { from: telegramBotInfoForTest }),
+      openclaw_prompt_context_timestamp_ms: 1_700_000_011_000,
+    };
+    await runtime.recordMessageForReplyChain(latestReply);
     const current = message(12, "continue");
     await runtime.recordMessageForReplyChain(current);
     const context = await runtime.buildPromptContextForMessage(
@@ -240,6 +244,7 @@ describe("Telegram prompt composition", () => {
       { payload: { messages: [{ message_id: "11", body: "latest DM" }] } },
     ]);
     expect(JSON.stringify(context)).not.toContain("older DM");
+    expect(context[0]).not.toHaveProperty("sessionTranscriptAssistantTextDedupeKeys");
   });
 
   it.each([

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // One managed update across the published-driver/candidate boundary, with synthetic state only.
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -9,7 +10,13 @@ import { fileURLToPath } from "node:url";
 import { runCancelableCommand } from "../../../lib/cancelable-command.mts";
 import { toErrorObject } from "../../../lib/error-format.mts";
 import { hasUnjoinedWork, runManagedCommand } from "../../../lib/managed-child-process.mts";
-import { classifyReleaseTrain, parseReleaseVersion } from "../../../lib/release-version.mjs";
+import {
+  classifyReleaseTrain,
+  compareReleaseVersions,
+  parseReleaseVersion,
+} from "../../../lib/release-version.mjs";
+import { stampFixtureVersion } from "../update-first-hop-package-fixtures.mjs";
+import { assertNoIncognitoArtifacts } from "./incognito-artifacts.mjs";
 import {
   assertPublishedDriverReclaimed,
   inspectPublishedDriverSqlite,
@@ -155,6 +162,17 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
+async function relabelCandidate(from, to) {
+  const dir = path.join(runtime, "candidate-relabel");
+  fs.mkdirSync(dir, { recursive: true });
+  await run("candidate-relabel-extract", "tar", ["-xf", candidate, "-C", dir]);
+  stampFixtureVersion(path.join(dir, "package"), to);
+  const relabeled = path.join(runtime, "openclaw-candidate-relabeled.tgz");
+  await run("candidate-relabel-pack", "tar", ["-czf", relabeled, "-C", dir, "package"]);
+  writeJson("candidate-relabel", { from, to, package: relabeled });
+  return relabeled;
+}
+
 async function freePort() {
   const server = net.createServer();
   await new Promise((resolve, reject) => {
@@ -220,7 +238,16 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     }
     assert.equal(readJson(path.join(packageRoot, "package.json")).version, driverVersion);
     await run("candidate-build", "tar", ["-xOf", candidate, "package/dist/build-info.json"]);
-    const build = output("candidate-build");
+    let build = output("candidate-build");
+    let candidatePackage = candidate;
+    // Between a release and its forward-port, main lags npm latest. The cell proves
+    // the update mechanics, not the version label: relabel the candidate to the
+    // driver version so the future-version guard sees an upgrade, not a downgrade.
+    if (compareReleaseVersions(build.version, driverVersion) < 0) {
+      candidatePackage = await relabelCandidate(build.version, driverVersion);
+      // Match the relabeled dist/build-info.json exactly; the installed bytes carry no source label.
+      build = { ...build, version: driverVersion };
+    }
     const driverBuild = legacySqlite
       ? readJson(path.join(packageRoot, "dist/build-info.json"))
       : undefined;
@@ -247,6 +274,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       },
       plugins: { enabled: false },
       agents: {
+        defaults: { heartbeat: { every: "0m" } },
         list: [
           { id: "main", default: true, workspace: path.join(runtime, "workspaces", "main") },
           { id: "second", workspace: path.join(runtime, "workspaces", "second") },
@@ -257,6 +285,21 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       fs.mkdirSync(agent.workspace, { recursive: true });
     }
     fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, `${JSON.stringify(config)}\n`);
+    // 2026.9.7 Doctor keeps unreferenced OAuth sidecars; the update must carry them unchanged.
+    const orphanSidecar = path.join(state, "credentials/auth-profiles", `${"e".repeat(32)}.json`);
+    const orphanSidecarBytes = `${JSON.stringify({
+      version: 1,
+      profileId: "openai-codex:default",
+      provider: "openai-codex",
+      encrypted: {
+        algorithm: "aes-256-gcm",
+        iv: "c3ludGg=",
+        tag: "c3ludGg=",
+        ciphertext: "c3ludGg=",
+      },
+    })}\n`;
+    fs.mkdirSync(path.dirname(orphanSidecar), { recursive: true });
+    fs.writeFileSync(orphanSidecar, orphanSidecarBytes, { mode: 0o600 });
     await run("fixture", "bash", [
       "-c",
       'source "$1"; install_update_restart_systemctl_shim absent',
@@ -310,6 +353,58 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE,
       "utf8",
     );
+    const gateway = async (name, method, params) => {
+      await run(name, "openclaw", [
+        "gateway",
+        "call",
+        method,
+        "--url",
+        `ws://127.0.0.1:${port}`,
+        "--token",
+        token,
+        "--timeout",
+        "30000",
+        "--json",
+        "--params",
+        JSON.stringify(params),
+      ]);
+      return output(name);
+    };
+    const sessions = [];
+    for (const incognito of [false, true]) {
+      const kind = incognito ? "incognito" : "durable";
+      const marker = `published-driver-${kind}-${randomUUID()}`;
+      const created = await gateway(`${kind}-create`, "sessions.create", {
+        agentId: "main",
+        ...(incognito ? { incognito: true } : { key: "agent:main:update-cell" }),
+      });
+      assert(created.ok && created.key && created.sessionId);
+      assert.equal(created.runStarted, false, "Fixture unexpectedly started inference");
+      if (incognito) {
+        assert.equal(created.entry.incognito, true);
+      }
+      const params = { agentId: "main", sessionKey: created.key };
+      const injected = await gateway(`${kind}-inject`, "chat.inject", {
+        ...params,
+        message: marker,
+      });
+      assert(injected.ok && injected.messageId);
+      const history = await gateway(`${kind}-before`, "chat.history", { ...params, limit: 20 });
+      assert.equal(history.sessionId, created.sessionId);
+      assert(
+        JSON.stringify(history.messages).includes(marker),
+        `${kind} content missing before update`,
+      );
+      sessions.push({ kind, marker, params, sessionId: created.sessionId });
+    }
+    const inspectIncognito = (name) => {
+      const backups = fs
+        .readdirSync(path.dirname(packageRoot))
+        .filter((entry) => /^\.openclaw[.-]package-(?:backup|activation)-/u.test(entry))
+        .map((entry) => path.join(path.dirname(packageRoot), entry));
+      writeJson(name, assertNoIncognitoArtifacts([state, ...backups], sessions[1].marker));
+    };
+    inspectIncognito("incognito-artifacts-before");
     let update;
     let updateFailure;
     const sqliteBefore = legacySqlite ? inspectPublishedDriverSqlite(state, 0) : undefined;
@@ -320,7 +415,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       update = await run(
         "update",
         "openclaw",
-        ["update", "--tag", candidate, "--yes", "--json"],
+        ["update", "--tag", candidatePackage, "--yes", "--json"],
         true,
       );
       if (update.exitCode !== 0) {
@@ -368,6 +463,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     assert.equal(recorded.status, "succeeded");
     assert.equal(result.after?.version, build.version);
     assert.deepEqual(readJson(path.join(packageRoot, "dist/build-info.json")), build);
+    assert.equal(fs.readFileSync(orphanSidecar, "utf8"), orphanSidecarBytes);
     assert.notEqual(
       fs.readFileSync(env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE, "utf8"),
       beforePid,
@@ -388,6 +484,19 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     );
     assert.equal(target?.connect.ok, true);
     assert.equal(target.server.version, build.version);
+    for (const session of sessions) {
+      const history = await gateway(`${session.kind}-after`, "chat.history", {
+        ...session.params,
+        limit: 20,
+      });
+      if (session.kind === "incognito") {
+        assert.deepEqual(history.messages, [], "Incognito content survived restart");
+      } else {
+        assert.equal(history.sessionId, session.sessionId);
+        assert(JSON.stringify(history.messages).includes(session.marker), "Durable content lost");
+      }
+    }
+    inspectIncognito("incognito-artifacts-after");
     if (sqliteBefore) {
       assert.equal(typeof build.buildId, "string", "Candidate build identity is missing");
       assert.equal(target.server.buildId, build.buildId);

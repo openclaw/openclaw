@@ -16,6 +16,7 @@ import { isUpdateDoctorLintPass } from "../commands/doctor/shared/update-phase.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -44,12 +45,8 @@ async function collectBundleMcpRuntimeToolSchemaFindings(params: {
     warn: () => {},
   });
   return collectNormalizedToolSchemaFindings({
-    agentId: params.agentId,
+    ...params,
     tools: activeBundleTools,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    modelRef: params.modelRef,
-    model: params.model,
     normalizationFailureFinding: bundleMcpRuntimeNormalizationFailureFinding,
   });
 }
@@ -94,7 +91,7 @@ function bundleMcpRequesterInspectionFinding(serverName: string): HealthFinding 
   return {
     checkId: "core/doctor/runtime-tool-schemas",
     severity: "info",
-    message: `Configured requester-scoped MCP server "${serverName}" was not probed without an authenticated requester.`,
+    message: `Configured requester-scoped MCP server "${serverName}" was not checked without an authenticated requester.`,
     path: `mcp.servers.${serverName}`,
     requirement: "authenticated requester context",
     fixHint: "Verify this server from an authenticated agent turn.",
@@ -287,12 +284,13 @@ export async function collectRuntimeToolSchemaFindings(
         }
       }
     }
+    const toolRegistry = inspection?.registry ?? createEmptyPluginRegistry();
     for (const frame of frames) {
       const { agentId, agentDir, workspaceDir, modelRef, model } = frame;
       const collectForAgent = async () => {
         findings.push(
           ...(await withPluginRuntimeRegistryScope(inspection?.registry, () =>
-            collectAgentRuntimeToolSchemaFindings({ ...frame, cfg }),
+            collectAgentRuntimeToolSchemaFindings({ ...frame, cfg, toolRegistry }),
           )),
         );
         if (!shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true })) {
@@ -361,7 +359,7 @@ export async function collectRuntimeToolSchemaFindings(
             findings.push({
               checkId: "core/doctor/runtime-tool-schemas",
               severity: "info",
-              message: `Configured MCP server "${serverName}" was not probed during read-only inspection because OAuth may rotate external credentials.`,
+              message: `Configured MCP server "${serverName}" was not checked during read-only inspection because OAuth may rotate external credentials.`,
               path: `mcp.servers.${serverName}`,
               fixHint:
                 "For configured servers, run `openclaw mcp probe <name>` against the serving configuration. Validate plugin-provided or agent-local MCP servers from an authenticated serving-agent turn so refreshed credentials persist with their owner.",

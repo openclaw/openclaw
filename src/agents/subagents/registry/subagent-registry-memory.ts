@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
+import { prepareGatewayContextBindingOwner } from "../../../plugins/runtime/gateway-context-binding-owner.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -8,11 +9,13 @@ import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { transferFollowupCohort } from "../completion/session-followup-cohort.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import {
   publishSubagentRunChanges,
   subscribeSubagentRunChanges,
 } from "./subagent-registry-publication.js";
+import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentRunRuntimeKey,
@@ -21,6 +24,42 @@ import {
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
 import { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
+
+function freezeValue(value: unknown): void {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) {
+    return;
+  }
+  for (const child of Object.values(value)) {
+    freezeValue(child);
+  }
+  Object.freeze(value);
+}
+
+const immutableSessionListFacts = new WeakMap<SubagentRunRecord, SubagentRunReadRecord>();
+
+/** A row replacement owns a new projection; retired immutable rows release theirs through GC. */
+export function immutableSubagentRunSessionList(entry: SubagentRunRecord): SubagentRunReadRecord {
+  const prepared = immutableSessionListFacts.get(entry);
+  if (prepared) {
+    return prepared;
+  }
+  prepareGatewayContextBindingOwner(entry);
+  freezeSubagentRunReadRecord(entry);
+  const projection = freezeSubagentRunReadRecord(projectSubagentRunForSessionList(entry));
+  immutableSessionListFacts.set(entry, projection);
+  return projection;
+}
+
+export function immutableSubagentRun(entry: SubagentRunRecord): SubagentRunRecord {
+  immutableSubagentRunSessionList(entry);
+  return entry;
+}
+
+/** Registry projections contain only canonical JSON fields and owner-created containers. */
+export function freezeSubagentRunReadRecord<T extends SubagentRunReadRecord>(record: T): T {
+  freezeValue(record);
+  return record;
+}
 
 // Preflight consults the collector lookup on every Gateway agent request, so it
 // must stay O(1) regardless of retained collector records. The map subclass
@@ -140,6 +179,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     childSessionKey: string;
     childAgentId?: string;
     current: boolean;
+    superseded: boolean;
     expectedEntry?: SubagentRunRecord;
   }>();
   private readonly completionAuthorities = new Map<object, CompletionCustody>();
@@ -362,13 +402,29 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     expectedEntry?: SubagentRunRecord,
     childAgentId?: string,
   ) {
-    const scope = { childSessionKey, childAgentId, current: true, expectedEntry };
+    const scope = {
+      childSessionKey,
+      childAgentId,
+      current: true,
+      superseded: false,
+      expectedEntry,
+    };
     this.registrationScopes.add(scope);
     return {
+      get superseded() {
+        return scope.superseded;
+      },
       assertCurrent: () => {
         if (!scope.current) {
           throw new Error("Subagent registration owner changed during preparation");
         }
+      },
+      accept: (entry: SubagentRunRecord) => {
+        if (!scope.current || entry.childSessionKey !== childSessionKey) {
+          throw new Error("Subagent registration owner changed before publication");
+        }
+        scope.expectedEntry = entry;
+        this.commitOwnership(entry);
       },
       release: () => {
         scope.current = false;
@@ -379,8 +435,15 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
 
   /** Publish accepted runtime ownership after the row's commit acknowledgement. */
   commitOwnership(entry: SubagentRunRecord): void {
+    if (this.settleCommittedOwnership(entry)) {
+      publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
+    }
+  }
+
+  /** Bulk restore settles custody before its one atomic row publication notifies readers. */
+  settleCommittedOwnership(entry: SubagentRunRecord): boolean {
     if (!isSameSubagentRunOwner(this.get(entry.runId), entry)) {
-      return;
+      return false;
     }
     for (const scope of this.registrationScopes) {
       if (
@@ -388,6 +451,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         !isSameSubagentRunOwner(scope.expectedEntry, entry)
       ) {
         scope.current = false;
+        scope.superseded = true;
       }
     }
     for (const scope of this.retirementScopes) {
@@ -403,7 +467,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         scope.observation = { state: "superseded" };
       }
     }
-    publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
+    return true;
   }
 
   /** Normal cleanup calls this only after its deletion commits; raw map deletion is not evidence. */
@@ -506,6 +570,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   override clear(): void {
     for (const scope of this.registrationScopes) {
       scope.current = false;
+      scope.superseded = true;
     }
     this.registrationScopes.clear();
     for (const { entry } of this.completionAuthorities.values()) {

@@ -63,16 +63,6 @@ type RawTranscriptReseedReason =
   | "orphaned-tool-use"
   | "session-expired";
 
-const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>([
-  "missing-transcript",
-  "orphaned-tool-use",
-  "message-policy",
-  "system-prompt",
-  "cwd",
-  "mcp",
-  "session-expired",
-]);
-
 export function resolveAutoCliSessionReseedHistoryChars(contextWindowTokens: number): number {
   if (!Number.isFinite(contextWindowTokens) || contextWindowTokens <= 0) {
     return MAX_CLI_SESSION_RESEED_HISTORY_CHARS;
@@ -163,13 +153,7 @@ export function buildCliSessionHistoryPrompt(params: {
   const summaryRendered = firstIsCompaction ? renderHistoryMessage(firstEntry) : undefined;
   const tailMessages = firstIsCompaction ? params.messages.slice(1) : params.messages;
 
-  const tailRaw = tailMessages
-    .flatMap((message) => {
-      const rendered = renderHistoryMessage(message);
-      return rendered ? [rendered] : [];
-    })
-    .join("\n\n")
-    .trim();
+  const tailRaw = tailMessages.map(renderHistoryMessage).filter(Boolean).join("\n\n").trim();
 
   const truncationMarker = "[OpenClaw reseed history truncated; older turns dropped]";
   const renderTruncatedTail = (raw: string, budget: number): string => {
@@ -495,9 +479,7 @@ export async function loadCliSessionPromptContext(
   if (
     !hasSummary &&
     !params.sessionManager &&
-    (params.allowRawTranscriptReseed !== true ||
-      !params.rawTranscriptReseedReason ||
-      !RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS.has(params.rawTranscriptReseedReason))
+    (params.allowRawTranscriptReseed !== true || !params.rawTranscriptReseedReason)
   ) {
     return { reseedMessages: [], durableContext };
   }

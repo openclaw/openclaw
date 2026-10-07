@@ -103,8 +103,8 @@ function compactRichText(value: string): string {
     .join("\n");
 }
 
-function joinRichText(parts: string[], separator: string): string {
-  return parts.map(compactRichText).filter(Boolean).join(separator);
+function joinRichText(parts: string[]): string {
+  return parts.map(compactRichText).filter(Boolean).join("\n");
 }
 
 function renderRichInlineText(value: RichText | undefined): string {
@@ -133,10 +133,7 @@ function renderRichInlineText(value: RichText | undefined): string {
 
 function renderRichCaption(caption: RichBlockCaption | undefined): string {
   return caption
-    ? joinRichText(
-        [renderRichInlineText(caption.text), renderRichInlineText(caption.credit ?? "")],
-        "\n",
-      )
+    ? joinRichText([renderRichInlineText(caption.text), renderRichInlineText(caption.credit)])
     : "";
 }
 
@@ -150,38 +147,25 @@ function renderRichBlock(block: RichBlock): string {
       return renderRichInlineText(block.text);
     case "expandable_blockquote":
     case "pullquote":
-      return joinRichText(
-        [renderRichInlineText(block.text), renderRichInlineText(block.credit ?? "")],
-        "\n",
-      );
+      return renderRichCaption(block);
     case "mathematical_expression":
       return block.expression;
     case "blockquote":
-      return joinRichText(
-        [renderRichInlineText(block.credit ?? ""), renderRichBlocks(block.blocks)],
-        "\n",
-      );
+      return joinRichText([renderRichInlineText(block.credit), renderRichBlocks(block.blocks)]);
     case "collage":
     case "slideshow":
-      return joinRichText([renderRichCaption(block.caption), renderRichBlocks(block.blocks)], "\n");
+      return joinRichText([renderRichCaption(block.caption), renderRichBlocks(block.blocks)]);
     case "details":
-      return joinRichText(
-        [renderRichInlineText(block.summary), renderRichBlocks(block.blocks)],
-        "\n",
-      );
+      return joinRichText([renderRichInlineText(block.summary), renderRichBlocks(block.blocks)]);
     case "list":
       return joinRichText(
-        block.items.map((item) => joinRichText([item.label, renderRichBlocks(item.blocks)], "\n")),
-        "\n",
+        block.items.map((item) => joinRichText([item.label, renderRichBlocks(item.blocks)])),
       );
     case "table":
-      return joinRichText(
-        [
-          renderRichInlineText(block.caption ?? ""),
-          ...block.cells.flatMap((row) => row.map((cell) => renderRichInlineText(cell.text ?? ""))),
-        ],
-        "\n",
-      );
+      return joinRichText([
+        renderRichInlineText(block.caption),
+        ...block.cells.flatMap((row) => row.map((cell) => renderRichInlineText(cell.text))),
+      ]);
     case "animation":
     case "audio":
     case "document":
@@ -191,10 +175,7 @@ function renderRichBlock(block: RichBlock): string {
     case "voice_note":
       return renderRichCaption(block.caption);
     case "buttons":
-      return joinRichText(
-        block.buttons.map((button) => renderRichInlineText(button.text)),
-        "\n",
-      );
+      return joinRichText(block.buttons.map((button) => renderRichInlineText(button.text)));
     case "anchor":
     case "divider":
       return "";
@@ -204,7 +185,7 @@ function renderRichBlock(block: RichBlock): string {
 }
 
 function renderRichBlocks(blocks: readonly RichBlock[]): string {
-  return joinRichText(blocks.map(renderRichBlock), "\n");
+  return joinRichText(blocks.map(renderRichBlock));
 }
 
 export function resolveTelegramRichMessagePlaceholder(
@@ -217,7 +198,7 @@ export function resolveTelegramRichMessageText(msg: TelegramTextMessage): string
   if (!msg.rich_message) {
     return undefined;
   }
-  return compactRichText(renderRichBlocks(msg.rich_message.blocks)) || undefined;
+  return renderRichBlocks(msg.rich_message.blocks) || undefined;
 }
 
 export function resolveTelegramRichMessageBody(msg: TelegramTextMessage): string | undefined {

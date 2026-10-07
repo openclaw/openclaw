@@ -9,7 +9,6 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { loadSettings } from "../../app/settings.ts";
-import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
 import {
@@ -18,7 +17,7 @@ import {
 } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
-import { availableSidebarSlots, sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
+import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { createSidebarFullMessageLoader } from "./chat-pane-sidebar-layout.ts";
 import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -32,6 +31,8 @@ import {
 } from "./components/chat-message-media.ts";
 import {
   clearSessionWorkspacePreviews,
+  getSessionWorkspace,
+  loadSessionWorkspace,
   openSessionWorkspacePreview,
 } from "./components/chat-session-workspace-state.ts";
 import {
@@ -63,7 +64,9 @@ function discussionSlots(discussionAvailable: boolean) {
     discussion,
     discussionAvailable,
   } as Parameters<typeof sidebarPanelDefinitions>[0]);
-  return availableSidebarSlots(definitions);
+  return definitions
+    .filter((definition) => definition.available)
+    .map((definition) => definition.slot);
 }
 
 afterEach(() => {
@@ -332,7 +335,7 @@ describe("chat pane embedded panels", () => {
     "reuses attachment metadata when Open shows %s content in Files",
     async (surface) => {
       installTranscriptDomMocks();
-      const { mount, state } = createReviewFixture();
+      const { context, mount, state } = createReviewFixture();
       const transcript = document.body.appendChild(document.createElement("div"));
       const fetchMetadata = vi.fn(() =>
         Promise.resolve(Response.json({ available: true, sizeBytes: 574_000 })),
@@ -382,10 +385,7 @@ describe("chat pane embedded panels", () => {
         sessionKey: state.sessionKey,
         currentAgentId: resolveChatAgentId(state),
         fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
-        loadFullAssistantMessage: createSidebarFullMessageLoader(
-          state,
-          Boolean(parseCatalogSessionKey(state.sessionKey)),
-        ),
+        loadFullAssistantMessage: createSidebarFullMessageLoader(state, context.gateway),
         connectionEpoch: state.connectionEpoch,
       } as ChatProps;
       const renderAttachment = () => {
@@ -480,7 +480,7 @@ describe("chat pane embedded panels", () => {
 
   it("opens the requested file when an unrelated directory listing completes first", async () => {
     const { file, list, mount, preview, renderPanels, state } = createReviewFixture();
-    createSessionWorkspaceProps(state).onRefresh();
+    loadSessionWorkspace(state, getSessionWorkspace(state), true);
     openSessionWorkspaceFile(state, { path: preview.file.path });
     await renderPanels();
     expect(mount.querySelector('[data-panel-skeleton="files"]')).not.toBeNull();

@@ -1,14 +1,12 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { uniqueStrings, uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { z } from "zod";
 import type {
-  QaLabExecutionKind,
   QaLabResolvedRunPlan,
   QaLabRunnerSnapshot,
   QaLabRunSelection,
 } from "../runner-contract.js";
-import { defaultQaModelForMode as defaultStaticQaModelForMode } from "./model-selection.js";
 import {
   defaultQaRuntimeModelForMode,
   resolveQaRuntimeModelPair,
@@ -68,10 +66,7 @@ function createDefaultQaRunSelection(
     channelDriver: profile.channelDriver,
     evidenceMode: profile.evidenceMode,
     providerMode,
-    ...resolveQaRuntimeModelPair({
-      providerMode,
-      resolveDefaultModel: (mode, alternate) => defaultStaticQaModelForMode(mode, { alternate }),
-    }),
+    ...resolveQaRuntimeModelPair({ providerMode }),
     fastMode: getQaProvider(providerMode).kind === "live",
     runtimePair: null,
     runtimePairLane: null,
@@ -140,10 +135,11 @@ function normalizeQaProfile(
   if (input !== undefined && input !== null && (typeof input !== "string" || !input.trim())) {
     throw new Error("QA runner profile must be a non-empty string");
   }
-  const profile = typeof input === "string" ? input.trim() : fallback;
-  if (!profiles.some((entry) => entry.id === profile)) {
+  const profileId = typeof input === "string" ? input.trim() : fallback;
+  const profile = profiles.find((entry) => entry.id === profileId);
+  if (!profile) {
     throw new Error(
-      `unknown QA run profile: ${profile}; expected one of ${profiles.map((entry) => entry.id).join(", ")}`,
+      `unknown QA run profile: ${profileId}; expected one of ${profiles.map((entry) => entry.id).join(", ")}`,
     );
   }
   return profile;
@@ -188,12 +184,12 @@ export function normalizeQaRunSelection(
     throw new Error("QA runner request must be a JSON object");
   }
   const payload = input as Record<string, unknown>;
-  const profile = normalizeQaProfile(
+  const profileDefaults = normalizeQaProfile(
     payload.profile,
     profiles,
     Array.isArray(payload.scenarioIds) ? "all" : undefined,
   );
-  const profileDefaults = requireQaRunProfile(profiles, profile);
+  const profile = profileDefaults.id;
   const providerMode = normalizeQaProviderMode(
     payload.providerMode ?? (profile === "smoke-ci" ? "mock-openai" : undefined),
   );
@@ -393,9 +389,7 @@ export function resolveQaLabRunPlan(params: {
   if (selectedScenarios.length === 0) {
     errors.push("QA run plan selected no runnable scenarios.");
   }
-  const executionKinds = uniqueStrings(
-    selectedScenarios.map((scenario) => scenario.execution.kind),
-  ) as QaLabExecutionKind[];
+  const executionKinds = uniqueValues(selectedScenarios.map((scenario) => scenario.execution.kind));
   return {
     status: errors.length > 0 ? "invalid" : "ready",
     profile: selection.profile,

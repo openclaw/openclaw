@@ -19,7 +19,6 @@ import type { BlockReplySource } from "./block-reply-source.types.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
 import { resolveReplyDispatchErrorOutcome } from "./reply-dispatch-outcome.js";
 
-/** Streaming block reply pipeline that tracks sent content and media. */
 export type BlockReplyPipeline = {
   enqueue: (payload: ReplyPayload) => void;
   flush: (options?: { force?: boolean }) => Promise<void>;
@@ -38,32 +37,6 @@ export type BlockReplyPipeline = {
   hasRetryBlockedTerminalDelivery?: (minimumAssistantMessageIndex?: number) => boolean;
   hasRetryBlockedDelivery: () => boolean;
 };
-
-/** Optional buffering strategy used before payloads enter block delivery. */
-type BlockReplyBuffer = {
-  shouldBuffer: (payload: ReplyPayload) => boolean;
-  onEnqueue?: (payload: ReplyPayload) => void;
-  finalize?: (payload: ReplyPayload) => ReplyPayload;
-};
-
-/** Buffers audio payloads so final delivery can preserve voice presentation. */
-export function createAudioAsVoiceBuffer(params: {
-  isAudioPayload: (payload: ReplyPayload) => boolean;
-}): BlockReplyBuffer {
-  let seenAudioAsVoice = false;
-  return {
-    onEnqueue: (payload) => {
-      if (payload.audioAsVoice) {
-        seenAudioAsVoice = true;
-      }
-    },
-    shouldBuffer: (payload) => params.isAudioPayload(payload),
-    finalize: (payload) =>
-      seenAudioAsVoice
-        ? copyReplyPayloadMetadata(payload, { ...payload, audioAsVoice: true })
-        : payload,
-  };
-}
 
 function createBlockReplyContentIdentity(payload: ReplyPayload) {
   const reply = resolveSendableOutboundReplyParts(payload);
@@ -112,9 +85,10 @@ export function createBlockReplyPipeline(params: {
   ) => Promise<void> | void;
   timeoutMs: number;
   coalescing?: BlockStreamingCoalescing;
-  buffer?: BlockReplyBuffer;
+  /** Buffer audio until its voice presentation metadata has arrived. */
+  isAudioPayload?: (payload: ReplyPayload) => boolean;
 }): BlockReplyPipeline {
-  const { onBlockReply, coalescing, buffer } = params;
+  const { onBlockReply, coalescing, isAudioPayload } = params;
   const timeoutMs = clampPositiveTimerTimeoutMs(params.timeoutMs) ?? 0;
   const sentKeys = new Set<string>();
   const sentContentKeys = new Set<string>();
@@ -122,11 +96,13 @@ export function createBlockReplyPipeline(params: {
   const pendingKeys = new Set<string>();
   const seenKeys = new Set<string>();
   const bufferedPayloads: ReplyPayload[] = [];
+  let seenAudioAsVoice = false;
   type BlockAttempt = Awaited<ReturnType<typeof deliverBlockReply>> & {
     sourceText: string;
     contentKey: string;
     mediaUrls: readonly string[];
     terminal: boolean;
+    messageStart?: number;
     terminalDeliveryConfirmed?: true;
   };
   const blockAttemptsByMessage = new Map<number | undefined, BlockAttempt[]>();
@@ -181,14 +157,16 @@ export function createBlockReplyPipeline(params: {
     pendingKeys.add(dedupeKey);
     const isTerminalContent = isReplyPayloadTerminalContent(payload);
     const reply = resolveSendableOutboundReplyParts(payload);
+    const metadata = getReplyPayloadMetadata(payload);
     const attempt: BlockAttempt = {
       outcome: "cancelled",
       sourceText: blockSourceText ?? reply.trimmedText,
       contentKey,
       mediaUrls: reply.mediaUrls,
       terminal: isTerminalContent && hasOutboundReplyContent(payload, { trimText: true }),
+      messageStart: metadata?.assistantMessageStartIndex,
     };
-    const index = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+    const index = metadata?.assistantMessageIndex;
     const attempts = blockAttemptsByMessage.get(index) ?? [];
     attempts.push(attempt);
     blockAttemptsByMessage.set(index, attempts);
@@ -275,8 +253,8 @@ export function createBlockReplyPipeline(params: {
     : null;
 
   const bufferPayload = (payload: ReplyPayload) => {
-    buffer?.onEnqueue?.(payload);
-    if (!buffer?.shouldBuffer(payload)) {
+    seenAudioAsVoice ||= Boolean(payload.audioAsVoice);
+    if (!isAudioPayload?.(payload)) {
       return false;
     }
     const payloadKey = createBlockReplyPayloadKey(payload);
@@ -293,7 +271,9 @@ export function createBlockReplyPipeline(params: {
       return;
     }
     for (const payload of bufferedPayloads) {
-      const finalPayload = buffer?.finalize?.(payload) ?? payload;
+      const finalPayload = seenAudioAsVoice
+        ? copyReplyPayloadMetadata(payload, { ...payload, audioAsVoice: true })
+        : payload;
       sendPayload(finalPayload, /* bypassSeenCheck */ true);
     }
     bufferedPayloads.length = 0;
@@ -372,11 +352,24 @@ export function createBlockReplyPipeline(params: {
     await sendChain;
   };
 
+  // A final payload joins every text item of its physical assistant message, and each item
+  // streamed under its own index (hidden commentary items take indexes without blocks), so
+  // also match item runs back to the message start.
   const matchingAttempts = (payload: ReplyPayload) => {
     const index = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
-    return index === undefined
-      ? blockAttemptsByMessage.values()
-      : [blockAttemptsByMessage.get(index) ?? []];
+    if (index === undefined) {
+      return blockAttemptsByMessage.values();
+    }
+    const start = blockAttemptsByMessage.get(index)?.[0]?.messageStart ?? index;
+    const runs: BlockAttempt[][] = [];
+    for (let item = index, run: BlockAttempt[] = []; item >= start; item--) {
+      const attempts = blockAttemptsByMessage.get(item);
+      if (attempts?.length) {
+        run = [...attempts, ...run];
+        runs.push(run);
+      }
+    }
+    return runs;
   };
   const normalizeSource = (text: string) => text.replace(/\s+/g, "");
   const combinedSource = (attempts: BlockAttempt[]) =>

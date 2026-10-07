@@ -7,13 +7,13 @@ import {
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 
 /** Coarse chat shape used when a channel can distinguish direct, group, and broadcast targets. */
-export type ChannelRouteChatType = "direct" | "group" | "channel";
+type ChannelRouteChatType = "direct" | "group" | "channel";
 
 /** Provider-specific thread kind carried with normalized channel routes. */
-export type ChannelRouteThreadKind = "topic" | "thread" | "reply";
+type ChannelRouteThreadKind = "topic" | "thread" | "reply";
 
 /** Describes which runtime surface supplied a channel route thread id. */
-export type ChannelRouteThreadSource = "explicit" | "target" | "session" | "turn";
+type ChannelRouteThreadSource = "explicit" | "target" | "session" | "turn";
 
 /** Normalized channel route used for comparison, binding, and dedupe helpers. */
 export type ChannelRouteRef = {
@@ -68,14 +68,9 @@ export type ChannelRouteTargetInput = Pick<
 /** Route input accepted by compact-key helpers after legacy and normalized callers converge. */
 export type ChannelRouteKeyInput = ChannelRouteRef | ChannelRouteTargetInput;
 
-/** Normalizes a route thread id while preserving provider string ids. */
-export function normalizeRouteThreadId(value: unknown): string | number | undefined {
-  return normalizeOptionalThreadValue(value);
-}
-
 /** Stringifies a normalized thread id for stable route keys and comparisons. */
 export function stringifyRouteThreadId(value: unknown): string | undefined {
-  const normalized = normalizeRouteThreadId(value);
+  const normalized = normalizeOptionalThreadValue(value);
   return normalized == null ? undefined : String(normalized);
 }
 
@@ -91,7 +86,7 @@ export function normalizeChannelRouteRef(
     typeof input.accountId === "string" ? normalizeOptionalAccountId(input.accountId) : undefined;
   const to = normalizeOptionalString(input.to);
   const rawTo = normalizeOptionalString(input.rawTo);
-  const threadId = normalizeRouteThreadId(input.threadId);
+  const threadId = normalizeOptionalThreadValue(input.threadId);
   if (!channel && !to && !accountId && threadId == null) {
     return undefined;
   }

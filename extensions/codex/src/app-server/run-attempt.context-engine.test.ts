@@ -16,7 +16,9 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import {
   assistantMessage,
   setupRunAttemptTestHooks,
@@ -32,6 +34,7 @@ import {
   getRequestInputText,
   getRequestInputTextAt,
   makeThreadBootstrapBinding,
+  requestMethodsExcludingSkillDiscovery,
   requireRecord,
   runCodexAppServerAttempt,
   writeCodexAppServerBinding,
@@ -420,6 +423,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   });
 
   it("projects thread-bootstrap context only once for a matching context-engine epoch", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
@@ -438,11 +442,12 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     firstParams.contextEngine = contextEngine;
 
     const firstRun = runCodexAppServerAttempt(firstParams);
-    await firstHarness.waitForMethod("turn/start");
+    await firstRun.waitForTurnAccepted();
     expectRequestInputTextContains(firstHarness, "OpenClaw assembled context for this turn:");
     expectRequestInputTextContains(firstHarness, "bootstrap-only context");
     await firstHarness.completeTurn();
     await firstRun;
+    await nativeHookRelayUnregisterQueue.flush();
 
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding?.contextEngine?.projection).toEqual({
@@ -453,21 +458,18 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     });
 
     const secondRun = runCodexAppServerAttempt(firstParams);
-    await vi.waitFor(() => {
-      expect(
-        firstHarness.requests.filter((request) => request.method === "turn/start"),
-      ).toHaveLength(2);
-    });
+    await secondRun.waitForTurnAccepted();
+    expect(firstHarness.requests.filter((request) => request.method === "turn/start")).toHaveLength(
+      2,
+    );
 
-    expect(firstHarness.requests.map((request) => request.method)).toEqual([
+    expect(requestMethodsExcludingSkillDiscovery(firstHarness)).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/start",
-      "model/list",
       "turn/start",
       "config/read",
       "configRequirements/read",
-      "model/list",
       "turn/start",
     ]);
     const secondInputText = getRequestInputTextAt(firstHarness, 1);
@@ -476,6 +478,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(secondInputText).toBe("hello");
     await firstHarness.completeTurn();
     await secondRun;
+    await nativeHookRelayUnregisterQueue.flush();
   });
 
   it.each(["byte guard", "token pressure", "inactive engine"] as const)(
@@ -554,11 +557,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       );
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
-      expect(harness.requests.map(({ method }) => method)).toEqual([
+      expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
         "config/read",
         "configRequirements/read",
         ...(resumed ? ["thread/read", "thread/resume", "thread/inject_items"] : ["thread/start"]),
-        "model/list",
         "turn/start",
       ]);
       const inputText = getRequestInputText(harness);
@@ -612,11 +614,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
 
-    expect(harness.requests.map((request) => request.method)).toEqual([
+    expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/start",
-      "model/list",
       "turn/start",
     ]);
     const inputText = getRequestInputText(harness);
@@ -677,11 +678,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
-      expect(harness.requests.map((request) => request.method)).toEqual([
+      expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
         "config/read",
         "configRequirements/read",
         "thread/start",
-        "model/list",
         "turn/start",
       ]);
       expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
@@ -776,10 +776,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         }),
       ]);
 
-      expect(harness.requests.map((request) => request.method)).toEqual([
+      expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
         "config/read",
         "thread/start",
-        "model/list",
         "turn/start",
       ]);
       expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
@@ -868,7 +867,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("persists the admitted user prompt before an async item buffered during turn startup", async () => {
     const workspaceDir = path.join(tempDir, "workspace-early-async");
     const params = await createSqliteParams(workspaceDir, "early-async-order");
-    params.onBlockReply = vi.fn();
+    const delivered = Promise.withResolvers<void>();
+    params.onBlockReply = vi.fn(() => delivered.resolve());
     params.sandboxSessionKey = "agent:main:policy";
     params.contextEngine = createContextEngine();
     const beforeMessageWrite = vi.fn();
@@ -906,7 +906,12 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    await awaitGateBeforeSettlement(
+      delivered.promise,
+      run,
+      "Codex attempt completed before delivering its buffered async item",
+    );
+    expect(params.onBlockReply).toHaveBeenCalledOnce();
     expect(recorder.markSentToProvider).not.toHaveBeenCalled();
     expect(recorder.markRuntimePersisted).toHaveBeenCalledOnce();
     expect(beforeMessageWrite).toHaveBeenCalledWith(

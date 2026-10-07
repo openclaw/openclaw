@@ -25,6 +25,7 @@ import {
 } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { loadSubagentSessionEntry } from "../../agents/subagents/registry/subagent-session-reconciliation.js";
 import { revokeRequesterCronAuthority } from "../../agents/subagents/requester-cron-authority.js";
 import * as requesterAttachment from "../../agents/subagents/requester-final-attachment.js";
 import { createSessionsYieldTool } from "../../agents/tools/sessions-yield-tool.js";
@@ -32,6 +33,12 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolvePhysicalSessionStorePath } from "../../config/sessions/session-store-path.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import {
+  AgentDatabaseAdmissionError,
+  assertAgentDatabaseAdmitted,
+  createAgentDatabaseInspectionRefusal,
+  recordAgentDatabaseAdmissions,
+} from "../../state/agent-database-admission.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -361,14 +368,40 @@ it.each(["source retirement", "transport failure after commit"] as const)(
 );
 
 it.each([
-  { prepared: false, missing: false },
-  { prepared: true, missing: false },
-  { prepared: true, missing: true },
+  { prepared: false, memberState: "present" },
+  { prepared: true, memberState: "present" },
+  { prepared: true, memberState: "retired" },
+  { prepared: true, memberState: "rearmed" },
 ])(
-  "recovers the original requester transfer after restart (prepared: $prepared, missing member: $missing)",
-  async ({ prepared, missing }) => {
+  "recovers the original requester transfer after restart (prepared: $prepared, member: $memberState)",
+  async ({ prepared, memberState }) => {
+    const conflicted = memberState === "rearmed";
     vi.useFakeTimers();
     const { entries, settle } = await createYieldedChild(true);
+    const healthyRunId = "zz-independent-restored-child";
+    if (conflicted) {
+      const healthyRequester = "agent:other:independent-restored-requester";
+      const healthyChild = "agent:other:subagent:independent-restored-child";
+      for (const sessionKey of [healthyRequester, healthyChild]) {
+        await writeSubagentSessionEntry({
+          stateDir: fixture.stateDir,
+          agentId: "other",
+          sessionKey,
+          defaultSessionId: `${sessionKey}-session`,
+        });
+      }
+      await registerSubagentRun({
+        runId: healthyRunId,
+        childSessionKey: healthyChild,
+        requesterSessionKey: healthyRequester,
+        requesterAgentId: "other",
+        requesterTurnRunId: "independent-restored-parent",
+        requesterDisplayKey: requesterSessionKey,
+        task: "Keep independent restoration moving",
+        cleanup: "keep",
+        expectsCompletionMessage: true,
+      });
+    }
     const failed = createDeferred();
     const promotion = vi
       .spyOn(requesterAttachment, "promoteRequesterFinalAttachment")
@@ -410,22 +443,30 @@ it.each([
         promotion.mockRestore();
       }
       expect(writes).toBe(prepared ? 1 : 0);
+      if (memberState !== "present") {
+        const sibling = expectDefined(entries[1], "prepared cohort sibling");
+        await registryPersistence.mutateSubagentRuns(
+          [sibling.runId],
+          (rows) => {
+            const next =
+              memberState === "retired"
+                ? null
+                : structuredClone(expectDefined(rows.get(sibling.runId), "rearmed sibling"));
+            if (next) {
+              const wake = expectDefined(next.requesterSettleWake, "prepared sibling wake");
+              wake.rearmGeneration =
+                expectDefined(wake.rearmGeneration, "prepared wake generation") + 1;
+            }
+            return { value: undefined, postimages: new Map([[sibling.runId, next]]) };
+          },
+          { context: captureOpenClawStateWorkerContext() },
+        );
+      }
       await resetSubagentRegistryForTests({ persist: false });
       if (settlement) {
         await expect(settlement).rejects.toMatchObject({ outcome: "committed" });
       }
       await closeOpenClawStateDatabaseAsync();
-      if (missing) {
-        // A durable partial cohort must never become a new, smaller first-stage write.
-        await registryPersistence.mutateSubagentRuns(
-          [entries[1]!.runId],
-          () => ({
-            value: undefined,
-            postimages: new Map([[entries[1]!.runId, null]]),
-          }),
-          { context: captureOpenClawStateWorkerContext() },
-        );
-      }
       const beforeRestore = writes;
       await initSubagentRegistry();
       const restored = expectDefined(
@@ -444,23 +485,58 @@ it.each([
       }
       const context = sessionSharingTestContext(vi.fn(), getRuntimeConfig());
       context.resolveGatewayContext = () => context;
+      if (conflicted) {
+        recordAgentDatabaseAdmissions(
+          [
+            createAgentDatabaseInspectionRefusal({
+              agentId: "main",
+              paths: [fixture.stateDir],
+              pending: true,
+              reason: "Startup preparation is pending",
+            }),
+          ],
+          { source: "startup" },
+        );
+        expect(() => assertAgentDatabaseAdmitted("main")).toThrow(AgentDatabaseAdmissionError);
+        // Generic restoration deliberately reads existing sessions through the
+        // read-only owner, without borrowing pending writable admission.
+        expect(
+          loadSubagentSessionEntry({ childSessionKey: restored.childSessionKey }),
+        ).toMatchObject({
+          sessionId: `${restored.childSessionKey}-session`,
+        });
+      }
       const activation = activateSubagentRegistry(context.resolveGatewayContext);
-      if (missing) {
+      if (conflicted) {
         await expect(activation).rejects.toMatchObject({
           outcome: "committed",
           publication: "superseded",
         });
         expect(subagentRuns.get(restored.runId)?.requesterTurnRunId).toBe("staged-cohort-parent");
-        expect(writes).toBe(beforeRestore);
+        expect(subagentRuns.get(restored.runId)?.requesterSettleWake?.batchRunIds).toEqual(
+          entries.map((entry) => entry.runId).toSorted(),
+        );
+        expect(subagentRuns.get(healthyRunId)?.requesterTurnRunId).toBeUndefined();
+        expect(writes).toBe(beforeRestore + 1);
       } else {
         await activation;
         expect(subagentRuns.get(restored.runId)?.requesterTurnRunId).toBeUndefined();
         expect(subagentRuns.get(restored.runId)?.requesterTurnYielded).toBeUndefined();
-        expect(subagentRuns.get(restored.runId)?.requesterSettleWake?.rearmGeneration).toBe(1);
+        expect(subagentRuns.get(restored.runId)?.requesterSettleWake).toMatchObject({
+          batchRunIds: entries.map((entry) => entry.runId).toSorted(),
+          rearmGeneration: 1,
+        });
+        // A retired member leaves the original batch identity and release-only write intact.
         expect(writes).toBe(beforeRestore + (prepared ? 1 : 2));
+        if (memberState === "retired") {
+          expect(subagentRuns.has(entries[1]!.runId)).toBe(false);
+        }
       }
       expect(fixture.wake).not.toHaveBeenCalled();
     } finally {
+      if (conflicted) {
+        recordAgentDatabaseAdmissions([], { source: "startup" });
+      }
       await resetSubagentRegistryForTests({ persist: false });
       await Promise.allSettled(settlement ? [settlement] : []);
       promotion.mockRestore();
@@ -515,8 +591,8 @@ it.each([false, true])(
       await expect(opposite).rejects.toMatchObject({ outcome: "not-committed" });
       expect(writes).toBe(requesterYielded ? 2 : 1);
       const { loadSubagentRegistryFromSqlite } = await vi.importActual<
-        typeof import("../../agents/subagents/registry/subagent-registry.store.sqlite.js")
-      >("../../agents/subagents/registry/subagent-registry.store.sqlite.js");
+        typeof import("../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js")
+      >("../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js");
       const stored = expectDefined(
         loadSubagentRegistryFromSqlite().get(entry.runId),
         "settled child",
@@ -578,8 +654,8 @@ it("retains the committed cohort when release admission fails and the caller ret
     expect(attempts).toBe(2);
     expect(writes).toBe(1);
     const { loadSubagentRegistryFromSqlite } = await vi.importActual<
-      typeof import("../../agents/subagents/registry/subagent-registry.store.sqlite.js")
-    >("../../agents/subagents/registry/subagent-registry.store.sqlite.js");
+      typeof import("../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js")
+    >("../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js");
     expect(loadSubagentRegistryFromSqlite().get(entry.runId)).toMatchObject({
       requesterTurnRunId: "staged-cohort-parent",
       requesterTurnYielded: true,

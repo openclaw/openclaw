@@ -350,7 +350,6 @@ export async function withReplaySession(
         onSteeringAcknowledged: () => {},
         persistToolResultProjections: async () => {},
         runtimeOnly: false,
-        sessionPromptState: promptState,
         systemPrompt: "",
         toolResultAggregateMaxChars: 8000,
         toolResultMaxChars: 4000,

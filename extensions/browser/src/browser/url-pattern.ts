@@ -1,6 +1,3 @@
-/**
- * URL pattern matching for Browser response and wait tools.
- */
 function wildcardPatternToRegExp(pattern: string): RegExp {
   let source = "^";
   for (let index = 0; index < pattern.length; index += 1) {
@@ -20,16 +17,12 @@ function wildcardPatternToRegExp(pattern: string): RegExp {
   return new RegExp(source, "u");
 }
 
-/** Matches exact, wildcard, or substring URL patterns against a browser URL. */
 export function matchBrowserUrlPattern(pattern: string, url: string): boolean {
   const trimmedPattern = pattern.trim();
   if (!trimmedPattern) {
     return false;
   }
-  if (trimmedPattern === url) {
-    return true;
-  }
-  if (trimmedPattern === "*") {
+  if (trimmedPattern === url || trimmedPattern === "*") {
     return true;
   }
   if (trimmedPattern.includes("*")) {

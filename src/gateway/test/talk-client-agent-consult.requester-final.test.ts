@@ -13,6 +13,7 @@ import {
   promoteRequesterFinalAttachment,
 } from "../../agents/subagents/requester-final-attachment.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 
@@ -122,6 +123,7 @@ describe("Talk requester-final consult ownership", () => {
     };
     mocks.createOperationalRunInstanceRef.mockReturnValueOnce(operationalRunInstance);
     mocks.runEmbeddedAgentCore.mockImplementationOnce(async () => {
+      const project = (_overlay: ReplyToolAuthorityOverlay) => "authority";
       await withGatewayToolCallerIdentity(
         {
           agentId: "researcher",
@@ -129,7 +131,8 @@ describe("Talk requester-final consult ownership", () => {
           operationalRunInstance,
           embeddedRunToolAuthorityBinding: () => ({
             source: "attempt",
-            project: () => "authority",
+            project,
+            projectAsync: async (overlay) => project(overlay),
             assertActive: () => {},
           }),
         },

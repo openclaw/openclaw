@@ -129,7 +129,6 @@ public actor GatewayNodeSession {
     private var attachmentLimits: GatewayAttachmentLimits?
     private var mainSessionKey: String?
     private var snapshotWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
-    private var snapshotReadyWaiters: [CheckedContinuation<Bool, Never>] = []
     // `computer.act` is not safe to repeat after a response is lost. Keep recent
     // in-flight/results on the long-lived node session so a channel reconnect can
     // replay the receipt without posting input twice. App restart intentionally
@@ -138,6 +137,7 @@ public actor GatewayNodeSession {
     private var computerInvokeReceiptOrder: [ComputerInvokeReceiptKey] = []
     #if DEBUG
     private var computerInvokeReceiptJoinCounts: [UUID: Int] = [:]
+    private var computerInvokeReceiptJoinWaiters: [CheckedContinuation<Void, Never>] = []
     var testBeforeChannelShutdown: (@Sendable () async -> Void)?
     #endif
 
@@ -330,39 +330,6 @@ public actor GatewayNodeSession {
         else { throw CancellationError() }
         await self.notifyConnectedIfNeeded(
             admissionGeneration: expectedAdmissionGeneration)
-    }
-
-    /// Keeps the flat overload source-compatible while credentials remain one reconnect identity.
-    public func connect(
-        url: URL,
-        token: String? = nil,
-        bootstrapToken: String? = nil,
-        password: String? = nil,
-        connectOptions: GatewayConnectOptions,
-        sessionBox: WebSocketSessionBox?,
-        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
-        onConnected: @escaping @Sendable () async -> Void,
-        onDisconnected: @escaping @Sendable (String) async -> Void,
-        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse,
-        onInvokeInput: (@Sendable (NodeInvokeInputEvent) async -> Void)? = nil,
-        onInvokeCancel: (@Sendable (String) async -> Void)? = nil,
-        onRouteInvalidated: (@Sendable () async -> Void)? = nil) async throws
-    {
-        try await self.connect(
-            url: url,
-            credentials: GatewayNodeSessionCredentials(
-                token: token,
-                bootstrapToken: bootstrapToken,
-                password: password),
-            connectOptions: connectOptions,
-            sessionBox: sessionBox,
-            extraHeadersProvider: extraHeadersProvider,
-            onConnected: onConnected,
-            onDisconnected: onDisconnected,
-            onInvoke: onInvoke,
-            onInvokeInput: onInvokeInput,
-            onInvokeCancel: onInvokeCancel,
-            onRouteInvalidated: onRouteInvalidated)
     }
 
     public func disconnect() async {
@@ -598,19 +565,15 @@ public actor GatewayNodeSession {
     }
 
     private func awaitPluginSurfaceRefresh(_ task: Task<String?, Never>, timeoutMs: Double) async -> String? {
-        do {
-            return try await AsyncTimeout.withTimeout(
-                seconds: max(0, timeoutMs) / 1000,
-                onTimeout: {
-                    NSError(
-                        domain: "Gateway",
-                        code: 8,
-                        userInfo: [NSLocalizedDescriptionKey: "plugin surface refresh timed out"])
-                },
-                operation: { await task.value })
-        } catch {
-            return nil
-        }
+        try? await AsyncTimeout.withTimeout(
+            seconds: max(0, timeoutMs) / 1000,
+            onTimeout: {
+                NSError(
+                    domain: "Gateway",
+                    code: 8,
+                    userInfo: [NSLocalizedDescriptionKey: "plugin surface refresh timed out"])
+            },
+            operation: { await task.value })
     }
 
     private func releasePluginSurfaceRefreshWaiter(surface: String, refreshID: UUID, waiterID: UUID) {
@@ -926,9 +889,7 @@ extension GatewayNodeSession {
             self.reactionAccess = GatewayReactionAccessFacts(hello: ok)
             self.attachmentLimits = ok.advertisedAttachmentLimits()
             let snapshotMainSessionKey = ok.snapshot.sessiondefaults?["mainSessionKey"]?.value as? String
-            let trimmedMainSessionKey = snapshotMainSessionKey?
-                .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
-            self.mainSessionKey = trimmedMainSessionKey.isEmpty ? nil : trimmedMainSessionKey
+            self.mainSessionKey = snapshotMainSessionKey?.trimmedNonEmpty
             if self.hasEverConnected {
                 self.broadcastServerEvent(
                     EventFrame(type: "event", event: "seqGap", payload: nil, seq: nil, stateversion: nil))
@@ -961,7 +922,6 @@ extension GatewayNodeSession {
         self.attachmentLimits = nil
         self.mainSessionKey = nil
         self.drainSnapshotWaiters(returning: false)
-        self.drainSnapshotReadyWaiters(returning: false)
     }
 
     private func handleChannelDisconnected(
@@ -1003,31 +963,22 @@ extension GatewayNodeSession {
     private func markSnapshotReceived() {
         self.snapshotReceived = true
         self.drainSnapshotWaiters(returning: true)
-        self.drainSnapshotReadyWaiters(returning: true)
     }
 
-    private func waitForSnapshot(timeoutMs: Int) async -> Bool {
+    private func waitForSnapshot(timeoutMs: Int? = nil) async -> Bool {
         if self.snapshotReceived {
             return true
         }
-        let clamped = max(0, timeoutMs)
         let waiterID = UUID()
         return await withCheckedContinuation { cont in
             self.snapshotWaiters[waiterID] = cont
-            Task { [weak self] in
-                guard let self else { return }
-                try? await Task.sleep(nanoseconds: UInt64(clamped) * 1_000_000)
-                await self.timeoutSnapshotWaiter(id: waiterID)
+            if let timeoutMs {
+                Task { [weak self] in
+                    guard let self else { return }
+                    try? await Task.sleep(nanoseconds: UInt64(max(0, timeoutMs)) * 1_000_000)
+                    await self.timeoutSnapshotWaiter(id: waiterID)
+                }
             }
-        }
-    }
-
-    private func waitForSnapshot() async -> Bool {
-        if self.snapshotReceived {
-            return true
-        }
-        return await withCheckedContinuation { cont in
-            self.snapshotReadyWaiters.append(cont)
         }
     }
 
@@ -1041,14 +992,6 @@ extension GatewayNodeSession {
     private func drainSnapshotWaiters(returning value: Bool) {
         let waiters = self.snapshotWaiters.values
         self.snapshotWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume(returning: value)
-        }
-    }
-
-    private func drainSnapshotReadyWaiters(returning value: Bool) {
-        let waiters = self.snapshotReadyWaiters
-        self.snapshotReadyWaiters.removeAll()
         for waiter in waiters {
             waiter.resume(returning: value)
         }
@@ -1415,6 +1358,11 @@ extension GatewayNodeSession {
             }
             #if DEBUG
             self.computerInvokeReceiptJoinCounts[receipt.id, default: 0] += 1
+            let waiters = self.computerInvokeReceiptJoinWaiters
+            self.computerInvokeReceiptJoinWaiters.removeAll()
+            for waiter in waiters {
+                waiter.resume()
+            }
             #endif
             let response = switch receipt.state {
             case let .inFlight(task): await task.value
@@ -1511,6 +1459,22 @@ extension GatewayNodeSession {
             timeoutMs: timeoutMs,
             receiptScope: receiptScope,
             onInvoke: onInvoke)
+    }
+
+    // Waits for recorded receipt joins without a test-side deadline.
+    // periphery:ignore - package tests await receipt joining without exposing the receipt store.
+    func waitForComputerReceiptJoinsForTesting(
+        idempotencyKey: String,
+        receiptScope: String,
+        count: Int) async
+    {
+        while self
+            .computerReceiptJoinCountForTesting(idempotencyKey: idempotencyKey, receiptScope: receiptScope) < count
+        {
+            await withCheckedContinuation { continuation in
+                self.computerInvokeReceiptJoinWaiters.append(continuation)
+            }
+        }
     }
 
     // periphery:ignore - package tests assert receipt joining without exposing the receipt store.
@@ -1661,12 +1625,7 @@ extension GatewayNodeSession {
         _ paramsJSON: String?) throws -> [String: AnyCodable]?
     {
         guard let paramsJSON, !paramsJSON.isEmpty else { return nil }
-        guard let data = paramsJSON.data(using: .utf8) else {
-            throw NSError(domain: "Gateway", code: 12, userInfo: [
-                NSLocalizedDescriptionKey: "paramsJSON not UTF-8",
-            ])
-        }
-        return try JSONDecoder().decode([String: AnyCodable].self, from: data)
+        return try self.decoder.decode([String: AnyCodable].self, from: Data(paramsJSON.utf8))
     }
 
     private func broadcastServerEvent(_ evt: EventFrame) {

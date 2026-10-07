@@ -118,7 +118,7 @@ function holdBackfillPublication(signal?: AbortSignal) {
 
 it("publishes read-only transcript previews without acquiring stored row facts again", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:preview-only-backfill",
@@ -210,7 +210,7 @@ it.for(["notice cleared", "selection changed"] as const)(
   "rejects a held fallback after same-session metadata changes: %s",
   (change, { signal, onTestFinished }) => {
     const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const cfg = { agents: { entries: { main: {} } } };
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:held-fallback",
@@ -297,7 +297,7 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
   const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = {
       agents: {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
         defaults: { utilityModel: "unit-test/small" },
       },
     };
@@ -436,7 +436,7 @@ it.each(["before transcript work", "before preview publication"] as const)(
   async (phase) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       resetGatewayWorkAdmission();
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const cfg = { agents: { entries: { main: {} } } };
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:foreground-backfill",

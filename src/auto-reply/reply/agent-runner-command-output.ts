@@ -26,14 +26,6 @@ function readToolResultText(value: unknown): string | undefined {
   return text || undefined;
 }
 
-function readNullableNumberValue(value: unknown): number | null | undefined {
-  if (value === null) {
-    return null;
-  }
-  return readFiniteNumberValue(value);
-}
-
-/** Projects a completed command-tool event into the channel command-output contract. */
 export function buildCommandOutputFromToolResultEvent(
   evt: EmbeddedAgentEvent,
 ): Parameters<NonNullable<GetReplyOptions["onCommandOutput"]>>[0] | undefined {
@@ -54,9 +46,8 @@ export function buildCommandOutputFromToolResultEvent(
     readToolResultText(evt.data.result);
   const explicitStatus =
     evt.data.status ?? readStringValue(result?.status) ?? readStringValue(details?.status);
-  const exitCode = readNullableNumberValue(
-    result?.exitCode ?? details?.exitCode ?? evt.data.exitCode,
-  );
+  const rawExitCode = result?.exitCode ?? details?.exitCode ?? evt.data.exitCode;
+  const exitCode = rawExitCode === null ? null : readFiniteNumberValue(rawExitCode);
   const durationMs = readFiniteNumberValue(
     result?.durationMs ?? details?.durationMs ?? evt.data.durationMs,
   );

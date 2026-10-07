@@ -1,7 +1,4 @@
-/**
- * Browser route context factory that wires profile-scoped runtime operations for
- * the Browser control server.
- */
+import fs from "node:fs";
 import {
   resolveCdpControlPolicy,
   resolveCdpReachabilityPolicy,
@@ -13,18 +10,20 @@ import { getOwnBrowserProfile, resolveProfile, type ResolvedBrowserProfile } fro
 import {
   BrowserProfileNotFoundError,
   BrowserProfileUnavailableError,
+  BrowserResetUnsupportedError,
   toBrowserErrorResponse,
 } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { refreshResolvedBrowserConfigFromDisk } from "./resolved-config-refresh.js";
 import { createProfileAvailability } from "./server-context.availability.js";
 import {
+  assertProfileLifecycleContext,
+  beginProfileTransition,
   getProfileLifecycle,
   getOrCreateProfileRuntime,
   isBrowserRuntimeRunning,
   withProfileOperationLease,
 } from "./server-context.lifecycle.js";
-import { createProfileResetOps } from "./server-context.reset.js";
 import { createProfileSelectionOps } from "./server-context.selection.js";
 import { createProfileTabOps } from "./server-context.tab-ops.js";
 import type {
@@ -35,6 +34,7 @@ import type {
   ProfileRuntimeState,
   ProfileStatus,
 } from "./server-context.types.js";
+import { movePathToTrash } from "./trash.js";
 
 export type {
   BrowserRouteContext,
@@ -78,9 +78,6 @@ export function withProfileContextOperation<T>(
   return runner(signal, run);
 }
 
-/**
- * Create a profile-scoped context for browser operations.
- */
 function createProfileContext(
   opts: ContextOptions,
   runtimeState: BrowserServerState,
@@ -118,14 +115,7 @@ function createProfileContext(
     listTabs: rawTabOps.listTabs,
     openTab: rawTabOps.openTab,
   });
-
-  const rawReset = createProfileResetOps({
-    profile,
-    state,
-    runtime: profileState,
-    configRevision,
-    resolveOpenClawUserDataDir,
-  });
+  const capabilities = getBrowserProfileCapabilities(profile);
 
   const withLease = async <T>(
     callerSignal: AbortSignal | undefined,
@@ -185,13 +175,37 @@ function createProfileContext(
         rawSelection.closeTab(targetId, { ...options, signal }),
       ),
     stopRunningBrowser,
-    resetProfile: rawReset.resetProfile,
+    resetProfile: async () => {
+      if (!capabilities.supportsReset) {
+        throw new BrowserResetUnsupportedError(
+          `reset-profile is only supported for local profiles (profile "${profile.name}" is remote).`,
+        );
+      }
+      const userDataDir = resolveOpenClawUserDataDir(profile.name);
+      assertProfileLifecycleContext({ state: state(), runtime: profileState, configRevision });
+      profileState.managedLaunchFailure = undefined;
+      let result: Awaited<ReturnType<ProfileContext["resetProfile"]>> = {
+        moved: false,
+        from: userDataDir,
+      };
+      await beginProfileTransition({
+        state: state(),
+        runtime: profileState,
+        reason: "profile reset requested",
+        managedChrome: "release-profile-data",
+        afterCleanup: async () => {
+          if (fs.existsSync(userDataDir)) {
+            result = { moved: true, from: userDataDir, to: await movePathToTrash(userDataDir) };
+          }
+        },
+      });
+      return result;
+    },
   };
   profileOperationRunners.set(context, withLease);
   return context;
 }
 
-/** Creates the Browser route context used by control-server route handlers. */
 export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteContext {
   const refreshConfigFromDisk = opts.refreshConfigFromDisk === true;
 

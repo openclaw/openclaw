@@ -7,6 +7,7 @@ import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materializ
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
+import * as stateSchemas from "../../infra/update-candidate-state.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
   getUpdateRun,
@@ -18,6 +19,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import * as freshDoctor from "./update-command-fresh-doctor.js";
 import { createPostUpdateRepairFixture } from "./update-command-post-update-repair.test-support.js";
 import { registerCurrentCoreRuntimeRefreshTests } from "./update-command-post-update-runtime-refresh.test-support.js";
 import { finishUpdate } from "./update-command-post-update.js";
@@ -27,10 +29,13 @@ import {
   taskRecovery,
 } from "./update-command-post-update.test-support.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
-import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
 import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-service-plan.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
+
+const { revalidateManagedGatewayServiceAfterUpdate } = await vi.importActual<
+  typeof import("./update-command-service-revalidation.js")
+>("./update-command-service-revalidation.js");
 
 const mocks = vi.hoisted(() => ({
   repair: vi.fn<typeof import("../../infra/update-repair-agent.js").runUpdateRepairLoop>(),
@@ -101,11 +106,14 @@ vi.mock("./update-command-supervisor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-supervisor.js")>()),
   hasLoadedLaunchdKeepAliveSupervisor: async () => false,
 }));
+vi.mock("./update-command-service-revalidation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-service-revalidation.js")>()),
+  revalidateManagedGatewayServiceAfterUpdate: mocks.revalidate,
+}));
 vi.mock("./update-command-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service.js")>()),
   maybeRestartService: mocks.restart,
   maybeStopManagedServiceBeforeMutableUpdate: mocks.stop,
-  revalidateManagedGatewayServiceAfterUpdate: mocks.revalidate,
   resolveUpdatedGatewayRestartPort: async () => 19101,
   tryInstallShellCompletion: async () => {},
 }));
@@ -364,7 +372,11 @@ describe("post-activation failure settlement without inference", () => {
         const actual = await vi.importActual<typeof import("./update-command-rollback.js")>(
           "./update-command-rollback.js",
         );
-        mocks.rollback.mockImplementation(actual.rollbackFailedUpdate);
+        mocks.rollback.mockImplementation(async (rollbackParams) => {
+          // Real rollback must inspect the restored generation, not the candidate-phase fixture.
+          mocks.revalidate.mockImplementation(revalidateManagedGatewayServiceAfterUpdate);
+          return await actual.rollbackFailedUpdate(rollbackParams);
+        });
         mocks.stop.mockResolvedValue({
           ...params.preManagedServiceStop!,
           windowsTaskAutoStartRecovery: {
@@ -630,6 +642,9 @@ describe("post-activation failure settlement without inference", () => {
     "foreign",
     "database-restored",
     "source-rollback-failed",
+    "migration-required",
+    "migration-incomplete",
+    "migration-refused",
   ] as const)(
     "recovers a migrated candidate only after proven Doctor settlement (%s)",
     async (receipt) => {
@@ -647,6 +662,35 @@ describe("post-activation failure settlement without inference", () => {
       await fs.mkdir(scratch);
       vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(scratch);
       params.root = root;
+      const migration = receipt.startsWith("migration-");
+      const recovered = receipt === "settled" || receipt === "migration-required";
+      let agentVersion = 21;
+      const doctor = vi.spyOn(freshDoctor, "runUpdateFinalizationDoctorInFreshProcess");
+      if (migration) {
+        params.candidateSchemaVersions = { state: 18, agent: 23 };
+        vi.spyOn(stateSchemas, "readUpdateStateSchemaVersions").mockImplementation(async () => [
+          {
+            path: path.join(params.opts.run!.env!.OPENCLAW_STATE_DIR!, "state/openclaw.sqlite"),
+            userVersion: 18,
+          },
+          {
+            path: path.join(
+              params.opts.run!.env!.OPENCLAW_STATE_DIR!,
+              "agents/main/agent/openclaw-agent.sqlite",
+            ),
+            userVersion: agentVersion,
+          },
+        ]);
+        doctor.mockImplementation(async () => {
+          expect(mocks.restartCommand).not.toHaveBeenCalled();
+          if (receipt === "migration-refused") {
+            throw new Error("Agent database migration refused: active writer");
+          }
+          if (receipt === "migration-required") {
+            agentVersion = 23;
+          }
+        });
+      }
       params.result = {
         ...params.result,
         root,
@@ -672,9 +716,13 @@ describe("post-activation failure settlement without inference", () => {
             cwd: root,
             durationMs: 5_000,
             exitCode: 1,
-            termination: "timeout",
-            stderrTail: "Doctor timed out while repairing state.",
-            failureFacts: [{ check: "package-runtime", code: "runtime-verification-failed" }],
+            termination: migration ? "exit" : "timeout",
+            stderrTail: migration
+              ? "Doctor config promotion refused: authority-check-failed: OpenClaw state is undergoing offline maintenance; retry when it finishes."
+              : "Doctor timed out while repairing state.",
+            failureFacts: migration
+              ? [{ check: "config-write", code: "authority-check-failed" }]
+              : [{ check: "package-runtime", code: "runtime-verification-failed" }],
           },
         ],
       };
@@ -684,11 +732,13 @@ describe("post-activation failure settlement without inference", () => {
         cwd: receipt === "foreign" ? path.join(root, "other-candidate") : root,
         durationMs: 1,
         exitCode: 0,
-        advisory: {
-          kind: "recoverable-maintenance" as const,
-          message:
-            "Doctor timed out; all tracked process groups stopped. Run `openclaw update repair`.",
-        },
+        advisory: migration
+          ? undefined
+          : {
+              kind: "recoverable-maintenance" as const,
+              message:
+                "Doctor timed out; all tracked process groups stopped. Run `openclaw update repair`.",
+            },
       };
       if (receipt !== "missing") {
         params.result.steps.push(settledStep);
@@ -739,6 +789,9 @@ describe("post-activation failure settlement without inference", () => {
         runtime: { ...state.runtime, status: mocks.healthy ? "running" : "stopped" },
       }));
       mocks.restartCommand.mockImplementation(async () => {
+        if (migration) {
+          expect(agentVersion).toBe(23);
+        }
         mocks.healthy = true;
         return "accepted";
       });
@@ -761,7 +814,7 @@ describe("post-activation failure settlement without inference", () => {
           failure.result.recovery,
           JSON.stringify(vi.mocked(defaultRuntime.error).mock.calls),
         ).toMatchObject(
-          receipt === "settled"
+          recovered
             ? {
                 serviceRestartSafe: true,
                 service: "healthy",
@@ -770,13 +823,26 @@ describe("post-activation failure settlement without inference", () => {
             : { serviceRestartSafe: false },
         );
       });
-      expect(mocks.restartCommand).toHaveBeenCalledTimes(receipt === "settled" ? 1 : 0);
+      expect(mocks.restartCommand).toHaveBeenCalledTimes(recovered ? 1 : 0);
+      if (migration) {
+        expect(doctor).toHaveBeenCalledOnce();
+      }
       const report = getUpdateRun(params.opts.run!.runId, { env: params.opts.run!.env });
       expect(report?.verification).toMatchObject({
-        serviceRunning: receipt === "settled",
-        readyz: receipt === "settled",
+        serviceRunning: recovered,
+        readyz: recovered,
       });
       const rendered = renderUpdateRunReport(report!).lines.join("\n");
+      if (migration) {
+        expect(report?.status).toBe("failed");
+        expect(
+          report?.steps.find((step) => step.step === "post-install verification")?.failureFacts,
+        ).toContainEqual(expect.objectContaining({ code: "authority-check-failed" }));
+      }
+      if (migration && !recovered) {
+        expect(rendered).toContain("openclaw doctor --fix");
+        expect(rendered).toContain("openclaw gateway start");
+      }
       if (receipt === "settled") {
         expect(rendered).toContain("openclaw update repair");
         expect(report?.origin.nextAction).toContain("candidate Gateway is healthy");

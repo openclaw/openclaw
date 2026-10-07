@@ -25,6 +25,8 @@ export type ProviderReplayPolicy = {
   preserveSignatures?: boolean;
   /** Keep per-turn runtime context in place to preserve signed thinking prefixes. */
   appendOnlyRuntimeContext?: boolean;
+  /** Append system-authority updates instead of rewriting the stable prompt prefix. */
+  inHistorySystemUpdates?: boolean;
   sanitizeThoughtSignatures?: {
     allowBase64Only?: boolean;
     includeCamelCase?: boolean;
@@ -53,6 +55,8 @@ export type ProviderReplayPolicyContext = {
   modelId?: string;
   modelApi?: string | null;
   model?: ProviderRuntimeModel;
+  /** Host-resolved model, endpoint, and authentication eligibility. */
+  inHistorySystemUpdates?: boolean;
 };
 
 export type ProviderReplaySessionEntry = {

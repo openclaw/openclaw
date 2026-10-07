@@ -272,18 +272,14 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     info: GatewayControlUiPluginTab | undefined,
     hasBundledDescriptor: boolean,
   ): string | null {
+    // Secure cross-site cookies work on HTTPS and browser-trusted loopback.
+    // Insecure LAN HTTP must not fall back to an ambient bearer substitute.
     return info?.path &&
       info.requiresGatewayAuth === true &&
       !hasBundledDescriptor &&
-      this.isExternalTabAuthSupported()
+      window.isSecureContext
       ? `${this.tabKey()}\n${info.path}`
       : null;
-  }
-
-  private isExternalTabAuthSupported(): boolean {
-    // Secure cross-site cookies work on HTTPS and browser-trusted loopback.
-    // Insecure LAN HTTP must not fall back to an ambient bearer substitute.
-    return window.isSecureContext;
   }
 
   protected probeExternalTabAuth(path: string, signal: AbortSignal): Promise<boolean> {
@@ -634,7 +630,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
       });
     }
     if (info?.path) {
-      if (info.requiresGatewayAuth === true && !this.isExternalTabAuthSupported()) {
+      if (info.requiresGatewayAuth === true && !window.isSecureContext) {
         return html`
           <section class="card lazy-view-state" role="status">
             <div class="card-title">${t("login.failure.insecure.title")}</div>

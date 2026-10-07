@@ -1,8 +1,3 @@
-/**
- * transcripts built-in tool.
- *
- * Manages live capture, manual import, summarization, and process-local transcript sessions.
- */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
@@ -341,11 +336,8 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
   );
 }
 
-/** Create the agent-facing transcripts tool. */
 export function createTranscriptsTool(options?: {
   agentId?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
   caller?: TranscriptToolCaller;
   assertCallerActive?: () => void;
   config?: OpenClawConfig;
@@ -357,8 +349,6 @@ export function createTranscriptsTool(options?: {
     stateDir: options?.stateDir ?? resolveStateDir(),
     logger: options?.logger ?? console,
     ...(options?.agentId ? { agentId: options.agentId } : {}),
-    ...(options?.agentChannel ? { agentChannel: options.agentChannel } : {}),
-    ...(options?.agentAccountId ? { agentAccountId: options.agentAccountId } : {}),
     ...(options?.caller ? { caller: options.caller } : {}),
     ...(options?.assertCallerActive ? { assertCallerActive: options.assertCallerActive } : {}),
   };

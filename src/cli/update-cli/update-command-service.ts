@@ -7,6 +7,11 @@ import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
+import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
+import {
+  ServiceStartRefusalError,
+  type SystemdServiceStartRefusal,
+} from "../../daemon/service-inspection-error.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
@@ -27,6 +32,7 @@ import {
 } from "../daemon-cli/restart-health.js";
 import { tryWriteCompletionCache, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import { recordMutableUpdateSignalPhase } from "./update-command-mutable-signals.js";
 import type { PluginUpdateWarning } from "./update-command-plugins-internals.js";
 import { observeUpdateGatewayReadiness } from "./update-command-readiness.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
@@ -61,7 +67,6 @@ import {
 
 export {
   maybeStopManagedServiceBeforeMutableUpdate,
-  revalidateManagedGatewayServiceAfterUpdate,
   mutableUpdateGatewayServiceBlock,
   UpdateCommandAbort,
   type PreManagedServiceStop,
@@ -69,35 +74,6 @@ export {
 } from "./update-command-service-maintenance.js";
 export { resolveUpdatedGatewayRestartPort } from "./update-command-service-plan.js";
 export { maybeRestartServiceAfterFailedMutableUpdate } from "./update-command-service-recovery.js";
-
-export function shouldPrepareUpdatedInstallRestart(params: {
-  updateMode: UpdateRunResult["mode"];
-  serviceInstalled: boolean;
-  serviceLoaded: boolean;
-  serviceStoppedForUpdate?: boolean;
-  serviceMatchesUpdateRoot?: boolean;
-  requiresInstallRootRefresh?: boolean;
-}): boolean {
-  const useInstalledState =
-    params.requiresInstallRootRefresh === true ||
-    isPackageManagerUpdateMode(params.updateMode) ||
-    (params.updateMode === "git" && params.serviceStoppedForUpdate);
-  return useInstalledState
-    ? params.serviceInstalled
-    : params.serviceLoaded &&
-        (params.updateMode !== "git" || params.serviceMatchesUpdateRoot === true);
-}
-
-export function resolvePostUpdateServiceStateReadEnv(params: {
-  updateMode: UpdateRunResult["mode"];
-  processEnv?: NodeJS.ProcessEnv;
-  preManagedServiceEnv?: NodeJS.ProcessEnv;
-}): NodeJS.ProcessEnv {
-  const fallbackEnv = params.processEnv ?? process.env;
-  const usesServiceEnv =
-    params.updateMode === "git" || isPackageManagerUpdateMode(params.updateMode);
-  return usesServiceEnv ? (params.preManagedServiceEnv ?? fallbackEnv) : fallbackEnv;
-}
 
 export async function tryInstallShellCompletion(opts: {
   root: string;
@@ -211,6 +187,7 @@ export async function maybeRestartService(params: {
     assertCurrent();
     if (params.opts.run) {
       recordUpdateRunPhase(params.opts.run.runId, phase, undefined, { env: params.opts.run.env });
+      recordMutableUpdateSignalPhase(params.opts.run, phase);
     }
   };
   let verificationObserved = false;
@@ -239,6 +216,11 @@ export async function maybeRestartService(params: {
   }
   let activation = {
     ...params,
+    // A default update step must not truncate a Windows service's cold-start budget.
+    timeoutMs:
+      process.platform === "win32" && params.opts.timeout === undefined
+        ? Math.max(params.timeoutMs, resolveGatewayStartupTiming().deadlineMs)
+        : params.timeoutMs,
     invocationEnv,
     serviceEnv,
     assertCurrent,
@@ -287,6 +269,47 @@ export async function maybeRestartService(params: {
     assertCurrent();
     return "reconciliation-pending" as const;
   };
+  const serviceDefinitionRefused = async (refusal: SystemdServiceStartRefusal) => {
+    recordPhase("verifying");
+    recordServiceReconciliationWarning(
+      activation.result,
+      activation.serviceEnv,
+      `SERVICE-DEFINITION: ${refusal.message} The updated installation is kept; after resolving the service hold, run \`${formatCliCommand("openclaw gateway start", activation.serviceEnv)}\`. Gateway readiness remains unverified.`,
+    );
+    if (!verificationObserved) {
+      await recordFailedUpdateGatewayState(params.opts.run, activation.serviceEnv, assertCurrent);
+      assertCurrent();
+    }
+    return "reconciliation-pending" as const;
+  };
+  const readServiceStartRefusal = async (failure: unknown) => {
+    if (failure instanceof ServiceStartRefusalError) {
+      return failure.refusal;
+    }
+    const deadline = createGatewayRestartDeadline({ timeoutMs: activation.timeoutMs });
+    try {
+      const runtime = await deadline.run(() =>
+        deadline.read("service startup refusal", () =>
+          resolveGatewayService().readRuntime(activation.serviceEnv, {
+            timeoutMs: deadline.remainingMs(),
+          }),
+        ),
+      );
+      assertCurrent();
+      return runtime?.systemd?.startRefusal;
+    } catch (error) {
+      if (hasCommandProcessCleanupError(error)) {
+        throw error;
+      }
+      if ((await deadline.cleanup) === "unknown") {
+        throw new CommandProcessCleanupError({ cause: error });
+      }
+      assertCurrent();
+      return error instanceof ServiceStartRefusalError ? error.refusal : undefined;
+    } finally {
+      deadline.dispose();
+    }
+  };
   let activationAccepted = false;
   let childReadinessPending = false;
   let updatedInstallRestartNeedsServiceRootProof = false;
@@ -314,7 +337,11 @@ export async function maybeRestartService(params: {
       assertCurrent,
       recoverHealth: async (initialHealth, reinspect, assertReadinessCurrent) => {
         assertReadinessCurrent();
-        if (childReadinessPending || opts.recoverHealth === false) {
+        if (
+          childReadinessPending ||
+          opts.recoverHealth === false ||
+          initialHealth.runtime?.systemd?.startRefusal
+        ) {
           return { health: initialHealth, launchAgentRecovery: null };
         }
         let health = initialHealth;
@@ -356,7 +383,6 @@ export async function maybeRestartService(params: {
           timeoutMs: activation.timeoutMs,
           expectedVersion: expectedGatewayVersion,
           ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
-          requirePluginHealth: false,
           env: activation.serviceEnv,
         });
         assertReadinessCurrent();
@@ -368,6 +394,9 @@ export async function maybeRestartService(params: {
     });
     verificationObserved = true;
     assertCurrent();
+    if (verification.serviceDefinitionRefusal) {
+      return await serviceDefinitionRefused(verification.serviceDefinitionRefusal);
+    }
     if (verification.stopReason === "still-starting" && activation.result.status !== "error") {
       activation.result.reason = "still-starting";
     }
@@ -437,7 +466,8 @@ export async function maybeRestartService(params: {
             refreshedGatewayHealth =
               health.healthy ||
               health.waitOutcome === "timeout" ||
-              health.waitOutcome === "still-starting"
+              health.waitOutcome === "still-starting" ||
+              health.runtime.systemd?.startRefusal
                 ? health
                 : undefined;
           }
@@ -448,6 +478,12 @@ export async function maybeRestartService(params: {
           assertCurrent();
           if (err instanceof UpdateCommandRecoveryPendingError) {
             throw err;
+          }
+          if (!activation.definitionRecovery?.unverified) {
+            const refusal = await readServiceStartRefusal(err);
+            if (refusal) {
+              return await serviceDefinitionRefused(refusal);
+            }
           }
           const warning =
             `Failed to reconcile gateway service with ${activation.result.root ?? "the updated install"}: ${String(err)}. ` +
@@ -602,7 +638,7 @@ export async function maybeRestartService(params: {
           }
           return await failed(activationAccepted ? "restart-health-failed" : "failed");
         }
-        if (restartHealthy === "readiness-pending") {
+        if (restartHealthy === "readiness-pending" || restartHealthy === "reconciliation-pending") {
           return restartHealthy;
         }
       }
@@ -618,6 +654,12 @@ export async function maybeRestartService(params: {
       assertCurrent();
       if (err instanceof UpdateCommandRecoveryPendingError) {
         throw err;
+      }
+      if (!activation.definitionRecovery?.unverified) {
+        const refusal = await readServiceStartRefusal(err);
+        if (refusal) {
+          return await serviceDefinitionRefused(refusal);
+        }
       }
       if (err instanceof GatewayRestartHealthError && !updatedInstallRestartNeedsServiceRootProof) {
         // The installed CLI owns restart retries; observe its final health result

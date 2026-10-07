@@ -34,6 +34,7 @@ import {
 import { UserProfileOwnerError } from "./user-profiles-schema.js";
 import type {
   CachedGitHubIdentity,
+  CachedGitHubIdentityBinding,
   StoredGitHubIdentity,
   ProfileDisplayRow,
   UserProfileGitHubAttribution,
@@ -162,11 +163,16 @@ export function selectProfileAccessEntries(
   }
   const identities = selectStoredGitHubIdentities(db, profileIds);
   return rows.map(([id, row]) => {
-    const accounts = identities.get(id)?.accounts;
+    const identity = identities.get(id);
+    const accounts = identity?.accounts;
     return [
       id,
       accounts?.length
-        ? { ...row, githubAccountIds: accounts.map(({ accountId }) => accountId) }
+        ? {
+            ...row,
+            githubAccountIds: accounts.map(({ accountId }) => accountId),
+            githubLogin: identity?.primary?.login ?? null,
+          }
         : row,
     ];
   });
@@ -174,27 +180,41 @@ export function selectProfileAccessEntries(
 
 function resolveCachedGitHubIdentityInDatabase(
   db: DatabaseSync,
-  params: { accountId: number; email: string },
+  binding: CachedGitHubIdentityBinding,
 ): CachedGitHubIdentity | undefined {
-  const email = params.email.trim().toLowerCase();
   if (
-    !email ||
-    !Number.isSafeInteger(params.accountId) ||
-    params.accountId <= 0 ||
     !tableExists(db, "user_profiles") ||
-    !tableExists(db, "user_profile_emails") ||
     !tableExists(db, "user_profile_identities") ||
     !readGitHubColumns(db).verifiedLogin
   ) {
     return undefined;
   }
-  const alias = selectUserProfileEmailAlias(db, email);
+  const login = "login" in binding ? normalizeGitHubLogin(binding.login)?.toLowerCase() : undefined;
+  const accountBinding = "email" in binding ? binding : undefined;
+  const email = accountBinding?.email.trim().toLowerCase();
+  const alias = login
+    ? selectGitHubProfileAlias(db, {
+        kind: "github-login",
+        subject: githubAuthenticationSubject(login),
+      })
+    : email &&
+        accountBinding &&
+        Number.isSafeInteger(accountBinding.accountId) &&
+        accountBinding.accountId > 0 &&
+        tableExists(db, "user_profile_emails")
+      ? selectGitHubProfileAlias(db, { kind: "email", email })
+      : undefined;
   const profile = alias ? selectResolvedUserProfileMetadataById(db, alias.profile_id) : undefined;
-  if (!profile) {
-    return undefined;
-  }
-  const identity = selectStoredGitHubIdentities(db, [profile.id]).get(profile.id);
-  return identity?.accounts.some((account) => account.accountId === params.accountId)
+  const accounts = profile
+    ? selectStoredGitHubIdentities(db, [profile.id]).get(profile.id)?.accounts
+    : undefined;
+  // A login alias stays reusable only while its profile's verified account still holds that login.
+  return profile &&
+    accounts?.some((account) =>
+      login
+        ? account.login.toLowerCase() === login
+        : account.accountId === accountBinding?.accountId,
+    )
     ? { profileId: profile.id, updatedAt: profile.updated_at }
     : undefined;
 }
@@ -366,6 +386,20 @@ type GitHubProfileAlias =
   | { kind: "email"; email: string }
   | { kind: "github-login"; subject: string };
 
+function selectGitHubProfileAlias(db: DatabaseSync, alias: GitHubProfileAlias) {
+  return alias.kind === "email"
+    ? selectUserProfileEmailAlias(db, alias.email)
+    : executeSqliteQueryTakeFirstSync(
+        db,
+        userProfilesDb(db)
+          .selectFrom("user_profile_identities")
+          .select("profile_id")
+          .where("provider", "=", GITHUB_PROVIDER)
+          .where("subject", "=", alias.subject)
+          .where("canonical_login", "is", null),
+      );
+}
+
 function readGitHubIdentityBinding(db: DatabaseSync, alias: GitHubProfileAlias, accountId: number) {
   const kysely = userProfilesDb(db);
   const subject = String(accountId);
@@ -379,18 +413,7 @@ function readGitHubIdentityBinding(db: DatabaseSync, alias: GitHubProfileAlias, 
       .where("subject", "=", subject)
       .where("canonical_login", "is not", null),
   );
-  const aliasIdentity =
-    alias.kind === "email"
-      ? selectUserProfileEmailAlias(db, alias.email)
-      : executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("user_profile_identities")
-            .select("profile_id")
-            .where("provider", "=", GITHUB_PROVIDER)
-            .where("subject", "=", alias.subject)
-            .where("canonical_login", "is", null),
-        );
+  const aliasIdentity = selectGitHubProfileAlias(db, alias);
   const aliasProfileId = aliasIdentity
     ? selectResolvedUserProfileMetadataById(db, aliasIdentity.profile_id)?.id
     : undefined;

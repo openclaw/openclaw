@@ -31,10 +31,7 @@ export type ConversationDeliveryRecord = {
 };
 
 export class ConversationDeliveryInputError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ConversationDeliveryInputError";
-  }
+  override name = "ConversationDeliveryInputError";
 }
 
 export class ConversationDeliveryMissingError extends Error {

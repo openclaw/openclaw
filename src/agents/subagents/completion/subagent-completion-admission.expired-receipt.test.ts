@@ -109,10 +109,14 @@ describe("requester receipts after completion expiry", () => {
     expect(subagentRuns.get(input.subagent.runId)?.delivery?.status).toBe("delivered");
   });
 
-  it.each([undefined, "parent"] as const)(
-    "records a successful requester wake after expiry (target=%s)",
-    async (completionTarget) => {
-      const input = await suspend({ completionTarget });
+  it.each([
+    { completionTarget: undefined, resultText: "canonical result" },
+    { completionTarget: "parent", resultText: "canonical result" },
+    { completionTarget: "parent", resultText: null },
+  ] as const)(
+    "records a successful requester wake after expiry (target=$completionTarget, result=$resultText)",
+    async ({ completionTarget, resultText }) => {
+      const input = await suspend({ completionTarget, resultText });
       const driver = requesterWakeDriver([input]);
       driver.wake.mockImplementation(async (params) => {
         await params.completeBatch([input.subagent], 1, { delivered: true, path: "direct" });
@@ -131,19 +135,12 @@ describe("requester receipts after completion expiry", () => {
         expect(stored?.delivery?.lastError).toBeUndefined();
         expect(stored?.delivery?.payload).toBeUndefined();
         expect(stored?.requesterSettleWake).toBeUndefined();
-        expect(stored?.completion?.resultText).toBe("canonical result");
+        expect(stored?.completion?.resultText).toBe(resultText);
       } finally {
         driver.controller.clearScheduledResumeTimers();
       }
     },
   );
-
-  it("preserves a missing-deliverable verdict after its delivery is acknowledged", async () => {
-    const input = await suspend({ completionTarget: "parent", resultText: null });
-    await settle(input, true);
-    database = await reopenCompletionFixtureOwners();
-    expect(subagentRuns.get(input.subagent.runId)?.delivery?.status).toBe("delivered");
-  });
 
   it.each([
     { reason: "expiry" as const, delivered: false },
@@ -158,62 +155,56 @@ describe("requester receipts after completion expiry", () => {
     },
   );
 
-  it("rejects an acknowledgment after the durable delivery generation changes", async () => {
-    const input = await suspend();
-    const changed = structuredClone(input.subagent);
-    changed.delivery!.generation = 2;
-    seedSubagentCompletionDelivery({
-      subagent: changed,
-
-      databaseOptions: { database },
-    });
-    await expect(settle(input, true)).rejects.toThrow(/(owner|cohort) changed before mutation/);
-    database = await reopenCompletionFixtureOwners();
-    expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
-      status: "suspended",
-      generation: 2,
-    });
-    expect(subagentRuns.get(input.subagent.runId)?.requesterSettleWake).toBeDefined();
-  });
-
-  it.each(["run", "execution", "host incarnation"] as const)(
-    "rejects a changed completion %s owner",
-    async (changedOwner) => {
+  it.each([
+    "run",
+    "execution",
+    "host incarnation",
+    "delivery generation",
+    "registry write",
+  ] as const)(
+    "preserves the suspended delivery and wake when %s rejects the receipt",
+    async (cut) => {
       const input = await suspend();
       const changed = structuredClone(input.subagent);
-      if (changedOwner === "run") {
+      if (cut === "run") {
         changed.taskRunId = "replacement-source-run";
-      } else if (changedOwner === "host incarnation") {
+      } else if (cut === "host incarnation") {
         bindSubagentRunRuntimeKey(changed, {});
         subagentRuns.set(changed.runId, changed);
-      } else {
+      } else if (cut === "execution") {
         changed.endedReason = "subagent-killed";
         changed.execution.outcome = { status: "error", error: "cancelled by the requester" };
+      } else if (cut === "delivery generation") {
+        changed.delivery!.generation = 2;
       }
-      if (changedOwner !== "host incarnation") {
+      if (cut !== "host incarnation" && cut !== "registry write") {
         seedSubagentCompletionDelivery({ subagent: changed, databaseOptions: { database } });
       }
-      await expect(settle(input, true)).rejects.toThrow(/(owner|cohort) changed before mutation/);
+      if (cut === "registry write") {
+        database.db.exec(
+          "CREATE TRIGGER reject_ack AFTER UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'ack write cut'); END",
+        );
+      }
+      try {
+        await expect(settle(input, true)).rejects.toThrow(
+          cut === "registry write" ? "ack write cut" : /(owner|cohort) changed before mutation/,
+        );
+        expect(isDeliverySuspended(input.subagent)).toBe(true);
+        expect(currentCompletionRun(input).requesterSettleWake).toBeDefined();
+      } finally {
+        if (cut === "registry write") {
+          database.db.exec("DROP TRIGGER reject_ack");
+        }
+      }
       database = await reopenCompletionFixtureOwners();
       expect(isDeliverySuspended(subagentRuns.get(input.subagent.runId)!)).toBe(true);
       expect(subagentRuns.get(input.subagent.runId)?.requesterSettleWake).toBeDefined();
+      if (cut === "delivery generation") {
+        expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
+          status: "suspended",
+          generation: 2,
+        });
+      }
     },
   );
-
-  it("rolls back delivery and wake changes together if the registry write fails", async () => {
-    const input = await suspend();
-    database.db.exec(
-      "CREATE TRIGGER reject_ack AFTER UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'ack write cut'); END",
-    );
-    try {
-      await expect(settle(input, true)).rejects.toThrow("ack write cut");
-      expect(isDeliverySuspended(input.subagent)).toBe(true);
-      expect(currentCompletionRun(input).requesterSettleWake).toBeDefined();
-    } finally {
-      database.db.exec("DROP TRIGGER reject_ack");
-    }
-    database = await reopenCompletionFixtureOwners();
-    expect(isDeliverySuspended(subagentRuns.get(input.subagent.runId)!)).toBe(true);
-    expect(subagentRuns.get(input.subagent.runId)?.requesterSettleWake).toBeDefined();
-  });
 });

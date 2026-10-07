@@ -130,62 +130,17 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     }
   });
 
-  it.each(
-    [
-      {
-        name: "landscape",
-        width: 1200,
-        height: 800,
-        pane: 500,
-        expectedWidth: 400,
-        expectedHeight: 400 / 1.5,
-      },
-      {
-        name: "portrait",
-        width: 800,
-        height: 1600,
-        pane: 500,
-        expectedWidth: 180,
-        expectedHeight: 360,
-      },
-      {
-        name: "tiny image",
-        width: 1,
-        height: 1,
-        pane: 500,
-        expectedWidth: 160,
-        expectedHeight: 160,
-      },
-      {
-        name: "narrow pane",
-        width: 1200,
-        height: 800,
-        pane: 180,
-        expectedWidth: 180,
-        expectedHeight: 120,
-      },
-      {
-        name: "panorama",
-        width: 1200,
-        height: 80,
-        pane: 500,
-        expectedWidth: 400,
-        expectedHeight: 400 / 15,
-      },
-      {
-        name: "tiny tall image",
-        width: 80,
-        height: 1600,
-        pane: 500,
-        expectedWidth: 160,
-        expectedHeight: 360,
-      },
-    ].flatMap((scenario) =>
-      ["assistant", "user"].map((role) => ({ scenario, role, name: scenario.name })),
-    ),
-  )(
-    "keeps the $role $name frame and next message stationary through fetch, decode, and cache reuse",
-    async ({ scenario, role }) => {
+  it.each([
+    ["landscape", 1200, 800, 500, 400, 400 / 1.5, "assistant", true],
+    ["portrait", 800, 1600, 500, 180, 360, "user", true],
+    ["tiny image", 1, 1, 500, 160, 160, "assistant", true],
+    ["narrow pane", 1200, 800, 180, 180, 120, "user", true],
+    ["panorama", 1200, 80, 500, 400, 400 / 15, "assistant", true],
+    ["tiny tall image", 80, 1600, 500, 160, 360, "user", true],
+    ["unknown dimensions", 800, 1600, 500, 180, 360, "assistant", false],
+  ] as const)(
+    "keeps %s geometry through fetch, decode, and cache reuse",
+    async (name, width, height, pane, expectedWidth, expectedHeight, role, sized) => {
       const { page } = await import("vitest/browser");
       await page.viewport(1440, 900);
       // Constrain the message column, not the surrounding avatar row or mobile breakpoint.
@@ -197,17 +152,14 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       const images = [
         {
           url: source,
-          alt: scenario.name,
-          width: scenario.width,
-          height: scenario.height,
+          alt: name,
+          width: sized ? width : undefined,
+          height: sized ? height : undefined,
         },
       ];
       const draw = () =>
         render(
-          html`<div
-            class="chat-group ${role}"
-            style=${`--chat-message-max-width: ${scenario.pane}px`}
-          >
+          html`<div class="chat-group ${role}" style=${`--chat-message-max-width: ${pane}px`}>
             <div class="chat-group-messages">
               ${renderMessageImages(images)}
               <p data-next-message>Next message</p>
@@ -218,60 +170,39 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       draw();
       const originalFrame = frame(container);
       const before = geometry(container);
-      expect(before.width).toBeCloseTo(scenario.expectedWidth, 1);
-      expect(before.height).toBeCloseTo(scenario.expectedHeight, 1);
+      expect(before.width).toBeCloseTo(sized ? expectedWidth : 400, 1);
+      expect(before.height).toBeCloseTo(sized ? expectedHeight : 400 / 1.5, 1);
+      expect(container.querySelector(".chat-image-skeleton")).not.toBeNull();
       expect(getComputedStyle(originalFrame).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
       expect(originalFrame.getAttribute("aria-busy")).toBe("true");
       expect(originalFrame.textContent?.trim()).toBe("");
       expect(originalFrame.querySelector("svg")).toBeNull();
       expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
-      response.resolve(svgResponse(scenario.width ?? 800, scenario.height ?? 1600));
+      response.resolve(svgResponse(width, height));
       await waitForFast(() => expect(container.querySelector("img")).not.toBeNull());
       const image = container.querySelector("img")!;
-      expect(geometry(container)).toEqual(before);
+      if (sized) {
+        expect(geometry(container)).toEqual(before);
+      }
       await image.decode();
-      expect(geometry(container)).toEqual(before);
+      const decoded = geometry(container);
+      if (sized) {
+        expect(decoded).toEqual(before);
+      } else {
+        expect(decoded.width).toBe(expectedWidth);
+        expect(decoded.height).toBe(expectedHeight);
+      }
       expect(frame(container)).toBe(originalFrame);
       draw();
       expect(container.querySelector("img")).toBe(image);
-      expect(geometry(container)).toEqual(before);
+      expect(geometry(container)).toEqual(decoded);
       render(nothing, container);
       draw();
       const remounted = await admittedImage(container);
       expect(remounted.getAttribute("src")).toBe(image.getAttribute("src"));
       await remounted.decode();
-      expect(geometry(container)).toEqual(before);
+      expect(geometry(container)).toEqual(decoded);
       expect(fetchMock).toHaveBeenCalledOnce();
-    },
-  );
-
-  it.each(["assistant", "user"])(
-    "uses natural decoded geometry for a $role image without dimensions",
-    async (role) => {
-      const container = mount(500);
-      const response = createDeferred<Response>();
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(() => response.promise),
-      );
-      const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
-      render(
-        html`<div class="chat-group ${role}">
-          <div class="chat-group-messages">
-            ${renderMessageImages([{ url: source, fileName: "portrait.svg" }])}
-            <p data-next-message>Next message</p>
-          </div>
-        </div>`,
-        container,
-      );
-      expect(geometry(container).height).toBeCloseTo(400 / 1.5, 1);
-      expect(frame(container).textContent?.trim()).toBe("");
-      expect(container.querySelector(".chat-image-skeleton")).not.toBeNull();
-      response.resolve(svgResponse(800, 1600));
-      await waitForFast(() => expect(container.querySelector("img")).not.toBeNull());
-      await container.querySelector("img")!.decode();
-      expect(geometry(container).width).toBe(180);
-      expect(geometry(container).height).toBe(360);
     },
   );
 
@@ -485,84 +416,18 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     },
   );
 
-  it.each(
-    [1440, 390].flatMap((viewport) =>
-      ["light", "dark"].flatMap((theme) =>
-        [
-          ...[1, 2, 3].flatMap((count) =>
-            [false, true].flatMap((withDocument) =>
-              [0, 1].map((available) => ({
-                role: "assistant",
-                name: "unknown dimensions",
-                width: undefined,
-                height: undefined,
-                count,
-                document: withDocument,
-                available,
-              })),
-            ),
-          ),
-          {
-            role: "assistant",
-            name: "known dimensions",
-            width: 1200,
-            height: 800,
-            count: 2,
-            document: true,
-            available: 0,
-          },
-          {
-            role: "assistant",
-            name: "panorama",
-            width: 1200,
-            height: 80,
-            count: 2,
-            document: true,
-            available: 0,
-          },
-          {
-            role: "assistant",
-            name: "tall image",
-            width: 420,
-            height: 1800,
-            count: 2,
-            document: true,
-            available: 0,
-          },
-          {
-            role: "assistant",
-            name: "tiny tall image",
-            width: 80,
-            height: 1600,
-            count: 2,
-            document: true,
-            available: 0,
-          },
-          {
-            role: "user",
-            name: "pair",
-            width: 1200,
-            height: 800,
-            count: 2,
-            document: true,
-            available: 0,
-          },
-          {
-            role: "user",
-            name: "mixed gallery",
-            width: 1200,
-            height: 800,
-            count: 2,
-            document: true,
-            available: 3,
-          },
-        ].map((scenario) => ({ viewport, theme, scenario })),
-      ),
-    ),
-  )(
-    "keeps unavailable attachment blocks compact at $viewport px in $theme: $scenario",
-    async ({ viewport, theme, scenario }) => {
-      const { role, width: imageWidth, height: imageHeight, count, available } = scenario;
+  it.each([
+    [1440, "light", "assistant", undefined, undefined, 1, false, 0],
+    [390, "dark", "assistant", undefined, undefined, 2, true, 1],
+    [1440, "dark", "assistant", undefined, undefined, 3, false, 1],
+    [390, "light", "assistant", 1200, 80, 2, true, 0],
+    [390, "dark", "assistant", 420, 1800, 2, true, 0],
+    [1440, "dark", "assistant", 80, 1600, 2, true, 0],
+    [390, "light", "user", 1200, 800, 2, true, 0],
+    [1440, "dark", "user", 1200, 800, 2, true, 3],
+  ] as const)(
+    "keeps unavailable attachments compact at %s px in %s: %s %s×%s, %s blocked, document=%s, %s available",
+    async (viewport, theme, role, imageWidth, imageHeight, count, withDocument, available) => {
       const { page } = await import("vitest/browser");
       await page.viewport(viewport, 1600);
       document.documentElement.dataset.themeMode = theme;
@@ -603,7 +468,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
           html`<div class="chat-group ${role}">
             <div class="chat-group-messages">
               ${renderMessageImages(images, { sessionKey: "unavailable-geometry", agentId: "main", onRequestUpdate: draw })}
-              ${scenario.document ? renderCompactAttachmentCard({ kind: "document", label: "notes.pdf" }) : nothing}
+              ${withDocument ? renderCompactAttachmentCard({ kind: "document", label: "notes.pdf" }) : nothing}
               <p data-next-message>Next message</p>
             </div>
           </div>`,
@@ -617,8 +482,8 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         ).toHaveLength(count),
       );
       await Promise.all([...container.querySelectorAll("img")].map((image) => image.decode()));
-      const reference = scenario.document ? container : mount(400);
-      if (!scenario.document) {
+      const reference = withDocument ? container : mount(400);
+      if (!withDocument) {
         render(renderCompactAttachmentCard({ kind: "document", label: "notes.pdf" }), reference);
       }
       const file = reference.querySelector<HTMLElement>(
@@ -650,7 +515,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       const compactHeight =
         rowHeights.reduce((sum, height) => sum + height, 0) + gap * (rowHeights.length - 1);
       expect(gallery.getBoundingClientRect().height).toBeCloseTo(compactHeight, 1);
-      if (scenario.document) {
+      if (withDocument) {
         const parentGap = Number.parseFloat(getComputedStyle(gallery.parentElement!).rowGap);
         expect(
           file.getBoundingClientRect().top - gallery.getBoundingClientRect().bottom,

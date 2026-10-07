@@ -18,7 +18,6 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeFastMode,
   normalizeLowercaseStringOrEmpty,
-  readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeAnthropicServiceTier,
@@ -246,9 +245,9 @@ export function createAnthropicServiceTierWrapper(
     baseStreamFn,
     ({ payload, model }) => {
       const payloadPolicy = resolveAnthropicPayloadPolicy({
-        provider: readStringValue(model.provider),
-        api: readStringValue(model.api),
-        baseUrl: readStringValue(model.baseUrl),
+        provider: model.provider,
+        api: model.api,
+        baseUrl: model.baseUrl,
         serviceTier,
       });
       applyAnthropicPayloadPolicyToParams(payload, payloadPolicy, new Set());
@@ -260,9 +259,9 @@ export function createAnthropicServiceTierWrapper(
           return false;
         }
         return resolveAnthropicPayloadPolicy({
-          provider: readStringValue(model.provider),
-          api: readStringValue(model.api),
-          baseUrl: readStringValue(model.baseUrl),
+          provider: model.provider,
+          api: model.api,
+          baseUrl: model.baseUrl,
           serviceTier,
         }).allowsServiceTier;
       },
@@ -282,10 +281,7 @@ export function resolveAnthropicFastMode(
   extraParams: Record<string, unknown> | undefined,
 ): boolean | undefined {
   const raw = extraParams?.fastMode ?? extraParams?.fast_mode;
-  const fastMode =
-    typeof raw === "function"
-      ? normalizeFastMode((raw as () => unknown)() as string | boolean | null | undefined)
-      : normalizeFastMode(raw as string | boolean | null | undefined);
+  const fastMode = normalizeFastMode(typeof raw === "function" ? (raw as () => unknown)() : raw);
   return fastMode === "auto" ? undefined : fastMode === "ultrafast" ? true : fastMode;
 }
 

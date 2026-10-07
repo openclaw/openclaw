@@ -5,6 +5,7 @@ import {
   SESSION_OWNER_COLUMN_DEFINITIONS,
 } from "../../state/openclaw-agent-db-additive-columns.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -146,6 +147,7 @@ describe("SQLite session owner assignment", () => {
       for (const { columnName, tableName } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
         initial.db.exec(`ALTER TABLE ${tableName} DROP COLUMN ${columnName};`);
       }
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
 
       expect(loadSessionEntry(scope)).toMatchObject({
@@ -184,6 +186,7 @@ describe("SQLite session owner assignment", () => {
       ).toEqual(assignment);
       expect(loadSessionEntry(scope)?.owner).toEqual(assignment);
 
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       expect(loadSessionEntry(scope)?.owner).toEqual(assignment);
       const reopened = openOpenClawAgentDatabase({ agentId: "main", env: state.env });

@@ -141,7 +141,9 @@ not change retained archives or completion delivery's final-answer scanner.
 Tasks reports this as a non-retryable preview limit; refreshing cannot resolve it.
 
 Terminal failed runs report failure status without replaying captured
-reply text. Tool/toolResult output is not promoted into child result text.
+reply text. When completion is recovered from the child's stored session, its
+recorded failure or timeout diagnostic is preserved for the parent.
+Tool/toolResult output is not promoted into child result text.
 
 ### Stats line
 

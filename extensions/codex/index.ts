@@ -1,7 +1,3 @@
-/**
- * Bundled Codex plugin entry: app-server harness, media understanding,
- * migration provider, CLI-session commands, and binding hooks.
- */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizePluginsConfig,
@@ -117,7 +113,7 @@ export default definePluginEntry({
         // codex config block, so a live block is the plugin-side default. Gating
         // on a feature flag (supervision) here would silently drop unrelated
         // harness settings such as appServer.homeScope; feature gates belong in
-        // the feature's own surface (see requireSupervisionEnabled).
+        // the feature's own surface (see requireLiveToolPolicy).
         enabledByDefault: livePluginConfig !== undefined,
       }).enabled;
       if (!enabled) {

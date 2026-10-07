@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   readPersistedAuthProfileStateRaw,
@@ -13,6 +14,7 @@ import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
@@ -273,6 +275,32 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         sessionId: "session-1",
         updatedAt: beforePreservePatch?.updatedAt,
       });
+    });
+
+    t("reads the exact timestamp without selecting or decoding cold snapshots", async () => {
+      const scope = adapter.entryScope(paths);
+      replaceSessionEntrySync(scope, {
+        sessionId: "timestamp-target",
+        updatedAt: 42,
+        skillsSnapshot: { prompt: `TIMESTAMP_COLD_PAYLOAD_${"x".repeat(65_536)}`, skills: [] },
+      });
+      const reads = observeMainThreadReads();
+      const parse = vi.spyOn(JSON, "parse");
+      try {
+        expect(adapter.readSessionUpdatedAtCore(scope)).toBe(42);
+        const queries = reads.calls
+          .flatMap((call) => call.mock.contexts)
+          .map((statement) => (statement as StatementSync).sourceSQL)
+          .filter((sql) => /from "session_nodes"/i.test(sql));
+        expect(queries).toHaveLength(1);
+        expect.soft(queries.some((sql) => sql.includes("session_entry_snapshots"))).toBe(false);
+        expect(parse.mock.calls.some(([value]) => value.includes("TIMESTAMP_COLD_PAYLOAD_"))).toBe(
+          false,
+        );
+      } finally {
+        parse.mockRestore();
+        reads.restore();
+      }
     });
 
     it("conforms for exact persisted-key lookup without canonical alias fallback", async () => {
@@ -1331,7 +1359,7 @@ describe("sqlite session normalization", () => {
       chatType: "group",
       displayName: "telegram:g-bucephalus-+-topics",
       sessionId: newSessionId,
-      status: "running",
+      status: undefined,
       updatedAt: 1_782_997_881_018,
     });
     await appendTranscriptEvent(

@@ -3,6 +3,8 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecMode } from "../infra/exec-approvals.js";
+import type { MemoryAudience } from "../plugins/memory-provider-types.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentRunClientContext, AgentRunMessageContext } from "./command/shared-types.js";
@@ -32,6 +34,10 @@ export type OpenClawSharedToolsOptions = {
   toolBindings?: Readonly<Record<string, unknown>>;
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
   conversationRecall?: ConversationRecallContext;
+  /** Host-resolved memory partition shared by plugin tools for this turn. */
+  memoryAudience?: MemoryAudience;
+  /** Stable mutation identity supplied only for a provider-owned memory flush. */
+  memoryFlush?: { flushId: string };
   /** Trusted platform-native conversation id for the active inbound turn. */
   nativeChannelId?: string;
   /** Producer-authored bare upload handles mapped to exact sandbox paths. */
@@ -68,6 +74,8 @@ export type OpenClawSharedToolsOptions = {
   skillWorkshop?: SkillWorkshopRunOptions;
   webFetchHostnameAllowlistRef?: { value?: string[] };
   webSearchEnabled?: boolean;
+  /** Construction fact for prompt guidance; never contains credentials or diagnostics. */
+  onWebSearchConfiguration?: (configured: boolean) => void;
   /** Routable target for the current conversation when it differs from the native channel ID. */
   currentMessagingTarget?: string;
   /** Dynamic audio state for runs that can accept steered input after tool creation. */
@@ -177,6 +185,7 @@ export type OpenClawToolsOptions = {
   requesterSenderId?: string | null;
   /** Prepared exec/process isolation key for this run. */
   processScopeKey?: string;
+  inputProvenance?: InputProvenance;
 } & OpenClawSharedToolsOptions &
   AgentRunClientContext &
   AgentRunMessageContext &

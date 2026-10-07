@@ -2,11 +2,15 @@ import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import {
   observeHostDataSql,
   observeSqliteReadSql,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { loadSubagentMaintenanceRunsInDatabase } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import { acquireStateDatabaseSchemaLease } from "../../infra/gateway-state-owner.js";
 import {
   isSqliteWorkerError,
   type SqliteWorkerOperations,
@@ -29,6 +33,8 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { ensureSessionTranscriptArchiveSchema } from "../../state/openclaw-agent-session-transcript-archive-schema.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
+import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import * as configEnv from "../config-env-vars.js";
@@ -48,18 +54,173 @@ import {
   applySessionEntryExactReplacements,
 } from "./session-accessor.sqlite-replacement-projection.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
+import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
+
+it.each([false, true])(
+  "retains prepared maintenance protection through replacement settlement (revoke: %s)",
+  async (revoke) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const sessionKey = "agent:main:replacement-preservation";
+      writeSessionEntry(database, sessionKey, {
+        sessionId: "replacement-preservation",
+        updatedAt: Date.now(),
+        label: "before",
+      });
+      let prepared = false;
+      let current = true;
+      const dispose = vi.fn();
+      const prepare = vi.fn(async () => {
+        prepared = true;
+        return {
+          capture() {
+            expect(dispose).not.toHaveBeenCalled();
+            if (!current) {
+              throw new Error("preservation revoked");
+            }
+            return [sessionKey];
+          },
+          dispose,
+        };
+      });
+      const unregister = registerSessionMaintenancePreserveKeysProvider(prepare);
+      try {
+        const replacement = applySessionEntryExactReplacements({
+          storePath: database.path,
+          sessionKeys: [sessionKey],
+          skipMaintenance: false,
+          assertCommitAllowed() {
+            if (prepared && revoke) {
+              current = false;
+            }
+          },
+          update: ([row]) => ({
+            result: "committed",
+            replacements: [{ sessionKey, entry: { ...row!.entry, label: "after" } }],
+          }),
+        });
+        if (revoke) {
+          await expect(replacement).rejects.toThrow("preservation revoked");
+        } else {
+          await expect(replacement).resolves.toBe("committed");
+        }
+        expect(readExactSessionEntryRow(database, sessionKey)?.entry.label).toBe(
+          revoke ? "before" : "after",
+        );
+        expect(prepare).toHaveBeenCalledOnce();
+        expect(dispose).toHaveBeenCalledOnce();
+      } finally {
+        unregister();
+      }
+    });
+  },
+);
+
+it("rechecks prepared durable maintenance facts after the final replacement grant", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const shared = openOpenClawStateDatabase();
+    const identity = requireOpenClawStateDatabaseIdentity({ db: shared.db });
+    const sessionKey = "agent:main:replacement-durable-preservation";
+    writeSessionEntry(database, sessionKey, {
+      sessionId: "durable-preservation",
+      updatedAt: Date.now(),
+      label: "before",
+    });
+    const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+      capture: () => [],
+      dispose: () => {},
+      subagentRunBasis: {
+        databasePath: shared.path,
+        databaseIdentity: identity.key,
+        databaseBirthtime: identity.birthtime,
+        digest: loadSubagentMaintenanceRunsInDatabase(shared).digest,
+      },
+    }));
+    const child: SubagentRunRecord = {
+      runId: "late-preserved-child",
+      requesterSessionKey: sessionKey,
+      childSessionKey: "agent:main:subagent:late-preserved-child",
+      requesterDisplayKey: "synthetic-parent",
+      task: "Synthetic maintenance custody",
+      cleanup: "keep",
+      createdAt: 1,
+      completion: { required: false },
+      delivery: { status: "not_required" },
+      execution: { status: "running", startedAt: 1 },
+    };
+    let finalGrant = false;
+    const createAdmission = admission.createSqliteWorkerOperationAdmission;
+    const admitted = vi
+      .spyOn(admission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((callback, attachment) =>
+        createAdmission((request, grant) => {
+          if (
+            request.stage === "commit" &&
+            isRecord(request.facts) &&
+            isRecord(request.facts.publication) &&
+            request.facts.publication.kind === "session-entry-replacements"
+          ) {
+            finalGrant = true;
+            // Bypass host publication to model a foreign commit before the worker resumes.
+            shared.db
+              .prepare(
+                "INSERT INTO subagent_runs (run_id, child_session_key, requester_session_key, created_at, payload_json) VALUES (?, ?, ?, ?, ?)",
+              )
+              .run(
+                child.runId,
+                child.childSessionKey,
+                child.requesterSessionKey,
+                child.createdAt,
+                JSON.stringify(child),
+              );
+          }
+          callback(request, grant);
+        }, attachment),
+      );
+    try {
+      const error = await applySessionEntryExactReplacements({
+        storePath: database.path,
+        sessionKeys: [sessionKey],
+        skipMaintenance: false,
+        update: ([row]) => ({
+          result: undefined,
+          replacements: [{ sessionKey, entry: { ...row!.entry, label: "after" } }],
+        }),
+      }).then(
+        () => undefined,
+        (cause: unknown) => cause,
+      );
+      expect(finalGrant).toBe(true);
+      expect(error).toMatchObject({
+        code: "outcome-unknown",
+        cause: { message: "Session subagent facts changed before commit" },
+      });
+      expect(readExactSessionEntryRow(database, sessionKey)?.entry.label).toBe("before");
+    } finally {
+      admitted.mockRestore();
+      unregister();
+    }
+  });
+});
 
 it("does not probe archive recovery during ordinary replacements", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const maintenance = createOpenClawDatabaseMaintenanceScope();
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const schemaLease = acquireStateDatabaseSchemaLease(database.path);
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: () => schemaLease.assertCurrent(),
+      assertDatabaseAccess: schemaLease.assertDatabaseAccess,
+    });
     try {
       // The native maintenance path exposes SQL from the same replacement kernel.
       await maintenance.run(async () => {
-        const database = openOpenClawAgentDatabase({ agentId: "main" });
         const sessionKey = "agent:main:replacement-no-archive";
         writeSessionEntry(database, sessionKey, { sessionId: "replacement", updatedAt: 1 });
         ensureSessionTranscriptArchiveSchema(database.db);
         const sql = observeSqliteReadSql(StatementSync.prototype);
+        const nativeExec = vi.spyOn(database.db, "exec");
         try {
           await applySessionEntryExactReplacements({
             storePath: database.path,
@@ -69,16 +230,24 @@ it("does not probe archive recovery during ordinary replacements", async () => {
               replacements: [{ sessionKey, entry: { ...row!.entry, label: "committed" } }],
             }),
           });
+          expect(
+            nativeExec.mock.calls.some(([statement]) => /\bBEGIN\s+IMMEDIATE\b/i.test(statement)),
+          ).toBe(true);
           expect(readExactSessionEntryRow(database, sessionKey)?.entry.label).toBe("committed");
           expect(
             sql.queries.filter((query) => /from "session_transcript_archives"/i.test(query)),
           ).toEqual([]);
         } finally {
+          nativeExec.mockRestore();
           sql.restore();
         }
       });
     } finally {
-      await maintenance.close();
+      try {
+        await maintenance.close();
+      } finally {
+        schemaLease.release();
+      }
     }
   });
 });
@@ -471,6 +640,7 @@ it.each([
   "lost delivery after native completion",
   "lost result and commit receipt after final grant",
   "unknown native settlement after commit",
+  "post-commit observer failure",
   "unknown native settlement and lifecycle callback failure",
 ] as const)("settles canonical replacement with %s", async (fault) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -512,10 +682,14 @@ it.each([
     });
     const deliveryFailure = new Error("Replacement committed but its reply was lost");
     const missingReceipt = fault === "lost result and commit receipt after final grant";
+    const observerFailure = fault === "post-commit observer failure";
     const callbackFails = fault === "unknown native settlement and lifecycle callback failure";
     const nativeUnknown = fault === "unknown native settlement after commit" || callbackFails;
     const callbackFailure = new Error("Replacement lifecycle callback failed after native commit");
     const committedLifecycle = vi.fn(() => {
+      if (observerFailure) {
+        throw deliveryFailure;
+      }
       if (callbackFails) {
         throw callbackFailure;
       }
@@ -583,7 +757,7 @@ it.each([
                   }
                   verifiedCommits++;
                   injected = true;
-                  if (!nativeUnknown) {
+                  if (!nativeUnknown && !observerFailure) {
                     throw deliveryFailure;
                   }
                   return result;

@@ -11,10 +11,8 @@ import * as systemdFiles from "../../daemon/systemd-service-files.js";
 import * as systemdSystem from "../../daemon/systemd-system.js";
 import { buildSystemdUnit } from "../../daemon/systemd-unit.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
-import {
-  swapStagedPackageInstall,
-  type PackageUpdateTransaction,
-} from "../../infra/package-update-swap.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import * as candidateState from "../../infra/update-candidate-state.js";
 import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
 import { prepareNativePackageStage } from "../../infra/update-native-package-stage.js";

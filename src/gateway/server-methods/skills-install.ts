@@ -1,4 +1,3 @@
-// Source-routed skill installation and its reconnect/publication authority.
 import {
   buildClawHubTrustErrorDetails,
   ErrorCodes,

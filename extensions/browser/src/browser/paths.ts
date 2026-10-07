@@ -90,10 +90,8 @@ function resolveManagedInboundMediaRef(
   if (/^media:\/\//i.test(normalizedSource)) {
     const rawUriMatch = /^media:\/\/[^/?#]*([^?#]*)/iu.exec(normalizedSource);
     const rawPath = rawUriMatch?.[1] ?? "";
-    let parsed: URL;
-    try {
-      parsed = new URL(normalizedSource);
-    } catch {
+    const parsed = URL.parse(normalizedSource);
+    if (!parsed) {
       return { ok: false, error: `Invalid media reference: ${normalizedSource}` };
     }
     if (parsed.hostname !== "inbound") {
@@ -230,7 +228,6 @@ export async function resolveExistingUploadPaths(
   return resolveUploadPaths({ ...options, strict: false });
 }
 
-/** Strictly resolve upload paths under the upload root only. */
 export async function resolveStrictExistingUploadPaths(
   options: UploadPathResolutionOptions,
 ): Promise<StrictExistingPathsResult> {

@@ -259,7 +259,6 @@
   }
 }
 
-/* Message images (sent images displayed in chat) */
 .chat-message-images {
   display: flex;
   flex-direction: column;

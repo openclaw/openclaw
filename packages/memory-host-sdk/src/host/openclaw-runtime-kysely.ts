@@ -5,4 +5,5 @@ export {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
+  sqliteStringSet,
 } from "../../../../src/infra/kysely-sync.js";

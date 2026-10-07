@@ -26,10 +26,8 @@ import {
 } from "../../model-auth.js";
 import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
 import { providerModelRouteAcceptsAuthMode } from "../../provider-model-route-auth.js";
-import {
-  applyPreparedRuntimeAuthToModel,
-  type ModelProviderRequestTransportOverrides,
-} from "../../provider-request-config.js";
+import { applyPreparedRuntimeAuthToModel } from "../../provider-request-config.js";
+import type { ModelProviderRequestTransportOverrides } from "../../provider-request-config.types.js";
 import { protectPreparedProviderRuntimeAuth } from "../../provider-runtime-auth-protection.js";
 import { unwrapSecretSentinelsForProviderEgress } from "../../provider-secret-egress.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
@@ -237,8 +235,7 @@ export function createEmbeddedRunAuthController(params: {
     const refreshGeneration = runtimeAuthState.generation;
     const refreshProfileId = runtimeAuthState.profileId;
     const refreshPromise: Promise<void> = (async () => {
-      const currentRuntimeAuthState = state.runtimeAuthState;
-      const sourceApiKey = currentRuntimeAuthState?.sourceApiKey.trim() ?? "";
+      const sourceApiKey = runtimeAuthState.sourceApiKey.trim();
       if (!sourceApiKey) {
         throw new Error(`Runtime auth refresh requires a source credential.`);
       }
@@ -247,8 +244,8 @@ export function createEmbeddedRunAuthController(params: {
       const preparedAuth = await prepareRuntimeAuthForModel({
         runtimeModel,
         apiKey: sourceApiKey,
-        authMode: currentRuntimeAuthState?.authMode ?? "unknown",
-        profileId: currentRuntimeAuthState?.profileId,
+        authMode: runtimeAuthState.authMode,
+        profileId: runtimeAuthState.profileId,
       });
       if (!preparedAuth?.apiKey) {
         throw new Error(
@@ -346,17 +343,9 @@ export function createEmbeddedRunAuthController(params: {
           if (activeRuntimeAuthState) {
             activeRuntimeAuthState.refreshTimer = retryTimer;
           }
-          if (state.runtimeAuthRefreshCancelled && activeRuntimeAuthState) {
-            clearTimeout(retryTimer);
-            activeRuntimeAuthState.refreshTimer = undefined;
-          }
         });
     }, delayMs);
     runtimeAuthState.refreshTimer = timer;
-    if (state.runtimeAuthRefreshCancelled) {
-      clearTimeout(timer);
-      runtimeAuthState.refreshTimer = undefined;
-    }
   };
 
   const resolveAuthProfileFailoverReason = (failoverParams: {
@@ -620,7 +609,7 @@ export function createEmbeddedRunAuthController(params: {
           if (canProbeCandidate) {
             didTransientCooldownProbe = true;
             params.log.warn(
-              `probing cooldowned auth profile for ${params.provider}/${modelId} due to ${cooldownProbePolicy.unavailableReason ?? "transient"} unavailability`,
+              `checking cooldowned auth profile for ${params.provider}/${modelId} due to ${cooldownProbePolicy.unavailableReason ?? "transient"} unavailability`,
             );
           } else {
             state.profileIndex += 1;

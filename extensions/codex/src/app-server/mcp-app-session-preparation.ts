@@ -31,7 +31,7 @@ import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
-import { startOrResumeThread } from "./thread-lifecycle.js";
+import { startOrResumeThread } from "./thread-lifecycle-run.js";
 import {
   isSameCodexAppServerThreadOwner,
   retainCodexAppServerBindingSubscription,
@@ -69,7 +69,7 @@ export async function prepareCodexMcpAppSession(params: {
     });
     const assertCurrent = () => {
       assertSourceCurrent();
-      admitted.assertCurrent();
+      admitted.authority.assertLegacyCurrent();
     };
     assertCurrent();
     const prepareThread = async () => {

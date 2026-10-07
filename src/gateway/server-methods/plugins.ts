@@ -38,9 +38,10 @@ import { getPluginRegistryVersion } from "../../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
 import { validatePluginSkillPath } from "../../skills/loading/plugin-skill-bundle.js";
+import { catalogHandlers } from "./catalog.js";
 import { pluginCredentialHandlers } from "./plugins.credentials.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 function pluginReadError(error: unknown) {
   return errorShape(
@@ -52,14 +53,12 @@ function pluginReadError(error: unknown) {
 }
 
 export const pluginsHandlers: GatewayRequestHandlers = {
+  ...catalogHandlers,
   ...pluginCredentialHandlers,
-  "plugins.skills.read": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(params, validatePluginsSkillsReadParams, "plugins.skills.read", respond)
-    ) {
-      return;
-    }
-    try {
+  "plugins.skills.read": defineValidatedGatewayHandler(
+    "plugins.skills.read",
+    validatePluginsSkillsReadParams,
+    async ({ params, respond, context }) => {
       if (params.path !== undefined) {
         try {
           validatePluginSkillPath(params.path);
@@ -95,15 +94,13 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         }),
         undefined,
       );
-    } catch (error) {
-      respond(false, undefined, pluginReadError(error));
-    }
-  },
-  "plugins.list": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validatePluginsListParams, "plugins.list", respond)) {
-      return;
-    }
-    try {
+    },
+    pluginReadError,
+  ),
+  "plugins.list": defineValidatedGatewayHandler(
+    "plugins.list",
+    validatePluginsListParams,
+    async ({ respond, context }) => {
       const catalog = await listManagedPlugins({ config: context.getRuntimeConfig() });
       const registry = getPluginRegistryForContext();
       // The first loaded record owns shadowed IDs; read runtime facts after catalog I/O.
@@ -142,15 +139,13 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         },
         undefined,
       );
-    } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-    }
-  },
-  "plugins.inspect": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validatePluginsInspectParams, "plugins.inspect", respond)) {
-      return;
-    }
-    try {
+    },
+    (error) => errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)),
+  ),
+  "plugins.inspect": defineValidatedGatewayHandler(
+    "plugins.inspect",
+    validatePluginsInspectParams,
+    async ({ params, respond, context }) => {
       let target: { pluginId: string } | { clawhub: { packageName: string; version?: string } };
       if ("pluginId" in params) {
         target = { pluginId: params.pluginId };
@@ -194,15 +189,13 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         },
         undefined,
       );
-    } catch (error) {
-      respond(false, undefined, pluginReadError(error));
-    }
-  },
-  "plugins.search": async ({ params, respond }) => {
-    if (!assertValidParams(params, validatePluginsSearchParams, "plugins.search", respond)) {
-      return;
-    }
-    try {
+    },
+    pluginReadError,
+  ),
+  "plugins.search": defineValidatedGatewayHandler(
+    "plugins.search",
+    validatePluginsSearchParams,
+    async ({ params, respond }) => {
       const results = await searchInstallablePluginPackages({
         query: params.query,
         limit: params.limit,
@@ -245,10 +238,9 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         },
         undefined,
       );
-    } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-    }
-  },
+    },
+    (error) => errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)),
+  ),
   "plugins.catalog.browse": defineValidatedGatewayHandler(
     "plugins.catalog.browse",
     validatePluginsCatalogBrowseParams,
@@ -261,124 +253,116 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      const query = params.query?.trim();
+      const intent = params.intent ?? "all";
+      const includeBundledOnly = intent === "bundled" || intent === "official" || intent === "all";
+      const overviewRequest = intent === "all" && !query && !params.category && !params.cursor;
+      const remoteRequest: Promise<{
+        items: ClawHubPluginCatalogEntry[];
+        categories?: ClawHubPluginCategory[];
+        nextCursor?: string;
+      }> = overviewRequest
+        ? fetchClawHubPluginOverview()
+        : intent === "bundled"
+          ? Promise.resolve({ items: [] })
+          : fetchClawHubPluginCatalog({
+              query,
+              ...(params.searchSource ? { searchSource: params.searchSource } : {}),
+              intent,
+              category: params.category,
+              cursor: params.cursor,
+              limit: params.pageSize ?? 20,
+            });
+      // Observe optional remote failure immediately; inventory failures still return promptly.
+      const [[remoteResult], local] = await Promise.all([
+        Promise.allSettled([remoteRequest]),
+        listManagedPlugins({ config: context.getRuntimeConfig() }),
+      ]);
+      const catalogOptions = {
+        local,
+        includeBundledOnly,
+        intent,
+        category: params.category,
+        query: params.query,
+        cursor: params.cursor,
+      };
       try {
-        const local = await listManagedPlugins({ config: context.getRuntimeConfig() });
-        const query = params.query?.trim();
-        const intent = params.intent ?? "all";
-        const includeBundledOnly =
-          intent === "bundled" || intent === "official" || intent === "all";
-        const catalogOptions = {
-          local,
-          includeBundledOnly,
-          intent,
-          category: params.category,
-          query: params.query,
-          cursor: params.cursor,
-        };
-        try {
-          const overviewRequest = intent === "all" && !query && !params.category && !params.cursor;
-          const remote: {
-            items: ClawHubPluginCatalogEntry[];
-            categories?: ClawHubPluginCategory[];
-            nextCursor?: string;
-          } = overviewRequest
-            ? await fetchClawHubPluginOverview()
-            : intent === "bundled"
-              ? { items: [] }
-              : await fetchClawHubPluginCatalog({
-                  query,
-                  ...(params.searchSource ? { searchSource: params.searchSource } : {}),
-                  intent,
-                  category: params.category,
-                  cursor: params.cursor,
-                  limit: params.pageSize ?? 20,
-                });
-          const items = joinClawHubPluginCatalog({
-            ...catalogOptions,
-            remote: remote.items,
-            categories: remote.categories,
-          });
-          registerClawHubCatalogIconUrls(items.map((item) => item.catalog.imageUrl));
-          respond(
-            true,
-            {
-              items,
-              ...(overviewRequest ? { categories: remote.categories } : {}),
-              ...(remote.nextCursor ? { nextCursor: remote.nextCursor } : {}),
-            },
-            undefined,
-          );
-        } catch (error) {
-          respond(
-            true,
-            {
-              items: joinClawHubPluginCatalog({ ...catalogOptions, remote: [] }),
-              ...(params.cursor ? { nextCursor: params.cursor } : {}),
-              remoteError: `ClawHub is unavailable: ${formatErrorMessage(error)}.${
-                intent === "all"
-                  ? " Installed plugins remain available."
-                  : includeBundledOnly
-                    ? " Bundled plugins remain available."
-                    : ""
-              }`,
-            },
-            undefined,
-          );
+        if (remoteResult.status === "rejected") {
+          throw remoteResult.reason;
         }
+        const remote = remoteResult.value;
+        const items = joinClawHubPluginCatalog({
+          ...catalogOptions,
+          remote: remote.items,
+          categories: remote.categories,
+        });
+        registerClawHubCatalogIconUrls(items.map((item) => item.catalog.imageUrl));
+        respond(
+          true,
+          {
+            items,
+            ...(overviewRequest ? { categories: remote.categories } : {}),
+            ...(remote.nextCursor ? { nextCursor: remote.nextCursor } : {}),
+          },
+          undefined,
+        );
       } catch (error) {
         respond(
-          false,
+          true,
+          {
+            items: joinClawHubPluginCatalog({ ...catalogOptions, remote: [] }),
+            ...(params.cursor ? { nextCursor: params.cursor } : {}),
+            remoteError: `ClawHub is unavailable: ${formatErrorMessage(error)}.${
+              intent === "all"
+                ? " Installed plugins remain available."
+                : includeBundledOnly
+                  ? " Bundled plugins remain available."
+                  : ""
+            }`,
+          },
           undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `Plugin discovery is unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
-          ),
         );
       }
     },
+    (error) =>
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `Plugin discovery is unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
+      ),
   ),
   "plugins.catalog.categories": defineValidatedGatewayHandler(
     "plugins.catalog.categories",
     validatePluginsCatalogCategoriesParams,
     async ({ respond }) => {
-      try {
-        respond(true, { categories: await fetchClawHubPluginCategories() }, undefined);
-      } catch (error) {
+      respond(true, { categories: await fetchClawHubPluginCategories() }, undefined);
+    },
+    (error) =>
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `Plugin categories are unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
+      ),
+  ),
+  "plugins.catalog.get": defineValidatedGatewayHandler(
+    "plugins.catalog.get",
+    validatePluginsCatalogGetParams,
+    async ({ params, respond, context }) => {
+      const identity = resolvePluginDiscoveryIdentity(params.id);
+      if (!identity) {
         respond(
           false,
           undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `Plugin categories are unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
-          ),
+          errorShape(ErrorCodes.INVALID_REQUEST, "Unknown plugin discovery identity."),
         );
+        return;
       }
-    },
-  ),
-  "plugins.catalog.get": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(params, validatePluginsCatalogGetParams, "plugins.catalog.get", respond)
-    ) {
-      return;
-    }
-    const identity = resolvePluginDiscoveryIdentity(params.id);
-    if (!identity) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "Unknown plugin discovery identity."),
-      );
-      return;
-    }
-    if (identity.origin === "local" && params.version) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "Local plugin details do not select releases."),
-      );
-      return;
-    }
-    try {
+      if (identity.origin === "local" && params.version) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "Local plugin details do not select releases."),
+        );
+        return;
+      }
       const local = await listManagedPlugins({ config: context.getRuntimeConfig() });
       const localPlugin = findLocalPluginByIdentity(local, identity.identity, identity.origin);
       let remoteError: string | undefined;
@@ -434,15 +418,11 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         };
       }
       respond(true, result, undefined);
-    } catch (error) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `Plugin details are unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
-        ),
-      );
-    }
-  },
+    },
+    (error) =>
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `Plugin details are unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
+      ),
+  ),
 };

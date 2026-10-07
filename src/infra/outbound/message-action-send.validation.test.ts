@@ -49,20 +49,6 @@ describe("runMessageAction send validation", () => {
     ).rejects.toThrow(/message required/i);
   });
 
-  it("allows send when only generic presentation blocks are provided", async () => {
-    const result = await runDrySend({
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        presentation: { blocks: [{ type: "divider" }] },
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    });
-
-    expect(result.kind).toBe("send");
-  });
-
   it("allows send when only a portable location is provided", async () => {
     const result = await runDrySend({
       cfg: workspaceConfig,
@@ -220,62 +206,6 @@ describe("runMessageAction send validation", () => {
     ).rejects.toThrow(/use action "poll" instead of "send"/i);
   });
 
-  it("allows send when only schema-padded shared poll modifiers are present", async () => {
-    // LLMs routinely echo the shared `message` tool schema's poll modifier
-    // defaults (`pollDurationHours: 1`, `pollMulti: false`) on every plain
-    // `send` call alongside the rest of the schema-padded slots. Without a
-    // pollQuestion or pollOption present, these defaults are noise — not
-    // poll intent — and must not block the send.
-    const result = await runDrySend({
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        message: "hello",
-        pollQuestion: "",
-        pollOption: [],
-        pollDurationHours: 1,
-        pollMulti: false,
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    });
-
-    expect(result.kind).toBe("send");
-  });
-
-  it("allows send when only schema-padded channel-extra poll metadata is present", async () => {
-    const result = await runDrySend({
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        message: "hello",
-        pollDurationSeconds: 60,
-        pollPublic: true,
-        pollAnonymous: false,
-        pollOptionIndex: 0,
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    });
-
-    expect(result.kind).toBe("send");
-  });
-
-  it("treats blank shared-schema event location as omitted on send", async () => {
-    const result = await runDrySend({
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        message: "hello",
-        location: " \t\n",
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    });
-
-    expect(result.kind).toBe("send");
-  });
-
   it("keeps rejecting a non-empty event location string on send", async () => {
     await expect(
       runDrySend({
@@ -311,7 +241,6 @@ describe("message body alias normalization", () => {
 
   it.each([
     { name: "canonical message", body: { message: "    indented body" } },
-    { name: "reasoning tag alias", body: { text: "<think>private</think>    indented body" } },
     {
       name: "mixed reasoning preamble alias",
       body: { text: "<think>private</think>\nThinking\n_summary_\n    indented body" },

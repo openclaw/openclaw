@@ -913,7 +913,8 @@
         if (filePath !== null && (offset !== undefined || limit !== undefined)) {
           const startLine = offset ?? 1;
           const endLine = limit !== undefined ? startLine + limit - 1 : "";
-          pathHtml += `<span class="line-numbers">:${startLine}${endLine ? "-" + endLine : ""}</span>`;
+          const lineNumbers = `:${startLine}${endLine ? "-" + endLine : ""}`;
+          pathHtml += `<span class="line-numbers">${escapeHtml(lineNumbers)}</span>`;
         }
 
         html += `<div class="tool-header"><span class="tool-name">read</span> <span class="tool-path">${pathHtml}</span></div>`;
@@ -1607,6 +1608,7 @@
     if (e.key === "Escape") {
       searchInput.value = "";
       searchQuery = "";
+      treeRendered = false;
       navigateTo(leafId, "bottom");
     }
     if (e.ctrlKey && e.key === "t") {

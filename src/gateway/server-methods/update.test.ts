@@ -1,6 +1,7 @@
 // Update method tests cover update.run/status, restart sentinel metadata,
 // managed-service handoff, restart scheduling, and delivery context preservation.
 
+import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
@@ -130,7 +131,7 @@ describe("update.run acknowledgement", () => {
   it("rejects an ambiguous session alias before recording or handing off an update", async () => {
     const respond = vi.fn();
     await invokeUpdateRun({ sessionKey: "global" }, respond, {
-      agents: { list: [{ id: "operations" }, { id: "research" }] },
+      agents: { entries: { operations: {}, research: {} } },
     });
     expect(respond).toHaveBeenCalledExactlyOnceWith(
       false,
@@ -445,8 +446,12 @@ describe("update.run restart scheduling", () => {
   });
 
   it("persists managed update continuation before transferring validation while serving", async () => {
+    const root = path.join(
+      await fs.realpath(expectDefined(process.env.HOME, "fixture HOME")),
+      "openclaw-global",
+    );
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-    mockGlobalInstallSurface();
+    mockGlobalInstallSurface(root);
 
     const payload = await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
       captureUpdateRunPayload({}, {}),
@@ -454,14 +459,14 @@ describe("update.run restart scheduling", () => {
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        root: "/tmp/openclaw-global",
+        root,
         restartDrainTimeoutMs: 300_000,
         restartDelayMs: 0,
         handoffId: expect.any(String),
         supervisor: "launchd",
         meta: expect.objectContaining({
           handoffId: expect.any(String),
-          root: "/tmp/openclaw-global",
+          root,
         }),
       }),
     );
@@ -475,7 +480,7 @@ describe("update.run restart scheduling", () => {
     expect(transferManagedServiceUpdateHandoffMock).toHaveBeenCalledExactlyOnceWith({
       kind: "managed-update-handoff",
       handoffId,
-      installRoot: "/tmp/openclaw-global",
+      installRoot: root,
     });
     expect(recordLatestUpdateRestartSentinelMock.mock.invocationCallOrder[0]).toBeLessThan(
       transferManagedServiceUpdateHandoffMock.mock.invocationCallOrder[0]!,
@@ -630,8 +635,12 @@ describe("update.run restart scheduling", () => {
   });
 
   it("delegates Git preflight to the same prepared updater while serving", async () => {
+    const root = path.join(
+      await fs.realpath(expectDefined(process.env.HOME, "fixture HOME")),
+      "openclaw-git",
+    );
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-    mockGitInstallSurface("/tmp/openclaw-git");
+    mockGitInstallSurface(root);
     const payload = await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
       captureUpdateRunPayload(),
     );
@@ -639,12 +648,12 @@ describe("update.run restart scheduling", () => {
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        root: "/tmp/openclaw-git",
+        root,
         handoffId: expect.any(String),
         supervisor: "launchd",
         meta: expect.objectContaining({
           handoffId: expect.any(String),
-          root: "/tmp/openclaw-git",
+          root,
         }),
       }),
     );

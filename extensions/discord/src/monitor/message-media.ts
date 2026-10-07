@@ -25,6 +25,7 @@ import {
   resolveDiscordReferencedReplyMessage,
   resolveDiscordSnapshotStickers,
 } from "./message-forwarded.js";
+import { withAbortTimeout } from "./timeouts.js";
 
 const AUDIO_ATTACHMENT_EXTENSIONS = new Set([
   ".aac",
@@ -124,6 +125,7 @@ function resolveDiscordMediaClassification(params: {
     fetchedContentType: params.fetchedContentType,
   });
   const mime = normalizeMimeType(contentType);
+  const definitive = isDefinitiveMediaType(contentType);
   // Discord now sends duration_secs on ordinary video/image attachments, so a
   // bare duration is no longer a voice-note signal. A waveform remains the
   // definitive native voice-note marker and keeps overriding a conflicting
@@ -137,24 +139,18 @@ function resolveDiscordMediaClassification(params: {
     (!definitiveVisual &&
       (isDiscordVoiceDurationOnly(params.attachment) ||
         (isDiscordAudioAttachmentFileName(params.attachment.filename ?? params.attachment.url) &&
-          !isDefinitiveMediaType(contentType))))
+          !definitive)))
       ? "audio"
       : undefined;
   const kind =
     audioKind ??
-    (!isDefinitiveMediaType(contentType)
-      ? isImageAttachment(params.attachment)
-        ? "image"
-        : "document"
-      : undefined);
+    (!definitive ? (isImageAttachment(params.attachment) ? "image" : "document") : undefined);
 
   return {
     // Inbound projection prefers MIME over kind. A native voice classification
     // or filename fallback must replace a non-definitive MIME rather than be masked by it.
     contentType:
-      (audioKind && !mime?.startsWith("audio/")) || (kind && !isDefinitiveMediaType(contentType))
-        ? undefined
-        : contentType,
+      (audioKind && !mime?.startsWith("audio/")) || (kind && !definitive) ? undefined : contentType,
     ...(kind ? { kind } : {}),
   };
 }
@@ -242,50 +238,26 @@ async function fetchDiscordMedia(
   },
 ) {
   const endpointGuard = resolveDiscordEndpointMediaGuard(params.url, operation.endpointRuntime);
-  const timeoutAbortController = operation.totalTimeoutMs ? new AbortController() : undefined;
-  const signal =
-    operation.abortSignal && timeoutAbortController
-      ? AbortSignal.any([operation.abortSignal, timeoutAbortController.signal])
-      : (operation.abortSignal ?? timeoutAbortController?.signal);
-  let timedOut = false;
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-  const savePromise = saveRemoteMedia({
-    url: params.url,
-    filePathHint: params.filePathHint,
-    maxBytes: operation.maxBytes,
-    // Endpoint media owns its pinned transport. An account proxy fetcher would
-    // otherwise replace the SSRF guard's dispatcher and leak the endpoint URL.
-    fetchImpl: endpointGuard ? undefined : operation.fetchImpl,
-    ssrfPolicy: endpointGuard?.ssrfPolicy ?? operation.ssrfPolicy,
-    ...(endpointGuard ? { maxRedirects: endpointGuard.maxRedirects } : {}),
-    readIdleTimeoutMs: operation.readIdleTimeoutMs,
-    fallbackContentType: params.fallbackContentType,
-    originalFilename: params.originalFilename,
-    ...(signal ? { requestInit: { signal } } : {}),
-  }).catch((error: unknown) => {
-    if (timedOut) {
-      return new Promise<never>(() => {});
-    }
-    throw error;
-  });
-  try {
-    if (!operation.totalTimeoutMs) {
-      return await savePromise;
-    }
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutHandle = setTimeout(() => {
-        timedOut = true;
-        timeoutAbortController?.abort();
-        reject(new Error(`discord media download timed out after ${operation.totalTimeoutMs}ms`));
-      }, operation.totalTimeoutMs);
-      timeoutHandle.unref?.();
+  const save = (signal?: AbortSignal) =>
+    saveRemoteMedia({
+      ...params,
+      maxBytes: operation.maxBytes,
+      // Endpoint media owns its pinned transport; an account proxy must not replace it.
+      fetchImpl: endpointGuard ? undefined : operation.fetchImpl,
+      ssrfPolicy: endpointGuard?.ssrfPolicy ?? operation.ssrfPolicy,
+      ...(endpointGuard ? { maxRedirects: endpointGuard.maxRedirects } : {}),
+      readIdleTimeoutMs: operation.readIdleTimeoutMs,
+      ...(signal ? { requestInit: { signal } } : {}),
     });
-    return await Promise.race([savePromise, timeoutPromise]);
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-  }
+  return operation.totalTimeoutMs
+    ? withAbortTimeout({
+        timeoutMs: operation.totalTimeoutMs,
+        createTimeoutError: () =>
+          new Error(`discord media download timed out after ${operation.totalTimeoutMs}ms`),
+        run: (signal) =>
+          save(operation.abortSignal ? AbortSignal.any([operation.abortSignal, signal]) : signal),
+      })
+    : save(operation.abortSignal);
 }
 
 async function appendResolvedMediaFromAttachments(

@@ -212,7 +212,7 @@ Source: `src/agents/embedded-agent-runner/google-prompt-cache.ts`.
 
 CLI backends that emit JSONL usage events (`jsonlDialect: "claude-stream-json"` or `"gemini-stream-json"`) go through a shared usage parser that recognizes several field-name variants, including a plain `cached` counter mapped to `cacheRead`. When the CLI's JSON payload omits a direct input-token field, OpenClaw derives it as `input_tokens - cached`. This is usage normalization only - it does not create Anthropic/OpenAI-style prompt-cache markers for these CLI-driven models.
 
-Claude Code has no OpenClaw-controlled `cache_control` breakpoint on `--append-system-prompt-file`, so OpenClaw keeps its complete system prompt in that transport. When the bounded version probe finds Claude Code 2.1.98 or newer, bundled `claude-cli` also passes `--exclude-dynamic-system-prompt-sections`. The first CLI execution or direct Anthropic OAuth request starts the shared probe; concurrent executions reuse it, and API catalog discovery does not start it. That Claude Code flag moves only Claude's own per-machine cwd, environment, memory-path, and Git-status sections out of its native system prompt; an older, unknown, or failed probe keeps the established argv. `cacheRetention` still has no effect on this path.
+Claude Code has no OpenClaw-controlled `cache_control` breakpoint on `--append-system-prompt-file`, so OpenClaw keeps its complete system prompt in that transport. When the bounded version check finds Claude Code 2.1.98 or newer, bundled `claude-cli` also passes `--exclude-dynamic-system-prompt-sections`. The first CLI execution or direct Anthropic OAuth request starts the shared check; concurrent executions reuse it, and API catalog discovery does not start it. That Claude Code flag moves only Claude's own per-machine cwd, environment, memory-path, and Git-status sections out of its native system prompt; an older, unknown, or failed check keeps the established argv. `cacheRetention` still has no effect on this path.
 
 One-shot helper runs dispatched through a CLI backend, such as Active Memory recall on `claude-cli`, get a new session key on every run. Those runs carry the Runtime facts line (agent, session, model, channel) in their only user turn instead of the system prompt, so repeated recalls of one agent send a byte-identical system prompt and can reuse Claude's prompt cache. Normal CLI turns keep the Runtime line in the system prompt.
 
@@ -324,6 +324,8 @@ Run it with:
 ```sh
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 pnpm test:live:cache
 ```
+
+This command selects the existing cache regression test through the shared live runner. Set `OPENCLAW_VITEST_RUNTIME=bun` to run its provider calls on Bun; the default is Node. Provider usage summaries and advisory warnings remain visible, and hard regression floors fail the test.
 
 The baseline file stores the most recently observed live numbers plus the provider-specific regression floors the test checks against. Each run uses fresh per-run session IDs and prompt namespaces so previous cache state does not pollute the current sample. Anthropic and OpenAI use different enforcement: an Anthropic floor miss is a hard regression (test fails), while an OpenAI floor miss is watch-only (recorded as a warning, does not fail the run). They do not share a single cross-provider threshold.
 

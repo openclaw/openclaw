@@ -117,7 +117,6 @@ export type SlackQaMessageScenarioRun = {
   matchText: string;
   /** Observation window for negative scenarios; must stay below the enclosing flow deadline. */
   noReplyObservationMs?: number;
-  preserveGatewayDebug?: boolean;
   settleObservedMs?: number;
   verify?: (message: SlackMessage, context: { requestThreadTs: string; sentTs: string }) => void;
   verifyObserved?: (params: {

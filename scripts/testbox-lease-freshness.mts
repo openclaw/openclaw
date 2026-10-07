@@ -151,7 +151,7 @@ function buildTestboxLeaseFingerprint(
   };
 }
 
-export function testboxLeaseStaleReasons(saved: unknown, current: unknown) {
+function testboxLeaseStaleReasons(saved: unknown, current: unknown) {
   if (!isRecord(saved) || saved.version !== STATE_VERSION || !isRecord(current)) {
     return ["state schema"];
   }

@@ -10,13 +10,7 @@ import {
   composeProviderStreamWrappers,
   createMoonshotThinkingWrapper,
   createPlainTextToolCallCompatWrapper,
-  GOOGLE_THINKING_STREAM_HOOKS,
-  KILOCODE_THINKING_STREAM_HOOKS,
-  MINIMAX_FAST_MODE_STREAM_HOOKS,
   MOONSHOT_THINKING_STREAM_HOOKS,
-  OPENAI_RESPONSES_STREAM_HOOKS,
-  OPENROUTER_THINKING_STREAM_HOOKS,
-  TOOL_STREAM_DEFAULT_ON_HOOKS,
 } from "./provider-stream.js";
 
 type StreamFn = NonNullable<ProviderWrapStreamFnContext["streamFn"]>;
@@ -363,7 +357,7 @@ describe("buildProviderStreamFamilyHooks", () => {
       return {} as never;
     };
 
-    const googleHooks = GOOGLE_THINKING_STREAM_HOOKS;
+    const googleHooks = buildProviderStreamFamilyHooks("google-thinking");
     const googleStream = requireStreamFn(
       requireWrapStreamFn(googleHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
@@ -384,7 +378,7 @@ describe("buildProviderStreamFamilyHooks", () => {
     expect(googleThinkingConfig.thinkingLevel).toBe("HIGH");
     expect(googleThinkingConfig).not.toHaveProperty("thinkingBudget");
 
-    const minimaxHooks = MINIMAX_FAST_MODE_STREAM_HOOKS;
+    const minimaxHooks = buildProviderStreamFamilyHooks("minimax-fast-mode");
     const minimaxStream = requireStreamFn(
       requireWrapStreamFn(minimaxHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
@@ -402,7 +396,7 @@ describe("buildProviderStreamFamilyHooks", () => {
     );
     expect(capturedModelId).toBe("MiniMax-M2.7-highspeed");
 
-    const kilocodeHooks = KILOCODE_THINKING_STREAM_HOOKS;
+    const kilocodeHooks = buildProviderStreamFamilyHooks("kilocode-thinking");
     void requireStreamFn(
       requireWrapStreamFn(kilocodeHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
@@ -547,7 +541,7 @@ describe("buildProviderStreamFamilyHooks", () => {
     expect(capturedReasoning).toBe("max");
     expect(capturedModelReasoning).toBe(true);
 
-    const openAiHooks = OPENAI_RESPONSES_STREAM_HOOKS;
+    const openAiHooks = buildProviderStreamFamilyHooks("openai-responses-defaults");
     payloadSeed = { reasoning: { effort: "medium", summary: "auto" } };
     void requireStreamFn(
       requireWrapStreamFn(openAiHooks.wrapStreamFn)({
@@ -578,7 +572,7 @@ describe("buildProviderStreamFamilyHooks", () => {
       version: VERSION,
     });
 
-    const openRouterHooks = OPENROUTER_THINKING_STREAM_HOOKS;
+    const openRouterHooks = buildProviderStreamFamilyHooks("openrouter-thinking");
     void requireStreamFn(
       requireWrapStreamFn(openRouterHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
@@ -609,7 +603,7 @@ describe("buildProviderStreamFamilyHooks", () => {
     expectDefaultThinkingBudget(openRouterNoEffortPayload);
     expect(openRouterNoEffortPayload).not.toHaveProperty("reasoning");
 
-    const toolStreamHooks = TOOL_STREAM_DEFAULT_ON_HOOKS;
+    const toolStreamHooks = buildProviderStreamFamilyHooks("tool-stream-default-on");
     const toolStreamDefault = requireStreamFn(
       requireWrapStreamFn(toolStreamHooks.wrapStreamFn)({
         streamFn: baseStreamFn,

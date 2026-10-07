@@ -1,5 +1,5 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import type { PackageActivationRuntime } from "../../infra/package-update-swap-contract.js";
+import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
@@ -28,6 +28,7 @@ import {
 } from "./update-command-executor.js";
 import type { InitializedUpdate } from "./update-command-initialization.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
+import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
 import {
   UpdateCommandFailure,
@@ -35,7 +36,6 @@ import {
   withUpdateAdmissionReporting,
 } from "./update-command-result.js";
 import {
-  assertUpdatePackageActivationAdmission,
   createUpdateRunProgress,
   prepareUpdateCommand,
   prepareMutableUpdateRuntime,
@@ -59,6 +59,10 @@ export async function updateCommand(
   executorOptions?: UpdateCommandExecutorOptions,
 ): Promise<void> {
   return await withDeferredDebugProxyCapture(async () => {
+    const { tryRunImmutableUpdateCommand } = await import("./update-command-immutable.js");
+    if (await tryRunImmutableUpdateCommand(inputOpts)) {
+      return;
+    }
     const { withRetainedUpdateRuntime } = await import("../../infra/update-retained-runtime.js");
     return await withRetainedUpdateRuntime(import.meta.url, (retainRuntime) =>
       updateCommandWithRuntime(inputOpts, retainRuntime, executorOptions),

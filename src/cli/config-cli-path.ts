@@ -170,6 +170,10 @@ function schemaLooksObject(schema: JsonSchemaRecord): boolean {
 function propertySchema(schema: JsonSchemaRecord, segment: PathSegment): JsonSchemaRecord[] {
   const schemas: JsonSchemaRecord[] = [];
   for (const alternative of schemaAlternatives(schema)) {
+    if (Object.keys(alternative).length === 0) {
+      schemas.push(alternative);
+      continue;
+    }
     if (schemaLooksArray(alternative)) {
       const index = parseConfigPathArrayIndex(segment);
       if (index !== undefined) {
@@ -186,6 +190,8 @@ function propertySchema(schema: JsonSchemaRecord, segment: PathSegment): JsonSch
     const explicit = properties?.[segment];
     if (isPlainRecord(explicit)) {
       schemas.push(explicit);
+    } else if (alternative.additionalProperties === true) {
+      schemas.push({});
     } else if (isPlainRecord(alternative.additionalProperties)) {
       schemas.push(alternative.additionalProperties);
     }
@@ -342,24 +348,23 @@ function mergeModelArrays(
     }
   }
   for (const entry of patch) {
-    if (!isPlainRecord(entry) || typeof entry.id !== "string" || !entry.id.trim()) {
-      suppliedPaths.push([...path, String(merged.length)]);
-      merged.push(entry);
-      continue;
-    }
-    const id = entry.id.trim();
-    const existingIndex = indexById.get(id);
-    if (existingIndex === undefined) {
+    if (isPlainRecord(entry) && typeof entry.id === "string" && entry.id.trim()) {
+      const id = entry.id.trim();
+      const existingIndex = indexById.get(id);
+      if (existingIndex !== undefined) {
+        const existingEntry = merged[existingIndex];
+        merged[existingIndex] = isPlainRecord(existingEntry)
+          ? { ...existingEntry, ...entry }
+          : entry;
+        for (const key of Object.keys(entry)) {
+          suppliedPaths.push([...path, String(existingIndex), key]);
+        }
+        continue;
+      }
       indexById.set(id, merged.length);
-      suppliedPaths.push([...path, String(merged.length)]);
-      merged.push(entry);
-      continue;
     }
-    const existingEntry = merged[existingIndex];
-    merged[existingIndex] = isPlainRecord(existingEntry) ? { ...existingEntry, ...entry } : entry;
-    for (const key of Object.keys(entry)) {
-      suppliedPaths.push([...path, String(existingIndex), key]);
-    }
+    suppliedPaths.push([...path, String(merged.length)]);
+    merged.push(entry);
   }
   return { value: merged, suppliedPaths };
 }

@@ -101,8 +101,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
         justify-content: center;
         color: var(--muted);
       }
-      .icon svg,
-      .icon img {
+      .icon svg {
         width: 16px;
         height: 16px;
       }

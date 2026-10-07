@@ -38,7 +38,7 @@ struct NativeConversationOutboxTests {
         #expect(await model.hasPendingNativeConversationWork() == false)
         model.flushOutboxIfNeeded()
         // A refused flush has no completion event; fail promptly rather than waiting on one.
-        let drainStarted = model.isFlushingOutbox
+        let drainStarted = model.outboxFlushTask != nil
         try #require(drainStarted)
         var confirmed: Set<String> = []
         for await change in changes {

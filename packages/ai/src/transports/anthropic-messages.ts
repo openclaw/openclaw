@@ -7,7 +7,13 @@ import type {
   TextBlockParam,
   ToolResultBlockParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
-import type { Context, Model, Tool } from "@openclaw/llm-core";
+import {
+  hasRuntimeContextMarker,
+  supportsClaudeInHistorySystemMessages,
+  type Context,
+  type Model,
+  type Tool,
+} from "@openclaw/llm-core";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAiTransportHost } from "../host.js";
 import {
@@ -48,6 +54,7 @@ import {
   extractToolResultBlockText,
   extractToolResultText,
 } from "../providers/tool-result-text.js";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../replay-turn-classification.js";
 import {
   buildAnthropicReplayPlan,
   type AnthropicCompactionBlock,
@@ -64,7 +71,6 @@ import { resolveAnthropicMessagesMaxTokens } from "./anthropic-transport-options
 import { resolveProviderEndpoint } from "./host-policy.js";
 import {
   coerceTransportToolCallArguments,
-  sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
@@ -77,9 +83,10 @@ type AnthropicReplayBlock =
     };
 
 type AnthropicWireMessage = {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string | AnthropicReplayBlock[];
   reasoning_content?: string;
+  clear_at?: "next_user_message";
 };
 
 const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
@@ -96,11 +103,11 @@ async function convertContentBlocks(
     (profile === "provider" || model.input.includes("image")) &&
     content.some(isImageWithMediaPayload);
   if (!hasImages) {
-    return sanitizeNonEmptyTransportPayloadText(
-      extractToolResultText(content),
-      mediaPlaceholder ??
-        (profile === "transport" ? "(no output)" : isError ? "[tool error with no output]" : ""),
-    );
+    const text = extractToolResultText(content);
+    return text.trim()
+      ? text
+      : (mediaPlaceholder ??
+          (profile === "transport" ? "(no output)" : isError ? "[tool error with no output]" : ""));
   }
   const blocks: Array<TextBlockParam | ImageBlockParam> = [];
   let hasTextBlock = false;
@@ -111,7 +118,7 @@ async function convertContentBlocks(
     }
     const blockText = extractToolResultBlockText(block);
     if (blockText) {
-      blocks.push({ type: "text", text: sanitizeTransportPayloadText(blockText) });
+      blocks.push({ type: "text", text: blockText });
       hasTextBlock = true;
     }
     if (!isImageWithMediaPayload(record)) {
@@ -121,7 +128,7 @@ async function convertContentBlocks(
       [
         {
           type: "image" as const,
-          data: typeof record.data === "string" ? record.data : "",
+          data: record.data,
           mimeType:
             typeof record.mimeType === "string"
               ? record.mimeType
@@ -165,7 +172,19 @@ async function convertAnthropicMessages(
   },
 ): Promise<AnthropicWireMessage[]> {
   const params: AnthropicWireMessage[] = [];
+  const appendMessage = (message: AnthropicWireMessage) => {
+    // Interrupted turns can leave a system update last; retain it before the next user turn.
+    if (message.role === "user" && params.at(-1)?.role === "system") {
+      params.push({
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+      });
+    }
+    params.push(message);
+  };
   const modelRetainsRuntimeContext = bindsClaudeThinkingPrefix(model);
+  const inHistorySystemUpdates =
+    !isOAuthToken && isDirectAnthropicModel(model) && supportsClaudeInHistorySystemMessages(model);
   const imageBudget = createAnthropicInlineImageBudget();
   const allowReasoningContentReplay = options.allowReasoningContentReplay === true;
   const replayThinkingEnabled = options.replayThinkingEnabled !== false;
@@ -179,17 +198,19 @@ async function convertAnthropicMessages(
       continue;
     }
     if (msg.role === "user") {
+      const operatorMessage = inHistorySystemUpdates ? msg.operatorMessage : undefined;
+      const sourceContent = msg.content;
       let content: AnthropicWireMessage["content"];
-      if (typeof msg.content === "string") {
-        if (msg.content.trim().length === 0) {
+      if (typeof sourceContent === "string") {
+        if (sourceContent.trim().length === 0) {
           continue;
         }
-        content = sanitizeTransportPayloadText(msg.content);
+        content = sanitizeTransportPayloadText(sourceContent);
       } else {
         const normalizedContent =
           !managed || model.input.includes("image")
-            ? await normalizeAnthropicInlineContent(msg.content, imageBudget)
-            : msg.content.map((item) =>
+            ? await normalizeAnthropicInlineContent(sourceContent, imageBudget)
+            : sourceContent.map((item) =>
                 item.type === "image"
                   ? { type: "text" as const, text: NON_VISION_USER_IMAGE_PLACEHOLDER }
                   : item,
@@ -218,13 +239,22 @@ async function convertAnthropicMessages(
           continue;
         }
       }
-      if (
-        msg.runtimeContextCarrier &&
-        !(msg.runtimeContextCarrierRetained ?? modelRetainsRuntimeContext)
-      ) {
-        options.cacheBreakpointOptOutMessageIndexes?.add(params.length);
+      appendMessage({
+        role: operatorMessage ? "system" : "user",
+        content: operatorMessage
+          ? typeof content === "string"
+            ? [{ type: "text", text: content }]
+            : content.filter((block) => block.type === "text")
+          : content,
+        ...(operatorMessage?.turnScoped ? { clear_at: "next_user_message" as const } : {}),
+      });
+      const runtimeContextRetained =
+        msg.runtimeContext !== undefined
+          ? msg.runtimeContext.retained
+          : msg.runtimeContextCarrierRetained;
+      if (hasRuntimeContextMarker(msg) && !(runtimeContextRetained ?? modelRetainsRuntimeContext)) {
+        options.cacheBreakpointOptOutMessageIndexes?.add(params.length - 1);
       }
-      params.push({ role: "user", content });
       continue;
     }
     if (msg.role === "assistant") {
@@ -335,7 +365,7 @@ async function convertAnthropicMessages(
         j += 1;
       }
       i = j - 1;
-      params.push({
+      appendMessage({
         role: "user",
         content: toolResults,
       });
@@ -443,7 +473,7 @@ function buildAnthropicGenerationParams({
 function convertAnthropicTools(
   tools: Tool[],
   isOAuthTokenLocal: boolean,
-  supportsEagerToolInputStreaming = false,
+  supportsEagerToolInputStreaming: boolean,
 ): {
   projection: AnthropicToolProjection;
   tools: AnthropicTool[];
@@ -539,7 +569,7 @@ export async function buildAnthropicRequest(
   const params: MessageCreateParamsStreaming = {
     model:
       managed && isDirectAnthropicModel(model) ? model.id.replace(/^anthropic\//i, "") : model.id,
-    // SAFETY: the beta endpoint accepts compaction blocks omitted by the stable SDK union.
+    // SAFETY: the API accepts in-history system messages and compaction blocks absent from the SDK union.
     messages: messages as MessageParam[],
     max_tokens: maxTokens ?? model.maxTokens,
     stream: true,

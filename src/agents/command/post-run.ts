@@ -2,7 +2,6 @@ import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion"
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { CliDeps } from "../../cli/deps.types.js";
-import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../../config/sessions/restart-recovery-types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
@@ -15,7 +14,6 @@ import {
   buildRestartRecoveryTerminalDeliveryEvidence,
   constrainRestartRecoveryDeliveryPayloads,
   shouldPersistCurrentRunSessionCleanup,
-  shouldPersistRestartRecoveryCleanup,
 } from "../agent-command-restart-recovery.js";
 import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal-delivery.js";
 import {
@@ -28,10 +26,14 @@ import { normalizeAgentRunTerminalReplySnapshot } from "../agent-run-terminal-re
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { AcceptedCompactionSuccessor } from "../embedded-agent-runner/compaction-successor.js";
-import { buildMainSessionRecoveryClearPatch } from "../main-session-recovery/main-session-recovery-clear.js";
+import { buildMainSessionRecoverySettlementPatch } from "../main-session-recovery/main-session-recovery-clear.js";
+import { inspectMainSessionRecoveryLifecycleEvent } from "../main-session-recovery/main-session-recovery-lifecycle.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
 import type { AgentRunSessionTarget } from "../run-session-target.types.js";
-import { throwAgentRunRestartAbortReason } from "../run-termination.js";
+import {
+  createAgentRunRestartAbortError,
+  throwAgentRunRestartAbortReason,
+} from "../run-termination.js";
 import type { SessionMaintenanceRequest } from "../session-maintenance/run.js";
 import { persistAssistantTranscriptRepairRecord } from "./assistant-transcript-repair.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
@@ -55,54 +57,6 @@ import type { AgentCommandOpts } from "./types.js";
 type EmbeddedAgentAttempt = Awaited<ReturnType<typeof runEmbeddedAgentAttempt>>;
 
 const log = createSubsystemLogger("agents/agent-command");
-
-export async function clearCommandRecoveryClaim(params: {
-  prepared: PreparedAgentCommandExecution;
-  sessionEntry?: SessionEntry;
-  runOwnedSessionId: string;
-  sessionReboundDuringRun: boolean;
-  trackedRestartRecoveryDeliveryClaim: boolean;
-  terminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidenceResult;
-}): Promise<void> {
-  const { sessionStore, sessionKey, storePath, runId } = params.prepared;
-  if (
-    params.sessionReboundDuringRun ||
-    !params.trackedRestartRecoveryDeliveryClaim ||
-    !sessionStore ||
-    !sessionKey
-  ) {
-    return;
-  }
-  try {
-    const entry = sessionStore[sessionKey] ?? params.sessionEntry;
-    if (entry?.restartRecoveryDeliveryRunId === runId) {
-      await persistAgentSession({
-        agentId: params.prepared.sessionAgentId,
-        sessionStore,
-        sessionKey,
-        storePath,
-        initialEntry: entry,
-        entry: {
-          ...entry,
-          ...buildRestartRecoveryClaimCleanupPatch({
-            entry,
-            recordTerminalSource: true,
-            terminalRunId: runId,
-            terminalDeliveryEvidence: params.terminalDeliveryEvidence,
-          }),
-          ...buildMainSessionRecoveryClearPatch(entry),
-          updatedAt: Date.now(),
-        },
-        shouldPersist: (current) =>
-          shouldPersistRestartRecoveryCleanup(current, params.runOwnedSessionId, runId),
-      });
-    }
-  } catch (error) {
-    log.warn(
-      `failed to clear restart recovery delivery context for ${sessionKey}: ${coerceErrorMessage(error)}`,
-    );
-  }
-}
 
 export function createCompactionSessionIdReporter(
   sessionId: string,
@@ -200,6 +154,12 @@ export async function finalizeEmbeddedAgentCommand(params: {
     lifecycleGeneration,
   } = params.attempt;
   const { skillsSnapshot, runContext } = params.embeddedSessionState;
+  const interruptedForRestart = () =>
+    inspectMainSessionRecoveryLifecycleEvent({
+      currentLifecycleGeneration: lifecycleGeneration,
+      event: { data: { phase: "end", ...terminal.outcome } },
+      abortSignal: deferredLifecycle.signal,
+    }).interrupted;
   const effectiveCwd = cwd ?? workspaceDir;
   const isHeartbeatLifecycleRun = isHeartbeatLifecycleRunKind(params.opts.bootstrapContextRunKind);
   let sessionEntry = params.sessionEntry;
@@ -434,6 +394,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
               model: agentMeta?.model ?? fallbackModel,
               thinkLevel: effectiveTurnThinkLevel,
               auth: params.attempt.maintenanceAuthProfile,
+              senderIsOwner: params.opts.senderIsOwner,
             }),
             sessionId: runOwnedSessionId,
             lifecycleRevision: sessionEntry.lifecycleRevision,
@@ -594,7 +555,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
       sessionKey &&
       !isSubagentSessionKey(sessionKey) &&
       !params.suppressVisibleSessionEffects &&
-      !sessionReboundDuringRun
+      !sessionReboundDuringRun &&
+      !interruptedForRestart()
     ) {
       const entry =
         (await resolveFreshSessionEntryForDelivery?.()) ?? sessionStore[sessionKey] ?? sessionEntry;
@@ -610,16 +572,16 @@ export async function finalizeEmbeddedAgentCommand(params: {
       const clearOwnedPendingFinal =
         deliveryResult?.deliverySucceeded === true &&
         pendingFinalDeliveryMarker.pendingFinalDeliveryIntentId !== undefined;
+      const clearUnclaimedRecoveryContext =
+        clearOwnedPendingFinal &&
+        entry.restartRecoveryDeliveryRunId === undefined &&
+        entry.restartRecoveryDeliverySourceRunId === undefined &&
+        !entry.restartRecoveryRuns?.length;
       // Preserve the exact claim snapshot through sibling session writes, then
       // revalidate its durable owner immediately before committing cleanup.
-      const recoveryClaimEntry =
-        entry.restartRecoveryDeliveryRunId === runId
-          ? entry
-          : sessionEntry?.restartRecoveryDeliveryRunId === runId
-            ? sessionEntry
-            : params.sessionEntry?.restartRecoveryDeliveryRunId === runId
-              ? params.sessionEntry
-              : undefined;
+      const recoveryClaimEntry = [entry, sessionEntry, params.sessionEntry].find(
+        (candidate) => candidate?.restartRecoveryDeliveryRunId === runId,
+      );
       const clearsRecoveryCycle = entry.restartRecoveryDeliveryRunId === runId;
       if (clearOwnedPendingFinal || clearStaleTransportOnly || recoveryClaimEntry) {
         const now = Date.now();
@@ -633,8 +595,9 @@ export async function finalizeEmbeddedAgentCommand(params: {
             ...(clearOwnedPendingFinal || clearStaleTransportOnly
               ? clearPendingFinalDelivery(entry, now)
               : { ...entry, updatedAt: now }),
+            ...(clearUnclaimedRecoveryContext ? { restartRecoveryDeliveryContext: undefined } : {}),
             ...(recoveryClaimEntry
-              ? buildRestartRecoveryClaimCleanupPatch({
+              ? buildMainSessionRecoverySettlementPatch({
                   entry: {
                     ...recoveryClaimEntry,
                     restartRecoveryTerminalDeliveryEvidence:
@@ -642,16 +605,26 @@ export async function finalizeEmbeddedAgentCommand(params: {
                     restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
                   },
                   recordTerminalSource: true,
+                  clearRecoveryState: clearsRecoveryCycle,
                   terminalDeliveryEvidence: buildRestartRecoveryTerminalDeliveryEvidence(
                     deliveryResult ?? result,
                   ),
                   terminalRunId: runId,
                 })
               : {}),
-            ...(clearsRecoveryCycle ? buildMainSessionRecoveryClearPatch(entry) : {}),
+          },
+          assertCommitAllowed: () => {
+            if (interruptedForRestart()) {
+              throw createAgentRunRestartAbortError();
+            }
           },
           shouldPersist: (current) =>
+            !interruptedForRestart() &&
             shouldPersistCurrentRunSessionCleanup(current, runOwnedSessionId) &&
+            (!clearUnclaimedRecoveryContext ||
+              (current?.restartRecoveryDeliveryRunId === undefined &&
+                current?.restartRecoveryDeliverySourceRunId === undefined &&
+                !current?.restartRecoveryRuns?.length)) &&
             (!recoveryClaimEntry ||
               current?.restartRecoveryDeliveryRunId === runId ||
               (!clearsRecoveryCycle && current?.restartRecoveryDeliveryRunId === undefined)) &&

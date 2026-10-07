@@ -3,7 +3,7 @@ import * as loggingConfigModule from "../logging/config.js";
 import * as redaction from "../logging/redact.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
-import { sanitizeToolResult } from "./embedded-agent-tool-results.js";
+import { prepareToolResult, sanitizeToolResult } from "./embedded-agent-tool-results.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -16,10 +16,10 @@ it("reuses sanitized arrays and objects without reprocessing their text or image
     { content: [{ type: "image", data: "aGVsbG8=" }], details: { token: "fixture-secret" } },
     [{ token: "fixture-secret" }],
   ]) {
-    const sanitized = sanitizeToolResult(input);
+    const readResult = prepareToolResult(input);
+    const sanitized = readResult();
     expect(JSON.stringify(sanitized)).not.toContain("fixture-secret");
-    expect(sanitizeToolResult(input)).toEqual(sanitized);
-    expect(sanitizeToolResult(sanitized)).toEqual(sanitized);
+    expect(readResult()).toBe(sanitized);
   }
   expect(deepRedact).toHaveBeenCalledTimes(2);
 });
@@ -44,9 +44,10 @@ it.each(["input", "output"] as const)(
 
 it("does not return a cached output modified by an earlier consumer", () => {
   const input = { details: { note: "ordinary" } };
-  const sanitized = sanitizeToolResult(input) as typeof input;
+  const readResult = prepareToolResult(input);
+  const sanitized = readResult() as typeof input;
   sanitized.details.note = "Authorization: Bearer consumer-secret-value";
-  expect(sanitizeToolResult(input)).toEqual({ details: { note: "ordinary" } });
+  expect(readResult()).toEqual({ details: { note: "ordinary" } });
 });
 
 it.each(["add", "enumerability", "prototype", "array-length"] as const)(
@@ -54,7 +55,8 @@ it.each(["add", "enumerability", "prototype", "array-length"] as const)(
   (change) => {
     const input = { details: { note: "ordinary" }, content: [{ type: "text", text: "kept" }] };
     const deepRedact = vi.spyOn(redaction, "redactModelVisibleSecrets");
-    sanitizeToolResult(input);
+    const readResult = prepareToolResult(input);
+    readResult();
     if (change === "add") {
       Object.assign(input.details, { token: "added-secret" });
     } else if (change === "enumerability") {
@@ -64,7 +66,7 @@ it.each(["add", "enumerability", "prototype", "array-length"] as const)(
     } else {
       input.content.length = 0;
     }
-    const next = sanitizeToolResult(input);
+    const next = readResult();
     expect(deepRedact).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(next)).not.toContain("added-secret");
     if (change === "array-length") {
@@ -77,15 +79,17 @@ it("invalidates both original and prepared results for changed patterns and regi
   const patterns = ["unrelated-value"];
   vi.spyOn(loggingConfigModule, "readLoggingConfig").mockReturnValue({ redactPatterns: patterns });
   const input = { details: { note: "opaque(abcdefghijklmnopqrst) extra(01234567890123456789)" } };
-  const prepared = sanitizeToolResult(input);
-  expect(prepared).toEqual(input);
+  const readResult = prepareToolResult(input);
+  const prepared = readResult();
+  const readPrepared = prepareToolResult(prepared);
+  expect(readPrepared()).toEqual(input);
   patterns.push(String.raw`/opaque\(([^)]+)\)/g`);
-  for (const candidate of [input, prepared]) {
-    expect(JSON.stringify(sanitizeToolResult(candidate))).not.toContain("abcdefghijklmnopqrst");
+  for (const read of [readResult, readPrepared]) {
+    expect(JSON.stringify(read())).not.toContain("abcdefghijklmnopqrst");
   }
   registerSecretValueForRedaction("01234567890123456789");
-  for (const candidate of [input, prepared]) {
-    expect(JSON.stringify(sanitizeToolResult(candidate))).not.toContain("01234567890123456789");
+  for (const read of [readResult, readPrepared]) {
+    expect(JSON.stringify(read())).not.toContain("01234567890123456789");
   }
 });
 
@@ -105,10 +109,11 @@ it("does not memoize getters or proxies whose reads can change during sanitizati
     },
   );
   for (const input of [getter, proxy]) {
-    sanitizeToolResult(input);
+    const readResult = prepareToolResult(input);
+    readResult();
     value = "second-secret";
     const deepRedact = vi.spyOn(redaction, "redactModelVisibleSecrets");
-    expect(sanitizeToolResult(input)).toEqual({ token: "***" });
+    expect(readResult()).toEqual({ token: "***" });
     expect(deepRedact).toHaveBeenCalled();
     deepRedact.mockRestore();
   }
@@ -116,17 +121,19 @@ it("does not memoize getters or proxies whose reads can change during sanitizati
 
 it("rechecks an accessor installed on a previously cached data property", () => {
   const input = { details: { token: "first-secret" } };
-  sanitizeToolResult(input);
+  const readResult = prepareToolResult(input);
+  readResult();
   Object.defineProperty(input.details, "token", { enumerable: true, get: () => "second-secret" });
-  expect(sanitizeToolResult(input)).toEqual({ details: { token: "***" } });
+  expect(readResult()).toEqual({ details: { token: "***" } });
 });
 
 it("preserves cycles and shared references without retaining stale nested values", () => {
   const shared = { token: "first-secret" };
   const input: Record<string, unknown> = { first: shared, second: shared };
   input.self = input;
-  const first = sanitizeToolResult(input);
-  expect(sanitizeToolResult(input)).toEqual(first);
+  const readResult = prepareToolResult(input);
+  const first = readResult();
+  expect(readResult()).toEqual(first);
   shared.token = "second-secret";
-  expect(JSON.stringify(sanitizeToolResult(input))).not.toContain("second-secret");
+  expect(JSON.stringify(readResult())).not.toContain("second-secret");
 });

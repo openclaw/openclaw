@@ -11,12 +11,20 @@ import {
   normalizeChannelAccounts,
   type CompatMutationResult,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { mergeTelegramAccountConfig } from "./account-config.js";
+import { listTelegramAccountIds } from "./account-selection.js";
+import {
+  DEFAULT_TELEGRAM_WEBHOOK_PATH,
+  resolveTelegramGatewayWebhookUrl,
+  resolveTelegramWebhookPathConflict,
+} from "./webhook-route.js";
 
 const webhookListenerMigration = createLegacyWebhookListenerDoctorContract({
   channelKey: "telegram",
   defaultPort: 8787,
   defaultHost: "127.0.0.1",
 });
+export const { historicalWebhookListener } = webhookListenerMigration;
 
 const RETIRED_TUNING_KEYS = new Set([
   "timeoutSeconds",
@@ -107,31 +115,8 @@ function removeRetiredTelegramGroupHistoryContextConfig(params: {
   return { entry: updated, changed: true };
 }
 
-function resolveCompatibleDefaultGroupEntry(section: Record<string, unknown>): {
-  groups: Record<string, unknown>;
-  entry: Record<string, unknown>;
-} | null {
-  const existingGroups = section.groups;
-  if (existingGroups !== undefined && !asObjectRecord(existingGroups)) {
-    return null;
-  }
-  const groups = asObjectRecord(existingGroups) ?? {};
-  const defaultKey = "*";
-  const existingEntry = groups[defaultKey];
-  if (existingEntry !== undefined && !asObjectRecord(existingEntry)) {
-    return null;
-  }
-  const entry = asObjectRecord(existingEntry) ?? {};
-  return { groups, entry };
-}
-
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   ...webhookListenerMigration.legacyConfigRules,
-  {
-    path: ["channels", "telegram", "groupMentionsOnly"],
-    message:
-      'channels.telegram.groupMentionsOnly was removed; use channels.telegram.groups."*".requireMention instead. Run "openclaw doctor --fix".',
-  },
   {
     path: ["channels", "telegram"],
     message:
@@ -147,18 +132,46 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   },
 ];
 
+export function normalizeHistoricalWebhookConfig({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  const historicalWebhookAccountIds =
+    cfg.channels?.telegram?.enabled === false
+      ? []
+      : listTelegramAccountIds(cfg).filter((accountId) => {
+          const account = mergeTelegramAccountConfig(cfg, accountId);
+          if (account.enabled === false || !account.webhookUrl?.trim()) {
+            return false;
+          }
+          const path = account.webhookPath ?? DEFAULT_TELEGRAM_WEBHOOK_PATH;
+          const gatewayUrl = resolveTelegramGatewayWebhookUrl(cfg, path);
+          return (
+            !gatewayUrl ||
+            URL.parse(account.webhookUrl)?.href !== gatewayUrl ||
+            resolveTelegramWebhookPathConflict(path) !== undefined
+          );
+        });
+  return {
+    ...webhookListenerMigration.normalizeCompatibilityConfig({ cfg }),
+    historicalWebhookAccountIds,
+  };
+}
+
 export function normalizeCompatibilityConfig({
   cfg,
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  const webhook = webhookListenerMigration.normalizeCompatibilityConfig({ cfg });
+  const webhook = normalizeHistoricalWebhookConfig({ cfg });
+  const { historicalWebhookAccountIds } = webhook;
   const changes = [...webhook.changes];
   const rawEntry = asObjectRecord(
     (webhook.config.channels as Record<string, unknown> | undefined)?.telegram,
   );
   if (!rawEntry) {
-    return { config: cfg, changes: [] };
+    return { config: cfg, changes: [], historicalWebhookAccountIds };
   }
 
   const tuningKnobs = stripRetiredTelegramTuning(rawEntry, "channel");
@@ -181,32 +194,6 @@ export function normalizeCompatibilityConfig({
   updated = retired.entry;
   changed = changed || retired.changed;
 
-  if (updated.groupMentionsOnly !== undefined) {
-    const defaultGroupEntry = resolveCompatibleDefaultGroupEntry(updated);
-    if (!defaultGroupEntry) {
-      changes.push(
-        "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
-      );
-    } else {
-      const { groups, entry } = defaultGroupEntry;
-      if (entry.requireMention === undefined) {
-        entry.requireMention = updated.groupMentionsOnly;
-        groups["*"] = entry;
-        updated = { ...updated, groups };
-        changes.push(
-          'Moved channels.telegram.groupMentionsOnly → channels.telegram.groups."*".requireMention.',
-        );
-      } else {
-        changes.push(
-          'Removed channels.telegram.groupMentionsOnly (channels.telegram.groups."*" already set).',
-        );
-      }
-      const { groupMentionsOnly: _ignored, ...rest } = updated;
-      updated = rest;
-      changed = true;
-    }
-  }
-
   const accounts = normalizeChannelAccounts({
     entry: updated,
     pathPrefix: "channels.telegram",
@@ -225,7 +212,7 @@ export function normalizeCompatibilityConfig({
   changed = changed || accounts.changed;
 
   if (!changed && changes.length === 0) {
-    return { config: cfg, changes: [] };
+    return { config: cfg, changes: [], historicalWebhookAccountIds };
   }
   return {
     config: {
@@ -236,5 +223,6 @@ export function normalizeCompatibilityConfig({
       } as OpenClawConfig["channels"],
     },
     changes,
+    historicalWebhookAccountIds,
   };
 }

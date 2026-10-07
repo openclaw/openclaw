@@ -520,6 +520,7 @@ describe("unit-fast vitest lane", () => {
       "src/agents/code-mode-quickjs.integration.test.ts",
       "src/agents/prepared-model-runtime.scoped-refresh.test.ts",
       "src/agents/provider-transport-fetch.headers.test.ts",
+      "src/auto-reply/reply/agent-runner-execution-runtime.test.ts",
       "src/commands/status-overview-values.test.ts",
     ]) {
       expect(isUnitFastTestFile(file), file).toBe(false);
@@ -601,10 +602,7 @@ describe("unit-fast vitest lane", () => {
       "src/acp/translator.error-kind.test.ts",
       "src/agents/auth-profiles/oauth-refresh-error.test.ts",
       "src/agents/embedded-agent-runner/model.provider-hooks.timeout.test.ts",
-      "src/agents/tools/computer-tool.context.test.ts",
       "src/agents/tools/computer-tool.schema.test.ts",
-      "src/agents/tools/computer-tool.v2.test.ts",
-      "src/auto-reply/reply/agent-runner-execution-runtime.test.ts",
       "src/infra/provider-usage.test.ts",
     ];
     for (const file of files) {

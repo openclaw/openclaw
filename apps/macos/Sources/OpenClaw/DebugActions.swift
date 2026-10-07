@@ -18,8 +18,8 @@ enum DebugActions {
         window.isRestorable = false
         window.contentView = NSHostingView(rootView: AgentEventsWindow())
         window.center()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.shared.makeKeyAndOrderFront(window: window)
+        AppActivation.shared.activate()
     }
 
     @MainActor
@@ -30,16 +30,16 @@ enum DebugActions {
             let alert = NSAlert()
             alert.messageText = "Log file not found"
             alert.informativeText = path
-            alert.runModal()
+            AppActivation.shared.presentAlert(alert)
             return
         }
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+        AppActivation.shared.revealFiles([url])
     }
 
     @MainActor
     static func openConfigFolder() {
         let url = OpenClawPaths.stateDirURL
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+        AppActivation.shared.revealFiles([url])
     }
 
     @MainActor
@@ -48,15 +48,15 @@ enum DebugActions {
             let alert = NSAlert()
             alert.messageText = "Remote mode"
             alert.informativeText = "Session store lives on the gateway host in remote mode."
-            alert.runModal()
+            AppActivation.shared.presentAlert(alert)
             return
         }
         let path = self.resolveSessionStorePath()
         let url = URL(fileURLWithPath: path)
         if FileManager().fileExists(atPath: path) {
-            NSWorkspace.shared.activateFileViewerSelecting([url])
+            AppActivation.shared.revealFiles([url])
         } else {
-            NSWorkspace.shared.open(url.deletingLastPathComponent())
+            AppActivation.shared.open(url.deletingLastPathComponent())
         }
     }
 
@@ -177,12 +177,14 @@ enum DebugActions {
         let task = Process()
         // The replacement must wait until cleanup releases this profile's instance lock.
         task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        let launchArguments = AppLaunchRuntimePlan.current.allowsActivation
+            ? [url.path] : ["-g", url.path, "--args", "--no-activate"]
         task.arguments = [
             "-c",
             "while /bin/kill -0 \"$1\" 2>/dev/null; do /bin/sleep 0.1; done; shift; exec /usr/bin/open -n \"$@\"",
             "openclaw-restart",
             String(ProcessInfo.processInfo.processIdentifier),
-        ] + (AppProfile.current.name.map { ["--env", "OPENCLAW_PROFILE=\($0)"] } ?? []) + [url.path]
+        ] + (AppProfile.current.name.map { ["--env", "OPENCLAW_PROFILE=\($0)"] } ?? []) + launchArguments
         try? task.run()
         AppDelegate.requestTermination()
     }

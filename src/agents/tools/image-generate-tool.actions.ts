@@ -16,16 +16,6 @@ import {
   type MediaGenerateActionResult,
 } from "./media-generate-tool-actions-shared.js";
 
-function formatImageGenerationAuthHint(provider: { id: string }): string | undefined {
-  return provider.id === "openai"
-    ? "set OPENAI_API_KEY or configure an OpenClaw Codex login OAuth profile (not SIWC) for openai/gpt-image-2"
-    : undefined;
-}
-
-function listSupportedImageGenerationModes(provider: ImageGenerationProvider): string[] {
-  return ["generate", ...(provider.capabilities.edit.enabled ? ["edit"] : [])];
-}
-
 function summarizeImageGenerationCapabilities(provider: ImageGenerationProvider): string {
   const caps: string[] = [];
   if (provider.capabilities.edit.enabled) {
@@ -67,6 +57,7 @@ export function createImageGenerateListActionResult(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
 }): MediaGenerateActionResult {
   return createMediaGenerateProviderListActionResult({
     kind: "image_generation",
@@ -76,9 +67,13 @@ export function createImageGenerateListActionResult(params: {
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
-    listModes: listSupportedImageGenerationModes,
+    authProfileStoreSource: params.authProfileStoreSource,
+    listModes: (provider) => ["generate", ...(provider.capabilities.edit.enabled ? ["edit"] : [])],
     summarizeCapabilities: summarizeImageGenerationCapabilities,
-    formatAuthHint: formatImageGenerationAuthHint,
+    formatAuthHint: (provider) =>
+      provider.id === "openai"
+        ? "set OPENAI_API_KEY or configure an OpenClaw Codex login OAuth profile (not SIWC) for openai/gpt-image-2"
+        : undefined,
   });
 }
 

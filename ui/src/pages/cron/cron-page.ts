@@ -12,7 +12,8 @@ import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
-import { watchAgentScope } from "../../lib/agents/index.ts";
+import { watchAgentScope, watchSelectedAgent } from "../../lib/agents/index.ts";
+import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
 import {
   addCronJob,
   cancelCronEdit,
@@ -165,7 +166,17 @@ class CronPage extends OpenClawLightDomElement {
     .watchStore(() => this.context?.runtimeConfig)
     .effect(
       () => this.context?.agentSelection,
-      (agentSelection) => this.observeAgentScope(agentSelection),
+      (agentSelection) => {
+        const stopScope = this.observeAgentScope(agentSelection);
+        const stopSelection = watchSelectedAgent(agentSelection, (agentId) => {
+          // Team navigation can change the catalog owner while the all-agent
+          // inventory scope stays null. Retire those per-agent rows here.
+          if (this.modelSuggestionsRequest?.agentId !== agentId) {
+            void this.loadModelSuggestions(this.cron);
+          }
+        });
+        return () => [stopSelection, stopScope].forEach((stop) => stop());
+      },
     )
     .effect(
       () => this.context?.gateway,
@@ -358,7 +369,7 @@ class CronPage extends OpenClawLightDomElement {
       if (isCurrent()) {
         this.cronModelSuggestions = result.models
           .filter((entry) => entry.manualSelectionAllowed !== false)
-          .map((entry) => entry.id);
+          .map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider));
         this.modelSuggestionsError = modelCatalogRefreshError(result);
       }
     } catch (error) {

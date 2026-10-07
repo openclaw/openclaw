@@ -82,9 +82,11 @@ describe("suggestion dispatch through real chat input custody", () => {
     };
     const beforeCustody =
       change === "profile before custody" || change === "request before custody";
+    const capturePending = () => Promise.allSettled([listSessionPendingInputs(fixture.scope)]);
+    let pendingAtApproval: ReturnType<typeof capturePending> | undefined;
     if (beforeCustody) {
       fixture.beforeApprove.mockImplementation(() => {
-        expect(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+        pendingAtApproval = capturePending();
         if (change === "profile before custody") {
           linkEmail(email, mergedProfile.id);
         } else {
@@ -97,9 +99,12 @@ describe("suggestion dispatch through real chat input custody", () => {
       expect(fixture.beforeApprove).toHaveBeenCalledOnce();
       expect(response).toHaveBeenCalledOnce();
       if (beforeCustody) {
+        expect(await pendingAtApproval).toEqual([
+          { status: "fulfilled", value: { items: [], total: 0 } },
+        ]);
         expect.soft(response.mock.calls[0]?.[0]).toBe(false);
         expect.soft(claim()).toEqual({ state: "pending", dispatch_token: null });
-        expect.soft(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+        expect.soft(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
         expect.soft(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
         expect.soft(dispatchInboundMessageMock).not.toHaveBeenCalled();
         expect.soft(fixture.context.chatAbortControllers.has(runId)).toBe(false);
@@ -112,7 +117,7 @@ describe("suggestion dispatch through real chat input custody", () => {
         { suggestion: { id: suggestionId, state: "accepted" } },
       ]);
       expect(claim()).toEqual({ state: "accepted", dispatch_token: null });
-      const pending = listSessionPendingInputs(fixture.scope);
+      const pending = await listSessionPendingInputs(fixture.scope);
       expect(pending).toMatchObject({
         total: 1,
         items: [{ state: "queued", message: { content: text } }],
@@ -133,7 +138,7 @@ describe("suggestion dispatch through real chat input custody", () => {
         expect(transcript).toHaveLength(fixture.activeTranscript.length + 1);
         expect(transcript.at(-1)).toMatchObject({ message: { role: "user", content: text } });
         expect(recorder.getAdmissionReceipt()).toBeDefined();
-        expect(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+        expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
         const retry = await resolveSuggestion(mergedProfile.id);
         expect(retry.mock.calls[0]).toMatchObject([
           false,
@@ -155,7 +160,7 @@ describe("suggestion dispatch through real chat input custody", () => {
             details: expect.objectContaining({ runId }),
           }),
         );
-        expect(listSessionPendingInputs(fixture.scope)).toMatchObject({
+        expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
           total: 1,
           items: [{ id: pending.items[0]?.id, state: "interrupted", message: { content: text } }],
         });
@@ -170,6 +175,7 @@ describe("suggestion dispatch through real chat input custody", () => {
       expect(fixture.context.chatAbortControllers.size).toBe(0);
       expect(fixture.context.chatQueuedTurns.size).toBe(0);
     } finally {
+      await pendingAtApproval;
       await fixture.cleanup();
     }
   });

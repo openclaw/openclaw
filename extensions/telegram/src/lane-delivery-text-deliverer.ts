@@ -17,6 +17,7 @@ import {
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
+import { applyTextToPayload } from "./interactive-fallback.js";
 import type { TelegramPromptContextProjectionSequence } from "./prompt-context-projection.js";
 
 export type LaneName = "answer" | "reasoning";
@@ -50,25 +51,24 @@ export type LaneDeliveryResult = (
   | { kind: "preview-retained" | "preview-updated" | "sent" | "skipped" }
 ) & { deliveryResult: LivePreviewDeliveryResult };
 
+export type TelegramSendPayloadOptions = {
+  afterAcceptedDraft?: boolean;
+  durable?: boolean;
+  silent?: boolean;
+  promptContextSequence?: TelegramPromptContextProjectionSequence;
+  textMode?: "html";
+  onPlatformSendDispatch?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
+  bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
+  onMediaAccepted?: (mediaUrls: readonly string[]) => void;
+};
+
 type CreateLaneTextDelivererParams = {
   lanes: Record<LaneName, DraftLaneState>;
-  applyTextToPayload: (payload: ReplyPayload, text: string) => ReplyPayload;
   sendPayload: (
     payload: ReplyPayload,
-    options?: {
-      afterAcceptedDraft?: boolean;
-      durable?: boolean;
-      promptContextSequence?: TelegramPromptContextProjectionSequence;
-      textMode?: "html";
-      onPlatformSendDispatch?: () => Promise<void>;
-      assertPlatformSendAuthorized?: () => void;
-      bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
-      onMediaAccepted?: (mediaUrls: readonly string[]) => void;
-    },
+    options?: TelegramSendPayloadOptions,
   ) => Promise<LivePreviewDeliveryResult>;
-  flushDraftLane: (lane: DraftLaneState) => Promise<void>;
-  stopDraftLane: (lane: DraftLaneState) => Promise<void>;
-  clearDraftLane: (lane: DraftLaneState) => Promise<void>;
   editStreamMessage: (params: {
     laneName: LaneName;
     messageId: number;
@@ -112,42 +112,23 @@ type DeliverLaneTextParams = {
 export type LaneTextDeliverer = (params: DeliverLaneTextParams) => Promise<LaneDeliveryResult>;
 
 export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): LaneTextDeliverer {
-  const mediaChannelData = (
-    channelData: ReplyPayload["channelData"],
-    options?: { stripButtons?: boolean },
-  ): ReplyPayload["channelData"] => {
-    if (!options?.stripButtons) {
-      return channelData;
-    }
-    const telegramData = asOptionalRecord(channelData?.telegram);
-    if (!telegramData) {
-      return channelData;
-    }
-    const { buttons: _buttons, ...telegramRest } = telegramData;
-    if (_buttons === undefined) {
-      return channelData;
-    }
-    const next: Record<string, unknown> = { ...channelData };
-    if (Object.keys(telegramRest).length > 0) {
-      next.telegram = telegramRest;
-    } else {
-      delete next.telegram;
-    }
-    return Object.keys(next).length > 0 ? next : undefined;
-  };
-  const withMediaChannelData = (
-    payload: ReplyPayload,
-    options?: { stripButtons?: boolean },
-  ): ReplyPayload => {
-    const channelData = mediaChannelData(payload.channelData, options);
-    if (channelData === payload.channelData) {
+  const stripTelegramButtons = (payload: ReplyPayload): ReplyPayload => {
+    const telegramData = asOptionalRecord(payload.channelData?.telegram);
+    if (!telegramData || telegramData.buttons === undefined) {
       return payload;
     }
-    if (channelData) {
-      return copyReplyPayloadMetadata(payload, { ...payload, channelData });
+    const { buttons: _buttons, ...telegramRest } = telegramData;
+    const channelData = { ...payload.channelData };
+    if (Object.keys(telegramRest).length > 0) {
+      channelData.telegram = telegramRest;
+    } else {
+      delete channelData.telegram;
     }
     const { channelData: _channelData, ...rest } = payload;
-    return copyReplyPayloadMetadata(payload, rest);
+    return copyReplyPayloadMetadata(
+      payload,
+      Object.keys(channelData).length > 0 ? { ...rest, channelData } : rest,
+    );
   };
   const withFallbackTelegramButtons = (
     payload: ReplyPayload,
@@ -179,7 +160,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
   ): ReplyPayload => {
     let mediaPayload: ReplyPayload;
     if (getReplyPayloadTtsSupplement(payload)) {
-      mediaPayload = buildTtsSupplementMediaPayload(params.applyTextToPayload(payload, text));
+      mediaPayload = buildTtsSupplementMediaPayload(applyTextToPayload(payload, text));
     } else {
       const {
         text: _text,
@@ -187,14 +168,14 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
         interactive: _interactive,
         btw: _btw,
         ...rest
-      } = payload.audioAsVoice === true ? params.applyTextToPayload(payload, text) : payload;
+      } = payload.audioAsVoice === true ? applyTextToPayload(payload, text) : payload;
       mediaPayload = copyReplyPayloadMetadata(
         payload,
         payload.audioAsVoice === true ? { ...rest, spokenText: text } : rest,
       );
     }
     return withFallbackTelegramButtons(
-      withMediaChannelData(mediaPayload, options),
+      options?.stripButtons ? stripTelegramButtons(mediaPayload) : mediaPayload,
       options?.fallbackButtons,
     );
   };
@@ -203,7 +184,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     if (!lane.stream || lane.finalized) {
       return;
     }
-    await params.clearDraftLane(lane);
+    await lane.stream.clear();
     lane.lastPartialText = "";
     lane.hasStreamedMessage = false;
   };
@@ -297,12 +278,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     if (finalizePreview) {
       if (previewAlreadyVisible) {
         // Cleanup cannot invalidate an accepted preview or create fresh send custody.
-        await params.stopDraftLane(lane).catch(() => undefined);
+        await lane.stream?.stop().catch(() => undefined);
       } else {
-        await params.stopDraftLane(lane);
+        await lane.stream?.stop();
       }
     } else {
-      await params.flushDraftLane(lane);
+      await lane.stream?.flush();
       if (buttons) {
         await stream.waitForInFlight();
       }
@@ -507,8 +488,14 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     }
     const preservesPreviewReplyTarget =
       payload.replyToId === undefined || payload.replyToId === originalReplyToId;
-    const streamed =
-      preservesPreviewReplyTarget && allowStream && !reply.hasMedia
+    const canFinalizeMediaPreview =
+      finalizePreview &&
+      lane.stream &&
+      lane.hasStreamedMessage &&
+      !lane.finalized &&
+      text.trim().length > 0;
+    const finalizedPreview =
+      preservesPreviewReplyTarget && allowStream && (!reply.hasMedia || canFinalizeMediaPreview)
         ? await streamText(
             laneName,
             lane,
@@ -518,89 +505,60 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
             finalizePreview,
             buttons,
             promptContextSequence,
-            false,
-            streamedErrorDraftText !== undefined,
+            reply.hasMedia,
+            !reply.hasMedia && streamedErrorDraftText !== undefined,
             onPlatformSendDispatch,
             assertPlatformSendAuthorized,
           )
         : undefined;
-    if (streamed) {
-      return streamed;
-    }
-
-    if (
-      preservesPreviewReplyTarget &&
-      allowStream &&
-      finalizePreview &&
-      reply.hasMedia &&
-      lane.stream &&
-      lane.hasStreamedMessage &&
-      !lane.finalized &&
-      text.trim().length > 0
-    ) {
-      const finalizedPreview = await streamText(
-        laneName,
-        lane,
-        text,
-        payload,
-        isDurableFinal,
-        true,
-        buttons,
-        promptContextSequence,
-        true,
-        false,
-        onPlatformSendDispatch,
-        assertPlatformSendAuthorized,
-      );
-      if (finalizedPreview) {
-        if (finalizedPreview.kind === "preview-finalized-partial") {
-          return finalizedPreview;
+    if (finalizedPreview) {
+      if (!reply.hasMedia || finalizedPreview.kind === "preview-finalized-partial") {
+        return finalizedPreview;
+      }
+      const stripButtons =
+        finalizedPreview.kind === "preview-finalized" &&
+        finalizedPreview.delivery.buttonsAttached === true;
+      const mediaText =
+        finalizedPreview.kind === "preview-finalized" ? finalizedPreview.delivery.content : text;
+      try {
+        const mediaDelivery = await params.sendPayload(
+          mediaOnlyPayload(payload, mediaText, {
+            stripButtons,
+            fallbackButtons: stripButtons ? undefined : buttons,
+          }),
+          {
+            afterAcceptedDraft: true,
+            durable,
+            promptContextSequence,
+            onPlatformSendDispatch,
+            assertPlatformSendAuthorized,
+            bindPendingFinalDelivery,
+            onMediaAccepted,
+          },
+        );
+        const suppression =
+          finalizedPreview.deliveryResult.suppression?.reason === "adapter_returned_no_identity"
+            ? finalizedPreview.deliveryResult.suppression
+            : (mediaDelivery.suppression ?? finalizedPreview.deliveryResult.suppression);
+        return {
+          ...finalizedPreview,
+          deliveryResult: {
+            ...(mediaDelivery.visibleReplySent
+              ? createAcceptedChannelDeliveryResult({
+                  deliveryResults: [finalizedPreview.deliveryResult, mediaDelivery],
+                })
+              : finalizedPreview.deliveryResult),
+            ...(suppression ? { suppression } : {}),
+            ...(mediaDelivery.deliveryIntent
+              ? { deliveryIntent: mediaDelivery.deliveryIntent }
+              : {}),
+          },
+        };
+      } catch (error) {
+        if (durable && finalizedPreview.kind === "preview-finalized") {
+          return { ...finalizedPreview, kind: "preview-finalized-partial", error };
         }
-        const stripButtons =
-          finalizedPreview.kind === "preview-finalized" &&
-          finalizedPreview.delivery.buttonsAttached === true;
-        const mediaText =
-          finalizedPreview.kind === "preview-finalized" ? finalizedPreview.delivery.content : text;
-        try {
-          const mediaDelivery = await params.sendPayload(
-            mediaOnlyPayload(payload, mediaText, {
-              stripButtons,
-              fallbackButtons: stripButtons ? undefined : buttons,
-            }),
-            {
-              afterAcceptedDraft: true,
-              durable,
-              promptContextSequence,
-              onPlatformSendDispatch,
-              assertPlatformSendAuthorized,
-              bindPendingFinalDelivery,
-              onMediaAccepted,
-            },
-          );
-          const suppression =
-            finalizedPreview.deliveryResult.suppression?.reason === "adapter_returned_no_identity"
-              ? finalizedPreview.deliveryResult.suppression
-              : (mediaDelivery.suppression ?? finalizedPreview.deliveryResult.suppression);
-          return {
-            ...finalizedPreview,
-            deliveryResult: {
-              ...(mediaDelivery.visibleReplySent
-                ? createAcceptedChannelDeliveryResult({
-                    deliveryResults: [finalizedPreview.deliveryResult, mediaDelivery],
-                  })
-                : finalizedPreview.deliveryResult),
-              ...(suppression ? { suppression } : {}),
-              ...(mediaDelivery.deliveryIntent
-                ? { deliveryIntent: mediaDelivery.deliveryIntent }
-                : {}),
-            },
-          };
-        } catch (error) {
-          if (durable && finalizedPreview.kind === "preview-finalized") {
-            return { ...finalizedPreview, kind: "preview-finalized-partial", error };
-          }
-          throw error;
-        }
+        throw error;
       }
     }
 
@@ -621,7 +579,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     // Accepted pagination pages remain visible. If bounded final retries exhaust,
     // deliver only the unaccepted suffix so fallback cannot duplicate the prefix.
     const deliveryResult = await params.sendPayload(
-      params.applyTextToPayload(payload, retainedFinalContent?.sourceText ?? text),
+      applyTextToPayload(payload, retainedFinalContent?.sourceText ?? text),
       {
         afterAcceptedDraft,
         durable,

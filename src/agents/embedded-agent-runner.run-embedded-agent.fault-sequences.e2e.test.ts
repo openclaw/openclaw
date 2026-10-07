@@ -123,7 +123,7 @@ function makeProviderConfig(fallbacks: string[]): OpenClawConfig {
   return {
     agents: {
       defaults: { model: { primary: "openai/mock-1", fallbacks } },
-      list: [{ id: "test" }],
+      entries: { test: {} },
     },
     models: {
       providers: {
@@ -643,7 +643,9 @@ describe("runEmbeddedAgent provider fault sequences", () => {
         { provider: "openai", model: "mock-1", profileId: "openai:p1", fault: { status: 402 } },
       ]);
       expect(error.message).toContain("returned a billing error");
-      expect(error.message).toContain("insufficient balance");
+      expect(error.message).toContain(
+        "check your account's balance and usage limits before trying again.",
+      );
       const usageStats = await readUsageStats(agentDir);
       expect(usageStats["openai:p1"]?.disabledReason).toBe("billing");
       expect(usageStats["openai:p1"]?.failureCounts?.billing).toBe(1);

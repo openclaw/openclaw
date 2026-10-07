@@ -1,6 +1,7 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.hasPermission
 import android.Manifest
 import android.content.Context
 import android.hardware.Sensor
@@ -8,7 +9,6 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.SystemClock
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -50,10 +50,7 @@ internal data class MotionActivityRecord(
 internal data class PedometerRecord(
   val startISO: String,
   val endISO: String,
-  val steps: Int?,
-  val distanceMeters: Double?,
-  val floorsAscended: Int?,
-  val floorsDescended: Int?,
+  val steps: Int,
 )
 
 /** Motion data seam for Android sensors and tests. */
@@ -86,9 +83,7 @@ private object SystemMotionDataSource : MotionDataSource {
     return sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
   }
 
-  override fun hasPermission(context: Context): Boolean =
-    ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) ==
-      android.content.pm.PackageManager.PERMISSION_GRANTED
+  override fun hasPermission(context: Context): Boolean = context.hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)
 
   override suspend fun activity(
     context: Context,
@@ -148,9 +143,6 @@ private object SystemMotionDataSource : MotionDataSource {
       startISO = Instant.ofEpochMilli(max(0L, bootMs)).toString(),
       endISO = Instant.now().toString(),
       steps = steps,
-      distanceMeters = null,
-      floorsAscended = null,
-      floorsDescended = null,
     )
   }
 
@@ -258,10 +250,7 @@ class MotionHandler internal constructor(
       buildJsonObject {
         put("startISO", JsonPrimitive(payload.startISO))
         put("endISO", JsonPrimitive(payload.endISO))
-        payload.steps?.let { put("steps", JsonPrimitive(it)) }
-        payload.distanceMeters?.let { put("distanceMeters", JsonPrimitive(it)) }
-        payload.floorsAscended?.let { put("floorsAscended", JsonPrimitive(it)) }
-        payload.floorsDescended?.let { put("floorsDescended", JsonPrimitive(it)) }
+        put("steps", JsonPrimitive(payload.steps))
       }.toString()
     }
 

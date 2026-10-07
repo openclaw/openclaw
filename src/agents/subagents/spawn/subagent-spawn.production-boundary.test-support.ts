@@ -161,21 +161,21 @@ export async function createBoundWorker(
   const store = createWorkerSessionPlacementStore({ database });
   const session = { sessionId: "parent-session", agentId: "main", sessionKey: parentSessionKey };
   let placement = await store.startDispatch({ ...session, executionMode: "worker-turn" });
-  placement = store.transition({
+  placement = await store.transition({
     sessionId: session.sessionId,
     from: "requested",
     to: "provisioning",
     expectedGeneration: placement.generation,
     patch: { environmentId: "queued-worker-environment" },
   });
-  placement = store.transition({
+  placement = await store.transition({
     sessionId: session.sessionId,
     from: "provisioning",
     to: "syncing",
     expectedGeneration: placement.generation,
     patch: { workerBundleHash: "a".repeat(64) },
   });
-  placement = store.transition({
+  placement = await store.transition({
     sessionId: session.sessionId,
     from: "syncing",
     to: "starting",
@@ -190,7 +190,7 @@ export async function createBoundWorker(
     sessionId: session.sessionId,
     ownerEpoch: 1,
   });
-  placement = store.transition({
+  placement = await store.transition({
     sessionId: session.sessionId,
     from: "starting",
     to: "active",
@@ -242,10 +242,13 @@ export function createBoundSpawnInvocation(
     completionTarget?: "parent";
   },
   requesterModel?: { provider: string; model: string },
+  senderIsOwner?: boolean,
 ) {
   const { parentSessionKey, parentRunId } = bound;
   const source = createSessionsSpawnTool({
     config: bound.cfg,
+    senderIsOwner,
+    expectedParentSessionId: "parent-session",
     agentSessionKey: parentSessionKey,
     requesterRunId: parentRunId,
     requesterTurnRunId: parentRunId,
@@ -280,7 +283,7 @@ export function createBoundSpawnInvocation(
     agentId: "main",
     sessionKey: parentSessionKey,
   });
-  return () =>
+  return (toolCallId = "spawn-production-boundary") =>
     withPluginRuntimeGatewayRequestScope(
       {
         context: bound.context as unknown as GatewayRequestContext,
@@ -288,7 +291,7 @@ export function createBoundSpawnInvocation(
       },
       () =>
         withGatewayToolCallerIdentity(caller, () =>
-          tool.execute!("spawn-production-boundary", { task: "bounded child", ...request }),
+          tool.execute!(toolCallId, { task: "bounded child", ...request }),
         ),
     );
 }
@@ -325,7 +328,7 @@ export function registerYieldedRequesterBatchCase(options: {
     async (actor, { signal }) => {
       const registry = await import("../registry/subagent-registry.js");
       const { loadSubagentRegistryFromSqlite } =
-        await import("../registry/subagent-registry.store.sqlite.js");
+        await import("../registry/subagent-registry-state.fixture.test-support.js");
       const { settleSubagentRegistryPersistenceWork } =
         await import("../registry/subagent-registry.persistence.test-support.js");
       const announce = await import("../announce/subagent-announce.js");

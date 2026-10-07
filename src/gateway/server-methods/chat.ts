@@ -20,7 +20,7 @@ import {
 } from "./chat-broadcast.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
-import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
+import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -63,7 +63,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    let appended: Awaited<ReturnType<typeof appendAssistantTranscriptMessage>>;
+    let appended: Awaited<ReturnType<typeof appendInjectedAssistantMessageToTranscript>>;
     try {
       const admission = await beginSessionWorkAdmission({
         scope: storePath,
@@ -85,15 +85,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       try {
         appended = await admission.run(
           async () =>
-            await appendAssistantTranscriptMessage({
+            await appendInjectedAssistantMessageToTranscript({
               sessionKey,
               message: p.message,
               label: p.label,
               sessionId,
               storePath,
               agentId,
-              createIfMissing: true,
-              cfg,
+              config: cfg,
             }),
         );
       } finally {

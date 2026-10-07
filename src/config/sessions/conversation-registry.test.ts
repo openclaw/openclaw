@@ -159,7 +159,7 @@ describe("conversation registry", () => {
       chatType: "channel",
       deliveryContext: { channel: "discord", accountId: "default", to: "channel:ops" },
     });
-    const snapshot = loadReplySessionInitializationSnapshot(scope);
+    const snapshot = await loadReplySessionInitializationSnapshot(scope);
 
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
@@ -218,6 +218,7 @@ describe("conversation registry", () => {
       routeContext: { guildId: "guild-a" },
     });
 
+    await closeOpenClawAgentDatabasesAsync(tempDir);
     const resolved = resolveSqliteReadScope(scope);
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     database.db
@@ -264,7 +265,7 @@ describe("conversation registry", () => {
         chatType: "channel",
         deliveryContext: { channel: "discord", accountId: "default", to: target },
       });
-      const snapshot = loadReplySessionInitializationSnapshot(scope);
+      const snapshot = await loadReplySessionInitializationSnapshot(scope);
       const committed = await commitReplySessionInitialization({
         activeSessionKey: sessionKey,
         agentId: "main",
@@ -289,6 +290,7 @@ describe("conversation registry", () => {
       { target: "channel:alpha", routeContext: { guildId: "guild-alpha" } },
       { target: "channel:beta", routeContext: { guildId: "guild-beta" } },
     ]);
+    await closeOpenClawAgentDatabasesAsync(tempDir);
     const resolved = resolveSqliteReadScope(scope);
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     executeSqliteQuerySync(
@@ -313,7 +315,7 @@ describe("conversation registry", () => {
       chatType: "channel",
       deliveryContext: { channel: "discord", accountId: "default", to: "channel:rollover" },
     });
-    let snapshot = loadReplySessionInitializationSnapshot(scope);
+    let snapshot = await loadReplySessionInitializationSnapshot(scope);
     await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",
@@ -325,7 +327,7 @@ describe("conversation registry", () => {
       storePath,
     });
 
-    snapshot = loadReplySessionInitializationSnapshot(scope);
+    snapshot = await loadReplySessionInitializationSnapshot(scope);
     const rollover = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",
@@ -348,7 +350,7 @@ describe("conversation registry", () => {
       await resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "after-rollover" }),
     ).toMatchObject({ routeContext: { guildId: "guild-a" } });
 
-    snapshot = loadReplySessionInitializationSnapshot(scope);
+    snapshot = await loadReplySessionInitializationSnapshot(scope);
     await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",
@@ -385,6 +387,7 @@ describe("conversation registry", () => {
       chatType: "direct",
       deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-a" },
     });
+    await closeOpenClawAgentDatabasesAsync(tempDir);
     const resolved = resolveSqliteReadScope(scope);
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     executeSqliteQuerySync(
@@ -454,6 +457,7 @@ describe("conversation registry", () => {
         },
       );
     }
+    await closeOpenClawAgentDatabasesAsync(tempDir);
     const resolved = resolveSqliteReadScope({ agentId: "main", storePath });
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     const db = getSessionKysely(database.db);

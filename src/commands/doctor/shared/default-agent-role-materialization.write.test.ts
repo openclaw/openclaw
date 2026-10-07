@@ -69,7 +69,7 @@ describe("default role materialization authored writes", () => {
 
     const snapshot = await io.readConfigFileSnapshot();
     expect(snapshot.valid).toBe(false);
-    expect(snapshot.sourceConfig.agents?.entries?.ops?.default).toBe(true);
+    expect(snapshot.sourceConfig).toHaveProperty("agents.entries.ops.default", true);
     expect(snapshot.sourceConfig.agents?.defaults?.heartbeat?.agentId).toBeUndefined();
     const doctorCandidate = createCanonicalAgentConfigFixture(snapshot.sourceConfig, {
       env: { HOME: root },

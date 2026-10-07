@@ -13,10 +13,13 @@ Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 
 ## Choose a model route
 
-The model picker can show **Anthropic** and **Claude CLI** separately. These are
+The model picker shows each Claude model once per route. API and Claude CLI are
 not interchangeable billing choices: `anthropic/*` is the canonical model
 identity and can run through either runtime; `claude-cli/*` selects the native
-Claude runtime explicitly.
+Claude runtime explicitly. When a configured `anthropic/*` model already runs
+through Claude CLI, the picker omits its matching `claude-cli/*` entry, unless the
+agent's model policy or a Gateway role allows that `claude-cli/*` entry but not
+the `anthropic/*` one.
 
 - **API / API · OpenClaw** uses the configured Anthropic API connection.
 - **Claude CLI / Claude CLI · native** runs through Claude Code, using its native
@@ -141,7 +144,9 @@ OpenClaw release:
         native login tokens. Claude owns the login and token refresh lifecycle.
         Gateway startup shares the native login availability check across agent
         workspaces using the same config and environment. Explicit catalog/auth
-        captures recheck availability for their own generation.
+        captures recheck availability for their own generation. Model lists also
+        recheck it in the background at most once a minute, so `claude auth login`
+        or logout after Gateway startup reaches the model picker without a restart.
         New sessions select saved subscription credentials by account order and
         use protected file-descriptor forwarding, including tokens saved with
         `openclaw models auth paste-token --provider anthropic`. API keys saved for
@@ -199,9 +204,9 @@ OpenClaw release:
     Direct Messages API requests using a setup token advertise a maintained
     Claude Code client version, or the installed CLI version when newer.
     Anthropic uses that identity to gate newer models. A missing, older, or
-    failed CLI probe uses OpenClaw's maintained version floor. Discovery is
+    failed CLI check uses OpenClaw's maintained version floor. Discovery is
     shared with the CLI backend and cached until process restart; API-key
-    requests do not run the probe.
+    requests do not run the check.
 
     ### Config example
 
@@ -404,17 +409,36 @@ see Anthropic's [migration guide](https://platform.claude.com/docs/en/models/fab
 
 Fable 5.1 binds retained thinking to the preceding system prompt, tools, and
 conversation history. Changing that prefix can invalidate later thinking
-blocks. Claude Code manages this history for the CLI runtime. OpenClaw's
-embedded runtime uses append-only context only for prefix-binding models such as
-Fable 5.1, Opus 5.5, and Sonnet 5.5: it persists hidden runtime-context carriers
-after their user turn, keeps earlier carriers and inline inbound metadata in
-place, and preserves consecutive user turns on the Messages API. This also
-applies to matching Claude models on Bedrock, Vertex, and Foundry, although Bedrock Converse still merges
-consecutive user turns. Carriers contain only the delimited context body; the
-instruction to use it privately lives once in the stable system prompt.
-Other Claude models keep transient carriers and normal user-turn merging.
-Transient carriers are the cheaper cache shape when thinking does not bind the
-prefix: old carriers consume no later context or repeated cache-read charges.
+blocks. On direct Anthropic API-key Messages routes, OpenClaw enables
+`inHistorySystemUpdates` for Opus 4.8, Opus 5/5.5, Sonnet 5/5.5, Fable 5/5.1,
+and Mythos 5/5.1. It pins the stable system prefix and appends changed, added,
+or removed prompt sections as system messages after the current user turn.
+Workspace instructions, skills, and permission changes therefore preserve the
+earlier prefix. Changing the provider, model, or transport, or compacting the
+session, starts a new prefix series. After a Gateway restart, the series
+continues only when the current stable prefix matches the last saved rendered
+prefix.
+
+These routes also keep runtime context append-only as turn-scoped system
+messages, without user-message delimiters. OpenClaw sends
+`clear_at: "next_user_message"` with the
+`mid-conversation-system-clear-at-2026-08-21` beta: earlier carriers stay in the
+transcript but consume no input tokens after the next user message. Persistent
+prompt updates need no beta header. Operator system messages follow all other
+context for their user turn, including tool results.
+Tool results and queued extension context also clear turn-scoped messages, so
+OpenClaw renews the current user turn's runtime context after those continuations.
+
+OAuth, proxies, Bedrock, Vertex, and Foundry keep their existing behavior.
+Prefix-binding models such as Fable 5.1, Opus 5.5, and Sonnet 5.5 retain hidden
+user-role runtime-context carriers and inline inbound metadata, preserving
+consecutive user turns on the Messages API; Bedrock Converse still merges
+consecutive user turns. Those carriers contain the delimited context body,
+with interpretation guidance once in the stable system prompt. Routes without
+either capability keep transient carriers and normal user-turn merging.
+Transient carriers remain the cheaper shape on routes without in-history
+system updates when thinking does not bind the prefix: old carriers consume no
+later context or repeated cache-read charges.
 
 Direct Anthropic API-key requests with adaptive thinking send the
 `thinking-binding-controls-2026-08-01` beta and
@@ -486,7 +510,9 @@ their Desktop title and remain colorless.
 
 No additional OpenClaw config is required for discovery. The Anthropic plugin
 is bundled and enabled by default; a native macOS node advertises the read-only
-Claude session commands when the local `~/.claude/projects/` directory exists.
+Claude session commands when the local Claude projects directory exists
+(`$CLAUDE_CONFIG_DIR/projects/` when `CLAUDE_CONFIG_DIR` is set, otherwise
+`~/.claude/projects/`, matching Gateway-side discovery).
 Approve the node pairing upgrade when those commands first appear.
 
 The sidebar groups rows by their Gateway or paired-node host and shows each

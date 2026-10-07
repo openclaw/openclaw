@@ -1,4 +1,3 @@
-// Shared pure skill grouping helper.
 import type { SkillStatusEntry } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 

@@ -1,6 +1,3 @@
-/**
- * Public SDK facade for memory host runtime core and public artifact discovery.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
@@ -92,7 +89,6 @@ async function readMemoryHostEventExportOwnership(
     }
   | { kind: "missing" }
   | { kind: "orphan"; ownerContent: string }
-  | { kind: "pending-missing"; ownerContent: string }
   | { kind: "foreign" }
 > {
   const content = await workspaceRoot.readText(owner.ownerRelativePath).catch((error: unknown) => {
@@ -152,9 +148,7 @@ async function readMemoryHostEventExportOwnership(
     }
   }
   if (!openedExport) {
-    return typeof parsed.pendingContentSha256 === "string"
-      ? { kind: "pending-missing", ownerContent: content }
-      : { kind: "orphan", ownerContent: content };
+    return { kind: "orphan", ownerContent: content };
   }
   let exportContent: string;
   const exportIdentity: FileIdentityStat = {
@@ -306,84 +300,64 @@ async function materializeMemoryHostEventExport(params: {
           }
           throw error;
         }
-      } else if (ownership.content !== content) {
-        publishedIdentity = ownership.identity;
-        try {
-          const updateOwnerContent = memoryHostEventExportOwnerContent(owner, {
-            pendingSha256: contentSha256,
-            identity: ownership.identity,
-            ...(ownership.content === undefined
-              ? {}
-              : { currentSha256: sha256Hex(ownership.content) }),
-          });
-          const currentOwnerContent = memoryHostEventExportOwnerContent(owner, {
-            currentSha256: contentSha256,
-            identity: ownership.identity,
-          });
-          if (
-            !(await rewriteMemoryHostEventArtifactIfUnchanged({
-              workspaceRoot,
-              relativePath: owner.ownerRelativePath,
-              expectedContent: ownership.ownerContent,
-              nextContent: updateOwnerContent,
-            }))
-          ) {
-            return undefined;
-          }
-          await syncDirectoryIfSupported(path.dirname(absolutePath));
-          if (
-            !(await rewriteMemoryHostEventArtifactIfUnchanged({
-              workspaceRoot,
-              relativePath: owner.relativePath,
-              expectedIdentity: ownership.identity,
-              nextContent: content,
-            }))
-          ) {
-            return undefined;
-          }
-          await syncDirectoryIfSupported(path.dirname(absolutePath));
-          if (
-            !(await rewriteMemoryHostEventArtifactIfUnchanged({
-              workspaceRoot,
-              relativePath: owner.ownerRelativePath,
-              expectedContent: updateOwnerContent,
-              nextContent: currentOwnerContent,
-            }))
-          ) {
-            return undefined;
-          }
-          await syncDirectoryIfSupported(path.dirname(absolutePath));
-        } catch (error) {
-          if (isWorkspaceWriteUnavailable(error)) {
-            return undefined;
-          }
-          throw error;
-        }
-      } else if (ownership.needsFinalize) {
-        publishedIdentity = ownership.identity;
-        try {
-          if (
-            !(await rewriteMemoryHostEventArtifactIfUnchanged({
-              workspaceRoot,
-              relativePath: owner.ownerRelativePath,
-              expectedContent: ownership.ownerContent,
-              nextContent: memoryHostEventExportOwnerContent(owner, {
-                currentSha256: contentSha256,
-                identity: ownership.identity,
-              }),
-            }))
-          ) {
-            return undefined;
-          }
-          await syncDirectoryIfSupported(path.dirname(absolutePath));
-        } catch (error) {
-          if (isWorkspaceWriteUnavailable(error)) {
-            return undefined;
-          }
-          throw error;
-        }
       } else {
         publishedIdentity = ownership.identity;
+        try {
+          let expectedOwnerContent = ownership.ownerContent;
+          if (ownership.content !== content) {
+            const updateOwnerContent = memoryHostEventExportOwnerContent(owner, {
+              pendingSha256: contentSha256,
+              identity: ownership.identity,
+              ...(ownership.content === undefined
+                ? {}
+                : { currentSha256: sha256Hex(ownership.content) }),
+            });
+            if (
+              !(await rewriteMemoryHostEventArtifactIfUnchanged({
+                workspaceRoot,
+                relativePath: owner.ownerRelativePath,
+                expectedContent: expectedOwnerContent,
+                nextContent: updateOwnerContent,
+              }))
+            ) {
+              return undefined;
+            }
+            await syncDirectoryIfSupported(path.dirname(absolutePath));
+            if (
+              !(await rewriteMemoryHostEventArtifactIfUnchanged({
+                workspaceRoot,
+                relativePath: owner.relativePath,
+                expectedIdentity: ownership.identity,
+                nextContent: content,
+              }))
+            ) {
+              return undefined;
+            }
+            await syncDirectoryIfSupported(path.dirname(absolutePath));
+            expectedOwnerContent = updateOwnerContent;
+          }
+          if (ownership.content !== content || ownership.needsFinalize) {
+            if (
+              !(await rewriteMemoryHostEventArtifactIfUnchanged({
+                workspaceRoot,
+                relativePath: owner.ownerRelativePath,
+                expectedContent: expectedOwnerContent,
+                nextContent: memoryHostEventExportOwnerContent(owner, {
+                  currentSha256: contentSha256,
+                  identity: ownership.identity,
+                }),
+              }))
+            ) {
+              return undefined;
+            }
+            await syncDirectoryIfSupported(path.dirname(absolutePath));
+          }
+        } catch (error) {
+          if (isWorkspaceWriteUnavailable(error)) {
+            return undefined;
+          }
+          throw error;
+        }
       }
       if (storedEvents.length === 0 || !publishedIdentity) {
         return undefined;
@@ -457,11 +431,7 @@ async function listMemoryWorkspacePublicArtifacts(params: {
     });
   }
 
-  const deduped = new Map<string, MemoryPluginPublicArtifact>();
-  for (const artifact of artifacts) {
-    deduped.set(`${artifact.workspaceDir}\0${artifact.relativePath}\0${artifact.kind}`, artifact);
-  }
-  return [...deduped.values()];
+  return artifacts;
 }
 
 /** Lists public memory artifacts across all configured memory workspaces. */

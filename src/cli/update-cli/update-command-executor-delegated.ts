@@ -33,7 +33,7 @@ export async function withDelegatedUpdateCommandExecutor<T>(
   root: string,
   operation: (
     fence: UpdateRecoveryFence,
-    commandAuthority: ManagedCommandProcessAuthority | undefined,
+    commandAuthority: ManagedCommandProcessAuthority,
   ) => Promise<T>,
   options?: { activationTimeoutMs: number },
 ): Promise<T> {
@@ -60,11 +60,21 @@ export async function withDelegatedUpdateCommandExecutor<T>(
       let active = true;
       const isLive = (identity: ManagedHandoffLease["executor"]) =>
         store.isProcessIdentityCurrent(identity);
+      const receivers = [
+        originalChild,
+        child,
+        ...(slotChild ? [slotChild] : []),
+        ...(retainedChild ? [retainedChild] : []),
+      ];
+      // Windows launcher ancestry can differ from the recorded spawner. The live
+      // lease must still bind this PID and start identity; only an immediate
+      // parent may supply the existing fallback for an unreadable self identity.
       if (
-        !store.acceptParentBoundExecutor(originalChild) ||
-        !store.acceptParentBoundExecutor(child) ||
-        (slotChild && !store.acceptParentBoundExecutor(slotChild)) ||
-        (retainedChild && !store.acceptParentBoundExecutor(retainedChild))
+        !receivers.every(
+          (lease) =>
+            (process.platform === "win32" && store.owns(lease, "executor")) ||
+            store.acceptParentBoundExecutor(lease),
+        )
       ) {
         throw new UpdateCommandRecoveryPendingError(
           "The update process no longer has permission to continue.",
@@ -177,19 +187,17 @@ export async function withDelegatedUpdateCommandExecutor<T>(
           let outcome: { result: T } | { error: unknown };
           try {
             fence.assertCurrent();
-            if (databaseIdentity) {
-              admittedAuthorities.set(fence, {
-                authority: Object.freeze({
-                  ...databaseIdentity,
-                  installKey: original.key,
-                  owner: original.owner,
-                }),
-                assertCurrent: assertBase,
-                managedHandoff,
-                runId,
-                retainedRoot: retained?.key,
-              });
-            }
+            admittedAuthorities.set(fence, {
+              authority: Object.freeze({
+                ...databaseIdentity,
+                installKey: original.key,
+                owner: original.owner,
+              }),
+              assertCurrent: assertBase,
+              managedHandoff,
+              runId,
+              retainedRoot: retained?.key,
+            });
             if (options) {
               activation.start(
                 new UpdateActivationTimeoutError(root, options.activationTimeoutMs),
@@ -197,21 +205,16 @@ export async function withDelegatedUpdateCommandExecutor<T>(
               );
             }
             outcome = {
-              result: await operation(
-                fence,
-                databaseIdentity
-                  ? {
-                      runId,
-                      databaseIdentity,
-                      parents: [
-                        originalChild,
-                        child,
-                        ...(retainedChild ? [retainedChild] : []),
-                        ...(slotChild ? [slotChild] : []),
-                      ],
-                    }
-                  : undefined,
-              ),
+              result: await operation(fence, {
+                runId,
+                databaseIdentity,
+                parents: [
+                  originalChild,
+                  child,
+                  ...(retainedChild ? [retainedChild] : []),
+                  ...(slotChild ? [slotChild] : []),
+                ],
+              }),
             };
           } catch (error) {
             outcome = { error };

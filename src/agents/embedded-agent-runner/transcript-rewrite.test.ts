@@ -304,7 +304,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
         expect((await loadTranscriptEvents(target)).slice(0, originalRows.length)).toEqual(
           originalRows,
         );
-        expect(listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
+        expect(await listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
         receipt.finish("cancelled");
         expect(() => receipt.run(() => {})).toThrow("ownership ended");
         expect(

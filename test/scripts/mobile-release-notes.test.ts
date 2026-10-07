@@ -124,7 +124,7 @@ function accept(files: Array<{ file: string; focus: string[] }>, changes = [clai
 }
 
 describe("generated mobile store notes", () => {
-  it("uses endpoint app evidence and freezes notes for replay, rejecting wrong source, identity, baseline, or edited text", async () => {
+  it("selects bounded app evidence and freezes notes for replay with source, identity, baseline, and text validation", async () => {
     const f = fixture();
     f.write(
       "apps/shared/OpenClawWatchRTC/src/lib.rs",
@@ -132,14 +132,95 @@ describe("generated mobile store notes", () => {
     );
     git(f.rootDir, "add", "apps/shared/OpenClawWatchRTC/src/lib.rs");
     git(f.rootDir, "commit", "-m", "Enable watch reconnect");
+    const generatedFile = "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift";
+    const uiTestFile = "apps/ios/UITests/ReleaseTests.swift";
+    const localizationFile = "apps/ios/Resources/Localizable.xcstrings";
+    f.write(
+      generatedFile,
+      "// Generated file. Do not edit.\n" + "struct GeneratedModel {}\n".repeat(6000),
+    );
+    f.write(uiTestFile, "func testUnsupportedFeature() {}\n".repeat(6000));
+    f.write(
+      localizationFile,
+      JSON.stringify({
+        sourceLanguage: "en",
+        version: "1.0",
+        strings: Object.fromEntries(
+          Array.from({ length: 500 }, (_, index) => [
+            `message-${index}`,
+            {
+              localizations: {
+                es: {
+                  stringUnit: { state: "translated", value: "LOCALIZATION_ONLY_NOISE".repeat(24) },
+                },
+              },
+            },
+          ]),
+        ),
+      }),
+    );
+    git(f.rootDir, "add", generatedFile, uiTestFile, localizationFile);
+    git(f.rootDir, "commit", "-m", "Refresh generated declarations, translations, and UI checks");
     f.sourceSha = git(f.rootDir, "rev-parse", "HEAD");
     f.plan.sourceSha = f.sourceSha;
     fs.writeFileSync(f.planPath, JSON.stringify(f.plan));
-    accept([
-      { file: f.file, focus: ["label"] },
-      { file: "apps/shared/OpenClawWatchRTC/src/lib.rs", focus: ["reconnect_enabled"] },
-    ]);
+    api.parse.mockImplementationOnce((request: { input: string }) => {
+      // The original generator exceeds this budget before it can select the useful change.
+      expect(request.input.length).toBeLessThan(60_000);
+      const inventory: { files: Array<{ id: string; file: string; summary?: unknown }> } =
+        JSON.parse(request.input);
+      expect(inventory.files).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ file: generatedFile })]),
+      );
+      expect(inventory.files).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ file: uiTestFile })]),
+      );
+      const localization = inventory.files.find((entry) => entry.file === localizationFile);
+      expect(localization?.summary).toBeDefined();
+      expect(JSON.stringify(localization)).toContain("es");
+      expect(request.input).not.toContain("LOCALIZATION_ONLY_NOISE");
+      const selected = inventory.files.find((entry) => entry.file === f.file);
+      expect(selected).toBeDefined();
+      return {
+        status: "completed",
+        output_parsed: {
+          files: [
+            { id: selected?.id, focus: ["label"] },
+            {
+              id: inventory.files.find(
+                (entry) => entry.file === "apps/shared/OpenClawWatchRTC/src/lib.rs",
+              )?.id,
+              focus: ["reconnect_enabled"],
+            },
+          ],
+        },
+      };
+    });
+    api.parse
+      .mockResolvedValueOnce({ status: "completed", output_parsed: { changes: [claim] } })
+      .mockResolvedValueOnce({
+        status: "completed",
+        output_parsed: { approved: true, problems: [] },
+      });
+
     const saved = await generateMobileReleaseNotes(f);
+    expect(api.parse).toHaveBeenCalledTimes(3);
+    for (const index of [1, 2]) {
+      const request = api.parse.mock.calls[index]![0];
+      expect(request.input.length).toBeLessThan(60_000);
+      const input = JSON.parse(request.input);
+      expect(input.evidence).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            file: f.file,
+            patch: expect.stringContaining('+let label = "Send message"'),
+          }),
+        ]),
+      );
+      expect(request.input).not.toContain("LOCALIZATION_ONLY_NOISE");
+      expect(request.input).not.toContain("testUnsupportedFeature");
+      expect(request.input).not.toContain("struct GeneratedModel");
+    }
     const draft = JSON.parse(api.parse.mock.calls[1]![0].input);
     const evidence = draft.evidence.filter((entry: { kind?: string }) => entry.kind !== "context");
     expect(evidence).toHaveLength(2);
@@ -276,98 +357,48 @@ describe("generated mobile store notes", () => {
     expect(api.parse).not.toHaveBeenCalled();
   });
 
-  it("shortlists a real change without sending generated, UI-test, or raw localization noise", async () => {
-    const f = fixture();
-    const generatedFile = "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift";
-    const uiTestFile = "apps/ios/UITests/ReleaseTests.swift";
-    const localizationFile = "apps/ios/Resources/Localizable.xcstrings";
-    f.write(
-      generatedFile,
-      "// Generated file. Do not edit.\n" + "struct GeneratedModel {}\n".repeat(6000),
-    );
-    f.write(uiTestFile, "func testUnsupportedFeature() {}\n".repeat(6000));
-    f.write(
-      localizationFile,
-      JSON.stringify({
-        sourceLanguage: "en",
-        version: "1.0",
-        strings: Object.fromEntries(
-          Array.from({ length: 500 }, (_, index) => [
-            `message-${index}`,
-            {
-              localizations: {
-                es: {
-                  stringUnit: { state: "translated", value: "LOCALIZATION_ONLY_NOISE".repeat(24) },
-                },
-              },
-            },
-          ]),
-        ),
-      }),
-    );
-    git(f.rootDir, "add", generatedFile, uiTestFile, localizationFile);
-    git(f.rootDir, "commit", "-m", "Refresh generated declarations, translations, and UI checks");
-    f.sourceSha = git(f.rootDir, "rev-parse", "HEAD");
-    f.plan.sourceSha = f.sourceSha;
-    fs.writeFileSync(f.planPath, JSON.stringify(f.plan));
-    api.parse.mockImplementationOnce((request: { input: string }) => {
-      // The original generator exceeds this budget before it can select the useful change.
-      expect(request.input.length).toBeLessThan(60_000);
-      const inventory: { files: Array<{ id: string; file: string; summary?: unknown }> } =
-        JSON.parse(request.input);
-      expect(inventory.files).not.toEqual(
-        expect.arrayContaining([expect.objectContaining({ file: generatedFile })]),
-      );
-      expect(inventory.files).not.toEqual(
-        expect.arrayContaining([expect.objectContaining({ file: uiTestFile })]),
-      );
-      const localization = inventory.files.find((entry) => entry.file === localizationFile);
-      expect(localization?.summary).toBeDefined();
-      expect(JSON.stringify(localization)).toContain("es");
-      expect(request.input).not.toContain("LOCALIZATION_ONLY_NOISE");
-      const selected = inventory.files.find((entry) => entry.file === f.file);
-      expect(selected).toBeDefined();
-      return {
-        status: "completed",
-        output_parsed: { files: [{ id: selected?.id, focus: ["label"] }] },
-      };
-    });
-    api.parse
-      .mockResolvedValueOnce({ status: "completed", output_parsed: { changes: [claim] } })
-      .mockResolvedValueOnce({
-        status: "completed",
-        output_parsed: { approved: true, problems: [] },
-      });
-
-    const saved = await generateMobileReleaseNotes(f);
-    expect(api.parse).toHaveBeenCalledTimes(3);
-    for (const index of [1, 2]) {
-      const request = api.parse.mock.calls[index]![0];
-      expect(request.input.length).toBeLessThan(60_000);
-      const input = JSON.parse(request.input);
-      expect(input.evidence).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            file: f.file,
-            patch: expect.stringContaining('+let label = "Send message"'),
-          }),
-        ]),
-      );
-      expect(request.input).not.toContain("LOCALIZATION_ONLY_NOISE");
-      expect(request.input).not.toContain("testUnsupportedFeature");
-      expect(request.input).not.toContain("struct GeneratedModel");
-    }
-    expect(saved.entries[0]?.text).toBe("- Clearer labels when sending messages.");
-  });
-
   it.each([
-    { files: [], error: /too small/iu },
-    { files: [{ id: "f9999", focus: ["label"] }], error: /selection|selected|unknown/iu },
-  ])("rejects an empty or unknown shortlist before drafting: $files", async ({ files, error }) => {
+    { name: "empty shortlist", files: [], error: /too small/iu, calls: 1 },
+    {
+      name: "unknown shortlist",
+      files: [{ id: "f9999", focus: ["label"] }],
+      error: /selection|selected|unknown/iu,
+      calls: 1,
+    },
+    { name: "incomplete response", files: undefined, error: /did not complete/u, calls: 1 },
+    {
+      name: "expired budget",
+      files: [{ id: "f1", focus: ["label"] }],
+      error: /budget|deadline|timed out/iu,
+      calls: 1,
+    },
+    {
+      name: "missing source mapping",
+      files: undefined,
+      error: /Missing source mapping/u,
+      calls: 0,
+    },
+  ])("rejects $name without saving partial notes", async ({ name, files, error, calls }) => {
     const f = fixture();
-    api.parse.mockResolvedValueOnce({ status: "completed", output_parsed: { files } });
+    if (name === "missing source mapping") {
+      git(f.rootDir, "update-ref", "-d", "refs/openclaw/mobile-releases/ios/2026.7.3-1");
+    } else if (name === "expired budget") {
+      const started = Date.now();
+      let now = started;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      api.parse.mockImplementationOnce(() => {
+        now = started + 300_001;
+        return { status: "completed", output_parsed: { files } };
+      });
+    } else {
+      api.parse.mockResolvedValueOnce(
+        files
+          ? { status: "completed", output_parsed: { files } }
+          : { status: "incomplete", output_parsed: { changes: [] } },
+      );
+    }
     await expect(generateMobileReleaseNotes(f)).rejects.toThrow(error);
-    expect(api.parse).toHaveBeenCalledTimes(1);
+    expect(api.parse).toHaveBeenCalledTimes(calls);
     expect(fs.existsSync(f.outputPath)).toBe(false);
   });
 
@@ -425,100 +456,63 @@ describe("generated mobile store notes", () => {
     expect(saved.entries[0]?.text).toBe("- Updated English labels.");
   });
 
-  it("stops after the overall budget expires without starting a draft or saving notes", async () => {
-    const f = fixture();
-    const started = Date.now();
-    let now = started;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    api.parse.mockImplementationOnce(() => {
-      now = started + 300_001;
-      return {
-        status: "completed",
-        output_parsed: { files: [{ id: "f1", focus: ["label"] }] },
-      };
-    });
-    await expect(generateMobileReleaseNotes(f)).rejects.toThrow(/budget|deadline|timed out/iu);
-    expect(api.parse).toHaveBeenCalledTimes(1);
-    expect(fs.existsSync(f.outputPath)).toBe(false);
-  });
-
-  it("refuses a missing public source mapping before asking the model", async () => {
-    const f = fixture();
-    git(f.rootDir, "update-ref", "-d", "refs/openclaw/mobile-releases/ios/2026.7.3-1");
-    await expect(generateMobileReleaseNotes(f)).rejects.toThrow("Missing source mapping");
-    expect(api.parse).not.toHaveBeenCalled();
-    expect(fs.existsSync(f.outputPath)).toBe(false);
-  });
-
-  it("reviews selected changes after an empty draft and saves the corrected highlights", async () => {
-    const f = fixture();
-    const correction = "e1: The changed send label is missing from the empty draft.";
-    select([{ file: f.file, focus: ["label"] }]);
-    api.parse
-      .mockResolvedValueOnce({ status: "completed", output_parsed: { changes: [] } })
-      .mockImplementationOnce((request: { input: string }) => {
-        const review = JSON.parse(request.input);
-        expect(review.draft.changes).toEqual([]);
-        expect(review.evidence).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              id: "e1",
-              file: f.file,
-              patch: expect.stringContaining('+let label = "Send message"'),
-            }),
-          ]),
-        );
-        return {
-          status: "completed",
-          output_parsed: { approved: false, problems: [correction] },
-        };
-      })
-      .mockImplementationOnce((request: { input: string }) => {
-        expect(JSON.parse(request.input).corrections).toEqual([correction]);
-        return { status: "completed", output_parsed: { changes: [claim] } };
-      })
-      .mockResolvedValueOnce({
-        status: "completed",
-        output_parsed: { approved: true, problems: [] },
-      });
-
-    const saved = await generateMobileReleaseNotes(f);
-    expect(api.parse).toHaveBeenCalledTimes(5);
-    expect(saved.entries[0]?.claims).toEqual([claim]);
-    expect(
-      renderMobileReleaseNotes({
-        rootDir: f.rootDir,
-        platform: f.platform,
-        version: "2026.7.40",
-        build: "2",
-        audience: "ios",
-        artifactPath: f.outputPath,
-      }),
-    ).toBe("- Clearer labels when sending messages.");
-  });
-
-  it("rejects repeated unsupported model claims without creating an uploadable artifact", async () => {
-    const f = fixture();
-    select([{ file: f.file, focus: ["label"] }]);
-    for (let index = 0; index < 2; index++) {
+  it.each([true, false])(
+    "publishes corrected highlights only after factual review (approved=%s)",
+    async (approved) => {
+      const f = fixture();
+      const changes = approved ? [] : [claim];
+      const correction = approved
+        ? "e1: The changed send label is missing from the empty draft."
+        : "Unsupported behavior claim.";
+      select([{ file: f.file, focus: ["label"] }]);
       api.parse
-        .mockResolvedValueOnce({ status: "completed", output_parsed: { changes: [claim] } })
+        .mockResolvedValueOnce({ status: "completed", output_parsed: { changes } })
+        .mockImplementationOnce((request: { input: string }) => {
+          const review = JSON.parse(request.input);
+          expect(review.draft.changes).toEqual(changes);
+          expect(review.evidence).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                id: "e1",
+                file: f.file,
+                patch: expect.stringContaining('+let label = "Send message"'),
+              }),
+            ]),
+          );
+          return {
+            status: "completed",
+            output_parsed: { approved: false, problems: [correction] },
+          };
+        })
+        .mockImplementationOnce((request: { input: string }) => {
+          expect(JSON.parse(request.input).corrections).toEqual([correction]);
+          return { status: "completed", output_parsed: { changes: [claim] } };
+        })
         .mockResolvedValueOnce({
           status: "completed",
-          output_parsed: { approved: false, problems: ["Unsupported behavior claim."] },
+          output_parsed: { approved, problems: approved ? [] : [correction] },
         });
-    }
-    await expect(generateMobileReleaseNotes(f)).rejects.toThrow(
-      "Could not validate ios release notes",
-    );
-    expect(api.parse).toHaveBeenCalledTimes(5);
-    expect(fs.existsSync(f.outputPath)).toBe(false);
-  });
 
-  it("rejects incomplete API output without saving partial notes", async () => {
-    const f = fixture();
-    api.parse.mockResolvedValue({ status: "incomplete", output_parsed: { changes: [] } });
-    await expect(generateMobileReleaseNotes(f)).rejects.toThrow("did not complete");
-    expect(fs.existsSync(f.outputPath)).toBe(false);
-  });
+      if (approved) {
+        const saved = await generateMobileReleaseNotes(f);
+        expect(saved.entries[0]?.claims).toEqual([claim]);
+        expect(
+          renderMobileReleaseNotes({
+            rootDir: f.rootDir,
+            platform: f.platform,
+            version: "2026.7.40",
+            build: "2",
+            audience: "ios",
+            artifactPath: f.outputPath,
+          }),
+        ).toBe("- Clearer labels when sending messages.");
+      } else {
+        await expect(generateMobileReleaseNotes(f)).rejects.toThrow(
+          "Could not validate ios release notes",
+        );
+        expect(fs.existsSync(f.outputPath)).toBe(false);
+      }
+      expect(api.parse).toHaveBeenCalledTimes(5);
+    },
+  );
 });

@@ -57,7 +57,7 @@ During startup or restart, the Gateway waits up to five minutes for another Open
 
 On shutdown, the Gateway closes its server and settles owned work before releasing its process owner and compatibility projection. Offline maintenance closes admission and retains both sidecars through state, linked config/credential, and alias removal, then drains its remaining database resources before releasing ownership.
 
-On Unix, destructive cleanup retains SQLite's native exclusion until the database is removed. On Windows, SQLite's open file handles prevent unlink; the cleanup command closes its own probe before removal. Native cleanup must finish before process ownership is released.
+On Unix, destructive cleanup retains SQLite's native exclusion until the database is removed. On Windows, SQLite's open file handles prevent unlink; the cleanup command closes its own check before removal. Native cleanup must finish before process ownership is released.
 
 Normal upgrades preserve mutual exclusion with older state-local-lock runtimes through the compatibility projection and historical-owner checks. After releasing both sidecars, destructive cleanup removes only empty directories whose filesystem identities still match the directories it owned. A replacement directory or a new owner's files remain intact, and cleanup reports an interrupted removal. The managed update path stops the old service before mutation. Binaries predating state-local ownership retain their existing supported-upgrade stop checks.
 
@@ -65,7 +65,7 @@ Normal upgrades preserve mutual exclusion with older state-local-lock runtimes t
 
 - If the port is occupied by a different, non-gateway process, the error is the same; free the port or choose another with `openclaw gateway --port <port>`.
 - `OPENCLAW_ALLOW_MULTI_GATEWAY=1` permits multiple config/runtime instances, not shared mutable state. Each instance still needs a unique `OPENCLAW_STATE_DIR`.
-- Under a service supervisor, a new gateway process that hits either error above first probes `/healthz` on the existing process. If that process is healthy, the new process leaves it in control instead of failing. On systemd, it exits with code `78`; the unit's `RestartPreventExitStatus=78` stops `Restart=always` from looping on a lock or `EADDRINUSE` conflict. If the existing process never becomes healthy, the health-probe retry is time-bounded and startup then fails with the lock error above instead of looping forever.
+- Under a service supervisor, a new gateway process that hits either error above first checks `/healthz` on the existing process. If that process is healthy, the new process leaves it in control instead of failing. On systemd, it exits with code `78`; the unit's `RestartPreventExitStatus=78` stops `Restart=always` from looping on a lock or `EADDRINUSE` conflict. If the existing process never becomes healthy, the health-check retry is time-bounded and startup then fails with the lock error above instead of looping forever.
 - The macOS app keeps its own lightweight PID guard before spawning the gateway; the file lock and socket bind above are the actual runtime enforcement.
 
 ## Related

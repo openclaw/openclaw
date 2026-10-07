@@ -24,7 +24,10 @@ export class SessionManagerMetadata extends SessionManagerEntries {
         parentId: this.appendParentId,
         timestamp: new Date().toISOString(),
       };
-      if (!admission || isIncognitoSessionKey(this.persistenceTarget?.sessionKey)) {
+      if (
+        !admission ||
+        (isIncognitoSessionKey(this.persistenceTarget?.sessionKey) && "db" in admission.database)
+      ) {
         // Volatile storage keeps its one native owner until its complete actor cutover.
         const appended = this.appendEntry(entry);
         return this.publishMetadataCommit(

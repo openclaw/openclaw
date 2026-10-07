@@ -293,7 +293,7 @@ describe("board gateway runtime boundaries", () => {
       getGatewayMethodRegistry: () => methodRegistry,
       getSessionEventSubscriberConnIds: () => new Set<string>(),
       getRuntimeConfig: () => ({
-        agents: { list: [{ id: "main" }] },
+        agents: { entries: { main: {} } },
         tools: { exec: { mode: "ask" } },
       }),
       logGateway: { warn: vi.fn() },
@@ -301,6 +301,7 @@ describe("board gateway runtime boundaries", () => {
     gatewayContext.resolveGatewayContext = () => gatewayContext;
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     server.on("connection", (socket) => {
+      let gatewayClient: GatewayWsClient | null = null;
       socket.send(
         JSON.stringify({
           type: "event",
@@ -316,7 +317,7 @@ describe("board gateway runtime boundaries", () => {
           type: "req";
         };
         if (request.method === "connect") {
-          gatewayClients.add({
+          gatewayClient = {
             socket,
             connect: {
               role: "operator",
@@ -324,7 +325,8 @@ describe("board gateway runtime boundaries", () => {
             } as GatewayWsClient["connect"],
             connId: "board-authority-proof",
             usesSharedGatewayAuth: false,
-          });
+          };
+          gatewayClients.add(gatewayClient);
           socket.send(
             JSON.stringify({
               type: "res",
@@ -365,7 +367,7 @@ describe("board gateway runtime boundaries", () => {
               }),
             );
           },
-          client: null,
+          client: gatewayClient,
           isWebchatConnect: () => false,
           context: gatewayContext,
           methodRegistry,
@@ -445,7 +447,7 @@ describe("board gateway runtime boundaries", () => {
     });
     const harness = createHarness(undefined, undefined, undefined, {
       getRuntimeConfig: () => ({
-        agents: { list: [{ id: "main" }] },
+        agents: { entries: { main: {} } },
         tools: { exec: { mode: "auto" } },
       }),
     });

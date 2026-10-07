@@ -8,7 +8,7 @@ import { isPathStrictlyInside } from "../../infra/path-guards.js";
 import {
   UPDATE_DESTINATION_RECOVERY,
   type UpdateDestinationFailure,
-} from "../../infra/update-destination-failure.js";
+} from "../../infra/update-failure-facts-format.js";
 import { createUpdateFailureFact } from "../../infra/update-failure-facts.js";
 import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
 import {

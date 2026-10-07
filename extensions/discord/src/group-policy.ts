@@ -59,10 +59,7 @@ function resolveDiscordChannelKey(
   if (channelSlug && channelEntries[`#${channelSlug}`]) {
     return `#${channelSlug}`;
   }
-  const normalizedGroupChannel = groupChannel ? normalizeDiscordSlug(groupChannel) : undefined;
-  return normalizedGroupChannel !== undefined && channelEntries[normalizedGroupChannel]
-    ? normalizedGroupChannel
-    : undefined;
+  return groupChannel && channelEntries[channelSlug] ? channelSlug : undefined;
 }
 
 function buildDiscordPolicyTree(guilds: DiscordConfig["guilds"]): ScopeTree {

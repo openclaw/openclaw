@@ -43,11 +43,14 @@ function visibleState(
   sessionKey: string,
   options: Omit<ActiveRunParams, "context" | "requestedKey" | "canonicalKey"> = {},
 ) {
-  return resolveVisibleActiveSessionRunState({
-    context: {},
+  const { projectedAgentRunIndex, ...scope } = options;
+  return createVisibleActiveSessionRunProjector(
+    {},
+    projectedAgentRunIndex,
+  )({
     requestedKey: sessionKey,
     canonicalKey: sessionKey,
-    ...options,
+    ...scope,
   });
 }
 
@@ -303,6 +306,8 @@ it("projects a lifecycle-owned worker run without widening event visibility", ()
 it("projects reply lifecycle state without hiding independent embedded work", () => {
   const sessionKey = "agent:main:reply-settling";
   const sessionId = "reply-settling-session";
+  const project = createVisibleActiveSessionRunProjector({});
+  const state = () => project({ requestedKey: sessionKey, canonicalKey: sessionKey, sessionId });
   const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
   const replacementHandle: EmbeddedAgentQueueHandle = {
     abort: () => undefined,
@@ -312,27 +317,27 @@ it("projects reply lifecycle state without hiding independent embedded work", ()
     queueMessage: async () => undefined,
   };
   try {
-    expect(visibleState(sessionKey, { sessionId })).toEqual({ active: true });
+    expect(state()).toEqual({ active: true });
 
     operation.markWaitingForGlobalLane();
-    expect(visibleState(sessionKey, { sessionId })).toEqual({ active: true });
+    expect(state()).toEqual({ active: true });
     operation.markGlobalLaneWaitEnded();
 
     operation.setPhase("running");
     operation.markWaitingForGlobalLane();
-    expect(visibleState(sessionKey, { sessionId })).toEqual({ active: true });
+    expect(state()).toEqual({ active: true });
     operation.markGlobalLaneWaitEnded();
     markReplyOperationExecutionStarted(operation);
-    expect(visibleState(sessionKey, { sessionId })).toEqual({ active: true });
+    expect(state()).toEqual({ active: true });
     operation.markWaitingForGlobalLane();
-    expect(visibleState(sessionKey, { sessionId })).toEqual({ active: true });
+    expect(state()).toEqual({ active: true });
     operation.markGlobalLaneWaitEnded();
     expect(operation.abortByUser()).toBe(true);
     expect(isEmbeddedAgentRunActive(sessionId)).toBe(true);
-    expect(visibleState(sessionKey, { sessionId })).toEqual({ active: false, runIds: [] });
+    expect(state()).toEqual({ active: false, runIds: [] });
 
     setActiveEmbeddedRun(sessionId, replacementHandle, sessionKey);
-    expect(visibleState(sessionKey, { sessionId })).toEqual({ active: true });
+    expect(state()).toEqual({ active: true });
   } finally {
     clearActiveEmbeddedRun(sessionId, replacementHandle, sessionKey);
     operation.complete();

@@ -213,15 +213,24 @@
   pointer-events: none;
 }
 
-.sw-collection__search input {
+.sw-collection__search input,
+.sw-queue__search input,
+.sw-revision-dialog__input {
   width: 100%;
-  padding: 7px 10px 7px 32px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg);
   color: var(--text);
   font: inherit;
+}
+
+.sw-collection__search input,
+.sw-queue__search input {
   font-size: 13px;
+}
+
+.sw-collection__search input {
+  padding: 7px 10px 7px 32px;
 }
 
 .sw-collection__count {
@@ -238,28 +247,36 @@
   min-height: 0;
 }
 
-.sw-collection__shelf {
+.sw-collection__shelf,
+.sw-collection__reader {
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
   overflow: auto;
+}
+
+.sw-collection__shelf {
   padding: 6px 0;
   border-right: 1px solid var(--border);
 }
 
-.sw-installed-skill {
+.sw-installed-skill,
+.sw-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 3px;
   width: 100%;
-  padding: 9px 14px;
-  border: none;
-  border-left: 3px solid transparent;
   background: transparent;
   color: var(--text);
   font: inherit;
   text-align: left;
+}
+
+.sw-installed-skill {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 3px;
+  padding: 9px 14px;
+  border: none;
+  border-left: 3px solid transparent;
 }
 
 .sw-installed-skill:hover,
@@ -286,23 +303,29 @@
   overflow-wrap: anywhere;
 }
 
-.sw-installed-skill__desc {
+.sw-installed-skill__desc,
+.sw-row__desc {
   display: -webkit-box;
   overflow: hidden;
   color: var(--muted);
   font-size: 12px;
-  line-height: 1.45;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
   -webkit-box-orient: vertical;
 }
 
-.sw-collection__reader {
+.sw-installed-skill__desc {
+  line-height: 1.45;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.sw-collection__reader-head,
+.sw-detail__head {
   display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  overflow: auto;
+  align-items: flex-start;
+  flex-shrink: 0;
+  padding: 18px 24px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
 }
 
 /* Keep the skill identity visible while scrolling its instructions or diff. */
@@ -310,14 +333,8 @@
   position: sticky;
   top: 0;
   z-index: 1;
-  display: flex;
-  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  flex-shrink: 0;
-  padding: 18px 24px 14px;
-  border-bottom: 1px solid var(--border);
-  background: var(--card);
 }
 
 .sw-collection__reader-identity {
@@ -375,14 +392,7 @@
 }
 
 .sw-queue__search input {
-  width: 100%;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--text);
   padding: 7px 10px;
-  border-radius: var(--radius-md);
-  font: inherit;
-  font-size: 13px;
 }
 
 .sw-queue__body {
@@ -405,18 +415,12 @@
 .sw-row {
   padding: 10px 14px;
   border-left: 3px solid transparent;
-  display: grid;
   grid-template-columns: 14px 1fr auto;
   gap: 8px;
   align-items: start;
-  background: transparent;
   border-top: none;
   border-right: none;
   border-bottom: none;
-  text-align: left;
-  font: inherit;
-  color: var(--text);
-  width: 100%;
 }
 
 .sw-row__dot {
@@ -435,15 +439,10 @@
 }
 
 .sw-row__desc {
-  color: var(--muted);
-  font-size: 12px;
   margin-top: 2px;
-  overflow: hidden;
   text-overflow: ellipsis;
-  display: -webkit-box;
   -webkit-line-clamp: 1;
   line-clamp: 1;
-  -webkit-box-orient: vertical;
 }
 
 .sw-row__meta {
@@ -502,11 +501,7 @@
 .sw-filter-empty__icon svg {
   width: 24px;
   height: 24px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .sw-empty__title {
@@ -624,13 +619,7 @@
 }
 
 .sw-detail__head {
-  padding: 18px 24px 14px;
-  border-bottom: 1px solid var(--border);
-  display: flex;
   gap: 14px;
-  align-items: flex-start;
-  background: var(--card);
-  flex-shrink: 0;
 }
 
 .sw-detail__head-left {
@@ -1064,15 +1053,9 @@
 }
 
 .sw-revision-dialog__input {
-  width: 100%;
   min-height: 138px;
   resize: vertical;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg);
-  color: var(--text);
   padding: 12px 14px;
-  font: inherit;
   font-size: 13.5px;
   line-height: 1.55;
 }
@@ -1243,7 +1226,8 @@
 
   /* A stacked detail must size from its document and actions. The desktop
      height constraint otherwise clips the action bar below an unscrollable card. */
-  .sw-triage {
+  .sw-triage,
+  .sw-collection__panes {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(96px, 22vh) auto;
   }
@@ -1260,12 +1244,6 @@
 
   .sw-queue-resizer {
     display: none;
-  }
-
-  /* Stacked panes: cap the shelf so the skill document stays reachable. */
-  .sw-collection__panes {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(96px, 22vh) auto;
   }
 
   .sw-collection__shelf {
@@ -1396,7 +1374,8 @@
   stroke-width: 1.6;
 }
 
-.sw-view {
+.sw-view,
+.sw-view__pane {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
@@ -1404,10 +1383,6 @@
 }
 
 .sw-view__pane {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
   animation: sw-pane-in 240ms cubic-bezier(0.32, 0.72, 0.32, 1) both;
 }
 

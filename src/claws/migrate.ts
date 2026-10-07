@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-import { lstat, realpath } from "node:fs/promises";
+import { lstat, realpath, rm } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 import { listAgentEntries, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -9,7 +8,7 @@ import { isAvatarDataUrl } from "../shared/avatar-policy.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { openExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import { digestClawValue } from "./digest.js";
+import { digestClawBytes, digestClawValue } from "./digest.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { ClawMigrationError } from "./migrate-errors.js";
 import {
@@ -19,7 +18,6 @@ import {
   lstatMigrationPathIfExists,
   packageIdentityDigest,
   removeGeneratedPackageIfUnchanged,
-  removePackagePreview,
 } from "./migrate-package.js";
 import {
   assertPackageDestinationOutsideWorkspaces,
@@ -33,12 +31,9 @@ import {
   validateAgentConfigKeys,
 } from "./migrate-validation.js";
 import { readSelectedWorkspaceFiles } from "./migrate-workspace-files.js";
+import { readClawInstallRecordFromDatabase } from "./provenance-read.kernel.js";
 import { readClawSecondaryReferenceTables } from "./provenance-secondary-references.js";
-import {
-  persistClawMigrationOwnership,
-  readClawInstallRecordFromDatabase,
-  readClawInstallRecords,
-} from "./provenance.js";
+import { persistClawMigrationOwnership, readClawInstallRecords } from "./provenance.js";
 import { readClawManifestFile } from "./reader.js";
 import { isPortableClawAvatar } from "./schema-portability.js";
 import type { ClawManifest, ClawOpenClawProfile } from "./types.js";
@@ -97,14 +92,9 @@ type BuiltMigration = {
   addPlan: Awaited<ReturnType<typeof buildClawAddPlan>>;
   manifest: ClawManifest;
   profile?: ClawOpenClawProfile;
-  clawMarkdownBody?: Buffer;
   packageFiles: Map<string, Buffer>;
   ownershipFiles: PersistedClawWorkspaceFile[];
 };
-
-function sha256(value: Uint8Array): string {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
-}
 
 async function readOwnership(options: OpenClawStateDatabaseOptions, agentId: string) {
   const database = await openExistingOpenClawStateDatabaseReadOnly(options);
@@ -156,7 +146,7 @@ function sanitizeAgentPreview(agent: ClawManifest["agent"]): ClawManifest["agent
     ...agent,
     identity: {
       ...agent.identity,
-      avatar: `image data URL (${Buffer.byteLength(avatar, "utf8")} bytes; ${sha256(Buffer.from(avatar))})`,
+      avatar: `image data URL (${Buffer.byteLength(avatar, "utf8")} bytes; ${digestClawBytes(Buffer.from(avatar))})`,
     },
   };
 }
@@ -169,9 +159,29 @@ function buildPlanIntegrity(
     schemaVersion: CLAW_MIGRATION_PLAN_SCHEMA_VERSION,
     addPlan,
     packageFiles: [...packageFiles.entries()]
-      .map(([path, content]) => ({ path, digest: sha256(content), byteLength: content.byteLength }))
+      .map(([path, content]) => ({
+        path,
+        digest: digestClawBytes(content),
+        byteLength: content.byteLength,
+      }))
       .toSorted((left, right) => left.path.localeCompare(right.path)),
     retained: MIGRATION_RETAINED_PATHS,
+  });
+}
+
+function adoptMigrationActions(plan: BuiltMigration["addPlan"]): void {
+  plan.actions = plan.actions.map((action) => {
+    if (action.kind !== "workspaceFile" && action.kind !== "agent" && action.kind !== "workspace") {
+      return action;
+    }
+    return {
+      ...action,
+      action: "reuse",
+      details: {
+        ...action.details,
+        expectedState: action.kind === "workspaceFile" ? "present-matching" : "present",
+      },
+    };
   });
 }
 
@@ -306,17 +316,15 @@ export async function buildClawMigrationPlan(params: {
     );
   }
   const packagePreview = await createPackagePreview(projected.packageFiles);
-  let loaded: Extract<Awaited<ReturnType<typeof readClawManifestFile>>, { ok: true }>;
   try {
-    const read = await readClawManifestFile(packagePreview);
-    if (!read.ok) {
+    const loaded = await readClawManifestFile(packagePreview);
+    if (!loaded.ok) {
       throw new ClawMigrationError(
         "generated_package_invalid",
-        read.diagnostics.map((diagnostic) => diagnostic.message).join("; "),
-        read.diagnostics[0]?.path,
+        loaded.diagnostics.map((diagnostic) => diagnostic.message).join("; "),
+        loaded.diagnostics[0]?.path,
       );
     }
-    loaded = read;
     const existingWorkspacePaths = configuredAgents
       .filter((entry) => entry.id !== agentId)
       .map((entry) => resolveAgentWorkspaceDir(params.config, entry.id, options.env));
@@ -366,22 +374,7 @@ export async function buildClawMigrationPlan(params: {
         );
       }
     }
-    addPlan.actions = addPlan.actions.map((action) => ({
-      ...action,
-      action:
-        action.kind === "workspaceFile" || action.kind === "agent" || action.kind === "workspace"
-          ? "reuse"
-          : action.action,
-      ...(action.kind === "agent"
-        ? { details: { ...action.details, expectedState: "present" } }
-        : {}),
-      ...(action.kind === "workspace"
-        ? { details: { ...action.details, expectedState: "present" } }
-        : {}),
-      ...(action.kind === "workspaceFile"
-        ? { details: { ...action.details, expectedState: "present-matching" } }
-        : {}),
-    }));
+    adoptMigrationActions(addPlan);
     const planIntegrity = buildPlanIntegrity(addPlan, projected.packageFiles);
     addPlan.planIntegrity = planIntegrity;
     const plan: ClawMigrationPlan = {
@@ -399,7 +392,7 @@ export async function buildClawMigrationPlan(params: {
         .map(([path, content]) => ({
           path,
           byteLength: content.byteLength,
-          digest: sha256(content),
+          digest: digestClawBytes(content),
         }))
         .toSorted((left, right) => left.path.localeCompare(right.path)),
       workspaceFiles: selectedFiles.map(({ name, content, digest }) => ({
@@ -445,12 +438,11 @@ export async function buildClawMigrationPlan(params: {
       addPlan,
       manifest: loaded.manifest,
       ...(loaded.openClawProfile ? { profile: loaded.openClawProfile } : {}),
-      ...(loaded.clawMarkdownBody ? { clawMarkdownBody: loaded.clawMarkdownBody } : {}),
       packageFiles: projected.packageFiles,
       ownershipFiles,
     };
   } finally {
-    await removePackagePreview(packagePreview);
+    await rm(packagePreview, { recursive: true, force: true });
   }
 }
 
@@ -547,22 +539,7 @@ export async function applyClawMigrationPlan(params: {
         );
       }
     }
-    finalPlan.actions = finalPlan.actions.map((action) => ({
-      ...action,
-      action:
-        action.kind === "workspaceFile" || action.kind === "agent" || action.kind === "workspace"
-          ? "reuse"
-          : action.action,
-      ...(action.kind === "agent"
-        ? { details: { ...action.details, expectedState: "present" } }
-        : {}),
-      ...(action.kind === "workspace"
-        ? { details: { ...action.details, expectedState: "present" } }
-        : {}),
-      ...(action.kind === "workspaceFile"
-        ? { details: { ...action.details, expectedState: "present-matching" } }
-        : {}),
-    }));
+    adoptMigrationActions(finalPlan);
     const finalIntegrity = buildPlanIntegrity(finalPlan, params.migration.packageFiles);
     if (finalIntegrity !== params.migration.plan.planIntegrity) {
       throw new ClawMigrationError(

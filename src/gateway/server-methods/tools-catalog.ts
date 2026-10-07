@@ -1,4 +1,3 @@
-// Gateway RPC handler for the tool catalog shown by clients and Control UI.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -128,6 +127,9 @@ function buildPluginGroups(params: {
       ? pluginToolMetadata.get(buildPluginToolMetadataKey(meta.pluginId, tool.name))
       : undefined;
     const parameters = summarizeToolParameters(tool.parameters);
+    const fullDescription =
+      ownedMetadata?.description ??
+      (typeof tool.description === "string" ? tool.description : undefined);
     existing.tools.push({
       id: tool.name,
       label:
@@ -135,14 +137,10 @@ function buildPluginGroups(params: {
         normalizeOptionalString(tool.label) ??
         tool.name,
       description: summarizeToolDescriptionText({
-        rawDescription:
-          ownedMetadata?.description ??
-          (typeof tool.description === "string" ? tool.description : undefined),
+        rawDescription: fullDescription,
         displaySummary: tool.displaySummary,
       }),
-      fullDescription:
-        ownedMetadata?.description ??
-        (typeof tool.description === "string" ? tool.description : undefined),
+      fullDescription,
       ...(parameters?.length ? { parameters } : {}),
       source: "plugin",
       pluginId,
@@ -207,7 +205,6 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
       rawAgentId: params.agentId,
       respond,
       cfg: context.getRuntimeConfig(),
-      normalize: normalizeOptionalString,
     });
     if (!resolved) {
       return;

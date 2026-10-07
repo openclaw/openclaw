@@ -1,7 +1,7 @@
-// Reads provider ids selected by auth, model, channel, and media configuration.
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as normalizeId } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
 export function collectConfiguredModelProviderSelectionIds(
@@ -47,20 +47,12 @@ export function collectConfiguredModelProviderSelectionIds(
 export function collectConfiguredMediaProviderSelectionIds(
   cfg: OpenClawConfig,
 ): ReadonlySet<string> {
-  const ids = new Set<string>();
-  const add = (value: unknown) => {
-    const id = normalizeId(value);
-    if (id) {
-      ids.add(id.toLowerCase());
-    }
-  };
   const models = cfg.tools?.media?.models;
-  if (Array.isArray(models)) {
-    for (const model of models) {
-      add(asNullableRecord(model)?.provider);
-    }
-  }
-  return ids;
+  return new Set(
+    normalizeTrimmedStringList(
+      Array.isArray(models) ? models.map((model) => asNullableRecord(model)?.provider) : [],
+    ).map((provider) => provider.toLowerCase()),
+  );
 }
 
 /** Provider ids used by static and installed-registry plugin matching. */

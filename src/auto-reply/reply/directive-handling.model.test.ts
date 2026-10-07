@@ -70,9 +70,14 @@ vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => {
     findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
       authProfilesStoreMock.profiles[profileId],
     getRuntimeAuthProfileStoreSnapshot: readAuthProfileStoreForTest,
-    hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
   };
 });
+vi.mock("../../agents/auth-profiles/source-check.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/source-check.js")>()),
+  hasAnyAuthProfileStoreSourceAsync: async () =>
+    Object.keys(authProfilesStoreMock.profiles).length > 0,
+}));
+// mock-isolation: Directive tests own the in-memory credential map and stub writes; real persistence stays isolated.
 vi.mock("../../agents/auth-profiles/store-runtime.js", () => {
   return {
     ensureAuthProfileStore: readAuthProfileStoreForTest,
@@ -106,7 +111,7 @@ vi.mock("../../plugins/provider-thinking.js", () => ({
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { preparePublishedModelRuntimeChoice } from "../../agents/model-runtime-choice.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
-import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
@@ -239,18 +244,6 @@ function baseConfig(): OpenClawConfig {
     commands: { text: true },
     agents: { defaults: {} },
   } as unknown as OpenClawConfig;
-}
-
-function modelDefinition(id: string, name: string): ModelDefinitionConfig {
-  return {
-    id,
-    name,
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8192,
-  };
 }
 
 function createSessionEntry(overrides?: Partial<InternalSessionEntry>): InternalSessionEntry {
@@ -752,18 +745,17 @@ describe("/model chat UX", () => {
     createModelVisibilityPolicy: (...args) => createModelVisibilityPolicy(...args),
     buildModelAliasIndex: (...args) => buildModelAliasIndex(...args),
     createSessionEntry,
-    modelDefinition,
     setAuthProfiles,
   });
 
-  it("auto-applies closest match for typos", () => {
+  it("auto-applies closest match for typos", async () => {
     const directives = parseInlineSessionDirectives("/model anthropic/claud-opus-4-5");
     const cfg: OpenClawConfig = {
       commands: { text: true },
       agents: { defaults: { modelPolicy: { allow: ["anthropic/claude-opus-4-6"] } } },
     };
 
-    const resolved = resolveModelSelectionFromDirective({
+    const resolved = await resolveModelSelectionFromDirective({
       directives,
       cfg,
       agentDir: "/tmp/agent",
@@ -781,8 +773,8 @@ describe("/model chat UX", () => {
     expect(resolved.errorText).toBeUndefined();
   });
 
-  it("rejects numeric /model selections with a guided error", () => {
-    const resolved = resolveModelSelectionForCommand({
+  it("rejects numeric /model selections with a guided error", async () => {
+    const resolved = await resolveModelSelectionForCommand({
       command: "/model 99",
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
     });
@@ -792,8 +784,8 @@ describe("/model chat UX", () => {
     expect(resolved.errorText).toContain("Browse: /models or /models <provider>");
   });
 
-  it("includes additive allowlist repair when a runtime switch targets a blocked model", () => {
-    const resolved = resolveModelSelectionForCommand({
+  it("includes additive allowlist repair when a runtime switch targets a blocked model", async () => {
+    const resolved = await resolveModelSelectionForCommand({
       command: "/model openai/gpt-5.5 --runtime codex",
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
     });
@@ -807,13 +799,13 @@ describe("/model chat UX", () => {
     expect(resolved.errorText).toContain("openclaw plugins enable codex");
   });
 
-  it("names the active per-agent allowlist in repair guidance", () => {
-    const resolved = resolveModelSelectionForCommand({
+  it("names the active per-agent allowlist in repair guidance", async () => {
+    const resolved = await resolveModelSelectionForCommand({
       command: "/model openai/gpt-5.5",
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
       cfg: {
         agents: {
-          list: [{ id: "ops", modelPolicy: { allow: ["anthropic/*"] } }],
+          entries: { ops: { modelPolicy: { allow: ["anthropic/*"] } } },
         },
       },
       agentId: "ops",
@@ -824,8 +816,8 @@ describe("/model chat UX", () => {
     );
   });
 
-  it("treats explicit default /model selection as resettable default", () => {
-    const resolved = resolveModelSelectionForCommand({
+  it("treats explicit default /model selection as resettable default", async () => {
+    const resolved = await resolveModelSelectionForCommand({
       command: "/model anthropic/claude-opus-4-6",
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
     });
@@ -838,8 +830,8 @@ describe("/model chat UX", () => {
     });
   });
 
-  it("treats /model default as a session model reset", () => {
-    const resolved = resolveModelSelectionForCommand({
+  it("treats /model default as a session model reset", async () => {
+    const resolved = await resolveModelSelectionForCommand({
       command: "/model default",
       allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
     });
@@ -853,8 +845,8 @@ describe("/model chat UX", () => {
     });
   });
 
-  it("keeps openrouter provider/model split for exact selections", () => {
-    const resolved = resolveModelSelectionForCommand({
+  it("keeps openrouter provider/model split for exact selections", async () => {
+    const resolved = await resolveModelSelectionForCommand({
       command: "/model openrouter/anthropic/claude-opus-4-6",
       allowedModelKeys: new Set(["openrouter/anthropic/claude-opus-4-6"]),
     });
@@ -867,8 +859,8 @@ describe("/model chat UX", () => {
     });
   });
 
-  it("keeps cloudflare @cf model segments for exact selections", () => {
-    const resolved = resolveModelSelectionForCommand({
+  it("keeps cloudflare @cf model segments for exact selections", async () => {
+    const resolved = await resolveModelSelectionForCommand({
       command: "/model openai/@cf/openai/gpt-oss-20b",
       allowedModelKeys: new Set(["openai/@cf/openai/gpt-oss-20b"]),
     });
@@ -881,10 +873,10 @@ describe("/model chat UX", () => {
     });
   });
 
-  it("keeps @YYYYMMDD as part of the model when the stored numeric profile is for another provider", () => {
+  it("keeps @YYYYMMDD as part of the model when the stored numeric profile is for another provider", async () => {
     setAuthProfiles(createDateAuthProfiles("anthropic"));
 
-    const resolved = resolveModelSelectionForCommand({
+    const resolved = await resolveModelSelectionForCommand({
       command: `/model custom/vertex-ai_claude-haiku-4-5@${OPENAI_DATE_PROFILE_ID}`,
       allowedModelKeys: new Set([`custom/vertex-ai_claude-haiku-4-5@${OPENAI_DATE_PROFILE_ID}`]),
     });

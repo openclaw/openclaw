@@ -1,17 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { Insertable } from "kysely";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
-  acpSessionRowMatchesEntry,
   buildAcpDatabaseSessionKey,
   getAcpSessionKysely,
-  resolveLegacyFreeAcpSessionKey,
-  selectAcpSessionRow,
-  selectLegacyFreeAcpSessionRows,
   upsertAcpSessionMetaRow,
 } from "./session-meta-keys.js";
-import type { AcpSessionsTable } from "./session-meta-read.types.js";
+import type { AcpSessionRow } from "./session-meta-read.types.js";
 import type { AcpSessionMutationCommit } from "./session-meta-write.types.js";
 
 export function bindAcpSessionMeta(params: {
@@ -20,7 +15,7 @@ export function bindAcpSessionMeta(params: {
   lifecycleRevision?: string;
   meta: SessionAcpMeta;
   updatedAt: number;
-}): Insertable<AcpSessionsTable> {
+}): AcpSessionRow {
   return {
     session_key: params.sessionKey,
     // Kept in the existing column for schema neutrality. New rows prefer the
@@ -70,30 +65,12 @@ export function applyAcpSessionMutation(
     if (initialKey !== finalKey) {
       keys.add(initialKey);
     }
-    if (finalKey !== input.sessionKey && !resolveLegacyFreeAcpSessionKey(input.sessionKey)) {
-      const row = selectAcpSessionRow(db, input.sessionKey);
-      if (row && acpSessionRowMatchesEntry(row, input.entry)) {
-        keys.add(input.sessionKey);
-      }
-    }
   }
   if (
     input.currentRowKey &&
-    (input.decision.kind === "clear" || input.currentRowKey !== finalKey) &&
-    !resolveLegacyFreeAcpSessionKey(input.currentRowKey)
+    (input.decision.kind === "clear" || input.currentRowKey !== finalKey)
   ) {
     keys.add(input.currentRowKey);
-  }
-  // Aliases are reread after the awaited entry change; a rebound lifecycle keeps its row.
-  for (const aliases of selectLegacyFreeAcpSessionRows(db, [
-    input.storageSessionKey,
-    input.sessionKey,
-  ]).values()) {
-    for (const alias of aliases) {
-      if (acpSessionRowMatchesEntry(alias, input.entry)) {
-        keys.add(alias.session_key);
-      }
-    }
   }
   for (const key of keys) {
     executeSqliteQuerySync(

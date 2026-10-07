@@ -1,10 +1,13 @@
 import assertStrict from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-// Assertions for upgrade-survivor E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadColumns,
+} from "../../../lib/sqlite-transcript-payload.mjs";
 import {
   UPGRADE_SURVIVOR_ASSERTION_SCENARIOS,
   usesStructuredToolSearchAtBaseline,
@@ -321,7 +324,7 @@ function seedState() {
       write(path.join(workspace, fileName), contents);
     }
   }
-  writeJson(path.join(workspace, ".openclaw", "workspace-state.json"), {
+  writeJson(path.join(workspace, "openclaw-workspace-state.json"), {
     version: 1,
     setupCompletedAt: "2026-04-01T00:00:00.000Z",
   });
@@ -654,6 +657,149 @@ function assertConfigSurvived() {
       "logging.file tilde path changed",
     );
   }
+}
+
+function readLegacyOperatorPendingDelivery(db) {
+  return db
+    .prepare("SELECT current_session_id, entry_json FROM session_nodes WHERE session_key = ?")
+    .get("agent:ops:legacy-pending-delivery");
+}
+
+function captureLegacyOperatorPendingDelivery([stateDir, artifactRoot]) {
+  const fixturePath = path.join(artifactRoot, "legacy-operator-pending-delivery.json");
+  const witnessPath = path.join(artifactRoot, "legacy-operator-pending-delivery-before-start.json");
+  if (!fs.existsSync(fixturePath) || fs.existsSync(witnessPath)) {
+    return;
+  }
+  let witness;
+  try {
+    const db = new DatabaseSync(path.join(stateDir, "agents/ops/agent/openclaw-agent.sqlite"), {
+      readOnly: true,
+    });
+    try {
+      witness = { row: readLegacyOperatorPendingDelivery(db) };
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    // Observation must not alter service startup; the post-update oracle rejects this receipt.
+    witness = { error: String(error) };
+  }
+  try {
+    fs.writeFileSync(witnessPath, `${JSON.stringify(witness)}\n`, { flag: "wx" });
+  } catch (error) {
+    if (error.code !== "EEXIST") {
+      throw error;
+    }
+  }
+}
+
+function assertLegacyOperatorPendingDelivery([updateJson, updateErr]) {
+  const stateDir = requireEnv("OPENCLAW_STATE_DIR");
+  const artifactRoot = requireEnv("OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT");
+  const fixture = readJson(path.join(artifactRoot, "legacy-operator-pending-delivery.json"));
+  for (const file of [updateJson, updateErr]) {
+    assert(
+      !fs.readFileSync(file, "utf8").includes("Legacy session entry state requires migration"),
+      "published update stopped on legacy pending-delivery state",
+    );
+  }
+  const db = new DatabaseSync(path.join(stateDir, "agents/ops/agent/openclaw-agent.sqlite"), {
+    readOnly: true,
+  });
+  let liveRow;
+  let recoveredInputs = [];
+  try {
+    liveRow = readLegacyOperatorPendingDelivery(db);
+    if (
+      liveRow &&
+      JSON.parse(liveRow.entry_json).pendingFinalDelivery?.intentId !== "legacy-pending-intent"
+    ) {
+      recoveredInputs = db
+        .prepare(
+          `SELECT ${sqliteTranscriptPayloadColumns(db)} FROM transcript_events WHERE session_id = ? ORDER BY seq`,
+        )
+        .all("legacy-pending-delivery")
+        .map((event) => JSON.parse(readSqliteTranscriptPayload(event)).message);
+    }
+  } finally {
+    db.close();
+  }
+  let row = liveRow;
+  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE === "auto-auth") {
+    const witness = readJson(
+      path.join(artifactRoot, "legacy-operator-pending-delivery-before-start.json"),
+    );
+    assertStrict.equal(witness.error, undefined, "pre-start legacy delivery observation failed");
+    row = witness.row;
+  }
+  assert(row, "published update did not import legacy session into SQLite");
+  assertStrict.equal(row.current_session_id, "legacy-pending-delivery");
+  const entry = JSON.parse(row.entry_json);
+  assertStrict.equal(entry.sessionId, "legacy-pending-delivery");
+  assertStrict.deepEqual(entry.pendingFinalDelivery, {
+    kind: "replayable",
+    text: "Saved July reply",
+    createdAt: 1710000000000,
+    context: { channel: "telegram", to: "synthetic-recipient" },
+    intentId: "legacy-pending-intent",
+  });
+  assertStrict.deepEqual(
+    Object.keys(entry).filter((key) => key.startsWith("pendingFinalDelivery")),
+    ["pendingFinalDelivery"],
+  );
+  const runsDir = path.join(stateDir, "session-sqlite-migration-runs");
+  const archived = fs
+    .readdirSync(runsDir)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => readJson(path.join(runsDir, name)))
+    .filter((run) => run.completedAt)
+    .flatMap((run) => run.targets.flatMap((target) => target.completedMoves))
+    .some(
+      (move) =>
+        move.kind === "legacy-store" &&
+        move.sourcePath === fixture.storePath &&
+        fs.existsSync(move.archivePath) &&
+        fs.readFileSync(move.archivePath, "utf8") === fixture.original,
+    );
+  assert(archived, "published update did not archive the original legacy session bytes");
+  assert(liveRow, "startup removed the imported legacy session");
+  assertStrict.equal(liveRow.current_session_id, "legacy-pending-delivery");
+  const liveEntry = JSON.parse(liveRow.entry_json);
+  assertStrict.equal(liveEntry.sessionId, "legacy-pending-delivery");
+  assertStrict.deepEqual(
+    Object.keys(liveEntry).filter(
+      (key) => key.startsWith("pendingFinalDelivery") && key !== "pendingFinalDelivery",
+    ),
+    [],
+  );
+  if (liveEntry.pendingFinalDelivery?.intentId === "legacy-pending-intent") {
+    assertStrict.deepEqual(liveEntry.pendingFinalDelivery, entry.pendingFinalDelivery);
+  } else {
+    assert(
+      recoveredInputs.some((message) => {
+        const provenance = message?.provenance;
+        const text =
+          typeof message?.content === "string"
+            ? message.content
+            : (message?.content ?? [])
+                .filter((part) => part.type === "text")
+                .map((part) => part.text)
+                .join("\n");
+        return (
+          message?.role === "user" &&
+          provenance?.kind === "internal_system" &&
+          provenance.sourceTool === "main_session_restart_recovery" &&
+          provenance.sourceSessionKey === "agent:ops:legacy-pending-delivery" &&
+          text.includes('The interrupted final reply was captured: "Saved July reply"')
+        );
+      }),
+      "startup replaced the legacy pending delivery without retaining its saved reply in recovery input",
+    );
+  }
+  console.log(
+    "Published updater: legacy pending delivery imported into SQLite; original JSON archived unchanged.",
+  );
 }
 
 function assertStateSurvived() {
@@ -1848,6 +1994,12 @@ if (command === "list-scenarios") {
   legacyOperator.seedLegacyOperatorAgent();
 } else if (command === "seed-legacy-operator-gateway") {
   legacyOperator.seedLegacyOperatorGatewayState();
+} else if (command === "seed-legacy-operator-pending-delivery") {
+  legacyOperator.seedLegacyOperatorPendingDelivery();
+} else if (command === "capture-legacy-operator-pending-delivery") {
+  captureLegacyOperatorPendingDelivery(process.argv.slice(3));
+} else if (command === "assert-legacy-operator-pending-delivery") {
+  assertLegacyOperatorPendingDelivery(process.argv.slice(3));
 } else if (command === "assert-legacy-operator-gateway") {
   legacyOperator.assertLegacyOperatorGatewayState(process.argv[3] || "candidate");
 } else if (command === "legacy-operator-turn") {

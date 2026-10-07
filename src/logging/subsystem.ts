@@ -39,19 +39,9 @@ export type SubsystemLogger = {
 type ChalkInstance = InstanceType<typeof Chalk>;
 
 const inspectValue: ((value: unknown) => string) | null = (() => {
-  const getBuiltinModule = (
-    process as NodeJS.Process & {
-      getBuiltinModule?: (id: string) => unknown;
-    }
-  ).getBuiltinModule;
-  if (typeof getBuiltinModule !== "function") {
-    return null;
-  }
   try {
-    const utilNamespace = getBuiltinModule("util") as {
-      inspect?: (value: unknown) => string;
-    };
-    return typeof utilNamespace.inspect === "function" ? utilNamespace.inspect : null;
+    const inspect = process.getBuiltinModule?.("util").inspect;
+    return typeof inspect === "function" ? inspect : null;
   } catch {
     return null;
   }
@@ -156,13 +146,10 @@ function formatSubsystemForConsole(subsystem: string): string {
   if (CHANNEL_SUBSYSTEM_PREFIXES.has(normalizeLowercaseStringOrEmpty(first))) {
     return first;
   }
-  if (parts.length > SUBSYSTEM_MAX_SEGMENTS) {
-    return parts.slice(-SUBSYSTEM_MAX_SEGMENTS).join("/");
-  }
-  return parts.join("/");
+  return parts.slice(-SUBSYSTEM_MAX_SEGMENTS).join("/");
 }
 
-export function stripRedundantSubsystemPrefixForConsole(
+function stripRedundantSubsystemPrefixForConsole(
   message: string,
   displaySubsystem: string,
 ): string {
@@ -179,11 +166,7 @@ export function stripRedundantSubsystemPrefixForConsole(
         normalizeLowercaseStringOrEmpty(bracketTag) ===
         normalizeLowercaseStringOrEmpty(displaySubsystem)
       ) {
-        let i = closeIdx + 1;
-        while (message[i] === " ") {
-          i += 1;
-        }
-        return message.slice(i);
+        return message.slice(closeIdx + 1).replace(/^ */, "");
       }
     }
   }
@@ -200,17 +183,7 @@ export function stripRedundantSubsystemPrefixForConsole(
     return message;
   }
 
-  let i = displaySubsystem.length;
-  while (message[i] === " ") {
-    i += 1;
-  }
-  if (message[i] === ":") {
-    i += 1;
-  }
-  while (message[i] === " ") {
-    i += 1;
-  }
-  return message.slice(i);
+  return message.slice(displaySubsystem.length).replace(/^ *:? */, "");
 }
 
 function createConsoleLineFormatter(subsystem: string) {

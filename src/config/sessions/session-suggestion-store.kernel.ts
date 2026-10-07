@@ -190,11 +190,10 @@ export function claimSessionSuggestionDispatchInDatabase(
     return null;
   }
   const now = params.now ?? Date.now();
-  const claimTtlMs = params.claimTtlMs ?? SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS;
   if (
     row.dispatch_token &&
     row.dispatch_started_at !== null &&
-    now - row.dispatch_started_at < claimTtlMs
+    now - row.dispatch_started_at < SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS
   ) {
     return { kind: "busy" };
   }

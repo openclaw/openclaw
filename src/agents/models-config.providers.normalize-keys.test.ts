@@ -11,9 +11,10 @@ import { normalizeProviderCatalogModelsForConfig } from "./models-config.provide
 import { normalizeProviders } from "./models-config.providers.normalize.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
-vi.mock("./models-config.providers.policy.js", () => ({
-  normalizeProviderSpecificConfig: (_provider: string, config: object) => config,
-  resolveProviderConfigApiKeyResolver: () => undefined,
+// mock-isolation: normalization consumes hook results without loading the plugin runtime.
+vi.mock("../plugins/provider-runtime.js", () => ({
+  normalizeProviderConfigWithPlugin: () => undefined,
+  resolveProviderConfigApiKeyWithPlugin: () => undefined,
 }));
 
 describe("normalizeProviders", () => {

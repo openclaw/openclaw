@@ -57,7 +57,6 @@ export function consumeLineBreak(text: string, start: number): number | null {
 
 export type StructuralLineBreakOptions = {
   lineBreakOffsets: ReadonlySet<number>;
-  usedLineBreakOffsets?: Set<number>;
 };
 
 export function consumeStructuralLineBreakAfterHorizontalWhitespace(
@@ -72,7 +71,6 @@ export function consumeStructuralLineBreakAfterHorizontalWhitespace(
   }
   for (let offset = start; offset <= right; offset += 1) {
     if (options?.lineBreakOffsets.has(offset)) {
-      options.usedLineBreakOffsets?.add(offset);
       return offset;
     }
   }

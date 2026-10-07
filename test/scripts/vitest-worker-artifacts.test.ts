@@ -15,8 +15,6 @@ import {
 } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "../../scripts/run-vitest.mts";
 import { createVitestProcessCompletion } from "../../scripts/vitest-process-group.mts";
-import { resolveRuntimeWorkerArgv } from "../../src/infra/runtime-worker-url.js";
-import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -751,8 +749,8 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
                 : path.join(root, "src/agents/embedded-agent-runner/run/payloads.ts"),
             );
             const result = await node(
-              [
-                ...resolveRuntimeWorkerArgv(pathToFileURL(probe), resolveTestNodeExecPath()),
+              (workerArgv) => [
+                ...workerArgv(pathToFileURL(probe)),
                 url.href,
                 pathToFileURL(
                   owner

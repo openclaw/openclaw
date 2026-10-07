@@ -64,10 +64,7 @@ struct ChatMarkdownList: Equatable {
 }
 
 struct ChatMarkdownListItem: Equatable {
-    enum Checkbox: Equatable {
-        case checked
-        case unchecked
-    }
+    typealias Checkbox = Markdown.Checkbox
 
     let checkbox: Checkbox?
     let content: [ChatMarkdownListItemContent]
@@ -895,11 +892,6 @@ enum ChatMarkdownBlockSegmenter {
             itemCount += 1
             guard itemCount <= self.maxListItems else { return nil }
 
-            let checkbox: ChatMarkdownListItem.Checkbox? = switch item.checkbox {
-            case .checked?: .checked
-            case .unchecked?: .unchecked
-            case nil: nil
-            }
             var content: [ChatMarkdownListItemContent] = []
             for child in item.children {
                 if let code = child as? Markdown.CodeBlock {
@@ -926,7 +918,7 @@ enum ChatMarkdownBlockSegmenter {
                     content.append(.markdown(markdown))
                 }
             }
-            renderedItems.append(ChatMarkdownListItem(checkbox: checkbox, content: content))
+            renderedItems.append(ChatMarkdownListItem(checkbox: item.checkbox, content: content))
         }
         return ChatMarkdownList(kind: kind, items: renderedItems)
     }

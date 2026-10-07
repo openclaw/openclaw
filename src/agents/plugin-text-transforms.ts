@@ -10,7 +10,6 @@ import type { StreamFn } from "./runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "./stream-compat.js";
 import { createStreamIteratorWrapper } from "./stream-iterator-wrapper.js";
 
-/** Merge multiple plugin text-transform sets. */
 export function mergePluginTextTransforms(
   ...transforms: Array<PluginTextTransforms | undefined>
 ): PluginTextTransforms | undefined {
@@ -25,7 +24,6 @@ export function mergePluginTextTransforms(
   };
 }
 
-/** Apply sequential plugin text replacements to one string. */
 export function applyPluginTextReplacements(
   text: string,
   replacements?: PluginTextReplacement[],
@@ -98,27 +96,6 @@ function transformToolCallArgumentText(
   );
 }
 
-/** Apply input text replacements to a stream context. */
-function transformStreamContextText(
-  context: Parameters<StreamFn>[1],
-  replacements?: PluginTextReplacement[],
-  options?: { systemPrompt?: boolean },
-): Parameters<StreamFn>[1] {
-  if (!replacements || replacements.length === 0) {
-    return context;
-  }
-  return {
-    ...context,
-    systemPrompt:
-      options?.systemPrompt !== false && typeof context.systemPrompt === "string"
-        ? applyPluginTextReplacements(context.systemPrompt, replacements)
-        : context.systemPrompt,
-    messages: Array.isArray(context.messages)
-      ? context.messages.map((message) => transformMessageText(message, replacements))
-      : context.messages,
-  } as Parameters<StreamFn>[1];
-}
-
 function transformAssistantEventText(
   event: unknown,
   replacements?: PluginTextReplacement[],
@@ -183,7 +160,6 @@ function wrapStreamTextTransforms(
   return stream;
 }
 
-/** Wrap a stream function with plugin input/output text transforms. */
 export function wrapStreamFnTextTransforms(params: {
   streamFn: StreamFn;
   input?: PluginTextReplacement[];
@@ -191,9 +167,18 @@ export function wrapStreamFnTextTransforms(params: {
   transformSystemPrompt?: boolean;
 }): StreamFn {
   return (model, context, options) => {
-    const nextContext = transformStreamContextText(context, params.input, {
-      systemPrompt: params.transformSystemPrompt,
-    });
+    const nextContext = params.input?.length
+      ? ({
+          ...context,
+          systemPrompt:
+            params.transformSystemPrompt !== false && typeof context.systemPrompt === "string"
+              ? applyPluginTextReplacements(context.systemPrompt, params.input)
+              : context.systemPrompt,
+          messages: Array.isArray(context.messages)
+            ? context.messages.map((message) => transformMessageText(message, params.input))
+            : context.messages,
+        } as Parameters<StreamFn>[1])
+      : context;
     const maybeStream = params.streamFn(model, nextContext, options);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
       return Promise.resolve(maybeStream).then((stream) =>

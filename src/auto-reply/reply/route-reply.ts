@@ -43,28 +43,6 @@ const BLOCK_REPLY_COMPLETION_RETENTION = {
   maxEntries: 2_000,
 } as const;
 
-function replyDeliverySourceMatchesRoute(params: {
-  source: NonNullable<
-    NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["replyDeliverySource"]
-  >;
-  payloadDelivery: ReplyDeliveryContext;
-  routeDelivery: ReplyDeliveryContext;
-  channel: string;
-  accountId?: string;
-}): boolean {
-  const sourceChannel =
-    normalizeMessageChannel(params.source.channel) ??
-    normalizeOptionalLowercaseString(params.source.channel);
-  const routeChannel =
-    normalizeMessageChannel(params.channel) ?? normalizeOptionalLowercaseString(params.channel);
-  return (
-    sourceChannel === routeChannel &&
-    normalizeAccountId(params.source.accountId) === normalizeAccountId(params.accountId) &&
-    normalizeChatType(params.payloadDelivery.chatType ?? undefined) ===
-      normalizeChatType(params.routeDelivery.chatType ?? undefined)
-  );
-}
-
 type RouteReplyParams = {
   payload: ReplyPayload;
   channel: OriginatingChannelType;
@@ -117,7 +95,6 @@ type RouteReplyResult = {
   queueCustody?: "held" | "released";
   /** True when a hook intentionally suppressed provider delivery. */
   suppressed?: boolean;
-  /** Delivery disposition reason when additional caller context is useful. */
   reason?:
     | "reasoning_payload_not_external"
     | "channel_transform"
@@ -277,16 +254,17 @@ async function routeReplyOperation(
 
   const payloadMetadata = getReplyPayloadMetadata(normalized);
   const payloadReplyDelivery = payloadMetadata?.replyDelivery;
+  const replyDeliverySource = payloadMetadata?.replyDeliverySource;
   const payloadPolicyMatchesRoute =
-    payloadReplyDelivery && params.replyDelivery && payloadMetadata.replyDeliverySource
-      ? replyDeliverySourceMatchesRoute({
-          source: payloadMetadata.replyDeliverySource,
-          payloadDelivery: payloadReplyDelivery,
-          routeDelivery: params.replyDelivery,
-          channel: channelId,
-          accountId,
-        })
-      : false;
+    payloadReplyDelivery &&
+    params.replyDelivery &&
+    replyDeliverySource &&
+    (normalizeMessageChannel(replyDeliverySource.channel) ??
+      normalizeOptionalLowercaseString(replyDeliverySource.channel)) ===
+      (normalizeMessageChannel(channelId) ?? normalizeOptionalLowercaseString(channelId)) &&
+    normalizeAccountId(replyDeliverySource.accountId) === normalizeAccountId(accountId) &&
+    normalizeChatType(payloadReplyDelivery.chatType ?? undefined) ===
+      normalizeChatType(params.replyDelivery.chatType ?? undefined);
   const replyDelivery = payloadPolicyMatchesRoute
     ? payloadReplyDelivery
     : (params.replyDelivery ?? payloadReplyDelivery);

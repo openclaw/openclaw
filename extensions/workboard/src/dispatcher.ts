@@ -35,7 +35,7 @@ const DEFAULT_DISPATCH_MAX_STARTS = 3;
 type WorkboardSubagentRuntime = Pick<PluginRuntime["subagent"], "run">;
 type WorkboardWorktreeRuntime = PluginRuntime["worktrees"];
 
-export type WorkboardDispatchStartOptions = {
+type WorkboardDispatchStartOptions = {
   cardId?: string;
   maxStarts?: number;
   model?: string;
@@ -83,31 +83,6 @@ const pendingWorkboardDispatches = new WeakMap<WorkboardStore, Promise<void>>();
 function cardHasActiveClaim(card: WorkboardCard, now: number): boolean {
   const claim = card.metadata?.claim;
   return Boolean(claim && isFutureDateTimestampMs(claim.expiresAt, { nowMs: now }));
-}
-
-function buildExecution(params: {
-  card: WorkboardCard;
-  sessionKey: string;
-  runId: string;
-  runtime: Awaited<ReturnType<WorkboardSubagentRuntime["run"]>>["runtime"];
-  now: number;
-}): WorkboardExecution {
-  return {
-    id: params.card.execution?.id ?? `${params.card.id}:agent-session`,
-    kind: "agent-session",
-    mode: "autonomous",
-    status: "running",
-    ...(params.runtime
-      ? {
-          engine: params.runtime.harness,
-          model: `${params.runtime.provider}/${params.runtime.model}`,
-        }
-      : {}),
-    sessionKey: params.sessionKey,
-    runId: params.runId,
-    startedAt: params.now,
-    updatedAt: params.now,
-  };
 }
 
 async function materializeWorkspace(params: {
@@ -184,29 +159,6 @@ async function materializeWorkspace(params: {
       ...(sourceBranch ? { sourceBranch } : {}),
     },
   };
-}
-
-function buildWorkerPrompt(params: {
-  card: WorkboardCard;
-  context: string;
-  ownerId: string;
-  token: string;
-}): string {
-  return [
-    `Work on this OpenClaw Workboard card: ${params.card.title}`,
-    "",
-    "## Worker protocol",
-    `Card id: ${params.card.id}`,
-    `Claim ownerId: ${params.ownerId}`,
-    `Claim token: ${params.token}`,
-    "",
-    "Heartbeat with workboard_heartbeat using the card id and token while working.",
-    "When done, call workboard_complete with the card id, token, summary, and proof.",
-    "If you recorded proof separately, pass its returned proofId to workboard_complete.",
-    "If blocked, call workboard_block with the card id, token, and reason.",
-    "",
-    params.context,
-  ].join("\n");
 }
 
 function sortReadyCards(a: WorkboardCard, b: WorkboardCard): number {
@@ -477,12 +429,21 @@ async function runWorkboardDispatch(
       const run = await params.subagent.run({
         sessionKey,
         ...(assertOwnerCurrent ? { assertCurrent: assertOwnerCurrent } : {}),
-        message: buildWorkerPrompt({
-          card: claimed.card,
+        message: [
+          `Work on this OpenClaw Workboard card: ${claimed.card.title}`,
+          "",
+          "## Worker protocol",
+          `Card id: ${claimed.card.id}`,
+          `Claim ownerId: ${ownerId}`,
+          `Claim token: ${claimValue}`,
+          "",
+          "Heartbeat with workboard_heartbeat using the card id and token while working.",
+          "When done, call workboard_complete with the card id, token, summary, and proof.",
+          "If you recorded proof separately, pass its returned proofId to workboard_complete.",
+          "If blocked, call workboard_block with the card id, token, and reason.",
+          "",
           context,
-          ownerId,
-          token: claimValue,
-        }),
+        ].join("\n"),
         toolsAlsoAllow: [...WORKBOARD_REQUIRED_WORKER_TOOLS],
         ...(params.options?.provider ? { provider: params.options.provider } : {}),
         ...(params.options?.model ? { model: params.options.model } : {}),
@@ -494,13 +455,22 @@ async function runWorkboardDispatch(
       });
       runStarted = true;
       const acceptedSessionKey = run.sessionKey?.trim() || sessionKey;
-      const acceptedExecution = buildExecution({
-        card: launched,
+      const acceptedExecution: WorkboardExecution = {
+        id: launched.execution?.id ?? `${launched.id}:agent-session`,
+        kind: "agent-session",
+        mode: "autonomous",
+        status: "running",
+        ...(run.runtime
+          ? {
+              engine: run.runtime.harness,
+              model: `${run.runtime.provider}/${run.runtime.model}`,
+            }
+          : {}),
         sessionKey: acceptedSessionKey,
         runId: run.runId,
-        runtime: run.runtime,
-        now,
-      });
+        startedAt: now,
+        updatedAt: now,
+      };
       const acceptedCard = {
         ...launched,
         sessionKey: acceptedSessionKey,

@@ -19,7 +19,7 @@ import {
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import { createToolLoopBatchAdmission } from "./embedded-agent-runner/run/tool-loop-recovery.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
-import { admitToolCallBatch } from "./tool-loop-admission.js";
+import { admitSingleToolCallLoop, admitToolCallBatch } from "./tool-loop-admission.js";
 import { recordToolCall, recordToolCallOutcome } from "./tool-loop-detection.js";
 
 const ctx = {
@@ -159,6 +159,37 @@ describe("whole-batch tool-loop admission", () => {
     resetAdjustedParamsByToolCallIdForTests();
   });
 
+  it.each([undefined, { enabled: false }])(
+    "admits existing loops without recording when detection is disabled (%j)",
+    async (loopDetection) => {
+      const state = getDiagnosticSessionState(ctx);
+      const args = { action: "poll", sessionId: "process-1" };
+      for (let index = 0; index < 30; index++) {
+        recordToolCallOutcome(state, {
+          toolName: "process",
+          toolParams: args,
+          toolCallId: `prior-${index}`,
+          result: {
+            content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
+            details: { status: "running" },
+          },
+          runId: ctx.runId,
+        });
+      }
+      const candidate = call("next", "process", args);
+      await expect(admitToolCallBatch([candidate], ctx)).resolves.toMatchObject({
+        intervention: { kind: "critical-tool-loop" },
+      });
+      const history = [...(state.toolCallHistory ?? [])];
+      const disabled = { ...ctx, loopDetection };
+      await expect(admitToolCallBatch([candidate], disabled)).resolves.toEqual({});
+      await expect(
+        admitSingleToolCallLoop({ toolName: "process", params: args }, disabled),
+      ).resolves.toBeUndefined();
+      expect(state.toolCallHistory).toEqual(history);
+    },
+  );
+
   it.each([
     ["read", { path: "/tmp/repeated" }, "generic_repeat"],
     ["process", { action: "poll", sessionId: "process-1" }, "known_poll_no_progress"],
@@ -250,10 +281,6 @@ describe("whole-batch tool-loop admission", () => {
 
   it("keeps a terminal exec failure streak across rejected exec calls", async () => {
     const state = getDiagnosticSessionState(ctx);
-    const failure = {
-      content: [{ type: "text" as const, text: "Traceback: missing package" }],
-      details: { status: "completed", exitCode: 1, aggregated: "Traceback: missing package" },
-    };
     for (let index = 0; index < 20; index += 1) {
       const job = call(`job-${index}`, "exec", { command: `python job-${index}.py` });
       const batch = index % 4 === 0 ? [job, rejectedCall(`invalid-${index}`, "exec", {})] : [job];
@@ -266,7 +293,7 @@ describe("whole-batch tool-loop admission", () => {
         toolName: "exec",
         toolParams: job.args,
         toolCallId: job.toolCall.id,
-        result: failure,
+        result: execFailure,
         runId: ctx.runId,
       });
     }
@@ -278,35 +305,35 @@ describe("whole-batch tool-loop admission", () => {
     });
   });
 
-  it("blocks a repeated batch that mixes a valid call with a rejected one", async () => {
-    const { messages, turns, execExecute } = await runComposedLoop("run-mixed", (turn) => [
-      { type: "toolCall", id: `read-${turn}`, name: "read", arguments: { path: "a" } },
-      { type: "toolCall", id: `exec-${turn}`, name: "exec", arguments: {} },
-    ]);
-
-    // In assistant order the pair alternates, so ping-pong detection blocks it.
-    expect(firstLoopBlock(messages)).toMatchObject({ toolCallId: "read-11" });
-    expect(execExecute).not.toHaveBeenCalled();
-    expect(turns).toBeLessThan(composedTurnCap);
-    expectRecoveryStop(messages);
-  });
-
-  it("blocks changing exec failures across rejected calls to another tool", async () => {
-    const { messages, turns, execExecute } = await runComposedLoop("run-exec-tail", (turn) => [
-      {
-        type: "toolCall",
-        id: `exec-${turn}`,
-        name: "exec",
-        arguments: { command: `python job-${turn}.py` },
-      },
-      ...(turn % 4 === 0
-        ? [{ type: "toolCall" as const, id: `read-${turn}`, name: "read", arguments: {} }]
-        : []),
-    ]);
-
-    // Rejected reads never ran, so they must not end the exec failure tail.
-    expect(firstLoopBlock(messages)).toMatchObject({ toolCallId: "exec-21" });
-    expect(execExecute).toHaveBeenCalledTimes(20);
+  it.each([
+    { name: "mixed valid and rejected calls", mixed: true, blockedId: "read-11", executions: 0 },
+    {
+      name: "exec failures across rejected reads",
+      mixed: false,
+      blockedId: "exec-21",
+      executions: 20,
+    },
+  ])("blocks $name through the agent loop", async ({ mixed, blockedId, executions }) => {
+    const { messages, turns, execExecute } = await runComposedLoop("run-composed", (turn) =>
+      mixed
+        ? [
+            { type: "toolCall", id: `read-${turn}`, name: "read", arguments: { path: "a" } },
+            { type: "toolCall", id: `exec-${turn}`, name: "exec", arguments: {} },
+          ]
+        : [
+            {
+              type: "toolCall",
+              id: `exec-${turn}`,
+              name: "exec",
+              arguments: { command: `python job-${turn}.py` },
+            },
+            ...(turn % 4 === 0
+              ? [{ type: "toolCall" as const, id: `read-${turn}`, name: "read", arguments: {} }]
+              : []),
+          ],
+    );
+    expect(firstLoopBlock(messages)).toMatchObject({ toolCallId: blockedId });
+    expect(execExecute).toHaveBeenCalledTimes(executions);
     expect(turns).toBeLessThan(composedTurnCap);
     expectRecoveryStop(messages);
   });
@@ -329,15 +356,12 @@ describe("whole-batch tool-loop admission", () => {
     });
   });
 
-  it("returns a typed critical intervention and records only veto evidence", async () => {
-    const state = getDiagnosticSessionState({
-      sessionKey: ctx.sessionKey,
-      sessionId: ctx.sessionId,
-    });
+  it.each([19, 20])("atomically vetoes a batch with %i prior polls", async (priorCount) => {
+    const state = getDiagnosticSessionState(ctx);
     const pollArgs = { action: "poll", sessionId: "process-1" };
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < priorCount; index++) {
       const toolCallId = `prior-${index}`;
-      recordToolCall(state, "process", pollArgs, toolCallId, ctx.loopDetection, {
+      recordToolCall(state, "process", pollArgs, toolCallId, {
         runId: ctx.runId,
       });
       recordToolCallOutcome(state, {
@@ -348,23 +372,22 @@ describe("whole-batch tool-loop admission", () => {
           content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
           details: { status: "running" },
         },
-        config: ctx.loopDetection,
         runId: ctx.runId,
       });
     }
-
-    const unrelatedSiblings = Array.from({ length: 20 }, (_, index) =>
-      call(`safe-sibling-${index}`, "write", {}),
-    );
+    const crossing = priorCount === 19;
+    const siblings = crossing
+      ? [call("candidate-20", "process", pollArgs)]
+      : Array.from({ length: 20 }, (_, index) => call(`safe-sibling-${index}`, "write", {}));
+    const blockedId = crossing ? "candidate-21" : "repeated";
     const admission = await admitToolCallBatch(
-      [...unrelatedSiblings, call("repeated", "process", pollArgs)],
+      [...siblings, call(blockedId, "process", pollArgs)],
       ctx,
     );
-
     expect(admission).toMatchObject({
       intervention: {
         kind: "critical-tool-loop",
-        toolCallId: "repeated",
+        toolCallId: blockedId,
         toolName: "process",
         detector: "known_poll_no_progress",
         count: 20,
@@ -375,63 +398,25 @@ describe("whole-batch tool-loop admission", () => {
       toolName: "process",
       outcomeKind: "tool-loop-veto",
     });
-    expect(consumeBatchAdmittedToolCall("safe-sibling-0", ctx.runId)).toBe(false);
-    await expect(admitToolCallBatch([call("recovery-write", "write", {})], ctx)).resolves.toEqual(
-      expect.objectContaining({
-        commitReadyCalls: expect.any(Function),
-        releaseSkippedCalls: expect.any(Function),
-      }),
-    );
-  });
-
-  it("blocks a batch that crosses the critical threshold within its own candidates", async () => {
-    const state = getDiagnosticSessionState({
-      sessionKey: ctx.sessionKey,
-      sessionId: ctx.sessionId,
-    });
-    const pollArgs = { action: "poll", sessionId: "process-2" };
-    for (let index = 0; index < 19; index += 1) {
-      const toolCallId = `prior-${index}`;
-      recordToolCall(state, "process", pollArgs, toolCallId, ctx.loopDetection, {
-        runId: ctx.runId,
-      });
-      recordToolCallOutcome(state, {
-        toolName: "process",
-        toolParams: pollArgs,
-        toolCallId,
-        result: {
-          content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
-          details: { status: "running" },
+    expect(consumeBatchAdmittedToolCall(siblings[0]!.toolCall.id, ctx.runId)).toBe(false);
+    if (crossing) {
+      await expect(
+        admitToolCallBatch([call("recovery-repeat", "process", pollArgs)], ctx),
+      ).resolves.toMatchObject({
+        intervention: {
+          kind: "critical-tool-loop",
+          toolCallId: "recovery-repeat",
+          detector: "known_poll_no_progress",
         },
-        config: ctx.loopDetection,
-        runId: ctx.runId,
       });
+    } else {
+      await expect(admitToolCallBatch([call("recovery-write", "write", {})], ctx)).resolves.toEqual(
+        expect.objectContaining({
+          commitReadyCalls: expect.any(Function),
+          releaseSkippedCalls: expect.any(Function),
+        }),
+      );
     }
-
-    const admission = await admitToolCallBatch(
-      [call("candidate-20", "process", pollArgs), call("candidate-21", "process", pollArgs)],
-      ctx,
-    );
-
-    expect(admission).toMatchObject({
-      intervention: {
-        kind: "critical-tool-loop",
-        toolCallId: "candidate-21",
-        detector: "known_poll_no_progress",
-        count: 20,
-      },
-    });
-    expect(state.toolCallHistory).toHaveLength(21);
-    expect(consumeBatchAdmittedToolCall("candidate-20", ctx.runId)).toBe(false);
-    await expect(
-      admitToolCallBatch([call("recovery-repeat", "process", pollArgs)], ctx),
-    ).resolves.toMatchObject({
-      intervention: {
-        kind: "critical-tool-loop",
-        toolCallId: "recovery-repeat",
-        detector: "known_poll_no_progress",
-      },
-    });
   });
 
   it("records an admitted call once and skips only its duplicate single-call loop policy", async () => {

@@ -13,8 +13,10 @@ import {
   getActiveSessionWorkAdmissionCount,
 } from "../../../sessions/session-lifecycle-admission.js";
 import type { AgentWaitResult } from "../../run-wait.js";
+import type { KillPublicationPreparation } from "./subagent-control-kill-scope.js";
 import * as killSession from "./subagent-control-session.js";
 import { killSubagentRunAdmin } from "./subagent-control.js";
+import type { SubagentAdminKillResult } from "./subagent-control.types.js";
 import * as completionState from "./subagent-registry-completion.js";
 import * as registryHelpers from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -29,6 +31,40 @@ import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 const fixture = useSubagentControlFixture();
 const rootKey = "agent:main:subagent:publication-root";
 const childKey = "agent:main:subagent:publication-drain";
+
+it("does not refresh session metadata when an owned abort marker is already persisted", async () => {
+  const sessionId = "idempotent-abort-session";
+  const storePath = await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: rootKey,
+    defaultSessionId: sessionId,
+    abortedLastRun: true,
+    updatedAt: 17,
+  });
+  const read = () => loadExactSessionEntryReadOnly({ storePath, sessionKey: rootKey })?.entry;
+  const before = read();
+  expect(before?.abortedLastRun).toBe(true);
+  const marker = {
+    childSessionKey: rootKey,
+    storePath,
+    hasSessionEntry: true,
+    expectedSessionId: sessionId,
+    expectedLifecycleRevision: before?.lifecycleRevision,
+    abortedLastRun: true,
+  };
+  expect(await killSession.persistSubagentAbortedLastRun(marker)).toBe(true);
+  expect(read()).toEqual(before);
+
+  const assertCommitAllowed = vi.fn(() => {
+    throw new Error("Abort-marker authority was revoked");
+  });
+  expect(await killSession.persistSubagentAbortedLastRun({ ...marker, assertCommitAllowed })).toBe(
+    false,
+  );
+  expect(assertCommitAllowed).toHaveBeenCalled();
+  expect(read()).toEqual(before);
+});
 
 it.each(["replacement", "retirement"] as const)(
   "revalidates the session after held publication preparation permits %s",
@@ -50,11 +86,18 @@ it.each(["replacement", "retirement"] as const)(
       cleanup: "keep",
     });
     const onResult = vi.fn();
-    const preparePublication = vi.fn(async (publish: () => void) => {
-      if (transition === "replacement") {
-        await writeSubagentSessionEntry({ ...target, sessionId: "successor-session" });
-      } else {
-        await removeSubagentSessionEntry(target);
+    let transitioned = false;
+    const publishSnapshot = vi.fn();
+    const preparePublication = vi.fn<
+      KillPublicationPreparation<SubagentAdminKillResult>["prepare"]
+    >(async (publish) => {
+      if (!transitioned) {
+        transitioned = true;
+        if (transition === "replacement") {
+          await writeSubagentSessionEntry({ ...target, sessionId: "successor-session" });
+        } else {
+          await removeSubagentSessionEntry(target);
+        }
       }
       return publish();
     });
@@ -68,10 +111,10 @@ it.each(["replacement", "retirement"] as const)(
       },
       {
         assertCurrent: () => {},
-        preparePublication,
+        preparePublication: { prepare: preparePublication, publishSnapshot },
       },
     );
-    expect(preparePublication).toHaveBeenCalledOnce();
+    expect(publishSnapshot).toHaveBeenCalledExactlyOnceWith(result);
     expect(onResult).toHaveBeenCalledExactlyOnceWith(result);
     expect(result).toMatchObject({
       found: true,
@@ -124,6 +167,7 @@ it.each([
 
     const successorCompleted = createDeferred();
     const originalCompleted = createDeferred();
+    const originalTimingCompleted = createDeferred();
     const originalSettled = createDeferred();
     const stopObserving = subscribeSubagentRunChanges("persistence", () => {
       const original = subagentRuns.get(b0.runId);
@@ -159,7 +203,15 @@ it.each([
           firstChildCleanup.resolve();
           await releaseFirstChildCleanup.promise;
         }
+        const completingOriginal =
+          entry.runId === b0.runId &&
+          entry.generation === b0.generation &&
+          entry.execution.status === "terminal" &&
+          entry.execution.outcome?.status === "ok";
         await persistTiming(entry, options);
+        if (completingOriginal) {
+          originalTimingCompleted.resolve();
+        }
       },
     );
     if (!completeDuringDrain && !provisional) {
@@ -316,6 +368,8 @@ it.each([
           terminalReply: { disposition: "visible", text: "original completed during cancellation" },
         });
         await originalCompleted.promise;
+        // Completion timing clears the abort marker after its registry outcome is durable.
+        await originalTimingCompleted.promise;
         expect(subagentRuns.get(b0.runId)?.killReconciliation).toBeUndefined();
         childAdmission.release();
         if (replace) {

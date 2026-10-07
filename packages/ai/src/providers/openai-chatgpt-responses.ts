@@ -248,11 +248,7 @@ function compressRequestBodyZstd(bodyJson: string): Uint8Array<ArrayBuffer> | nu
 export const streamOpenAICodexResponses: StreamFunction<
   "openai-chatgpt-responses",
   OpenAICodexResponsesOptions
-> = (
-  model: Model<"openai-chatgpt-responses">,
-  context: Context,
-  options?: OpenAICodexResponsesOptions,
-) => {
+> = (model, context, options) => {
   const stream = new AssistantMessageEventStream();
 
   void (async () => {
@@ -671,7 +667,7 @@ export const streamOpenAICodexResponses: StreamFunction<
 export const streamSimpleOpenAICodexResponses: StreamFunction<
   "openai-chatgpt-responses",
   SimpleStreamOptions
-> = (model: Model<"openai-chatgpt-responses">, context: Context, options?: SimpleStreamOptions) => {
+> = (model, context, options) => {
   const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const resolvedOptions = {
@@ -992,14 +988,26 @@ async function acquireWebSocket(
   release: (options?: { keep?: boolean }) => void;
 }> {
   const { url, headers } = authority;
-  if (!sessionId) {
-    const socket = await connectWebSocket(url, headers, signal);
-    return {
-      socket,
-      release: () => {
+  const lease = (socket: WebSocketLike, entry?: CachedWebSocketConnection) => ({
+    socket,
+    entry,
+    release: ({ keep }: { keep?: boolean } = {}) => {
+      if (!sessionId || !entry || !keep || !isWebSocketReusable(socket)) {
         closeWebSocketSilently(socket);
-      },
-    };
+        if (entry?.idleTimer) {
+          clearTimeout(entry.idleTimer);
+        }
+        if (sessionId && entry) {
+          deleteOwnedWebSocketSession(state, sessionId, entry);
+        }
+        return;
+      }
+      entry.busy = false;
+      scheduleSessionWebSocketExpiry(state, sessionId, entry);
+    },
+  });
+  if (!sessionId) {
+    return lease(await connectWebSocket(url, headers, signal));
   }
 
   const cached = state.sessionCache.get(sessionId);
@@ -1020,29 +1028,12 @@ async function acquireWebSocket(
       expectedCacheValue = undefined;
     } else if (!cached.busy && isWebSocketReusable(cached.socket)) {
       cached.busy = true;
-      return {
-        socket: cached.socket,
-        entry: cached,
-        release: ({ keep } = {}) => {
-          if (!keep || !isWebSocketReusable(cached.socket)) {
-            closeWebSocketSilently(cached.socket);
-            deleteOwnedWebSocketSession(state, sessionId, cached);
-            return;
-          }
-          cached.busy = false;
-          scheduleSessionWebSocketExpiry(state, sessionId, cached);
-        },
-      };
+      return lease(cached.socket, cached);
     }
     if (cached.busy) {
-      const socket = await connectWebSocket(url, headers, signal);
-      return {
-        socket,
-        release: () => {
-          closeWebSocketSilently(socket);
-        },
-      };
+      return lease(await connectWebSocket(url, headers, signal));
     }
+
     if (!isWebSocketReusable(cached.socket)) {
       closeWebSocketSilently(cached.socket);
       deleteOwnedWebSocketSession(state, sessionId, cached);
@@ -1059,22 +1050,7 @@ async function acquireWebSocket(
   };
   // A concurrent winner keeps the cache; this socket then remains transient.
   const ownsCache = setOwnedWebSocketSession(state, sessionId, entry, expectedCacheValue);
-  return {
-    socket,
-    entry: ownsCache ? entry : undefined,
-    release: ({ keep } = {}) => {
-      if (!ownsCache || !keep || !isWebSocketReusable(entry.socket)) {
-        closeWebSocketSilently(entry.socket);
-        if (entry.idleTimer) {
-          clearTimeout(entry.idleTimer);
-        }
-        deleteOwnedWebSocketSession(state, sessionId, entry);
-        return;
-      }
-      entry.busy = false;
-      scheduleSessionWebSocketExpiry(state, sessionId, entry);
-    },
-  };
+  return lease(socket, ownsCache ? entry : undefined);
 }
 
 function extractWebSocketError(event: unknown): Error {

@@ -1,4 +1,3 @@
-// Resolves directive interpretation and prompt projection at the text-command boundary.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";

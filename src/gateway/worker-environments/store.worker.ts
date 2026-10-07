@@ -21,7 +21,6 @@ import type {
 } from "./store.types.js";
 import { pruneObservedTerminalWorkerEnvironments } from "./terminal-environment-retention.js";
 
-const admitted = () => {};
 type Method = keyof WorkerEnvironmentMutationMethods | "initialize";
 type Input<Name extends Method> = {
   nowMs?: number;
@@ -42,14 +41,11 @@ function mutation<Name extends Method, Result>(
   return (input: Input<Name>, { open }: WorkerOperationContext) => {
     const database = open();
     return runOpenClawStateWriteTransaction(
-      ({ db }) => {
+      (transactionDatabase) => {
+        const { db } = transactionDatabase;
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const now = () => input.nowMs ?? Date.now();
-        const store = createWorkerEnvironmentStoreKernel({
-          database,
-          now,
-          write: (operation) => operation(db),
-        });
+        const store = createWorkerEnvironmentStoreKernel(transactionDatabase, now);
         const changesBefore = readTotalChanges(db);
         const touched = new Set<string>();
         const result = execute(input, { db, store, now, touch: (id) => touched.add(id.trim()) });
@@ -118,17 +114,12 @@ export const workerEnvironmentOperations = {
     "refreshBootstrapReceipt",
     ({ input }, { store, touch }) => {
       touch(input.environmentId);
-      return store.refreshBootstrapReceipt({ ...input, assertCurrent: admitted });
+      return store.refreshBootstrapReceipt(input);
     },
   ),
   "workerEnvironments.transition": mutation("transition", ({ input }, { store, touch }) => {
     touch(input.environmentId);
-    return store.transition({
-      ...input,
-      placementBinding: input.placementBinding
-        ? { ...input.placementBinding, assertCurrent: admitted }
-        : undefined,
-    });
+    return store.transition(input);
   }),
   "workerEnvironments.renewCredential": mutation(
     "renewCredential",
@@ -151,7 +142,7 @@ export const workerEnvironmentOperations = {
   "workerEnvironments.ensurePreparedIntent": mutation(
     "ensurePreparedIntent",
     ({ input }, { store, touch }) => {
-      const value = store.ensurePreparedIntent({ ...input, assertCurrent: admitted });
+      const value = store.ensurePreparedIntent(input);
       touch(input.intent.environmentId);
       if (value) {
         touch(value.environmentId);
@@ -163,7 +154,7 @@ export const workerEnvironmentOperations = {
     "requestPreparedDestroy",
     ({ input }, { store, touch }) => {
       touch(input.environmentId);
-      return store.requestPreparedDestroy({ ...input, assertCurrent: admitted });
+      return store.requestPreparedDestroy(input);
     },
   ),
   "workerEnvironments.createSessionAttachmentIntent": mutation(
@@ -174,13 +165,13 @@ export const workerEnvironmentOperations = {
         touch(previous.environmentId);
       }
       touch(input.environmentId);
-      return store.createSessionAttachmentIntent(input, admitted);
+      return store.createSessionAttachmentIntent(input);
     },
   ),
   "workerEnvironments.closeSessionAttachment": mutation(
     "closeSessionAttachment",
     ({ input }, { store, touch }) => {
-      const value = store.closeSessionAttachment(input, admitted);
+      const value = store.closeSessionAttachment(input);
       if (value) {
         touch(value.environmentId);
       }
@@ -198,7 +189,7 @@ export const workerEnvironmentOperations = {
     "touchSessionAttachment",
     ({ input }, { store, touch }) => {
       touch(input.environmentId);
-      return store.touchSessionAttachment(input, admitted);
+      return store.touchSessionAttachment(input);
     },
   ),
   "workerEnvironments.pruneTerminalEnvironments": mutation(
@@ -207,10 +198,7 @@ export const workerEnvironmentOperations = {
       for (const row of approved) {
         touch(row.environment_id);
       }
-      return pruneObservedTerminalWorkerEnvironments({
-        observed: approved,
-        write: (operation) => operation(db),
-      });
+      return pruneObservedTerminalWorkerEnvironments(db, approved);
     },
   ),
 } satisfies WorkerOperationHandlers;

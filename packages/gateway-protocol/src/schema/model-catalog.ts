@@ -76,6 +76,15 @@ const ModelRuntimeProperties = {
   serviceTiers: Type.Optional(Type.Array(NonEmptyString)),
   /** Local selected-request applicability, not preference or upstream fulfillment. */
   supportsFastMode: Type.Optional(Type.Boolean()),
+  /** Selected route can safely retry rejected service tiers before output. */
+  supportsServiceTierRecovery: Type.Optional(Type.Boolean()),
+  /** Recent fulfillment of a requested tier; never a capability restriction. */
+  serviceTierObservation: Type.Optional(
+    closedObject({
+      requestedTier: NonEmptyString,
+      responseTier: Type.Optional(NonEmptyString),
+    }),
+  ),
   supportsTools: Type.Optional(Type.Boolean()),
   input: Type.Optional(
     Type.Array(
@@ -124,6 +133,8 @@ export const ModelCatalogProviderOutcomeSchema = closedObject({
 
 export const ModelsListResultSchema = closedObject({
   models: Type.Array(ModelChoiceSchema),
+  /** Matches the authorized session row's saved model-selection inputs. */
+  sessionModelRevision: Type.Optional(NonEmptyString),
   /** The Gateway owns role restrictions and the effective permitted reset target. */
   modelSelectionPolicy: Type.Optional(
     closedObject({

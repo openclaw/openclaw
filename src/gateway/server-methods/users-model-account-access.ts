@@ -5,14 +5,16 @@ import {
   prepareUserProfileSelectionAuthority,
 } from "../../state/user-channel-identity-operations.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
-import { isUserModelAuthProfileOwner } from "../../state/user-model-accounts.js";
+import { prepareUserModelAccountAuthority } from "../../state/user-model-account-operations.js";
 import { ensureProfileIdForEmail } from "../../state/user-profile-email.js";
 import { UserProfileNotFoundError } from "../../state/user-profiles-schema.js";
 import type {
   ModelAccountConnectAction,
+  ModelAccountConnectWorkerAction,
+  ModelAccountRole,
   UserModelAccountSelection,
 } from "../model-account-authority.js";
-import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { resolveOperatorRolePolicyForProfile } from "../operator-role-policy.js";
 import { SESSION_READ_SCOPE, SESSION_WRITE_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
@@ -30,7 +32,7 @@ export async function prepareUserModelAccountAction(
     | PersonalModelSelectionScope
     | "operator.admin"
     | typeof SESSION_WRITE_SCOPE = WRITE_SCOPE,
-): Promise<ModelAccountConnectAction> {
+): Promise<ModelAccountConnectWorkerAction> {
   const { client, context } = options;
   const profileReference = client?.authenticatedUserProfile?.profileId;
   const userReference = client?.authenticatedUserId;
@@ -91,13 +93,17 @@ export async function prepareUserModelAccountAction(
     throw new UserProfileNotFoundError(ownerReference);
   }
   const owner = ownerIdentity.profileId;
-  const assertCurrent = () => {
+  const assertCurrent = (roles?: readonly ModelAccountRole[]) => {
     assertConnectionCurrent();
     if (!actorIdentity.isCurrent() || !ownerIdentity.isCurrent()) {
       throw new ModelAccountConnectAuthorityError();
     }
     const scope = actor === owner ? requiredScope : "operator.admin";
-    const role = resolveOperatorRolePolicyForProfile(actor, context.getRuntimeConfig());
+    const assignment = roles?.find((entry) => entry.profileId === actor);
+    if (roles && !assignment) {
+      throw new ModelAccountConnectAuthorityError();
+    }
+    const role = resolveOperatorRolePolicyForProfile(actor, context.getRuntimeConfig(), assignment);
     const grants = [client?.connect.scopes ?? [], ...(role ? [role.scopes] : [])];
     if (
       !grants.every((allowedScopes) =>
@@ -108,7 +114,7 @@ export async function prepareUserModelAccountAction(
     }
   };
   assertCurrent();
-  return { owner, assertCurrent };
+  return { owner, actorProfileId: actor, assertCurrent };
 }
 
 /** Preview and commit share the same self-owned selection; scope follows the requested action. */
@@ -118,9 +124,13 @@ export async function preparePersonalModelAccountSelection(
   requiredScope: PersonalModelSelectionScope = "operator.write",
 ): Promise<UserModelAccountSelection> {
   const action = await prepareUserModelAccountAction(options, undefined, requiredScope);
+  const account = await prepareUserModelAccountAuthority({
+    profileId: action.owner,
+    authProfileId,
+  });
   const assertCurrent = () => {
     action.assertCurrent();
-    if (!isUserModelAuthProfileOwner({ profileId: action.owner, authProfileId })) {
+    if (!account?.isCurrent()) {
       throw new ModelAccountConnectAuthorityError();
     }
   };

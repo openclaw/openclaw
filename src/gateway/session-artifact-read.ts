@@ -39,7 +39,10 @@ import {
   resolveMessageRunId,
   toArtifactSummary,
 } from "./server-methods/artifacts-content.js";
-import type { createSessionTranscriptReader } from "./session-transcript-read-kernel.js";
+import type {
+  SessionTranscriptPageReader,
+  SessionTranscriptVisitor,
+} from "./session-transcript-read.types.js";
 import {
   parseTranscriptImageArtifactId,
   projectTranscriptImageArtifacts,
@@ -51,10 +54,8 @@ const IMAGE_PAGE_BYTES = 1024 * 1024;
 const IMAGE_INLINE_PREVIEW_MAX_BYTES = 256 * 1024;
 
 type SessionArtifactFilters = Pick<ArtifactsListParams, "runId" | "messageRole">;
-type ArtifactReaders = Pick<
-  ReturnType<typeof createSessionTranscriptReader>,
-  "visitSessionMessagesAsync" | "readSessionMessagesPageWithStatsAsync"
->;
+type ArtifactReaders = SessionTranscriptVisitor &
+  Pick<SessionTranscriptPageReader, "readSessionMessagesPageWithStatsAsync">;
 
 export type SessionArtifactReadQuery = SessionArtifactFilters &
   (
@@ -202,9 +203,8 @@ function collectArtifactsFromMessage(
       }
     }
   }
-  for (let contentIndex = 0; contentIndex < content.length; contentIndex += 1) {
-    const block = asOptionalRecord(content[contentIndex]);
-    if (!block || !isArtifactBlock(block)) {
+  for (const [contentIndex, block] of content.entries()) {
+    if (!isArtifactBlock(block)) {
       continue;
     }
     // Fallback titles participate in existing artifact IDs. Count omitted roles

@@ -16,7 +16,7 @@ import { handleChatSend } from "./chat-send-handler.js";
 import { withSessionMutationCommitGuard } from "./session-mutation-guards.js";
 import {
   authorizeSessionSuggestionMutation,
-  respondSessionSuggestionSessionChanged,
+  sessionSuggestionSessionChangedError,
   type createSessionSuggestionMutation,
 } from "./sessions-suggestions-access.js";
 import type {
@@ -149,8 +149,7 @@ export async function dispatchSuggestion(params: {
       return { ok: false, error: error.error };
     }
     if (isSessionWorkStartInvalidatedError(error)) {
-      respondSessionSuggestionSessionChanged(captureResponse, params.target.canonicalKey);
-      return { ok: false, error: response?.[2] };
+      return { ok: false, error: sessionSuggestionSessionChangedError(params.target.canonicalKey) };
     }
     return {
       ok: false,

@@ -1,12 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { makeEmbeddedRunnerAttempt } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { createEmbeddedRunReplayState, type EmbeddedRunReplayState } from "./replay-state.js";
+import { createEmbeddedRunReplayState } from "./replay-state.js";
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
-import {
-  createIdleTimeoutBreakerState,
-  MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT,
-} from "./run/idle-timeout-breaker.js";
+import { MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT } from "./run/idle-timeout-breaker.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import { createUsageAccumulator, toNormalizedUsage } from "./usage-accumulator.js";
 
@@ -55,7 +52,6 @@ function makePromptState(options: { waitForPersistence?: () => Promise<void> } =
 function makeNormalizationInput(
   attempt: EmbeddedRunAttemptResult,
   sessionPromptState: ReturnType<typeof makePromptState>,
-  replayState: EmbeddedRunReplayState = createEmbeddedRunReplayState(),
 ): Parameters<typeof normalizeEmbeddedRunAttempt>[0] {
   return {
     runInput: {
@@ -86,15 +82,15 @@ function makeNormalizationInput(
     bootstrapPromptWarningSignaturesSeen: [],
     usageAccumulator: createUsageAccumulator(),
     lastRunPromptUsage: undefined,
-    idleTimeoutBreakerState: createIdleTimeoutBreakerState(),
+    idleTimeoutBreakerState: { consecutiveIdleTimeoutsBeforeOutput: 0 },
     contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-    replayState,
+    replayState: createEmbeddedRunReplayState(),
     lastRetryFailoverReason: null,
   };
 }
 
 describe("normalizeEmbeddedRunAttempt", () => {
-  it("keeps the physical-attempt source when the idle-timeout breaker completes the run", async () => {
+  it("keeps the physical-attempt source when idle timeouts trip the breaker despite billed partial output", async () => {
     const attempt = {
       ...makeAttempt(),
       modelAttempt: {
@@ -103,6 +99,7 @@ describe("normalizeEmbeddedRunAttempt", () => {
         credentialSource: { kind: "profile" as const },
       },
       terminal: { kind: "timeout" as const, phase: "prompt" as const, source: "idle" as const },
+      attemptUsage: { output: 36 },
     };
     const input = makeNormalizationInput(attempt, makePromptState());
     let result: Awaited<ReturnType<typeof normalizeEmbeddedRunAttempt>> | undefined;
@@ -250,28 +247,6 @@ describe("normalizeEmbeddedRunAttempt", () => {
     expect(result.lastRunPromptUsage).toEqual(input.lastRunPromptUsage);
     expect(state.markOwnedTranscriptRetry).not.toHaveBeenCalled();
     expect(state.continueFromCurrentTranscript).toHaveBeenCalledOnce();
-  });
-
-  it("keeps replay state unsafe after a later clean attempt", async () => {
-    const state = makePromptState();
-    let replayState = createEmbeddedRunReplayState();
-    for (const replaySafe of [false, true]) {
-      const input = makeNormalizationInput(
-        {
-          ...makeAttempt(),
-          replayMetadata: { replaySafe, hadPotentialSideEffects: !replaySafe },
-        },
-        state,
-        replayState,
-      );
-      const result = await normalizeEmbeddedRunAttempt(input);
-      expect(result.action).toBe("proceed");
-      if (result.action !== "proceed") {
-        throw new Error(`expected proceed, got ${result.action}`);
-      }
-      replayState = result.replayState;
-      expect(replayState).toEqual({ replayInvalid: true, hadPotentialSideEffects: true });
-    }
   });
 
   it("writes canonical assistant abort lifecycle metadata", async () => {

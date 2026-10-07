@@ -263,10 +263,7 @@ export async function settlePendingFinalDelivery(
       if (settled === current && !owedNotice && !clearsNotice && !terminalEvidence) {
         return null;
       }
-      wakeRecovery =
-        settled !== "queued" &&
-        internalEntry.status === "running" &&
-        internalEntry.abortedLastRun === true;
+      wakeRecovery = settled !== "queued" && internalEntry.abortedLastRun === true;
       return {
         ...(internalEntry.mainRestartRecovery
           ? {
@@ -284,7 +281,12 @@ export async function settlePendingFinalDelivery(
         ...(terminalEvidence ? { restartRecoveryTerminalDeliveryEvidence: terminalEvidence } : {}),
       };
     },
-    { skipMaintenance: true, takeCacheOwnership: true, preserveActivity: options.preserveActivity },
+    {
+      skipMaintenance: true,
+      takeCacheOwnership: true,
+      preserveActivity: options.preserveActivity,
+      workerGuard: {},
+    },
   );
   if (wakeRecovery) {
     const { scheduleMainSessionRecoveryPendingTarget } =
@@ -360,27 +362,6 @@ export async function completeDurableDelivery(
       );
 }
 
-/** Finalizes a policy-suppressed send before its durable intent is acknowledged. */
-async function suppressDurableDelivery(
-  completion: DurableDeliveryCompletion,
-  stateDir?: string,
-  stateContext?: DeliveryQueueStateContext,
-  target?: ConversationDeliveryTarget,
-): Promise<DurableDeliveryCompletionResult> {
-  return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "suppressed", undefined, {
-        stateDir,
-        stateContext,
-      })
-    : conversationResult(
-        completion,
-        (scope) => markConversationDeliverySuppressed(scope, completion.operationId),
-        stateDir,
-        stateContext,
-        target,
-      );
-}
-
 /** Finalizes a permanent provider rejection that provably preceded platform I/O. */
 export async function rejectDurableDelivery(
   completion: DurableDeliveryCompletion,
@@ -435,9 +416,23 @@ export async function settleDurableDelivery(
   stateContext?: DeliveryQueueStateContext,
   target?: ConversationDeliveryTarget,
 ): Promise<DurableDeliveryCompletionResult> {
-  return "result" in evidence
-    ? completeDurableDelivery(completion, evidence.result, stateDir, stateContext, target)
-    : evidence.platformSendStarted
-      ? failDurableDelivery(completion, stateDir, stateContext, target)
-      : suppressDurableDelivery(completion, stateDir, stateContext, target);
+  if ("result" in evidence) {
+    return completeDurableDelivery(completion, evidence.result, stateDir, stateContext, target);
+  }
+  if (evidence.platformSendStarted) {
+    return failDurableDelivery(completion, stateDir, stateContext, target);
+  }
+  // Finalize policy suppression before the durable intent is acknowledged.
+  return completion.kind === "pending-final"
+    ? await settlePendingFinalDelivery(completion, "suppressed", undefined, {
+        stateDir,
+        stateContext,
+      })
+    : conversationResult(
+        completion,
+        (scope) => markConversationDeliverySuppressed(scope, completion.operationId),
+        stateDir,
+        stateContext,
+        target,
+      );
 }

@@ -2,12 +2,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
-import type { OpenClawPluginService } from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import acpxPlugin from "../../../../extensions/acpx/index.js";
@@ -157,7 +160,7 @@ describe("native child cancellation authority", () => {
           }),
         );
         await server.startupSettled;
-        const acpxServices: OpenClawPluginService[] = [];
+        const acpxServices: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
         const acpxRuntime = createPluginRuntimeMock({
           state: {
             openKeyedStore: (options) => createPluginStateKeyedStoreForTests("acpx", options),
@@ -184,7 +187,9 @@ describe("native child cancellation authority", () => {
         if (!acpxService) {
           throw new Error("ACPX plugin did not register its runtime service");
         }
+        const scheduler = createTestPluginServiceScheduler();
         const acpxServiceContext = {
+          scheduler,
           config,
           workspaceDir: root,
           stateDir,
@@ -490,8 +495,13 @@ describe("native child cancellation authority", () => {
             interruptsAfterSuccessor.filter((entry) => entry.turnId === successorTurnStart?.turnId),
           ).toHaveLength(0);
         } finally {
-          await acpxService.stop?.(acpxServiceContext);
-          await server.close();
+          scheduler.beginClose();
+          try {
+            await acpxService.stop?.(acpxServiceContext);
+          } finally {
+            await scheduler.stop();
+            await server.close();
+          }
         }
       },
     );

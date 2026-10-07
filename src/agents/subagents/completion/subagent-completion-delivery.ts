@@ -9,7 +9,10 @@ import {
   type SessionDeliverySettledOutcome,
 } from "../../../infra/session-delivery-queue.records.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import type { RuntimeContextFragment } from "../../internal-runtime-context.js";
+import {
+  RUNTIME_EVENT_USER_PROMPT,
+  type RuntimeContextFragment,
+} from "../../internal-runtime-context.js";
 import {
   ensureDeliveryState,
   loadPendingFinalDeliveryPayload,
@@ -123,7 +126,7 @@ export function resolveCorrelatedSubagentDelivery(
   const result = resolveSubagentCompletionResultText(entry) ?? "(no output)";
   return {
     ...queued,
-    message: `${CANONICAL_RESULT_PROMPT}\n\n${result}`,
+    message: RUNTIME_EVENT_USER_PROMPT,
     runtimeContextFragments: [
       { kind: "runtime-instruction", text: CANONICAL_RESULT_PROMPT },
       { kind: "conversation-data", text: result },

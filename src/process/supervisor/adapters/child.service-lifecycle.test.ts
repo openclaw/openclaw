@@ -125,6 +125,27 @@ describeSpawnTransports("POSIX child invocation identity", () => {
 });
 
 describeSpawnTransports("service-managed child lifecycle", () => {
+  it("rejects NUL input before creating a relay and leaves shutdown clean", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const supervisor = createProcessSupervisor();
+    const relay = vi.spyOn(relayIntegration, "spawnServiceChildRelay");
+    try {
+      await expect(
+        supervisor.spawn({ mode: "child", argv: ["/bin/sh", "-c", "printf bad\0command"] }),
+      ).rejects.toThrow(/NUL bytes|null bytes/);
+      await expect(
+        supervisor.spawn({ mode: "anchored-shell", command: "printf bad\0command" }),
+      ).rejects.toThrow(/NUL bytes|null bytes/);
+      expect(relay.mock.calls.length).toBe(0);
+      const run = await supervisor.spawn({ mode: "anchored-shell", command: "printf ready" });
+      await expect(run.wait()).resolves.toMatchObject({ exitCode: 0, stdout: "ready" });
+      await run.waitForExtinction?.();
+    } finally {
+      relay.mockRestore();
+      await supervisor.shutdown();
+    }
+  });
+
   it.each([
     { reason: "manual-cancel" as const, timeoutMs: undefined, noOutputTimeoutMs: undefined },
     { reason: "overall-timeout" as const, timeoutMs: 100, noOutputTimeoutMs: undefined },

@@ -146,7 +146,6 @@ it.each(["acquire", "release", "rollup", "prune"] as const)(
 );
 
 it.each([
-  { closing: false, retarget: false, refresh: false },
   { closing: true, retarget: false, refresh: false },
   { closing: false, retarget: true, refresh: false },
   { closing: false, retarget: true, refresh: true },

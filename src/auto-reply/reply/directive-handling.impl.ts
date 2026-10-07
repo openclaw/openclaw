@@ -43,11 +43,11 @@ import {
   canPersistSessionDirectiveDefaults,
   DIRECTIVE_ACK_MESSAGES,
   type IgnoredSessionDirectiveFlag,
+  formatElevatedEvent,
   formatElevatedUnavailableText,
   formatModelSelectionScopeAck,
-  enqueueModeSwitchEvents,
+  formatReasoningEvent,
   persistSessionDirectiveSnapshot,
-  rejectSessionDirectiveTransaction,
   resolveDirectiveTouchedSessionFields,
   withOptions,
 } from "./directive-handling.shared.js";
@@ -77,7 +77,6 @@ export async function handleDirectiveOnly(
     aliasIndex,
     allowedModelKeys,
     allowedModelCatalog,
-    resetModelOverride,
     provider,
     model,
     formatModelSwitchEvent,
@@ -88,9 +87,12 @@ export async function handleDirectiveOnly(
     currentElevatedLevel,
   } = params;
   const allowPrivilegedPersistence = canPersistSessionDirectiveDefaults(params);
-  const rejectModelTransaction = (errorText: string) => {
+  const rejectModelTransaction = (errorText: string): ReplyPayload => {
     params.onRejection?.();
-    return rejectSessionDirectiveTransaction(params.persistenceState, errorText);
+    if (params.persistenceState) {
+      params.persistenceState.outcome = { kind: "rejected", errorText };
+    }
+    return { text: errorText, isError: true };
   };
   const acknowledgeIgnoredDirective = (
     reply: ReplyPayload,
@@ -120,31 +122,18 @@ export async function handleDirectiveOnly(
       ? allowedModelCatalog
       : undefined;
   const modelInfo = await maybeHandleModelDirectiveInfo({
-    directives,
-    cfg: params.cfg,
+    ...params,
     agentDir,
     activeAgentId,
-    provider,
-    model,
-    defaultProvider,
-    defaultModel,
-    aliasIndex,
-    allowedModelCatalog,
     currentThinkLevel: currentThinkLevel ?? "off",
     thinkingCatalog,
     runtimePolicySessionKey,
-    sessionKey,
-    storePath,
-    resetModelOverride,
-    workspaceDir: params.workspaceDir,
-    surface: params.surface,
-    sessionEntry,
   });
   if (modelInfo) {
     return acknowledgeIgnoredDirective(modelInfo, "hasModelDirective");
   }
 
-  const modelResolution = resolveModelSelectionFromDirective({
+  const modelResolution = await resolveModelSelectionFromDirective({
     directives,
     cfg: params.cfg,
     agentDir,
@@ -574,13 +563,19 @@ export async function handleDirectiveOnly(
     }
   }
   if (!params.persistenceState) {
-    enqueueModeSwitchEvents({
-      enqueueSystemEvent,
-      sessionEntry,
-      sessionKey: resolveSystemEventQueueKey(sessionKey, activeAgentId),
-      elevatedChanged,
-      reasoningChanged,
-    });
+    const eventSessionKey = resolveSystemEventQueueKey(sessionKey, activeAgentId);
+    if (elevatedChanged) {
+      enqueueSystemEvent(formatElevatedEvent(sessionEntry.elevatedLevel), {
+        sessionKey: eventSessionKey,
+        contextKey: "mode:elevated",
+      });
+    }
+    if (reasoningChanged) {
+      enqueueSystemEvent(formatReasoningEvent(sessionEntry.reasoningLevel), {
+        sessionKey: eventSessionKey,
+        contextKey: "mode:reasoning",
+      });
+    }
   }
   if (params.persistenceState) {
     params.persistenceState.outcome = {

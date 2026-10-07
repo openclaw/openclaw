@@ -1,3 +1,5 @@
+import type { LitElement } from "lit";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type {
   AgentsListResult,
@@ -5,6 +7,7 @@ import type {
   GatewaySessionRow,
   SessionsListResult,
 } from "../api/types.ts";
+import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -157,9 +160,16 @@ suite.define(() => {
         expect(await sidebar.locator('[data-session-key="agent:forge:notes"]').count()).toBe(0);
         await captureSidebarUiProof(suite, page, "sidebar-roster-before.png");
         await chip.click();
-        const modeToggle = sidebar.locator('wa-dropdown-item[value="command:sidebar-agents"]');
-        await expect.poll(() => modeToggle.textContent()).toContain("Show all agents");
-        await modeToggle.click();
+        const allAgentsTile = sidebar.locator('.sidebar-agent-menu [value="scope:all"]');
+        await expect.poll(() => allAgentsTile.isVisible()).toBe(true);
+        expect(await allAgentsTile.getAttribute("aria-current")).toBeNull();
+        const activeAgentTile = sidebar.locator(".sidebar-agent-menu__agent-switch--active");
+        const expectFocused = (locator: Locator) =>
+          expect.poll(() => locator.evaluate((el) => el === document.activeElement)).toBe(true);
+        await expectFocused(activeAgentTile);
+        await page.keyboard.press("Home");
+        await expectFocused(allAgentsTile);
+        await page.keyboard.press("Enter");
 
         const headers = sidebar.locator(".sidebar-agent-roster__row");
         await expect.poll(() => headers.count()).toBe(4);
@@ -242,45 +252,53 @@ suite.define(() => {
         await expect.poll(async () => (await activityReads()).length).toBe(initialReads + 2);
         await expect.poll(() => sessionRows.count()).toBe(8);
 
-        await workspace.focus();
-        await page.keyboard.press("Enter");
         const workspaceMenu = sidebar.locator(".sidebar-agent-menu");
+        await page.mouse.move(1100, 700);
+        await expect.poll(() => workspaceMenu.count()).toBe(0);
+        await workspace.focus();
+        await Promise.all([
+          sidebar.evaluate(
+            (element) =>
+              new Promise<void>((resolve) => {
+                element.addEventListener("wa-after-show", () => resolve(), { once: true });
+              }),
+          ),
+          workspace.hover(),
+        ]);
+        expect(await workspace.evaluate((element) => element === document.activeElement)).toBe(
+          true,
+        );
+        await page.keyboard.press("Enter");
         const workspaceMenuItems = workspaceMenu.locator(":scope > wa-dropdown-item");
-        await expect.poll(() => workspaceMenuItems.count()).toBe(3);
+        await expect.poll(() => workspaceMenuItems.count()).toBe(4);
         expect(
           await workspaceMenuItems.evaluateAll((items) =>
             items.map((item) => item.getAttribute("value")),
           ),
-        ).toEqual(["command:sidebar-agents", "command:agent-settings", "command:help"]);
-        expect(
-          await workspaceMenu
-            .getByRole("menuitem", { name: "Show one agent", exact: true })
-            .count(),
-        ).toBe(1);
-        expect(await workspaceMenuItems.nth(1).textContent()).toContain("Agent settings");
-        expect(
-          await workspaceMenu.locator('wa-dropdown-item[slot="submenu"]').allTextContents(),
         ).toEqual([
-          expect.stringContaining("Docs"),
-          expect.stringContaining("Get help"),
-          expect.stringContaining("Discord community"),
-          expect.stringContaining("View changelog"),
+          "command:new-agent",
+          "command:agents-directory",
+          "command:capabilities",
+          "command:agent-settings",
         ]);
-        await expect
-          .poll(() => modeToggle.evaluate((element) => element === document.activeElement))
-          .toBe(true);
+        expect(
+          await workspaceMenu.locator(".sidebar-agent-menu__agent-list wa-dropdown-item").count(),
+        ).toBe(5);
+        expect(await workspaceMenu.locator('[value="command:help"]').count()).toBe(0);
+        expect(await workspaceMenu.locator("wa-dropdown-item[aria-checked]").count()).toBe(0);
+        expect(await allAgentsTile.getAttribute("aria-current")).toBe("true");
+        const agentTiles = workspaceMenu.locator(
+          ".sidebar-agent-menu__agent-list wa-dropdown-item",
+        );
+        await expectFocused(agentTiles.first());
         await page.keyboard.press("ArrowDown");
-        await expect
-          .poll(() =>
-            workspaceMenuItems.nth(1).evaluate((element) => element === document.activeElement),
-          )
-          .toBe(true);
+        await expectFocused(agentTiles.nth(1));
+        await page.keyboard.press("End");
+        await expectFocused(workspaceMenuItems.last());
         await captureSidebarUiProof(suite, page, "sidebar-team-workspace-menu.png");
         await page.keyboard.press("Escape");
         await expect.poll(() => workspaceMenu.count()).toBe(0);
-        await expect
-          .poll(() => workspace.evaluate((element) => element === document.activeElement))
-          .toBe(true);
+        await expectFocused(workspace);
 
         await sidebar.locator(".sidebar-brand__new-thread").click();
         const newMenu = sidebar.locator(".sidebar-brand .sidebar-new-session-menu");
@@ -362,12 +380,10 @@ suite.define(() => {
         const actions = forgeGroup.locator(".sidebar-agent-roster__actions");
         await forgeGroup.locator(".sidebar-agent-roster__row").focus();
         await page.keyboard.press("Tab");
-        await expect
-          .poll(() => actions.locator("a").evaluate((el) => el === document.activeElement))
-          .toBe(true);
+        await expectFocused(actions.locator("a"));
         await page.keyboard.press("Tab");
         const options = actions.getByRole("button", { name: "Options for Forge" });
-        await expect.poll(() => options.evaluate((el) => el === document.activeElement)).toBe(true);
+        await expectFocused(options);
         await page.keyboard.press("Space");
         await actions.getByRole("menuitem", { name: "All sessions", exact: true }).waitFor();
         expect(await actions.locator("wa-dropdown-item").allTextContents()).toEqual([
@@ -375,6 +391,14 @@ suite.define(() => {
           expect.stringContaining("All sessions"),
           expect.stringContaining("Collapse others"),
         ]);
+        const overflowItems = actions.locator("wa-dropdown-item");
+        expect(await overflowItems.locator('[slot="icon"] svg').count()).toBe(3);
+        await expectFocused(overflowItems.first());
+        await page.keyboard.press("ArrowDown");
+        await expectFocused(overflowItems.nth(1));
+        await page.keyboard.press("Escape");
+        await expectFocused(options);
+        await options.press("Enter");
         await actions.getByRole("menuitem", { name: "All sessions", exact: true }).click();
         await waitForControlUiRoute(page, { routeId: "sessions", pathname: "/sessions" });
         await expect
@@ -408,21 +432,196 @@ suite.define(() => {
         await waitForControlUiRoute(page, { routeId: "new-session", pathname: "/new" });
         expect(new URL(page.url()).searchParams.get("agent")).toBe("forge");
         await workspace.click();
-        await modeToggle.press("Enter");
+        await workspaceMenu.locator('[value="agent:forge"]').press("Enter");
         await expect.poll(() => headers.count()).toBe(0);
         expect(await sidebar.getByRole("link", { name: "Home", exact: true }).count()).toBe(1);
         expect(await chip.isVisible()).toBe(true);
         expect(await workspace.count()).toBe(0);
-        await expect
-          .poll(() => chip.evaluate((element) => element === document.activeElement))
-          .toBe(true);
         await chip.click();
-        await expect.poll(() => modeToggle.textContent()).toContain("Show all agents");
+        await expect.poll(() => allAgentsTile.isVisible()).toBe(true);
+        expect(await allAgentsTile.getAttribute("aria-current")).toBeNull();
         expect(
-          await sidebar.locator(".sidebar-agent-menu__agent-grid wa-dropdown-item").count(),
-        ).toBe(4);
+          await sidebar.locator(".sidebar-agent-menu__agent-list wa-dropdown-item").count(),
+        ).toBe(5);
+        await expectFocused(activeAgentTile);
         await page.keyboard.press("Escape");
+        await expect.poll(() => workspaceMenu.count()).toBe(0);
+        await page.setViewportSize({ width: 390, height: 844 });
+        const drawerToggle = page
+          .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
+          .first();
+        await drawerToggle.click();
+        for (const trigger of [chip, workspace]) {
+          if (trigger === workspace) {
+            await chip.press("Enter");
+            await expect.poll(() => allAgentsTile.isVisible()).toBe(true);
+            await allAgentsTile.press("Enter");
+          }
+          await trigger.press("Enter");
+          await expect.poll(() => allAgentsTile.isVisible()).toBe(true);
+          await expectFocused(activeAgentTile);
+          await page.keyboard.press("Escape");
+          await expect.poll(() => workspaceMenu.count()).toBe(0);
+          expect(await sidebar.isVisible()).toBe(true);
+          await expectFocused(trigger);
+        }
       },
     );
   });
+
+  it.each([false, true])(
+    "keeps main-chat identity, activity, metadata and actions visible (touch=%s)",
+    async (touch) => {
+      await suite.withPage(
+        { viewport: { width: 390, height: 900 }, hasTouch: touch, isMobile: touch },
+        async ({ page }) => {
+          const mainKey = "agent:forge:main";
+          const agentsList: AgentsListResult = {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [
+              { id: "main", name: "Harbor" },
+              { id: "forge", name: "Forge" },
+            ],
+          };
+          const rows = [
+            { key: "agent:main:main", kind: "direct", agentId: "main", isMain: true, icon: "home" },
+            {
+              key: mainKey,
+              kind: "direct",
+              agentId: "forge",
+              isMain: true,
+              hasActiveRun: true,
+              status: "running",
+              unread: true,
+              incognito: touch ? true : undefined,
+              owner: { actor: { type: "human", id: "profile-riley", label: "Riley" } },
+            },
+          ] satisfies GatewaySessionRow[];
+          await installMockGateway(page, {
+            sessions: rows,
+            methodResponses: {
+              "agents.list": agentsList,
+              "sessions.list": {
+                ts: Date.now(),
+                path: "",
+                count: rows.length,
+                defaults: { model: null, modelProvider: null, contextTokens: null },
+                owners: [
+                  { type: "human", id: "profile-riley", label: "Riley" },
+                  { type: "human", id: "profile-devon", label: "Devon" },
+                ],
+                sessions: rows,
+              } satisfies SessionsListResult,
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await waitForControlUiRoute(page, { routeId: "chat" });
+          const drawer = page
+            .locator(".topbar-nav-toggle:visible,.chat-pane__nav-toggle:visible")
+            .first();
+          if ((await drawer.getAttribute("aria-expanded")) === "false") {
+            await drawer.click();
+          }
+          const sidebar = page.locator("openclaw-app-sidebar");
+          await sidebar.locator(".sidebar-agent-card__main").click();
+          await sidebar.locator('.sidebar-agent-menu [value="scope:all"]').click();
+          const headerLocator = sidebar.locator(
+            '[data-agent-group="forge"] .sidebar-agent-roster__header',
+          );
+          await headerLocator.waitFor({ state: "visible" });
+          const quietHeader = sidebar.locator(
+            '[data-agent-group="main"] .sidebar-agent-roster__header',
+          );
+          expect(await quietHeader.locator(".sidebar-session-indicator").count()).toBe(0);
+          expect(await quietHeader.locator(".sidebar-agent-roster__signals").isVisible()).toBe(
+            false,
+          );
+          const selectors = [".session-glyph--running", ".session-unread-dot"];
+          const expectSignals = async () => {
+            for (const selector of selectors) {
+              await expect.poll(() => headerLocator.locator(selector).isVisible()).toBe(true);
+              expect(await headerLocator.locator(selector).count()).toBe(1);
+            }
+          };
+          await page.mouse.move(389, 899);
+          await expectSignals();
+          const action = headerLocator.locator('button[slot="trigger"]');
+          await action.focus();
+          await expectSignals();
+          const boxes = await sidebar.evaluate(async (sidebarElement, key) => {
+            const host = sidebarElement as AppSidebarSessionNavigationElement;
+            // Feed the shell-owned outbox summary, not a replacement row projection.
+            host.storedOutboxes = {
+              total: 2,
+              attentionCountForSession: (sessionKey) => (sessionKey === key ? 2 : 0),
+              hasSessionDraft: (sessionKey) => sessionKey === key,
+            };
+            host.sessionDataContext!.sessions.setPullRequestSummary(key, {
+              numbers: [103],
+              state: "open",
+            });
+            await host.updateComplete;
+            const roster = host.querySelector<LitElement>("openclaw-sidebar-agent-roster")!;
+            await roster.updateComplete;
+            const header = roster.querySelector(
+              '[data-agent-group="forge"] .sidebar-agent-roster__header',
+            )!;
+            const box = (element: Element) => {
+              const rect = element.getBoundingClientRect();
+              return {
+                left: rect.left,
+                right: rect.right,
+                top: rect.top,
+                bottom: rect.bottom,
+              };
+            };
+            const name = header.querySelector<HTMLElement>(".sidebar-agent-roster__copy > span")!;
+            return {
+              header: box(header),
+              signals: box(header.querySelector(".sidebar-agent-roster__signals")!),
+              actions: box(header.querySelector(".sidebar-agent-roster__actions")!),
+              nameFits: name.clientWidth > 0 && name.scrollWidth <= name.clientWidth,
+              badges: [...header.querySelectorAll(".session-row-badge, .session-owner-chip")].map(
+                (badge) => ({
+                  label: badge.getAttribute("aria-label"),
+                  visible: badge.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }),
+                  box: box(badge),
+                }),
+              ),
+            };
+          }, mainKey);
+          expect(boxes.nameFits).toBe(true);
+          expect(
+            boxes.signals.right <= boxes.actions.left ||
+              boxes.actions.right <= boxes.signals.left ||
+              boxes.signals.bottom <= boxes.actions.top ||
+              boxes.actions.bottom <= boxes.signals.top,
+          ).toBe(true);
+          expect(boxes.badges.map((badge) => badge.label)).toEqual(
+            expect.arrayContaining([
+              "Created by Riley",
+              "#103 · Open",
+              "2 messages need attention",
+              touch ? "Incognito session" : "Unsent draft",
+            ]),
+          );
+          for (const badge of boxes.badges) {
+            expect(badge.visible).toBe(true);
+          }
+          for (const box of [
+            boxes.actions,
+            boxes.signals,
+            ...boxes.badges.map((badge) => badge.box),
+          ]) {
+            expect(box.left).toBeGreaterThanOrEqual(boxes.header.left);
+            expect(box.right).toBeLessThanOrEqual(boxes.header.right);
+            expect(box.top).toBeGreaterThanOrEqual(boxes.header.top);
+            expect(box.bottom).toBeLessThanOrEqual(boxes.header.bottom);
+          }
+        },
+      );
+    },
+  );
 });

@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-// Projects prepared connection identity into user-turn attribution fields.
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
@@ -14,6 +13,7 @@ import {
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
 import { INTERNAL_MESSAGE_CHANNEL, isOperatorUiClient } from "../../utils/message-channel.js";
+import { gitHubPublicApi } from "../github-public-api.js";
 import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
 import type { GatewayClient, GatewayRequestOptions } from "./shared-types.js";
@@ -22,15 +22,25 @@ export function isGatewayClientProfilePending(client: GatewayClient | null): boo
   return Boolean(client?.authenticatedGitHubIdentitySync && !client.authenticatedUserProfile);
 }
 
-export function authenticatedProfileUnavailableError(
-  message = "Authenticated profile verification is unavailable. Retry shortly; if this continues, contact a gateway administrator.",
-  retryAfterMs = 1_000,
-): ErrorShape {
-  return errorShape(ErrorCodes.UNAVAILABLE, message, {
-    retryable: true,
-    retryAfterMs,
-    details: { code: ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE },
-  });
+/** A GitHub quota failure names its cause and carries GitHub's reset deadline. */
+export function authenticatedProfileUnavailableError(cause?: unknown): ErrorShape {
+  // Only a real GitHub transport error may load the GitHub surface; it can be absent.
+  const rateLimited =
+    cause instanceof Error &&
+    cause.name === "ControlUiGitHubError" &&
+    cause instanceof gitHubPublicApi.ControlUiGitHubError &&
+    cause.statusCode === 429;
+  return errorShape(
+    ErrorCodes.UNAVAILABLE,
+    rateLimited
+      ? "GitHub is rate limiting profile verification. Retry shortly; if this continues, ask a gateway administrator to check the GitHub API credential."
+      : "Authenticated profile verification is unavailable. Retry shortly; if this continues, contact a gateway administrator.",
+    {
+      retryable: true,
+      retryAfterMs: (rateLimited && cause.retryAfterMs) || 1_000,
+      details: { code: ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE },
+    },
+  );
 }
 
 export async function authorizeAuthenticatedProfileForMethod(params: {
@@ -54,8 +64,8 @@ export async function authorizeAuthenticatedProfileForMethod(params: {
   }
   try {
     await sync();
-  } catch {
-    return authenticatedProfileUnavailableError();
+  } catch (error) {
+    return authenticatedProfileUnavailableError(error);
   }
   return params.client?.authenticatedUserProfile?.profileId.trim()
     ? sessionProfileError()

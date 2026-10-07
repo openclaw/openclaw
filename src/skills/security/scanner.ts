@@ -32,12 +32,7 @@ type SkillScanSummary = {
 };
 
 export type SkillScanOptions = {
-  excludeTestFiles?: boolean;
-  includeHiddenDirectories?: boolean;
-  includeNestedNodeModulesTestFiles?: boolean;
-  includeNodeModules?: boolean;
   includeFiles?: string[];
-  onlyIncludeFiles?: boolean;
   maxFiles?: number;
   maxFileBytes?: number;
 };
@@ -58,8 +53,6 @@ const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 const MAX_LINE_RULE_FINDINGS_PER_RULE = 32;
 const FILE_SCAN_CACHE_MAX = 5000;
 const MAX_SCAN_DIRECTORY_ENTRIES = 100_000;
-const TEST_DIRECTORY_NAMES = new Set(["__fixtures__", "__mocks__", "__tests__", "test", "tests"]);
-const TEST_FILE_NAME_PATTERN = /\.(?:mock|spec|test|test-helper|test-support)\.[^.]+$/i;
 
 type FileScanIdentity = Pick<Stats, "dev" | "ino" | "size" | "mtimeMs" | "ctimeMs">;
 
@@ -78,25 +71,6 @@ type CollectedScannableFiles = {
 
 export function isScannable(filePath: string): boolean {
   return SCANNABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
-}
-
-function getCachedFileScanResult(params: {
-  filePath: string;
-  identity: FileScanIdentity;
-  maxFileBytes: number;
-}): FileScanCacheEntry | undefined {
-  const cached = FILE_SCAN_CACHE.get(params.filePath);
-  if (!cached) {
-    return undefined;
-  }
-  if (
-    !sameFileScanIdentity(cached.identity, params.identity) ||
-    cached.maxFileBytes !== params.maxFileBytes
-  ) {
-    FILE_SCAN_CACHE.delete(params.filePath);
-    return undefined;
-  }
-  return cached;
 }
 
 function fileScanIdentity({ dev, ino, size, mtimeMs, ctimeMs }: Stats): FileScanIdentity {
@@ -558,12 +532,7 @@ function scanSourceRules(
 
 function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOptions> {
   return {
-    excludeTestFiles: opts?.excludeTestFiles ?? false,
-    includeHiddenDirectories: opts?.includeHiddenDirectories ?? false,
-    includeNestedNodeModulesTestFiles: opts?.includeNestedNodeModulesTestFiles ?? false,
-    includeNodeModules: opts?.includeNodeModules ?? false,
     includeFiles: opts?.includeFiles ?? [],
-    onlyIncludeFiles: opts?.onlyIncludeFiles ?? false,
     maxFiles: Math.max(1, opts?.maxFiles ?? DEFAULT_MAX_SCAN_FILES),
     maxFileBytes: Math.max(1, opts?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES),
   };
@@ -619,27 +588,14 @@ async function collectScannableFiles(
     rootDir: dirPath,
     includeFiles: opts.includeFiles,
   });
-  if (opts.onlyIncludeFiles) {
-    return {
-      files: forcedFiles.slice(0, opts.maxFiles),
-      truncated: forcedFiles.length > opts.maxFiles,
-    };
-  }
   if (forcedFiles.length > opts.maxFiles) {
     return { files: forcedFiles.slice(0, opts.maxFiles), truncated: true };
   }
 
   const seen = new Set(forcedFiles.map((f) => path.resolve(f)));
   const files = [...forcedFiles];
-  const include = ({ name, kind, relativePath }: WalkDirectoryEntry) =>
-    (opts.includeHiddenDirectories || !name.startsWith(".")) &&
-    (opts.includeNodeModules || name !== "node_modules") &&
-    (!opts.excludeTestFiles ||
-      !(kind === "directory"
-        ? TEST_DIRECTORY_NAMES.has(name)
-        : TEST_FILE_NAME_PATTERN.test(name)) ||
-      (opts.includeNestedNodeModulesTestFiles &&
-        relativePath.split(/[\\/]+/u).includes("node_modules")));
+  const include = ({ name }: WalkDirectoryEntry) =>
+    !name.startsWith(".") && name !== "node_modules";
   const walked = await walkDirectory(dirPath, {
     maxEntries: Math.max(
       MAX_SCAN_DIRECTORY_ENTRIES,
@@ -681,17 +637,11 @@ async function scanFileWithCache(params: {
   if (!st?.isFile()) {
     return { scanned: false, findings: [] };
   }
-  const cached = getCachedFileScanResult({
-    filePath,
-    identity: st,
-    maxFileBytes,
-  });
-  if (cached) {
-    return {
-      scanned: cached.scanned,
-      findings: cached.findings,
-    };
+  const cached = FILE_SCAN_CACHE.get(filePath);
+  if (cached && sameFileScanIdentity(cached.identity, st) && cached.maxFileBytes === maxFileBytes) {
+    return cached;
   }
+  FILE_SCAN_CACHE.delete(filePath);
 
   if (st.size > maxFileBytes) {
     const skippedEntry: FileScanCacheEntry = {

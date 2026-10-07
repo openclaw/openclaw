@@ -50,39 +50,43 @@ describe("repository checkpoint workflow authority", () => {
     realWorktree: true,
   });
 
-  it.each(["add", "modify", "delete"] as const)(
-    "rejects %s before uploading any accepted objects and retains the checkpoint",
+  it.each(["add", "modify", "delete", "source-commit"] as const)(
+    "rejects %s workflow changes before upload and retains the checkpoint",
     async (operation) => {
-      const f = await createFixture(operation === "add" ? {} : { [workflow]: definition });
-      const saved = await f.repository.capture("accepted code\n", operation, {
-        [workflow]: operation === "delete" ? null : definition + "# accepted change\n",
-      });
+      const f = await createFixture(
+        operation === "add" ? {} : { [workflow]: definition },
+        operation === "source-commit" ? "topic" : undefined,
+      );
+      if (operation === "source-commit") {
+        const { runtime, git, baseCommit } = f.repository;
+        runtime.mergeBase = git(["rev-parse", baseCommit + "^"]);
+        runtime.mergeBaseTree = git(["rev-parse", runtime.mergeBase + "^{tree}"]);
+        runtime.baseHead = runtime.mergeBase;
+        runtime.baseHeadTree = runtime.mergeBaseTree;
+      }
+      const saved =
+        operation === "source-commit"
+          ? undefined
+          : await f.repository.capture("accepted code\n", operation, {
+              [workflow]: operation === "delete" ? null : definition + "# accepted change\n",
+            });
       const result = await f.coordinator.requestForSession(f.request(operation, f.guest));
       expect(result).toMatchObject(rejected);
       expect(writes()).toEqual([]);
-      expect(f.repository.runtime.effects).toEqual([]);
-      expect(
-        (await getSessionRepositoryWorkspaceStore().get(f.repository.workspace.workspaceId))
-          ?.checkpointRef,
-      ).toBe(saved.ref);
-      const calls = mocks.runCommand.mock.calls.length;
-      expect(await f.coordinator.requestForSession(f.request(operation, f.guest))).toEqual(result);
-      expect(mocks.runCommand.mock.calls).toHaveLength(calls);
+      if (saved) {
+        expect(f.repository.runtime.effects).toEqual([]);
+        expect(
+          (await getSessionRepositoryWorkspaceStore().get(f.repository.workspace.workspaceId))
+            ?.checkpointRef,
+        ).toBe(saved.ref);
+        const calls = mocks.runCommand.mock.calls.length;
+        expect(await f.coordinator.requestForSession(f.request(operation, f.guest))).toEqual(
+          result,
+        );
+        expect(mocks.runCommand.mock.calls).toHaveLength(calls);
+      }
     },
   );
-
-  it("rejects a source-commit workflow absent from the checkpoint's file delta", async () => {
-    const f = await createFixture({ [workflow]: definition }, "topic");
-    const { runtime, git, baseCommit } = f.repository;
-    runtime.mergeBase = git(["rev-parse", baseCommit + "^"]);
-    runtime.mergeBaseTree = git(["rev-parse", runtime.mergeBase + "^{tree}"]);
-    runtime.baseHead = runtime.mergeBase;
-    runtime.baseHeadTree = runtime.mergeBaseTree;
-    expect(
-      await f.coordinator.requestForSession(f.request("source-history", f.guest)),
-    ).toMatchObject(rejected);
-    expect(writes()).toEqual([]);
-  });
 
   it("publishes ordinary guest changes with unchanged workflows and reuses immutable tree reads", async () => {
     const f = await createFixture({ [workflow]: definition });

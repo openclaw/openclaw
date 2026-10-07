@@ -21,7 +21,7 @@ const assignIf = (
   target: Record<string, unknown>,
   key: string,
   value: unknown,
-  shouldAssign: boolean,
+  shouldAssign = value !== undefined,
 ) => {
   if (shouldAssign) {
     target[key] = value;
@@ -184,11 +184,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
   } else if (hasAgentTurnPatch) {
     payload = { kind: "agentTurn" };
     assignIf(payload, "message", String(opts.message), typeof opts.message === "string");
-    if (opts.clearModel) {
-      payload.model = null;
-    } else {
-      assignIf(payload, "model", model, Boolean(model));
-    }
+    assignIf(payload, "model", opts.clearModel ? null : model);
     assignIf(payload, "fallbacks", fallbacks, typeof opts.fallbacks === "string");
     assignIf(payload, "fallbacks", null, Boolean(opts.clearFallbacks));
     if (opts.clearThinking) {
@@ -206,20 +202,15 @@ export async function resolveCronEditPayloadDeliveryPatch(
     assignIf(payload, "env", parseCronCommandEnv(opts.commandEnv), opts.commandEnv !== undefined);
     assignIf(payload, "input", opts.commandInput, hasCommandInput);
     assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
-    assignIf(
-      payload,
-      "noOutputTimeoutSeconds",
-      noOutputTimeoutSeconds,
-      noOutputTimeoutSeconds !== undefined,
-    );
-    assignIf(payload, "outputMaxBytes", outputMaxBytes, outputMaxBytes !== undefined);
+    assignIf(payload, "noOutputTimeoutSeconds", noOutputTimeoutSeconds);
+    assignIf(payload, "outputMaxBytes", outputMaxBytes);
   } else if (hasScriptPatch) {
     payload = { kind: "script" };
     if (scriptPath) {
       payload.script = await readCronPayloadScript(scriptPath);
     }
-    assignIf(payload, "timeoutSeconds", scriptTimeoutSeconds, scriptTimeoutSeconds !== undefined);
-    assignIf(payload, "toolBudget", scriptToolBudget, scriptToolBudget !== undefined);
+    assignIf(payload, "timeoutSeconds", scriptTimeoutSeconds);
+    assignIf(payload, "toolBudget", scriptToolBudget);
   }
   if (payload) {
     if (opts.clearTools) {

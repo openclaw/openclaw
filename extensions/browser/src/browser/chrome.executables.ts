@@ -1,7 +1,7 @@
-/** Chromium-family executable discovery across supported platforms. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { pathExistsSync as exists } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -10,7 +10,6 @@ import {
 import { execBrowserProbe, WINDOWS_VERSION_DIR_RE } from "./chrome.executable-probe.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 
-/** Browser executable candidate with product metadata and filesystem path. */
 export type BrowserExecutable = {
   kind: "brave" | "canary" | "chromium" | "chrome" | "custom" | "edge";
   path: string;
@@ -225,11 +224,10 @@ function detectDefaultChromiumExecutableLinux(): BrowserExecutable | null {
   if (!desktopId) {
     return null;
   }
-  const trimmed = desktopId.trim();
-  if (!CHROMIUM_DESKTOP_IDS.has(trimmed)) {
+  if (!CHROMIUM_DESKTOP_IDS.has(desktopId)) {
     return null;
   }
-  const desktopPath = findDesktopFilePath(trimmed);
+  const desktopPath = findDesktopFilePath(desktopId);
   if (!desktopPath) {
     return null;
   }
@@ -487,14 +485,34 @@ function findPlaywrightChromiumExecutableCandidatesLinux(): Array<BrowserExecuta
   return candidates;
 }
 
+function getPlaywrightEnv(name: string): string | undefined {
+  const suffix = name.toLowerCase();
+  return (
+    process.env[name] ??
+    process.env[`npm_config_${suffix}`] ??
+    process.env[`npm_package_config_${suffix}`]
+  );
+}
+
 function getPlaywrightBrowserCachePaths(): string[] {
-  const configured = normalizeOptionalString(process.env[PLAYWRIGHT_BROWSERS_PATH_ENV]);
-  return [
-    ...new Set([
-      ...(configured && configured !== "0" ? [configured] : []),
-      path.join(os.homedir(), ".cache", "ms-playwright"),
-    ]),
-  ];
+  const configured = getPlaywrightEnv(PLAYWRIGHT_BROWSERS_PATH_ENV);
+  const cacheHome = process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache");
+  const candidates = [path.join(cacheHome, "ms-playwright")];
+  if (configured === "0") {
+    try {
+      const packageRoot = path.dirname(
+        fileURLToPath(import.meta.resolve("playwright-core/package.json")),
+      );
+      candidates.unshift(path.join(packageRoot, ".local-browsers"));
+    } catch {
+      // A missing Playwright package must not hide the default cache.
+    }
+  } else if (configured) {
+    candidates.unshift(configured);
+  }
+  // Match Playwright's install-time base without importing its browser runtime.
+  const base = getPlaywrightEnv("INIT_CWD") || process.cwd();
+  return [...new Set(candidates.map((candidate) => path.resolve(base, candidate)))];
 }
 
 function readSortedDirNames(dir: string): string[] {
@@ -580,7 +598,6 @@ function chromeExecutableCandidates(platform: NodeJS.Platform): BrowserExecutabl
   }
 }
 
-/** Resolve the Google Chrome executable for a named platform when available. */
 export function resolveGoogleChromeExecutableForPlatform(
   platform: NodeJS.Platform,
 ): BrowserExecutable | null {
@@ -600,7 +617,6 @@ export function resolveGoogleChromeExecutableForPlatform(
   return findFirstChromeExecutable(candidates, platform);
 }
 
-/** Resolve the preferred Chromium-family executable for a platform. */
 export function resolveBrowserExecutableForPlatform(
   resolved: ResolvedBrowserConfig,
   platform: NodeJS.Platform,

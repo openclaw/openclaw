@@ -32,6 +32,22 @@ replacement. Choose an empty `OPENCLAW_GIT_DIR` and retry.
 
 ### Validation and activation
 
+On Windows, candidate commands verify their recorded handoff lease and their own
+PID/start identity even when the launcher process tree changes. A different
+immediate parent no longer causes a valid candidate to fail with `Candidate
+executor binding does not match its parent`. The update owner must remain live,
+and changed or revoked leases still refuse mutation. This check runs in the
+candidate, so it also accepts valid handoffs from older installed updaters.
+
+Channel health collection timeouts are warnings during post-update verification.
+The Gateway must still answer, report the expected version and build, pass HTTP
+readiness, and remain in the same running generation. An explicit negative channel
+probe still fails verification. Timeout warnings remain in the update report even
+if a later probe completes; run `openclaw health` to check the affected channels.
+The seven-second collection budget is unchanged. Updated Gateways also avoid
+reporting collection timeouts as negative probes to older updaters, although those
+updaters cannot add the new warning to their update reports.
+
 If the resolved registry package version equals the installed version without changing the selected channel or installation method, or the Git target SHA equals `HEAD` and the installed runtime passes artifact verification, plugin convergence still runs; if plugins and runtime artifacts remain unchanged, the run finishes `skipped` with reason `already-current`.
 Runtime maintenance can therefore succeed without changing the Git revision.
 A same-version explicit `--channel` or installation-method change finishes successfully.
@@ -142,23 +158,92 @@ path to inspect before retrying recovery. Sibling `.openclaw.update-stage-*`
 directories are outside that package fingerprint; do not remove stages that
 another updater may still be using.
 
-Package publication hashes the candidate before activation and the installed
+Launcher backups verify the saved file bytes or symlink target. Recreating an
+equivalent npm or Homebrew launcher does not invalidate recovery because its
+inode, timestamps, or ownership metadata changed. A changed symlink target still
+refuses the swap and names both targets; filesystem mutation ownership checks
+remain in effect. This fix belongs to the installed updater, so a candidate
+cannot change an older updater's launcher checks during that first update.
+
+On POSIX npm installations, publication admission checks the existing package
+directory or source-link entry and standard launchers before staging. The source
+link check does not require ownership of the external checkout. Additional launcher destinations
+are checked against the staged candidate before validation; unrelated prefix files
+are left alone. An ownership
+refusal names the object path, its owner UID, and the expected UID. Writable
+prefix parents such as `bin` and `lib/node_modules` may belong to another UID;
+their directory identities still must remain unchanged during publication and
+recovery. Published objects and private recovery artifacts retain their ownership
+checks. This admission behavior belongs to the installed updater, so it cannot
+repair the checks in an already-running older updater.
+
+Journal-owned publication and rollback also compare launcher bytes or link targets,
+without requiring uid/gid metadata that a non-root updater cannot restore. They
+still require the recorded launcher identity before replacing it. New symlinks
+preserve the existing launcher's ownership when possible; otherwise they use the
+updater's effective user and group instead of inheriting an unusable bin-directory
+group. An ownership fallback produces a warning.
+
+Package publication verifies the candidate before activation and the installed
 package after publication. Launcher publication checks package identities without
 repeatedly hashing both generations. Retirement verifies the live package before
 deleting obsolete backups; rollback still hashes a backup before restoring it
 and verifies the restored bytes. These improvements belong to the installed
 updater and do not change an older updater already running.
 
-An older installed updater that stops with `Package rollback verification byte
-limit exceeded` cannot obtain this repair from its staged candidate. Use the
-installation's [manual package update method](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
+Candidate verification uses the same best-effort contract when its scan reaches
+the resource limits: activation and publication continue with directory identity,
+package version, and launcher verification, recording that full package contents
+are unverified. The reader allows **500,000 entries / 8 GiB**; the shared deadline
+still bounds scan time. When a scan completes, its fingerprint must still match.
+
+When full verification is available, these checks walk every entry to verify
+identity, metadata, directory listings, links, and a final metadata sweep. A
+file's content digest from the earlier baseline or staged-package scan is reused
+only when its complete metadata, including inode, link count, size, modification
+time, and change time, is unchanged and its change time predates that earlier
+read by at least five seconds. Recovery helpers and later commands re-read file
+contents. Like the metadata sweep, these checks observe the package rather than
+lock it: writes through an already-modified shared memory mapping may not update
+file times. Keep other package managers and tools that modify the installation
+stopped during an update.
+
+Future installed updaters hash package files in short-lived worker threads with
+synchronous reads, at most four files at a time. The sealed recovery helper uses
+the same path; if worker threads are unavailable, hashing runs in-process. A file
+whose digest is reused under the rule above is not re-read; every other file is
+read afresh in the workers. The asynchronous directory walk, serial final
+metadata recheck, and deadlines are unchanged. Older installed updaters keep
+their own scanning behavior.
+
+The published 2026.9.7 and 2026.9.8 updaters still use their own **50,000-entry /
+1 GiB** caps for candidates; the candidate cannot change that installed driver.
+For a supervisor version of 2026.9.8 or earlier, including prereleases, candidate
+admission refuses a tree with more than 50,000 entries and directs you to run
+`npm i -g openclaw@latest` manually (preserving the requested version or tag when
+specified). This counts
+the package root and every entry, including hidden lockfiles, without following
+symlinks. Newer supervisors do not receive this size refusal.
+
+An older installed updater that stops with `Package rollback verification entry
+limit exceeded` or `Package rollback verification byte limit exceeded` likewise
+needs the installation's [manual package update method](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
 with a verified backup and the managed Gateway stopped during replacement.
 
 Interrupting a fresh local update before activation records a failed,
 `interrupted` history entry while its installation owner is still held.
-An interrupted update is not a successful update or a verified rollback.
+A pre-activation interruption is not a successful update or a verified rollback.
 Unresolved effects remain visible in the update report. Unsupported pending
 checkpoint records block further mutable update work and remain unchanged.
+
+During activation or verification, SIGINT, SIGTERM, and SIGHUP stop forward work
+and retain the updater until its existing recovery owner has attempted to restore
+the Gateway and write the failure report. Recovery uses the update's existing
+budget and package/state safety checks. The report names the interrupted phase
+and signal; use `openclaw update status` and, if recovery remains pending,
+`openclaw update repair`. This requires the fix in the installed updater; a new
+candidate cannot change an older driver's signal handling. SIGKILL cannot run
+this cleanup and still requires explicit recovery.
 
 After the target Doctor migrates shared state, the installed target runtime owns
 database validation, service finalization, and update-history writes, including
@@ -178,6 +263,23 @@ host links target the staged installation. Literal imports, `require()` calls, a
 literal dynamic imports to shared source modules include those modules and their
 package metadata in the private copy. Unrelated repository files remain outside
 the snapshot.
+
+Plugin snapshots verify inventoried bytes with SHA-256. Native companion captures
+may add or remove hard links while the old Gateway serves; link-only metadata
+changes do not invalidate unchanged files on Windows or POSIX. Content, file
+identity, type, permissions, ownership, size, and modification-time changes still
+refuse the snapshot.
+
+This check belongs to the installed updater. An older updater that reports
+`Plugin entry changed after snapshot inventory` during native capture cannot
+obtain this repair from the candidate it is already validating. Use the
+installation's [manual update method](/install/updating/update-methods), with a
+verified backup and the managed Gateway stopped during package replacement.
+
+Before each candidate check starts, the updater names the check and command.
+These progress messages go to stderr with `--json`, leaving stdout for the JSON
+result. The installed updater owns these announcements, so an older updater gains
+them on its next update after installing this version.
 
 Plugin dependency inventory skips incidental Git runtime transaction directories
 named `<destination>.openclaw-update-<UUID>.tmp`. Their candidate and rollback
@@ -231,7 +333,7 @@ cleanup handling.
 After the canary passes, the updater records temporary-copy cleanup and previous-Gateway
 readiness verification as active steps. `openclaw update status`, including `--json`,
 shows the recorded operation, wait reason, start time, and budget. Readiness observations
-refresh at most every 30 seconds within each probe stage. Verification checks the managed
+refresh at most every 30 seconds within each check stage. Verification checks the managed
 service, listener identity, installed version/build, health RPC, and HTTP readiness.
 Its implicit allowance is ten times the canary startup duration, with a five-minute minimum
 and one-hour ceiling; an explicit `--timeout` takes precedence. The ceiling preserves
@@ -245,7 +347,7 @@ the update records a warning and continues; removal may still finish in the back
 The warning names the temporary path and explains cleanup after the updater exits.
 These progress improvements require the repaired updater on the next update hop.
 An already-running 2026.9.5 updater retains its original silent verification window;
-independent `openclaw gateway status --deep --require-rpc` and `/readyz` probes can show
+independent `openclaw gateway status --deep --require-rpc` and `/readyz` checks can show
 whether the old Gateway is still serving, but do not establish the updater's wait reason.
 
 Update build and validation processes resolve source-linked plugin SDKs from
@@ -293,14 +395,14 @@ Auth diagnostics are advisory; optional inference repair runs through triage onl
 after a failed update has settled. It uses the normal runtime credential resolver,
 including shared profiles and OAuth refresh.
 
-The new version answers the updater's native service capability probe before
-loading configuration or initializing debug capture. Probing capability does not
+The new version answers the updater's native service capability check before
+loading configuration or initializing debug capture. Checking capability does not
 open or migrate shared state, so the old Gateway can keep serving while its
 database schema is older than the new version's. The installed updater runs first;
-this repair takes effect when the version it probes contains the fix.
+this repair takes effect when the version it checks contains the fix.
 
-The invoking updater supplies the capability probe's per-step time budget. The
-probe does not impose a separate startup deadline.
+The invoking updater supplies the capability check's per-step time budget. The
+check does not impose a separate startup deadline.
 
 Snapshot preparation budgets time for the SQLite database and journal bytes,
 including copying and verification passes, with a five-minute startup floor.
@@ -312,7 +414,7 @@ that scales with measured database and plugin bytes. An explicit per-step
 timeout replaces that derived allowance.
 While retaining its own runtime, the updater reports completed file operations
 directly instead of repeatedly scanning the growing copy. If those operations
-stop completing, isolated filesystem probes still track a slow individual copy.
+stop completing, isolated filesystem checks still track a slow individual copy.
 This improvement applies when the installed updater contains the fix.
 Automatic and chat updates leave that runtime allowance derived from state.
 Their request and recovery watchdogs do not become update validation deadlines.
@@ -320,12 +422,12 @@ Startup and readiness responses share their own allowance, including reading
 the response body. Completed candidate CLI and Gateway startup milestones from a
 fixed set of startup events renew that allowance once each; passing the original
 deadline records a warning while startup keeps progressing. Unknown names are
-ignored and logged at debug level. Probe responses do not renew the allowance.
+ignored and logged at debug level. Check responses do not renew the allowance.
 The total readiness wait cannot exceed four
 times its initial allowance, even while milestones advance. Reaching that ceiling
 refuses the candidate and records the elapsed time and milestones reached, leaving
 the previous Gateway untouched. A candidate that exits or stops advancing fails
-validation with its last startup evidence. Unreachable probes
+validation with its last startup evidence. Unreachable checks
 without startup evidence and configured proxy failures remain warnings.
 This progress-aware wait belongs to the installed updater. The published
 2026.9.4 updater retains its fixed five-minute cap when checking a newer candidate.
@@ -475,7 +577,7 @@ or checkout swap, required `doctor --fix` migrations, and state compatibility
 inspection, followed by service start
 in `restarting`. Update verification does not use model inference. In `verifying`,
 the updater checks that the managed service is running and owns its port, requires
-the normal 12-probe health settle and a Gateway hello handshake matching the
+the normal 12-check health settle and a Gateway hello handshake matching the
 expected version and Git build identity, checks channel readiness, and requires
 HTTP 200 from `/readyz`. Plugin activation or load failures remain named warnings
 when these core checks pass; they do not turn a successful core update into an error.
@@ -510,7 +612,7 @@ than success or an indefinite pending run. Observed PID or boot-generation chang
 remain failures and enter recovery. Check `openclaw gateway status --deep`
 before retiring those backups. A timeout alone does not authorize a recovery
 restart or rollback; a refused rollback also leaves the candidate untouched.
-A running status alone, a failed probe on an established listener, or an HTTP
+A running status alone, a failed check on an established listener, or an HTTP
 `/readyz` failure does not establish startup progress. Those unhealthy-service
 observations and concrete version, build, channel, or stopped-service failures
 remain failures with their own diagnostics. Doctor reports a qualifying startup
@@ -701,7 +803,7 @@ If schema state cannot be verified, rollback is refused with
 If an update fails before activation, recovery observes the existing Gateway once
 without waiting for startup or restarting it. Native service and listener checks
 share the update's existing observation allowance; their elapsed time does not
-consume the separate short health-request timeout. An explicit shorter probe
+consume the separate short health-request timeout. An explicit shorter check
 allowance and the overall deadline still apply. This correction takes effect
 when the installed updater includes it, not in an older updater already running.
 
@@ -980,6 +1082,8 @@ the sentinel.
 
     Dev updates fetch only the configured tracking remote for `main`, or the remote identified by an explicit tracked target. Unrelated remotes remain untouched, with a scope warning in update history; their availability cannot fail the update. When no local `main` exists, or an explicit commit or tag needs discovery, candidate remotes may be tried. Failed optional attempts are warnings, and stale refs from failed fetches cannot select a branch. A failed fetch from the configured authority still reports `fetch-failed` before activation. Fetching does not rewrite Git configuration.
 
+    An explicit detached full commit ID already present locally skips optional remote discovery. This does not skip candidate validation or promise an offline update: missing tree/blob objects in partial clones are still hydrated privately before activation. Symbolic and tracked targets retain their remote freshness and ancestry checks.
+
     Fetch behavior belongs to the updater already running. An older updater may still fail before candidate code executes. For that first hop, use Git's process-only `remote.<name>.skipFetchAll=true` override for the unrelated remote, or update through the installation's [manual method](/install/updating/update-methods); no persistent Git config change is needed.
 
     Shallow and partial source checkouts retain their installed refs, shallow boundaries, and object database during target inspection. Missing objects are fetched into the private inspection repository through the checkout's configured remotes. This behavior belongs to the installed updater; an older updater that fails with `Git target inspection clone failed` needs its checkout's missing objects fetched before retrying.
@@ -1025,7 +1129,9 @@ the sentinel.
 
   </Step>
   <Step title="Sync plugins">
-    Against the installed target, syncs plugins to the active channel before restarting the managed service. Dev uses bundled plugins; stable and beta use npm or ClawHub while preserving recorded source choices. A changed plugin snapshot runs fresh Doctor migrations; unchanged plugins do not run another full Doctor pass. The updater then revalidates the service owner, starts the Gateway, and verifies the final snapshot.
+    Against the installed target, syncs plugins to the active channel before restarting the managed service. Dev uses bundled plugins; stable and beta use npm or ClawHub while preserving recorded source choices. A changed plugin snapshot or deferred model retirement recorded by this update runs fresh Doctor repairs. Unchanged plugins with no pending repair do not run another full Doctor pass. The updater then revalidates the service owner, starts the Gateway, and verifies the final snapshot.
+
+    The updater performing plugin convergence owns this deferred-repair decision. Package updates that delegate this work to the new version can use its repair immediately. If an older updater leaves model retirement deferred, run the newly installed `openclaw doctor --fix` once to finish it. Later updates use their own run history to complete the follow-up; they do not use another update's pending marker.
 
     Source targets that support runtime completion also check their generated plugin runtime overlay and SDK aliases before loading plugin configuration. This completes artifacts omitted by an older updater on the first update to such a target; `update repair` performs the same check before Doctor. Exact artifacts remain untouched, including while a Gateway is running. Replacing missing or stale artifacts requires proof that the selected Gateway's affected runtime is offline. Before publication and each subsequent write, completion also checks discovered managed Gateways and refuses any observed live sibling using overlapping output paths. Stop that sibling through its own service manager or Startup process before retrying. A Gateway serving a physically separate runtime does not block completion. If the selected service's ownership or offline status cannot be verified, completion fails with recovery guidance instead of reporting a successful update. Older targets retain their existing generation behavior. Clean-source and staged-build validation still apply.
 
@@ -1075,7 +1181,7 @@ Already-current runtime plugins are kept in place; a no-op startup repair does
 not reinstall the package or invalidate the migration checkpoint.
 
 When post-core convergence retains an official pin outside automatic release-pin
-recovery and the npm probe finds a newer release, the update prints a pin advisory
+recovery and the npm check finds a newer release, the update prints a pin advisory
 and reports `postUpdate.plugins.status: "warning"` in JSON. The warning includes
 the observed installed and available versions and an explicit command to replace
 the pin. Keep the pin if intentional. This advisory does not establish

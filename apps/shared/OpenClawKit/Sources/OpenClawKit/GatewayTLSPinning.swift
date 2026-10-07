@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Security
+import Synchronization
 
 public struct GatewayTLSParams: Equatable, Sendable {
     public let required: Bool
@@ -223,35 +224,6 @@ public enum GatewayTLSServerTrust {
     }
 }
 
-final class GatewayTLSFirstUseClaims: @unchecked Sendable {
-    private let lock = NSLock()
-    private var fingerprints: [String: String] = [:]
-
-    func record(_ fingerprint: String, stableID: String) {
-        self.lock.lock()
-        self.fingerprints[stableID] = fingerprint
-        self.lock.unlock()
-    }
-
-    func fingerprint(stableID: String) -> String? {
-        self.lock.lock()
-        defer { self.lock.unlock() }
-        return self.fingerprints[stableID]
-    }
-
-    func clear(stableID: String) {
-        self.lock.lock()
-        self.fingerprints[stableID] = nil
-        self.lock.unlock()
-    }
-
-    func clearAll() {
-        self.lock.lock()
-        self.fingerprints.removeAll()
-        self.lock.unlock()
-    }
-}
-
 struct GatewayTLSKeychainOperations: @unchecked Sendable {
     let copyMatching: (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus
     let add: (CFDictionary) -> OSStatus
@@ -294,25 +266,20 @@ public enum GatewayTLSStore {
     }
 
     private static let baseKeychainService = "ai.openclaw.tls-pinning"
-    private static let keychainServiceLock = NSLock()
-    private nonisolated(unsafe) static var keychainNamespace = GatewayTLSKeychainNamespaceState()
+    private static let keychainNamespace = Mutex(GatewayTLSKeychainNamespaceState())
     private static var keychainService: String {
-        self.keychainServiceLock.withLock {
-            self.keychainNamespace.service(base: self.baseKeychainService)
-        }
+        self.keychainNamespace.withLock { $0.service(base: self.baseKeychainService) }
     }
 
     private static let keychainAccountPrefix = "fingerprint.v3."
     private static let legacyCanonicalAccountPrefix = "fingerprint.v2."
-    private static let firstUseClaims = GatewayTLSFirstUseClaims()
+    private static let firstUseClaims = Mutex<[String: String]>([:])
 
     /// The macOS app profile is immutable for the process lifetime. Configure its
     /// Keychain namespace before constructing any Gateway connection.
     @discardableResult
     public static func configureKeychainServiceSuffix(_ suffix: String) -> Bool {
-        self.keychainServiceLock.withLock {
-            self.keychainNamespace.configure(suffix: suffix)
-        }
+        self.keychainNamespace.withLock { $0.configure(suffix: suffix) }
     }
 
     static func resolvedKeychainService(suffix: String) -> String {
@@ -335,7 +302,7 @@ public enum GatewayTLSStore {
         guard let account = self.keychainAccount(stableID: stableID) else { return nil }
         switch self.loadFingerprintResult(stableID: stableID) {
         case let .value(existing):
-            self.firstUseClaims.record(existing, stableID: stableID)
+            self.firstUseClaims.withLock { $0[stableID] = existing }
             return existing
         case .unavailable:
             return nil
@@ -348,13 +315,13 @@ public enum GatewayTLSStore {
             _ = self.clearSafeLegacyFingerprint(stableID: stableID)
         }
         if let claimed {
-            self.firstUseClaims.record(claimed, stableID: stableID)
+            self.firstUseClaims.withLock { $0[stableID] = claimed }
         }
         return claimed
     }
 
     public static func claimedFirstUseFingerprint(stableID: String) -> String? {
-        self.firstUseClaims.fingerprint(stableID: stableID)
+        self.firstUseClaims.withLock { $0[stableID] }
     }
 
     @discardableResult
@@ -396,7 +363,7 @@ public enum GatewayTLSStore {
         let removedLegacy = self.clearSafeLegacyFingerprint(stableID: stableID)
         let removed = removedCanonical && removedLegacy
         if removed {
-            self.firstUseClaims.clear(stableID: stableID)
+            self.firstUseClaims.withLock { $0[stableID] = nil }
         }
         return removed
     }
@@ -409,7 +376,7 @@ public enum GatewayTLSStore {
         ] as CFDictionary)
         let removed = removedKeychain == errSecSuccess || removedKeychain == errSecItemNotFound
         if removed {
-            self.firstUseClaims.clearAll()
+            self.firstUseClaims.withLock { $0.removeAll() }
         }
         return removed
     }
@@ -436,47 +403,25 @@ public enum GatewayTLSStore {
         stableID: String,
         account: String) -> FingerprintRead
     {
-        let v2Account = self.keychainAccount(
-            stableID: stableID,
-            prefix: self.legacyCanonicalAccountPrefix)
-        if let v2Account {
-            switch self.readLegacyKeychainFingerprint(account: v2Account) {
+        let accounts = [
+            self.keychainAccount(stableID: stableID, prefix: self.legacyCanonicalAccountPrefix),
+            self.canSafelyReadLegacyRawStorageKey(stableID) ? stableID : nil,
+        ].compactMap(\.self)
+        for legacyAccount in accounts {
+            switch self.readLegacyKeychainFingerprint(account: legacyAccount) {
             case let .value(fingerprint):
-                return self.migrateLegacyFingerprint(
-                    fingerprint,
-                    stableID: stableID,
-                    account: account)
+                guard let winner = self.createCanonicalFingerprintIfAbsent(fingerprint, account: account) else {
+                    return .unavailable
+                }
+                _ = self.clearSafeLegacyFingerprint(stableID: stableID)
+                return .value(winner)
             case .unavailable:
                 return .unavailable
             case .missing:
                 break
             }
         }
-        guard self.canSafelyReadLegacyRawStorageKey(stableID) else { return .missing }
-
-        switch self.readLegacyKeychainFingerprint(account: stableID) {
-        case let .value(fingerprint):
-            return self.migrateLegacyFingerprint(
-                fingerprint,
-                stableID: stableID,
-                account: account)
-        case .unavailable:
-            return .unavailable
-        case .missing:
-            return .missing
-        }
-    }
-
-    private static func migrateLegacyFingerprint(
-        _ fingerprint: String,
-        stableID: String,
-        account: String) -> FingerprintRead
-    {
-        guard let winner = self.createCanonicalFingerprintIfAbsent(fingerprint, account: account) else {
-            return .unavailable
-        }
-        _ = self.clearSafeLegacyFingerprint(stableID: stableID)
-        return .value(winner)
+        return .missing
     }
 
     private static func readCanonicalFingerprint(account: String) -> FingerprintRead {
@@ -504,13 +449,6 @@ public enum GatewayTLSStore {
         return comparison == fingerprint ? .value(fingerprint) : .unavailable
     }
 
-    private static func loadCanonicalFingerprint(account: String) -> String? {
-        guard case let .value(fingerprint) = self.readCanonicalFingerprint(account: account) else {
-            return nil
-        }
-        return fingerprint
-    }
-
     private static func readLegacyKeychainFingerprint(account: String) -> FingerprintRead {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -527,17 +465,13 @@ public enum GatewayTLSStore {
         guard status == errSecSuccess,
               let data = result as? Data,
               let value = String(data: data, encoding: .utf8),
-              let fingerprint = self.normalizedFingerprint(value)
+              let fingerprint = value.trimmedNonEmpty
         else { return .unavailable }
         return .value(fingerprint)
     }
 
     private static func writeCanonicalFingerprint(_ value: String, stableID: String) -> Bool {
         guard let account = self.keychainAccount(stableID: stableID) else { return false }
-        return self.writeCanonicalFingerprint(value, account: account)
-    }
-
-    private static func writeCanonicalFingerprint(_ value: String, account: String) -> Bool {
         let data = Data(self.canonicalStoredFingerprint(value).utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -576,14 +510,14 @@ public enum GatewayTLSStore {
             return fingerprint
         }
         guard addStatus == errSecDuplicateItem else { return nil }
-        return self.loadCanonicalFingerprint(account: account)
+        guard case let .value(fingerprint) = self.readCanonicalFingerprint(account: account) else { return nil }
+        return fingerprint
     }
 
-    private static func keychainAccount(stableID: String) -> String? {
-        self.keychainAccount(stableID: stableID, prefix: self.keychainAccountPrefix)
-    }
-
-    private static func keychainAccount(stableID: String, prefix: String) -> String? {
+    private static func keychainAccount(
+        stableID: String,
+        prefix: String = GatewayTLSStore.keychainAccountPrefix) -> String?
+    {
         guard !stableID.isEmpty else { return nil }
         let component = Data(stableID.utf8).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
@@ -603,11 +537,6 @@ public enum GatewayTLSStore {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalized = normalizeFingerprint(trimmed)
         return normalized.count == 64 ? normalized : trimmed
-    }
-
-    private static func normalizedFingerprint(_ value: String?) -> String? {
-        let value = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return value.isEmpty ? nil : value
     }
 
     @discardableResult
@@ -744,23 +673,18 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
     }
 
     public var allowsDeviceTokenRetryAuth: Bool {
-        self.failureLock.lock()
-        defer { self.failureLock.unlock() }
-        return self.pinningState.enforcedFingerprint != nil
+        self.failureLock.withLock { self.pinningState.enforcedFingerprint != nil }
     }
 
     public var effectiveTLSFingerprintSHA256: String? {
-        self.failureLock.lock()
-        defer { self.failureLock.unlock() }
-        return self.pinningState.acceptedFingerprint
+        self.failureLock.withLock { self.pinningState.acceptedFingerprint }
     }
 
     public func consumeLastTLSFailure() -> GatewayTLSValidationFailure? {
-        self.failureLock.lock()
-        defer { self.failureLock.unlock() }
-        let failure = self.lastTLSFailure
-        self.lastTLSFailure = nil
-        return failure
+        self.failureLock.withLock {
+            defer { self.lastTLSFailure = nil }
+            return self.lastTLSFailure
+        }
     }
 
     // periphery:ignore - External TLS transports delegate trust ownership to this session.
@@ -768,61 +692,56 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
     /// The existing pin owner also supplies typed repair evidence and first-use persistence.
     public func validateServerTrust(_ trust: SecTrust, for url: URL) -> Bool {
         guard let authority = GatewayTLSAuthority(url: url), authority.scheme == "wss" else { return false }
-        switch GatewayTLSServerTrust.evaluate(
-            trust: trust,
+        return self.evaluateServerTrust(
+            trust,
             host: authority.host,
             port: authority.port,
-            params: self.params,
             expectedFingerprint: self.currentEnforcedFingerprint())
+    }
+
+    private func evaluateServerTrust(
+        _ trust: SecTrust,
+        host: String,
+        port: Int,
+        expectedFingerprint: String?) -> Bool
+    {
+        switch GatewayTLSServerTrust.evaluate(
+            trust: trust,
+            host: host,
+            port: port,
+            params: self.params,
+            expectedFingerprint: expectedFingerprint)
         {
         case let .accept(fingerprint, enforcePin):
-            self.recordTLSAcceptance(fingerprint, enforcePin: enforcePin)
+            self.failureLock.withLock {
+                self.lastTLSFailure = nil
+                self.pinningState.recordAcceptance(fingerprint, enforcePin: enforcePin)
+            }
             return true
         case let .reject(failure, enforcedFingerprint):
-            if let enforcedFingerprint { self.recordTLSPinExpectation(enforcedFingerprint) }
+            if let enforcedFingerprint {
+                self.failureLock.withLock { self.pinningState.enforceFingerprint(enforcedFingerprint) }
+            }
             self.recordTLSFailure(failure)
             return false
         }
     }
 
     private func recordTLSFailure(_ failure: GatewayTLSValidationFailure) {
-        self.failureLock.lock()
-        self.lastTLSFailure = failure
-        self.failureLock.unlock()
+        self.failureLock.withLock { self.lastTLSFailure = failure }
     }
 
     private func currentEnforcedFingerprint() -> String? {
-        self.failureLock.lock()
-        defer { self.failureLock.unlock() }
-        return self.pinningState.enforcedFingerprint
-    }
-
-    private func recordTLSPinExpectation(_ fingerprint: String) {
-        self.failureLock.lock()
-        self.pinningState.enforceFingerprint(fingerprint)
-        self.failureLock.unlock()
-    }
-
-    private func recordTLSAcceptance(_ fingerprint: String?, enforcePin: Bool) {
-        self.failureLock.lock()
-        self.lastTLSFailure = nil
-        self.pinningState.recordAcceptance(fingerprint, enforcePin: enforcePin)
-        self.failureLock.unlock()
+        self.failureLock.withLock { self.pinningState.enforcedFingerprint }
     }
 
     private func registerExpectedAuthority(url: URL?) {
         guard let url, let authority = GatewayTLSAuthority(url: url) else { return }
-        self.failureLock.lock()
-        if self.expectedAuthority == nil {
-            self.expectedAuthority = authority
+        self.failureLock.withLock {
+            if self.expectedAuthority == nil {
+                self.expectedAuthority = authority
+            }
         }
-        self.failureLock.unlock()
-    }
-
-    private func currentExpectedAuthority() -> GatewayTLSAuthority? {
-        self.failureLock.lock()
-        defer { self.failureLock.unlock() }
-        return self.expectedAuthority
     }
 
     public func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
@@ -944,7 +863,7 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         let host = challenge.protectionSpace.host
         let port = challenge.protectionSpace.port
         let expected = self.currentEnforcedFingerprint()
-        guard let expectedAuthority = self.currentExpectedAuthority(),
+        guard let expectedAuthority = self.failureLock.withLock({ self.expectedAuthority }),
               expectedAuthority.matches(host: host, port: port)
         else {
             self.recordTLSFailure(GatewayTLSValidationFailure(
@@ -958,21 +877,9 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
             completionHandler(.cancelAuthenticationChallenge, nil)
             return
         }
-        switch GatewayTLSServerTrust.evaluate(
-            trust: trust,
-            host: host,
-            port: port,
-            params: self.params,
-            expectedFingerprint: expected)
-        {
-        case let .accept(fingerprint, enforcePin):
-            self.recordTLSAcceptance(fingerprint, enforcePin: enforcePin)
+        if self.evaluateServerTrust(trust, host: host, port: port, expectedFingerprint: expected) {
             completionHandler(.useCredential, URLCredential(trust: trust))
-        case let .reject(failure, enforcedFingerprint):
-            if let enforcedFingerprint {
-                self.recordTLSPinExpectation(enforcedFingerprint)
-            }
-            self.recordTLSFailure(failure)
+        } else {
             completionHandler(.cancelAuthenticationChallenge, nil)
         }
     }
@@ -1035,12 +942,8 @@ private func certificateFingerprint(_ trust: SecTrust) -> String? {
     else {
         return nil
     }
-    return sha256Hex(SecCertificateCopyData(cert) as Data)
-}
-
-private func sha256Hex(_ data: Data) -> String {
-    let digest = SHA256.hash(data: data)
-    return digest.map { String(format: "%02x", $0) }.joined()
+    return SHA256.hash(data: SecCertificateCopyData(cert) as Data)
+        .map { String(format: "%02x", $0) }.joined()
 }
 
 private func normalizeFingerprint(_ raw: String) -> String {

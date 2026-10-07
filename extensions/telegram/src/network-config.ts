@@ -9,8 +9,8 @@ const TELEGRAM_ENABLE_AUTO_SELECT_FAMILY_ENV = "OPENCLAW_TELEGRAM_ENABLE_AUTO_SE
 export const TELEGRAM_DNS_RESULT_ORDER_ENV = "OPENCLAW_TELEGRAM_DNS_RESULT_ORDER";
 
 type TelegramAutoSelectFamilyDecision = {
-  value: boolean | null;
-  source?: string;
+  value: boolean;
+  source: string;
 };
 
 let wsl2SyncCache: boolean | undefined;
@@ -20,20 +20,15 @@ function isWSL2SyncCached(): boolean {
 }
 
 type TelegramDnsResultOrderDecision = {
-  value: "ipv4first" | "verbatim" | null;
-  source?: string;
+  value: "ipv4first" | "verbatim";
+  source: string;
 };
 
 export function resolveTelegramAutoSelectFamilyDecision(params?: {
   network?: TelegramNetworkConfig;
   env?: NodeJS.ProcessEnv;
-  nodeMajor?: number;
 }): TelegramAutoSelectFamilyDecision {
   const env = params?.env ?? process.env;
-  const nodeMajor =
-    typeof params?.nodeMajor === "number"
-      ? params.nodeMajor
-      : Number(process.versions.node.split(".")[0]);
 
   if (isTruthyEnvValue(env[TELEGRAM_ENABLE_AUTO_SELECT_FAMILY_ENV])) {
     return { value: true, source: `env:${TELEGRAM_ENABLE_AUTO_SELECT_FAMILY_ENV}` };
@@ -48,36 +43,14 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
   if (isWSL2SyncCached()) {
     return { value: false, source: "default-wsl2" };
   }
-  if (Number.isFinite(nodeMajor) && nodeMajor >= 22) {
-    return { value: true, source: "default-node22" };
-  }
-  return { value: null };
+  return { value: true, source: "default-node22" };
 }
 
-/**
- * Resolve DNS result order setting for Telegram network requests.
- * Some networks/ISPs have issues with IPv6 causing fetch failures.
- * Setting "ipv4first" prioritizes IPv4 addresses in DNS resolution.
- *
- * Priority:
- * 1. Environment variable OPENCLAW_TELEGRAM_DNS_RESULT_ORDER
- * 2. Config: channels.telegram.network.dnsResultOrder
- * 3. Process default: dns.getDefaultResultOrder()
- * 4. Default: "ipv4first" on Node 22+ (to work around common IPv6 issues)
- */
+// Default to IPv4 first to work around networks with broken IPv6 connectivity.
 export function resolveTelegramDnsResultOrderDecision(params?: {
   network?: TelegramNetworkConfig;
-  env?: NodeJS.ProcessEnv;
-  nodeMajor?: number;
-  defaultResultOrder?: string | null;
 }): TelegramDnsResultOrderDecision {
-  const env = params?.env ?? process.env;
-  const nodeMajor =
-    typeof params?.nodeMajor === "number"
-      ? params.nodeMajor
-      : Number(process.versions.node.split(".")[0]);
-
-  const envValue = normalizeOptionalLowercaseString(env[TELEGRAM_DNS_RESULT_ORDER_ENV]);
+  const envValue = normalizeOptionalLowercaseString(process.env[TELEGRAM_DNS_RESULT_ORDER_ENV]);
   if (envValue === "ipv4first" || envValue === "verbatim") {
     return { value: envValue, source: `env:${TELEGRAM_DNS_RESULT_ORDER_ENV}` };
   }
@@ -87,19 +60,10 @@ export function resolveTelegramDnsResultOrderDecision(params?: {
     return { value: configValue, source: "config" };
   }
 
-  const processDefaultValue = normalizeOptionalLowercaseString(
-    params && "defaultResultOrder" in params
-      ? params.defaultResultOrder
-      : dns.getDefaultResultOrder?.(),
-  );
+  const processDefaultValue = normalizeOptionalLowercaseString(dns.getDefaultResultOrder());
   if (processDefaultValue === "ipv4first" || processDefaultValue === "verbatim") {
     return { value: processDefaultValue, source: "process-default" };
   }
 
-  // Default to ipv4first on Node 22+ to avoid IPv6 issues
-  if (Number.isFinite(nodeMajor) && nodeMajor >= 22) {
-    return { value: "ipv4first", source: "default-node22" };
-  }
-
-  return { value: null };
+  return { value: "ipv4first", source: "default-node22" };
 }

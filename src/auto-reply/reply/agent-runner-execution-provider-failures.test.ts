@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
@@ -598,11 +599,16 @@ describe("executeAgentTurn: provider failures", () => {
   it("keeps overload failure handling terminal when the turn is aborted", async () => {
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     vi.useFakeTimers();
-    state.runEmbeddedAgentMock.mockRejectedValue(new Error("model is overloaded"));
+    const runnerStarted = createDeferred();
+    state.runEmbeddedAgentMock.mockImplementation(async () => {
+      runnerStarted.resolve();
+      throw new Error("model is overloaded");
+    });
     const abortController = new AbortController();
     const { replyOperation } = createMockReplyOperation({ abortSignal: abortController.signal });
     const onBlockReply = vi.fn();
-    const onAgentRunTerminalOutcome = vi.fn();
+    const failureReported = createDeferred();
+    const onAgentRunTerminalOutcome = vi.fn(() => failureReported.resolve());
 
     const resultPromise = executeAgentTurn(
       createMinimalRunAgentTurnParams({
@@ -610,7 +616,16 @@ describe("executeAgentTurn: provider failures", () => {
         replyOperation,
       }),
     );
-    await vi.advanceTimersByTimeAsync(0);
+    await awaitGateBeforeSettlement(
+      runnerStarted.promise,
+      resultPromise,
+      "provider failure fixture did not reach the runner",
+    );
+    await awaitGateBeforeSettlement(
+      failureReported.promise,
+      resultPromise,
+      "provider failure fixture did not report its terminal outcome",
+    );
     abortController.abort();
     await expect(resultPromise).resolves.toMatchObject({
       kind: "final",
@@ -631,13 +646,15 @@ describe("executeAgentTurn: provider failures", () => {
   it("keeps transient HTTP failure handling terminal when the turn is aborted", async () => {
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     vi.useFakeTimers();
-    state.runEmbeddedAgentMock.mockRejectedValue(
-      new FailoverError("provider request timed out", {
+    const runnerStarted = createDeferred();
+    state.runEmbeddedAgentMock.mockImplementation(async () => {
+      runnerStarted.resolve();
+      throw new FailoverError("provider request timed out", {
         reason: "timeout",
         provider: "anthropic",
         model: "claude-opus-4-1",
-      }),
-    );
+      });
+    });
     const abortController = new AbortController();
     const { replyOperation } = createMockReplyOperation({ abortSignal: abortController.signal });
 
@@ -645,7 +662,11 @@ describe("executeAgentTurn: provider failures", () => {
     const resultPromise = executeAgentTurn(
       createMinimalRunAgentTurnParams({ replyOperation, opts: { onBlockReply } }),
     );
-    await vi.advanceTimersByTimeAsync(0);
+    await awaitGateBeforeSettlement(
+      runnerStarted.promise,
+      resultPromise,
+      "provider failure fixture did not reach the runner",
+    );
     abortController.abort();
     await expect(resultPromise).resolves.toMatchObject({
       kind: "final",

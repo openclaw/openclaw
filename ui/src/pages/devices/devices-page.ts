@@ -23,9 +23,9 @@ import { showSecretRevealDialog } from "../../components/secret-reveal-dialog.ts
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { presenceConnectivitySignature } from "../../lib/nodes/inventory.ts";
 import {
   approveDevicePairing,
@@ -41,7 +41,7 @@ import {
   type ExecApprovalsTarget,
   type DevicesPageDataState,
 } from "../../lib/nodes/page-operations.ts";
-import { readSystemInfo } from "../../lib/system-info.ts";
+import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
@@ -51,6 +51,8 @@ import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { DevicesDialogController } from "./devices-dialogs.ts";
 import { renderDevices } from "./view.ts";
+
+registerDevicesEnglish();
 
 const DEVICES_DOCS_URL = "https://docs.openclaw.ai/nodes";
 
@@ -378,12 +380,7 @@ class DevicesPage extends OpenClawLightDomElement {
 
   private get canLoadSystemInfo(): boolean {
     const snapshot = this.gateway.snapshot;
-    return (
-      this.isConnected &&
-      snapshot?.phase === "connected" &&
-      !this.systemInfoUnavailable &&
-      isGatewayMethodAdvertised(snapshot, "system.info") === true
-    );
+    return this.isConnected && !this.systemInfoUnavailable && canReadSystemInfo(snapshot);
   }
 
   private get canLoadDesktopEnvironments(): boolean {
@@ -466,6 +463,29 @@ class DevicesPage extends OpenClawLightDomElement {
           acknowledgeLabel: t("common.close"),
           note: t("devices.inventory.rotateWithheldNote"),
         }));
+  }
+
+  // Retargeting discards the draft for the target being left, so a dirty form
+  // asks first. Cancelling restores nothing because nothing is written until the
+  // operator confirms: the target, the form, the scope and the dirty flag are
+  // still the ones the selector was rendered from, and the re-render puts the
+  // selector itself back on that target.
+  private async changeExecApprovalsTarget(kind: "gateway" | "node", nodeId: string | null) {
+    const devices = this.pageState;
+    if (devices.execApprovalsDirty && !(await this.dialogs.confirmExecApprovalsDiscard())) {
+      this.requestUpdate();
+      return;
+    }
+    if (this.pageState !== devices) {
+      return;
+    }
+    this.execApprovalsTarget = kind;
+    this.execApprovalsTargetNodeId = nodeId;
+    devices.execApprovalsSnapshot = null;
+    devices.execApprovalsForm = null;
+    devices.execApprovalsDirty = false;
+    devices.execApprovalsSelectedAgent = null;
+    this.requestUpdate();
   }
 
   private resolveExecApprovalsTarget(): ExecApprovalsTarget {
@@ -588,15 +608,8 @@ class DevicesPage extends OpenClawLightDomElement {
               void this.context.runtimeConfig.save();
             }
           },
-          onExecApprovalsTargetChange: (kind, nodeId) => {
-            this.execApprovalsTarget = kind;
-            this.execApprovalsTargetNodeId = nodeId;
-            devices.execApprovalsSnapshot = null;
-            devices.execApprovalsForm = null;
-            devices.execApprovalsDirty = false;
-            devices.execApprovalsSelectedAgent = null;
-            this.requestUpdate();
-          },
+          onExecApprovalsTargetChange: (kind, nodeId) =>
+            void this.changeExecApprovalsTarget(kind, nodeId),
           onExecApprovalsSelectAgent: (agentId) => {
             devices.execApprovalsSelectedAgent = agentId;
             this.requestUpdate();

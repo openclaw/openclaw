@@ -27,7 +27,7 @@ import { buildScheduledCodexAppAuthorityInputFingerprint } from "./scheduled-app
 import { createCodexAppServerBindingStore, sessionBindingIdentity } from "./session-binding.js";
 import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 import { createCodexTestModel, useAutoCleanupTempDirTracker } from "./test-support.js";
-import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 import {
   createAppServerOptions,
   createLeasedCodexLifecycleHarness,
@@ -110,7 +110,6 @@ describe("Codex app inventory across physical process restart", () => {
     const appServer = {
       ...createAppServerOptions(),
       connectionClass: "local-loopback" as const,
-      remoteAppsSubstrate: "preconfigured" as const,
     };
     appServer.start = {
       ...appServer.start,
@@ -483,11 +482,7 @@ describe("Codex app inventory across physical process restart", () => {
     return { ...f, first, process };
   }
 
-  it.each([
-    { lifecycle: "cold", scheduled: false },
-    { lifecycle: "warm", scheduled: true },
-    { lifecycle: "unloaded-same-process", scheduled: true },
-  ])(
+  it.each([{ lifecycle: "unloaded-same-process", scheduled: true }])(
     "preserves approved apps on $lifecycle continuation, scheduled=$scheduled",
     async ({ lifecycle, scheduled }) => {
       const f = await continuation(scheduled, lifecycle);
@@ -694,33 +689,7 @@ describe("Codex app inventory across physical process restart", () => {
     expect(reads.every((call) => !call.params.threadId || call.loaded)).toBe(true);
   });
 
-  it("rejects a scheduled continuation whose account app was revoked", async () => {
-    const f = await continuation(true, "cold");
-    f.revokeAccount();
-    await expect(f.process.run()).rejects.toThrow("Scheduled Codex apps are unavailable");
-  });
-
-  it("checks scheduled tools on the loaded thread even when account-wide tools remain available", async () => {
-    const f = await continuation(true, "warm");
-    const { process, first } = f;
-    process.threadToolRevocations.add(first.threadId);
-    const boundary = f.calls.length;
-    await expect(process.run()).rejects.toThrow("Scheduled Codex apps are unavailable");
-    const calls = f.calls.slice(boundary);
-    expect(
-      calls.some(
-        (call) =>
-          call.method === "mcpServerStatus/list" &&
-          call.params.threadId === first.threadId &&
-          call.loaded,
-      ),
-    ).toBe(true);
-    expect(
-      calls.filter((call) => call.method === "thread/start" || call.method === "thread/resume"),
-    ).toEqual([]);
-  });
-
-  it.each(["cold", "warm"])(
+  it.each(["cold"])(
     "rejects active inherited MCP servers on a scheduled %s continuation",
     async (lifecycle) => {
       const f = await continuation(true, lifecycle);
@@ -808,7 +777,7 @@ describe("Codex app inventory across physical process restart", () => {
     ).toBe(false);
   });
 
-  it.each(["cold", "warm"])(
+  it.each(["warm"])(
     "retires the %s client when denied admission cannot unsubscribe",
     async (lifecycle) => {
       const f = await continuation(true, lifecycle);

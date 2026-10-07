@@ -1,32 +1,15 @@
-/**
- * Resolves CLI runtime backends registered by plugins or setup metadata.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   resolvePluginSetupCliBackend,
   resolvePluginSetupRegistry,
 } from "../plugins/setup-registry.js";
 import { resolveRuntimeTextTransforms } from "../plugins/text-transforms.runtime.js";
-import type {
-  CliBackendNormalizeConfigContext,
-  CliBundleMcpMode,
-  CliBackendPlugin,
-} from "../plugins/types.js";
+import type { CliBackendNormalizeConfigContext, CliBackendPlugin } from "../plugins/types.js";
 import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
 
-const defaultCliBackendsDeps = {
-  resolvePluginSetupCliBackend,
-  resolvePluginSetupRegistry,
-  resolveRuntimeCliBackends,
-};
-
-type CliBackendsDeps = typeof defaultCliBackendsDeps;
-
-let cliBackendsDeps: CliBackendsDeps = defaultCliBackendsDeps;
-
-/** Fully merged CLI backend definition used by agent runner execution. */
 export type ResolvedCliBackend = Pick<
   CliBackendPlugin,
   | "id"
@@ -50,6 +33,7 @@ export type ResolvedCliBackend = Pick<
   | "isolatesInstructionsWithExactTools"
   | "projectNativeToolAuthority"
   | "nativeToolMode"
+  | "hostOwnedTools"
   | "sideQuestionToolMode"
   | "runtimeArtifact"
 > & {
@@ -65,29 +49,10 @@ type ResolvedCliBackendLiveTest = {
   dockerBinaryName?: string;
 };
 
-/** Binding between a model provider and the CLI runtime that serves it. */
 type CliRuntimeModelBackendBinding = {
   provider: string;
   runtime: string;
-  pluginId?: string;
 };
-
-function normalizeBundleMcpMode(
-  mode: CliBundleMcpMode | undefined,
-  enabled: boolean,
-): CliBundleMcpMode | undefined {
-  if (!enabled) {
-    return undefined;
-  }
-  return mode ?? "claude-config-file";
-}
-
-function resolveRegisteredBackend(provider: string) {
-  const normalized = normalizeProviderId(provider);
-  return cliBackendsDeps
-    .resolveRuntimeCliBackends()
-    .find((entry) => normalizeProviderId(entry.id) === normalized);
-}
 
 function resolveCliBackendModelProvider(
   backend: Pick<CliBackendPlugin, "modelProvider">,
@@ -98,21 +63,19 @@ function resolveCliBackendModelProvider(
 
 function addCliRuntimeModelBinding(
   bindings: Map<string, CliRuntimeModelBackendBinding>,
-  params: { backend: Pick<CliBackendPlugin, "id" | "modelProvider">; pluginId?: string },
+  backend: Pick<CliBackendPlugin, "id" | "modelProvider">,
 ): void {
-  const provider = resolveCliBackendModelProvider(params.backend);
-  const runtime = normalizeProviderId(params.backend.id);
+  const provider = resolveCliBackendModelProvider(backend);
+  const runtime = normalizeProviderId(backend.id);
   if (!provider || !runtime) {
     return;
   }
   bindings.set(`${provider}:${runtime}`, {
     provider,
     runtime,
-    ...(params.pluginId ? { pluginId: params.pluginId } : {}),
   });
 }
 
-/** Lists model-provider to CLI-runtime bindings from runtime and optional setup registries. */
 export function listCliRuntimeModelBackendBindings(
   params: {
     config?: OpenClawConfig;
@@ -121,21 +84,15 @@ export function listCliRuntimeModelBackendBindings(
   } = {},
 ): CliRuntimeModelBackendBinding[] {
   const bindings = new Map<string, CliRuntimeModelBackendBinding>();
-  for (const backend of cliBackendsDeps.resolveRuntimeCliBackends("metadata")) {
-    addCliRuntimeModelBinding(bindings, {
-      backend,
-      ...(backend.pluginId ? { pluginId: backend.pluginId } : {}),
-    });
+  for (const backend of resolveRuntimeCliBackends("metadata")) {
+    addCliRuntimeModelBinding(bindings, backend);
   }
   if (params.includeSetupRegistry === true) {
-    for (const entry of cliBackendsDeps.resolvePluginSetupRegistry({
+    for (const entry of resolvePluginSetupRegistry({
       config: params.config,
       env: params.env,
     }).cliBackends) {
-      addCliRuntimeModelBinding(bindings, {
-        backend: entry.backend,
-        pluginId: entry.pluginId,
-      });
+      addCliRuntimeModelBinding(bindings, entry.backend);
     }
   }
   return [...bindings.values()].toSorted((left, right) =>
@@ -145,7 +102,6 @@ export function listCliRuntimeModelBackendBindings(
   );
 }
 
-/** Lists CLI runtime ids that alias canonical model providers. */
 export function listCliRuntimeProviderIds(
   params: {
     config?: OpenClawConfig;
@@ -161,12 +117,12 @@ export function listCliRuntimeProviderIds(
   ].toSorted();
 }
 
-/** Resolves the canonical model provider served by a CLI runtime id. */
 export function resolveCliRuntimeCanonicalProvider(params: {
   runtime: string | undefined;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   includeSetupRegistry?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot | null;
 }): string | undefined {
   const runtime = normalizeProviderId(params.runtime ?? "");
   if (!runtime) {
@@ -178,23 +134,22 @@ export function resolveCliRuntimeCanonicalProvider(params: {
   if (runtimeBinding) {
     return runtimeBinding.provider;
   }
-  if (params.includeSetupRegistry !== true) {
+  if (params.includeSetupRegistry !== true || params.metadataSnapshot === null) {
     return undefined;
   }
-  const setupBackend = cliBackendsDeps.resolvePluginSetupCliBackend({
+  const setupBackend = resolvePluginSetupCliBackend({
     backend: runtime,
     config: params.config,
     env: params.env,
+    metadataSnapshot: params.metadataSnapshot,
   });
   return setupBackend ? resolveCliBackendModelProvider(setupBackend.backend) : undefined;
 }
 
-/** Resolves the binding for one provider/runtime pair when registered. */
 export function resolveCliRuntimeModelBackendBinding(params: {
   provider: string | undefined;
   runtime: string | undefined;
   config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
 }): CliRuntimeModelBackendBinding | undefined {
   const provider = normalizeProviderId(params.provider ?? "");
   const runtime = normalizeProviderId(params.runtime ?? "");
@@ -208,14 +163,12 @@ export function resolveCliRuntimeModelBackendBinding(params: {
   if (runtimeBinding) {
     return runtimeBinding;
   }
-  const includeSetupRegistry = params.config !== undefined || params.env !== undefined;
-  if (!includeSetupRegistry) {
+  if (params.config === undefined) {
     return undefined;
   }
-  const setupBackend = cliBackendsDeps.resolvePluginSetupCliBackend({
+  const setupBackend = resolvePluginSetupCliBackend({
     backend: runtime,
     config: params.config,
-    env: params.env,
   });
   if (!setupBackend) {
     return undefined;
@@ -225,29 +178,23 @@ export function resolveCliRuntimeModelBackendBinding(params: {
     ? {
         provider: setupProvider,
         runtime,
-        ...(setupBackend.pluginId ? { pluginId: setupBackend.pluginId } : {}),
       }
     : undefined;
 }
 
-/** Checks whether a runtime is registered to serve a model provider. */
 export function isCliRuntimeModelBackendForProvider(params: {
   provider: string | undefined;
   runtime: string | undefined;
   config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
 }): boolean {
   return resolveCliRuntimeModelBackendBinding(params) !== undefined;
 }
 
-/** Resolves live-test defaults advertised by a CLI backend plugin. */
 export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendLiveTest | null {
   const normalized = normalizeProviderId(provider);
   const entry =
-    cliBackendsDeps.resolvePluginSetupCliBackend({ backend: normalized }) ??
-    cliBackendsDeps
-      .resolveRuntimeCliBackends()
-      .find((backend) => normalizeProviderId(backend.id) === normalized);
+    resolvePluginSetupCliBackend({ backend: normalized }) ??
+    resolveRuntimeCliBackends().find((backend) => normalizeProviderId(backend.id) === normalized);
   if (!entry) {
     return null;
   }
@@ -267,7 +214,6 @@ export function cliBackendSupportsSessionFork(provider: string, cfg?: OpenClawCo
   return Boolean(config?.forkArg && config.resumeAtArg);
 }
 
-/** Resolves the executable CLI backend registered by its owning plugin. */
 export function resolveCliBackendConfig(
   provider: string,
   cfg?: OpenClawConfig,
@@ -280,9 +226,10 @@ export function resolveCliBackendConfig(
     ...(cfg ? { config: cfg } : {}),
   };
   const runtimeTextTransforms = resolveRuntimeTextTransforms();
-  const registered = resolveRegisteredBackend(normalized);
-  const backend =
-    registered ?? cliBackendsDeps.resolvePluginSetupCliBackend({ backend: normalized })?.backend;
+  const registered = resolveRuntimeCliBackends().find(
+    (entry) => normalizeProviderId(entry.id) === normalized,
+  );
+  const backend = registered ?? resolvePluginSetupCliBackend({ backend: normalized })?.backend;
   if (!backend) {
     return null;
   }
@@ -301,7 +248,7 @@ export function resolveCliBackendConfig(
     ...(modelProvider ? { modelProvider } : {}),
     config: { ...config, command },
     bundleMcp,
-    bundleMcpMode: normalizeBundleMcpMode(backend.bundleMcpMode, bundleMcp),
+    bundleMcpMode: bundleMcp ? (backend.bundleMcpMode ?? "claude-config-file") : undefined,
     ...(registered ? { pluginId: registered.pluginId } : {}),
     transformSystemPrompt: backend.transformSystemPrompt,
     textTransforms: mergePluginTextTransforms(runtimeTextTransforms, backend.textTransforms),
@@ -320,24 +267,8 @@ export function resolveCliBackendConfig(
     isolatesInstructionsWithExactTools: backend.isolatesInstructionsWithExactTools,
     projectNativeToolAuthority: backend.projectNativeToolAuthority,
     nativeToolMode: backend.nativeToolMode,
+    hostOwnedTools: backend.hostOwnedTools,
     sideQuestionToolMode: backend.sideQuestionToolMode,
     runtimeArtifact: backend.runtimeArtifact,
   };
-}
-
-/** Test-only dependency controls for CLI backend registry resolution. */
-const testing = {
-  resetDepsForTest(): void {
-    cliBackendsDeps = defaultCliBackendsDeps;
-  },
-  setDepsForTest(deps: Partial<CliBackendsDeps>): void {
-    cliBackendsDeps = {
-      ...defaultCliBackendsDeps,
-      ...deps,
-    };
-  },
-} as const;
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliBackendsTestApi")] = testing;
 }

@@ -2,12 +2,7 @@ import {
   MeetingPlatformAdapter,
   type MeetingBrowserJoinSession,
 } from "openclaw/plugin-sdk/meeting-runtime";
-import {
-  teamsMeetingAudioCaptureScript,
-  teamsMeetingLeaveScript,
-  teamsMeetingStatusScript,
-  teamsMeetingTranscriptScript,
-} from "./teams-meetings-page-scripts.js";
+import { teamsMeetingPageScripts } from "./teams-meetings-page-scripts.js";
 import {
   isRecoverableTeamsMeetingTab,
   isSameTeamsMeetingUrl,
@@ -82,11 +77,6 @@ export const TEAMS_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
     unavailableMessage:
       "Open the OpenClaw browser profile, finish the Teams sign-in, admission, or permission prompt, then retry.",
     origin: teamsMeetingOrigin,
-    scripts: {
-      audioCapture: teamsMeetingAudioCaptureScript,
-      status: teamsMeetingStatusScript,
-      leave: teamsMeetingLeaveScript,
-      transcript: teamsMeetingTranscriptScript,
-    },
+    scripts: teamsMeetingPageScripts,
   }),
 });

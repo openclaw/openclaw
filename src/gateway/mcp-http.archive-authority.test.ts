@@ -78,7 +78,7 @@ describe("MCP HTTP session archive authority", () => {
       toolCallerIdentity = getGatewayToolCallerIdentity();
       return completed;
     });
-    resolveTools.mockReset().mockReturnValue({
+    resolveTools.mockReset().mockResolvedValue({
       agentId: "main",
       workspaceDir: "/workspace/archive-authority",
       captureFinalCronCreatorTools: undefined,

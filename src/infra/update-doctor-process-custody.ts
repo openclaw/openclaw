@@ -270,7 +270,7 @@ export function createUpdateDoctorProcessCustody(
         // A missing or partial receipt cannot prove that no native work started.
       }
       // Shipped targets without this IPC retain normal completion, after the
-      // original pinned namespace also confirms that no command claims remain.
+      // original pinned namespace also confirms that no owned command claims remain.
       const legacyCompletion = !receipt && !interrupted && rootExtinct;
       const identities =
         receipt?.slots.flatMap((slot) => (slot.identity ? [slot.identity] : [])) ?? [];
@@ -278,6 +278,7 @@ export function createUpdateDoctorProcessCustody(
       // Withheld private input proves no Doctor writers, not whole Windows Job extinction.
       const admitted =
         (rootExtinct && (receipt !== undefined || legacyCompletion)) || inputWithheld;
+      let diagnostics: string[] = [];
       const cleanup = (async () => {
         const pids = [...identities.map((identity) => identity.pid), ...(pid ? [pid] : [])];
         if (!admitted || pid === undefined) {
@@ -289,10 +290,11 @@ export function createUpdateDoctorProcessCustody(
         }
         try {
           // Snapshot exact native handles before joining; mutable IPC never selects this namespace.
-          const retire = nativeCustody?.prepareSettlement(pid, identities);
+          const prepared = nativeCustody?.prepareSettlement(pid, identities);
+          diagnostics = prepared?.diagnostics ?? [];
           const groups = await settleCommandProcessGroups(identities);
           if (groups.settled && pending === 0) {
-            retire?.();
+            prepared?.retire();
           }
           return groups;
         } catch (error) {
@@ -305,11 +307,19 @@ export function createUpdateDoctorProcessCustody(
       const groups = await cleanup;
       const settled = admitted && pending === 0 && groups.settled;
       mayRemove = settled;
+      const step: UpdateStepResult = {
+        name: "doctor process settlement",
+        command: "settle doctor process groups",
+        cwd: root,
+        durationMs: Date.now() - started,
+        exitCode: settled ? 0 : 1,
+        ...(diagnostics.length ? { diagnostics } : {}),
+      };
       if (
         settled &&
         (inputWithheld || legacyCompletion || (!abnormal && receipt?.slots.length === 0))
       ) {
-        return undefined;
+        return diagnostics.length ? step : undefined;
       }
       const knownPid = pid ?? receipt?.pid;
       const pids = [
@@ -322,11 +332,7 @@ export function createUpdateDoctorProcessCustody(
         ? "Doctor did not finish normally, but every tracked process group stopped. Preserving migrated state; run `openclaw update repair` to finish deferred maintenance."
         : `Doctor processes remain unsettled, data-at-risk. PIDs/process groups: ${pids.join(", ") || "unavailable"}; ${!receipt ? "custody receipt unavailable" : pending > 0 ? `${pending} spawn reservations lack a process identity` : (groups.reason ?? "process extinction could not be proven")}. Keep the Gateway stopped and preserve ${descriptor.path}; resolve retained process custody before retrying \`openclaw update repair\`. Repeating repair alone cannot clear unknown reservations.`;
       return {
-        name: "doctor process settlement",
-        command: "settle doctor process groups",
-        cwd: root,
-        durationMs: Date.now() - started,
-        exitCode: settled ? 0 : 1,
+        ...step,
         ...(settled
           ? { advisory: { kind: "recoverable-maintenance" as const, message } }
           : {

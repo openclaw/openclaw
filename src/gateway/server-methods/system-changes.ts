@@ -1,4 +1,3 @@
-// Reads the bounded system/config journals as one admin-facing change history.
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   ErrorCodes,
@@ -15,7 +14,7 @@ import type { SequencedSqliteAuditRecordEntry } from "../../infra/sqlite-audit-r
 import { SYSTEM_AGENT_AUDIT_SCOPE, type SystemAgentAuditEntry } from "../../system-agent/audit.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 const DEFAULT_CHANGE_LIMIT = 50;
 const MAX_CHANGE_LIMIT = 200;
@@ -44,11 +43,11 @@ type ChangeCandidate = {
   recordedAt: number;
   transition?: string;
   pendingCollapse?: PendingCollapse;
-  positions: Array<{ scope: ChangeScope; sequence: number }>;
+  position: { scope: ChangeScope; sequence: number };
 };
 
-type EligibleScan<T> = {
-  entries: SequencedSqliteAuditRecordEntry<T>[];
+type CandidateScan = {
+  entries: ChangeCandidate[];
   exhausted: boolean;
   nextBeforeSequence: number;
 };
@@ -181,7 +180,7 @@ function toSystemAgentCandidate(
     },
     transition: transitionKey(record.value.configHashBefore, record.value.configHashAfter),
     recordedAt: record.createdAt,
-    positions: [{ scope: SYSTEM_AGENT_AUDIT_SCOPE, sequence: record.sequence }],
+    position: { scope: SYSTEM_AGENT_AUDIT_SCOPE, sequence: record.sequence },
   };
 }
 
@@ -207,7 +206,7 @@ function toConfigCandidate(
       },
       transition: transitionKey(value.previousHash, value.nextHash),
       recordedAt: record.createdAt,
-      positions: [{ scope: CONFIG_AUDIT_SCOPE, sequence: record.sequence }],
+      position: { scope: CONFIG_AUDIT_SCOPE, sequence: record.sequence },
     };
   }
   if (value.result !== "rename" && value.result !== "copy-fallback") {
@@ -226,17 +225,17 @@ function toConfigCandidate(
     },
     transition: transitionKey(value.previousHash, value.nextHash),
     recordedAt: record.createdAt,
-    positions: [{ scope: CONFIG_AUDIT_SCOPE, sequence: record.sequence }],
+    position: { scope: CONFIG_AUDIT_SCOPE, sequence: record.sequence },
   };
 }
 
-async function scanEligible<T>(params: {
+async function scanCandidates<T>(params: {
   beforeSequence: number;
   target: number;
   latest: AuditStore<T>["latest"];
-  include: (entry: SequencedSqliteAuditRecordEntry<T>) => boolean;
-}): Promise<EligibleScan<T>> {
-  const entries: SequencedSqliteAuditRecordEntry<T>[] = [];
+  project: (entry: SequencedSqliteAuditRecordEntry<T>) => ChangeCandidate | null;
+}): Promise<CandidateScan> {
+  const entries: ChangeCandidate[] = [];
   let beforeSequence = params.beforeSequence;
   let exhausted = false;
   let loadedRawEntries = 0;
@@ -263,8 +262,9 @@ async function scanEligible<T>(params: {
       const entry = page[index]!;
       // The cursor tracks every scanned raw row, including filtered records.
       beforeSequence = entry.sequence;
-      if (params.include(entry)) {
-        entries.push(entry);
+      const candidate = params.project(entry);
+      if (candidate) {
+        entries.push(candidate);
         if (entries.length >= params.target) {
           stoppedAt = index;
           break;
@@ -283,7 +283,7 @@ async function scanEligible<T>(params: {
   return {
     entries,
     exhausted,
-    nextBeforeSequence: entries.at(-1)?.sequence ?? beforeSequence,
+    nextBeforeSequence: entries.at(-1)?.position.sequence ?? beforeSequence,
   };
 }
 
@@ -315,7 +315,7 @@ function planConfigMatches(
     const write = configByTransition
       .get(operation.transition)
       ?.filter((candidate) => {
-        const configSequence = candidate.positions[0]!.sequence;
+        const configSequence = candidate.position.sequence;
         return (
           !usedConfig.has(candidate) &&
           configSequence < lastMatchedConfigSequence &&
@@ -328,7 +328,7 @@ function planConfigMatches(
     }
     planned.set(operation, write);
     usedConfig.add(write);
-    lastMatchedConfigSequence = write.positions[0]!.sequence;
+    lastMatchedConfigSequence = write.position.sequence;
   }
   return planned;
 }
@@ -338,11 +338,11 @@ function compareCandidates(left: ChangeCandidate, right: ChangeCandidate): numbe
   if (left.recordedAt !== right.recordedAt) {
     return right.recordedAt - left.recordedAt;
   }
-  const scopeOrder = right.positions[0]!.scope.localeCompare(left.positions[0]!.scope);
+  const scopeOrder = right.position.scope.localeCompare(left.position.scope);
   if (scopeOrder !== 0) {
     return scopeOrder;
   }
-  return right.positions[0]!.sequence - left.positions[0]!.sequence;
+  return right.position.sequence - left.position.sequence;
 }
 
 function isWithinCollapseWindow(operationAt: number, configAt: number): boolean {
@@ -371,7 +371,7 @@ function consumePendingCollapse(
   ) {
     return { pending: [...pending], suppressed: false };
   }
-  const sequence = candidate.positions[0]!.sequence;
+  const sequence = candidate.position.sequence;
   let markerIndex = -1;
   let markerSequence = Number.POSITIVE_INFINITY;
   for (let index = 0; index < pending.length; index += 1) {
@@ -433,7 +433,7 @@ function mergeCandidates(params: {
       const collapse = consumePendingCollapse(pendingCollapse, config);
       pendingCollapse = collapse.pending;
       if (collapse.suppressed) {
-        configBefore = config.positions[0]!.sequence;
+        configBefore = config.position.sequence;
         configIndex += 1;
         continue;
       }
@@ -444,13 +444,13 @@ function mergeCandidates(params: {
 
     entries.push(next);
     if (next === system) {
-      systemBefore = system.positions[0]!.sequence;
+      systemBefore = system.position.sequence;
       systemIndex += 1;
       if (system.pendingCollapse) {
         pendingCollapse = appendPendingCollapse(pendingCollapse, system.pendingCollapse);
       }
     } else {
-      configBefore = config!.positions[0]!.sequence;
+      configBefore = config!.position.sequence;
       configIndex += 1;
     }
   }
@@ -504,23 +504,20 @@ export async function listSystemChanges(
       };
   const limit = Math.min(MAX_CHANGE_LIMIT, Math.max(1, params.limit ?? DEFAULT_CHANGE_LIMIT));
   const target = limit + 1;
-  const systemScan = await scanEligible({
+  const systemScan = await scanCandidates({
     beforeSequence: cursor.systemAgentBefore,
     target,
     latest: systemStore.latest,
-    include: () => true,
+    project: toSystemAgentCandidate,
   });
-  const configScan = await scanEligible({
+  const configScan = await scanCandidates({
     beforeSequence: cursor.configBefore,
     target,
     latest: configStore.latest,
-    include: (entry) => toConfigCandidate(entry) !== null,
+    project: toConfigCandidate,
   });
-  const systemCandidates = systemScan.entries.map(toSystemAgentCandidate);
-  const configCandidates = configScan.entries.flatMap((entry) => {
-    const candidate = toConfigCandidate(entry);
-    return candidate ? [candidate] : [];
-  });
+  const systemCandidates = systemScan.entries;
+  const configCandidates = configScan.entries;
   // A visible write can enrich the operation immediately. Its cursor position
   // stays in the config stream and is suppressed only when that stream reaches it.
   const plannedMatches = planConfigMatches(systemCandidates, configCandidates);
@@ -535,7 +532,7 @@ export async function listSystemChanges(
     if (write) {
       operation.pendingCollapse = {
         transition: operation.transition,
-        maxConfigSequence: write.positions[0]!.sequence,
+        maxConfigSequence: write.position.sequence,
         operationAt: operation.entry.at,
       };
       if (write.entry.changedPaths?.length) {
@@ -592,28 +589,21 @@ export async function listSystemChanges(
 }
 
 export const systemChangesHandlers: GatewayRequestHandlers = {
-  "openclaw.changes.list": async (options) => {
-    const { params, respond } = options;
-    if (
-      !assertValidParams(params, validateSystemChangesListParams, "openclaw.changes.list", respond)
-    ) {
-      return;
-    }
-    try {
+  "openclaw.changes.list": defineValidatedGatewayHandler(
+    "openclaw.changes.list",
+    validateSystemChangesListParams,
+    async (options) => {
+      const { params, respond } = options;
       const authority = readGatewayRequestMutationAuthority(options);
       authority.assertCurrent();
       const result = await listSystemChanges(params);
       authority.assertCurrent();
       respond(true, result);
-    } catch (error) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          error instanceof Error ? error.message : "invalid change-history cursor",
-        ),
-      );
-    }
-  },
+    },
+    (error) =>
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        error instanceof Error ? error.message : "invalid change-history cursor",
+      ),
+  ),
 };

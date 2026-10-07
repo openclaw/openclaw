@@ -114,7 +114,7 @@ function resolveConfiguredMcpServers(
       error: "Config file is invalid; fix it before using MCP config commands.",
     };
   }
-  const sourceConfig = snapshot.sourceConfig ?? snapshot.resolved;
+  const sourceConfig = snapshot.sourceConfig;
   return {
     ok: true,
     path: snapshot.path,
@@ -216,7 +216,7 @@ async function updateConfiguredMcpServerConfig(params: {
     return { ...unchanged, updated: false };
   }
 
-  const servers = normalizeConfiguredMcpServers(loaded.config.mcp?.servers);
+  const servers = structuredClone(loaded.mcpServers);
   servers[name] = params.update({ ...servers[name] });
   return commitConfiguredMcpServers({
     loaded,
@@ -360,7 +360,7 @@ async function setConfiguredMcpServer(
     return { ok: false, path: loaded.path, error: "MCP server config must be a JSON object." };
   }
 
-  const servers = normalizeConfiguredMcpServers(loaded.config.mcp?.servers);
+  const servers = structuredClone(loaded.mcpServers);
   servers[name] = canonicalizeConfiguredMcpServer(restoredServer);
   return commitConfiguredMcpServers({
     loaded,
@@ -409,7 +409,7 @@ async function unsetConfiguredMcpServer(
     };
   }
 
-  const servers = normalizeConfiguredMcpServers(loaded.config.mcp?.servers);
+  const servers = structuredClone(loaded.mcpServers);
   delete servers[name];
   return commitConfiguredMcpServers({
     loaded,

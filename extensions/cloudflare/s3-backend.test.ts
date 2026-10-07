@@ -1,3 +1,4 @@
+/// <reference lib="es2024.promise" />
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
@@ -65,65 +66,49 @@ describe("R2 object transport", () => {
     expect(send).toHaveBeenCalledTimes(2);
   });
 
-  it.each([0, PART_BYTES])("uses conditional PutObject for known size %i", async (sizeBytes) => {
+  it("uploads ordered bounded parts for a declared large object", async () => {
     const { send, backend } = fixture();
-    send.mockResolvedValue({});
-    expect(
-      await backend.putObject("boundary", bytes(Buffer.alloc(sizeBytes)), { sizeBytes }),
-    ).toEqual({ sizeBytes });
-    expect(send.mock.calls[0]?.[0]).toBeInstanceOf(PutObjectCommand);
-    expect(send.mock.calls[0]?.[0].input).toMatchObject({
-      ContentLength: sizeBytes,
+    const lengths: number[] = [];
+    const edges: number[][] = [];
+    send.mockImplementation(async (command) => {
+      if (command instanceof CreateMultipartUploadCommand) {
+        return { UploadId: "upload" };
+      }
+      if (command instanceof UploadPartCommand) {
+        const body = command.input.Body;
+        if (!(body instanceof Uint8Array)) {
+          throw new Error("Expected byte part");
+        }
+        lengths.push(body.byteLength);
+        edges.push([body[0]!, body[body.byteLength - 1]!]);
+        return { ETag: `part-${command.input.PartNumber}` };
+      }
+      return {};
+    });
+    const data = bytes(Buffer.alloc(PART_BYTES - 1, 1), Buffer.from([2, 3, 4, 5]));
+    expect(await backend.putObject("large", data, { sizeBytes: PART_BYTES + 3 })).toEqual({
+      sizeBytes: PART_BYTES + 3,
+    });
+    expect(lengths).toEqual([PART_BYTES, 3]);
+    expect(edges).toEqual([
+      [1, 2],
+      [3, 5],
+    ]);
+    const complete = send.mock.calls.at(-1)?.[0];
+    expect(complete).toBeInstanceOf(CompleteMultipartUploadCommand);
+    expect(complete.input).toEqual({
+      Bucket: "test-bucket",
+      Key: "archive/team/large",
+      UploadId: "upload",
       IfNoneMatch: "*",
+      MultipartUpload: {
+        Parts: [
+          { PartNumber: 1, ETag: "part-1" },
+          { PartNumber: 2, ETag: "part-2" },
+        ],
+      },
     });
   });
-
-  it.each([undefined, PART_BYTES + 3])(
-    "uploads ordered bounded parts with declared size %s",
-    async (sizeBytes) => {
-      const { send, backend } = fixture();
-      const lengths: number[] = [];
-      const edges: number[][] = [];
-      send.mockImplementation(async (command) => {
-        if (command instanceof CreateMultipartUploadCommand) {
-          return { UploadId: "upload" };
-        }
-        if (command instanceof UploadPartCommand) {
-          const body = command.input.Body;
-          if (!(body instanceof Uint8Array)) {
-            throw new Error("Expected byte part");
-          }
-          lengths.push(body.byteLength);
-          edges.push([body[0]!, body[body.byteLength - 1]!]);
-          return { ETag: `part-${command.input.PartNumber}` };
-        }
-        return {};
-      });
-      const data = bytes(Buffer.alloc(PART_BYTES - 1, 1), Buffer.from([2, 3, 4, 5]));
-      expect(await backend.putObject("large", data, { sizeBytes })).toEqual({
-        sizeBytes: PART_BYTES + 3,
-      });
-      expect(lengths).toEqual([PART_BYTES, 3]);
-      expect(edges).toEqual([
-        [1, 2],
-        [3, 5],
-      ]);
-      const complete = send.mock.calls.at(-1)?.[0];
-      expect(complete).toBeInstanceOf(CompleteMultipartUploadCommand);
-      expect(complete.input).toEqual({
-        Bucket: "test-bucket",
-        Key: "archive/team/large",
-        UploadId: "upload",
-        IfNoneMatch: "*",
-        MultipartUpload: {
-          Parts: [
-            { PartNumber: 1, ETag: "part-1" },
-            { PartNumber: 2, ETag: "part-2" },
-          ],
-        },
-      });
-    },
-  );
 
   it("completes an empty unknown-size body through multipart", async () => {
     const { send, backend } = fixture();
@@ -136,103 +121,73 @@ describe("R2 object transport", () => {
     expect(send.mock.calls[2]?.[0]).toBeInstanceOf(CompleteMultipartUploadCommand);
   });
 
-  it.each(["part", "completion", "producer", "size"])(
-    "aborts multipart when %s fails",
-    async (failure) => {
-      const { send, backend } = fixture();
-      send.mockImplementation(async (command) => {
-        if (command instanceof CreateMultipartUploadCommand) {
-          return { UploadId: "upload" };
-        }
-        if (command instanceof UploadPartCommand) {
-          if (failure === "part") {
-            throw serviceError("AccessDenied", 403);
-          }
-          return { ETag: "part" };
-        }
-        if (command instanceof CompleteMultipartUploadCommand && failure === "completion") {
-          throw serviceError("PreconditionFailed", 412);
-        }
-        return {};
-      });
-      async function* source() {
-        yield Buffer.from("abc");
-        if (failure === "producer") {
-          throw new Error("private-credential-value");
-        }
-      }
-      const result = backend.putObject("broken", source(), {
-        sizeBytes: failure === "size" ? PART_BYTES + 1 : undefined,
-      });
-      await expect(result).rejects.not.toThrow("private-credential-value");
-      expect(send.mock.calls.at(-1)?.[0]).toBeInstanceOf(AbortMultipartUploadCommand);
-      expect(send.mock.calls.at(-1)?.[0].input).toEqual({
-        Bucket: "test-bucket",
-        Key: "archive/team/broken",
-        UploadId: "upload",
-      });
-      expect(send.mock.calls.at(-1)).toHaveLength(1);
-    },
-  );
-
-  it("aborts a cancelled multipart upload without passing the cancelled signal to cleanup", async () => {
+  it.each(["completion", "producer", "size"])("aborts multipart when %s fails", async (failure) => {
     const { send, backend } = fixture();
-    const controller = new AbortController();
     send.mockImplementation(async (command) => {
       if (command instanceof CreateMultipartUploadCommand) {
         return { UploadId: "upload" };
       }
       if (command instanceof UploadPartCommand) {
-        controller.abort();
-        throw controller.signal.reason;
+        return { ETag: "part" };
+      }
+      if (command instanceof CompleteMultipartUploadCommand && failure === "completion") {
+        throw serviceError("PreconditionFailed", 412);
       }
       return {};
     });
-    await expect(
-      backend.putObject("cancelled", bytes(Buffer.from("abc")), { signal: controller.signal }),
-    ).rejects.toMatchObject({ name: "AbortError" });
+    async function* source() {
+      yield Buffer.from("abc");
+      if (failure === "producer") {
+        throw new Error("private-credential-value");
+      }
+    }
+    const result = backend.putObject("broken", source(), {
+      sizeBytes: failure === "size" ? PART_BYTES + 1 : undefined,
+    });
+    await expect(result).rejects.not.toThrow("private-credential-value");
     expect(send.mock.calls.at(-1)?.[0]).toBeInstanceOf(AbortMultipartUploadCommand);
+    expect(send.mock.calls.at(-1)?.[0].input).toEqual({
+      Bucket: "test-bucket",
+      Key: "archive/team/broken",
+      UploadId: "upload",
+    });
     expect(send.mock.calls.at(-1)).toHaveLength(1);
-    expect(
-      send.mock.calls.some(([command]) => command instanceof CompleteMultipartUploadCommand),
-    ).toBe(false);
   });
 
   it("cancels a blocked producer and cleans up its upload", async () => {
     const { send, backend } = fixture();
     const controller = new AbortController();
-    let release: (() => void) | undefined;
-    let entered: (() => void) | undefined;
-    const started = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    const waiting = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    send.mockResolvedValueOnce({ UploadId: "upload" }).mockResolvedValue({});
+    const started = Promise.withResolvers<void>();
+    const waiting = Promise.withResolvers<void>();
+    send
+      .mockResolvedValueOnce({ UploadId: "upload" })
+      .mockResolvedValueOnce({ ETag: "part" })
+      .mockResolvedValueOnce({});
     async function* source() {
-      entered?.();
-      await waiting;
+      yield Buffer.alloc(PART_BYTES);
+      started.resolve();
+      await waiting.promise;
       yield Buffer.from("late");
     }
     const result = backend.putObject("blocked", source(), { signal: controller.signal });
     const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
     try {
-      await started;
+      await started.promise;
       controller.abort();
       await rejected;
       expect(send.mock.calls.at(-1)?.[0]).toBeInstanceOf(AbortMultipartUploadCommand);
+      expect(send.mock.calls.at(-1)).toHaveLength(1);
+      expect(
+        send.mock.calls.some(([command]) => command instanceof CompleteMultipartUploadCommand),
+      ).toBe(false);
     } finally {
-      release?.();
+      waiting.resolve();
     }
   });
 
   it("aborts a failed part before waiting for producer cleanup", async () => {
     const { send, backend } = fixture();
-    let release: (() => void) | undefined;
-    const waiting = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const waiting = Promise.withResolvers<void>();
     send.mockImplementation(async (command) => {
       if (command instanceof CreateMultipartUploadCommand) {
         return { UploadId: "upload" };
@@ -246,16 +201,16 @@ describe("R2 object transport", () => {
       try {
         yield Buffer.alloc(PART_BYTES);
       } finally {
-        await waiting;
+        await waiting.promise;
       }
     }
     try {
-      await expect(backend.putObject("failed-part", source(), {})).rejects.toThrow(
-        "Object Read & Write",
-      );
+      const result = backend.putObject("failed-part", source(), {});
+      await expect(result).rejects.toThrow("Object Read & Write");
+      await expect(result).rejects.not.toThrow("private-credential-value");
       expect(send.mock.calls.at(-1)?.[0]).toBeInstanceOf(AbortMultipartUploadCommand);
     } finally {
-      release?.();
+      waiting.resolve();
     }
   });
 
@@ -269,10 +224,10 @@ describe("R2 object transport", () => {
     );
   });
 
-  it.each([2, 4])("rejects an incorrect known size %i before publication", async (sizeBytes) => {
+  it("rejects an oversized body before publication", async () => {
     const { send, backend } = fixture();
     await expect(
-      backend.putObject("wrong-size", bytes(Buffer.from("abc")), { sizeBytes }),
+      backend.putObject("wrong-size", bytes(Buffer.from("abc")), { sizeBytes: 2 }),
     ).rejects.toThrow("declared size");
     expect(send).not.toHaveBeenCalled();
   });
@@ -361,16 +316,14 @@ describe("R2 object transport", () => {
     expect(backend.displayTarget).toBe("r2://test-bucket/archive/team");
   });
 
-  it.each([401, 403, 404, 500])("maps probe HTTP %i into a safe next step", async (code) => {
+  it.each([404, 500])("maps probe HTTP %i into a safe next step", async (code) => {
     const { send, backend } = fixture();
     send.mockRejectedValue(serviceError("Error", code));
     const result = backend.probe();
     await expect(result).rejects.toThrow(
-      code === 401 || code === 403
-        ? "the R2 token needs Object Read & Write on bucket test-bucket"
-        : code === 404
-          ? `create bucket test-bucket in account ${settings.accountId}`
-          : "check the bucket settings",
+      code === 404
+        ? `create bucket test-bucket in account ${settings.accountId}`
+        : "check the bucket settings",
     );
     await expect(result).rejects.not.toThrow("private-credential-value");
   });

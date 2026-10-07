@@ -51,8 +51,6 @@ import { pollGitHubDeviceFlow, startGitHubDeviceFlow } from "./github-oauth-devi
 import {
   authorizationStillOwned,
   configuredOAuthIdentities,
-  currentIdentityForRecord,
-  defaultGitAuthor,
   identityStillSelected,
   MAINTENANCE_INTERVAL_MS,
   REFRESH_SKEW_MS,
@@ -206,7 +204,10 @@ export function createGitHubOAuthLifecycle(params: {
             kind: "oauth",
             gitAuthor: record.expectedIdentity?.gitAuthor
               ? structuredClone(record.expectedIdentity.gitAuthor)
-              : defaultGitAuthor(account),
+              : {
+                  name: account.login,
+                  email: `${account.accountId}+${account.login}@users.noreply.github.com`,
+                },
           };
           nextConfig = await updateGitHubToolIdentityConfig({
             scope: record.scope,
@@ -352,7 +353,10 @@ export function createGitHubOAuthLifecycle(params: {
     if (!currentRecord.pendingRefresh && currentRecord.accessExpiresAtMs > now + REFRESH_SKEW_MS) {
       return;
     }
-    const currentIdentity = currentIdentityForRecord(params.getConfig(), currentRecord);
+    const currentIdentity = resolveConfiguredGitHubToolIdentity({
+      config: params.getConfig(),
+      ...currentRecord,
+    });
     if (currentIdentity?.kind !== "oauth" || currentIdentity.profileId !== profileId) {
       return;
     }
@@ -435,7 +439,10 @@ export function createGitHubOAuthLifecycle(params: {
         } catch {
           continue;
         }
-        const persistedIdentity = currentIdentityForRecord(persistedConfig, record);
+        const persistedIdentity = resolveConfiguredGitHubToolIdentity({
+          config: persistedConfig,
+          ...record,
+        });
         const agentBindingMatches =
           record.scope === "system" ||
           (record.pendingInitial.agentLifecycleBinding !== undefined &&
@@ -464,7 +471,10 @@ export function createGitHubOAuthLifecycle(params: {
         ).catch(() => undefined);
         continue;
       }
-      const current = currentIdentityForRecord(params.getConfig(), record);
+      const current = resolveConfiguredGitHubToolIdentity({
+        config: params.getConfig(),
+        ...record,
+      });
       if (current?.profileId !== profileId || current.kind !== "oauth") {
         queueOAuthCleanup(profileId);
         continue;
@@ -507,10 +517,7 @@ export function createGitHubOAuthLifecycle(params: {
     if (stopping && !maintenance) {
       return Promise.resolve();
     }
-    if (maintenance) {
-      return maintenance;
-    }
-    maintenance = runMaintenance()
+    maintenance ??= runMaintenance()
       .catch(warnMaintenanceError)
       .finally(() => {
         maintenance = undefined;
