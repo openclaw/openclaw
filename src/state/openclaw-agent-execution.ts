@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { addAbortListener } from "node:events";
 import path from "node:path";
-import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
@@ -39,6 +38,7 @@ import {
 } from "./openclaw-agent-execution-incognito.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
 import {
+  assertAgentDatabaseExecutionSharedState,
   captureBorrowedAgentDatabaseGenerationClaim,
   supportsAgentDatabaseExecutionScope,
   supportsOpenClawAgentDatabaseExecution,
@@ -48,15 +48,11 @@ import {
   runOutsideOpenClawDatabaseMaintenanceScope,
 } from "./openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "./openclaw-state-db-cache.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
   LEASE_CONTENTION_RETRY_MS,
   LEASE_CONTENTION_RETRY_TIMEOUT_MS,
 } from "./openclaw-state-lease-heartbeat-shared.js";
-import {
-  captureOpenClawStateReadContext,
-  captureOpenClawStateWorkerContext,
-} from "./openclaw-state-worker-context.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
 export { supportsOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution-scope.js";
 
@@ -141,16 +137,7 @@ function captureFileAgentDatabaseExecution(
       `OpenClaw agent database ${pathname} is already open for agent ${existing.agentId}; requested agent ${agentId}.`,
     );
   }
-  const env =
-    process.platform === "win32"
-      ? cloneEnvWithPlatformSemantics(options.env ?? process.env)
-      : options.env;
-  const state = captureOpenClawStateReadContext(resolveOpenClawStateSqlitePath(env));
-  if (existing.sharedDatabaseKey !== state.admission.identity.key) {
-    throw new Error(
-      "Agent database execution belongs to another shared-state database; drain its existing resources before changing the state directory.",
-    );
-  }
+  assertAgentDatabaseExecutionSharedState(options, existing.sharedDatabaseKey);
   return existing.borrow(
     pathname,
     constraints.expectedIdentity,
@@ -320,6 +307,10 @@ function createAgentDatabaseExecution(
             throw new Error("Agent database execution belongs to another physical file");
           }
           fileIdentity ??= Object.freeze({ ...received });
+        },
+        () => {
+          const retained = owner.borrow(pathname);
+          return () => retained.release();
         },
         fileIdentity ? undefined : (creationIdentity ?? creatingTarget),
         creationClaim?.witness,

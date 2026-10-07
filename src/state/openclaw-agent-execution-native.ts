@@ -94,6 +94,7 @@ export function createAgentDatabaseNativeGeneration(
   assertCleanupOwned: () => void,
   expectedIdentity: AgentDatabaseExecutionFileIdentity | undefined,
   acceptFileIdentity: (identity: AgentDatabaseExecutionFileIdentity) => void,
+  retainVerification: () => () => Promise<void>,
   creatingIdentity?: DatabasePathIdentity,
   creationClaim?: AgentDatabaseFileExecutionOpen["creationClaim"],
 ): AgentDatabaseNativeGeneration {
@@ -544,6 +545,7 @@ export function createAgentDatabaseNativeGeneration(
         check: integrityCheckPending,
         ...(integrityCheckPending === "full" && nativeIdentity
           ? {
+              release: retainVerification(),
               proof: {
                 identity: nativeIdentity.physicalIdentity,
                 complete: (assertVerifierCurrent: () => void) => {
