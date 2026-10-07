@@ -1232,10 +1232,26 @@ jobs:
       actions: read
       contents: read
     steps:
+      - name: Verify defining package workflow identity
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          RESOLVED_TOOLING_SHA: ${{ needs.resolve_package.outputs.tooling_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$WORKFLOW_REPOSITORY" != "openclaw/openclaw" ||
+                ! "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ||
+                "$WORKFLOW_SHA" != "$RESOLVED_TOOLING_SHA" ]]; then
+            echo "::error::Package tooling must match the workflow defining this job."
+            exit 1
+          fi
+
       - name: Checkout package workflow ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.resolve_package.outputs.tooling_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           fetch-depth: 1
           persist-credentials: false
 

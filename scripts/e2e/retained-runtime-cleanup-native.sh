@@ -63,6 +63,11 @@ PY
 fixture="$(mktemp -d "$RUNNER_TEMP/retained-runtime-native-XXXXXX")"
 holder_pid=""
 holder_birth=""
+diagnostic_holder_pid=""
+diagnostic_holder_birth=""
+doctor_phase=""
+doctor_log=""
+artifact=""
 process_birth() {
   python3 - "$1" <<'PY'
 import os, pathlib, sys
@@ -76,8 +81,97 @@ except (OSError, ValueError, IndexError):
     sys.exit(1)
 PY
 }
+diagnose_census_failure() {
+  timeout --signal=KILL 3s python3 - "$doctor_log" "$doctor_phase" "$fixture" "$artifact" \
+    "$diagnostic_holder_pid" "$diagnostic_holder_birth" <<'PY' || echo "native-cleanup diagnostic: unavailable"
+import errno, json, os, pathlib, re, sys
+
+log, phase, fixture, artifact, holder_pid, holder_birth = sys.argv[1:]
+inspector_uid = os.getuid()
+result = {"phase": phase, "doctorTimeIdentityProven": False, "inspectorUid": inspector_uid}
+
+def emit():
+    print("native-cleanup diagnostic: " + json.dumps(result, sort_keys=True))
+
+def read_record(path, limit=16384):
+    with path.open("rb") as source:
+        data = source.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("oversized process record")
+    return data.decode("utf-8", errors="replace")
+
+def read_link(path):
+    value = os.readlink(path)
+    if len(os.fsencode(value)) > 4096:
+        raise ValueError("oversized process link")
+    return value
+
+def identity(pid):
+    root = pathlib.Path("/proc") / str(pid)
+    fields = read_record(root / "stat").rsplit(") ", 1)[1].split()
+    uids = re.search(r"^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)$", read_record(root / "status"), re.M)
+    boot = read_record(pathlib.Path("/proc/sys/kernel/random/boot_id"), 128).strip()
+    if uids is None or not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", boot) or not re.fullmatch(r"[RSDZTtWXxKIP]", fields[0]):
+        raise ValueError("invalid process metadata")
+    return {"pid": pid, "ppid": int(fields[1]), "state": fields[0],
+            "startTicks": int(fields[19]), "bootId": boot,
+            "uids": [int(value) for value in uids.groups()]}
+
+def within(path, root):
+    return bool(root) and (path == root or path.startswith(root + "/"))
+
+try:
+    with open(log, "rb") as source:
+        data = source.read(65536)
+        result["logComplete"] = os.fstat(source.fileno()).st_size <= len(data)
+    pids = set(re.findall(rb"Could not classify PID ([1-9][0-9]*): working directory is unavailable", data))
+    result["matchingPidCount"] = len(pids)
+    if not result["logComplete"] or len(pids) != 1:
+        result["processObserved"] = False
+        emit()
+        sys.exit(0)
+    pid = int(next(iter(pids)))
+    if not 0 < pid <= 2147483647:
+        raise ValueError("invalid PID range")
+    before = identity(pid)
+    root = pathlib.Path("/proc") / str(pid)
+    try:
+        name = os.path.basename(read_link(root / "exe"))
+        exe_class = name if name in ("node", "bun", "bash", "sh", "dash", "init", "systemd") else "other"
+        exe = {"class": exe_class}
+    except OSError as error:
+        exe = {"class": "unavailable", "errno": error.errno}
+    try:
+        cwd = read_link(root / "cwd")
+        cwd_result = {"outcome": "readable", "withinFixture": within(cwd, fixture),
+                      "withinOwnedArtifact": within(cwd, artifact)}
+    except OSError as error:
+        cwd_result = {"outcome": "permission-denied" if error.errno in (errno.EACCES, errno.EPERM) else "unavailable",
+                      "errno": error.errno}
+    after = identity(pid)
+    stable = all(before[key] == after[key] for key in ("pid", "ppid", "startTicks", "bootId", "uids"))
+    result.update({"processObserved": True, "identityStable": stable,
+                   "birthPaired": before["bootId"] == after["bootId"] and before["startTicks"] == after["startTicks"],
+                   "before": {key: value for key, value in before.items() if key != "bootId"},
+                   "after": {key: value for key, value in after.items() if key != "bootId"}})
+    if stable:
+        result.update({"exe": exe, "cwd": cwd_result,
+                       "allUidsForeign": all(uid != inspector_uid for uid in before["uids"]),
+                       "matchesOriginalHolder": str(pid) == holder_pid and
+                       before["bootId"] + ":" + str(before["startTicks"]) == holder_birth})
+    else:
+        result["classification"] = "raced-unverified"
+except (OSError, ValueError, IndexError) as error:
+    result.update({"processObserved": False, "classification": "unavailable-unverified",
+                   "errorKind": type(error).__name__})
+emit()
+PY
+}
 cleanup() {
   local result=$?
+  if [[ "$result" -ne 0 && -n "$doctor_log" ]]; then
+    diagnose_census_failure
+  fi
   # Only this shell's child, with the same observed Linux process birth, may be signalled.
   if [[ -n "$holder_pid" && -n "$holder_birth" ]] &&
     [[ "$(process_birth "$holder_pid" || true)" == "$holder_birth" ]]; then
@@ -123,10 +217,14 @@ node -e 'process.stdin.resume(); process.stdout.write("ready\n")' "$artifact" \
   < "$fixture/holder-input" >&4 3>&- 4>&- &
 holder_pid=$!
 holder_birth="$(process_birth "$holder_pid")"
+diagnostic_holder_pid="$holder_pid"
+diagnostic_holder_birth="$holder_birth"
 IFS= read -r -t 30 ready <&4 || fail "holder did not become ready"
 [[ "$ready" == ready ]] || fail "unexpected holder readiness"
 
 run_doctor() {
+  doctor_log="$1"
+  doctor_phase="$2"
   assert_host
   timeout --signal=TERM --kill-after=15s 300s env -i \
     PATH="$PATH" HOME="$fixture/home" TMPDIR="$fixture/tmp" TMP="$fixture/tmp" TEMP="$fixture/tmp" \

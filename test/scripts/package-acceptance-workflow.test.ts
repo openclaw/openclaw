@@ -2893,6 +2893,19 @@ function workflowStep(job: WorkflowJob, stepName: string): WorkflowStep {
   return step;
 }
 
+function workflowChoiceOptions(input: unknown): string[] {
+  if (
+    input === null ||
+    typeof input !== "object" ||
+    !("options" in input) ||
+    !Array.isArray(input.options) ||
+    !input.options.every((option) => typeof option === "string")
+  ) {
+    throw new Error("Expected workflow choice input with string options");
+  }
+  return input.options;
+}
+
 function releasePublishOrchestration(job: WorkflowJob): WorkflowStep {
   const dispatch = workflowStep(job, "Dispatch publish workflows");
   const phases = job.steps?.filter((step) =>
@@ -8430,6 +8443,79 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(JSON.stringify(npm12Job)).not.toContain("secrets.");
   });
 
+  it("checks out the defining npm acceptance workflow rather than caller or package refs", () => {
+    const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh");
+    const guard = workflowStep(job, "Verify defining package workflow identity");
+    const checkout = workflowStep(job, "Checkout package workflow ref");
+    expect(job.steps?.[0]).toBe(guard);
+    expect(job.steps?.[1]).toBe(checkout);
+    expect(guard.env).toEqual({
+      WORKFLOW_REPOSITORY: "${{ job.workflow_repository }}",
+      WORKFLOW_SHA: "${{ job.workflow_sha }}",
+      RESOLVED_TOOLING_SHA: "${{ needs.resolve_package.outputs.tooling_sha }}",
+    });
+    expect(checkout.with).toMatchObject({
+      repository: "${{ job.workflow_repository }}",
+      ref: "${{ job.workflow_sha }}",
+      "persist-credentials": false,
+    });
+    const ref = checkout.with?.ref;
+    if (typeof ref !== "string") {
+      throw new Error("Expected defining workflow checkout ref");
+    }
+    const calledSha = "a".repeat(40);
+    expect(
+      runInNewContext(ref.slice(3, -2), {
+        job: { workflow_sha: calledSha },
+        github: { sha: "b".repeat(40), workflow_sha: "c".repeat(40) },
+        inputs: { workflow_ref: "refs/heads/main", package_ref: "d".repeat(40) },
+        needs: { resolve_package: { outputs: { tooling_sha: "e".repeat(40) } } },
+      }),
+    ).toBe(calledSha);
+  });
+
+  it.each([
+    ["valid", "openclaw/openclaw", "a".repeat(40), "a".repeat(40), 0],
+    ["foreign repository", "example/other", "a".repeat(40), "a".repeat(40), 1],
+    ["missing defining SHA", "openclaw/openclaw", "", "a".repeat(40), 1],
+    ["malformed defining SHA", "openclaw/openclaw", "refs/heads/main", "refs/heads/main", 1],
+    ["resolver mismatch", "openclaw/openclaw", "a".repeat(40), "b".repeat(40), 1],
+    ["missing resolver SHA", "openclaw/openclaw", "a".repeat(40), "", 1],
+  ])(
+    "validates defining npm workflow identity before checkout: %s",
+    (_, repository, sha, resolved, status) => {
+      const step = workflowStep(
+        workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh"),
+        "Verify defining package workflow identity",
+      );
+      const result = spawnSync(
+        process.platform === "darwin" ? "/bin/bash" : "bash",
+        ["--noprofile", "--norc", "-c", step.run ?? ""],
+        {
+          encoding: "utf8",
+          timeout: 30_000,
+          env: {
+            PATH: process.env.PATH,
+            WORKFLOW_REPOSITORY: repository,
+            WORKFLOW_SHA: sha,
+            RESOLVED_TOOLING_SHA: resolved,
+          },
+        },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(status);
+    },
+  );
+
+  it.each([undefined, null, "native-cleanup", {}, { options: null }, { options: [1] }])(
+    "rejects malformed workflow choice options: %j",
+    (input) => {
+      expect(() => workflowChoiceOptions(input)).toThrow(
+        "Expected workflow choice input with string options",
+      );
+    },
+  );
+
   it("checks the installed package tree budget immediately after npm 12 installation", () => {
     const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh");
     const install = workflowStep(job, "Run install.sh with npm 12");
@@ -8455,9 +8541,10 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(cleanup.run).toContain(
       'bash scripts/e2e/retained-runtime-cleanup-native.sh "$RUNNER_TEMP/openclaw-npm12-prefix"',
     );
-    const profiles = readWorkflow(PACKAGE_ACCEPTANCE_WORKFLOW).on?.workflow_dispatch?.inputs
-      ?.suite_profile?.options;
-    for (const profile of profiles ?? []) {
+    const profiles = workflowChoiceOptions(
+      readWorkflow(PACKAGE_ACCEPTANCE_WORKFLOW).on?.workflow_dispatch?.inputs?.suite_profile,
+    );
+    for (const profile of profiles) {
       expect(runInNewContext(cleanup.if ?? "false", { inputs: { suite_profile: profile } })).toBe(
         profile === "native-cleanup",
       );
@@ -8482,6 +8569,151 @@ test "$package_manager" = "pnpm@12.1.0"
       include_release_path_suites: "false",
       telegram_enabled: "false",
     });
+  });
+
+  it.each([
+    "none",
+    "multiple",
+    "oversized",
+    "zero-pid",
+    "out-of-range",
+    "malformed-status",
+    "oversized-stat",
+    "oversized-status",
+    "oversized-link",
+    "stable",
+    "foreign",
+    "readable",
+    "raced",
+    "disappeared",
+  ])("bounds the native cleanup failure diagnostic: %s", (scenario) => {
+    const script = readFileSync("scripts/e2e/retained-runtime-cleanup-native.sh", "utf8");
+    const diagnostic = script.match(
+      /diagnose_census_failure\(\) \{[\s\S]*?<<'PY'[^\n]*\n([\s\S]*?)\nPY\n\}/u,
+    )?.[1];
+    if (!diagnostic) {
+      throw new Error("Missing bounded census diagnostic");
+    }
+    const root = tempDirs.make("native-cleanup-diagnostic-");
+    const log = join(root, "removed.log");
+    const failure = (pid: number) =>
+      `Could not classify PID ${pid}: working directory is unavailable\n`;
+    writeFileSync(
+      log,
+      scenario === "none"
+        ? "unrelated failure"
+        : scenario === "multiple"
+          ? failure(1037) + failure(1038)
+          : scenario === "oversized"
+            ? failure(1037) + "x".repeat(65536)
+            : scenario === "zero-pid"
+              ? failure(0)
+              : scenario === "out-of-range"
+                ? failure(2147483648)
+                : failure(1037) + failure(1037),
+    );
+    const result = spawnSync(
+      "python3",
+      [
+        "-c",
+        String.raw`
+import errno, io, os, pathlib, sys
+from unittest.mock import patch
+program, log, scenario = sys.argv[1:]
+boot = "11111111-2222-3333-4444-555555555555"
+sys.argv = ["diagnostic", log, "remove", "/fixture", "/fixture/artifact", "1037", boot + ":100"]
+reads = []
+stat_count = 0
+class BoundedRecord(io.BytesIO):
+    def read(self, size=-1):
+        assert 0 <= size <= 16385
+        return super().read(size)
+def record(text):
+    return BoundedRecord(text.encode())
+def read_proc(path, *args, **kwargs):
+    global stat_count
+    path = str(path)
+    reads.append(path)
+    if path == "/proc/sys/kernel/random/boot_id":
+        return record(boot)
+    if path == "/proc/1037/status":
+        if scenario == "malformed-status":
+            return record("Uid: invalid")
+        if scenario == "oversized-status":
+            return record("x" * 16385)
+        uid = "0" if scenario == "foreign" else "1001"
+        return record("Uid:\t" + "\t".join([uid] * 4) + "\n")
+    if path == "/proc/1037/stat":
+        stat_count += 1
+        if scenario == "oversized-stat":
+            return record("x" * 16385)
+        if scenario == "disappeared" and stat_count == 2:
+            raise FileNotFoundError()
+        start = "101" if scenario == "raced" and stat_count == 2 else "100"
+        return record("1037 (private-command) " + " ".join(["S", "42"] + ["0"] * 17 + [start]))
+    raise AssertionError("Unexpected process read")
+def read_link(path):
+    reads.append(str(path))
+    if str(path) == "/proc/1037/exe":
+        if scenario == "oversized-link":
+            return "x" * 4097
+        return "/private/runtime/node"
+    if str(path) == "/proc/1037/cwd":
+        if scenario == "readable":
+            return "/fixture/artifact/private-directory"
+        raise PermissionError(errno.EACCES, "private-error")
+    raise AssertionError("Unexpected link read")
+with patch.object(pathlib.Path, "open", read_proc), patch.object(os, "readlink", read_link), patch.object(os, "getuid", return_value=1001):
+    try:
+        exec(compile(program, "diagnostic", "exec"))
+    except SystemExit as error:
+        assert error.code == 0
+print("read-count=" + str(len(reads)))
+`,
+        diagnostic,
+        log,
+        scenario,
+      ],
+      { encoding: "utf8", timeout: 5_000 },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toMatch(
+      /private-command|private-directory|private-error|\/private\/runtime/u,
+    );
+    expect(result.stdout).not.toContain("11111111-2222-3333-4444-555555555555");
+    expect(result.stdout).not.toContain('"bootId"');
+    expect(result.stdout).toContain('"inspectorUid": 1001');
+    if (["none", "multiple", "oversized", "zero-pid", "out-of-range"].includes(scenario)) {
+      expect(result.stdout).toContain("read-count=0");
+      expect(result.stdout).toContain('"processObserved": false');
+    } else if (
+      [
+        "raced",
+        "disappeared",
+        "malformed-status",
+        "oversized-stat",
+        "oversized-status",
+        "oversized-link",
+      ].includes(scenario)
+    ) {
+      expect(result.stdout).toContain("unverified");
+      expect(result.stdout).not.toContain('"matchesOriginalHolder": true');
+    } else {
+      expect(result.stdout).toContain('"identityStable": true');
+      expect(result.stdout).toContain('"matchesOriginalHolder": true');
+      expect(result.stdout).toContain('"doctorTimeIdentityProven": false');
+      expect(result.stdout).toContain('"birthPaired": true');
+      expect(result.stdout).toContain(`"allUidsForeign": ${scenario === "foreign"}`);
+      expect(result.stdout).toContain(
+        scenario === "readable" ? '"withinOwnedArtifact": true' : '"errno": 13',
+      );
+    }
+    expect(script.indexOf("    diagnose_census_failure")).toBeLessThan(
+      script.indexOf('    kill -TERM "$holder_pid"'),
+    );
+    expect(script).toContain("timeout --signal=KILL 3s python3");
+    expect(script).toContain('diagnostic_holder_birth="$holder_birth"');
   });
 
   it("binds npm 12 installation to the supplied prerelease dependency artifact", () => {
