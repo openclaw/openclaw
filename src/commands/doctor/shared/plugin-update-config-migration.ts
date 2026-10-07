@@ -99,9 +99,13 @@ export async function preparePluginUpdateConfigMigration(params: {
     });
     params.assertCurrent();
     const { config, selectedIds, selectedPending, inspected } = prepared;
+    let activationWarning: string | undefined;
     return {
       config,
       changed: selectedPending.length > 0 || !isDeepStrictEqual(config, params.config),
+      get activationWarning() {
+        return activationWarning;
+      },
       async [Symbol.asyncDispose]() {
         await cache[Symbol.asyncDispose]();
       },
@@ -177,12 +181,12 @@ export async function preparePluginUpdateConfigMigration(params: {
                     (entry.requiresStateMigration || !stateless.has(entry.pluginId))),
               );
               if (unresolved.length > 0) {
-                throw new Error(
-                  `Plugin settings are not ready for activation: ${unresolved.map((entry) => entry.pluginId).join(", ")}. Run openclaw doctor --fix to complete their data migrations, then retry the plugin update.`,
-                );
+                // Doctor needs the repaired package before it can finish its retained state work.
+                activationWarning = `Plugin packages are saved; activation is deferred for ${unresolved.map((entry) => entry.pluginId).join(", ")}. Existing data and settings are kept. Run openclaw doctor --fix to complete their data migrations, then reload the plugins.`;
               }
+              const unresolvedIds = new Set(unresolved.map((entry) => entry.pluginId));
               return selectedPending
-                .filter((entry) => active.has(entry.pluginId))
+                .filter((entry) => active.has(entry.pluginId) && !unresolvedIds.has(entry.pluginId))
                 .map((entry) => entry.pluginId);
             },
             { config: activationConfig },

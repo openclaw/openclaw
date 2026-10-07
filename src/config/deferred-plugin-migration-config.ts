@@ -126,15 +126,37 @@ function restorePath(source: unknown, candidate: unknown, segments: readonly str
   return next;
 }
 
+function isExplicitPluginEntryRemoval(params: {
+  pluginId: string;
+  retainedPath: readonly string[];
+  nextConfig: OpenClawConfig;
+  unsetPaths?: readonly (readonly string[])[];
+}): boolean {
+  const entryPath = ["plugins", "entries", params.pluginId];
+  return (
+    entryPath.every((segment, index) => params.retainedPath[index] === segment) &&
+    params.unsetPaths?.some(
+      (path) =>
+        path.length === entryPath.length &&
+        path.every((segment, index) => segment === entryPath[index]),
+    ) === true &&
+    readPathValue(params.nextConfig, entryPath) === undefined
+  );
+}
+
 /** Explicit edits must not report success after preservation restores their old values. */
 export function assertDeferredPluginMigrationConfigEditAllowed(params: {
   sourceConfig: unknown;
   nextConfig: OpenClawConfig;
   pending: readonly DeferredPluginMigration[];
   editedPaths: readonly (readonly string[])[];
+  unsetPaths?: readonly (readonly string[])[];
 }): void {
   for (const pending of params.pending) {
     for (const retainedPath of pending.configPaths ?? []) {
+      if (isExplicitPluginEntryRemoval({ ...params, pluginId: pending.pluginId, retainedPath })) {
+        continue;
+      }
       const intersects = params.editedPaths.some(
         (editedPath) =>
           retainedPath.every((segment, index) => editedPath[index] === segment) ||
@@ -163,10 +185,12 @@ export function preserveDeferredPluginMigrationConfig(params: {
   writeOptions?: Pick<ConfigWriteOptions, "explicitSetPaths" | "unsetPaths" | "auditOrigin">;
 }): OpenClawConfig {
   const { explicitSetPaths, unsetPaths, auditOrigin } = params.writeOptions ?? {};
+  const nextConfig = applyUnsetPathsForWrite(params.nextConfig, unsetPaths);
   if (params.pending.length > 0) {
     assertDeferredPluginMigrationConfigEditAllowed({
       ...params,
-      nextConfig: applyUnsetPathsForWrite(params.nextConfig, unsetPaths),
+      nextConfig,
+      unsetPaths,
       editedPaths:
         auditOrigin === "config-rpc" ? [[]] : [...(explicitSetPaths ?? []), ...(unsetPaths ?? [])],
     });
@@ -174,7 +198,15 @@ export function preserveDeferredPluginMigrationConfig(params: {
   let next: unknown = params.nextConfig;
   for (const pending of params.pending) {
     for (const path of pending.configPaths ?? []) {
-      if (path.length > 0) {
+      if (
+        path.length > 0 &&
+        !isExplicitPluginEntryRemoval({
+          pluginId: pending.pluginId,
+          retainedPath: path,
+          nextConfig,
+          unsetPaths,
+        })
+      ) {
         next = restorePath(params.sourceConfig, next, path);
       }
     }

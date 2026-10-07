@@ -192,9 +192,11 @@ export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParam
     await gateway("plugins.list", {});
   }
   let changed = false;
+  let activationDeferred = false;
   const update = withPluginLifecycleLease({}, (lease) =>
-    runPluginUpdateCommandUnlocked(params, lease, () => {
+    runPluginUpdateCommandUnlocked(params, lease, (deferred) => {
       changed = true;
+      activationDeferred ||= deferred;
     }),
   );
   let updateFailure: { error: unknown } | undefined;
@@ -203,7 +205,7 @@ export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParam
   });
   // The runtime owner takes the same lease. Old callbacks retain their captured
   // package graph while this explicit application waits for ownership.
-  if (changed) {
+  if (changed && !activationDeferred) {
     if (gateway) {
       try {
         const result = await gateway<PluginsRefreshResult>("plugins.refresh", {});
@@ -243,7 +245,7 @@ export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParam
 async function runPluginUpdateCommandUnlocked(
   params: RunPluginUpdateCommandParams,
   lease?: PluginLifecycleLeaseContext,
-  onMetadataChanged?: () => void,
+  onMetadataChanged?: (activationDeferred: boolean) => void,
 ): Promise<0 | 1> {
   const assertOwned = lease?.assertOwned.bind(lease);
   if (!params.opts.dryRun) {
@@ -650,7 +652,10 @@ async function runPluginUpdateCommandUnlocked(
       };
       await (migration ? migration.publish(nextConfig, commit) : commit());
       packageUpdatePersisted = true;
-      onMetadataChanged?.();
+      onMetadataChanged?.(Boolean(migration?.activationWarning));
+      if (migration?.activationWarning) {
+        logger.warn(migration.activationWarning);
+      }
       await settlePluginInstallTransactions(deferredInstallTransactions, "commit").catch(() =>
         logger.warn("Plugin update committed, but cleanup failed. Run openclaw plugins doctor."),
       );

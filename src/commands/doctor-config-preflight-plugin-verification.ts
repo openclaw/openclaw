@@ -20,6 +20,7 @@ import { shouldDeferConfiguredPluginInstallRepair } from "./doctor/shared/update
 
 type StartupPluginConvergenceResult = {
   warnings?: string[];
+  restoredPluginIds?: string[];
   quarantinedPlugins: DegradedPlugin[];
   deferredPlugins?: DeferredPluginMigration[];
   migrationInspection?: PluginMigrationInspection;
@@ -178,24 +179,40 @@ export async function refreshStartupPluginQuarantine(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   measure?: ConfigSnapshotReadMeasure;
+  assertCurrent?: () => void;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<StartupPluginConvergenceResult> {
   const plan = await planStartupPluginVerification(params);
   if (!plan.required) {
     return { quarantinedPlugins: [] };
   }
-  return verifyStartupPluginPayloads(params, plan.installRecords);
+  return verifyStartupPluginPayloads(
+    params,
+    plan.installRecords,
+    resolveUpdateRehearsalRoot(params.env) || shouldDeferConfiguredPluginInstallRepair(params.env)
+      ? undefined
+      : {
+          assertCurrent: params.assertCurrent,
+          beforePersistentEffect: params.beforePersistentEffect,
+        },
+  );
 }
 
 async function verifyStartupPluginPayloads(
   params: Parameters<typeof runDoctorPluginConvergence>[0],
   records: Record<string, PluginInstallRecord>,
+  recovery?: {
+    assertCurrent?: () => void;
+    beforePersistentEffect?: () => void | Promise<void>;
+  },
 ): Promise<StartupPluginConvergenceResult> {
-  const { runActivePluginPayloadSmokeCheck } = await measureDoctorConfigPreflightStep(
-    "plugin-payload-verification-import",
-    () => import("../plugins/active-payload-verification.js"),
-    params.measure,
-  );
-  const smoke = await measureDoctorConfigPreflightStep(
+  const { runActivePluginPayloadSmokeCheck, filterRecordsToActive } =
+    await measureDoctorConfigPreflightStep(
+      "plugin-payload-verification-import",
+      () => import("../plugins/active-payload-verification.js"),
+      params.measure,
+    );
+  let smoke = await measureDoctorConfigPreflightStep(
     "plugin-payload-verification",
     () =>
       runActivePluginPayloadSmokeCheck({
@@ -205,6 +222,52 @@ async function verifyStartupPluginPayloads(
       }),
     params.measure,
   );
+  const restoredPluginIds: string[] = [];
+  const warnings: string[] = [];
+  if (recovery && smoke.failures.some((failure) => failure.reason === "missing-package-dir")) {
+    const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
+    const { restoreMissingPluginInstallBackups } =
+      await import("../plugins/payload-verification.js");
+    const { writePersistedInstalledPluginIndexInstallRecordsWithLease } =
+      await import("../plugins/installed-plugin-index-records.js");
+    await withPluginLifecycleLease(
+      { env: params.env, processBound: true, assertCurrent: recovery.assertCurrent },
+      async (lease) => {
+        // An installer may have settled while startup waited for the lifecycle owner.
+        const current = await planStartupPluginVerification(params);
+        const activeRecords = filterRecordsToActive({ ...params, records: current.installRecords });
+        const backups = await restoreMissingPluginInstallBackups({
+          records: activeRecords,
+          env: params.env,
+          assertCurrent: () => lease.assertOwned(),
+          beforePersistentEffect: recovery.beforePersistentEffect,
+        });
+        restoredPluginIds.push(...backups.restored.map(({ pluginId }) => pluginId));
+        warnings.push(
+          ...backups.failures.map(
+            ({ pluginId, error }) =>
+              `Could not restore plugin "${pluginId}" from its install backup: ${error} Run \`openclaw update repair\`.`,
+          ),
+        );
+        if (restoredPluginIds.length > 0) {
+          await recovery.beforePersistentEffect?.();
+          lease.assertOwned();
+          await writePersistedInstalledPluginIndexInstallRecordsWithLease(current.installRecords, {
+            config: params.cfg,
+            env: params.env,
+            filePath: lease.databasePath,
+            lease,
+          });
+        }
+        smoke = await runActivePluginPayloadSmokeCheck({
+          cfg: params.cfg,
+          records: current.installRecords,
+          env: params.env,
+        });
+        lease.assertOwned();
+      },
+    );
+  }
   const quarantinedPlugins = buildStartupPluginQuarantine({
     cfg: params.cfg,
     failures: smoke.failures,
@@ -226,6 +289,8 @@ async function verifyStartupPluginPayloads(
     );
   }
   return {
+    ...(restoredPluginIds.length > 0 ? { restoredPluginIds } : {}),
+    ...(warnings.length > 0 ? { warnings } : {}),
     quarantinedPlugins,
     deferredPlugins: quarantinedPlugins.map((plugin) => ({
       pluginId: plugin.pluginId,

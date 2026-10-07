@@ -539,6 +539,45 @@ export function resolveClawHubUpdateSpecs(params: {
   });
 }
 
+/** Only a catalog-declared alternate may satisfy an implicit core-matched ClawHub target. */
+export async function resolveClawHubNpmUpdateFallback(params: {
+  officialInstall?: ReturnType<
+    typeof officialInstallRecords.resolveTrustedSourceLinkedOfficialClawHubInstall
+  >;
+  clawhubSpecs?: { installSpec?: string; recordSpec?: string };
+  versionBoundToCore?: boolean;
+  updateChannel?: UpdateChannel;
+  coreVersion?: string;
+}) {
+  const spec = params.officialInstall?.npmSpec;
+  if (
+    !spec ||
+    !params.versionBoundToCore ||
+    params.updateChannel !== "stable" ||
+    params.clawhubSpecs?.installSpec === params.clawhubSpecs?.recordSpec
+  ) {
+    return undefined;
+  }
+  const specs = await resolveNpmInstallSpecsForUpdateChannel({
+    spec,
+    updateChannel: params.updateChannel,
+    officialPackageName: resolveNpmSpecPackageName(spec),
+    coreVersion: params.coreVersion,
+    versionBoundToCore: true,
+  });
+  const targetVersion = normalizeExactSemverVersion(
+    parseClawHubPluginSpec(params.clawhubSpecs?.installSpec ?? "")?.version,
+  );
+  if (!targetVersion || resolveExactNpmSpecVersion(specs.installSpec) !== targetVersion) {
+    return undefined;
+  }
+  return {
+    ...specs,
+    expectedIntegrity:
+      specs.installSpec === spec ? params.officialInstall?.expectedIntegrity : undefined,
+  };
+}
+
 /** Identity matching permits id/path cleanup, never an implicit registry-source switch. */
 export function isBridgeRegistryInstall(
   bridge: ExternalizedBundledPluginBridge,

@@ -29,14 +29,21 @@ import {
 import { PLUGIN_INSTALL_ERROR_CODE } from "../../../plugins/install-types.js";
 import { hashStableJson } from "../../../plugins/installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../../plugins/installed-plugin-index-policy.js";
-import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "../../../plugins/installed-plugin-index-records.js";
+import {
+  loadInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsWithLease,
+} from "../../../plugins/installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndexSync } from "../../../plugins/installed-plugin-index-store.js";
 import {
   clearRetainedManagedNpmInstallMarker,
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
 } from "../../../plugins/managed-npm-retention.js";
-import { isPayloadMissing } from "../../../plugins/payload-verification.js";
+import { resolveTrustedSourceLinkedOfficialClawHubInstall } from "../../../plugins/official-external-install-records.js";
+import {
+  isPayloadMissing,
+  restoreMissingPluginInstallBackups,
+} from "../../../plugins/payload-verification.js";
 import {
   withPluginLifecycleLease,
   type PluginLifecycleLeaseContext,
@@ -219,13 +226,24 @@ async function repairMissingPluginInstallsWithLease(
   assertCurrent: () => void,
 ): Promise<RepairMissingPluginInstallsResult> {
   const env = params.env ?? process.env;
+  const baselineRecords =
+    params.baselineRecords ?? (await loadInstalledPluginIndexInstallRecords({ env }));
+  const { restored: restoredBackups, failures: backupFailures } =
+    shouldDeferConfiguredPluginInstallRepair(env)
+      ? { restored: [], failures: [] }
+      : await restoreMissingPluginInstallBackups({
+          records: baselineRecords,
+          env,
+          assertCurrent,
+          beforePersistentEffect: params.beforePersistentEffect,
+        });
   const installContext = await resolveConfiguredPluginInstallContext({
     cfg: params.cfg,
     env,
     configuredPluginIds: params.pluginIds,
     configuredChannelIds: params.channelIds,
     blockedPluginIds: params.blockedPluginIds,
-    baselineRecords: params.baselineRecords,
+    baselineRecords,
   });
   const {
     knownIds,
@@ -243,13 +261,22 @@ async function repairMissingPluginInstallsWithLease(
     installedPluginMissingRequiredDependencies,
     officialReplacementPluginIds,
   } = installContext;
-  const changes: string[] = [];
+  const changes = restoredBackups.map(
+    ({ pluginId, backupPath }) =>
+      `Restored installed plugin "${pluginId}" from verified backup ${backupPath}.`,
+  );
   const notices: string[] = [];
   const warnings: string[] = [];
   const warn = (message: string, pluginId?: string) => {
     warnings.push(message);
     params.onWarning?.({ message, ...(pluginId ? { pluginId } : {}) });
   };
+  for (const { pluginId, error } of backupFailures) {
+    warn(
+      `Could not restore plugin "${pluginId}" from its install backup: ${error} Retrying its recorded source; run "openclaw update repair" if it remains unavailable.`,
+      pluginId,
+    );
+  }
   const sourceOutcomes: PluginUpdateOutcome[] = [];
   const deferredRepairDetails: string[] = [];
   const failedPlugins = new Map<string, PluginUpdateOutcome | undefined>();
@@ -428,8 +455,10 @@ async function repairMissingPluginInstallsWithLease(
                 (updateChannel === "stable" || updateChannel === "extended-stable") &&
                 params.pluginIds.has(pluginId) &&
                 VERSION_BOUND_RUNTIME_PLUGIN_IDS.has(pluginId) &&
-                record.source === "npm" &&
-                Boolean(cohortSpecs[pluginId]) &&
+                ((record.source === "npm" && Boolean(cohortSpecs[pluginId])) ||
+                  Boolean(
+                    resolveTrustedSourceLinkedOfficialClawHubInstall({ pluginId, record }),
+                  )) &&
                 !newerRecordedPluginIds.has(pluginId) &&
                 (installedPluginIdsWithStaleVersionBoundRuntimePackages.has(pluginId) ||
                   isPayloadMissing(env, record.installPath)),
@@ -659,9 +688,12 @@ async function repairMissingPluginInstallsWithLease(
   }
 
   const persistedIndexOptions = { config: params.cfg, env, filePath: lease.databasePath, lease };
+  for (const { pluginId } of restoredBackups) {
+    repairedPluginIds.add(pluginId);
+  }
   // An explicit baseline may include earlier unpersisted sync/npm changes;
   // commit it even when this repair made no further changes.
-  if (nextRecords !== persistedRecords || params.baselineRecords) {
+  if (nextRecords !== persistedRecords || params.baselineRecords || restoredBackups.length > 0) {
     if (params.beforePersistentEffect) {
       const persistedIndex = readPersistedInstalledPluginIndexSync(persistedIndexOptions);
       // Republishing an unchanged baseline preserves the index contract without
