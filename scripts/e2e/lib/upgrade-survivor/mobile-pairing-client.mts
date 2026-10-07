@@ -476,9 +476,8 @@ export async function attemptConnect(params: {
       (frame) => frame.type === "event" && frame.event === "connect.challenge",
       () => waitForOpen(socket),
     );
-    const payload = isRecord(challengeFrame.payload) ? challengeFrame.payload : null;
     const connectRequest = buildConnectRequest({
-      challengePayload: payload,
+      challengePayload: challengeFrame.payload,
       client: params.client,
       mode: params.mode,
       role: params.role,
@@ -486,10 +485,9 @@ export async function attemptConnect(params: {
       auth: params.auth,
       identity: params.identity,
     });
-    const requestId = requireString(connectRequest.id, "connect request id");
     const response = receiveFrame(
       socket,
-      (frame) => frame.type === "res" && frame.id === requestId,
+      (frame) => frame.type === "res" && frame.id === connectRequest.id,
       () => socket.send(JSON.stringify(connectRequest)),
     );
     return { socket, response: await response, closeCode };

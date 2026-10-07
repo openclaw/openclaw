@@ -13,6 +13,7 @@ import {
   selectApplicableRuntimeConfig,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import { logVerbose } from "../globals.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
@@ -75,7 +76,8 @@ function hasEntryCredential(
         provider: providerId,
         authStore,
         authProfileStoreSource: resolveAuthProfileStoreSource?.(),
-        agentDir: agentDir?.trim() || resolveDefaultAgentDir(config ?? {}),
+        agentDir:
+          agentDir?.trim() || (authStore ? undefined : resolveDefaultAgentDir(config ?? {})),
       }),
   });
 }
@@ -411,6 +413,71 @@ function selectWebSearchCandidates(
       .filter((entry): entry is PluginWebSearchProviderEntry => Boolean(entry)),
     ...fallbackProviders.filter((entry) => !preferredIds.includes(entry.id)),
   ];
+}
+
+type WebSearchConfigurationParams = ResolveWebSearchDefinitionParams & {
+  authStore?: AuthProfileStore;
+  resolveAuthProfileStoreSource?: () => boolean;
+};
+
+/** Configuration presence, not credential validity or network health. */
+export function hasConfiguredWebSearchProvider(
+  options: WebSearchConfigurationParams = {},
+): boolean {
+  const context = resolveWebSearchRequestContext(options);
+  const { config, search, runtimeWebSearch } = context;
+  if (
+    search?.provider?.trim() ||
+    runtimeWebSearch?.selectedProvider ||
+    runtimeWebSearch?.providerConfigured ||
+    runtimeWebSearch?.diagnostics.some(
+      (diagnostic) => diagnostic.code === "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+    )
+  ) {
+    // A pinned, missing, or degraded provider must retain its existing actionable
+    // execution error. Do not misdescribe configured-but-unavailable as no setup.
+    return true;
+  }
+  return loadSortedWebSearchProviders({ ...context, preferRuntimeProviders: true }).some(
+    (provider) =>
+      providerRequiresCredential(provider) &&
+      (Boolean(coerceSecretRef(provider.getConfiguredCredentialValue?.(config))) ||
+        Boolean(coerceSecretRef(provider.getConfiguredCredentialFallback?.(config)?.value)) ||
+        hasEntryCredential(
+          provider,
+          config,
+          options.agentDir,
+          options.authStore,
+          options.resolveAuthProfileStoreSource,
+        )),
+  );
+}
+
+/** Prepare agent-scoped source facts without synchronous store discovery in tool assembly. */
+export async function prepareWebSearchConfiguration(
+  options: WebSearchConfigurationParams = {},
+): Promise<boolean> {
+  if (options.authStore || options.resolveAuthProfileStoreSource) {
+    return hasConfiguredWebSearchProvider(options);
+  }
+  let needsAuthSource = false;
+  const configured = hasConfiguredWebSearchProvider({
+    ...options,
+    resolveAuthProfileStoreSource: () => {
+      needsAuthSource = true;
+      return false;
+    },
+  });
+  if (configured || !needsAuthSource) {
+    return configured;
+  }
+  const hasSource = await hasAnyAuthProfileStoreSourceAsync(
+    options.agentDir?.trim() || resolveDefaultAgentDir(options.config ?? {}),
+  );
+  return hasConfiguredWebSearchProvider({
+    ...options,
+    resolveAuthProfileStoreSource: () => hasSource,
+  });
 }
 
 /** Reports whether web_search can use the prepared selection or resolve an agent-scoped provider. */

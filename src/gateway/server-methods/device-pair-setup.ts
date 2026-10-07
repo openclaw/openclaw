@@ -131,7 +131,6 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
         parsedJoinUrl.hash = "";
         joinUrl = parsedJoinUrl.toString();
       }
-      // QR is on by default; callers that only need the code can opt out.
       const includeQr = params.includeQr !== false;
       // QR rendering is optional output; keep the usable setup code if encoding fails.
       const renderedQr = includeQr

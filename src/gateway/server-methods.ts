@@ -78,7 +78,6 @@ import { classifyGatewayStaleInstall } from "./stale-install.js";
 
 export { coreGatewayHandlers };
 
-/** Builds the per-request method registry from core, plugin, and explicit extra handlers. */
 export function createRequestGatewayMethodRegistry(
   extraHandlers?: GatewayRequestHandlers,
 ): GatewayMethodRegistry {

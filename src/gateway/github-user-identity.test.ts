@@ -259,26 +259,28 @@ describe("authenticated GitHub identity sync", () => {
     });
   });
 
-  it("preserves verified identity after lookup failure and retries later", async () => {
+  it("reuses only the exact verified login binding during a GitHub outage", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const profile = ensureProfileForTailscaleIdentity({ login: "ada@github" });
       const fetchMock = vi
         .spyOn(globalThis, "fetch")
         .mockResolvedValueOnce(githubResponse({ id: 583231, login: "Ada" }))
         .mockRejectedValueOnce(new Error("network unavailable"))
-        .mockResolvedValueOnce(githubResponse({ id: 583231, login: "Ada-Renamed" }));
+        .mockRejectedValueOnce(new Error("network unavailable"))
+        .mockResolvedValueOnce(githubResponse({ id: 700, login: "eve" }))
+        .mockResolvedValueOnce(githubResponse({ id: 583231, login: "ada-renamed" }))
+        .mockRejectedValueOnce(new Error("network unavailable"));
 
-      const firstConnection = tailscaleSync();
-      await firstConnection?.();
-      const failingConnection = tailscaleSync();
-      await expect(failingConnection?.()).rejects.toMatchObject({ statusCode: 502 });
-      expect(getUserProfileListItem(profile.id).githubIdentity).toMatchObject({ login: "Ada" });
+      const { profileId } = await tailscaleSync()!();
+      await expect(tailscaleSync()!()).resolves.toMatchObject({ profileId });
+      expect(getUserProfileListItem(profileId).githubIdentity).toMatchObject({ login: "Ada" });
 
-      await failingConnection?.();
-      expect(getUserProfileListItem(profile.id).githubIdentity).toMatchObject({
-        login: "Ada-Renamed",
-      });
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      const unverifiedConnection = tailscaleSync("eve")!;
+      await expect(unverifiedConnection()).rejects.toMatchObject({ statusCode: 502 });
+      await expect(unverifiedConnection()).resolves.not.toMatchObject({ profileId });
+
+      await expect(tailscaleSync("ada-renamed")!()).resolves.toMatchObject({ profileId });
+      await expect(tailscaleSync()!()).rejects.toMatchObject({ statusCode: 502 });
+      expect(fetchMock).toHaveBeenCalledTimes(6);
     });
   });
 

@@ -1,5 +1,3 @@
-// OpenClaw Gateway client facade.
-// Injects OpenClaw host dependencies into the shared gateway-client package.
 import { parseHostForAddressChecks } from "../../packages/gateway-client/src/client-address-utils.js";
 import { GatewayClient as BaseGatewayClient } from "../../packages/gateway-client/src/index.js";
 import type {
@@ -63,128 +61,6 @@ export type GatewayClientOptions = BaseGatewayClientOptions & {
   /** Transfer a tunnel already opened for the same selected route. */
   preparedSshTunnel?: SshTunnel;
 };
-
-function createOpenClawGatewayClientHostDeps(
-  overrides?: GatewayClientHostDeps,
-  deviceAuthScope?: string,
-  suppressStoredDeviceAuth = false,
-  sharedStateMode?: "read-only",
-  preparedDeviceAuth?: DeviceAuthEntry,
-): GatewayClientHostDeps {
-  const readOnly = sharedStateMode === "read-only";
-  // Prepared auth is immutable request input. Any later durable mutation must
-  // still match this token so a stale request cannot undo a concurrent rotation.
-  const rotationFence = preparedDeviceAuth
-    ? { expectedToken: preparedDeviceAuth.token }
-    : undefined;
-  let tokenObservation:
-    | { deviceId: string; role: string; expectedToken: string | null }
-    | undefined;
-  const observe = (params: { deviceId: string; role: string }) => {
-    const deviceId = params.deviceId;
-    const role = normalizeDeviceAuthRole(params.role);
-    return (snapshot: { expectedToken: string | null }) => {
-      tokenObservation = { deviceId, role, expectedToken: snapshot.expectedToken };
-    };
-  };
-  const observedFor = (params: { deviceId: string; role: string }) =>
-    tokenObservation?.deviceId === params.deviceId &&
-    tokenObservation.role === normalizeDeviceAuthRole(params.role)
-      ? tokenObservation
-      : undefined;
-  const writeFence = (params: { deviceId: string; role: string }) => {
-    if (rotationFence) {
-      return rotationFence;
-    }
-    // Each connection's accepted writes settle before its successor loads another observation.
-    const observed = observedFor(params);
-    return observed ? { expectedToken: observed.expectedToken } : undefined;
-  };
-  const clearFence = (params: { deviceId: string; role: string; expectedToken?: string }) => {
-    const expectedToken = rotationFence?.expectedToken ?? params.expectedToken;
-    const raw = observedFor(params)?.expectedToken;
-    return {
-      ...rotationFence,
-      ...(typeof raw === "string" && raw !== expectedToken && raw.trim() === expectedToken
-        ? { observedToken: raw }
-        : {}),
-    };
-  };
-  const deviceAuthDeps: Pick<
-    GatewayClientHostDeps,
-    "loadDeviceAuthToken" | "storeDeviceAuthToken" | "clearDeviceAuthToken"
-  > = deviceAuthScope
-    ? {
-        loadDeviceAuthToken: async (params) => {
-          if (readOnly) {
-            return suppressStoredDeviceAuth
-              ? null
-              : loadOriginDeviceTokenReadOnly({ ...params, gatewayScope: deviceAuthScope });
-          }
-          const load = await loadOriginDeviceToken({
-            ...params,
-            gatewayScope: deviceAuthScope,
-            onSnapshot: observe(params),
-          });
-          return suppressStoredDeviceAuth ? null : load;
-        },
-        storeDeviceAuthToken: readOnly
-          ? () => {}
-          : (params) =>
-              storeOriginDeviceToken({
-                ...params,
-                gatewayScope: deviceAuthScope,
-                ...writeFence(params),
-              }),
-        clearDeviceAuthToken: readOnly
-          ? () => {}
-          : (params) =>
-              clearOriginDeviceToken({
-                ...params,
-                gatewayScope: deviceAuthScope,
-                ...clearFence(params),
-              }),
-      }
-    : readOnly
-      ? {
-          loadDeviceAuthToken: suppressStoredDeviceAuth ? () => null : loadDeviceAuthTokenReadOnly,
-          storeDeviceAuthToken: () => {},
-          clearDeviceAuthToken: () => {},
-        }
-      : {
-          loadDeviceAuthToken: (params) =>
-            loadDeviceAuthToken({ ...params, onSnapshot: observe(params) }),
-          storeDeviceAuthToken: (params) =>
-            storeDeviceAuthToken({ ...params, ...writeFence(params) }),
-          clearDeviceAuthToken: (params) =>
-            clearDeviceAuthToken({ ...params, ...clearFence(params) }),
-        };
-  const preparedDeviceAuthDeps = preparedDeviceAuth
-    ? { ...deviceAuthDeps, loadDeviceAuthToken: () => preparedDeviceAuth }
-    : deviceAuthDeps;
-  return {
-    // This wrapper is the only place the package reaches into OpenClaw runtime
-    // state. Keep device identity, token storage, proxy, and redaction here.
-    loadOrCreateDeviceIdentity,
-    signDevicePayload,
-    publicKeyRawBase64UrlFromPem,
-    ...preparedDeviceAuthDeps,
-    beforeConnect: ensureInheritedManagedProxyRoutingActive,
-    registerGatewayLoopbackBypass: registerManagedProxyGatewayLoopbackBypass,
-    logDebug,
-    logError,
-    redactForLog: redactToolPayloadText,
-    ...overrides,
-    ...(readOnly
-      ? {
-          // Read-only is an authoritative lifecycle policy: caller overrides
-          // must not restore identity creation or token writes behind it.
-          loadOrCreateDeviceIdentity: () => loadDeviceIdentityIfPresent() ?? undefined,
-          ...preparedDeviceAuthDeps,
-        }
-      : {}),
-  };
-}
 
 function shouldSuppressStoredDeviceAuth(opts: GatewayClientOptions): boolean {
   // Password-only read-only clients cannot use stored tokens for auth, retry, or persistence.
@@ -282,13 +158,119 @@ export class GatewayClient {
     for (const value of Object.values(baseOptions.edgeAuthHeaders ?? {})) {
       registerSecretValueForRedaction(value);
     }
-    const hostDeps = createOpenClawGatewayClientHostDeps(
-      baseOptions.hostDeps,
-      deviceAuthScope,
-      suppressStoredAuth,
-      sharedStateMode,
-      preparedDeviceAuth,
-    );
+    const readOnly = sharedStateMode === "read-only";
+    // Prepared auth is immutable request input. Any later durable mutation must
+    // still match this token so a stale request cannot undo a concurrent rotation.
+    const rotationFence = preparedDeviceAuth
+      ? { expectedToken: preparedDeviceAuth.token }
+      : undefined;
+    let tokenObservation:
+      | { deviceId: string; role: string; expectedToken: string | null }
+      | undefined;
+    const observe = (params: { deviceId: string; role: string }) => {
+      const deviceId = params.deviceId;
+      const role = normalizeDeviceAuthRole(params.role);
+      return (snapshot: { expectedToken: string | null }) => {
+        tokenObservation = { deviceId, role, expectedToken: snapshot.expectedToken };
+      };
+    };
+    const observedFor = (params: { deviceId: string; role: string }) =>
+      tokenObservation?.deviceId === params.deviceId &&
+      tokenObservation.role === normalizeDeviceAuthRole(params.role)
+        ? tokenObservation
+        : undefined;
+    const writeFence = (params: { deviceId: string; role: string }) => {
+      if (rotationFence) {
+        return rotationFence;
+      }
+      // Each connection's accepted writes settle before its successor loads another observation.
+      const observed = observedFor(params);
+      return observed ? { expectedToken: observed.expectedToken } : undefined;
+    };
+    const clearFence = (params: { deviceId: string; role: string; expectedToken?: string }) => {
+      const expectedToken = rotationFence?.expectedToken ?? params.expectedToken;
+      const raw = observedFor(params)?.expectedToken;
+      return {
+        ...rotationFence,
+        ...(typeof raw === "string" && raw !== expectedToken && raw.trim() === expectedToken
+          ? { observedToken: raw }
+          : {}),
+      };
+    };
+    const deviceAuthDeps: Pick<
+      GatewayClientHostDeps,
+      "loadDeviceAuthToken" | "storeDeviceAuthToken" | "clearDeviceAuthToken"
+    > = deviceAuthScope
+      ? {
+          loadDeviceAuthToken: async (params) => {
+            if (readOnly) {
+              return suppressStoredAuth
+                ? null
+                : loadOriginDeviceTokenReadOnly({ ...params, gatewayScope: deviceAuthScope });
+            }
+            const load = await loadOriginDeviceToken({
+              ...params,
+              gatewayScope: deviceAuthScope,
+              onSnapshot: observe(params),
+            });
+            return suppressStoredAuth ? null : load;
+          },
+          storeDeviceAuthToken: readOnly
+            ? () => {}
+            : (params) =>
+                storeOriginDeviceToken({
+                  ...params,
+                  gatewayScope: deviceAuthScope,
+                  ...writeFence(params),
+                }),
+          clearDeviceAuthToken: readOnly
+            ? () => {}
+            : (params) =>
+                clearOriginDeviceToken({
+                  ...params,
+                  gatewayScope: deviceAuthScope,
+                  ...clearFence(params),
+                }),
+        }
+      : readOnly
+        ? {
+            loadDeviceAuthToken: suppressStoredAuth ? () => null : loadDeviceAuthTokenReadOnly,
+            storeDeviceAuthToken: () => {},
+            clearDeviceAuthToken: () => {},
+          }
+        : {
+            loadDeviceAuthToken: (params) =>
+              loadDeviceAuthToken({ ...params, onSnapshot: observe(params) }),
+            storeDeviceAuthToken: (params) =>
+              storeDeviceAuthToken({ ...params, ...writeFence(params) }),
+            clearDeviceAuthToken: (params) =>
+              clearDeviceAuthToken({ ...params, ...clearFence(params) }),
+          };
+    const preparedDeviceAuthDeps = preparedDeviceAuth
+      ? { ...deviceAuthDeps, loadDeviceAuthToken: () => preparedDeviceAuth }
+      : deviceAuthDeps;
+    const hostDeps: GatewayClientHostDeps = {
+      // This wrapper is the only place the package reaches into OpenClaw runtime
+      // state. Keep device identity, token storage, proxy, and redaction here.
+      loadOrCreateDeviceIdentity,
+      signDevicePayload,
+      publicKeyRawBase64UrlFromPem,
+      ...preparedDeviceAuthDeps,
+      beforeConnect: ensureInheritedManagedProxyRoutingActive,
+      registerGatewayLoopbackBypass: registerManagedProxyGatewayLoopbackBypass,
+      logDebug,
+      logError,
+      redactForLog: redactToolPayloadText,
+      ...baseOptions.hostDeps,
+      ...(readOnly
+        ? {
+            // Read-only is an authoritative lifecycle policy: caller overrides
+            // must not restore identity creation or token writes behind it.
+            loadOrCreateDeviceIdentity: () => loadDeviceIdentityIfPresent() ?? undefined,
+            ...preparedDeviceAuthDeps,
+          }
+        : {}),
+    };
     if (sshTunnel) {
       const beforeConnect = hostDeps.beforeConnect;
       hostDeps.beforeConnect = () => {

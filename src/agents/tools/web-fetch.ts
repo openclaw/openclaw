@@ -389,10 +389,7 @@ type WebFetchRuntimeParams = {
 
 function normalizeProviderFinalUrl(value: unknown): string | undefined {
   const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  if (containsAsciiControlCharacter(trimmed) || trimmed.includes(" ")) {
+  if (!trimmed || containsAsciiControlCharacter(trimmed) || trimmed.includes(" ")) {
     return undefined;
   }
   const url = URL.parse(trimmed);
