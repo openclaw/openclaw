@@ -353,6 +353,7 @@ export type LatestTranscriptAssistantText = {
 };
 
 export type SessionTranscriptWriteLockAccessorContext = {
+  publishUpdate: (update?: TranscriptUpdatePayload) => Promise<void>;
   appendMessage: <TMessage>(
     options: LockedTranscriptMessageAppendOptions<TMessage>,
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;

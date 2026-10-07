@@ -756,10 +756,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/state/openclaw-state-read.worker.ts",
     ],
   })),
-  {
-    testFile: "src/gateway/server-methods/board.website.test.ts",
-    watchGlobs: ["src/boards/sqlite-board-store.worker.ts", "src/infra/sqlite-store.worker.ts"],
-  },
   ...[
     "src/gateway/server-methods/chat-history-handler.cli-import.test.ts",
     "src/gateway/server-methods/chat-history-registry.test.ts",
@@ -1177,10 +1173,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/config/sessions/session-transcript-reconcile.worker.ts",
     ],
   },
-  ...[
-    "src/plugin-state/plugin-blob-store.readonly.test.ts",
-    "src/plugin-state/plugin-blob-store.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
+  ...["src/plugin-state/plugin-blob-store.test.ts"].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
       "src/plugin-state/plugin-blob-store.worker.ts",

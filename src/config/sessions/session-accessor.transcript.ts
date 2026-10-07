@@ -1,6 +1,6 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
-import { trimTranscriptForManualCompact } from "./session-accessor.sqlite-transcript-write.js";
+import { trimTranscriptForManualCompact } from "./session-accessor.sqlite-compaction.js";
 import type {
   SessionTranscriptRuntimeScope,
   SessionTranscriptManualTrimResult,
@@ -220,6 +220,7 @@ export async function trimSessionTranscriptForManualCompact(
                           ).archive,
                   },
                   {
+                    kind: "turn",
                     agentId: resolved.agentId,
                     sessionKey: scope.sessionKey,
                     options: {

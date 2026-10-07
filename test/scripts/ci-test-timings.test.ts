@@ -441,7 +441,7 @@ describe("runtime placement observations", () => {
     files: readonly string[] = [
       "src/config/state-startup-corpus.test.ts",
       "src/infra/update-managed-service-handoff-lifecycle.test.ts",
-      "src/plugin-state/plugin-state-store.authority.test.ts",
+      "src/plugin-state/plugin-state-store.runtime.test.ts",
       "test/plugins/codex-model-catalog.gateway.test.ts",
     ],
   ) {

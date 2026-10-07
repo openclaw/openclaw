@@ -4,8 +4,12 @@ import path from "node:path";
 import { constants, DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeSqliteReadSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   captureSqliteWorkerStateContext,
@@ -385,8 +389,15 @@ describe("existing shared-state schema admission", () => {
     withExistingOpenClawStateSchema(options, () => {
       const { db } = openOpenClawStateDatabase(options);
       const peer = new DatabaseSync(options.path);
+      const reads = trackSqliteStatementExecutions(db, ["content"], (sql) =>
+        /^select "value_json" from "config_machine_state"/iu.test(sql) ? "content" : null,
+      );
+      const readVersion = () =>
+        runSqliteReadOperationSync(db, () => readStateSchemaContentVersion(db), "fresh");
       try {
-        expect(readStateSchemaContentVersion(db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+        expect(readVersion()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+        expect(readVersion()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+        expect(reads.counts.content).toBeLessThanOrEqual(1);
         db.exec("BEGIN");
         expect(
           db
@@ -402,10 +413,11 @@ describe("existing shared-state schema admission", () => {
             "UPDATE config_machine_state SET value_json = ? WHERE state_key = 'state.schema.contentVersion'",
           )
           .run(String(OPENCLAW_STATE_SCHEMA_VERSION + 1));
-        expect(readStateSchemaContentVersion(db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+        expect(readVersion()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
         db.exec("COMMIT");
-        expect(readStateSchemaContentVersion(db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION + 1);
+        expect(readVersion()).toBe(OPENCLAW_STATE_SCHEMA_VERSION + 1);
       } finally {
+        reads.restore();
         if (db.isTransaction) {
           db.exec("ROLLBACK");
         }

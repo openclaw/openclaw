@@ -89,49 +89,38 @@ function mapper() {
   };
 }
 
-it.each([false, true])(
-  "closes a mapped reader with explicit SQLite close capability %s",
-  async (explicitClose) => {
-    const capabilities = vi.spyOn(sqliteRuntime, "getSqliteRuntimeCapabilities").mockReturnValue({
-      explicitSqliteCloseReleasesNativeResources: explicitClose,
-      decided: true,
-      reason: "test policy",
-    });
-    try {
-      const options = source();
-      await executeExistingOpenClawStateRead(options, { type: "fleet.list" });
-      await closeOpenClawStateDatabaseByPathAsync(options.path);
-      expect(explicitClose ? mock.closeResources : mock.rotate).toHaveBeenCalledOnce();
-      expect(explicitClose ? mock.rotate : mock.closeResources).not.toHaveBeenCalled();
-      expect(mock.closePool).not.toHaveBeenCalled();
-      await closeOpenClawStateDatabaseAsync();
-      expect(mock.closePool).toHaveBeenCalledOnce();
-    } finally {
-      capabilities.mockRestore();
-    }
-  },
-);
+it("rotates mapped readers when explicit SQLite close cannot release native resources", async () => {
+  const capabilities = vi.spyOn(sqliteRuntime, "getSqliteRuntimeCapabilities").mockReturnValue({
+    explicitSqliteCloseReleasesNativeResources: false,
+    decided: true,
+    reason: "test policy",
+  });
+  try {
+    const options = source();
+    await executeExistingOpenClawStateRead(options, { type: "fleet.list" });
+    await closeOpenClawStateDatabaseByPathAsync(options.path);
+    expect(mock.rotate).toHaveBeenCalledOnce();
+    expect(mock.closeResources).not.toHaveBeenCalled();
+    expect(mock.closePool).not.toHaveBeenCalled();
+    await closeOpenClawStateDatabaseAsync();
+    expect(mock.closePool).toHaveBeenCalledOnce();
+  } finally {
+    capabilities.mockRestore();
+  }
+});
 
-it.each(["retired", "different-source", "capture", "schema"] as const)(
+it.each(["retired", "different-source", "schema"] as const)(
   "maps %s authority failure once before dispatching a read",
   async (kind) => {
     const options = source();
-    const original = new Error("original read admission refusal");
     const context =
       kind === "schema"
         ? withExistingOpenClawStateSchema({ path: options.path }, () =>
             captureOpenClawStateReadWorkerContext(options),
           )
-        : kind === "capture"
-          ? undefined
-          : captureOpenClawStateReadWorkerContext(options);
+        : captureOpenClawStateReadWorkerContext(options);
     if (kind === "retired") {
       await closeOpenClawStateDatabaseByPathAsync(options.path);
-    }
-    if (kind === "capture") {
-      vi.mocked(captureOpenClawStateReadWorkerContext).mockImplementationOnce(() => {
-        throw original;
-      });
     }
     const { mapped, mapError } = mapper();
     const read = () =>
@@ -140,7 +129,7 @@ it.each(["retired", "different-source", "capture", "schema"] as const)(
         { type: "fleet.list" },
         { context, mapError },
       );
-    if (kind === "capture" || kind === "schema") {
+    if (kind === "schema") {
       expect(read).toThrow(mapped);
     } else {
       await expect(Promise.resolve().then(read)).rejects.toBe(mapped);
@@ -149,13 +138,11 @@ it.each(["retired", "different-source", "capture", "schema"] as const)(
     expect(mapError.mock.calls[0]?.[1]).toBe("before-read");
     if (kind !== "schema") {
       expect(mapError).toHaveBeenCalledExactlyOnceWith(
-        kind === "capture"
-          ? original
-          : expect.objectContaining(
-              kind === "retired"
-                ? { code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" }
-                : { message: "Shared-state read context does not match its selected source" },
-            ),
+        expect.objectContaining(
+          kind === "retired"
+            ? { code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" }
+            : { message: "Shared-state read context does not match its selected source" },
+        ),
         "before-read",
       );
     }

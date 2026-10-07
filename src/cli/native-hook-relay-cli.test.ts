@@ -534,3 +534,32 @@ function createHeldOpenTextStream(text: string): PassThrough {
   stream.write(text);
   return stream;
 }
+
+it("fails closed in dedicated mode without reading local state or using operator RPC", async () => {
+  const invokeBridge = vi.fn();
+  const callGateway = vi.fn();
+  const stdout = createWritableTextBuffer();
+  const stderr = createWritableTextBuffer();
+  await runNativeHookRelayCliFromArgvForTest(
+    [
+      "node",
+      "openclaw",
+      "hooks",
+      "relay",
+      "--provider",
+      "codex",
+      "--relay-id",
+      "remote-relay",
+      "--generation",
+      "generation",
+      "--event",
+      "pre_tool_use",
+      "--remote-credential",
+      "/missing-native-hook-credential.json",
+    ],
+    { stdin: createReadableTextStream("{}"), stdout, stderr, invokeBridge, callGateway },
+  );
+  expect(invokeBridge).not.toHaveBeenCalled();
+  expect(callGateway).not.toHaveBeenCalled();
+  expect(stdout.text()).toContain("deny");
+});

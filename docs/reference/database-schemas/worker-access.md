@@ -1750,6 +1750,18 @@ released synchronous SDK reader and pairing request/approval mutations retain
 their native paths, so their shared SQL sites remain T1. No schema, retention,
 durability, or update migration changes.
 
+Durable transcript write locks retain the canonical agent writer for reads and
+callback settlement. Reads carry exact stored bytes and row sequences;
+the writer rechecks those snapshots, pending-input custody, and prepared source
+predicates in its synchronous transaction. Each append has its own acknowledged
+receipt, and successful callback notifications publish before writer release.
+Opaque synchronous SDK preparation and authority callbacks, process-held incognito,
+and admitted maintenance retain the native adapter. Unknown writes never replay.
+Custom JSON values stay on the host through message preparation; workers receive
+identity fields and accepted canonical JSON. Prepared replay, pending-input
+promotion, and suppression do not serialize discarded input. Ordinary replay
+continues comparing candidate payloads.
+
 Native transcript locks serialize accepted reads and writes through callback
 completion and join their settlement before releasing the reservation. Awaited
 message preparation captures the physical store and transcript version outside
@@ -3251,6 +3263,24 @@ and discovery snapshots do not grant permission.
 While a Gateway runs, other processes must use its RPCs for profile mutations;
 direct out-of-process SQLite writes are not supported. Doctor repairs and
 migrations run under their existing offline maintenance or startup owners.
+
+Self-profile disclosure travels with the existing profile authority read, reusing
+its selected identity and GitHub facts. Project recents prepare exact merge aliases
+in the same read worker and recheck their original requester and profile authority
+before responding. Their next read observes foreign commits through the reader's
+existing freshness scope. Cold session projections hydrate the profile catalog once
+off-thread; physical replacement or first appearance invalidates readiness and
+refreshes through that same owner. Warm catalog reads remain memory-only.
+Cookie and assistant-media responses retain those catalog facts through response
+closure, with current role and access policy checked synchronously before disclosure.
+Schemas, stored bytes, FIFO writes, accepted-write settlement, and update behavior
+are unchanged.
+
+Cold synchronous profile reads remain for released tool construction, Mention Inbox
+recording, transcript presentation, and standalone bootstrap SDK contracts. History
+workers use the same native selectors on their own thread. These retained paths
+remain migration debt until their SDK callers can use prepared facts; they do not
+justify a native catalog hydration fallback in the Gateway.
 
 Secret-store expiry runs in that worker for scheduled Gateway cleanup and
 post-mutation cleanup. The caller captures the database and expiry cutoffs before

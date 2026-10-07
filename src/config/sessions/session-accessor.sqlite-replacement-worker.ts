@@ -478,6 +478,10 @@ export async function runSessionEntryWorkerMutation<T>(
         !Array.isArray(facts.publication.sharingUnchangedKeys) ||
         !facts.publication.sharingUnchangedKeys.every(
           (key): key is string => typeof key === "string",
+        ) ||
+        !Array.isArray(facts.publication.generationUnchangedKeys) ||
+        !facts.publication.generationUnchangedKeys.every(
+          (key): key is string => typeof key === "string",
         )
       ) {
         throw new Error("Session entry mutation commit omitted its publication keys");
@@ -487,6 +491,7 @@ export async function runSessionEntryWorkerMutation<T>(
         facts.publication.changedKeys,
         facts.publication.membershipInvalidatedKeys,
         facts.publication.sharingUnchangedKeys,
+        facts.publication.generationUnchangedKeys,
       );
     },
     executionOptions.retainedExecution,

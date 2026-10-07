@@ -83,7 +83,11 @@ supports `legacy-operator-state`; historical targets retain `base` with `auto-au
 Missing historical catalogs keep that fallback; malformed or invalid catalogs fail.
 PRs defer the complete survivor to hourly main and Full Release Validation, while
 the other Docker seed lanes and QA Smoke retain their owner maps.
-Ordinary manual/release CI builds the full declaration-complete package. Main and
+Ordinary manual CI builds the full declaration-complete package. Full Release
+Validation's Docker seed child uses the 16-class Blacksmith runner when no release
+runner group is configured and the existing smoke package without removing
+coverage. Hosted outage overrides and retries keep their recovery route, and
+weighted lane admission remains serial. Main and
 selected PRs, including exact-head `release_gate` fallbacks, use the
 existing `ciArtifacts` profile and canonical packer with `--skip-build`, retaining
 the runtime, public SDK declarations, and unchanged tarball integrity check.

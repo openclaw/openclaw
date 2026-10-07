@@ -82,6 +82,7 @@ export type CodexStartOrResumeThreadParams = Omit<
   finalConfigPatch?: JsonObject;
   buildFinalConfigPatch?: (
     decision: CodexThreadFinalConfigPatchDecision,
+    client: CodexAppServerClient,
   ) => CodexThreadFinalConfigPatchResult | Promise<CodexThreadFinalConfigPatchResult>;
   nativeHookRelayGeneration?: string;
   /** Session-layer PreToolUse hooks must survive authoritative managed hook requirements. */

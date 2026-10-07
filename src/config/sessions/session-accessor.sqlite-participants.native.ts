@@ -34,6 +34,23 @@ export function recordSessionParticipant(
   scope: SessionAccessScope,
   params: SessionParticipantRecordInput,
 ): RecordSessionParticipantResult | null {
+  // Native callers may open shared state here; keep that read before their agent transaction.
+  return recordSessionParticipantWithAliasRead(scope, params, "before-transaction");
+}
+
+/** The sharing worker already holds its agent transaction when resolving profile aliases. */
+export function recordSessionParticipantFromWorker(
+  scope: SessionAccessScope,
+  params: SessionParticipantRecordInput,
+): RecordSessionParticipantResult | null {
+  return recordSessionParticipantWithAliasRead(scope, params, "on-miss");
+}
+
+function recordSessionParticipantWithAliasRead(
+  scope: SessionAccessScope,
+  params: SessionParticipantRecordInput,
+  aliasRead: "before-transaction" | "on-miss",
+): RecordSessionParticipantResult | null {
   const actorId = params.identity.id;
   if (!actorId || (params.identity.type === "agent" && actorId === params.sessionAgentId)) {
     return null;
@@ -42,8 +59,8 @@ export function recordSessionParticipant(
   const options = toDatabaseOptions(resolved);
   const promptedAt = params.promptedAt ?? Date.now();
   const namespace = participantIdentityNamespace(params.identity);
-  const aliases =
-    params.identity.type === "profile"
+  const preparedAliases =
+    aliasRead === "before-transaction" && params.identity.type === "profile"
       ? readUserProfileAliases(actorId, { env: scope.env })
       : undefined;
   const result = runOpenClawAgentWriteTransaction(
@@ -63,11 +80,17 @@ export function recordSessionParticipant(
       let existing = exact?.actor_id === actorId ? exact : undefined;
       // Prefer the exact row, otherwise the first retained alias. Preserve raw history;
       // read-time canonicalization combines aliases without a cross-database rewrite.
-      if (!existing && aliases && aliases.size > 1) {
-        existing = executeSqliteQuerySync(
-          database.db,
-          participantQuery.orderBy("actor_id"),
-        ).rows.find((row) => aliases.has(row.actor_id));
+      if (!existing && params.identity.type === "profile") {
+        const aliases =
+          aliasRead === "on-miss"
+            ? readUserProfileAliases(actorId, { env: scope.env })
+            : preparedAliases;
+        if (aliases && aliases.size > 1) {
+          existing = executeSqliteQuerySync(
+            database.db,
+            participantQuery.orderBy("actor_id"),
+          ).rows.find((row) => aliases.has(row.actor_id));
+        }
       }
       if (!existing) {
         const count = executeSqliteQueryTakeFirstSync(

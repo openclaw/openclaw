@@ -6,11 +6,11 @@ export const databaseWorkerExtensionTestRoots = [
 ];
 
 export const databaseWorkerExtensionTestFiles = [
+  "extensions/codex/src/app-server/transcript-mirror.user-idempotency.test.ts",
   "extensions/slack/src/conversation-bindings.test.ts",
   "extensions/a2a/src/inbound.test.ts",
   "extensions/buzz/src/inbound.test.ts",
   "extensions/clickclack/src/inbound.mention-gating.test.ts",
-  "extensions/clickclack/src/inbound.model-loop.test.ts",
   "extensions/clickclack/src/inbound.test.ts",
   "extensions/discord/src/monitor/message-handler.context-history.test.ts",
   "extensions/irc/src/inbound.behavior.test.ts",
@@ -90,7 +90,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/tlon/src/monitor/index.test.ts",
   "extensions/twitch/src/twitch-ingress.test.ts",
   "extensions/twitch/src/monitor.test.ts",
-  "extensions/whatsapp/src/auto-reply.web-auto-reply.error-delivery.test.ts",
   "extensions/whatsapp/src/auto-reply.web-auto-reply.media-delivery.test.ts",
   "extensions/whatsapp/src/auto-reply/monitor/process-message.test.ts",
   "extensions/whatsapp/src/inbound.media.test.ts",
@@ -194,6 +193,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/thread-lifecycle.assignment-rotation.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.native.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.binding.test.ts",
+  "extensions/codex/src/app-server/thread-lifecycle.remote-hooks.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.native-config.test.ts",
   "extensions/codex/src/app-server/thread-shell-environment.native.test.ts",
   "extensions/codex/src/app-server/transport-process-registration.test.ts",

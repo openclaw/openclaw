@@ -195,9 +195,15 @@ it.each([
     delivery.afterResult = () => {
       executions++;
       whileWaiting = sharing.readCurrent();
-      expect(generation.assertCurrent).toThrow(
-        expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-      );
+      // Only a held write that changes the incarnation fences generation reads; a
+      // replaced writer database leaves the retained source unverifiable either way.
+      if (boundary === "newer native write after reset" || boundary === "late writer") {
+        expect(generation.assertCurrent).toThrow(
+          expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+        );
+      } else {
+        generation.assertCurrent();
+      }
       if (boundary === "lost result") {
         throw failure;
       }
@@ -459,15 +465,21 @@ it.each([
             lifecycleRevision,
             owner: initialOwner,
           });
-          expect(generation.assertCurrent).toThrow(
-            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-          );
+          const assertHeldGeneration = () => {
+            // An identity-preserving held write leaves the generation readable.
+            if (reset) {
+              expect(generation.assertCurrent).toThrow(
+                expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+              );
+            } else {
+              generation.assertCurrent();
+            }
+          };
+          assertHeldGeneration();
           if (boundary === "reply") {
             assignNewOwner();
             // An owner-only publication cannot restore the old lifecycle before settlement.
-            expect(generation.assertCurrent).toThrow(
-              expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-            );
+            assertHeldGeneration();
             if (reset) {
               expect(sharing.readCurrent()).toBeUndefined();
             }

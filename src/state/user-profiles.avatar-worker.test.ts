@@ -16,7 +16,7 @@ import { onUserProfilesChanged, readUserProfileVersion } from "./user-profile-ev
 import {
   getUserProfileDisplay,
   readUserProfileIdentity,
-  retainUserProfileCatalog,
+  prepareUserProfileCatalog,
 } from "./user-profile-list.js";
 import { linkEmail, setAvatar, setDisplayName } from "./user-profile-writes.worker.js";
 import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
@@ -134,7 +134,7 @@ it.each([
       linkEmail("alias@example.test", profile.id);
       const pathname = openOpenClawStateDatabase().path;
       if (boundary !== "late catalog") {
-        release = retainUserProfileCatalog();
+        release = (await prepareUserProfileCatalog()).release;
       }
       const observed: Array<ReturnType<typeof getUserProfileDisplay>> = [];
       if (stage === "result") {
@@ -181,7 +181,8 @@ it.each([
           expect(setAvatar(profile.id, new Uint8Array([9]), "image/png").ok).toBe(true);
         }
         if (boundary === "late catalog") {
-          release = retainUserProfileCatalog();
+          delivery.afterRead = undefined;
+          release = (await prepareUserProfileCatalog()).release;
         }
       }
       if (stage === "settlement read") {
@@ -230,12 +231,12 @@ it.each(["resident", "absent", "late"] as const)(
       const pathname = openOpenClawStateDatabase().path;
       const admission = captureOpenClawStateWorkerContext({ path: pathname }).admission;
       if (catalog === "resident") {
-        release = retainUserProfileCatalog();
+        release = (await prepareUserProfileCatalog()).release;
       }
       const version = readUserProfileVersion();
       delivery.afterResult = async () => {
         if (catalog === "late") {
-          release = retainUserProfileCatalog();
+          release = (await prepareUserProfileCatalog()).release;
         }
         closing = closeOpenClawStateDatabaseByPathAsync(pathname);
         expect(() => admission.assertCurrent()).toThrow();
@@ -260,7 +261,7 @@ it("adopts an avatar off-thread and publishes its catalog before identity observ
     const profile = ensureProfileForEmail("portrait@example.test");
     const alias = ensureProfileForEmail("alias@example.test");
     linkEmail("alias@example.test", profile.id);
-    release = retainUserProfileCatalog();
+    release = (await prepareUserProfileCatalog()).release;
     const seen: unknown[] = [];
     stop = onUserProfilesChanged(() => {
       seen.push({
