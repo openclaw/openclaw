@@ -121,9 +121,11 @@ export function appendSqliteTrajectoryRuntimeEvents(
       for (;;) {
         const batch = selectTrajectoryRuntimeRetentionBatch(database.db, { sweepId, snapshot });
         snapshot = undefined;
-        const result = write("trajectory.runtime.retention.delete", (current) =>
-          deleteTrajectoryRuntimeRetention(current, batch),
-        );
+        const result = batch.refresh
+          ? deleteTrajectoryRuntimeRetention(database, batch)
+          : write("trajectory.runtime.retention.delete", (current) =>
+              deleteTrajectoryRuntimeRetention(current, batch),
+            );
         if (result.complete) {
           state.sweptAt = now;
           break;

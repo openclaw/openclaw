@@ -186,6 +186,7 @@ export function createIncognitoSideDataWorker(
                 database.db,
                 command.input,
               );
+              // Changing actor commands retain a commit receipt even for a refresh-only result.
               const deleted = context.writeTransaction(
                 "trajectory.runtime.retention.delete",
                 "Trajectory retention",

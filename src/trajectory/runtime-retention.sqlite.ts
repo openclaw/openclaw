@@ -231,7 +231,7 @@ export function selectTrajectoryRuntimeRetentionBatch(
   const sweep = currentSweep(database);
   const runs: Run[] = [];
   if (!sweep || sweep.id !== input.sweepId) {
-    return { sweepId: input.sweepId, runs };
+    return { sweepId: input.sweepId, runs, refresh: true as const };
   }
   if (input.snapshot && !sweep.plan) {
     sweep.plan = { ...input.snapshot, runs: [] };
@@ -294,7 +294,7 @@ export function deleteTrajectoryRuntimeRetention(
   database: OpenClawAgentDatabase,
   batch: ReturnType<typeof selectTrajectoryRuntimeRetentionBatch>,
 ) {
-  const sweep = currentSweep(database.db);
+  const sweep = batch.refresh ? undefined : currentSweep(database.db);
   if (!sweep?.plan || sweep.id !== batch.sweepId) {
     return { complete: false, refresh: true, deleted: 0, invalidated: 0, totalBytes: 0 };
   }

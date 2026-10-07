@@ -212,7 +212,11 @@ export async function loadAgentTrajectoryOperations() {
       input: Parameters<typeof retention.selectTrajectoryRuntimeRetentionBatch>[1],
       { open, writeTransaction, admit },
     ) => {
-      const batch = retention.selectTrajectoryRuntimeRetentionBatch(open().db, input);
+      const database = open();
+      const batch = retention.selectTrajectoryRuntimeRetentionBatch(database.db, input);
+      if (batch.refresh) {
+        return retention.deleteTrajectoryRuntimeRetention(database, batch);
+      }
       return writeTransaction(
         "trajectory.runtime.retention.delete",
         "Trajectory retention",

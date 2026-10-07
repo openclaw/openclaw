@@ -881,6 +881,11 @@ the reply is lost; unknown outcomes never replay. Project listing and checkout
 deletion retain the actor roster and snapshots through their consuming work,
 including the final synchronous deletion guard.
 
+Durable and synchronous native retention paths request a refresh before opening
+an empty writer transaction when selection already found an invalid plan.
+Valid batches still revalidate under the writer lock, and actor commands retain
+their commit-receipt transaction.
+
 Production acquisition remains host-owned, and every native selection arm stays
 in place until the atomic activation. These conditional compositions add no
 schema, persistent cache, worker service, retention, durability, permission,
