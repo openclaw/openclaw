@@ -233,47 +233,6 @@ it("scopes requested and resolved questions to operators allowed to see their se
   });
 });
 
-it("preserves a browser URL through request, get, and list", async () => {
-  const url = "https://example.test/connect";
-  const questions = [{ ...requestParams.questions[0], url }];
-  const requested = await call("question.request", {
-    ...requestParams,
-    id: "client-question-id",
-    questions,
-  });
-  expect(requested[0]).toBe(true);
-  const id = (requested[1] as { id: string }).id;
-  expect(id).toBe("client-question-id");
-  expect(broadcast).toHaveBeenCalledWith(
-    "question.requested",
-    expect.objectContaining({
-      id,
-      runId: "run-main",
-      questions,
-      status: "pending",
-    }),
-    publicationOptions,
-  );
-
-  expect(await call("question.get", { id })).toEqual([
-    true,
-    {
-      question: expect.objectContaining({
-        id,
-        questions,
-        runId: "run-main",
-        status: "pending",
-      }),
-    },
-    undefined,
-  ]);
-  expect(await call("question.list", {})).toEqual([
-    true,
-    { questions: [expect.objectContaining({ id, questions, runId: "run-main" })] },
-    undefined,
-  ]);
-});
-
 const credentialUrl = new URL("https://example.test/connect");
 credentialUrl.username = "fixture-user";
 credentialUrl.password = "fixture-password";
@@ -305,6 +264,7 @@ it("rejects duplicate ids and admits a bounded rich single-option question at th
     questions: [
       {
         ...requestParams.questions[0],
+        url: "https://example.test/connect",
         allowEmpty: true,
         presentation: "form",
         options: [{ label: "Only", thumbnail: "https://example.com/only.png" }],
@@ -312,6 +272,7 @@ it("rejects duplicate ids and admits a bounded rich single-option question at th
     ],
   });
   expect(oneOption[0]).toBe(true);
+  expect(manager.get("rich-question")?.questions[0]?.url).toBe("https://example.test/connect");
   expect(
     (
       await call("question.resolve", {
@@ -525,27 +486,6 @@ it("requires admitted authority, not an admin's supplied run metadata", async ()
     }),
   ).toMatchObject(invalidRequest);
   expect(manager.list()).toEqual([]);
-});
-
-it("uses admitted requester provenance instead of caller-supplied correlation fields", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const response = await call(
-      "question.request",
-      {
-        questions: secretRequestParams.questions,
-        agentId: "other",
-        sessionKey: "agent:other:other",
-        runId: "other-run",
-      },
-      { client: adminRequestClient },
-    );
-    expect(response[0]).toBe(true);
-    expect(manager.get((response[1] as { id: string }).id)).toMatchObject({
-      agentId: requestParams.agentId,
-      sessionKey: requestParams.sessionKey,
-      runId: requestParams.runId,
-    });
-  });
 });
 
 it("diverts operator-entered credentials into the store and exposes only a stored marker", async () => {

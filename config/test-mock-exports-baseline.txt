@@ -7608,8 +7608,6 @@
 ["src/gateway/server-methods/approval.channel-custody.test.ts","../approval-channel-custody.js","f0d5803521990b83fb2926a74ab0148b1cdb4eba8cf2e738399d6ee50976617e",1]
 ["src/gateway/server-methods/approval.test.ts","../approval-channel-custody.js","f0d5803521990b83fb2926a74ab0148b1cdb4eba8cf2e738399d6ee50976617e",1]
 ["src/gateway/server-methods/artifacts-session-resolution.test.ts","../server-session-key.js","27ed70f25cc985bd6666fbb0564a29f3a136d943d3a1fa12eff4f9d23c101d74",1]
-["src/gateway/server-methods/artifacts.download-lookup.test.ts","../session-transcript-readers.js","af0d11d6ef83c61bf779d987660afaa67172eb823455802ac7ce1f8a55f50b4b",1]
-["src/gateway/server-methods/artifacts.managed-lifecycle.test.ts","../session-transcript-readers.js","c047907673921e3afb9a2c05fe8b34f7d9f28a431770473862eefbc61666e4e8",1]
 ["src/gateway/server-methods/artifacts.request-authority.test.ts","../session-transcript-readers.js","be65a1780b27ef7289f925ecef49cf7f057331b2ce251820238f382d6470d440",1]
 ["src/gateway/server-methods/artifacts.test.ts","../session-transcript-readers.js","c047907673921e3afb9a2c05fe8b34f7d9f28a431770473862eefbc61666e4e8",1]
 ["src/gateway/server-methods/audit.test.ts","../../audit/audit-event-store.js","39fb91d20c6a6abc7df8ee7ddac92a81c3ce51267931876a77f379efb148bf67",1]
