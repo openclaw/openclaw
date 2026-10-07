@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import {
+  createReplyOperation,
+  replyRunRegistry,
+} from "../../auto-reply/reply/reply-run-registry.js";
 import {
   beginSessionWorkAdmission,
   isCompetingSessionWorkAdmissionActive,
@@ -24,6 +27,7 @@ function fixture() {
     defaultAgentId: "main",
   };
   const register = (options?: {
+    runId?: string;
     agentId?: string;
     sessionKey?: string;
     sessionId?: string;
@@ -32,7 +36,7 @@ function fixture() {
   }) => {
     const registration = registerChatAbortController({
       chatAbortControllers: context.chatAbortControllers,
-      runId: "terminal-run",
+      runId: options?.runId ?? "terminal-run",
       sessionId: options?.sessionId ?? target.sessionId,
       sessionKey: options?.sessionKey ?? target.canonicalKey,
       agentId: options?.agentId ?? target.agentId,
@@ -65,7 +69,7 @@ it.each([
   const registration = register(options);
   const admission = await admit();
   try {
-    expect(await waitForTerminalSessionRunSettlement(target)).toBe(true);
+    expect(await waitForTerminalSessionRunSettlement(target)).toBe(false);
     expect(isCompetingSessionWorkAdmissionActive(target.storePath, [target.sessionId])).toBe(true);
     expect(target.context.chatAbortControllers.size).toBe(1);
     expect(registration.controller.signal.aborted).toBe(false);
@@ -79,7 +83,6 @@ it("joins captured terminal owners without waiting for its caller or a successor
   const { target, register, admit } = fixture();
   const registration = register();
   const caller = await admit();
-  const previous = await admit();
   const reply = createReplyOperation({
     sessionKey: target.canonicalKey,
     sessionId: target.sessionId,
@@ -96,10 +99,9 @@ it("joins captured terminal owners without waiting for its caller or a successor
   try {
     successor = await admit();
     registration.cleanup();
-    reply.complete();
     await vi.advanceTimersByTimeAsync(0);
     expect(settled).toBe(false);
-    previous.release();
+    reply.complete();
     expect(await waiting).toBe(true);
     expect(caller.isActive()).toBe(true);
     expect(successor.isActive()).toBe(true);
@@ -107,7 +109,6 @@ it("joins captured terminal owners without waiting for its caller or a successor
   } finally {
     registration.cleanup();
     reply.complete();
-    previous.release();
     caller.release();
     successor?.release();
     await waiting;
@@ -117,9 +118,8 @@ it("joins captured terminal owners without waiting for its caller or a successor
 it.each(["timeout", "cancel"] as const)(
   "bounds terminal settlement on %s without cancelling the run",
   async (ending) => {
-    const { target, register, admit } = fixture();
+    const { target, register } = fixture();
     const registration = register();
-    const admission = await admit();
     const controller = new AbortController();
     const waiting = waitForTerminalSessionRunSettlement({ ...target, signal: controller.signal });
     try {
@@ -131,41 +131,79 @@ it.each(["timeout", "cancel"] as const)(
         await vi.advanceTimersByTimeAsync(SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS);
         expect(await waiting).toBe(false);
       }
-      expect(admission.isActive()).toBe(true);
       expect(registration.controller.signal.aborted).toBe(false);
     } finally {
       registration.cleanup();
-      admission.release();
       await waiting.catch(() => {});
       await vi.advanceTimersByTimeAsync(0);
     }
   },
 );
 
-it("does not await an in-band execution's own terminal reply", async () => {
-  const { target, register, admit } = fixture();
-  const registration = register({ kind: "agent" });
-  const admission = await admit();
-  const reply = createReplyOperation({
-    sessionKey: target.canonicalKey,
-    sessionId: target.sessionId,
-    agentId: target.agentId,
-    resetTriggered: false,
-  });
-  reply.freezeAbort();
-  try {
-    await admission.run(() =>
+it.each(["none", "chat", "reply"] as const)(
+  "excludes only the in-band execution while joining another %s writer",
+  async (otherOwner) => {
+    const { target, register, admit } = fixture();
+    const caller = register({ kind: "agent", runId: "caller-run" });
+    const admission = await admit();
+    const other = otherOwner === "chat" ? register() : undefined;
+    const reply = createReplyOperation({
+      sessionKey: target.canonicalKey,
+      sessionId: target.sessionId,
+      agentId: target.agentId,
+      resetTriggered: false,
+    });
+    if (otherOwner !== "reply") {
+      replyRunRegistry.bindSourceTurnId(reply, "caller-run");
+    }
+    reply.freezeAbort();
+    let settled = false;
+    const waiting = admission.run(() =>
       runWithChatAbortExecution(
-        registration.entry,
+        caller.entry,
         async () => {
           expect(await waitForTerminalSessionRunSettlement(target)).toBe(true);
+          settled = true;
         },
-        registration.cleanup,
+        caller.cleanup,
       ),
     );
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(otherOwner === "none");
+      other?.cleanup();
+      if (otherOwner === "reply") {
+        reply.complete();
+      }
+      await waiting;
+      expect(settled).toBe(true);
+      expect(admission.isActive()).toBe(true);
+    } finally {
+      other?.cleanup();
+      reply.complete();
+      admission.release();
+      await waiting;
+      caller.cleanup();
+    }
+  },
+);
+
+it("refuses an acquired live admission without waiting for an older terminal owner", async () => {
+  const { target, register, admit } = fixture();
+  const terminal = register();
+  const live = await admit();
+  let result: boolean | undefined;
+  const waiting = waitForTerminalSessionRunSettlement(target).then((value) => {
+    result = value;
+  });
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(result).toBe(false);
+    expect(live.isActive()).toBe(true);
+    expect(target.context.chatAbortControllers.size).toBe(1);
   } finally {
-    reply.complete();
-    admission.release();
-    registration.cleanup();
+    terminal.cleanup();
+    live.release();
+    await waiting;
   }
 });

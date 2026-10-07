@@ -1,13 +1,14 @@
 import {
   hasCommittedReplyOperationOutcome,
+  replyRunRegistry,
   resolveReplyOperationsForSession,
   waitForReplyOperationOwnerSettlement,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { getAttachedBackend } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
-  getSessionWorkAdmissionRelease,
+  isCompetingSessionWorkAdmissionActive,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-  waitForSessionWorkAdmissionRelease,
 } from "../../sessions/session-lifecycle-admission.js";
 import {
   isCurrentChatAbortExecution,
@@ -29,30 +30,37 @@ export async function waitForTerminalSessionRunSettlement(params: {
 }): Promise<boolean> {
   params.signal?.throwIfAborted();
   const sessionKeys = [params.requestedKey, params.canonicalKey];
+  // Admissions have no run identity; never wait on a possibly live competing turn.
+  if (isCompetingSessionWorkAdmissionActive(params.storePath, [...sessionKeys, params.sessionId])) {
+    return false;
+  }
   const matchingRuns = [...params.context.chatAbortControllers].filter(
     ([, entry]) =>
       (sessionKeys.includes(entry.sessionKey.trim()) || entry.sessionId === params.sessionId) &&
       chatRunBelongsToAgent({ ...entry, defaultAgentId: params.defaultAgentId }, params.agentId),
   );
-  // In-band commands cannot join their own execution or reply completion.
-  if (matchingRuns.some(([, entry]) => isCurrentChatAbortExecution(entry))) {
-    return true;
-  }
+  const currentRunId = matchingRuns.find(([, entry]) => isCurrentChatAbortExecution(entry))?.[0];
   const terminalRuns = matchingRuns
     .filter(([, entry]) => entry.projectSessionTerminalObservedAt !== undefined)
     .map(([runId, entry]) => ({ runId, entry }));
-  const terminalReplies = resolveReplyOperationsForSession({ ...params, sessionKeys }).filter(
-    (operation) => operation.result !== null || hasCommittedReplyOperationOutcome(operation),
+  const replies = resolveReplyOperationsForSession({ ...params, sessionKeys }).filter(
+    (operation) =>
+      currentRunId === undefined ||
+      (replyRunRegistry.getSourceTurnId(operation.key) !== currentRunId &&
+        getAttachedBackend(operation)?.runId !== currentRunId),
   );
-  if (terminalRuns.length === 0 && terminalReplies.length === 0) {
-    return true;
+  if (
+    matchingRuns.some(
+      ([runId, entry]) =>
+        runId !== currentRunId && entry.projectSessionTerminalObservedAt === undefined,
+    ) ||
+    replies.some(
+      (operation) => operation.result === null && !hasCommittedReplyOperationOutcome(operation),
+    )
+  ) {
+    return false;
   }
   const timeoutMs = SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS;
-  const admittedWork = getSessionWorkAdmissionRelease({
-    scope: params.storePath,
-    identities: [...sessionKeys, params.sessionId],
-    excludeCurrent: true,
-  });
   return await racePromiseWithAbortSignal(
     Promise.all([
       waitForChatAbortControllerRemoval({
@@ -60,10 +68,7 @@ export async function waitForTerminalSessionRunSettlement(params: {
         targets: terminalRuns,
         timeoutMs,
       }),
-      ...(admittedWork ? [waitForSessionWorkAdmissionRelease(admittedWork, timeoutMs)] : []),
-      ...terminalReplies.map((operation) =>
-        waitForReplyOperationOwnerSettlement(operation, timeoutMs),
-      ),
+      ...replies.map((operation) => waitForReplyOperationOwnerSettlement(operation, timeoutMs)),
     ]).then((results) => results.every(Boolean)),
     params.signal,
   );
