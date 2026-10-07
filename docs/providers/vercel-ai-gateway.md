@@ -84,6 +84,62 @@ Use either form in your configuration; OpenClaw resolves the canonical
 `anthropic/...` ref automatically.
 </Tip>
 
+## Decision models
+
+The plugin also serves TypeSafe AI's Jev through the Gateway for the separate
+[decision model](/concepts/decision-models) role:
+
+| Model reference                            | Model      |
+| ------------------------------------------ | ---------- |
+| `vercel-ai-gateway/typesafe-ai/jev`        | Jev        |
+| `vercel-ai-gateway/typesafe-ai/jev-1.13.0` | Jev 1.13.0 |
+
+Decision evaluation does not use the key that onboarding stores for chat
+models. It reads only the SecretRef at
+`plugins.entries.vercel-ai-gateway.config.apiKey`. After chat onboarding alone,
+the Decision models are listed but every evaluation returns
+`credentials-unavailable`. Also set `enabled: true` on the plugin entry: when
+the plugin is bundled with OpenClaw, this credential stays inactive until the
+entry is explicitly enabled.
+
+To reuse the same Gateway key, merge this into your configuration. It
+references `AI_GATEWAY_API_KEY` from the plugin entry and selects a decision
+model. To use a protected credential created in Settings → Secrets instead,
+reference it with a `store` ref.
+
+```json5
+{
+  plugins: {
+    entries: {
+      "vercel-ai-gateway": {
+        enabled: true,
+        config: {
+          apiKey: { source: "env", provider: "default", id: "AI_GATEWAY_API_KEY" },
+        },
+      },
+    },
+  },
+  agents: {
+    defaults: { decisionModel: "vercel-ai-gateway/typesafe-ai/jev" },
+  },
+}
+```
+
+The environment variable must be visible to the Gateway process, as described
+under [Advanced configuration](#advanced-configuration). Evaluations send the
+selected evidence through Vercel AI Gateway and incur its normal usage charges.
+
+The Gateway answers evidence beyond the model's input limit with HTTP 503, the
+same status it uses for a service outage. To keep oversized evidence from
+looking like an outage, OpenClaw refuses evaluation requests larger than 32 KiB
+before sending them and returns `unsupported-input`, which does not count
+toward the provider's failure cooldown. Tool filtering stays well within that
+budget. A 503 that still reaches OpenClaw counts as a transport failure, and
+after three consecutive transport failures, evaluations through this provider
+pause for at least 10 seconds while callers keep their normal behavior. Boolean
+questions also need non-empty `instructions`: the Gateway rejects them
+otherwise, and the evaluation returns `unsupported-input`.
+
 ## Advanced configuration
 
 <AccordionGroup>

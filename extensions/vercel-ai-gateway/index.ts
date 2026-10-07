@@ -1,4 +1,6 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
+import { createVercelAiGatewayDecisionProvider } from "./decisions.js";
 import { applyVercelAiGatewayConfig, VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
@@ -29,5 +31,16 @@ export default defineSingleProviderPluginEntry({
     },
     resolveDynamicModel: ({ modelId }) => resolveVercelAiGatewayModel(modelId),
     resolveThinkingProfile: ({ modelId }) => resolveVercelAiGatewayThinkingProfile(modelId),
+  },
+  register(api) {
+    api.registerDecisionProvider(
+      createVercelAiGatewayDecisionProvider(() => {
+        const prepared = getPreparedPluginSecretInput(PROVIDER_ID, "apiKey");
+        return {
+          apiKey: prepared.value,
+          revision: prepared.revision,
+        };
+      }),
+    );
   },
 });
