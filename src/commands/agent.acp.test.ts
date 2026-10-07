@@ -425,6 +425,13 @@ describe("agentCommand ACP runtime routing", () => {
         );
 
         expect(runTurn).toHaveBeenCalledOnce();
+        expect(runTurn).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionKey: "agent:codex:acp:test",
+            text: "  probe\n",
+            mode: "prompt",
+          }),
+        );
         expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
         expect(attemptExecutionMocks.persistAcpTurnTranscript.mock.calls.at(-1)?.[0]).toMatchObject(
           {

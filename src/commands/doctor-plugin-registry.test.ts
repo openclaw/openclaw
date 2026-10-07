@@ -772,7 +772,14 @@ describe("doctor official plugin provenance", () => {
     { name: "local source path", record: { ...legacyRecord, sourcePath: "/tmp/local-plugin" } },
     { name: "missing URL only", record: { ...legacyRecord, clawhubChannel: "official" } },
     { name: "missing channel only", record: { ...legacyRecord, clawhubUrl: "https://clawhub.ai" } },
+    { name: "custom host", record: { ...legacyRecord, clawhubUrl: "https://example.invalid" } },
+    { name: "community channel", record: { ...legacyRecord, clawhubChannel: "community" } },
     { name: "conflicting identity", record: { ...legacyRecord, resolvedName: "@vendor/acpx" } },
+    {
+      name: "npm-only catalog identity",
+      record: { source: "clawhub", spec: "clawhub:@openclaw/acpx" },
+    },
+    { name: "unlisted spec", record: { source: "clawhub", spec: "clawhub:@vendor/acpx" } },
   ] satisfies Array<{ name: string; record: PluginInstallRecord }>)(
     "preserves unproven $name for reinstall instead of inventing authority",
     async ({ record }) => {

@@ -523,70 +523,93 @@ describe("openai completions stream", () => {
     }
   });
 
-  it("reports an empty response without a terminal marker as interrupted", async () => {
-    const server = createServer((req, res) => {
-      let body = "";
-      req.setEncoding("utf8");
-      req.on("data", (chunk) => {
-        body += chunk;
-      });
-      req.on("end", () => {
-        void body;
-        res.writeHead(200, {
-          "content-type": "text/event-stream; charset=utf-8",
-          "cache-control": "no-cache",
-          connection: "keep-alive",
+  it.each(["empty", "tool", "text and tool"] as const)(
+    "reports a %s response without a terminal marker as interrupted",
+    async (content) => {
+      const server = createServer((req, res) => {
+        let body = "";
+        req.setEncoding("utf8");
+        req.on("data", (chunk) => {
+          body += chunk;
         });
-        res.end();
+        req.on("end", () => {
+          void body;
+          res.writeHead(200, {
+            "content-type": "text/event-stream; charset=utf-8",
+            "cache-control": "no-cache",
+            connection: "keep-alive",
+          });
+          if (content === "text and tool") {
+            res.write(
+              `data: ${JSON.stringify(makeCompletionsChunk({ content: "Running a command." }))}\n\n`,
+            );
+          }
+          if (content !== "empty") {
+            res.write(
+              `data: ${JSON.stringify(
+                makeCompletionsChunk({
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: "call_interrupted",
+                      function: { name: "bash", arguments: '{"cmd":"echo loopback"}' },
+                    },
+                  ],
+                }),
+              )}\n\n`,
+            );
+          }
+          res.end();
+        });
       });
-    });
 
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing loopback server address");
-      }
-      const baseModel = makeCompletionsModel({
-        id: "qwen3.6-27b",
-        name: "Qwen 3.6 27B",
-        provider: "vllm",
-        baseUrl: `http://127.0.0.1:${address.port}/v1`,
-        reasoning: false,
-        contextWindow: 131072,
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
       });
-      const stream = createOpenAICompletionsTransportStreamFn()(
-        baseModel,
-        {
-          systemPrompt: "system",
-          messages: [{ role: "user", content: "Run a command", timestamp: Date.now() }],
-          tools: [],
-        } as never,
-        { apiKey: "test-key" } as never,
-      );
-
-      let terminalEvent: string | undefined;
-      for await (const event of stream as AsyncIterable<{
-        type: string;
-      }>) {
-        if (event.type === "done" || event.type === "error") {
-          terminalEvent = event.type;
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing loopback server address");
         }
-      }
+        const baseModel = makeCompletionsModel({
+          id: "qwen3.6-27b",
+          name: "Qwen 3.6 27B",
+          provider: "vllm",
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          reasoning: false,
+          contextWindow: 131072,
+        });
+        const stream = createOpenAICompletionsTransportStreamFn()(
+          baseModel,
+          {
+            systemPrompt: "system",
+            messages: [{ role: "user", content: "Run a command", timestamp: Date.now() }],
+            tools: [],
+          } as never,
+          { apiKey: "test-key" } as never,
+        );
 
-      const result = await (await stream).result();
-      expect(terminalEvent).toBe("error");
-      expect(result.stopReason).toBe("error");
-      expect(result.errorMessage).toContain("Stream ended without finish_reason");
-      expect(result.content.filter((block) => block.type === "toolCall")).toStrictEqual([]);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-  });
+        let terminalEvent: string | undefined;
+        for await (const event of stream as AsyncIterable<{
+          type: string;
+        }>) {
+          if (event.type === "done" || event.type === "error") {
+            terminalEvent = event.type;
+          }
+        }
+
+        const result = await (await stream).result();
+        expect(terminalEvent).toBe("error");
+        expect(result.stopReason).toBe("error");
+        expect(result.errorMessage).toContain("Stream ended without finish_reason");
+        expect(result.content.filter((block) => block.type === "toolCall")).toStrictEqual([]);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
 
   it("rolls back provisional tags when stop strips spurious tool calls", async () => {
     const model = makeCompletionsModel({

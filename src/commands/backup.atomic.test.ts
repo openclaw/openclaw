@@ -64,6 +64,24 @@ describe("backupCreateCommand atomic archive write", () => {
     };
   }
 
+  it("does not leave a partial final archive behind when tar creation fails", async () => {
+    const { archiveDir, outputPath, runtime } = await prepareAtomicBackupScenario({
+      archivePrefix: "openclaw-backup-failure-",
+    });
+    try {
+      backupWalkMock.mockReturnValueOnce(createMockTarStream({ error: new Error("disk full") }));
+
+      await expect(backupCreateCommand(runtime, { output: outputPath })).rejects.toThrow(
+        /disk full/i,
+      );
+
+      await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readdir(archiveDir)).resolves.toStrictEqual([]);
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
   it("cleans intermediate retry archives after a later attempt succeeds", async () => {
     const { archiveDir, outputPath, runtime } = await prepareAtomicBackupScenario({
       archivePrefix: "openclaw-backup-retry-cleanup-",

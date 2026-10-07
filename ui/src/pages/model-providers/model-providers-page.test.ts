@@ -142,6 +142,7 @@ describe("ModelProvidersPage agent scope", () => {
       hello: { auth: { role: "operator", scopes: ["operator.read"] } },
     },
     { access: "missing-auth", hello: null },
+    { access: "missing-scopes", hello: { auth: { role: "operator" } } },
   ])("keeps saved account identities out of the $access page", async ({ hello }) => {
     const { context, request, snapshot } = createHarness("main");
     snapshot.hello = hello as typeof snapshot.hello;

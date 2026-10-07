@@ -898,7 +898,7 @@ describe("native hook execution admission", () => {
     },
   );
 
-  it.each(["blocked", "rewritten"] as const)(
+  it.each(["blocked", "rewritten", "failed"] as const)(
     "does not retain execution custody for a %s policy result",
     async (result) => {
       const admit = vi.fn();
@@ -908,6 +908,9 @@ describe("native hook execution admission", () => {
         runId: "execution-admission",
         executionAdmission: { toolNames: ["exec"], admit },
         runBeforeToolCall: async () => {
+          if (result === "failed") {
+            throw new Error("fixture policy failed");
+          }
           return result === "blocked"
             ? { blocked: true, kind: "veto", reason: "fixture policy blocked" }
             : { blocked: false, params: { command: "rewritten" } };
@@ -919,8 +922,12 @@ describe("native hook execution admission", () => {
         event: "pre_tool_use",
         rawPayload: { tool_name: "Bash", tool_use_id: "call", tool_input: { command: "true" } },
       });
-      const response = await invocation;
-      expect(JSON.parse(response.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+      if (result === "failed") {
+        await expect(invocation).rejects.toThrow("fixture policy failed");
+      } else {
+        const response = await invocation;
+        expect(JSON.parse(response.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+      }
       expect(admit).not.toHaveBeenCalled();
     },
   );

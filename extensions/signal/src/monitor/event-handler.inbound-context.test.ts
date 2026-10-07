@@ -1124,24 +1124,24 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
 
-  it.each([["literal escape", "line one\\nline two", "line one\\nline two"]])(
-    "keeps %s inbound verbose previews single-line",
-    async (_label, message, expectedPreview) => {
-      shouldLogVerboseMock.mockReturnValue(true);
-      try {
-        const handler = createTestHandler({ cfg: createDirectConfig() });
+  it.each([
+    ["CRLF", "line one\r\nline two", "line one\\r\\nline two"],
+    ["literal escape", "line one\\nline two", "line one\\nline two"],
+  ])("keeps %s inbound verbose previews single-line", async (_label, message, expectedPreview) => {
+    shouldLogVerboseMock.mockReturnValue(true);
+    try {
+      const handler = createTestHandler({ cfg: createDirectConfig() });
 
-        await receiveMessage(handler, { message });
+      await receiveMessage(handler, { message });
 
-        // body is formatInboundEnvelope(...) with an envelope prefix, so assert
-        // the escaped tail is present and the logged line stays single-line.
-        expect(logVerboseMock).toHaveBeenCalledWith(expect.stringContaining(expectedPreview));
-        const logged = String(logVerboseMock.mock.calls[0]?.[0] ?? "");
-        expect(logged).not.toMatch(/[\r\n]/);
-      } finally {
-        shouldLogVerboseMock.mockReturnValue(false);
-      }
-    },
-  );
+      // body is formatInboundEnvelope(...) with an envelope prefix, so assert
+      // the escaped tail is present and the logged line stays single-line.
+      expect(logVerboseMock).toHaveBeenCalledWith(expect.stringContaining(expectedPreview));
+      const logged = String(logVerboseMock.mock.calls[0]?.[0] ?? "");
+      expect(logged).not.toMatch(/[\r\n]/);
+    } finally {
+      shouldLogVerboseMock.mockReturnValue(false);
+    }
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

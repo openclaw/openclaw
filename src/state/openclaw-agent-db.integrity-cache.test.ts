@@ -279,6 +279,7 @@ it("does not lend remembered integrity to another file at the same path", () => 
 
 it.each([
   { mode: "version", runtimeProof: "shared" },
+  { mode: "version", runtimeProof: "reset" },
   { mode: "clean", runtimeProof: "foreign" },
 ] as const)(
   "uses durable $mode state for the next open ($runtimeProof runtime proof)",
@@ -287,10 +288,17 @@ it.each([
     const options = { agentId: "policy", env };
     const original = openOpenClawAgentDatabase(options);
     original.db.exec("INSERT INTO auth_profile_state VALUES ('preserved', '{\"ok\":true}', 1)");
-    closeOpenClawAgentDatabaseByPath(original.path);
+    if (runtimeProof === "reset") {
+      closeOpenClawAgentDatabasesForTest();
+    } else {
+      closeOpenClawAgentDatabaseByPath(original.path);
+    }
     const before = readOpenClawAgentIntegrityVerification(original.path, env);
     expect(before?.clean_close).toBe(1);
-    const lease = claimOpenClawAgentDatabaseLease({ ...options, path: original.path });
+    const lease =
+      runtimeProof === "reset"
+        ? undefined
+        : claimOpenClawAgentDatabaseLease({ ...options, path: original.path });
     try {
       if (runtimeProof === "foreign") {
         // A live foreign lease disallows reuse of this process's retained proof.
@@ -298,7 +306,7 @@ it.each([
           .db.prepare(
             "UPDATE agent_database_leases SET owner_pid = ?, owner_start_time = NULL WHERE lease_id = ?",
           )
-          .run(process.ppid, lease);
+          .run(process.ppid, lease!);
       }
       if (mode === "version") {
         const store = sqlite.openNodeSqliteDatabase(
@@ -341,14 +349,16 @@ it.each([
             path: original.path,
             admissionMode: "sync",
             integrityGateOutcome: "healthy",
-            integrityGateReason: "lease-class",
+            integrityGateReason: runtimeProof === "reset" ? "no-proof" : "lease-class",
           }),
         );
       }
       expect(queued).not.toHaveBeenCalled();
       expect(readOpenClawAgentIntegrityVerification(original.path, env)?.clean_close).toBe(0);
     } finally {
-      releaseOpenClawAgentDatabaseLease(lease, { env }, "read-only");
+      if (lease) {
+        releaseOpenClawAgentDatabaseLease(lease, { env }, "read-only");
+      }
     }
   },
 );

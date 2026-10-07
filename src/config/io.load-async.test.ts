@@ -208,6 +208,17 @@ it.each(["load", "snapshot", "policy"] as const)(
   },
 );
 
+it("rejects an invalid async load and rolls back its injected config environment", async () => {
+  const { io, env } = fixture(
+    JSON.stringify({
+      gateway: { port: "invalid" },
+      env: { vars: { CONFIG_FIXTURE_VALUE: "rejected" } },
+    }),
+  );
+  await expect(io.loadConfigAsync()).rejects.toMatchObject({ code: "INVALID_CONFIG" });
+  expect(env.CONFIG_FIXTURE_VALUE).toBeUndefined();
+});
+
 it.each(["metadata", "handoff"] as const)(
   "refuses snapshot results after its host owner is replaced during %s",
   async (phase) => {
