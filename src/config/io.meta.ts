@@ -16,6 +16,20 @@ export const AUTO_MANAGED_CONFIG_META_PATHS = [
   ["meta", "migrations", "utilityModelSeparation"],
 ] as const;
 
+/**
+ * Stamped keys that a bare `config set <path> <value>` collides with: the key itself, anything under
+ * it, and any section that holds one. Returns nothing for paths the command would accept.
+ */
+export function findAutoManagedMetaCollisions(
+  path: readonly string[],
+): readonly (readonly string[])[] {
+  const startsWith = (value: readonly string[], prefix: readonly string[]) =>
+    prefix.every((segment, index) => value[index] === segment);
+  return AUTO_MANAGED_CONFIG_META_PATHS.filter(
+    (managed) => startsWith(path, managed) || startsWith(managed, path),
+  );
+}
+
 export function hasWebhookMigrationProgress(
   previous: OpenClawConfig,
   next: OpenClawConfig,

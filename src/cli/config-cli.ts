@@ -143,9 +143,17 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     );
     const res = getAtPath(redactConfigObject(snapshot.config, uiHints), parsedPath);
     if (!res.found || res.value === undefined) {
-      const message = isConfigSchemaPath(schema, parsedPath)
-        ? `Config path is valid but unset: ${opts.path}. The runtime default applies until you set an authored value with ${formatCliCommand(`openclaw config set ${quoteCliArg(opts.path)} <value>`)}.`
-        : `Unknown config path: ${opts.path}. Run ${formatCliCommand("openclaw config schema")} to inspect valid paths.`;
+      const { findAutoManagedMetaCollisions } = await import("../config/io.meta.js");
+      const collisions = findAutoManagedMetaCollisions(parsedPath);
+      const setCommand = formatCliCommand(`openclaw config set ${quoteCliArg(opts.path)} <value>`);
+      const message =
+        collisions.length > 0
+          ? `Config path is valid but unset: ${opts.path}. OpenClaw stamps ${collisions
+              .map((managed) => managed.join("."))
+              .join(", ")} on every config write, so ${setCommand} is refused.`
+          : isConfigSchemaPath(schema, parsedPath)
+            ? `Config path is valid but unset: ${opts.path}. The runtime default applies until you set an authored value with ${setCommand}.`
+            : `Unknown config path: ${opts.path}. Run ${formatCliCommand("openclaw config schema")} to inspect valid paths.`;
       if (opts.json) {
         writeRuntimeJson(runtime, formatCliJsonFailure(message));
         exitCliAfterOutput(runtime, 1);

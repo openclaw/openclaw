@@ -444,6 +444,59 @@ describe("config cli integration", () => {
     });
   });
 
+  it("never advises config set for a path the write guard refuses", async () => {
+    const readMessage = async (field: string, json: boolean) => {
+      logs.length = 0;
+      errors.length = 0;
+      await reject(run("get", field, ...(json ? ["--json"] : [])));
+      if (json) {
+        expect(errors).toEqual([]);
+        return JSON.parse(logs[0] ?? "").error.message as string;
+      }
+      expect(logs).toEqual([]);
+      return errors[0] ?? "";
+    };
+
+    await withConfig(JSON.stringify({ gateway: { port: 18789 } }), async () => {
+      for (const field of [
+        "meta.lastTouchedVersion",
+        "meta.migrations.modelPolicyAllowlist",
+        "meta.migrations.utilityModelSeparation",
+      ]) {
+        for (const json of [false, true]) {
+          const message = await readMessage(field, json);
+          expect(message).toContain(`Config path is valid but unset: ${field}.`);
+          expect(message).not.toContain("The runtime default applies");
+          expect(message).toContain("is refused");
+        }
+        errors.length = 0;
+        logs.length = 0;
+        await reject(run("set", field, "1.2.3"));
+        expect(errors.join("\n")).toContain("auto-managed");
+      }
+
+      const section = await readMessage("meta.migrations", false);
+      expect(section).toContain("meta.migrations.modelPolicyAllowlist");
+      expect(section).not.toContain("The runtime default applies");
+
+      const typo = await readMessage("meta.lastTouchedVersionn", false);
+      expect(typo).toContain("Unknown config path: meta.lastTouchedVersionn.");
+
+      const advice = await readMessage("logging.level", false);
+      expect(advice).toContain("The runtime default applies");
+      expect(advice).toContain("openclaw config set logging.level <value>");
+      logs.length = 0;
+      errors.length = 0;
+      await run("set", "logging.level", "debug");
+      expect(errors).toEqual([]);
+      logs.length = 0;
+      errors.length = 0;
+      await run("get", "logging.level");
+      expect(errors).toEqual([]);
+      expect(logs[0]).toBe("debug\n");
+    });
+  });
+
   it("redacts SecretRef ids and plugin-only sensitive fields in JSON/text order", async () => {
     const secretRefId = "CONFIG_GET_TEST_TOKEN";
     const schemaOnlySecrets = ["first-private-route", "second-private-route"];
