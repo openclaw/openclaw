@@ -56,7 +56,7 @@ describe("initFastReplySessionState reset appearance", () => {
       },
     });
 
-    const result = initFastReplySessionState({
+    const result = await initFastReplySessionState({
       ctx: buildGetReplyCtx({
         Body: "/reset",
         RawBody: "/reset",
@@ -83,7 +83,7 @@ describe("initFastReplySessionState reset appearance", () => {
       },
     });
 
-    const result = initFastReplySessionState({
+    const result = await initFastReplySessionState({
       ctx: buildGetReplyCtx({
         Body: "/reset",
         RawBody: "/reset",
