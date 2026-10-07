@@ -3705,7 +3705,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/talk/client-voice-confirmation-lifecycle.test.ts",
   "src/talk/client-voice-session-store.test.ts",
   "src/talk/client-voice-session.digest-retry.test.ts",
-  "src/talk/client-voice-session.startup.test.ts",
   "src/talk/fast-context-runtime.test.ts",
   "src/talk/logging.test.ts",
   "src/test-utils/openclaw-test-state.test.ts",
