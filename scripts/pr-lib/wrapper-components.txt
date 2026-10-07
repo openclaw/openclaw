@@ -1178,6 +1178,7 @@ src/logging/redact-internal.ts
 src/logging/redact-json-tokens.ts
 src/logging/redact-json.ts
 src/logging/redact-linear-matchers.ts
+src/logging/redact-mask.ts
 src/logging/redact-pattern-runtime.ts
 src/logging/redact-patterns.ts
 src/logging/redact-pem.ts
