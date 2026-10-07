@@ -14,7 +14,6 @@ import {
   type OpenClawDatabaseMaintenanceScope,
 } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
-  closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseByPathAsync,
   isOpenClawStateDatabaseOpen,
 } from "../state/openclaw-state-db-cache.js";
@@ -96,14 +95,15 @@ export async function createDoctorMaintenanceState(options: {
     try {
       acquired.assertCurrent(options.assertCurrent);
       // Preflight can leave the ordinary shared-state WAL scheduler attached to
-      // a cached handle. Retire only that native cache owner; its close stops
-      // the scheduler, while unrelated readers sharing this state database
-      // retain their own lifecycle instead of being invalidated by Doctor
-      // admission.
+      // a cached handle. Retire and settle only that native cache owner before
+      // repair admission: a synchronous native close merely starts cancellation,
+      // so an inherited worker could otherwise outlive this boundary. Unrelated
+      // state resources retain their own lifecycle instead of being invalidated
+      // by Doctor admission.
       await acquired.run(async () => {
         const databasePath = resolveOpenClawStateSqlitePath(selectedEnv);
         if (isOpenClawStateDatabaseOpen(databasePath)) {
-          closeOpenClawStateDatabaseByPath(databasePath);
+          await closeOpenClawStateDatabaseByPathAsync(databasePath);
         }
       });
       acquired.assertCurrent(options.assertCurrent);

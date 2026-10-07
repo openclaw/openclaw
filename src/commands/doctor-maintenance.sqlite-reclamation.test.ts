@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import * as walAdmission from "../infra/sqlite-wal-write-admission.js";
 import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -30,12 +32,32 @@ it("drains inherited shared-state WAL maintenance before opening Doctor resource
       settle: (operation) => operation(),
       warn: vi.fn(),
     });
+    const cancellationStarted = createDeferred<void>();
+    const allowCancellationToSettle = createDeferred<void>();
+    const cancel = walAdmission.cancelSqliteWalWriteAdmission;
+    const cancellation = vi
+      .spyOn(walAdmission, "cancelSqliteWalWriteAdmission")
+      .mockImplementation(async (database) => {
+        if (database === inherited.db) {
+          cancellationStarted.resolve();
+          await allowCancellationToSettle.promise;
+        }
+        return cancel(database);
+      });
     try {
-      await maintenance.acquire();
+      const acquiring = maintenance.acquire();
+      await cancellationStarted.promise;
+      // The inherited native handle remains live until its admitted WAL work
+      // settles; Doctor must not open its repair resources before that point.
+      expect(inherited.db.isOpen).toBe(true);
+      allowCancellationToSettle.resolve();
+      await acquiring;
       expect(inherited.db.isOpen).toBe(false);
       const doctorHandle = maintenance.run(() => openOpenClawStateDatabase({ env: state.env }));
       expect(doctorHandle.db.isOpen).toBe(true);
     } finally {
+      allowCancellationToSettle.resolve();
+      cancellation.mockRestore();
       await maintenance.release();
       await closeOpenClawStateDatabaseAsync();
     }
