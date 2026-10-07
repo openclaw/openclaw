@@ -465,11 +465,13 @@ describe("session transcript reconcile worker lifecycle", () => {
         expect(changes).toHaveBeenCalledExactlyOnceWith({
           storePath: database.path,
           sessionKey: scope.sessionKey,
+          scope: "transcript",
         });
         expect(changes.mock.results[0]?.value).toBe(false);
         expect(facts).toHaveBeenCalledWith({
           storePath: database.path,
           sessionKey: scope.sessionKey,
+          scope: "transcript",
           facts: { kind: "unchanged" },
         });
         await vi.waitFor(() => expect(targetOutcome).toEqual({ ready: true }));
@@ -491,8 +493,8 @@ describe("session transcript reconcile worker lifecycle", () => {
         }
       }
       expect(changes.mock.calls).toEqual([
-        [{ storePath: database.path, sessionKey: scope.sessionKey }],
-        [{ storePath: database.path, sessionKey: secondScope.sessionKey }],
+        [{ storePath: database.path, sessionKey: scope.sessionKey, scope: "transcript" }],
+        [{ storePath: database.path, sessionKey: secondScope.sessionKey, scope: "transcript" }],
       ]);
     } finally {
       await closeOpenClawAgentDatabasesAsync();

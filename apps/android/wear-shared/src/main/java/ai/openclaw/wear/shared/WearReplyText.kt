@@ -1,7 +1,7 @@
 package ai.openclaw.wear.shared
 
+import ai.openclaw.wear.shared.WearProtocolCodec.json
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import java.security.MessageDigest
@@ -54,13 +54,6 @@ object WearReplyText {
       revision = revision,
     )
   }
-
-  private val json =
-    Json {
-      ignoreUnknownKeys = true
-      encodeDefaults = true
-      explicitNulls = false
-    }
 
   fun encode(page: WearReplyTextPage): JsonElement = json.encodeToJsonElement(WearReplyTextPage.serializer(), page)
 

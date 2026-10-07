@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatSessionPatch
 import ai.openclaw.app.chat.SessionSnooze
 import ai.openclaw.app.chat.isSessionRunActive
 import ai.openclaw.app.i18n.nativeString
@@ -427,10 +428,12 @@ internal fun SessionsScreen(
         val label = value.trim()
         coroutineScope.launch {
           viewModel.patchChatSession(
-            key = session.key,
-            ownerAgentId = session.ownerAgentId,
-            label = label.takeIf(String::isNotEmpty),
-            clearLabel = label.isEmpty(),
+            ChatSessionPatch(
+              key = session.key,
+              ownerAgentId = session.ownerAgentId,
+              label = label.takeIf(String::isNotEmpty),
+              clearLabel = label.isEmpty(),
+            ),
           )
         }
       },
@@ -451,7 +454,7 @@ internal fun SessionsScreen(
         // Remember the name so the group survives locally even if the patch later empties it.
         viewModel.addChatSessionGroup(value)
         coroutineScope.launch {
-          viewModel.patchChatSession(key = session.key, ownerAgentId = session.ownerAgentId, category = value.trim())
+          viewModel.patchChatSession(ChatSessionPatch(key = session.key, ownerAgentId = session.ownerAgentId, category = value.trim()))
         }
       },
     )
@@ -617,14 +620,21 @@ private fun SessionRow(
   val canChangeArchived = !session.sessionId.isNullOrBlank()
   val snoozePresets = remember(menuExpanded, submenu) { SessionSnooze.presets(System.currentTimeMillis()) }
 
+  fun dismissMenu() {
+    menuExpanded = false
+    submenu = null
+  }
+
   fun setSnooze(wakeAtMs: Long?) {
     coroutineScope.launch {
       viewModel.patchChatSession(
-        key = session.key,
-        ownerAgentId = session.ownerAgentId,
-        snoozedUntil = wakeAtMs,
-        clearSnooze = wakeAtMs == null,
-        expectedSessionId = session.sessionId,
+        ChatSessionPatch(
+          key = session.key,
+          ownerAgentId = session.ownerAgentId,
+          snoozedUntil = wakeAtMs,
+          clearSnooze = wakeAtMs == null,
+          expectedSessionId = session.sessionId,
+        ),
       )
     }
   }
@@ -632,10 +642,12 @@ private fun SessionRow(
   fun setArchived(archived: Boolean) {
     coroutineScope.launch {
       viewModel.patchChatSession(
-        key = session.key,
-        ownerAgentId = session.ownerAgentId,
-        expectedSessionId = session.sessionId,
-        archived = archived,
+        ChatSessionPatch(
+          key = session.key,
+          ownerAgentId = session.ownerAgentId,
+          expectedSessionId = session.sessionId,
+          archived = archived,
+        ),
       )
     }
   }
@@ -754,10 +766,7 @@ private fun SessionRow(
       }
       AppDropdownMenu(
         expanded = menuExpanded,
-        onDismissRequest = {
-          menuExpanded = false
-          submenu = null
-        },
+        onDismissRequest = ::dismissMenu,
       ) {
         if (submenu == null) {
           SessionMenuItem(nativeString("Color")) { submenu = SessionRowSubmenu.Color }
@@ -776,14 +785,15 @@ private fun SessionRow(
                 if (selectedColor == name) Icon(Icons.Default.Check, contentDescription = nativeString("Selected"))
               },
               onClick = {
-                menuExpanded = false
-                submenu = null
+                dismissMenu()
                 coroutineScope.launch {
                   viewModel.patchChatSession(
-                    key = session.key,
-                    ownerAgentId = session.ownerAgentId,
-                    color = name,
-                    clearColor = name == null,
+                    ChatSessionPatch(
+                      key = session.key,
+                      ownerAgentId = session.ownerAgentId,
+                      color = name,
+                      clearColor = name == null,
+                    ),
                   )
                 }
               },
@@ -794,8 +804,7 @@ private fun SessionRow(
           snoozePresets.forEach { preset ->
             val time = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).format(Instant.ofEpochMilli(preset.wakeAtMs).atZone(ZoneId.systemDefault()))
             SessionMenuItem(nativeString("\$title · \$time", preset.title, time)) {
-              menuExpanded = false
-              submenu = null
+              dismissMenu()
               setSnooze(preset.wakeAtMs)
             }
           }
@@ -814,24 +823,21 @@ private fun SessionRow(
           SessionMenuItem(nativeString("← Back")) { submenu = null }
           categories.forEach { category ->
             SessionMenuItem(category) {
-              menuExpanded = false
-              submenu = null
+              dismissMenu()
               coroutineScope.launch {
-                viewModel.patchChatSession(key = session.key, ownerAgentId = session.ownerAgentId, category = category)
+                viewModel.patchChatSession(ChatSessionPatch(key = session.key, ownerAgentId = session.ownerAgentId, category = category))
               }
             }
           }
           SessionMenuItem(nativeString("New group…")) {
-            menuExpanded = false
-            submenu = null
+            dismissMenu()
             onNewGroup()
           }
           if (!session.category.isNullOrBlank()) {
             SessionMenuItem(nativeString("Remove from group")) {
-              menuExpanded = false
-              submenu = null
+              dismissMenu()
               coroutineScope.launch {
-                viewModel.patchChatSession(key = session.key, ownerAgentId = session.ownerAgentId, clearCategory = true)
+                viewModel.patchChatSession(ChatSessionPatch(key = session.key, ownerAgentId = session.ownerAgentId, clearCategory = true))
               }
             }
           }
@@ -839,7 +845,7 @@ private fun SessionRow(
           SessionMenuItem(if (session.pinned == true) nativeString("Unpin") else nativeString("Pin")) {
             menuExpanded = false
             coroutineScope.launch {
-              viewModel.patchChatSession(key = session.key, ownerAgentId = session.ownerAgentId, pinned = session.pinned != true)
+              viewModel.patchChatSession(ChatSessionPatch(key = session.key, ownerAgentId = session.ownerAgentId, pinned = session.pinned != true))
             }
           }
           if (canSnoozeSession(session)) {
@@ -855,7 +861,7 @@ private fun SessionRow(
           SessionMenuItem(if (session.unread == true) nativeString("Mark as read") else nativeString("Mark as unread")) {
             menuExpanded = false
             coroutineScope.launch {
-              viewModel.patchChatSession(key = session.key, ownerAgentId = session.ownerAgentId, unread = session.unread != true)
+              viewModel.patchChatSession(ChatSessionPatch(key = session.key, ownerAgentId = session.ownerAgentId, unread = session.unread != true))
             }
           }
           SessionMenuItem(nativeString("Rename…")) {

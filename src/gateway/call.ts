@@ -627,7 +627,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     env: process.env,
     tailscaleMode: context.config.gateway?.tailscale?.mode,
   });
-  const { clientOptions, omitDeviceIdentity, deviceIdentity } = resolveGatewayCallDeviceAuth({
+  const { clientOptions, omitDeviceIdentity, deviceIdentity } = await resolveGatewayCallDeviceAuth({
     opts: input,
     url,
     authMode: resolvedAuth.mode,

@@ -248,27 +248,18 @@ const sessionActiveProjects = resolveGlobalSingleton(
   () => new Map<string, string[]>(),
 );
 
-export function createToolResultPromptProjectionState(): ToolResultPromptProjectionState {
-  return {
-    replacements: new Map(),
-    frozen: new Set<string>(),
-    ambiguousBaseKeys: new Set<string>(),
-    sourceHashByKey: new Map<string, string>(),
-    restoredCacheTtl: new Map(),
-  };
-}
-
-export function cloneToolResultPromptProjectionState(
-  state: ToolResultPromptProjectionState,
+export function createToolResultPromptProjectionState(
+  source?: ToolResultPromptProjectionState,
 ): ToolResultPromptProjectionState {
   return {
-    replacements: new Map(state.replacements),
-    frozen: new Set(state.frozen),
-    ambiguousBaseKeys: new Set(state.ambiguousBaseKeys),
-    sourceHashByKey: new Map(state.sourceHashByKey),
-    restoredCacheTtl: new Map(state.restoredCacheTtl),
-    cacheTtlCheckpoint: state.cacheTtlCheckpoint,
-    cacheTtlRevision: state.cacheTtlRevision,
+    replacements: new Map(source?.replacements),
+    frozen: new Set(source?.frozen),
+    ambiguousBaseKeys: new Set(source?.ambiguousBaseKeys),
+    sourceHashByKey: new Map(source?.sourceHashByKey),
+    restoredCacheTtl: new Map(source?.restoredCacheTtl),
+    ...(source
+      ? { cacheTtlCheckpoint: source.cacheTtlCheckpoint, cacheTtlRevision: source.cacheTtlRevision }
+      : {}),
   };
 }
 
@@ -375,20 +366,17 @@ export async function persistToolResultProjections(
   if (!marker && !cacheTouch) {
     return;
   }
+  let committedCheckpoint: CacheTtlCheckpoint | null = null;
   try {
     await appendEntry("openclaw.cache-ttl", { ...cacheTouch, ...marker });
-  } catch (error) {
+    committedCheckpoint = checkpoint;
+  } finally {
     // Rejection can follow a durable commit; the next write must re-establish the full base.
+    // A branch restore during the write owns its new baseline.
     if ((state.cacheTtlRevision ?? 0) === revision) {
-      state.cacheTtlCheckpoint = null;
+      state.cacheTtlCheckpoint = committedCheckpoint;
       state.cacheTtlRevision = revision + 1;
     }
-    throw error;
-  }
-  // A branch restore during the write owns its new baseline.
-  if ((state.cacheTtlRevision ?? 0) === revision) {
-    state.cacheTtlCheckpoint = checkpoint;
-    state.cacheTtlRevision = revision + 1;
   }
 }
 

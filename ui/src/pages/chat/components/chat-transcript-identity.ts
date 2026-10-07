@@ -28,13 +28,14 @@ export function resolveTranscriptParticipants(
   props: Pick<ChatThreadProps, "selectedSession" | "userId" | "messages" | "pendingInputs">,
 ) {
   const activeSession = props.selectedSession;
+  const sessionParticipants = activeSession?.expandedParticipants ?? activeSession?.participants;
   // Pending-input lists are freshly filtered by renderChat; their immutable
   // records, not that temporary array, identify the unfiltered inputs.
   return participants(
     props.messages,
     [
       props.userId,
-      activeSession?.expandedParticipants ?? activeSession?.participants,
+      sessionParticipants,
       activeSession?.owner?.actor.identity,
       ...(props.pendingInputs ?? []),
     ],
@@ -42,7 +43,7 @@ export function resolveTranscriptParticipants(
       // Use unfiltered history and retained participants so searching or paging away
       // another person's messages cannot turn a shared conversation into a solo one.
       const showOwnSenderName =
-        (activeSession?.expandedParticipants ?? activeSession?.participants ?? []).some(
+        (sessionParticipants ?? []).some(
           ({ identity }) =>
             identity.type !== "agent" &&
             !(identity.type === "profile" && identity.id === props.userId),
@@ -66,9 +67,7 @@ export function resolveTranscriptParticipants(
       const sessionPeople = new Set(
         [
           activeSession?.owner?.actor.identity,
-          ...(activeSession?.expandedParticipants ?? activeSession?.participants ?? []).map(
-            ({ identity }) => identity,
-          ),
+          ...(sessionParticipants ?? []).map(({ identity }) => identity),
         ].flatMap((identity) =>
           identity && identity.type !== "agent" ? [sessionParticipantIdentityKey(identity)] : [],
         ),

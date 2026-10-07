@@ -114,11 +114,10 @@ function projectPublicSessionShare(params: {
   agentId: string;
   sessionKey: string;
   grant: NonNullable<ReturnType<typeof resolveSessionPublicShare>>;
-  codec?: PublicSessionShareTokenCodec;
+  codec: PublicSessionShareTokenCodec;
 }): SessionPublicShare {
-  const codec = params.codec ?? loadPublicSessionShareTokenCodec();
   return {
-    token: codec.mint({
+    token: params.codec.mint({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       sessionId: params.grant.sessionId,
@@ -190,23 +189,40 @@ function createSessionMembersListHandler(
           Promise.resolve(projection.prepareSelection()),
         );
       } while (projection.needsSelectionPreparation());
-      const { entry, members: storedMembers } = await measureSessionCollaborationPhase(
-        `${method}.evidence`,
-        () =>
+      let tokenCodec = resolveSessionPublicShare(managed.entry)
+        ? await loadPublicSessionShareTokenCodec()
+        : undefined;
+      const readEvidence = async () => {
+        const evidence = await measureSessionCollaborationPhase(`${method}.evidence`, () =>
           readSessionMembersInWorker({
             agentId: managed.agentId,
             sessionKey: managed.storeKey,
             storePath: managed.storePath,
           }),
-      );
-      access.assertCurrent();
-      if (!entry) {
-        throw new Error("session changed before sharing read");
+        );
+        access.assertCurrent();
+        if (!evidence.entry) {
+          throw new Error("session changed before sharing read");
+        }
+        return { entry: evidence.entry, members: evidence.members };
+      };
+      let evidence = await readEvidence();
+      if (resolveSessionPublicShare(evidence.entry) && !tokenCodec) {
+        const prepared = loadPublicSessionShareTokenCodec();
+        if (prepared instanceof Promise) {
+          tokenCodec = await prepared;
+          // Foreign publication can reveal a cold codec after discovery. Its wait
+          // ends the read phase; authorize only the fresh row from the same target.
+          evidence = await readEvidence();
+        } else {
+          tokenCodec = prepared;
+        }
       }
+      const { entry, members: storedMembers } = evidence;
+      const publicShareGrant = resolveSessionPublicShare(entry);
       const currentCfg = context.getRuntimeConfig();
       const { target, role } = access.current(entry);
       const evidenceMembers = storedMembers.map(projectSessionMemberEvidence);
-      const publicShareGrant = resolveSessionPublicShare(entry);
       const actor = actorIdentity(client);
       const members = evidenceAware
         ? evidenceMembers
@@ -253,11 +269,12 @@ function createSessionMembersListHandler(
           ? { type: storedOwner.type, id: storedOwner.id, label: storedOwner.label }
           : undefined;
       const publicShare =
-        publicShareGrant?.sessionId === target.entry.sessionId
+        publicShareGrant?.sessionId === target.entry.sessionId && tokenCodec
           ? projectPublicSessionShare({
               agentId: target.agentId,
               sessionKey: target.canonicalKey,
               grant: publicShareGrant,
+              codec: tokenCodec,
             })
           : undefined;
       respond(
@@ -315,8 +332,8 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       }
       let publicShare: SessionPublicShare | undefined;
       await runExclusiveSharingMutation(managed, access.lifecycleStorePath, async () => {
+        const tokenCodec = params.enabled ? await loadPublicSessionShareTokenCodec() : undefined;
         const { target: current } = access.current();
-        const tokenCodec = params.enabled ? loadPublicSessionShareTokenCodec() : undefined;
         let changed = false;
         let inspected = false;
         await patchSessionEntryCore(

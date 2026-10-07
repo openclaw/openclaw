@@ -9,7 +9,7 @@ import {
   listAcpSessionEntries,
   readAcpSessionEntryAsync,
 } from "../../../acp/runtime/session-meta.js";
-import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { listSessionBindingsBySessionsAsync } from "../../../infra/outbound/session-binding-service.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
@@ -161,7 +161,6 @@ export async function handleAcpSessionsAction(
   const bindingContext = resolveAcpCommandBindingContext(params);
   const normalizedChannel = bindingContext.channel;
   const normalizedAccountId = bindingContext.accountId || undefined;
-  const bindingService = getSessionBindingService();
   const currentEntry = params.command.senderIsOwner
     ? null
     : await readAcpSessionEntryAsync({
@@ -178,20 +177,25 @@ export async function handleAcpSessionsAction(
       : [];
   params.command.assertOwnerCurrent?.();
 
-  const rows = visibleEntries
+  const selectedEntries = visibleEntries
     .toSorted((a, b) => (b.entry?.updatedAt ?? 0) - (a.entry?.updatedAt ?? 0))
-    .slice(0, 20)
+    .slice(0, 20);
+  const bindingsBySession = await listSessionBindingsBySessionsAsync(
+    selectedEntries
+      .filter(({ entry, acp }) => entry && acp)
+      .map(({ storeSessionKey }) => storeSessionKey),
+  );
+  params.command.assertOwnerCurrent?.();
+  const rows = selectedEntries
     .map(({ storeSessionKey, agentId, entry, acp }) => {
       if (!entry || !acp) {
         return "";
       }
-      const bindingThreadId = bindingService
-        .listBySession(storeSessionKey)
-        .find(
-          (binding) =>
-            (!normalizedChannel || binding.conversation.channel === normalizedChannel) &&
-            (!normalizedAccountId || binding.conversation.accountId === normalizedAccountId),
-        )?.conversation.conversationId;
+      const bindingThreadId = (bindingsBySession.get(storeSessionKey) ?? []).find(
+        (binding) =>
+          (!normalizedChannel || binding.conversation.channel === normalizedChannel) &&
+          (!normalizedAccountId || binding.conversation.accountId === normalizedAccountId),
+      )?.conversation.conversationId;
       const marker =
         currentSessionKey === storeSessionKey && target.agentId === agentId ? "*" : " ";
       const label = normalizeOptionalString(entry.label) || acp.agent;

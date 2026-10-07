@@ -359,12 +359,10 @@ export async function readManagedGatewayServiceForUpdate(
         ? { ...state, command: state.command, verdict: inspection }
         : null;
     } catch (error) {
-      if (hasCommandProcessCleanupError(error)) {
-        throw error;
-      }
       if (
-        error instanceof GatewayServiceUpdateOwnershipError &&
-        error.cause instanceof ServiceStartRefusalError
+        hasCommandProcessCleanupError(error) ||
+        (error instanceof GatewayServiceUpdateOwnershipError &&
+          error.cause instanceof ServiceStartRefusalError)
       ) {
         throw error;
       }

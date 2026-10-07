@@ -79,6 +79,8 @@ export const MODEL_CATALOG_MIN_MODELS = 200;
 const SCRIPT_LABEL = "publish-model-catalog";
 const PRICING_FETCH_TIMEOUT_MS = 60_000;
 const MAX_PRICING_CATALOG_BYTES = 5 * 1024 * 1024;
+// models.dev serves every provider's metadata in one document (5.1 MiB in October 2026).
+const MAX_MODELS_DEV_CATALOG_BYTES = 32 * 1024 * 1024;
 const BUNDLE_SIZE_WARNING_BYTES = 2 * 1024 * 1024;
 const CLIENT_BUNDLE_LIMIT_BYTES = 4 * 1024 * 1024;
 const defaultRootDir = resolveRepoRoot(import.meta.url);
@@ -413,13 +415,13 @@ function readModelsDevPricingProviders(
   return providers;
 }
 
-async function readJsonResponse(response: Response, source: string) {
+async function readJsonResponse(response: Response, source: string, maxBytes: number) {
   if (!response.ok) {
     throw new Error(`${source} request failed: HTTP ${response.status}`);
   }
   const contentLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(contentLength) && contentLength > MAX_PRICING_CATALOG_BYTES) {
-    throw new Error(`${source} response exceeds ${MAX_PRICING_CATALOG_BYTES} bytes`);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new Error(`${source} response exceeds ${maxBytes} bytes`);
   }
   const reader = response.body?.getReader();
   if (!reader) {
@@ -433,9 +435,9 @@ async function readJsonResponse(response: Response, source: string) {
       break;
     }
     total += value.byteLength;
-    if (total > MAX_PRICING_CATALOG_BYTES) {
+    if (total > maxBytes) {
       await reader.cancel();
-      throw new Error(`${source} response exceeds ${MAX_PRICING_CATALOG_BYTES} bytes`);
+      throw new Error(`${source} response exceeds ${maxBytes} bytes`);
     }
     chunks.push(value);
   }
@@ -465,7 +467,15 @@ function createModelCatalogSourceLoader(fetchImpl: typeof fetch = fetch): ModelC
         headers: { Accept: "application/json" },
         signal: AbortSignal.timeout(PRICING_FETCH_TIMEOUT_MS),
       })
-        .then((response) => readJsonResponse(response, label))
+        .then((response) =>
+          readJsonResponse(
+            response,
+            label,
+            url === MODELS_DEV_CATALOG_URL
+              ? MAX_MODELS_DEV_CATALOG_BYTES
+              : MAX_PRICING_CATALOG_BYTES,
+          ),
+        )
         .catch((cause: unknown) => {
           throw new Error(`${label} catalog unavailable: ${String(cause)}`, { cause });
         });

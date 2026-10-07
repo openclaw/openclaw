@@ -83,11 +83,9 @@ export async function prepareEmbeddedSkills(params: {
     });
   let restoreSkillEnv = () => {};
   try {
-    const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
-      skillsWorkspaceDir,
-      skillsPromptWorkspaceDir,
-    });
+    const mapPromptEntries = (entries: typeof skillEntries | undefined) =>
+      mapSandboxSkillEntriesForPrompt({ entries, skillsWorkspaceDir, skillsPromptWorkspaceDir });
+    const promptSkillEntries = mapPromptEntries(shouldLoadSkillEntries ? skillEntries : undefined);
     const skillsSnapshot =
       preparedSnapshot ??
       (await buildSkillSnapshot(skillsPromptWorkspaceDir, {
@@ -103,12 +101,7 @@ export async function prepareEmbeddedSkills(params: {
       contextTokenBudget: params.attempt.contextTokenBudget,
       skillsSnapshot,
       entries: promptSkillEntries,
-      loadEntries: async () =>
-        mapSandboxSkillEntriesForPrompt({
-          entries: await loadSkillEntries(),
-          skillsWorkspaceDir,
-          skillsPromptWorkspaceDir,
-        }) ?? [],
+      loadEntries: async () => mapPromptEntries(await loadSkillEntries()) ?? [],
       config: params.attempt.config,
       workspaceDir: skillsPromptWorkspaceDir,
       agentId: params.sessionAgentId,

@@ -73,6 +73,15 @@ internal object ChatWidgetUrlResolver {
       role: ChatWidgetSurfaceRole,
     ): ChatWidgetResource? = surface?.let { resolve(it, target, role, attemptedRoles) }?.takeIf { isReplacement(it, failedResource) }
 
+    fun preferred(surfaces: ChatWidgetSurfaceUrls): ChatWidgetResource? =
+      resolvePreferred(
+        surfaces,
+        target,
+        excluding = failedResource,
+        blockedRoles = blockedRoles,
+        attemptedRoles = attemptedRoles,
+      )
+
     if (ChatWidgetSurfaceRole.NODE !in blockedRoles) {
       replacement(observed.node, ChatWidgetSurfaceRole.NODE)?.let { return it }
       replacement(refreshNodeSurface(observed.node?.url), ChatWidgetSurfaceRole.NODE)?.let { return it }
@@ -81,25 +90,13 @@ internal object ChatWidgetUrlResolver {
     // A nil refresh can mean its route lease lost a reconnect race. Re-read
     // both roles so a replacement connection wins over the stale observation.
     val afterNodeRefresh = currentSurfaceUrls()
-    resolvePreferred(
-      afterNodeRefresh,
-      target,
-      excluding = failedResource,
-      blockedRoles = blockedRoles,
-      attemptedRoles = attemptedRoles,
-    )?.let { return it }
+    preferred(afterNodeRefresh)?.let { return it }
 
     if (ChatWidgetSurfaceRole.OPERATOR !in blockedRoles) {
       replacement(refreshOperatorSurface(afterNodeRefresh.operator?.url), ChatWidgetSurfaceRole.OPERATOR)?.let { return it }
     }
 
-    return resolvePreferred(
-      currentSurfaceUrls(),
-      target,
-      excluding = failedResource,
-      blockedRoles = blockedRoles,
-      attemptedRoles = attemptedRoles,
-    )
+    return preferred(currentSurfaceUrls())
   }
 
   private fun isReplacement(

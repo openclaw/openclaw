@@ -390,44 +390,37 @@ class SessionDiffPanel extends OpenClawLightDomElement {
     }
     const chunkCount = gap.count <= 25 ? gap.count : Math.min(20, gap.count);
     return html`<span class="session-diff__gap-controls">
-      <button
-        type="button"
-        aria-label=${t("chat.sessionDiff.expandPreviousLines", {
-          count: String(chunkCount),
-        })}
-        @click=${() => void this.expandGap(view, line, "up")}
-      >
-        ${icons.chevronUp}
-      </button>
-      <button
-        class="session-diff__gap-count"
-        type="button"
-        aria-label=${t("chat.sessionDiff.expandAllLines", { count: String(gap.count) })}
-        @click=${() => void this.expandGap(view, line, "all")}
-      >
-        ${line.text}
-      </button>
-      <button
-        type="button"
-        aria-label=${t("chat.sessionDiff.expandNextLines", { count: String(chunkCount) })}
-        @click=${() => void this.expandGap(view, line, "down")}
-      >
-        ${icons.chevronDown}
-      </button>
+      ${(
+        [
+          ["up", "expandPreviousLines", icons.chevronUp],
+          ["all", "expandAllLines", line.text],
+          ["down", "expandNextLines", icons.chevronDown],
+        ] as const
+      ).map(
+        ([direction, label, content]) => html`<button
+          class=${direction === "all" ? "session-diff__gap-count" : nothing}
+          type="button"
+          aria-label=${t(`chat.sessionDiff.${label}`, {
+            count: String(direction === "all" ? gap.count : chunkCount),
+          })}
+          @click=${() => void this.expandGap(view, line, direction)}
+        >
+          ${content}
+        </button>`,
+      )}
     </span>`;
   }
 
   private renderFileBody(view: FileView, result: SessionsDiffResult): TemplateResult {
     const { file, parsed } = view;
-    if (file.binary === true) {
-      return html`<div class="session-diff__note">${t("chat.sessionDiff.binaryFile")}</div>`;
-    }
-    if (!parsed) {
+    if (file.binary === true || !parsed) {
       return html`<div class="session-diff__note">
         ${t(
-          result.unavailableReason === "workspace_stopped"
-            ? "chat.sessionDiff.workspaceStoppedFile"
-            : "chat.sessionDiff.previewUnavailable",
+          file.binary === true
+            ? "chat.sessionDiff.binaryFile"
+            : result.unavailableReason === "workspace_stopped"
+              ? "chat.sessionDiff.workspaceStoppedFile"
+              : "chat.sessionDiff.previewUnavailable",
         )}
       </div>`;
     }

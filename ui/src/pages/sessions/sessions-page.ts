@@ -145,9 +145,6 @@ class SessionsPage extends OpenClawLightDomElement {
   private appliedRouteData?: SessionsRouteData;
   private sessionMutationPending = false;
   private sessionMenuTrigger: HTMLElement | null = null;
-  // Guards the async work fetch: a menu reopened for another session must not
-  // adopt a stale response.
-  private sessionMenuWorkVersion = 0;
   private listBinding?: SessionsPageListBinding;
   private unsubscribeList?: () => void;
   private listRequest?: Promise<void>;
@@ -639,18 +636,23 @@ class SessionsPage extends OpenClawLightDomElement {
         : "sessionsView.deleteSelectedConfirm",
       { count: String(rows.length) },
     );
-    if (
-      !(await showConfirmDialog({
-        message,
-        confirmLabel: t("common.delete"),
-        danger: true,
-        signal: this.pluginActionLifetime.signal,
-      })) ||
-      !this.isRequestScopeCurrent(scope)
-    ) {
+    if (!(await this.confirmMutation(message)) || !this.isRequestScopeCurrent(scope)) {
       return;
     }
     await this.deleteSessions(rows.filter((row) => this.selectedSessions.get(row.key) === row));
+  }
+
+  private confirmMutation(
+    message: string,
+    options: { confirmLabel?: string; signal?: AbortSignal } = {},
+  ) {
+    return showConfirmDialog({
+      message,
+      confirmLabel: t("common.delete"),
+      danger: true,
+      signal: this.pluginActionLifetime.signal,
+      ...options,
+    });
   }
 
   private async deleteSessions(
@@ -791,14 +793,12 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     if (
-      !(await showConfirmDialog({
-        message: t("sessionsView.deleteAllArchivedConfirm", {
+      !(await this.confirmMutation(
+        t("sessionsView.deleteAllArchivedConfirm", {
           count: String(archivedRows.length),
         }),
-        confirmLabel: t("common.delete"),
-        danger: true,
-        signal,
-      })) ||
+        { signal },
+      )) ||
       !this.isRequestScopeCurrent(scope)
     ) {
       return;
@@ -811,12 +811,7 @@ class SessionsPage extends OpenClawLightDomElement {
     const scope = this.captureRequestScope();
     if (
       !scope ||
-      !(await showConfirmDialog({
-        message: t("sessionsView.deleteSessionConfirm", { session: label }),
-        confirmLabel: t("common.delete"),
-        danger: true,
-        signal: this.pluginActionLifetime.signal,
-      })) ||
+      !(await this.confirmMutation(t("sessionsView.deleteSessionConfirm", { session: label }))) ||
       !this.isRequestScopeCurrent(scope)
     ) {
       return;
@@ -833,11 +828,8 @@ class SessionsPage extends OpenClawLightDomElement {
     const scope = this.captureRequestScope();
     if (
       !scope ||
-      !(await showConfirmDialog({
-        message: t("sessionsView.stopCloudWorkerConfirm", { session: label }),
+      !(await this.confirmMutation(t("sessionsView.stopCloudWorkerConfirm", { session: label }), {
         confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
-        danger: true,
-        signal: this.pluginActionLifetime.signal,
       })) ||
       !this.isRequestScopeCurrent(scope) ||
       !this.requireMutationAccess(scope, stopAction)
@@ -1183,12 +1175,12 @@ class SessionsPage extends OpenClawLightDomElement {
     }
     this.sessionMenu = null;
     this.sessionMenuTrigger = null;
-    this.sessionMenuWorkVersion += 1;
     this.sessionMenuWork = null;
   }
 
   private loadSessionMenuWork(row: GatewaySessionRow) {
-    const version = ++this.sessionMenuWorkVersion;
+    // Every opening has its own identity, including reopening the same row.
+    const menu = this.sessionMenu;
     if (!row.worktree) {
       this.sessionMenuWork = null;
       return;
@@ -1216,7 +1208,7 @@ class SessionsPage extends OpenClawLightDomElement {
       worktreeId: row.worktree.id,
       execNode: row.execNode,
     }).then((work) => {
-      if (version === this.sessionMenuWorkVersion) {
+      if (this.sessionMenu === menu) {
         this.sessionMenuWork = { loading: false, ...work };
       }
     });

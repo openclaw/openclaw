@@ -20,7 +20,7 @@ import {
   markConversationDeliverySent,
   markConversationDeliveryUnknown,
 } from "./conversation-delivery-store.js";
-import { resolveConversation } from "./conversation-registry.js";
+import { readConversation } from "./conversation-registry.js";
 import {
   applySessionEntryLifecycleMutation,
   deleteSessionEntryLifecycle,
@@ -318,7 +318,7 @@ describe("conversation delivery store", () => {
         maintenanceOverride: { mode: "enforce", pruneAfterMs: 1 },
       });
 
-      expect(resolveConversation(scope, conversationRef)).toMatchObject({
+      expect(await readConversation(scope, conversationRef)).toMatchObject({
         conversationRef,
         channel: "reef",
         sessionId: "reef-session",
@@ -387,7 +387,7 @@ describe("conversation delivery store", () => {
           .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
           .get("unrelated", "operation-deleted-session"),
       ).toEqual({ value_json: "keep" });
-      expect(resolveConversation(scope, conversationRef)).toMatchObject({ conversationRef });
+      expect(await readConversation(scope, conversationRef)).toMatchObject({ conversationRef });
     });
   });
 
@@ -410,11 +410,11 @@ describe("conversation delivery store", () => {
         target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
       });
 
-      expect(resolveConversation(scope, conversationRef)).toMatchObject({
+      expect(await readConversation(scope, conversationRef)).toMatchObject({
         conversationRef,
         channel: "reef",
       });
-      expect(resolveConversation(scope, conversationRef)?.sessionId).toBeUndefined();
+      expect((await readConversation(scope, conversationRef))?.sessionId).toBeUndefined();
       expect(loadSessionEntry({ ...scope, sessionKey })).toBeUndefined();
       expect(
         await getConversationDeliveryOperation(scope, "operation-migrated-session"),

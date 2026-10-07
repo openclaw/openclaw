@@ -127,56 +127,31 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   );
 }
 
-function shouldPreserveCurrentToolTurnReasoning(
-  messages: AgentMessage[],
-  index: number,
-  latestUserIndex: number,
-): boolean {
-  const message = messages.at(index);
-  if (
-    !message ||
-    index < latestUserIndex ||
-    !isAssistantMessageWithContent(message) ||
-    !message.content.some(isToolCallBlock)
-  ) {
-    return false;
-  }
-
-  for (let i = index - 1; i >= 0; i -= 1) {
-    const role = messages.at(i)?.role;
-    if (role === "user") {
-      break;
-    }
-    if (role === "assistant") {
-      return false;
-    }
-  }
-
-  for (let i = index + 1; i < messages.length; i += 1) {
-    const next = messages.at(i);
-    const role = next?.role;
-    if (next && typeof next === "object" && role === "toolResult") {
-      return true;
-    }
-    if (role === "user") {
-      return false;
-    }
-  }
-
-  return false;
+function findCurrentToolTurnAssistantIndex(messages: AgentMessage[]): number {
+  const latestUserIndex = messages.findLastIndex((message) => message?.role === "user");
+  // Even an assistant without content ends the first-assistant eligibility window.
+  const index = messages.findIndex(
+    (message, candidateIndex) => candidateIndex > latestUserIndex && message?.role === "assistant",
+  );
+  const message = messages[index];
+  return message &&
+    isAssistantMessageWithContent(message) &&
+    message.content.some(isToolCallBlock) &&
+    messages.some(
+      (next, nextIndex) =>
+        nextIndex > index && next && typeof next === "object" && next.role === "toolResult",
+    )
+    ? index
+    : -1;
 }
 
 export function shouldPreserveLatestAssistantThinking(messages: AgentMessage[]): boolean {
   const latestAssistantIndex = messages.findLastIndex(isAssistantMessageWithContent);
-  if (latestAssistantIndex < 0) {
-    return false;
-  }
-  if (latestAssistantIndex === messages.length - 1) {
-    return true;
-  }
-
-  const latestUserIndex = messages.findLastIndex((message) => message?.role === "user");
-  return shouldPreserveCurrentToolTurnReasoning(messages, latestAssistantIndex, latestUserIndex);
+  return (
+    latestAssistantIndex >= 0 &&
+    (latestAssistantIndex === messages.length - 1 ||
+      latestAssistantIndex === findCurrentToolTurnAssistantIndex(messages))
+  );
 }
 
 export function stripThinkingBlocksFromMessage(message: AgentMessage): AgentMessage {
@@ -191,11 +166,9 @@ function stripAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
 }
 
 export function dropReasoningFromHistory(messages: AgentMessage[]): AgentMessage[] {
-  const latestUserIndex = messages.findLastIndex((message) => message?.role === "user");
+  const currentToolTurnAssistantIndex = findCurrentToolTurnAssistantIndex(messages);
   return mapAssistantMessages(messages, (message, index) =>
-    shouldPreserveCurrentToolTurnReasoning(messages, index, latestUserIndex)
-      ? message
-      : stripThinkingBlocksFromMessage(message),
+    index === currentToolTurnAssistantIndex ? message : stripThinkingBlocksFromMessage(message),
   );
 }
 
@@ -339,25 +312,20 @@ function wrapRetryStreamWithRecoveryNotification(
     void completion.catch(() => {});
     return completion;
   };
-  retryStream.result = finish;
+  return settleRecoveryStream(retryStream, finish, readNotification);
+}
+
+function settleRecoveryStream(
+  stream: Awaited<ReturnType<StreamFn>>,
+  result: () => Promise<AssistantMessage>,
+  readNotification: () => Promise<void> | undefined,
+): Awaited<ReturnType<StreamFn>> {
+  stream.result = result;
   const settle = () =>
-    finish().then(
+    result().then(
       () => undefined,
       () => undefined,
     );
-  return wrapStreamObjectSettlement(
-    retryStream,
-    settle,
-    isTerminalAssistantEvent,
-    createRecoveryCloseSettlement(retryStream, settle, readNotification),
-  );
-}
-
-function createRecoveryCloseSettlement(
-  stream: object,
-  settle: () => Promise<void>,
-  readNotification: () => Promise<void> | undefined,
-): () => Promise<void> {
   let producerCompleted = false;
   void getEventStreamCompletion(stream)?.then(
     () => {
@@ -369,11 +337,12 @@ function createRecoveryCloseSettlement(
   );
   // A partial-only consumer can close without waiting for ordinary provider work.
   // Completed producers may still be scheduling their admitted repair notification.
-  return () => readNotification() ?? (producerCompleted ? settle() : Promise.resolve());
-}
-
-function isTerminalAssistantEvent(event: AssistantMessageEvent): boolean {
-  return event.type === "done" || event.type === "error";
+  return wrapStreamObjectSettlement(
+    stream,
+    settle,
+    (event) => event.type === "done" || event.type === "error",
+    () => readNotification() ?? (producerCompleted ? settle() : Promise.resolve()),
+  );
 }
 
 async function retryStreamWithoutThinking(
@@ -403,23 +372,30 @@ async function pumpStreamWithRecovery(
   notify: () => Promise<void>,
 ): Promise<AssistantMessage> {
   let yieldedOutput = false;
+  const recover = (error: unknown, stage: "stream error" | "error during stream") => {
+    if (!shouldRecoverAnthropicThinkingError(error, sessionMeta)) {
+      return undefined;
+    }
+    if (yieldedOutput) {
+      log.warn(
+        `[session-recovery] Anthropic thinking error occurred after streaming began; skipping retry to avoid duplicate chunks: sessionId=${sessionMeta.id}`,
+      );
+      return undefined;
+    }
+    sessionMeta.recoveredAnthropicThinking = true;
+    log.warn(
+      `[session-recovery] Anthropic thinking ${stage}; retrying once without thinking blocks: sessionId=${sessionMeta.id}`,
+    );
+    return retryStreamWithoutThinking(outer, retry, notify);
+  };
   try {
     return await runPluginStreamConsumer(stream, async () => {
       const resolved = await stream;
       for await (const chunk of resolved as AsyncIterable<unknown>) {
         if (isAssistantMessageErrorEvent(chunk)) {
-          if (shouldRecoverAnthropicThinkingError(chunk.error, sessionMeta)) {
-            if (yieldedOutput) {
-              log.warn(
-                `[session-recovery] Anthropic thinking error occurred after streaming began; skipping retry to avoid duplicate chunks: sessionId=${sessionMeta.id}`,
-              );
-            } else {
-              sessionMeta.recoveredAnthropicThinking = true;
-              log.warn(
-                `[session-recovery] Anthropic thinking stream error; retrying once without thinking blocks: sessionId=${sessionMeta.id}`,
-              );
-              return retryStreamWithoutThinking(outer, retry, notify);
-            }
+          const recovered = recover(chunk.error, "stream error");
+          if (recovered) {
+            return recovered;
           }
         } else {
           yieldedOutput = true;
@@ -430,20 +406,11 @@ async function pumpStreamWithRecovery(
       return result as AssistantMessage;
     });
   } catch (error: unknown) {
-    if (!shouldRecoverAnthropicThinkingError(error, sessionMeta)) {
-      throw error;
+    const recovered = recover(error, "error during stream");
+    if (recovered) {
+      return recovered;
     }
-    if (yieldedOutput) {
-      log.warn(
-        `[session-recovery] Anthropic thinking error occurred after streaming began; skipping retry to avoid duplicate chunks: sessionId=${sessionMeta.id}`,
-      );
-      throw error;
-    }
-    sessionMeta.recoveredAnthropicThinking = true;
-    log.warn(
-      `[session-recovery] Anthropic thinking error during stream; retrying once without thinking blocks: sessionId=${sessionMeta.id}`,
-    );
-    return retryStreamWithoutThinking(outer, retry, notify);
+    throw error;
   }
 }
 
@@ -460,18 +427,7 @@ function createRecoveryStream(
     pumpStreamWithRecovery(outer, stream, sessionMeta, retry, notify).finally(() => outer.end()),
   );
   void finalResultPromise.catch(() => {});
-  outer.result = () => finalResultPromise;
-  const settle = () =>
-    finalResultPromise.then(
-      () => undefined,
-      () => undefined,
-    );
-  return wrapStreamObjectSettlement(
-    outer,
-    settle,
-    isTerminalAssistantEvent,
-    createRecoveryCloseSettlement(outer, settle, readNotification),
-  );
+  return settleRecoveryStream(outer, () => finalResultPromise, readNotification);
 }
 
 export function wrapAnthropicStreamWithRecovery(

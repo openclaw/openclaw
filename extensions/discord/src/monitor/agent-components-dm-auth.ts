@@ -72,14 +72,13 @@ async function ensureDmComponentAuthorized(params: {
   const pairingResult = await createChannelPairingChallengeIssuer({
     channel: "discord",
     accountId: ctx.accountId,
-    upsertPairingRequest: async ({ id, meta }) => {
-      return await upsertChannelPairingRequest({
+    upsertPairingRequest: ({ id, meta }) =>
+      upsertChannelPairingRequest({
         channel: "discord",
         id,
         accountId: ctx.accountId,
         meta,
-      });
-    },
+      }),
   })({
     senderId: user.id,
     senderIdLine: `Your Discord user id: ${user.id}`,
@@ -163,27 +162,13 @@ export async function resolveInteractionContextWithDmAuth(params: {
     });
     return null;
   }
-  if (interactionCtx.isDirectMessage) {
-    const authorized = await ensureDmComponentAuthorized({
-      ctx,
-      interaction: params.interaction,
-      user: interactionCtx.user,
-      componentLabel: params.componentLabel,
-    });
-    if (!authorized) {
-      return null;
-    }
-  }
-  if (interactionCtx.isGroupDm) {
-    const authorized = await ensureGroupDmComponentAuthorized({
-      ctx,
-      interaction: params.interaction,
-      channelId: interactionCtx.channelId,
-      componentLabel: params.componentLabel,
-    });
-    if (!authorized) {
-      return null;
-    }
+  const authorize = interactionCtx.isDirectMessage
+    ? ensureDmComponentAuthorized
+    : interactionCtx.isGroupDm
+      ? ensureGroupDmComponentAuthorized
+      : undefined;
+  if (authorize && !(await authorize({ ...params, ...interactionCtx, ctx }))) {
+    return null;
   }
   return interactionCtx;
 }

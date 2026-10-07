@@ -617,10 +617,7 @@ private fun JsonObject.stringParam(
 private fun JsonObject.optionalStringParam(
   name: String,
   maxChars: Int,
-): String? {
-  if (name !in this) return null
-  return stringParam(name, maxChars)
-}
+): String? = if (name in this) stringParam(name, maxChars) else null
 
 private fun JsonObject.intParam(
   name: String,

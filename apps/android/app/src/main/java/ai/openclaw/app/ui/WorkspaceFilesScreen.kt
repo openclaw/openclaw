@@ -305,12 +305,11 @@ private fun WorkspaceEntryRow(
 private fun workspaceEntryDetail(
   context: Context,
   entry: GatewayWorkspaceEntry,
-): String? {
-  val parts = mutableListOf<String>()
-  entry.size?.let { parts.add(Formatter.formatShortFileSize(context, it)) }
-  entry.updatedAtMs?.let { parts.add(DateFormat.getDateInstance(DateFormat.SHORT).format(Date(it))) }
-  return parts.takeIf { it.isNotEmpty() }?.joinToString(" • ")
-}
+): String? =
+  listOfNotNull(
+    entry.size?.let { Formatter.formatShortFileSize(context, it) },
+    entry.updatedAtMs?.let { DateFormat.getDateInstance(DateFormat.SHORT).format(Date(it)) },
+  ).takeIf { it.isNotEmpty() }?.joinToString(" • ")
 
 @Composable
 private fun WorkspaceFilePreview(

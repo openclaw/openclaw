@@ -232,12 +232,7 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
     refreshTools: (recordQuarantine: RuntimeToolSchemaQuarantineRecorder) => {
       const next = buildCatalog(recordQuarantine);
       current.effectiveTools.splice(0, current.effectiveTools.length, ...next.effectiveTools);
-      for (const key of [
-        "visibleAllowedToolNames",
-        "liveAllowedToolNames",
-        "capabilityToolNames",
-        "replayAllowedToolNames",
-      ] as const) {
+      for (const key of [...promptPlanKeys, "replayAllowedToolNames"] as const) {
         const target = current.toolSearchRunPlan[key];
         // Earlier tool calls remain valid history, even after their live authority is revoked.
         if (key !== "replayAllowedToolNames") {

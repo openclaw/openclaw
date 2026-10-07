@@ -154,8 +154,9 @@ function resolveDiscordNativeCommandAllowlistAccess(params: {
   return { configured: true, allowed: match.allowed } as const;
 }
 
-export function resolveDiscordNativeCommandChannelAccessContext(params: {
+export function resolveDiscordNativeCommandAccessContext(params: {
   cfg: OpenClawConfig;
+  accountId: string;
   discordConfig: DiscordConfig;
   sender: { id: string; name?: string; tag?: string };
   isThreadChannel: boolean;
@@ -167,6 +168,13 @@ export function resolveDiscordNativeCommandChannelAccessContext(params: {
   threadParentName?: string;
   threadParentSlug?: string;
 }) {
+  const allowNameMatching = isDangerousNameMatchingEnabled(params.discordConfig);
+  const configuredDmAllowFrom = resolveDiscordAccountAllowFrom(params) ?? [];
+  const ownerAccess = resolveDiscordOwnerAccess({
+    allowFrom: configuredDmAllowFrom,
+    sender: params.sender,
+    allowNameMatching,
+  });
   const guild = params.guild ?? null;
   const commandsAllowFromAccess = resolveDiscordNativeCommandAllowlistAccess({
     cfg: params.cfg,
@@ -206,7 +214,16 @@ export function resolveDiscordNativeCommandChannelAccessContext(params: {
       : guild && (channelConfig?.allowed === false || !policyAuthorizer.allowed)
         ? "not-allowed"
         : undefined;
-  return { commandsAllowFromAccess, guildInfo, channelConfig, policyAuthorizer, channelDenial };
+  return {
+    allowNameMatching,
+    configuredDmAllowFrom,
+    ...ownerAccess,
+    commandsAllowFromAccess,
+    guildInfo,
+    channelConfig,
+    policyAuthorizer,
+    channelDenial,
+  };
 }
 
 export async function resolveDiscordGuildNativeCommandAuthorized(params: {
@@ -320,19 +337,9 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
     ? interaction.rawData.member.roles.map((roleId: string) => roleId)
     : [];
-  const allowNameMatching = isDangerousNameMatchingEnabled(discordConfig);
-  const configuredDmAllowFrom =
-    resolveDiscordAccountAllowFrom({
-      cfg,
-      accountId,
-    }) ?? [];
-  const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
-    allowFrom: configuredDmAllowFrom,
-    sender,
-    allowNameMatching,
-  });
-  const channelAccess = resolveDiscordNativeCommandChannelAccessContext({
+  const channelAccess = resolveDiscordNativeCommandAccessContext({
     cfg,
+    accountId,
     discordConfig,
     sender,
     ...channelContext,
@@ -351,9 +358,9 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     const dmAccess = await resolveDiscordDmCommandAccess({
       accountId,
       dmPolicy,
-      configuredAllowFrom: configuredDmAllowFrom,
+      configuredAllowFrom: channelAccess.configuredDmAllowFrom,
       sender,
-      allowNameMatching,
+      allowNameMatching: channelAccess.allowNameMatching,
       cfg,
       rest: interaction.client.rest,
     });
@@ -377,9 +384,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
       ...channelAccess,
       memberRoleIds,
       sender,
-      allowNameMatching,
-      ownerAllowListConfigured: ownerAllowList != null,
-      ownerAllowed: ownerOk,
+      ownerAllowListConfigured: channelAccess.ownerAllowList != null,
     });
     if (!authorized) {
       return false;
@@ -394,7 +399,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     !resolveDiscordOwnerAccess({
       allowFrom: commandOwnerAllowFrom,
       sender,
-      allowNameMatching,
+      allowNameMatching: channelAccess.allowNameMatching,
     }).ownerAllowed
   ) {
     const routeState = resolveDiscordNativeInteractionRouteState({
@@ -420,7 +425,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
       sessionPrefix: params.sessionPrefix ?? "discord:slash",
       channelConfig,
       guildInfo,
-      allowNameMatching,
+      allowNameMatching: channelAccess.allowNameMatching,
       commandAuthorized: true,
       user,
       sender,

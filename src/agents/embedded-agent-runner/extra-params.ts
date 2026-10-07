@@ -225,14 +225,13 @@ function applyDefaultOpenAIGptRuntimeParams(
   if (params.provider !== "openai" || !/^gpt-5(?:[.-]|$)/i.test(params.modelId)) {
     return;
   }
-  if (
-    !Object.hasOwn(merged, "parallel_tool_calls") &&
-    !Object.hasOwn(merged, "parallelToolCalls")
-  ) {
-    merged.parallel_tool_calls = true;
-  }
-  if (!Object.hasOwn(merged, "text_verbosity") && !Object.hasOwn(merged, "textVerbosity")) {
-    merged.text_verbosity = "low";
+  for (const [canonical, alias, value] of [
+    ["parallel_tool_calls", "parallelToolCalls", true],
+    ["text_verbosity", "textVerbosity", "low"],
+  ] as const) {
+    if (!Object.hasOwn(merged, canonical) && !Object.hasOwn(merged, alias)) {
+      merged[canonical] = value;
+    }
   }
 }
 
@@ -351,18 +350,20 @@ function createStreamFnWithExtraParams(
     streamParams.stop = resolvedStop;
   }
 
-  const readCacheCompat = (m?: ProviderRuntimeModel) =>
-    m?.api === "openai-completions" ? resolveOpenAICompletionsCompat(m) : m?.compat;
-
-  if (log.isEnabled("debug")) {
-    const initialCacheRetention = resolveCacheRetention(
+  const resolveModelCacheRetention = (candidate?: ProviderRuntimeModel) =>
+    resolveCacheRetention(
       extraParams,
       provider,
-      typeof model?.api === "string" ? model.api : undefined,
-      typeof model?.id === "string" ? model.id : undefined,
-      readCacheCompat(model),
-      model?.baseUrl,
+      typeof candidate?.api === "string" ? candidate.api : undefined,
+      typeof candidate?.id === "string" ? candidate.id : undefined,
+      candidate?.api === "openai-completions"
+        ? resolveOpenAICompletionsCompat(candidate)
+        : candidate?.compat,
+      candidate?.baseUrl,
     );
+
+  if (log.isEnabled("debug")) {
+    const initialCacheRetention = resolveModelCacheRetention(model);
     if (Object.keys(streamParams).length > 0 || initialCacheRetention) {
       const debugParams = { ...streamParams, cacheRetention: initialCacheRetention };
       log.debug(`creating streamFn wrapper with params: ${JSON.stringify(debugParams)}`);
@@ -371,14 +372,7 @@ function createStreamFnWithExtraParams(
 
   const underlying = requireBaseStreamFn(baseStreamFn);
   return (callModel, context, options) => {
-    const cacheRetention = resolveCacheRetention(
-      extraParams,
-      provider,
-      typeof callModel.api === "string" ? callModel.api : undefined,
-      typeof callModel.id === "string" ? callModel.id : undefined,
-      readCacheCompat(callModel),
-      callModel.baseUrl,
-    );
+    const cacheRetention = resolveModelCacheRetention(callModel);
     if (Object.keys(streamParams).length === 0 && !cacheRetention) {
       return underlying(callModel, context, options);
     }
@@ -563,9 +557,9 @@ export function applyExtraParamsToAgent(
     nativeWebSearchPolicyContext?: NativeWebSearchToolPolicyParams;
   },
 ) {
+  const selectedModel = { provider, modelId };
   const providerRuntimeHandle = ensureProviderRuntimePluginHandle({
-    provider,
-    modelId,
+    ...selectedModel,
     config: cfg,
     workspaceDir,
     runtimeHandle: getModelProviderRuntimePluginHandle(model),
@@ -575,8 +569,7 @@ export function applyExtraParamsToAgent(
     options?.preparedExtraParams ??
     resolvePreparedExtraParams({
       cfg,
-      provider,
-      modelId,
+      ...selectedModel,
       extraParamsOverride,
       thinkingLevel,
       agentId,
@@ -605,8 +598,7 @@ export function applyExtraParamsToAgent(
       agentId,
       auth: options?.auth,
       nativeWebSearchAllowedByToolPolicy,
-      provider,
-      modelId,
+      ...selectedModel,
       extraParams: effectiveExtraParams,
       thinkingLevel,
       model,
@@ -634,8 +626,7 @@ export function applyExtraParamsToAgent(
 
   if (
     shouldApplySiliconFlowThinkingOffCompat({
-      provider,
-      modelId,
+      ...selectedModel,
       thinkingLevel,
     })
   ) {

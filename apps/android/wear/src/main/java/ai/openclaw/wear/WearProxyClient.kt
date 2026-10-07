@@ -104,7 +104,7 @@ internal class WearProxyClient(
         val preferredPhone =
           when {
             requirePreferredNode || expectedNodeId == null -> resolvePreferredPhone()
-            else -> preferredPhoneRegistration(expectedNodeId)
+            else -> currentPreferredPhone()?.takeIf { it.nodeId == expectedNodeId }
           }
         val nodeId = expectedNodeId ?: checkNotNull(preferredPhone).nodeId
         if (requirePreferredNode && expectedNodeId != null && preferredPhone?.nodeId != expectedNodeId) {
@@ -217,42 +217,25 @@ internal class WearProxyClient(
       throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
     } ?: throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
 
-  private suspend fun acceptEventSource(sourceNodeId: String): Boolean {
-    val preferredPhone = currentPreferredPhone()
-    if (preferredPhone != null) {
-      return preferredPhone.nodeId == sourceNodeId
-    }
-    return try {
+  private suspend fun acceptEventSource(sourceNodeId: String): Boolean =
+    try {
       resolvePreferredPhone().nodeId == sourceNodeId
     } catch (err: CancellationException) {
       throw err
     } catch (_: WearProxyException) {
       false
     }
-  }
 
-  /** A unique directly connected phone becomes the preferred routing source immediately. */
-  fun updatePreferredPhoneNodeId(nodeId: String) {
+  /** Adopt a unique connected phone, or require rediscovery after an ambiguous capability callback. */
+  fun updatePreferredPhoneNodeId(nodeId: String?) {
     val changed =
       synchronized(preferredPhoneLock) {
         val changed = registeredPhone?.nodeId != nodeId
         preferredPhoneGeneration += 1
-        registeredPhone = PreferredPhoneRegistration(nodeId, preferredPhoneGeneration)
+        registeredPhone = nodeId?.let { PreferredPhoneRegistration(it, preferredPhoneGeneration) }
         changed
       }
     if (changed) mutablePreferredPhoneChanges.tryEmit(nodeId)
-  }
-
-  /** Capability callbacks are not reachability-filtered, so ambiguous results force fresh discovery. */
-  fun invalidatePreferredPhoneNode() {
-    val changed =
-      synchronized(preferredPhoneLock) {
-        val changed = registeredPhone != null
-        preferredPhoneGeneration += 1
-        registeredPhone = null
-        changed
-      }
-    if (changed) mutablePreferredPhoneChanges.tryEmit(null)
   }
 
   private suspend fun resolvePreferredPhone(): PreferredPhoneRegistration {
@@ -277,11 +260,6 @@ internal class WearProxyClient(
   private fun currentPreferredPhone(): PreferredPhoneRegistration? =
     synchronized(preferredPhoneLock) {
       registeredPhone
-    }
-
-  private fun preferredPhoneRegistration(nodeId: String): PreferredPhoneRegistration? =
-    synchronized(preferredPhoneLock) {
-      registeredPhone?.takeIf { it.nodeId == nodeId }
     }
 
   private fun invalidatePreferredPhone(registration: PreferredPhoneRegistration?) {
@@ -415,8 +393,7 @@ internal class WearEventSequenceTracker {
     }
     // Stream epochs expose phone restarts even when the new process happens to
     // produce the next numeric sequence. Legacy null epochs still use gap detection.
-    awaitingSnapshot = true
-    eventGeneration += 1
+    requireSnapshot()
     return WearSequenceDecision.GapOrReset
   }
 
@@ -480,12 +457,8 @@ internal class WearEventSequenceTracker {
 internal class WearEventSourceTracker {
   private var sourceNodeId: String? = null
 
-  fun adopt(sourceNodeId: String) {
+  fun adopt(sourceNodeId: String?) {
     this.sourceNodeId = sourceNodeId
-  }
-
-  fun reset() {
-    sourceNodeId = null
   }
 
   fun changed(sourceNodeId: String): Boolean {
@@ -500,24 +473,24 @@ internal class WearEventResyncBuffer(
 ) {
   // The response watermark splits events already captured by a snapshot from
   // later events that raced its delivery. A bounded overflow reappears as a gap.
-  private val events = LinkedHashMap<Pair<String?, Long>, WearInboundEvent>()
-  private var buffering = false
+  private var events: LinkedHashMap<Pair<String?, Long>, WearInboundEvent>? = null
 
   @Synchronized
   fun begin() {
-    events.clear()
-    buffering = true
+    events = LinkedHashMap()
   }
 
   @Synchronized
   fun start(event: WearInboundEvent) {
     begin()
-    appendLocked(event)
+    append(event)
   }
 
   @Synchronized
   fun append(event: WearInboundEvent) {
-    if (buffering) appendLocked(event)
+    val buffered = events ?: return
+    buffered[event.streamId to event.sequence] = event
+    while (buffered.size > capacity) buffered.remove(buffered.keys.first())
   }
 
   @Synchronized
@@ -525,26 +498,15 @@ internal class WearEventResyncBuffer(
     streamId: String?,
     sequence: Long?,
   ): List<WearInboundEvent> {
-    if (!buffering) return emptyList()
-    buffering = false
-    val pending =
-      if (sequence == null) {
-        // A legacy snapshot has no ordering boundary. It already represents
-        // pre-response state, so replay could duplicate it; the next live event
-        // establishes the new sequence baseline.
-        emptyList()
-      } else {
-        events.values
-          .filter { event -> event.streamId == streamId && event.sequence > sequence }
-          .sortedBy(WearInboundEvent::sequence)
-      }
-    events.clear()
-    return pending
-  }
-
-  private fun appendLocked(event: WearInboundEvent) {
-    events[event.streamId to event.sequence] = event
-    while (events.size > capacity) events.remove(events.keys.first())
+    val buffered = events ?: return emptyList()
+    events = null
+    // A legacy snapshot has no ordering boundary. It already represents
+    // pre-response state, so replay could duplicate it; the next live event
+    // establishes the new sequence baseline.
+    if (sequence == null) return emptyList()
+    return buffered.values
+      .filter { event -> event.streamId == streamId && event.sequence > sequence }
+      .sortedBy(WearInboundEvent::sequence)
   }
 
   private companion object {

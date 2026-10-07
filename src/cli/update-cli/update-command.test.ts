@@ -17,7 +17,6 @@ import * as restartHealth from "../daemon-cli/restart-health.js";
 import * as launchAgentRecovery from "./update-command-launch-agent-recovery.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import { testing as updateCommandPluginsTesting } from "./update-command-plugins.test-support.js";
-import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
 import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
 import {
   resolveServiceRefreshEnv,
@@ -891,24 +890,5 @@ describe("hasLoadedLaunchdKeepAliveSupervisor", () => {
     expect(isLoaded).not.toHaveBeenCalled();
 
     platformSpy.mockRestore();
-  });
-});
-
-describe("resolvePostCoreUpdateChildStdio", () => {
-  it('returns "pipe" on Windows so the child never inherits the parent console handles', () => {
-    // On Windows, stdio:"inherit" passes the parent's console HANDLE to the child process.
-    // PowerShell/CMD will not return the prompt until every holder of those handles exits,
-    // causing the terminal to hang after `openclaw update` completes (#78445).
-    expect(resolvePostCoreUpdateChildStdio("win32")).toBe("pipe");
-  });
-
-  it('returns "inherit" on non-Windows platforms', () => {
-    expect(resolvePostCoreUpdateChildStdio("linux")).toBe("inherit");
-    expect(resolvePostCoreUpdateChildStdio("darwin")).toBe("inherit");
-  });
-
-  it('returns "pipe" for JSON output on every platform', () => {
-    expect(resolvePostCoreUpdateChildStdio("linux", true)).toBe("pipe");
-    expect(resolvePostCoreUpdateChildStdio("darwin", true)).toBe("pipe");
   });
 });

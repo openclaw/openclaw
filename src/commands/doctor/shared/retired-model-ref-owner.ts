@@ -38,7 +38,7 @@ export function createRetiredModelRefOwners(params: {
   const env = params.env ?? process.env;
   const agents = params.agentIds ?? listAgentIds(params.cfg);
   const normalizedPluginsConfig = normalizePluginsConfig(params.cfg.plugins);
-  const owners = new Map(
+  return new Map(
     agents.map((agentId) => {
       const agentDir = resolveAgentDir(params.cfg, agentId, env);
       const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
@@ -176,5 +176,4 @@ export function createRetiredModelRefOwners(params: {
       ];
     }),
   );
-  return owners;
 }

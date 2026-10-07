@@ -333,12 +333,15 @@ internal fun SidebarSessionActivityIndicator(
   palette: SidebarPalette,
 ) {
   when (activity) {
-    SidebarSessionActivity.Queued -> {
+    SidebarSessionActivity.Queued,
+    SidebarSessionActivity.Failed,
+    -> {
+      val failed = activity == SidebarSessionActivity.Failed
       Icon(
-        imageVector = Icons.Default.HourglassEmpty,
-        contentDescription = nativeString("Queued"),
-        modifier = Modifier.size(15.dp),
-        tint = palette.muted,
+        imageVector = if (failed) Icons.Default.ErrorOutline else Icons.Default.HourglassEmpty,
+        contentDescription = if (failed) nativeString("Run failed") else nativeString("Queued"),
+        modifier = Modifier.size(if (failed) 16.dp else 15.dp),
+        tint = if (failed) ClawTheme.colors.danger else palette.muted,
       )
     }
 
@@ -358,15 +361,6 @@ internal fun SidebarSessionActivityIndicator(
             .clip(CircleShape)
             .background(ClawTheme.colors.primary)
             .clearAndSetSemantics { stateDescription = nativeString("Needs attention") },
-      )
-    }
-
-    SidebarSessionActivity.Failed -> {
-      Icon(
-        imageVector = Icons.Default.ErrorOutline,
-        contentDescription = nativeString("Run failed"),
-        modifier = Modifier.size(16.dp),
-        tint = ClawTheme.colors.danger,
       )
     }
   }

@@ -356,7 +356,14 @@ internal class WearRealtimeTalkController(
   ) {
     val obj = parseJsonParamsObject(payloadJson) ?: return
     if (event == "chat") {
-      handleChatEvent(obj)
+      val runId = obj["runId"].asStringOrNull() ?: return
+      val state = obj["state"].asStringOrNull() ?: return
+      realtimeAgentCoordinator.handleChatEvent(
+        sessionKey = obj["sessionKey"].asStringOrNull(),
+        runId = runId,
+        state = state,
+        message = obj["message"],
+      )
       return
     }
     if (event != "talk.event") return
@@ -496,18 +503,6 @@ internal class WearRealtimeTalkController(
         forced = obj["forced"].asBooleanOrNull() == true,
       )
     }
-  }
-
-  private fun handleChatEvent(obj: JsonObject) {
-    val runId = obj["runId"].asStringOrNull() ?: return
-    val state = obj["state"].asStringOrNull() ?: return
-    val eventSessionKey = obj["sessionKey"].asStringOrNull()
-    realtimeAgentCoordinator.handleChatEvent(
-      sessionKey = eventSessionKey,
-      runId = runId,
-      state = state,
-      message = obj["message"],
-    )
   }
 
   private fun startOutputLoop(

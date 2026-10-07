@@ -6,6 +6,7 @@ export const databaseWorkerExtensionTestRoots = [
 ];
 
 export const databaseWorkerExtensionTestFiles = [
+  "extensions/slack/src/conversation-bindings.test.ts",
   "extensions/a2a/src/inbound.test.ts",
   "extensions/buzz/src/inbound.test.ts",
   "extensions/clickclack/src/inbound.mention-gating.test.ts",

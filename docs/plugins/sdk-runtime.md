@@ -187,7 +187,11 @@ callbacks while cleanup finishes.
 
 Replacement validates metadata and configuration first, then stops services and
 channels, drains admitted work, runs `gateway_stop`, and disposes the old instance
-before invoking the new registration. Pre-publication failure triggers automatic
+before invoking the new registration. Session-extension and runtime-lifecycle
+`cleanup` callbacks receive `reason: "restart"` before the replacement registers,
+so they can unsubscribe observers and release in-memory buffers. Persistent
+session-state and scheduler reconciliation remain part of registry retirement.
+Pre-publication failure triggers automatic
 recovery by registering the captured previous code with its previous config;
 a stopped instance is not assumed to be restartable. A plugin cannot synchronously
 replace itself from its own active call: the operation rejects before shutdown

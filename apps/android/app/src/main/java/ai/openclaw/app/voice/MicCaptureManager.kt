@@ -363,23 +363,13 @@ internal class MicCaptureManager(
         if (gatewayError.isNotEmpty()) {
           upsertPendingAssistant(text = gatewayError, isStreaming = false)
         } else {
-          val failure = nativeText("Voice request failed")
-          upsertPendingAssistant(
-            text = failure.resolveNativeText(),
-            isStreaming = false,
-            localizedSource = failure.source,
-          )
+          upsertPendingAssistant(nativeText("Voice request failed"))
         }
         completePendingTurn()
       }
 
       "aborted" -> {
-        val abortedText = nativeText("Response aborted")
-        upsertPendingAssistant(
-          text = abortedText.resolveNativeText(),
-          isStreaming = false,
-          localizedSource = abortedText.source,
-        )
+        upsertPendingAssistant(nativeText("Response aborted"))
         completePendingTurn()
       }
     }
@@ -665,6 +655,13 @@ internal class MicCaptureManager(
       localizedSource = localizedSource,
     )
   }
+
+  private fun upsertPendingAssistant(text: NativeText.Resource) =
+    upsertPendingAssistant(
+      text = text.resolveNativeText(),
+      isStreaming = false,
+      localizedSource = text.source,
+    )
 
   private fun playAssistantReplyAsync(text: String) {
     val spoken = text.trim()

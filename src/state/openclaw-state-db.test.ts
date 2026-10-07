@@ -1,11 +1,11 @@
 // OpenClaw state database tests cover state DB migrations and persistence.
 import { deepStrictEqual } from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
+import { sha256Hex as sha256 } from "@openclaw/normalization-core/node-crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import {
@@ -19,11 +19,13 @@ import type { CronStoredJob } from "../cron/types.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import {
   countFailedDeliveryQueueEntries,
-  getDeliveryQueueEntryStatus,
-  loadDeliveryQueueEntry,
   terminalizePendingDeliveryQueueEntry,
 } from "../infra/delivery-queue-sqlite.js";
-import { seedDeliveryQueueEntry } from "../infra/delivery-queue-sqlite.test-support.js";
+import {
+  getDeliveryQueueEntryStatus,
+  loadDeliveryQueueEntry,
+  seedDeliveryQueueEntry,
+} from "../infra/delivery-queue-sqlite.test-support.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -141,10 +143,6 @@ const V2026_7_1_2_STATE_FIXTURE_RAW_SHA256 =
 
 function createTempStateDir(): string {
   return makeTempDir(stateDbTempDirs, "openclaw-state-db-");
-}
-
-function sha256(value: string | Uint8Array): string {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function materializeV2026_7_1_2StateDatabase(stateDir: string): {

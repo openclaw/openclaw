@@ -12,6 +12,7 @@ import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatReactionSummary
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatSessionPatch
 import ai.openclaw.app.chat.ChatSwarmGroup
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptAnchorState
@@ -1229,40 +1230,22 @@ class MainViewModel internal constructor(
 
   fun setAppearanceTextScale(scale: AppearanceTextScale): Unit = prefs.setAppearanceTextScale(scale)
 
-  fun setAppearanceThemeMode(mode: AppearanceThemeMode) {
-    val pendingScope = runtimeRef.value?.appearancePreferenceScopeForEdit()
-    val retainLocal = pendingScope == null
-    prefs.setAppearanceThemeMode(
-      mode = mode,
-      pendingSync = !retainLocal,
-      pendingScope = pendingScope,
-      retainLocal = retainLocal,
-    )
-    if (!retainLocal) syncQueuedAppearancePreference("ui.themeMode", mode.rawValue)
-  }
+  fun setAppearanceThemeMode(mode: AppearanceThemeMode) = setAppearancePreference("ui.themeMode", mode, prefs::setAppearanceThemeMode) { it.rawValue }
 
-  fun setAppearanceThemeFamily(family: AppearanceThemeFamily) {
-    val pendingScope = runtimeRef.value?.appearancePreferenceScopeForEdit()
-    val retainLocal = pendingScope == null
-    prefs.setAppearanceThemeFamily(
-      family = family,
-      pendingSync = !retainLocal,
-      pendingScope = pendingScope,
-      retainLocal = retainLocal,
-    )
-    if (!retainLocal) syncQueuedAppearancePreference("ui.theme", family.rawValue)
-  }
+  fun setAppearanceThemeFamily(family: AppearanceThemeFamily) = setAppearancePreference("ui.theme", family, prefs::setAppearanceThemeFamily) { it.rawValue }
 
-  fun setAppearanceAccentArgb(argb: Long?) {
+  fun setAppearanceAccentArgb(argb: Long?) = setAppearancePreference("ui.accent", argb, prefs::setAppearanceAccentArgb, ::appearanceAccentPreferenceValue)
+
+  private fun <T> setAppearancePreference(
+    key: String,
+    value: T,
+    save: (value: T, pendingSync: Boolean, pendingScope: AppearancePreferenceScope?, retainLocal: Boolean) -> Unit,
+    preferenceValue: (T) -> String?,
+  ) {
     val pendingScope = runtimeRef.value?.appearancePreferenceScopeForEdit()
     val retainLocal = pendingScope == null
-    prefs.setAppearanceAccentArgb(
-      argb = argb,
-      pendingSync = !retainLocal,
-      pendingScope = pendingScope,
-      retainLocal = retainLocal,
-    )
-    if (!retainLocal) syncQueuedAppearancePreference("ui.accent", appearanceAccentPreferenceValue(argb))
+    save(value, !retainLocal, pendingScope, retainLocal)
+    if (!retainLocal) syncQueuedAppearancePreference(key, preferenceValue(value))
   }
 
   fun refreshGatewayConnection() {
@@ -1572,38 +1555,8 @@ class MainViewModel internal constructor(
     archived: Boolean = false,
   ): Unit = ensureRuntime().chat.refreshSessions(limit = limit, archived = archived)
 
-  suspend fun patchChatSession(
-    key: String,
-    ownerAgentId: String? = null,
-    expectedSessionId: String? = null,
-    label: String? = null,
-    clearLabel: Boolean = false,
-    category: String? = null,
-    clearCategory: Boolean = false,
-    snoozedUntil: Long? = null,
-    clearSnooze: Boolean = false,
-    color: String? = null,
-    clearColor: Boolean = false,
-    pinned: Boolean? = null,
-    archived: Boolean? = null,
-    unread: Boolean? = null,
-  ) {
-    ensureRuntime().chat.patchSession(
-      key = key,
-      ownerAgentId = ownerAgentId,
-      expectedSessionId = expectedSessionId,
-      label = label,
-      clearLabel = clearLabel,
-      category = category,
-      clearCategory = clearCategory,
-      snoozedUntil = snoozedUntil,
-      clearSnooze = clearSnooze,
-      color = color,
-      clearColor = clearColor,
-      pinned = pinned,
-      archived = archived,
-      unread = unread,
-    )
+  internal suspend fun patchChatSession(patch: ChatSessionPatch) {
+    ensureRuntime().chat.patchSession(patch)
   }
 
   suspend fun deleteChatSession(

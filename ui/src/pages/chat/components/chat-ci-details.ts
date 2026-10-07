@@ -25,25 +25,22 @@ const SKIPPED_ICON = strokeIcon(svg`<circle cx="12" cy="12" r="10" /><path d="M8
 const CHECK_ORDER = { failed: 0, running: 1, passed: 2, skipped: 3 } as const;
 type CheckState = ControlUiSessionPullRequestCheck["state"] | "queued";
 
+const STEP_CONCLUSIONS = new Map<string, CheckState>([
+  ["success", "passed"],
+  ["failure", "failed"],
+  ["timed_out", "failed"],
+  ["action_required", "failed"],
+  ["startup_failure", "failed"],
+  ["skipped", "skipped"],
+  ["neutral", "skipped"],
+  ["cancelled", "skipped"],
+]);
+
 function stepState(step: ControlUiSessionPullRequestCheckStep): CheckState {
   if (step.status === "in_progress") {
     return "running";
   }
-  switch (step.conclusion) {
-    case "success":
-      return "passed";
-    case "failure":
-    case "timed_out":
-    case "action_required":
-    case "startup_failure":
-      return "failed";
-    case "skipped":
-    case "neutral":
-    case "cancelled":
-      return "skipped";
-    default:
-      return "queued";
-  }
+  return STEP_CONCLUSIONS.get(step.conclusion ?? "") ?? "queued";
 }
 
 const CHECK_PRESENTATION = {

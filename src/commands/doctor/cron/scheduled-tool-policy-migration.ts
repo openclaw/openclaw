@@ -79,11 +79,8 @@ function migrateScheduledToolPolicy(
     return { mutated, status: "current" };
   }
 
-  if (!ownerSessionKey) {
-    return { mutated: false, status: "legacy" };
-  }
-  const parsedSession = parseAgentSessionKey(ownerSessionKey);
-  if (!parsedSession) {
+  const parsedSession = ownerSessionKey ? parseAgentSessionKey(ownerSessionKey) : undefined;
+  if (!ownerSessionKey || !parsedSession) {
     return { mutated: false, status: "legacy" };
   }
   const ownerAgentId = normalizeOptionalString(owner?.agentId);

@@ -117,22 +117,6 @@ internal class MessageSpeechController(
       stop()
       return
     }
-    start(messageId = messageId, text = text)
-  }
-
-  fun stop() {
-    generation.incrementAndGet()
-    job?.cancel()
-    job = null
-    player.stop()
-    localSpeech.stop()
-    _state.value = null
-  }
-
-  private fun start(
-    messageId: String,
-    text: String,
-  ) {
     stop()
     val spoken = text.trim()
     if (spoken.isEmpty()) return
@@ -156,6 +140,15 @@ internal class MessageSpeechController(
           if (generation.get() == token && _state.value?.isActive == true) _state.value = null
         }
       }
+  }
+
+  fun stop() {
+    generation.incrementAndGet()
+    job?.cancel()
+    job = null
+    player.stop()
+    localSpeech.stop()
+    _state.value = null
   }
 
   private suspend fun playClip(clip: TalkSpeakAudio?): Boolean {

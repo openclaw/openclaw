@@ -500,26 +500,22 @@ export function completeUpdateCommandRun(
     inspected?.format === "legacy-serving"
       ? inspected.record
       : loadUpdateRecovery(run.runId, { env: run.env });
-  if (
-    recovery?.terminal &&
-    getUpdateRun(run.runId, { env: run.env })?.status === recovery.terminal.status
-  ) {
-    // Read the atomic durable outcome; diagnostics never authorize retention cleanup.
-    return normalizeUpdateFailureResult({
-      ...result,
-      status: recovery.terminal.status === "succeeded" ? "ok" : "error",
-      reason:
-        recovery.terminal.status === "succeeded"
-          ? undefined
-          : (recovery.primaryFailure?.code ?? "update-rolled-back"),
-      runId: run.runId,
-    });
-  }
   if (recovery) {
+    // Read the atomic durable outcome; diagnostics never authorize retention cleanup.
+    const terminal =
+      recovery.terminal &&
+      getUpdateRun(run.runId, { env: run.env })?.status === recovery.terminal.status
+        ? recovery.terminal
+        : undefined;
+    const succeeded = terminal?.status === "succeeded";
     return normalizeUpdateFailureResult({
       ...result,
-      status: "error",
-      reason: result.reason ?? "update-recovery-pending",
+      status: succeeded ? "ok" : "error",
+      reason: succeeded
+        ? undefined
+        : terminal
+          ? (recovery.primaryFailure?.code ?? "update-rolled-back")
+          : (result.reason ?? "update-recovery-pending"),
       runId: run.runId,
     });
   }

@@ -87,8 +87,7 @@ export async function inspectNpmGlobalDestination(
     if (launcherPresent && !launcherTarget) {
       return unknown(prefix, "unreadable-layout");
     }
-    const manageable = isGatewayServiceManagementAllowedForUpdate(process.env);
-    const serviceInspection = manageable
+    const serviceInspection = isGatewayServiceManagementAllowedForUpdate(process.env)
       ? await readManagedGatewayServiceForUpdate(process.env)
       : null;
     const command = serviceInspection?.command ?? null;

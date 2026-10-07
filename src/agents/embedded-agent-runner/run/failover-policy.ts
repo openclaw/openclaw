@@ -141,6 +141,9 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
     };
   }
   const surfaceError = { action: "surface_error" as const, reason: params.failoverReason };
+  let shouldRotate: boolean;
+  let shouldFallback: boolean;
+  let fallbackReason: FailoverReason = params.failoverReason ?? "unknown";
 
   if (params.stage === "prompt") {
     // Plugin harnesses can forward CLI terminal codes through failover normalization;
@@ -163,57 +166,38 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
       }
       return surfaceError;
     }
-    if (!params.profileRotated && shouldRotatePrompt(params)) {
-      return {
-        action: "rotate_profile",
-        reason: params.failoverReason,
-      };
+    shouldRotate = shouldRotatePrompt(params);
+    shouldFallback = params.failoverFailure && !isTerminalFormatFailure(params);
+  } else {
+    if (
+      params.signalOwnedInterruption ||
+      ((params.terminal.kind === "aborted" || params.terminal.kind === "timeout") &&
+        params.terminal.source === "external") ||
+      isTerminalFormatFailure(params)
+    ) {
+      return surfaceError;
     }
-    if (params.fallbackConfigured && params.failoverFailure && !isTerminalFormatFailure(params)) {
-      return {
-        action: "fallback_model",
-        reason: params.failoverReason ?? "unknown",
-      };
+    if (params.failoverFailure && params.failoverReason === "tls_certificate") {
+      return params.fallbackConfigured
+        ? { action: "fallback_model", reason: "tls_certificate" }
+        : surfaceError;
     }
-    return surfaceError;
+    shouldRotate = shouldRotateAssistant(params);
+    if (!shouldRotate) {
+      return { action: "continue_normal" };
+    }
+    shouldFallback = true;
+    if (!isConcreteNonTimeoutAssistantFailure(params) && isAssistantTimeoutFailure(params)) {
+      fallbackReason = "timeout";
+    }
   }
-
-  if (
-    params.signalOwnedInterruption ||
-    ((params.terminal.kind === "aborted" || params.terminal.kind === "timeout") &&
-      params.terminal.source === "external") ||
-    isTerminalFormatFailure(params)
-  ) {
-    return surfaceError;
-  }
-  if (params.failoverFailure && params.failoverReason === "tls_certificate") {
-    return params.fallbackConfigured
-      ? {
-          action: "fallback_model",
-          reason: "tls_certificate",
-        }
-      : surfaceError;
-  }
-  const assistantShouldRotate = shouldRotateAssistant(params);
-  if (!params.profileRotated && assistantShouldRotate) {
+  if (!params.profileRotated && shouldRotate) {
     return {
       action: "rotate_profile",
       reason: params.failoverReason,
     };
   }
-  if (assistantShouldRotate && params.fallbackConfigured) {
-    return {
-      action: "fallback_model",
-      reason:
-        !isConcreteNonTimeoutAssistantFailure(params) && isAssistantTimeoutFailure(params)
-          ? "timeout"
-          : (params.failoverReason ?? "unknown"),
-    };
-  }
-  if (!assistantShouldRotate) {
-    return {
-      action: "continue_normal",
-    };
-  }
-  return surfaceError;
+  return shouldFallback && params.fallbackConfigured
+    ? { action: "fallback_model", reason: fallbackReason }
+    : surfaceError;
 }

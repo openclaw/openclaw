@@ -607,10 +607,9 @@ async function refreshChat(
       return;
     }
     const sessionInfo = selectedChatSessionRow(host);
-    const rosterRow = sessionInfo ?? history.sessionInfo;
     if (sessionInfo) {
-      host.selectedChatSessionArchived = rosterRow.archived === true;
-      host.selectedChatSessionIncognito = rosterRow.incognito === true;
+      host.selectedChatSessionArchived = sessionInfo.archived === true;
+      host.selectedChatSessionIncognito = sessionInfo.incognito === true;
     }
     const snapshotRunId = history.inFlightRun?.runId?.trim();
     const activeRunIds = history.sessionInfo.activeRunIds;
@@ -658,11 +657,7 @@ async function refreshChat(
     previousSessionsResult,
     () => void flushChatQueueForEvent(host),
   );
-  const secondaryRefresh = Promise.allSettled([sessionsRefresh, startupMetadataRefresh]).finally(
-    requestUpdate,
-  );
-  void historyRefresh;
-  void secondaryRefresh;
+  void Promise.allSettled([sessionsRefresh, startupMetadataRefresh]).finally(requestUpdate);
   if (opts?.awaitHistory === true) {
     await historyRefresh;
     return;

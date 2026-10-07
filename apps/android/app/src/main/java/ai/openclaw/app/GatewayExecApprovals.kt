@@ -171,13 +171,10 @@ internal fun parseGatewayExecApprovalResolvedEventTerminal(
   payloadJson: String,
   json: Json,
 ): GatewayExecApprovalSnapshot.Terminal? =
-  try {
-    val root = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return null
+  parseApprovalObject(payloadJson, json) { root ->
     val id = root.strictApprovalId("id") ?: return null
     val decision = root.strictString("decision")?.let(::normalizeGatewayExecApprovalDecision) ?: return null
     legacyGatewayExecApprovalTerminal(id, decision)
-  } catch (_: Throwable) {
-    null
   }
 
 internal enum class GatewayApprovalRpcFamily {
@@ -283,13 +280,10 @@ internal fun parseGatewayExecApprovalGetPayload(
   json: Json,
   expectedId: String,
 ): GatewayExecApprovalSnapshot? =
-  try {
-    val root = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return null
+  parseApprovalObject(payloadJson, json) { root ->
     if (!root.hasExactKeys(APPROVAL_GET_RESULT_KEYS)) return null
     parseGatewayExecApprovalSnapshot(root["approval"].asObjectOrNull() ?: return null)
       ?.takeIf { it.id == expectedId }
-  } catch (_: Throwable) {
-    null
   }
 
 internal fun parseGatewayExecApprovalResolvePayload(
@@ -298,8 +292,7 @@ internal fun parseGatewayExecApprovalResolvePayload(
   expectedId: String,
   expectedDecision: String,
 ): GatewayExecApprovalResolution? =
-  try {
-    val root = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return null
+  parseApprovalObject(payloadJson, json) { root ->
     if (!root.hasExactKeys(APPROVAL_RESOLVE_RESULT_KEYS)) return null
     val applied = root.strictBoolean("applied") ?: return null
     val approval =
@@ -311,8 +304,6 @@ internal fun parseGatewayExecApprovalResolvePayload(
     // ambiguous write outcome, never evidence that the attempted approval applied.
     if (applied && approval.decision != expectedDecision) return null
     GatewayExecApprovalResolution(applied = applied, approval = approval)
-  } catch (_: Throwable) {
-    null
   }
 
 /** Parses the shipped pre-unified exec reviewer projection for old Gateway v4 peers. */
@@ -322,27 +313,29 @@ internal fun parseLegacyGatewayExecApprovalGetPayload(
   expectedId: String,
   createdAtMs: Long?,
 ): GatewayExecApprovalSnapshot.Pending? =
-  try {
-    val obj = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return null
+  parseApprovalObject(payloadJson, json) { obj ->
     val id = obj.strictApprovalId("id") ?: return null
     if (id != expectedId) return null
     val normalizedCreatedAtMs = createdAtMs?.takeIf { it >= 0 } ?: return null
     val expiresAtMs = obj.strictNonNegativeLong("expiresAtMs") ?: return null
     parseExecApprovalCommand(obj, id, normalizedCreatedAtMs, expiresAtMs, includeWarning = false)
       ?.let(GatewayExecApprovalSnapshot::Pending)
-  } catch (_: Throwable) {
-    null
   }
 
 internal fun parseLegacyGatewayExecApprovalResolvePayload(
   payloadJson: String,
   json: Json,
-): Boolean =
+): Boolean = parseApprovalObject(payloadJson, json) { it.strictBoolean("ok") } == true
+
+private inline fun <T> parseApprovalObject(
+  payloadJson: String,
+  json: Json,
+  parse: (JsonObject) -> T?,
+): T? =
   try {
-    val root = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return false
-    root.strictBoolean("ok") == true
+    parse(json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return null)
   } catch (_: Throwable) {
-    false
+    null
   }
 
 internal fun legacyGatewayExecApprovalTerminal(
