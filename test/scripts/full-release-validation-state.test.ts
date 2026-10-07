@@ -843,8 +843,8 @@ describe("release child attempt composition", () => {
   });
 
   describe("GitHub ghost rerun jobs", () => {
-    // Shape observed on 2026.9.7 FRV-E CI attempt 2: one rerun-failed POST left 17
-    // queued copies with no runner or steps beside the completed job.
+    // Shapes observed on FRV reruns: queued copies have no runner beside the completed
+    // job. GitHub may either omit their steps or mirror the completed job's steps.
     const ghost = {
       completed_at: null,
       conclusion: null,
@@ -854,7 +854,7 @@ describe("release child attempt composition", () => {
       runner_name: null,
       started_at: "2026-09-29T20:38:30Z",
       status: "queued",
-      steps: [],
+      steps: [{ name: "Run tests", status: "completed", conclusion: "failure" }],
     };
     const completed = {
       ...job("checks-node-core-runtime-infra-process", "success"),
@@ -896,18 +896,31 @@ describe("release child attempt composition", () => {
       ]);
     });
 
+    it("ignores never-executed copies beside a completed job in the effective attempt", () => {
+      const result = composeReleaseAttemptJobs([ghostAttempt], {
+        effectiveRunAttempt: 2,
+        plannedRunAttempt: 2,
+      });
+      expect(result.jobs).toEqual([
+        expect.objectContaining({
+          acceptedRunAttempt: 2,
+          conclusion: "success",
+          name: "checks-node-core-runtime-infra-process",
+        }),
+        expect.objectContaining({
+          acceptedRunAttempt: 2,
+          conclusion: "failure",
+          name: "checks-ui",
+        }),
+      ]);
+    });
+
     it.each<{
       label: string;
       attempts: Parameters<typeof composeReleaseAttemptJobs>[0];
       effectiveRunAttempt: number;
       plannedRunAttempt: number;
     }>([
-      {
-        label: "in the effective attempt",
-        attempts: [ghostAttempt],
-        effectiveRunAttempt: 2,
-        plannedRunAttempt: 2,
-      },
       {
         label: "without a completed sibling",
         attempts: [

@@ -220,7 +220,8 @@ vi.mock("./agent-model-discovery.js", () => ({
   },
 }));
 
-vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
+vi.mock("../plugins/synthetic-auth.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/synthetic-auth.runtime.js")>()),
   resolveRuntimeSyntheticAuthProviderRefs: () =>
     preparedModelRuntimeMocks.runtimeSyntheticAuthProviderRefs,
 }));

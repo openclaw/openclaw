@@ -73,6 +73,8 @@ export type OpenClawSharedToolsOptions = {
   skillWorkshop?: SkillWorkshopRunOptions;
   webFetchHostnameAllowlistRef?: { value?: string[] };
   webSearchEnabled?: boolean;
+  /** Construction fact for prompt guidance; never contains credentials or diagnostics. */
+  onWebSearchConfiguration?: (configured: boolean) => void;
   /** Routable target for the current conversation when it differs from the native channel ID. */
   currentMessagingTarget?: string;
   /** Dynamic audio state for runs that can accept steered input after tool creation. */
