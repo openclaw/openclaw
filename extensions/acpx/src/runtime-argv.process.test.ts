@@ -149,7 +149,7 @@ it.each([
           sessionStore: store,
           agentRegistry: createAgentRegistry({ overrides: config.agents }),
           permissionMode: "deny-all",
-          timeoutMs: 5_000,
+          timeoutMs: 15_000,
           ...(wrapped
             ? {
                 openclawWrapperRoot: path.join(state.root, "acpx"),

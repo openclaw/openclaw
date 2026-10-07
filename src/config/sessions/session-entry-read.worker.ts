@@ -41,6 +41,7 @@ import {
   readTranscriptHeaderFromDatabase,
 } from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
+import { readSessionWorktreeOwnerFactsInDatabase } from "./session-accessor.sqlite-worktree-owner.js";
 import {
   assertCanonicalSessionKeyWrite,
   assertCanonicalSqliteSessionKeysCurrent,
@@ -348,22 +349,24 @@ export function readSessionDiagnosticText(request: SessionDiagnosticTextWorkerIn
 export function readExactSessionEntriesWithLifecycle(
   request: SessionExactEntriesWorkerInput,
 ): SessionExactEntriesWorkerResult {
-  if (request.projection === "exact") {
+  if (request.projection === "exact" || request.projection === "worktree") {
     // Logical accessors validate only their candidates; unrelated rows are not listing admission.
     let source: SessionExactEntriesWorkerResult["source"];
     const read = withOpenClawAgentDatabaseReadOnly(
       (database) => {
         source = captureSessionEntryReadSource(database, request.expectedIdentity);
         return runSqliteDeferredTransactionSync(database.db, () =>
-          request.sessionKeys.flatMap((sessionKey) => {
-            const entry = readExactSessionEntryRow(
-              database,
-              sessionKey,
-              request.snapshotFields ?? "full",
-              "canonical",
-            )?.entry;
-            return entry ? [{ sessionKey, entry }] : [];
-          }),
+          request.projection === "worktree"
+            ? readSessionWorktreeOwnerFactsInDatabase(database, request.sessionKeys)
+            : request.sessionKeys.flatMap((sessionKey) => {
+                const entry = readExactSessionEntryRow(
+                  database,
+                  sessionKey,
+                  request.snapshotFields ?? "full",
+                  "canonical",
+                )?.entry;
+                return entry ? [{ sessionKey, entry }] : [];
+              }),
         );
       },
       { ...request.database, env: request.env },

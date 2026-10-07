@@ -225,6 +225,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
         className,
       ]),
       this.terminalSessions.booting,
+      this.terminalSessions.canHandoffSessions,
       this.sessionPickerOpen,
       this.sessionPickerTask.status,
       this.pickerSessions.map((session) => session.sessionId),
@@ -286,12 +287,17 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
           class="rail-header__action"
           type="button"
           aria-label=${t("terminal.dockBottom")}
+          ?disabled=${!this.terminalSessions.canHandoffSessions}
           @click=${() => this.setDock("bottom")}
         >
           ${icons.panelBottomOpen}
         </button>
       </openclaw-tooltip>
     `;
+  }
+
+  activateTerminalHost(): void {
+    this.terminalSessions.activateHost();
   }
 
   toggle(): void {
@@ -302,6 +308,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
       this.closeTerminalPanel();
     } else {
       this.dockLayout.setOpen(true);
+      this.activateTerminalHost();
       void this.terminalSessions.restoreSessions();
     }
   }
@@ -327,6 +334,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
         return;
       }
       this.dockLayout.setOpen(true);
+      this.activateTerminalHost();
       void (detail.newSession === true
         ? this.terminalSessions.openSession()
         : detail.terminalSessionId
@@ -433,14 +441,21 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
   }
 
   private setDock(dock: TerminalDock): void {
-    // Embedded chrome cannot dock itself: it asks the host to take the panel
-    // out to the bottom slot. Every other target stays with the dock layout,
-    // where "main" toggles instead of pinning.
-    if (this.embedded && dock === "bottom") {
+    // Moving between the global bottom dock and a chat's side panel changes
+    // presentation owners, not just geometry. The active pane owns the return.
+    const returnToSession = this.sessionBottomOnly && dock === "right";
+    if ((this.embedded && dock === "bottom") || returnToSession) {
+      if (!this.terminalSessions.handoffSessions()) {
+        return;
+      }
+      if (returnToSession) {
+        this.dockLayout.setOpen(false);
+      }
       window.dispatchEvent(
-        new CustomEvent<TerminalPanelToggleDetail>(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, {
-          detail: { agentId: this.agentId, dock: "bottom", open: true },
-        }),
+        new CustomEvent<TerminalPanelToggleDetail>(
+          returnToSession ? TERMINAL_PANEL_TOGGLE_EVENT : TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
+          { detail: { agentId: this.agentId, dock, open: true } },
+        ),
       );
       return;
     }
@@ -525,6 +540,8 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
       fullscreen: this.fullscreen,
       embedded: this.embedded,
       dock: this.dockLayout.dock,
+      dockDisabled:
+        (this.embedded || this.sessionBottomOnly) && !this.terminalSessions.canHandoffSessions,
       upload: this.terminalPanelUploadController,
       sessionPicker,
       onDock: (dock) => this.setDock(dock),
