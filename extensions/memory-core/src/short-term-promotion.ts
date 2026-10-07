@@ -1,6 +1,9 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
+import {
+  isDreamingTraceNoise,
+  isPromotionOriginBlocked,
+} from "./dreaming-consolidation-candidates.js";
 import { readPhaseSignalStore, readStore } from "./short-term-promotion-store.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
@@ -121,7 +124,7 @@ export async function rankShortTermPromotionCandidates(
       continue;
     }
     // Apply rejects these origins too; exclude them before scoring and candidate limits.
-    if (isPromotionOriginBlocked(entry)) {
+    if (isPromotionOriginBlocked(entry) || isDreamingTraceNoise(entry)) {
       continue;
     }
     if (

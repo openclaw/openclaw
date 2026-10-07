@@ -67,6 +67,7 @@ Dreaming runs three cooperative phases per sweep, in order: light -> REM -> deep
   </Accordion>
   <Accordion title="REM phase">
     - Builds theme and reflection summaries from recent short-term traces.
+    - Excludes obvious command-status listings and reconciliation-report findings from candidate truths and reinforcement; those traces are also ineligible for deep promotion.
     - Writes a managed `## REM Sleep` block when storage includes inline output.
     - Records REM reinforcement signals used by deep ranking.
     - Never writes to `MEMORY.md`.

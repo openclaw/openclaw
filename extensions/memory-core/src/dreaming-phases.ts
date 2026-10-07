@@ -15,7 +15,10 @@ import {
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeConceptToken } from "./concept-vocabulary.js";
-import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
+import {
+  isDreamingTraceNoise,
+  isPromotionOriginBlocked,
+} from "./dreaming-consolidation-candidates.js";
 import { readRecentDreamDiaryEntries } from "./dreaming-dreams-file.js";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import {
@@ -1151,9 +1154,10 @@ export function previewRemDreaming(params: {
   limit: number;
   minPatternStrength: number;
 }) {
-  const reflections = buildRemReflections(params.entries, params.limit, params.minPatternStrength);
+  const eligibleEntries = params.entries.filter((entry) => !isDreamingTraceNoise(entry));
+  const reflections = buildRemReflections(eligibleEntries, params.limit, params.minPatternStrength);
   const candidateSelections = selectRemCandidateTruths(
-    params.entries,
+    eligibleEntries,
     Math.max(1, Math.min(3, params.limit)),
   );
   const candidateTruths = candidateSelections.map((entry) => ({
@@ -1175,7 +1179,7 @@ export function previewRemDreaming(params: {
       : ["- No strong candidate truths surfaced."]),
   ];
   return {
-    sourceEntryCount: params.entries.length,
+    sourceEntryCount: eligibleEntries.length,
     reflections,
     candidateTruths,
     candidateKeys,
@@ -1224,7 +1228,7 @@ async function prepareLightDreaming(
         }),
       }),
     })
-  ).filter((entry) => !isPromotionOriginBlocked(entry));
+  ).filter((entry) => !isPromotionOriginBlocked(entry) && !isDreamingTraceNoise(entry));
   const rankedEntries = dedupeEntries(
     recentEntries.toSorted((a, b) => {
       const byTime = compareStoreTimestampDesc(a.lastRecalledAt, b.lastRecalledAt);
@@ -1290,7 +1294,7 @@ async function prepareRemDreaming(
         lookbackDays: params.config.lookbackDays,
       }),
     })
-  ).filter((entry) => !isPromotionOriginBlocked(entry));
+  ).filter((entry) => !isPromotionOriginBlocked(entry) && !isDreamingTraceNoise(entry));
   // Prefer entries staged by light sleep so REM synthesises from the
   // sequential light→REM pipeline instead of rescanning the full store.
   const lightKeys = await readLightStagedKeys({

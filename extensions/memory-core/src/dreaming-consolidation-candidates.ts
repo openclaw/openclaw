@@ -1,5 +1,19 @@
-import type { PromotionCandidate } from "./short-term-promotion-types.js";
+import type { PromotionCandidate, ShortTermRecallEntry } from "./short-term-promotion-types.js";
 import { isShortTermSessionCorpusPath } from "./short-term-promotion-utils.js";
+
+/** Reject machine-generated audit findings and pasted command listings as personal memories. */
+export function isDreamingTraceNoise(
+  entry: Pick<ShortTermRecallEntry, "path" | "snippet">,
+): boolean {
+  const sourcePath = entry.path.replaceAll("\\", "/");
+  const snippet = entry.snippet.trim();
+  return (
+    /(?:^|\/)\d{4}-\d{2}-\d{2}-reconcile-report\.md$/i.test(sourcePath) ||
+    /^(?:Broken Links?|Orphan Notes?|Duplicate Concepts?):/i.test(snippet) ||
+    /(?:^|\\n|\n)\?\?\s+\S/.test(snippet) ||
+    /^User:\s*loops\/cron-self-heal\/runs\//i.test(snippet)
+  );
+}
 
 export function filterConsolidationCandidates(
   candidates: readonly PromotionCandidate[],
@@ -21,5 +35,9 @@ export function isConsolidationCandidateEligible(candidate: PromotionCandidate):
   const normalizedPath = candidate.path.replaceAll("\\", "/");
   const sessionDerived =
     isShortTermSessionCorpusPath(normalizedPath) || normalizedPath.startsWith("sessions/");
-  return trustedOrigin && (!sessionDerived || candidate.provenance?.sessionKind === "interactive");
+  return (
+    trustedOrigin &&
+    !isDreamingTraceNoise(candidate) &&
+    (!sessionDerived || candidate.provenance?.sessionKind === "interactive")
+  );
 }
