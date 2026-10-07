@@ -307,7 +307,8 @@ export async function resolvePackageRuntimePreflight(params: {
     return {
       ...(recoverySteps ? { recoverySteps } : {}),
       ...resultError<PackageRuntimePreflight, string>(diagnostics.message),
-      failureFacts: diagnostics.failureFacts,
+      // Preserve the single Node refusal fact; the error retains the full diagnostic.
+      failureFacts: diagnostics.failureFacts.slice(0, 1),
     };
   });
 }

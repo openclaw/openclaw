@@ -604,7 +604,7 @@ describe("package runtime compatibility guidance", () => {
         }),
         expect.objectContaining({
           check: "node-runtime",
-          message: "Update binary: [redacted-path]",
+          message: expect.stringContaining(`detected: Node ${node} at [redacted-path]`),
         }),
       ]),
     );

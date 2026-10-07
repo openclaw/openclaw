@@ -450,7 +450,11 @@ describe("update-cli", () => {
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
     expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("node-runtime-preflight");
     expect(defaultRuntime.log).toHaveBeenCalledWith(
-      `openclaw@9999.0.0 requires Node >=999.0.0; selected runtime is Node ${process.versions.node}.\n${runtimeRecovery.expectedPlainRecovery("9999.0.0", "999.0.0", "absent", undefined, root)}`,
+      `Failing check node-runtime (node-runtime-preflight); key engines.node: Required: openclaw@9999.0.0 Node >=999.0.0; detected: Node ${process.versions.node} at ${process.execPath}
+Failing check node-runtime (node-runtime-preflight); key engines.node: Update install root: ${await fs.realpath(root)}
+Failing check node-runtime (node-runtime-preflight); key engines.node: Update binary: ${path.join(root, "openclaw.mjs")}
+Failing check node-runtime (node-runtime-preflight); key engines.node: Gateway install root: unresolved
+Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtimeRecovery.expectedPlainRecovery("9999.0.0", "999.0.0", "absent", undefined, root)}`,
     );
     expect(fetchNpmPackageTargetStatus).toHaveBeenCalledOnce();
   });
