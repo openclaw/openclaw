@@ -6,6 +6,7 @@ import {
   createEventManagerHarness,
   EVENT_MANAGER_REPLAY_KEY_LIMIT,
 } from "../manager.test-harness.js";
+import { MockProvider } from "../providers/mock.js";
 import type { AnswerCallInput, CallRecord, NormalizedEvent } from "../types.js";
 import { processEvent } from "./events.js";
 import { persistCallRecord } from "./store.js";
@@ -144,6 +145,60 @@ describe("processEvent (functional inbound calls)", () => {
       expect(hangupCalls).toHaveLength(kind === "rejected" ? 1 : 0);
     },
   );
+
+  it("admits and associates allowlisted inbound calls parsed by the mock provider", async () => {
+    const provider = new MockProvider();
+    const ctx = createContext({
+      provider,
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "mock",
+        fromNumber: "+15550000000",
+        inboundPolicy: "allowlist",
+        allowFrom: ["+15550001111"],
+      }),
+    });
+    const parse = (event: Partial<NormalizedEvent>) =>
+      provider.parseWebhookEvent({
+        headers: {},
+        rawBody: JSON.stringify({ event }),
+        url: "http://localhost/voice/webhook",
+        method: "POST",
+        query: {},
+      }).events;
+
+    for (const event of parse({
+      id: "mock-inbound-initiated",
+      type: "call.initiated",
+      callId: "mock-inbound",
+      providerCallId: "mock-inbound",
+      direction: "inbound",
+      from: "+15550001111",
+      to: "+15550000000",
+    })) {
+      await processEvent(ctx, event);
+    }
+    const call = requireFirstActiveCall(ctx);
+    expect(call).toMatchObject({
+      provider: "mock",
+      direction: "inbound",
+      from: "+15550001111",
+      to: "+15550000000",
+      providerCallId: "mock-inbound",
+    });
+    expect(ctx.providerCallIdMap.get("mock-inbound")).toBe(call.callId);
+
+    for (const event of parse({
+      id: "mock-inbound-answered",
+      type: "call.answered",
+      callId: "mock-inbound",
+      providerCallId: "mock-inbound",
+    })) {
+      await processEvent(ctx, event);
+    }
+    expect(ctx.activeCalls.size).toBe(1);
+    expect(ctx.activeCalls.get(call.callId)?.state).toBe("answered");
+  });
 
   it("answers accepted inbound calls when the provider requires an answer command", async () => {
     const answerCalls: AnswerCallInput[] = [];
