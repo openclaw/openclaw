@@ -5,6 +5,8 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { runOpenClawAgentWriteWithYieldingAdmission } from "../../state/openclaw-agent-db-transaction.js";
@@ -17,6 +19,7 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
 import { deriveLastRoutePatch, deriveSessionMetaPatch } from "./metadata.js";
 import type {
   RecordInboundSessionMetaParams,
@@ -631,16 +634,23 @@ export async function recordInboundSessionMeta(
 ): Promise<SessionEntry | null> {
   normalizeInternalTurnContext(params.ctx);
   const createIfMissing = params.createIfMissing ?? true;
-  return await patchSessionEntryCore(
+  let hadExistingEntry = false;
+  let previousOriginLabel: string | undefined;
+  let previousTopicName: string | undefined;
+  const updated = await patchSessionEntryCore(
     { sessionKey: params.sessionKey, storePath: params.storePath },
     (_entry, context) => {
+      const existing = context.existingEntry;
+      hadExistingEntry = existing !== undefined;
+      previousOriginLabel = sessionDeliveryOrigin(existing)?.label;
+      previousTopicName = existing?.topicName;
       const metadataPatch = deriveSessionMetaPatch({
         ctx: params.ctx,
         sessionKey: params.sessionKey,
-        existing: context.existingEntry,
+        existing,
         groupResolution: params.groupResolution,
       });
-      if (context.existingEntry) {
+      if (existing) {
         return metadataPatch;
       }
       return {
@@ -656,6 +666,30 @@ export async function recordInboundSessionMeta(
       ...(createIfMissing ? { fallbackEntry: mergeSessionEntry(undefined, {}) } : {}),
     },
   );
+  const topicLabel =
+    params.ctx.ChatType === "direct" &&
+    params.ctx.MessageThreadId != null &&
+    typeof params.ctx.ThreadLabel === "string"
+      ? params.ctx.ThreadLabel.trim()
+      : "";
+  const topicNameChangedForTelegramTopic =
+    previousTopicName !== updated?.topicName &&
+    updated?.topicName === topicLabel &&
+    sessionDeliveryOrigin(updated ?? undefined)?.provider === "telegram";
+  if (
+    hadExistingEntry &&
+    topicLabel &&
+    ((sessionDeliveryOrigin(updated ?? undefined)?.label === topicLabel &&
+      previousOriginLabel !== topicLabel) ||
+      topicNameChangedForTelegramTopic)
+  ) {
+    emitSessionLifecycleEvent({
+      sessionKey: params.sessionKey,
+      agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+      reason: "rename",
+    });
+  }
+  return updated;
 }
 
 /** Updates last-route/delivery metadata without refreshing activity timestamps. */

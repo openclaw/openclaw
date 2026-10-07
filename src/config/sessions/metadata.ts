@@ -242,7 +242,38 @@ export function deriveSessionMetaPatch(params: {
   }
 
   const patch: Partial<SessionEntry> = groupPatch ? { ...groupPatch } : {};
-  const mergedOrigin = mergeSessionOrigin(existingOrigin, origin);
+  const privateTelegramTopicLabel =
+    params.ctx.ChatType === "direct" &&
+    params.ctx.MessageThreadId != null &&
+    origin?.provider === "telegram"
+      ? normalizeOptionalString(params.ctx.ThreadLabel)
+      : undefined;
+  if (privateTelegramTopicLabel) {
+    // Reuse the shared native topic title projection for private Telegram topics.
+    patch.topicName = privateTelegramTopicLabel;
+  }
+  const existingTelegramTopicName = normalizeOptionalString(params.existing?.topicName);
+  const keepExistingTelegramTopicOriginLabel =
+    params.ctx.ChatType === "direct" &&
+    params.ctx.MessageThreadId != null &&
+    !normalizeOptionalString(params.ctx.ThreadLabel) &&
+    existingTelegramTopicName !== undefined &&
+    existingOrigin?.provider === "telegram" &&
+    existingOrigin.chatType === "direct" &&
+    origin?.provider === "telegram" &&
+    origin.chatType === "direct" &&
+    normalizeOptionalString(existingOrigin.accountId) !== undefined &&
+    existingOrigin.accountId === origin.accountId &&
+    normalizeOptionalString(existingOrigin.from) !== undefined &&
+    normalizeOptionalString(existingOrigin.from) === normalizeOptionalString(origin.from) &&
+    normalizeOptionalString(existingOrigin.to) !== undefined &&
+    normalizeOptionalString(existingOrigin.to) === normalizeOptionalString(origin.to) &&
+    String(existingOrigin.threadId ?? "") === String(params.ctx.MessageThreadId) &&
+    normalizeOptionalString(existingOrigin.label) === existingTelegramTopicName;
+  const mergedOrigin = mergeSessionOrigin(
+    existingOrigin,
+    keepExistingTelegramTopicOriginLabel && origin ? { ...origin, label: undefined } : origin,
+  );
   if (mergedOrigin) {
     if (!patch.chatType && mergedOrigin.chatType) {
       patch.chatType = mergedOrigin.chatType;

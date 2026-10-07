@@ -49,6 +49,10 @@ function cacheKey(chatId: number | string, threadId: number | string): string {
   return `${chatId}:${threadId}`;
 }
 
+export function resolveTelegramDirectTopicNameCacheScope(scope: string, accountId: string): string {
+  return scope + "\u0000telegram-account:" + accountId;
+}
+
 function resolveTopicNameCacheNamespace(scope: string): string {
   const hash = createHash("sha256").update(scope).digest("hex").slice(0, 16);
   return `${STORE_NAMESPACE_PREFIX}.${hash}`;

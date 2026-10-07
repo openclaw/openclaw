@@ -38,6 +38,7 @@ import {
   deliverTelegramUpdate,
   groupChat,
   groupCommand,
+  from,
   harness,
   photo,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
@@ -201,6 +202,11 @@ describe("Telegram recorded session destinations", () => {
         }
         harness.replySpy.mockImplementation(async (context, options) => {
           expect(context.SessionKey).toBe(selectedSessionKey);
+          if (isTopic) {
+            // Private bot forum topics keep the direct-session path used by progress previews.
+            expect(context.ChatType).toBe("direct");
+            expect(context.GroupThread).toBeUndefined();
+          }
           expect(context.CommandSource).toBe("text");
           expect(context.CommandTargetSessionKey).toBeUndefined();
           const reply = await getReplyFromConfig(context, options, cfg);
@@ -390,6 +396,93 @@ describe("Telegram recorded session destinations", () => {
       kind: "external",
       context: { channel: "telegram", to: "telegram:555", threadId: "7" },
     });
+  });
+
+  it("renames an existing private bot topic session from a title service update without a turn", async () => {
+    const sessionKey = "agent:main:main:thread:42001:77";
+    const bot = await createBot(false, true, cfg, true);
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "private-topic-session",
+        updatedAt: 1,
+        displayName: "New Chat",
+        topicName: "Old topic name",
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "telegram",
+            to: "telegram:42001",
+            accountId: "default",
+            threadId: "77",
+          },
+          origin: {
+            provider: "telegram",
+            from: "telegram:direct:42001",
+            to: "telegram:42001",
+            accountId: "default",
+            threadId: "77",
+            label: "Old topic name",
+          },
+        }),
+      },
+    });
+    const callsBefore = apiCalls.mock.calls.length;
+    await receive(bot, {
+      message_id: 7001,
+      date: 1736380700,
+      chat,
+      from,
+      message_thread_id: 77,
+      forum_topic_edited: { name: "Renamed personal topic" },
+    });
+
+    const updated = getSessionEntry({ storePath, sessionKey });
+    expect(updated?.label).toBeUndefined();
+    expect(updated?.displayName).toBe("New Chat");
+    expect(updated?.topicName).toBe("Renamed personal topic");
+    expect(updated?.updatedAt).toBe(1);
+    expect(updated?.delivery).toMatchObject({
+      context: {
+        channel: "telegram",
+        to: "telegram:42001",
+        accountId: "default",
+        threadId: "77",
+      },
+      origin: {
+        label: "Alice id:42001",
+        threadId: 77,
+      },
+    });
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    const serviceCalls = apiCalls.mock.calls.slice(callsBefore).map(([method]) => method);
+    expect(serviceCalls).not.toContain("sendMessage");
+    expect(serviceCalls).not.toContain("sendChatAction");
+  });
+
+  it("does not create a private topic session from a title-only service update", async () => {
+    const sessionKey = "agent:main:main:thread:42001:77";
+    const bot = await createBot(false, true, cfg, true);
+    await receive(bot, {
+      message_id: 7003,
+      date: 1736380700,
+      chat,
+      from,
+      forum_topic_edited: { name: "Topic without a thread identity" },
+    });
+    expect(getSessionEntry({ storePath, sessionKey })).toBeUndefined();
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    await receive(bot, {
+      message_id: 7002,
+      date: 1736380700,
+      chat,
+      from,
+      message_thread_id: 77,
+      is_topic_message: true,
+      forum_topic_created: { name: "New personal topic", icon_color: 7322096 },
+    });
+    expect(getSessionEntry({ storePath, sessionKey })).toBeUndefined();
+    expect(harness.replySpy).not.toHaveBeenCalled();
   });
 
   it("learns reply topic names and restores them after plugin-state reopen", async () => {
