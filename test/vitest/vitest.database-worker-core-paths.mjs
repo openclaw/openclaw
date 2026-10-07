@@ -998,6 +998,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-sdk/provider-auth.test.ts",
   "src/plugin-sdk/provider-auth-write-compat.test.ts",
   "src/plugin-sdk/session-transcript-runtime.catalog.test.ts",
+  "src/plugin-sdk/session-transcript-runtime.cold-restoration.test.ts",
   "src/plugin-sdk/session-transcript-runtime.read-fence.test.ts",
   "src/plugins/doctor-contract-registry.load-paths.test.ts",
   "src/skills/lifecycle/upload-store.test.ts",

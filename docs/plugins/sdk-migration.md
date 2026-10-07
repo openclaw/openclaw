@@ -102,6 +102,21 @@ for existing JavaScript consumers and is deprecated for runtime use; removal
 requires the next Plugin SDK major and explicit breaking-release approval. Both methods retain the
 existing reset policy and process-held incognito behavior.
 
+### Transcript cold-restoration policy
+
+`readSessionTranscriptRawDelta` and `readSessionTranscriptVisibleMessageDelta`
+from `openclaw/plugin-sdk/session-transcript-runtime` accept the optional
+`restoreColdStorage` parameter. Existing callers need no changes: omission or
+`true` retains automatic restoration. Pass `false` to receive the cold-storage
+error without restoring that archive.
+
+This is a restoration policy, not read-only storage access. Missing-store
+creation, schema admission and projection reconciliation retain their existing
+behavior. Consumers requiring side-effect-free reads must not treat this option
+as sufficient. Test the deployed SDK's cold refusal before relying on it;
+passing an unknown property to an older JavaScript runtime does not establish
+support.
+
 ### Why
 
 - **Slow startup** - importing one helper loaded dozens of unrelated modules.

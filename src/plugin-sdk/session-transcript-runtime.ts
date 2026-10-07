@@ -129,12 +129,18 @@ export async function appendSessionYieldContext(
 
 /** Scoped target and bounds for one raw generation-aware transcript page. */
 export type SessionTranscriptRawDeltaParams = SessionTranscriptTargetParams &
-  SessionTranscriptRawDeltaLimits;
+  SessionTranscriptRawDeltaLimits & {
+    /** False propagates cold-storage refusal. Defaults to true; not a read-only storage guarantee. */
+    restoreColdStorage?: boolean;
+  };
 export type { SessionTranscriptRawDeltaResult };
 
 /** Scoped target and bounds for one active-path visible-message page. */
 export type SessionTranscriptVisibleMessageDeltaParams = SessionTranscriptTargetParams &
-  SessionTranscriptVisibleMessageDeltaLimits;
+  SessionTranscriptVisibleMessageDeltaLimits & {
+    /** False propagates cold-storage refusal. Defaults to true; not a read-only storage guarantee. */
+    restoreColdStorage?: boolean;
+  };
 
 /** Generation-aware outcome for one bounded visible-message read. */
 export type SessionTranscriptVisibleMessageDeltaResult =
@@ -275,16 +281,19 @@ export async function readSessionTranscriptEvents(
 export async function readSessionTranscriptRawDelta(
   params: SessionTranscriptRawDeltaParams,
 ): Promise<SessionTranscriptRawDeltaResult> {
-  const { cursor, maxBytes, maxEvents, ...target } = params;
+  const { cursor, maxBytes, maxEvents, restoreColdStorage, ...target } = params;
   const scope = bindSessionTranscriptStoreScope(target);
   const { readRestoredSessionTranscript } =
     await import("../config/sessions/session-cold-storage-read.js");
-  return readRestoredSessionTranscript(scope, () =>
-    readTranscriptRawDelta(scope, {
-      ...(cursor !== undefined ? { cursor } : {}),
-      ...(maxBytes !== undefined ? { maxBytes } : {}),
-      ...(maxEvents !== undefined ? { maxEvents } : {}),
-    }),
+  return readRestoredSessionTranscript(
+    scope,
+    () =>
+      readTranscriptRawDelta(scope, {
+        ...(cursor !== undefined ? { cursor } : {}),
+        ...(maxBytes !== undefined ? { maxBytes } : {}),
+        ...(maxEvents !== undefined ? { maxEvents } : {}),
+      }),
+    { readOnly: restoreColdStorage === false },
   );
 }
 
@@ -292,18 +301,21 @@ export async function readSessionTranscriptRawDelta(
 export async function readSessionTranscriptVisibleMessageDelta(
   params: SessionTranscriptVisibleMessageDeltaParams,
 ): Promise<SessionTranscriptVisibleMessageDeltaResult> {
-  const { cursor, maxBytes, maxMessages, ...target } = params;
+  const { cursor, maxBytes, maxMessages, restoreColdStorage, ...target } = params;
   const scope = bindSessionTranscriptStoreScope(target);
   const { readRestoredSessionTranscript } =
     await import("../config/sessions/session-cold-storage-read.js");
   let result: ReturnType<typeof readVisibleMessageDelta>;
   try {
-    result = await readRestoredSessionTranscript(scope, () =>
-      readVisibleMessageDelta(scope, {
-        ...(cursor !== undefined ? { cursor } : {}),
-        ...(maxBytes !== undefined ? { maxBytes } : {}),
-        ...(maxMessages !== undefined ? { maxMessages } : {}),
-      }),
+    result = await readRestoredSessionTranscript(
+      scope,
+      () =>
+        readVisibleMessageDelta(scope, {
+          ...(cursor !== undefined ? { cursor } : {}),
+          ...(maxBytes !== undefined ? { maxBytes } : {}),
+          ...(maxMessages !== undefined ? { maxMessages } : {}),
+        }),
+      { readOnly: restoreColdStorage === false },
     );
   } catch (error) {
     if (isSessionTranscriptProjectionUnavailableError(error)) {
