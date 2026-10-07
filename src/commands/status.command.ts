@@ -115,23 +115,8 @@ export async function statusCommand(
     .then(({ scanStatus }) => scanStatus({ ...probeBudget, deep: opts.deep }))
     .catch((error: unknown) => reportStatusScanFailure(error, runtime, opts.timeoutMs));
 
-  const {
-    cfg,
-    osSummary,
-    update,
-    gatewayProbe,
-    gatewayReachable,
-    channelIssues,
-    agentStatus,
-    channels,
-    summary,
-    configDiagnostics,
-    secretDiagnostics,
-    memory,
-    memoryPlugin,
-    pluginCompatibility,
-    env,
-  } = scan;
+  const { cfg, update, gatewayProbe, gatewayReachable, configDiagnostics, secretDiagnostics, env } =
+    scan;
 
   if (configDiagnostics) {
     const { formatStatusConfigDiagnosticEntries, theme } =
@@ -272,21 +257,14 @@ export async function statusCommand(
   );
   const lines = await buildStatusCommandReportLines(
     await buildStatusCommandReportData({
+      ...scan,
       env: env ?? {},
       opts,
       surface: overviewSurface,
-      osSummary,
-      summary,
       securityAudit,
       health,
       usageLines,
       lastHeartbeat,
-      agentStatus,
-      channels,
-      channelIssues,
-      memory,
-      memoryPlugin,
-      pluginCompatibility,
       pairingRecovery,
       tableWidth,
       updateValue: updateSurface.updateAvailable

@@ -204,10 +204,11 @@ it("reads full durable context through workers and preserves the deprecated sync
       exec.mockRestore();
     }
     await expect(
-      SessionManager.readSessionContextAsync(target, async () => {
+      SessionManager.readSessionContextAsync(target, async (messages) => {
         await manager.appendMessageAsync(makeUserMessage("changed", 2));
+        return [...messages];
       }),
-    ).rejects.toThrow("changed during context read");
+    ).resolves.toEqual(expected);
     const missing = { ...target, storePath: path.join(state.agentDir("main"), "absent.sqlite") };
     await expect(
       SessionManager.readSessionContextAsync(missing, () => "unreadable", {

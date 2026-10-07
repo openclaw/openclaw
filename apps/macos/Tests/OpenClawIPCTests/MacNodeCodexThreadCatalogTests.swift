@@ -468,109 +468,54 @@ struct MacNodeCodexThreadCatalogTests {
         #expect(resolved.executable == fallback.executable.path)
     }
 
+    @Test(arguments: [
+        #"{"sessionCatalog":{"enabled":true,"homes":["/tmp/codex",{"path":"/tmp/other","label":"Other"}]},"supervision":{}}"#,
+        #"{"sessionCatalog":{},"supervision":{"enabled":false}}"#,
+        #"{}"#,
+    ])
+    func `canonical config without supervision`(_ json: String) throws {
+        var config = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        config["appServer"] = ["command": "/usr/bin/true", "args": ["app-server"]]
+        let root = self.codexRoot(config: config)
+        #expect(MacNodeCodexThreadCatalog.shouldAdvertise(root: root))
+        let invocation = try MacNodeCodexThreadCatalog.resolveInvocation(root: root, environment: [:], searchPaths: [])
+        #expect(invocation.executable == "/usr/bin/true")
+        #expect(invocation.arguments == ["app-server"])
+    }
+
+    @Test func `catalog defaults do not depend on plugin policy parsing`() throws {
+        for entry: [String: Any] in [
+            ["enabled": true],
+            ["enabled": true, "config": ["codexPlugins": 42]],
+        ] {
+            let root: [String: Any] = ["plugins": ["entries": ["codex": entry]]]
+            #expect(MacNodeCodexThreadCatalog.shouldAdvertise(root: root))
+            let invocation = try MacNodeCodexThreadCatalog.resolveInvocation(
+                root: root,
+                environment: ["OPENCLAW_CODEX_APP_SERVER_BIN": "/usr/bin/true"],
+                searchPaths: [])
+            #expect(invocation.executable == "/usr/bin/true")
+        }
+    }
+
     @Test func `complete official plugin config remains eligible for the catalog`() throws {
-        let app = try makeFakeCodex("#!/bin/sh\nexit 0\n")
-        let root = self.codexRoot(config: [
-            "codexDynamicToolsLoading": "direct",
-            "codexDynamicToolsExclude": ["private_tool"],
-            "discovery": ["enabled": true, "timeoutMs": 1000],
-            "computerUse": [
-                "enabled": false,
-                "autoInstall": false,
-                "marketplaceDiscoveryTimeoutMs": 1000,
-                "marketplaceSource": "source",
-                "marketplacePath": "path",
-                "marketplaceName": "marketplace",
-                "pluginName": "plugin",
-                "mcpServerName": "server",
-            ],
-            // The TypeScript parser treats this subtree independently.
-            "codexPlugins": 42,
-            "supervision": [
-                "enabled": true,
-                "allowRawTranscripts": false,
-                "allowWriteControls": false,
-                "endpoints": [
-                    [
-                        "id": "local",
-                        "label": "Local",
-                        "transport": "stdio-proxy",
-                        "command": "codex",
-                        "args": ["app-server"],
-                        "cwd": "/tmp",
-                    ],
-                    [
-                        "id": "remote",
-                        "label": "Remote",
-                        "transport": "websocket",
-                        "url": "wss://codex.example.test",
-                        "authTokenEnv": "CODEX_TOKEN",
-                    ],
-                ],
-            ],
-            "appServer": [
-                "mode": "guardian",
-                "transport": "stdio",
-                "homeScope": "user",
-                "command": app.executable.path,
-                "args": ["app-server", "--listen", "stdio://"],
-                "url": "",
-                "authToken": [
-                    "source": "env",
-                    "provider": "default",
-                    "id": "CODEX_TOKEN",
-                ],
-                "headers": [
-                    "x-file": [
-                        "source": "file",
-                        "provider": "mounted-json",
-                        "id": "/codex/token~1value",
-                    ],
-                    "x-exec": [
-                        "source": "exec",
-                        "provider": "vault",
-                        "id": "codex/token#value",
-                    ],
-                ],
-                "clearEnv": ["OPENAI_API_KEY"],
-                "remoteWorkspaceRoot": "/workspaces",
-                "codeModeOnly": true,
-                "requestTimeoutMs": 1000,
-                "turnCompletionIdleTimeoutMs": 1000,
-                "postToolRawAssistantCompletionIdleTimeoutMs": 1000,
-                "approvalPolicy": "on-failure",
-                "sandbox": "workspace-write",
-                "approvalsReviewer": "user",
-                "serviceTier": "priority",
-                "networkProxy": [
-                    "enabled": true,
-                    "profileName": "openclaw",
-                    "baseProfile": "workspace",
-                    "mode": "limited",
-                    "domains": ["example.test": "allow"],
-                    "unixSockets": ["/tmp/service.sock": "allow"],
-                    "proxyUrl": "http://127.0.0.1:8080",
-                    "socksUrl": "socks5://127.0.0.1:1080",
-                    "enableSocks5": true,
-                    "enableSocks5Udp": false,
-                    "allowUpstreamProxy": false,
-                    "allowLocalBinding": false,
-                    "dangerouslyAllowNonLoopbackProxy": false,
-                    "dangerouslyAllowAllUnixSockets": false,
-                ],
-                "defaultWorkspaceDir": "",
-                "experimental": ["sandboxExecServer": false],
-            ],
-        ])
+        var repository = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 {
+            repository.deleteLastPathComponent()
+        }
+        let fixture = repository.appendingPathComponent(
+            "extensions/codex/src/app-server/fixtures/native-plugin-config.json")
+        let config = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [String: Any])
+        let root = self.codexRoot(config: config)
 
         #expect(MacNodeCodexThreadCatalog.shouldAdvertise(root: root))
-        let invocation = try MacNodeCodexThreadCatalog.resolveInvocation(root: root, searchPaths: [])
-        #expect(invocation.executable == app.executable.path)
+        let invocation = try MacNodeCodexThreadCatalog.resolveInvocation(root: root, environment: [:], searchPaths: [])
+        #expect(invocation.executable == "/usr/bin/true")
+        #expect(invocation.arguments == ["app-server", "--listen", "stdio://"])
         #expect(invocation.clearEnv == ["OPENAI_API_KEY"])
     }
 
     @Test func `malformed or unknown official plugin config fails closed`() throws {
-        let app = try makeFakeCodex("#!/bin/sh\nexit 0\n")
         var malformedConfigs: [Any] = [
             "enabled",
             ["supervision": ["enabled": true], "unknown": true] as [String: Any],
@@ -578,6 +523,20 @@ struct MacNodeCodexThreadCatalogTests {
             ["supervision": ["enabled": true], "codexDynamicToolsExclude": ["tool", 42]] as [String: Any],
             ["supervision": ["enabled": true], "discovery": ["enabled": true, "unknown": true]] as [String: Any],
             ["supervision": ["enabled": true], "computerUse": ["timeoutMs": 1000]] as [String: Any],
+            ["sessionCatalog": ["enabled": 1]],
+            ["sessionCatalog": ["unknown": true]],
+            ["sessionCatalog": ["homes": "path"]],
+            ["sessionCatalog": ["homes": ["  "]]],
+            ["sessionCatalog": ["homes": [["label": "Missing path"]]]],
+            ["sessionCatalog": ["homes": [["path": "/tmp/codex", "label": " "]]]],
+            ["sessionCatalog": ["homes": [["path": "/tmp/codex", "unknown": true]]]],
+            ["computerUse": ["liveTestTimeoutMs": 0]],
+            ["computerUse": ["toolCallTimeoutMs": true]],
+            ["computerUse": ["healthCheckEnabled": 1]],
+            ["computerUse": ["healthCheckIntervalMinutes": 30.5]],
+            ["computerUse": ["pluginCacheMode": "other"]],
+            ["computerUse": ["strictReadiness": "true"]],
+            ["computerUse": ["autoRepair": 1]],
             ["supervision": "enabled"] as [String: Any],
             ["supervision": ["enabled": true, "unknown": true]] as [String: Any],
             ["supervision": ["enabled": true, "allowRawTranscripts": 1]] as [String: Any],
@@ -598,15 +557,23 @@ struct MacNodeCodexThreadCatalogTests {
             ["args": ["app-server", 42]] as [String: Any],
             ["url": 42] as [String: Any],
             ["authToken": ["source": "env", "provider": "default", "id": "lowercase"]] as [String: Any],
+            ["authToken": ["source": "store", "provider": "default", "id": "lowercase"]],
             ["headers": ["authorization": ["source": "exec", "provider": "vault", "id": "../token"]]] as [String: Any],
             ["clearEnv": true] as [String: Any],
             ["clearEnv": ["OPENAI_API_KEY", false]] as [String: Any],
             ["remoteWorkspaceRoot": "  "] as [String: Any],
             ["codeModeOnly": "true"] as [String: Any],
             ["requestTimeoutMs": 0] as [String: Any],
-            ["turnCompletionIdleTimeoutMs": "1000"] as [String: Any],
-            ["postToolRawAssistantCompletionIdleTimeoutMs": false] as [String: Any],
+            ["turnCompletionIdleTimeoutMs": 1000] as [String: Any],
+            ["postToolRawAssistantCompletionIdleTimeoutMs": 1000] as [String: Any],
             ["approvalPolicy": "always"] as [String: Any],
+            ["approvalPolicy": "untrusted"],
+            ["loopDetectionPreToolUseRelay": 1],
+            ["enableUltrafast": "true"],
+            ["cyberFailover": ["mode": "other"]],
+            ["cyberFailover": ["model": "  "]],
+            ["cyberFailover": ["cooloffMs": 0]],
+            ["cyberFailover": ["unknown": true]],
             ["sandbox": "full"] as [String: Any],
             ["approvalsReviewer": "agent"] as [String: Any],
             ["serviceTier": false] as [String: Any],
@@ -634,7 +601,7 @@ struct MacNodeCodexThreadCatalogTests {
                 try MacNodeCodexThreadCatalog.resolveInvocation(
                     root: root,
                     searchPaths: [],
-                    defaultMacOSAppExecutable: app.executable.path)
+                    defaultMacOSAppExecutable: "/usr/bin/true")
             }
         }
     }

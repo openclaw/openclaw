@@ -11,7 +11,7 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
-import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { InternalSessionEntry, SessionDiffBaseline } from "../config/sessions/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -247,7 +247,7 @@ describe("ensureSessionDiffBaseline", () => {
     });
     const target = await seedEntry({ entry });
     const read = vi
-      .spyOn(historyLane.pool, "run")
+      .spyOn(projectionLane.pool, "run")
       .mockRejectedValueOnce(new Error("authoritative read failed"));
     try {
       await expect(ensure(target)).rejects.toBeInstanceOf(SessionWorkStartInvalidatedError);

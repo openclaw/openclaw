@@ -41,13 +41,12 @@ import type { UpdateServiceDefinitionRecovery } from "./update-command-service-c
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import {
-  admitMigratedGatewayRecovery,
+  admitInstalledGatewayRecovery,
   refuseUnsettledDoctorRecovery,
 } from "./update-command-service-recovery.js";
 import {
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
-  type PreManagedServiceStop,
 } from "./update-command-service.js";
 import {
   completeUpdateCommandResult,
@@ -122,9 +121,9 @@ async function finishSettledUpdate(
     gateway,
   }));
   let rollbackAttempted = false;
-  let rollbackStopState: PreManagedServiceStop | undefined;
-  // Rollback can replace the suspension owner.
-  const currentServiceStop = () => rollbackStopState ?? params.preManagedServiceStop;
+  let latestServiceStop = params.preManagedServiceStop;
+  // Doctor parking and rollback replace this run's earlier service observation.
+  const currentServiceStop = () => latestServiceStop;
   let rolledBack = false;
   let originalServiceRecoveryHandled = false;
   let completedDowntimeMs: number | undefined = params.coreAlreadyCurrent ? 0 : undefined;
@@ -210,7 +209,7 @@ async function finishSettledUpdate(
             configSnapshot: params.configSnapshot,
             activationConfig: params.activationConfig,
             opts: params.opts,
-            preManagedServiceStop: params.preManagedServiceStop,
+            preManagedServiceStop: currentServiceStop(),
             timeoutMs: params.updateStepTimeoutMs,
             nodeRunner: params.packageUpdateNodeRunner,
             invocationCwd: params.invocationCwd,
@@ -226,9 +225,9 @@ async function finishSettledUpdate(
       }
       result = rollback.result;
       originalServiceRecoveryHandled = rollback.originalServiceRecovery !== undefined;
-      rollbackStopState = rollback.stoppedForRollback;
+      latestServiceStop = rollback.stoppedForRollback ?? currentServiceStop();
       rolledBack = rollback.rolledBack;
-      pendingRestartAtMs ??= rollbackStopState?.stoppedAtMs;
+      pendingRestartAtMs ??= latestServiceStop?.stoppedAtMs;
       if (rollback.verifiedAtMs !== undefined) {
         recordVerifiedDowntime(rollback.verifiedAtMs);
       }
@@ -254,8 +253,10 @@ async function finishSettledUpdate(
         { env: params.opts.run.env },
       );
     }
+    const recoveryParams = { ...params, preManagedServiceStop: currentServiceStop() };
     recoverService ||=
-      !gatewayStartAttempted && (await admitMigratedGatewayRecovery(params, result, assertCurrent));
+      !gatewayStartAttempted &&
+      (await admitInstalledGatewayRecovery(recoveryParams, result, assertCurrent));
     if (isUpdateGatewayReadinessPending(result)) {
       triageAllowed = false;
       return { result, recoverService: false };
@@ -341,10 +342,10 @@ async function finishSettledUpdate(
     if (recoverService && finalResult.recovery?.serviceRestartSafe === true) {
       const service = await maybeRestartServiceAfterFailedMutableUpdate({
         onGatewayStartAttempted,
-        recovery: result.recovery,
+        recovery: finalResult.recovery,
         originalManagedServiceRuntime: params.originalManagedServiceRuntime,
         updateRun: params.opts.run,
-        preManagedServiceStop: params.preManagedServiceStop,
+        preManagedServiceStop: currentServiceStop(),
         jsonMode: Boolean(params.opts.json),
         nodeRunner: params.packageUpdateNodeRunner,
         timeoutMs: params.updateStepTimeoutMs,
@@ -389,7 +390,7 @@ async function finishSettledUpdate(
         serviceStopped: !rolledBack && currentServiceStop()?.stopped,
         serviceUpdateVerdict: gatewayStartAttempted
           ? undefined
-          : params.preManagedServiceStop?.serviceUpdateVerdict,
+          : currentServiceStop()?.serviceUpdateVerdict,
         waitForStartup: shouldWaitForRecovery(params, currentServiceStop(), rollbackAttempted),
         assertCurrent,
       });
@@ -641,11 +642,11 @@ async function finishSettledUpdate(
             mode: resultWithPostUpdate.mode,
             root: postUpdateRoot,
             onStopped: (state) => {
-              rollbackStopState = state;
+              latestServiceStop = state;
               pendingRestartAtMs ??= state.stoppedAtMs;
             },
             onPrepared: (state) => {
-              rollbackStopState = state;
+              latestServiceStop = state;
             },
           });
           pendingRestartAtMs ??= stopped.stoppedAtMs;

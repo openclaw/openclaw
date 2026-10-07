@@ -1,7 +1,10 @@
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { collectUpdateDoctorFailureFacts } from "../../infra/update-doctor-result.js";
+import {
+  collectUpdateDoctorFailureFacts,
+  DoctorMaintenanceRefusalError,
+} from "../../infra/update-doctor-result.js";
 import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -223,12 +226,24 @@ export function createPostUpdateFailureResult(
 ): { result: UpdateRunResult; message: string } {
   const message = formatErrorMessage(error);
   const failureFacts = collectUpdateDoctorFailureFacts(error);
+  const dataAtRisk = collectNestedErrorCandidates(error).some(
+    (cause) =>
+      cause instanceof DoctorMaintenanceRefusalError && cause.refusal.kind === "data-at-risk",
+  );
   return {
     message,
     result: {
       ...params.result,
       status: "error",
       reason: "post-update-failed",
+      ...(dataAtRisk
+        ? {
+            recovery: {
+              serviceRestartSafe: false as const,
+              reason: "runtime-verification-failed" as const,
+            },
+          }
+        : {}),
       steps: [
         ...params.result.steps,
         {

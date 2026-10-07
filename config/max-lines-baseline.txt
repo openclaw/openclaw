@@ -281,7 +281,6 @@ src/agents/subagents/registry/subagent-control.test.ts
 src/agents/subagents/registry/subagent-registry-lifecycle.test.ts
 src/agents/subagents/registry/subagent-registry.test.ts
 src/agents/subagents/spawn/acp-spawn.test.ts
-src/agents/subagents/spawn/subagent-spawn.test.ts
 src/agents/system-prompt.ts
 src/agents/tool-search.test.ts
 src/agents/tools/cron-tool.test.ts
@@ -408,7 +407,6 @@ src/flows/doctor-health-contributions.test.ts
 src/flows/model-picker.ts
 src/gateway/call.test.ts
 src/gateway/call.ts
-src/gateway/cli-session-history.test.ts
 src/gateway/client.test.ts
 src/gateway/config-reload.test.ts
 src/gateway/config-reload.ts

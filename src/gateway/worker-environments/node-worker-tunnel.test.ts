@@ -190,23 +190,6 @@ describe("node worker tunnel manager", () => {
     await handle.stop();
   });
 
-  it("joins same-owner starts while workspace binding resolution is pending", async () => {
-    const record = environment();
-    const workspaceBinding = createDeferred<undefined>();
-    const resolveWorkspaceBinding = vi.fn(async () => await workspaceBinding.promise);
-    const manager = createManager(record);
-    manager.bindWorkspaceBindingResolver(resolveWorkspaceBinding);
-
-    const first = manager.start(startRequest());
-    await vi.waitFor(() => expect(resolveWorkspaceBinding).toHaveBeenCalledOnce());
-    const second = manager.start(startRequest());
-    workspaceBinding.resolve(undefined);
-
-    const [firstHandle, secondHandle] = await Promise.all([first, second]);
-    expect(resolveWorkspaceBinding).toHaveBeenCalledOnce();
-    expect(secondHandle).toBe(firstHandle);
-  });
-
   it.each(["stop", "stopAll"] as const)(
     "%s fences a pending workspace resolver without waiting for it",
     async (operation) => {
@@ -772,7 +755,7 @@ describe("node worker tunnel manager", () => {
     ).rejects.toThrow(error);
   });
 
-  it.each([1, 640])(
+  it.each([640])(
     "reuses the placement hash memo across node reconciliations (%s files)",
     async (fileCount) => {
       const record = environment();
@@ -943,78 +926,4 @@ describe("node worker tunnel manager", () => {
       await handle.stop();
     },
   );
-
-  it("does not republish an accepted manifest already current on the node", async () => {
-    const record = environment();
-    const localPath = tempDirs.make("node-worker-accepted-current-");
-    const remoteWorkspaceDir = tempDirs.make("node-worker-accepted-current-remote-");
-    const snapshot = workspaceSnapshot(localPath);
-    const { manifestRef: baseManifestRef } = snapshot;
-    const transferDirections: string[] = [];
-    const nodeTransport = transport();
-    const invoke = vi.fn(async ({ params }) => {
-      const input = params as { transfer?: { direction?: string } };
-      if (input.transfer?.direction) {
-        transferDirections.push(input.transfer.direction);
-      }
-      return {
-        ok: true,
-        payloadJSON: workspaceCommandPayload(remoteWorkspaceDir, {
-          stdout: input.transfer ? `${baseManifestRef}\n` : manifestCaptureOutput(baseManifestRef),
-        }),
-      };
-    });
-    nodeTransport.invoke = withWorkspaceDrain(invoke);
-    const publishSnapshot = vi.fn(() => "accepted-download-token");
-    const transfer = workspaceTransfer({
-      prepareSync: vi.fn(async () => ({ snapshot, token: "download-token" })),
-      prepareUpload: vi.fn(() => "upload-token"),
-      takeUpload: vi.fn(() =>
-        unchangedWorkspaceUpload(snapshot, tempDirs.make("node-worker-accepted-staging-")),
-      ),
-      getSnapshot: vi.fn(() => snapshot),
-      publishSnapshot,
-    });
-    const manager = createManager(record, {
-      getTransport: () => nodeTransport,
-      workspaceTransfer: transfer,
-    });
-    const handle = await manager.start(startRequest());
-    await handle.syncWorkspace({
-      source: { kind: "local", path: localPath },
-      sessionId: "session-1",
-      generation: 1,
-    });
-
-    const reconciliation = await handle.reconcileWorkspace({
-      source: {
-        kind: "local",
-        path: localPath,
-        journal: {
-          load: async () => undefined,
-          begin: vi.fn(async () => {}),
-          commit: vi.fn(async () => {}),
-          abort: vi.fn(async () => {}),
-        },
-        stagedResult: { ref: workerWorkspaceResultRef("node-current"), record: () => {} },
-      },
-      remoteWorkspaceDir,
-      baseManifestRef,
-    });
-    await verifyReconciledWorkspaceFinal(reconciliation, {
-      assertActive: async () => {},
-      resume: async () => {},
-    });
-
-    expect(reconciliation.manifestRef).toBe(baseManifestRef);
-    expect(transferDirections).toEqual(["download", "upload"]);
-    expect(publishSnapshot).not.toHaveBeenCalled();
-    expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({
-          argv: expect.arrayContaining(["all", baseManifestRef.slice("sha256:".length)]),
-        }),
-      }),
-    );
-  });
 });

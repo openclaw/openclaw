@@ -65,6 +65,7 @@ export function assertUpdateCandidatePluginEntryStat(
 export function resolveUpdateCandidatePluginTreeTargets(
   plan: MaterializablePlan,
   params: { targetStateDir: string; candidateRoot: string },
+  onProgress?: () => void,
 ) {
   const privateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
   const candidateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.candidateRoot));
@@ -104,6 +105,7 @@ export function resolveUpdateCandidatePluginTreeTargets(
           if ((await fs.realpath(source)) !== real) {
             throw new Error(`Plugin module owner changed after snapshot inventory: ${source}`);
           }
+          onProgress?.();
         }),
         ...plan.edges.map((edge) => async () => {
           const target = path.resolve(path.dirname(edge.source), await fs.readlink(edge.source));
@@ -116,6 +118,7 @@ export function resolveUpdateCandidatePluginTreeTargets(
           if (target !== edge.target || real !== edge.real) {
             throw new Error(`Plugin link changed after snapshot inventory: ${edge.source}`);
           }
+          onProgress?.();
         }),
       ],
     });
@@ -225,6 +228,7 @@ export async function verifyUpdateCandidatePluginTree(
     candidateRoot: string;
     hostLinks: Set<string>;
     onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void;
+    onProgress?: () => void;
   },
 ): Promise<void> {
   const readEntry = async (file: string) => {
@@ -247,6 +251,7 @@ export async function verifyUpdateCandidatePluginTree(
     } else if (stat.isSymbolicLink()) {
       assertUpdateCandidatePluginLinkTarget(file, path.resolve(path.dirname(file), link!), params);
     }
+    params.onProgress?.();
     // Inspect the entry before traversal, including standalone module aliases;
     // following a copied root link can otherwise accept an entirely live tree.
     if (link !== undefined) {

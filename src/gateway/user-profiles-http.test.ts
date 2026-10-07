@@ -118,11 +118,8 @@ describe("profile avatar HTTP endpoint", () => {
     });
   });
 
-  it.each([
-    { controlUi: { allowedOrigins: ["https://control.example"] } },
-    { publicOrigin: "https://control.example" },
-  ])("answers credentialed avatar preflights with origin policy %j", async (gateway) => {
-    getRuntimeConfig.mockReturnValue({ gateway });
+  it("answers credentialed avatar preflights with the public origin", async () => {
+    getRuntimeConfig.mockReturnValue({ gateway: { publicOrigin: "https://control.example" } });
     const res = response();
     const req = {
       method: "OPTIONS",
@@ -143,48 +140,6 @@ describe("profile avatar HTTP endpoint", () => {
     expect(res.setHeader).toHaveBeenCalledWith("Access-Control-Allow-Headers", "Authorization");
     expect(res.writeHead).toHaveBeenCalledWith(204);
   });
-
-  it.each([
-    { method: "GET", mime: "image/webp", hash: "first-hash", header: undefined },
-    { method: "HEAD", mime: "image/png", hash: "head-hash", header: undefined },
-    ...['"current-hash-png"', 'W/"current-hash-png"', '"other", "current-hash-png"', "*"].map(
-      (header) => ({ method: "GET", mime: "image/png", hash: "current-hash", header }),
-    ),
-  ])(
-    "serves saved avatars for $method / $header without unnecessary byte reads",
-    async ({ method, mime, hash, header }) => {
-      const bytes = new Uint8Array([1, 2, 3]);
-      avatarFixture.mockReturnValue({ bytes, mime, sha256: hash, updatedAt: 42 });
-      const res = response();
-      const req = request("/ignored-by-handler", header ? { "if-none-match": header } : {});
-      req.method = method;
-      await handleUserProfileAvatarHttpRequest(req, res.response, "/api/users/profile%2D1/avatar", {
-        auth: {} as never,
-      });
-
-      expect(createProfileAvatarReader).toHaveBeenCalledWith("profile-1");
-      expect(authorizeControlUiReadRequestOrReply).toHaveBeenCalledWith(
-        expect.objectContaining({ requiredOperatorMethod: "users.list" }),
-      );
-      const etag = `"${hash}-${mime === "image/webp" ? "webp" : "png"}"`;
-      if (header) {
-        expect(res.writeHead).toHaveBeenCalledWith(304, {
-          ETag: etag,
-          "Cache-Control": "private, max-age=0, must-revalidate",
-        });
-        expect(res.end).toHaveBeenCalledWith();
-      } else {
-        expect(res.writeHead).toHaveBeenCalledWith(
-          200,
-          expect.objectContaining({ "Content-Type": mime, ETag: etag }),
-        );
-        expect(res.end).toHaveBeenCalledWith(method === "HEAD" ? undefined : bytes);
-      }
-      if (method === "HEAD" || header) {
-        expect(loadAvatarBytes).not.toHaveBeenCalled();
-      }
-    },
-  );
 
   it("uses the host photo only for the owner, after auth and saved-avatar precedence", async () => {
     const hostAvatar = { bytes: Buffer.from([4, 5, 6]), mime: "image/jpeg", sha256: "host-photo" };

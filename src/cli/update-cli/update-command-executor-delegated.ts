@@ -60,11 +60,21 @@ export async function withDelegatedUpdateCommandExecutor<T>(
       let active = true;
       const isLive = (identity: ManagedHandoffLease["executor"]) =>
         store.isProcessIdentityCurrent(identity);
+      const receivers = [
+        originalChild,
+        child,
+        ...(slotChild ? [slotChild] : []),
+        ...(retainedChild ? [retainedChild] : []),
+      ];
+      // Windows launcher ancestry can differ from the recorded spawner. The live
+      // lease must still bind this PID and start identity; only an immediate
+      // parent may supply the existing fallback for an unreadable self identity.
       if (
-        !store.acceptParentBoundExecutor(originalChild) ||
-        !store.acceptParentBoundExecutor(child) ||
-        (slotChild && !store.acceptParentBoundExecutor(slotChild)) ||
-        (retainedChild && !store.acceptParentBoundExecutor(retainedChild))
+        !receivers.every(
+          (lease) =>
+            (process.platform === "win32" && store.owns(lease, "executor")) ||
+            store.acceptParentBoundExecutor(lease),
+        )
       ) {
         throw new UpdateCommandRecoveryPendingError(
           "The update process no longer has permission to continue.",

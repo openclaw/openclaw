@@ -348,7 +348,7 @@ function createSharedStateWorkerBackend(
             path: context.databasePath,
             env: getSqliteWorkerStateContext().environment,
           },
-          open,
+          retainedDatabase,
           nativeDatabase?.db.isOpen === true,
         );
       }

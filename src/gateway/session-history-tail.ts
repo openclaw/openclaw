@@ -1,5 +1,9 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type {
+  PaginatedSessionHistory,
+  SessionHistoryMessage,
+} from "../config/sessions/session-history-types.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveTranscriptPageEnd } from "../sessions/transcript-anchor-page.js";
@@ -25,6 +29,31 @@ const SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES = 8_000;
 const SILENT_CHAT_HISTORY_TAIL_SCAN_CHUNK_MESSAGES = 100;
 const SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_CHUNK_MESSAGES = 400;
 const HISTORY_PAGE_MAX_BYTES = 1024 * 1024;
+
+export function resolveCursorSeq(cursor: string | undefined): number | undefined {
+  if (!cursor) {
+    return undefined;
+  }
+  const normalized = cursor.startsWith("seq:") ? cursor.slice(4) : cursor;
+  if (!/^\d+$/.test(normalized)) {
+    return undefined;
+  }
+  const value = Number(normalized);
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+export function buildPaginatedSessionHistory(params: {
+  messages: SessionHistoryMessage[];
+  hasMore: boolean;
+  nextCursor?: string;
+}): PaginatedSessionHistory {
+  return {
+    items: params.messages,
+    messages: params.messages,
+    hasMore: params.hasMore,
+    ...(params.nextCursor ? { nextCursor: params.nextCursor } : {}),
+  };
+}
 
 export function readChatHistoryMessageId(message: unknown): string | undefined {
   const id = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id;

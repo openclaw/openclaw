@@ -1,18 +1,16 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
-import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { readSessionEntriesFromStoreInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target-paths.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
-import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import {
   formatTokenUsageDisplay,
   resolveTotalTokens,
   truncateLine,
 } from "../../../shared/subagents-format.js";
 import { resolveModelDisplayName, resolveModelDisplayRef } from "../../model-selection-display.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   observeSubagentExecution,
   type SubagentExecutionObservation,
@@ -84,33 +82,36 @@ export async function readSubagentListSessionEntries(
   context: SubagentListReadContext,
 ): Promise<Map<string, SessionEntry>> {
   const runs = [...context.view.active, ...context.view.recent];
-  const keysByStore = new Map<string, string[]>();
+  const batches = new Map<
+    string,
+    { agentId: string; storePath: string; runs: SubagentRunRecord[] }
+  >();
   for (const run of runs) {
-    const storePath = resolveSessionStorePathCore(cfg.session?.store, {
-      agentId: parseAgentSessionKey(run.childSessionKey)?.agentId,
-    });
-    const keys = keysByStore.get(storePath);
-    if (keys) {
-      keys.push(run.childSessionKey);
+    const owner = resolveSubagentChildSessionOwner(run, cfg);
+    const batch = batches.get(owner.agentId);
+    if (batch) {
+      batch.runs.push(run);
     } else {
-      keysByStore.set(storePath, [run.childSessionKey]);
+      batches.set(owner.agentId, { ...owner, runs: [run] });
     }
   }
+  // Raw session keys can repeat across agents; keep each run's metadata separate.
   const entries = new Map<string, SessionEntry>();
-  for (const [storePath, sessionKeys] of keysByStore) {
-    const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
-    const agentId = target.agentId ?? parseAgentSessionKey(sessionKeys[0]!)?.agentId;
-    if (!agentId) {
-      throw new Error("Cannot resolve subagent session metadata without an agent id");
-    }
+  for (const { agentId, storePath, runs: batchRuns } of batches.values()) {
     const selected = await readSessionEntriesFromStoreInWorker({
       agentId,
       storePath,
-      sessionKeys,
+      sessionKeys: batchRuns.map((run) => run.childSessionKey),
       projection: "list",
     });
-    for (const { sessionKey, entry } of selected.entries) {
-      entries.set(sessionKey, entry);
+    const bySessionKey = new Map(
+      selected.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+    );
+    for (const run of batchRuns) {
+      const entry = bySessionKey.get(run.childSessionKey);
+      if (entry) {
+        entries.set(run.runId, entry);
+      }
     }
   }
   return entries;
@@ -159,7 +160,7 @@ export function buildSubagentList(params: {
   const { now, view: runView, childSessionsByController } = params.context;
   let index = 1;
   const buildListEntry = (entry: SubagentRunRecord, runtimeMs: number) => {
-    const sessionEntry = params.sessionEntries.get(entry.childSessionKey);
+    const sessionEntry = params.sessionEntries.get(entry.runId);
     const modelSelection = {
       runtimeProvider: sessionEntry?.modelProvider,
       runtimeModel: sessionEntry?.model,

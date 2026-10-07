@@ -85,7 +85,7 @@ enum MacNodeCodexThreadCatalog {
     }
 
     private struct ConfiguredPlugin {
-        var supervisionEnabled: Bool
+        var sessionCatalogEnabled: Bool
         var appServer: ConfiguredAppServer?
     }
 
@@ -100,6 +100,7 @@ enum MacNodeCodexThreadCatalog {
     private static let pluginConfigKeys = Set([
         "codexDynamicToolsLoading",
         "codexDynamicToolsExclude",
+        "sessionCatalog",
         "discovery",
         "computerUse",
         "codexPlugins",
@@ -118,13 +119,14 @@ enum MacNodeCodexThreadCatalog {
         "clearEnv",
         "remoteWorkspaceRoot",
         "codeModeOnly",
+        "loopDetectionPreToolUseRelay",
         "requestTimeoutMs",
-        "turnCompletionIdleTimeoutMs",
-        "postToolRawAssistantCompletionIdleTimeoutMs",
         "approvalPolicy",
         "sandbox",
         "approvalsReviewer",
         "serviceTier",
+        "enableUltrafast",
+        "cyberFailover",
         "networkProxy",
         "defaultWorkspaceDir",
         "experimental",
@@ -301,7 +303,7 @@ enum MacNodeCodexThreadCatalog {
         } catch {
             return false
         }
-        guard plugin?.supervisionEnabled == true else { return false }
+        guard plugin?.sessionCatalogEnabled == true else { return false }
         return self.supportsConfiguredTransport(plugin?.appServer) &&
             self.supportsConfiguredHomeScope(plugin?.appServer)
     }
@@ -509,7 +511,7 @@ extension MacNodeCodexThreadCatalog {
             root: root)
         else { return nil }
         guard let rawConfig = entry["config"] else {
-            return ConfiguredPlugin(supervisionEnabled: false, appServer: nil)
+            return ConfiguredPlugin(sessionCatalogEnabled: true, appServer: nil)
         }
         let config = try self.configuredObject(rawConfig, allowed: self.pluginConfigKeys)
         try self.validateEnum(
@@ -520,11 +522,12 @@ extension MacNodeCodexThreadCatalog {
         try self.validateDiscoveryConfig(config["discovery"])
         try self.validateComputerUseConfig(config["computerUse"])
         // `codexPlugins` is intentionally parsed independently by readCodexPluginConfig.
-        // Its validity does not decide whether supervision remains enabled.
-        let supervisionEnabled = try self.validateSupervisionConfig(config["supervision"])
+        // Its validity does not decide whether the catalog remains enabled.
+        try self.validateSupervisionConfig(config["supervision"])
+        let sessionCatalogEnabled = try self.validateSessionCatalogConfig(config["sessionCatalog"])
         let appServer = try self.validateAppServerConfig(config["appServer"])
         return ConfiguredPlugin(
-            supervisionEnabled: supervisionEnabled,
+            sessionCatalogEnabled: sessionCatalogEnabled,
             appServer: appServer)
     }
 
@@ -541,15 +544,12 @@ extension MacNodeCodexThreadCatalog {
         try self.validateStringArray(appServer, key: "clearEnv")
         try self.validateNonEmptyString(appServer, key: "remoteWorkspaceRoot")
         try self.validateBoolean(appServer, key: "codeModeOnly")
+        try self.validateBoolean(appServer, key: "loopDetectionPreToolUseRelay")
         try self.validatePositiveNumber(appServer, key: "requestTimeoutMs")
-        try self.validatePositiveNumber(appServer, key: "turnCompletionIdleTimeoutMs")
-        try self.validatePositiveNumber(
-            appServer,
-            key: "postToolRawAssistantCompletionIdleTimeoutMs")
         try self.validateEnum(
             appServer,
             key: "approvalPolicy",
-            allowed: ["never", "on-request", "on-failure", "untrusted"])
+            allowed: ["never", "on-request", "on-failure"])
         try self.validateEnum(
             appServer,
             key: "sandbox",
@@ -559,6 +559,8 @@ extension MacNodeCodexThreadCatalog {
             key: "approvalsReviewer",
             allowed: ["user", "auto_review", "guardian_subagent"])
         try self.validateStringOrNull(appServer, key: "serviceTier")
+        try self.validateBoolean(appServer, key: "enableUltrafast")
+        try self.validateCyberFailoverConfig(appServer["cyberFailover"])
         try self.validateNetworkProxyConfig(appServer["networkProxy"])
         try self.validateString(appServer, key: "defaultWorkspaceDir")
         try self.validateExperimentalConfig(appServer["experimental"])
@@ -585,6 +587,30 @@ extension MacNodeCodexThreadCatalog {
         }
     }
 
+    private static func validateSessionCatalogConfig(_ rawValue: Any?) throws -> Bool {
+        guard let rawValue else { return true }
+        let config = try self.configuredObject(rawValue, allowed: ["enabled", "homes"])
+        try self.validateBoolean(config, key: "enabled")
+        if let rawHomes = config["homes"] {
+            guard let homes = rawHomes as? [Any] else {
+                throw CatalogError.invalidAppServerConfiguration
+            }
+            for rawHome in homes {
+                if let path = rawHome as? String {
+                    guard self.nonEmptyString(path) != nil else {
+                        throw CatalogError.invalidAppServerConfiguration
+                    }
+                } else {
+                    let home = try self.configuredObject(rawHome, allowed: ["path", "label"])
+                    guard home["path"] != nil else { throw CatalogError.invalidAppServerConfiguration }
+                    try self.validateNonEmptyString(home, key: "path")
+                    try self.validateNonEmptyString(home, key: "label")
+                }
+            }
+        }
+        return self.literalBoolean(config["enabled"]) != false
+    }
+
     private static func validateDiscoveryConfig(_ rawValue: Any?) throws {
         guard let rawValue else { return }
         let config = try self.configuredObject(rawValue, allowed: ["enabled", "timeoutMs"])
@@ -598,15 +624,32 @@ extension MacNodeCodexThreadCatalog {
             "enabled",
             "autoInstall",
             "marketplaceDiscoveryTimeoutMs",
+            "liveTestTimeoutMs",
+            "toolCallTimeoutMs",
+            "healthCheckEnabled",
+            "healthCheckIntervalMinutes",
+            "pluginCacheMode",
+            "strictReadiness",
+            "autoRepair",
             "marketplaceSource",
             "marketplacePath",
             "marketplaceName",
             "pluginName",
             "mcpServerName",
         ])
-        try self.validateBoolean(config, key: "enabled")
-        try self.validateBoolean(config, key: "autoInstall")
-        try self.validatePositiveNumber(config, key: "marketplaceDiscoveryTimeoutMs")
+        for key in ["enabled", "autoInstall", "healthCheckEnabled", "strictReadiness", "autoRepair"] {
+            try self.validateBoolean(config, key: key)
+        }
+        for key in ["marketplaceDiscoveryTimeoutMs", "liveTestTimeoutMs", "toolCallTimeoutMs"] {
+            try self.validatePositiveNumber(config, key: key)
+        }
+        if let interval = config["healthCheckIntervalMinutes"] {
+            guard let number = interval as? NSNumber,
+                  CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  [30.0, 60.0, 120.0, 240.0].contains(number.doubleValue)
+            else { throw CatalogError.invalidAppServerConfiguration }
+        }
+        try self.validateEnum(config, key: "pluginCacheMode", allowed: ["shared", "independent"])
         for key in [
             "marketplaceSource",
             "marketplacePath",
@@ -618,8 +661,8 @@ extension MacNodeCodexThreadCatalog {
         }
     }
 
-    private static func validateSupervisionConfig(_ rawValue: Any?) throws -> Bool {
-        guard let rawValue else { return false }
+    private static func validateSupervisionConfig(_ rawValue: Any?) throws {
+        guard let rawValue else { return }
         let config = try self.configuredObject(rawValue, allowed: [
             "enabled",
             "endpoints",
@@ -637,7 +680,6 @@ extension MacNodeCodexThreadCatalog {
                 try self.validateSupervisionEndpoint(endpoint)
             }
         }
-        return self.literalBoolean(config["enabled"]) == true
     }
 
     private static func validateSupervisionEndpoint(_ rawValue: Any) throws {
@@ -668,6 +710,14 @@ extension MacNodeCodexThreadCatalog {
         guard endpoint["url"] is String else {
             throw CatalogError.invalidAppServerConfiguration
         }
+    }
+
+    private static func validateCyberFailoverConfig(_ rawValue: Any?) throws {
+        guard let rawValue else { return }
+        let config = try self.configuredObject(rawValue, allowed: ["mode", "model", "cooloffMs"])
+        try self.validateEnum(config, key: "mode", allowed: ["auto", "off"])
+        try self.validateNonEmptyString(config, key: "model")
+        try self.validatePositiveNumber(config, key: "cooloffMs")
     }
 
     private static func validateNetworkProxyConfig(_ rawValue: Any?) throws {
@@ -745,7 +795,7 @@ extension MacNodeCodexThreadCatalog {
             throw CatalogError.invalidAppServerConfiguration
         }
         let validId = switch source {
-        case "env":
+        case "env", "store":
             self.matches(id, pattern: "^[A-Z][A-Z0-9_]{0,127}$")
         case "file":
             self.validFileSecretId(id)

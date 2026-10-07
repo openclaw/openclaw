@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { isMainThread } from "node:worker_threads";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { isDeletedAgentDatabasePath } from "../infra/agent-database-readers.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
@@ -26,6 +27,7 @@ import {
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-read.js";
 import { assertAgentDatabaseTerminalOpenAllowed } from "./openclaw-agent-db-terminal.js";
+import { hasOpenClawAgentCanonicalValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
@@ -180,6 +182,10 @@ export function openOpenClawAgentDatabaseReadOnly(
     if (!hasSchema) {
       close();
       return { found: false, reason: "schema-missing" };
+    }
+    // Worker admission loads file-bound proof before a read transaction prevents it.
+    if (!isMainThread) {
+      hasOpenClawAgentCanonicalValidation(database);
     }
     return { found: true, database };
   } catch (error) {

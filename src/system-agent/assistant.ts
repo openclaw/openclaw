@@ -5,6 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { extractAgentRunTerminalError, extractAgentRunText } from "../agents/agent-run-result.js";
+import {
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "../agents/prepared-model-runtime.errors.js";
+import {
+  AGENT_RUN_SUPERSEDED_STOP_REASON,
+  isAgentRunSupersededAbortReason,
+} from "../agents/run-termination.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { CommandLane } from "../process/lanes.js";
 import {
@@ -187,12 +195,29 @@ async function runConfiguredSystemAgentText(params: {
           });
     const terminalError = extractAgentRunTerminalError(result);
     if (terminalError) {
-      throw new SystemAgentInferenceUnavailableError("planner", [new Error(terminalError)]);
+      throw new SystemAgentInferenceUnavailableError(
+        "planner",
+        [new Error(terminalError)],
+        result.meta?.stopReason === "timeout" || result.meta?.timeoutPhase
+          ? "timeout"
+          : result.meta?.stopReason === AGENT_RUN_SUPERSEDED_STOP_REASON
+            ? "superseded"
+            : "retry",
+      );
     }
     text = extractAgentRunText(result);
   } catch (error) {
     if (error instanceof SystemAgentInferenceUnavailableError) {
       throw error;
+    }
+    if (
+      isAgentRunSupersededAbortReason(error) ||
+      error instanceof PreparedModelRuntimePublicationSupersededError
+    ) {
+      throw new SystemAgentInferenceUnavailableError("planner", [error], "superseded");
+    }
+    if (error instanceof PreparedModelRuntimeOwnerNotPublishedError) {
+      throw new SystemAgentInferenceUnavailableError("planner", [error], "runtime-unavailable");
     }
     text = undefined;
   } finally {
@@ -213,7 +238,7 @@ async function requireVerifiedPlannerRoute(
   deps: SystemAgentVerifiedInferenceDeps | undefined,
 ) {
   if (!binding) {
-    throw new SystemAgentInferenceUnavailableError("planner");
+    throw new SystemAgentInferenceUnavailableError("planner", [], "setup");
   }
   try {
     const route = await resolveSystemAgentVerifiedInferenceRoute(binding, deps);
@@ -221,7 +246,7 @@ async function requireVerifiedPlannerRoute(
       return route;
     }
   } catch (error) {
-    throw new SystemAgentInferenceUnavailableError("planner", [error]);
+    throw new SystemAgentInferenceUnavailableError("planner", [error], "route-changed");
   }
-  throw new SystemAgentInferenceUnavailableError("planner");
+  throw new SystemAgentInferenceUnavailableError("planner", [], "route-changed");
 }

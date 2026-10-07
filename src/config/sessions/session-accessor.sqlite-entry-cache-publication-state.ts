@@ -63,6 +63,7 @@ export function recordCommittedSessionEntryPublication(
   database: SessionEntryCacheDatabase | string,
   sessionKey: string,
   entry: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined,
+  before?: PendingSessionEntryPublication,
 ): void {
   const identity =
     typeof database === "string" ? database : findOpenClawAgentDatabaseIdentity(database)?.identity;
@@ -71,6 +72,9 @@ export function recordCommittedSessionEntryPublication(
   }
   for (const pending of pendingSessionEntryPublications.get(`file:${identity}\0${sessionKey}`) ??
     []) {
+    if (pending === before) {
+      break;
+    }
     pending.superseded.set(
       sessionKey,
       entry

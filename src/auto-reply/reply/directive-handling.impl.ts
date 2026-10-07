@@ -77,7 +77,6 @@ export async function handleDirectiveOnly(
     aliasIndex,
     allowedModelKeys,
     allowedModelCatalog,
-    resetModelOverride,
     provider,
     model,
     formatModelSwitchEvent,
@@ -123,25 +122,12 @@ export async function handleDirectiveOnly(
       ? allowedModelCatalog
       : undefined;
   const modelInfo = await maybeHandleModelDirectiveInfo({
-    directives,
-    cfg: params.cfg,
+    ...params,
     agentDir,
     activeAgentId,
-    provider,
-    model,
-    defaultProvider,
-    defaultModel,
-    aliasIndex,
-    allowedModelCatalog,
     currentThinkLevel: currentThinkLevel ?? "off",
     thinkingCatalog,
     runtimePolicySessionKey,
-    sessionKey,
-    storePath,
-    resetModelOverride,
-    workspaceDir: params.workspaceDir,
-    surface: params.surface,
-    sessionEntry,
   });
   if (modelInfo) {
     return acknowledgeIgnoredDirective(modelInfo, "hasModelDirective");

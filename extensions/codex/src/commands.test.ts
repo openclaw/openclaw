@@ -1290,7 +1290,7 @@ describe("codex command", () => {
     );
     const replacementRequest = vi
       .spyOn(replacement.client, "request")
-      .mockResolvedValue({} as never);
+      .mockImplementation(async (method) => (method === "skills/list" ? { data: [] } : {}));
     const sharedClientRuntime = await import("./app-server/shared-client.js");
     const retainPreviousClient = vi
       .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")

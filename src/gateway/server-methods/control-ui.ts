@@ -10,6 +10,7 @@ import {
   getSubagentSessionListReadSnapshotIdentity,
   prepareSubagentSessionListReadCache,
 } from "../../agents/subagents/registry/subagent-registry-state.js";
+import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
@@ -377,10 +378,27 @@ export function createControlUiHandlers(
   loadChecks: LoadSessionCheckDetails = loadSessionCheckDetails,
 ): GatewayRequestHandlers {
   return {
-    "controlUi.linkPreview": async ({ params, context, respond, signal }) => {
+    "controlUi.linkPreview": async ({
+      params,
+      client,
+      context,
+      respond,
+      signal,
+      hasCurrentClientAuthority,
+    }) => {
+      const revision = () =>
+        JSON.stringify([
+          getRuntimeConfigSnapshotMetadata()?.revision,
+          client?.authenticatedUserId,
+          client?.authenticatedUserProfile?.profileId,
+        ]);
+      const scope = { principal: client ?? context, revision: revision() };
       const isEnabled = () =>
+        !client?.connectionSignal?.aborted &&
+        hasCurrentClientAuthority?.() !== false &&
+        revision() === scope.revision &&
         context.getRuntimeConfig().gateway?.controlUi?.automaticallyFetchFavicons !== false;
-      if (!isEnabled()) {
+      if (signal?.aborted || !isEnabled()) {
         respond(true, {}, undefined);
         return;
       }
@@ -397,7 +415,7 @@ export function createControlUiHandlers(
         );
         return;
       }
-      const preview = await loadControlUiLinkPreview(url, isEnabled);
+      const preview = await loadControlUiLinkPreview(url, isEnabled, scope);
       respond(true, !signal?.aborted && isEnabled() ? preview : {}, undefined);
     },
     "controlUi.githubPreview": createGitHubReadHandler(

@@ -70,13 +70,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   }
   let rateLimited = directRateLimit;
   if (!directRateLimit) {
-    const details = await buildGatewayProbeConnectionDetails({
-      config: params.config,
-      token: params.token,
-      password: params.password,
-      ignoreEnvUrlOverride: params.ignoreEnvUrlOverride,
-      localPortOverride: params.localPortOverride,
-    });
+    const details = await buildGatewayProbeConnectionDetails(params);
     const probe = await probeGatewayStatus({
       url: details.url,
       token: params.token,
@@ -166,15 +160,10 @@ export async function healthCommand(
   } catch (error) {
     if (
       await emitReachableGatewayAuthDiagnostic({
+        ...opts,
         error,
         config: cfg,
         runtime,
-        timeoutMs: opts.timeoutMs,
-        token: opts.token,
-        password: opts.password,
-        ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
-        localPortOverride: opts.localPortOverride,
-        json: opts.json,
       })
     ) {
       return;

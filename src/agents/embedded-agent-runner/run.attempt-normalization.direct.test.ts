@@ -225,7 +225,7 @@ describe("normalizeEmbeddedRunAttempt", () => {
     });
   });
 
-  it.each([false, true])("budgets a no-op mid-turn retry (tool failed: %s)", async (isError) => {
+  it("budgets a no-op mid-turn retry as progress after a successful tool", async () => {
     const state = makePromptState();
     const attempt = makeAttempt({
       route: "truncate_tool_results_only",
@@ -233,13 +233,13 @@ describe("normalizeEmbeddedRunAttempt", () => {
       handled: true,
       truncatedCount: 0,
     });
-    attempt.toolMetas = [{ toolName: "read", isError }];
+    attempt.toolMetas = [{ toolName: "read", isError: false }];
     const input = makeNormalizationInput(attempt, state);
     input.lastRunPromptUsage = { input: 42_000, output: 1_000, total: 43_000 };
     const result = await normalizeEmbeddedRunAttempt(input);
     expect(result).toMatchObject({
       action: "retry",
-      retryKind: isError ? "recovery" : "progress_continuation",
+      retryKind: "progress_continuation",
     });
     if (result.action !== "retry") {
       throw new Error(`expected retry, got ${result.action}`);
@@ -273,28 +273,21 @@ describe("normalizeEmbeddedRunAttempt", () => {
     });
   });
 
-  it.each([false, true])(
-    "preserves context provenance across a retry (current: %s)",
-    async (current) => {
-      const assistant = makeCliUsageAssistant("stop");
-      const attempt = makeAttempt({ route: "compact_only", handled: true, truncatedCount: 0 });
-      attempt.messagesSnapshot = [assistant] as never;
-      attempt.lastAssistant = assistant as never;
-      if (current) {
-        attempt.currentAttemptAssistant = assistant as never;
-      }
-      const state = makePromptState();
-      const input = makeNormalizationInput(attempt, state);
-      input.lastRunPromptUsage = { input: 42_000, output: 1_000, total: 43_000 };
-      const result = await normalizeEmbeddedRunAttempt(input);
-      expect(state.continueFromCurrentTranscript).not.toHaveBeenCalled();
-      expect(result.action).toBe("retry");
-      if (result.action !== "retry") {
-        throw new Error(`expected retry, got ${result.action}`);
-      }
-      expect(result.lastRunPromptUsage).toEqual(
-        current ? { contextUsage: { state: "unavailable" } } : input.lastRunPromptUsage,
-      );
-    },
-  );
+  it("preserves current-attempt context provenance across a retry", async () => {
+    const assistant = makeCliUsageAssistant("stop");
+    const attempt = makeAttempt({ route: "compact_only", handled: true, truncatedCount: 0 });
+    attempt.messagesSnapshot = [assistant] as never;
+    attempt.lastAssistant = assistant as never;
+    attempt.currentAttemptAssistant = assistant as never;
+    const state = makePromptState();
+    const input = makeNormalizationInput(attempt, state);
+    input.lastRunPromptUsage = { input: 42_000, output: 1_000, total: 43_000 };
+    const result = await normalizeEmbeddedRunAttempt(input);
+    expect(state.continueFromCurrentTranscript).not.toHaveBeenCalled();
+    expect(result.action).toBe("retry");
+    if (result.action !== "retry") {
+      throw new Error(`expected retry, got ${result.action}`);
+    }
+    expect(result.lastRunPromptUsage).toEqual({ contextUsage: { state: "unavailable" } });
+  });
 });

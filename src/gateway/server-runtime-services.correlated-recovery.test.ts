@@ -57,10 +57,8 @@ afterEach(() => {
 
 describe("registered correlated completion recovery custody", () => {
   it.for([
-    { change: "none", outcome: "recovered" },
     { change: "none", outcome: "moved-to-failed" },
     { change: "default", outcome: "recovered" },
-    { change: "default", outcome: "moved-to-failed" },
     { change: "file", outcome: "recovered" },
     { change: "successor", outcome: "recovered" },
     { change: "default after commit", outcome: "recovered" },

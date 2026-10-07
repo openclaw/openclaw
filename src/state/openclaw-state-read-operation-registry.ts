@@ -3,6 +3,7 @@ import type { configHealthReadOperations } from "../config/io.health-state.kerne
 import type { MentionReadOperations } from "../gateway/mention-inbox.worker-contract.js";
 import type { localWorkspaceReadOperations } from "../gateway/worker-environments/local-workspace-store.kernel.js";
 import type { DeferredPluginMigrationReadOperations } from "../infra/deferred-plugin-migrations.contract.js";
+import type { gatewayBootReadOperations } from "../infra/gateway-boot-lifecycle.kernel.js";
 import type { RestartSentinelReadOperations } from "../infra/restart-sentinel.read.worker-contract.js";
 import type { DiagnosticReadOperations } from "../infra/sqlite-audit-record.read-contract.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
@@ -17,6 +18,7 @@ import {
 } from "./worker-operation-registry.js";
 
 type Operations = WorkerOperations<typeof localWorkspaceReadOperations> &
+  WorkerOperations<typeof gatewayBootReadOperations> &
   DiagnosticReadOperations &
   GeneratedHtmlProvenanceReadOperations &
   PairingReadOperations &
@@ -31,6 +33,8 @@ export type RegisteredStateReadCommand = SqliteWorkerCommand<Operations>;
 export type RegisteredStateReadResult = Operations[keyof Operations]["output"];
 
 export const stateReadRegistry = createWorkerOperationRegistry<Operations, DatabaseSync>({
+  gatewayBoot: () =>
+    import("../infra/gateway-boot-lifecycle.kernel.js").then((m) => m.gatewayBootReadOperations),
   localWorkspace: () =>
     import("../gateway/worker-environments/local-workspace-store.kernel.js").then(
       (m) => m.localWorkspaceReadOperations,

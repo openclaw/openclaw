@@ -13,6 +13,8 @@ import { projectSessionSharingEntry } from "../../config/sessions/session-access
 import * as historyMaintenance from "../../config/sessions/session-history-eviction.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as admissions from "../../infra/sqlite-worker-operation-admission.js";
+import { sessionChanges, type SessionRowFacts } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   openOpenClawAgentDatabase,
@@ -35,6 +37,78 @@ const META: SessionAcpMeta = {
   state: "idle",
   lastActivityAt: 100,
 };
+
+it("does not publish a delayed ACP postimage over a newer native publication", async () => {
+  await withOpenClawTestState(
+    { scenario: "minimal", label: "acp-receipt-native-order" },
+    async (state) => {
+      const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
+      await state.writeConfig(cfg);
+      const scope = {
+        cfg,
+        env: state.env,
+        agentId: "main",
+        sessionKey: "agent:main:acp:native-order",
+        skipMaintenance: true,
+      };
+      const entry = await upsertAcpSessionMeta({ ...scope, mutate: () => META });
+      expect(entry).toBeDefined();
+      const native = { ...META, runtimeSessionName: "newer-native" };
+      const changes: Array<SessionRowFacts | undefined> = [];
+      const release = sessionChanges.subscribeFacts((change) => {
+        if (
+          "sessionKey" in change &&
+          change.sessionKey === scope.sessionKey &&
+          change.scope === "acp"
+        ) {
+          changes.push(change.facts);
+        }
+      });
+      const observe = admissions.observeSqliteWorkerCommittedFacts;
+      let superseded = false;
+      const intercept = vi
+        .spyOn(admissions, "observeSqliteWorkerCommittedFacts")
+        .mockImplementation((admission, consume) => {
+          observe(admission, (receipt) => {
+            const facts = receipt.facts;
+            if (
+              !superseded &&
+              facts &&
+              typeof facts === "object" &&
+              "facts" in facts &&
+              facts.facts &&
+              typeof facts.facts === "object" &&
+              "kind" in facts.facts &&
+              facts.facts.kind === "acp"
+            ) {
+              superseded = true;
+              writeAcpSessionMetaForMigration({
+                env: state.env,
+                sessionKey: buildAcpDatabaseSessionKey(scope.sessionKey, scope.agentId),
+                sessionId: entry!.sessionId,
+                lifecycleRevision: entry!.lifecycleRevision,
+                meta: native,
+              });
+            }
+            consume(receipt);
+          });
+        });
+      try {
+        await upsertAcpSessionMeta({
+          ...scope,
+          mutate: () => ({ ...META, runtimeSessionName: "older-worker" }),
+        });
+        expect(superseded).toBe(true);
+        expect(changes.length).toBeGreaterThan(0);
+        expect(changes.every((change) => change === undefined)).toBe(true);
+        expect(readAcpSessionMeta(scope)).toEqual(native);
+      } finally {
+        release();
+        intercept.mockRestore();
+      }
+    },
+  );
+});
 
 it.each(["incognito", "file"] as const)(
   "creates, updates, and closes %s metadata through its storage owner",
@@ -77,6 +151,27 @@ it.each(["incognito", "file"] as const)(
           expect(paths.filter((filename) => fs.existsSync(filename))).toEqual([]);
         }
         const observe = observeHostDataSql();
+        let latestAcp: Extract<SessionRowFacts, { kind: "acp" }> | undefined;
+        const observedAcp: Array<Extract<SessionRowFacts, { kind: "acp" }>> = [];
+        const releaseFacts = sessionChanges.subscribeFacts((change) => {
+          if (
+            "sessionKey" in change &&
+            change.sessionKey === scope.sessionKey &&
+            change.scope === "acp"
+          ) {
+            latestAcp = change.facts?.kind === "acp" ? change.facts : undefined;
+          }
+        });
+        const releaseObservers = sessionChanges.subscribe((change) => {
+          if (
+            "sessionKey" in change &&
+            change.sessionKey === scope.sessionKey &&
+            change.scope === "acp" &&
+            latestAcp
+          ) {
+            observedAcp.push(latestAcp);
+          }
+        });
         const maintenance = vi.spyOn(historyMaintenance, "kickSessionHistoryDiskBudgetMaintenance");
         const initialize = vi.fn(() => META);
         const updatedMeta = { ...META, state: "running" as const, lastActivityAt: 200 };
@@ -87,6 +182,12 @@ it.each(["incognito", "file"] as const)(
         try {
           const created = await upsertAcpSessionMeta({ ...scope, mutate: initialize });
           expect(created?.acp).toEqual(META);
+          expect(observedAcp.at(-1)).toMatchObject({
+            kind: "acp",
+            sessionId: created?.sessionId,
+            lifecycleRevision: created?.lifecycleRevision ?? null,
+            acp: META,
+          });
           if (!created) {
             throw new Error("Expected the initialized ACP session");
           }
@@ -120,6 +221,7 @@ it.each(["incognito", "file"] as const)(
           try {
             const updated = await upsertAcpSessionMeta({ ...scope, mutate: update });
             expect(updated?.acp).toEqual(updatedMeta);
+            expect(observedAcp.at(-1)?.acp).toEqual(updatedMeta);
             if (incognito) {
               expect(readAcpSessionMeta(scope)).toEqual(updatedMeta);
             } else {
@@ -137,6 +239,7 @@ it.each(["incognito", "file"] as const)(
           expect(update.mock.calls[0]?.[0]).toEqual(META);
           const cleared = await upsertAcpSessionMeta({ ...scope, mutate: () => null });
           expect(cleared?.acp).toBeUndefined();
+          expect(observedAcp.at(-1)?.acp).toBeNull();
           if (!incognito) {
             expect(observe.queries).toEqual([]);
             expect(maintenance.mock.calls.length).toBeGreaterThan(0);
@@ -145,6 +248,8 @@ it.each(["incognito", "file"] as const)(
             ).toBe(true);
           }
         } finally {
+          releaseFacts();
+          releaseObservers();
           observe.restore();
           maintenance.mockRestore();
         }

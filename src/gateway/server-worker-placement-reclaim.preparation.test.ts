@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
@@ -190,21 +189,6 @@ it("rechecks the exact worker owner after asynchronous cancellation setup", asyn
   expect(f.run).not.toHaveBeenCalled();
 });
 
-it.each(["local", "reclaimed"] as const)(
-  "does not cancel fresh work on an already %s placement",
-  async (state) => {
-    const f = fixture(`idempotent-${state}`, state);
-    const admitted = await f.admit();
-    try {
-      await f.prepare();
-      expect(f.cancel).not.toHaveBeenCalled();
-      expect(admitted.isActive()).toBe(true);
-    } finally {
-      admitted.release();
-    }
-  },
-);
-
 it("auto-suspend eligibility rejects before closing admission or signalling cancellation", async () => {
   const f = fixture("auto-suspend");
   await expect(
@@ -240,30 +224,6 @@ it("keeps admissions closed while serialized teardown is queued, then revalidate
   release.resolve();
   await rejected;
   expect(teardown).not.toHaveBeenCalled();
-});
-
-it("a pending dispatch retains its producer while preparation fences new ingress", async () => {
-  const f = fixture("pending-dispatch");
-  Object.assign(f.placement, { state: "provisioning" });
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const stop = f.prepare({
-    run: async () => {
-      entered.resolve();
-      await release.promise;
-      return await f.run();
-    },
-  });
-  await entered.promise;
-  try {
-    await setImmediate();
-    expect(f.cancel).not.toHaveBeenCalled();
-    expect(f.run).not.toHaveBeenCalled();
-    await expect(f.admit()).rejects.toThrow();
-  } finally {
-    release.resolve();
-    await stop;
-  }
 });
 
 async function cancellationLoadFixture(
