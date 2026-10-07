@@ -385,7 +385,8 @@ vi.mock("./runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
   return { loadAgentRuntimePluginRegistryHandle: vi.fn(() => createEmptyPluginRegistry()) };
 });
-vi.mock("./subagents/announce/subagent-announce.js", () => ({
+vi.mock("./subagents/announce/subagent-announce.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagents/announce/subagent-announce.js")>()),
   captureSubagentCompletionReply: (sessionKey: Parameters<CaptureSubagentCompletionReply>[0]) =>
     hoisted.state.captureSubagentCompletionReplyOverride(sessionKey),
   runSubagentAnnounceFlow: (params: Parameters<RunSubagentAnnounceFlow>[0]) =>

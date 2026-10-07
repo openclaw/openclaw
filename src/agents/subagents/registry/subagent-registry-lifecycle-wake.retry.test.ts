@@ -25,7 +25,8 @@ vi.mock("./subagent-registry-lifecycle-announce-cleanup.js", () => ({
   resumeAncestorCleanup: vi.fn(),
   startSubagentAnnounceCleanupFlow: vi.fn(),
 }));
-vi.mock("./subagent-registry-lifecycle-finalize-cleanup.js", () => ({
+vi.mock("./subagent-registry-lifecycle-finalize-cleanup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagent-registry-lifecycle-finalize-cleanup.js")>()),
   finalizeResumedAnnounceGiveUp: vi.fn(),
 }));
 vi.mock("./subagent-registry-requester-yield.js", () => ({
@@ -40,7 +41,10 @@ vi.mock("./subagent-registry-lifecycle-log.js", () => ({
   }),
   maskLifecycleIdentifier: () => "synthetic",
 }));
-vi.mock("../completion/subagent-completion-admission.store.js", () => ({
+vi.mock("../completion/subagent-completion-admission.store.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../completion/subagent-completion-admission.store.js")
+  >()),
   blockSubagentCompletionDelivery: completionDeliveryMocks.blockSubagentCompletionDelivery,
   mutateRequesterCompletionBatch: completionDeliveryMocks.mutateRequesterCompletionBatch,
 }));

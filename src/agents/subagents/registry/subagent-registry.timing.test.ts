@@ -28,7 +28,8 @@ import {
 } from "./subagent-registry.test-helpers.js";
 
 const { announce } = vi.hoisted(() => ({ announce: vi.fn(async () => "delivered" as const) }));
-vi.mock("../announce/subagent-announce.js", () => ({
+vi.mock("../announce/subagent-announce.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../announce/subagent-announce.js")>()),
   runSubagentAnnounceFlow: announce,
   captureSubagentCompletionReply: vi.fn(async () => undefined),
 }));

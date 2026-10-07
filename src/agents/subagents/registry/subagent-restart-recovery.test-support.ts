@@ -28,7 +28,8 @@ import {
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-vi.mock("../announce/subagent-announce.js", () => ({
+vi.mock("../announce/subagent-announce.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../announce/subagent-announce.js")>()),
   captureSubagentCompletionReply: vi.fn(async () => undefined),
   runSubagentAnnounceFlow: vi.fn<
     typeof import("../announce/subagent-announce.js").runSubagentAnnounceFlow

@@ -42,7 +42,8 @@ vi.mock("./subagent-registry.store.sqlite.js", () => ({
   loadSubagentSessionListRunsFromSqlite: mocks.nativeCompactRead,
 }));
 
-vi.mock("./subagent-registry-state.fixture.test-support.js", () => ({
+vi.mock("./subagent-registry-state.fixture.test-support.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagent-registry-state.fixture.test-support.js")>()),
   saveSubagentRegistryChangesToSqlite: mocks.saveSubagentRegistryChangesToSqlite,
   saveSubagentRegistryToSqlite: mocks.saveSubagentRegistryToSqlite,
   persistRegistryFixture: (runs: Map<string, SubagentRunRecord>, runIds?: readonly string[]) => {

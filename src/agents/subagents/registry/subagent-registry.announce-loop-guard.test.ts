@@ -94,7 +94,8 @@ vi.mock("../../timeout.js", () => ({
   resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,
 }));
 
-vi.mock("../announce/subagent-announce.js", () => ({
+vi.mock("../announce/subagent-announce.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../announce/subagent-announce.js")>()),
   captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
   runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
 }));
