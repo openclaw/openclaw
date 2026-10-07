@@ -9680,7 +9680,6 @@
 ["src/process/supervisor/supervisor.one-shot-tools.test.ts","./adapters/pty.js","00e634b960fa19810b8a0acd3b3268023f1cf6bad5feb2214a849f3fe82f2a49",1]
 ["src/process/supervisor/supervisor.one-shot-tools.test.ts","./index.js","a60488819302a0dc2095370f72b0b6d72983a47fc06d5c9203cb529c3e1f0cab",1]
 ["src/process/supervisor/supervisor.readiness.test.ts","./adapters/child.js","6a9b936069872cc6392ebb029b6f561168223c5bc1315bea12a968056544f4bd",1]
-["src/process/supervisor/supervisor.rejection.test.ts","./adapters/child.js","26f84dc45fa8680a4c13dce7d8dc32175275eb2b021a05734d459ad845928fef",1]
 ["src/process/supervisor/supervisor.test.ts","./adapters/child.js","29213530c8191593fe2df3b44c1d607ba19d165e1265dab2ec3faca5ba430bb6",1]
 ["src/process/supervisor/supervisor.test.ts","./adapters/pty.js","7ef3fb87d26a48b22ff453cceefe21428cf215fc5b5711d855288465f8cc78e0",1]
 ["src/process/terminal-pty-node.failure.test.ts","../infra/node-runtime-executable.js","94eb9009dcea003110e1030141625c99e106a3e11b3caef7cbd22754afb5a082",1]
