@@ -79,6 +79,21 @@ function fixture(queue: Message[] = [], target = queue[0]) {
 }
 
 describe("embedded OpenClaw queued steering cancellation", () => {
+  it("settles accepted input when its transcript settlement observer throws", async () => {
+    vi.useFakeTimers();
+    const target = message("settlement observer failure");
+    const f = fixture([target]);
+    const waiting = f.wait("settlement observer failure", {
+      onQueueSettled: () => {
+        throw new Error("observer failed");
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(() => f.emit({ type: "message_end", message: target })).not.toThrow();
+    await expect(waiting).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
+    expect(f.listeners).toHaveLength(0);
+  });
+
   it.each(
     (["accepted", "rejected"] as const).flatMap((disposition) => [
       { disposition, tracked: true },

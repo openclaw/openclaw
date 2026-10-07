@@ -455,6 +455,30 @@ const runtimeContext = () =>
   expectDefined(buildRuntimeContextCustomMessage("original context"), "runtime context fixture");
 
 describe("active prompt steering context", () => {
+  it("restores the unkeyed source user after an existing context hook projects it", async () => {
+    const original = originalUser();
+    const steering = steeringUser();
+    const session = createSession();
+    session.agent.transformContext = async (messages) =>
+      messages.map((message) =>
+        message.role === "user" ? { ...message, content: "projected" } : message,
+      );
+    const originalTransform = session.agent.transformContext;
+    const cleanupPrompt = installPrompt(session);
+    const message = runtimeContext();
+    const cleanup = installRuntimeContextMessageForPrompt({ session, message });
+    session.agent.state.messages.push(original);
+    normalizeMessagesForLlmBoundary(await session.agent.transformContext(session.messages));
+    session.agent.state.messages = [original, steering];
+    await session.agent.continue();
+    const retry = session.messages;
+    cleanup();
+    cleanupPrompt();
+    expect(retry).toEqual([message, original, steering]);
+    expect(session.agent.transformContext).toBe(originalTransform);
+    expect(session.messages).toEqual([original, steering]);
+  });
+
   it("keeps steering context through tool use and retires it after a settled answer", () => {
     const first = steeringUser();
     attachSteeringRuntimeContext(first, { text: "first quoted context" });

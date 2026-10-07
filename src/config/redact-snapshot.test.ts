@@ -195,6 +195,42 @@ describe("redactConfigSnapshot", () => {
 });
 
 describe("generated redaction hints", () => {
+  it("preserves account SecretRef identity via generated channel metadata hints", () => {
+    const hints = buildConfigSchemaCore().uiHints;
+    expect(hints["channels.matrix.accounts.*.password"]?.sensitive).toBe(true);
+    expect(hints["channels.matrix.accounts.*.accessToken"]?.sensitive).toBe(true);
+
+    const snapshot = makeSnapshot({
+      channels: {
+        matrix: {
+          accounts: {
+            work: {
+              password: {
+                source: "store",
+                provider: "default",
+                id: "MATRIX_WORK_PASSWORD",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    expect(result.config).toHaveProperty("channels.matrix.accounts.work.password", {
+      source: "store",
+      provider: "default",
+      id: REDACTED_SENTINEL,
+    });
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.channels.matrix.accounts.work.password).toEqual({
+      source: "store",
+      provider: "default",
+      id: "MATRIX_WORK_PASSWORD",
+    });
+  });
+
   it("normalizes authored URL tags and protects custom plugin endpoints", () => {
     const hints = buildConfigSchemaCore({
       plugins: [

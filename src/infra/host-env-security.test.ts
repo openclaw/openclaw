@@ -589,6 +589,52 @@ describe("host env reported baseline coverage", () => {
       expect(inheritedSanitized[key]).toBeUndefined();
     }
 
+    // Pin the reviewed exception set independently of the production policy.
+    expect(allowedInheritedOverrideOnlyKeys.toSorted()).toEqual([
+      "ALL_PROXY",
+      "AWS_CONFIG_FILE",
+      "AWS_SHARED_CREDENTIALS_FILE",
+      "AWS_WEB_IDENTITY_TOKEN_FILE",
+      "AZURE_AUTH_LOCATION",
+      "CURL_CA_BUNDLE",
+      "DOCKER_CERT_PATH",
+      "DOCKER_CONTEXT",
+      "DOCKER_HOST",
+      "DOCKER_TLS_VERIFY",
+      "GIT_PAGER",
+      "GOOGLE_APPLICATION_CREDENTIALS",
+      "GRADLE_USER_HOME",
+      "HISTFILE",
+      "HOME",
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "KUBECONFIG",
+      "MANPAGER",
+      "NODE_EXTRA_CA_CERTS",
+      "NODE_TLS_REJECT_UNAUTHORIZED",
+      "NO_PROXY",
+      "PAGER",
+      "REQUESTS_CA_BUNDLE",
+      "RUSTUP_DIST_ROOT",
+      "RUSTUP_DIST_SERVER",
+      "RUSTUP_HOME",
+      "RUSTUP_TOOLCHAIN",
+      "RUSTUP_UPDATE_ROOT",
+      "SSH_AUTH_SOCK",
+      "SSL_CERT_DIR",
+      "SSL_CERT_FILE",
+      "SYSTEMROOT",
+      "WINDIR",
+      "XDG_CACHE_HOME",
+      "XDG_CONFIG_DIRS",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_DIRS",
+      "XDG_DATA_HOME",
+      "XDG_RUNTIME_DIR",
+      "XDG_STATE_HOME",
+      "ZDOTDIR",
+    ]);
+
     const inheritedAllowlist = new Set(allowedInheritedOverrideOnlyKeys);
     for (const key of baseline.reportedDangerousOverrideOnlyKeys) {
       expect(isDangerousHostEnvOverrideVarName(key)).toBe(true);
