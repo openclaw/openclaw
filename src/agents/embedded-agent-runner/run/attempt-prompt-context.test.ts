@@ -86,6 +86,7 @@ function createPrompt(overrides?: Partial<PromptInput>): PromptInput {
   return {
     effectivePrompt: "Visible request",
     effectiveTranscriptPrompt: "Visible request",
+    routePromptBuildContextThroughRuntimeCarrier: false,
     ...overrides,
   };
 }
@@ -324,7 +325,10 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
   it("routes hook prompt context through the stored carrier on append-only models", async () => {
     const hookPrepend = "<plugin-context>\nper-run memory nonce\n</plugin-context>";
     const fixture = createInput({
-      prompt: createPrompt({ promptBuildPrependContext: hookPrepend }),
+      prompt: createPrompt({
+        routePromptBuildContextThroughRuntimeCarrier: true,
+        promptBuildPrependContext: hookPrepend,
+      }),
     });
     const result = await prepareEmbeddedAttemptPromptContext({
       ...fixture.input,
@@ -345,6 +349,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
   it("joins hook prepend and append context in one carrier fragment in order", async () => {
     const fixture = createInput({
       prompt: createPrompt({
+        routePromptBuildContextThroughRuntimeCarrier: true,
         promptBuildPrependContext: "prepend part",
         promptBuildAppendContext: "append part",
       }),
@@ -357,6 +362,33 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       kind: "conversation-data",
       text: "prepend part\n\nappend part",
     });
+  });
+
+  it("routes hook prompt context through the carrier when the transcript prompt is empty", async () => {
+    const hookPrepend = "<plugin-context>\nper-run memory nonce\n</plugin-context>";
+    const fixture = createInput({
+      prompt: createPrompt({
+        effectivePrompt: "Runtime ask",
+        effectiveTranscriptPrompt: "",
+        routePromptBuildContextThroughRuntimeCarrier: true,
+        promptBuildPrependContext: hookPrepend,
+      }),
+    });
+    const result = await prepareEmbeddedAttemptPromptContext({
+      ...fixture.input,
+      appendOnlyRuntimeContext: true,
+    });
+    // Runtime-only turns still deliver hook context: assembly's routing decision
+    // is the single source of truth, so the carrier carries it instead of the
+    // transcript prompt and submission both dropping it.
+    expect(result.promptSubmission.runtimeOnly).toBe(true);
+    expect(result.promptForModel).toBe("Runtime ask");
+    expect(result.promptForSession).not.toContain("per-run memory nonce");
+    expect(result.runtimeContextMessageForCurrentTurn?.details.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: hookPrepend,
+    });
+    expect(result.runtimeContextMessageForCurrentTurn?.content).toContain("per-run memory nonce");
   });
 
   it("keeps hook prompt context out of the carrier when append-only runtime context is off", async () => {

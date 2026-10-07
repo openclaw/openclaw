@@ -192,7 +192,7 @@ export async function runEmbeddedAttemptPromptPhase(
     // Assembly routes hook prompt context into the stored runtime-context carrier
     // on these models, so the per-run rewrite must stay out of submission and budgeting.
     const promptBuildContextInRuntimeCarrier =
-      appendOnlyRuntimeContext === true && Boolean(promptAssembly.effectivePrompt.trim());
+      promptAssembly.routePromptBuildContextThroughRuntimeCarrier === true;
     transcriptLeafId = promptAssembly.transcriptLeafId;
     leasedSteering = promptAssembly.leasedSteering ?? leasedSteering;
 

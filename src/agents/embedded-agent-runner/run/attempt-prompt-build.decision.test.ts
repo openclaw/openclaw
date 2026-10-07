@@ -469,6 +469,20 @@ describe("prompt assembly hook prompt context", () => {
     expect(assembly.effectiveTranscriptPrompt).toBe("Hello");
   });
 
+  it("publishes one carrier-routing decision for empty-transcript runtime turns", async () => {
+    const f = await fixture(config(), "structured", "main", hookRunner);
+    const assembly = await f.assemble(
+      { prompt: "secret runtime context", transcriptPrompt: "" },
+      { appendOnlyRuntimeContext: true },
+    );
+    // The empty transcript must not drop the routing decision: the runtime-only
+    // submission path is what delivers the stored carrier to the model.
+    expect(assembly.routePromptBuildContextThroughRuntimeCarrier).toBe(true);
+    expect(assembly.promptBuildPrependContext).toBe(hookPrepend);
+    expect(assembly.effectivePrompt).toBe("secret runtime context");
+    expect(assembly.effectiveTranscriptPrompt).toBe("");
+  });
+
   it("keeps the legacy one-run prompt fold when append-only runtime context is off", async () => {
     const f = await fixture(config(), "structured", "main", hookRunner);
     const assembly = await f.assemble();

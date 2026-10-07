@@ -428,6 +428,9 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     assertHostActive,
     hookCtx,
     effectivePrompt,
+    // Published once so carrier construction, submission, and budgeting all
+    // agree instead of re-deriving the predicate from different prompt fields.
+    routePromptBuildContextThroughRuntimeCarrier,
     promptBuildPrependContext,
     promptBuildAppendContext,
     effectiveTranscriptPrompt,
@@ -455,6 +458,7 @@ type PromptContextAttempt = Pick<
 type PromptAssemblyContext = {
   effectivePrompt: string;
   effectiveTranscriptPrompt: string;
+  routePromptBuildContextThroughRuntimeCarrier: boolean;
   promptBuildPrependContext?: string;
   promptBuildAppendContext?: string;
   originContext?: ReturnType<typeof buildInterSessionPromptContext>;
@@ -547,12 +551,13 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   const escapedProjection = !input.isRawModelRun && usesEscapedRuntimeContext(input.sessionVersion);
   // Hook prompt context rides the stored carrier on append-only models, so the
   // next replay includes it byte-identically instead of rewriting earlier history.
-  const promptBuildContext =
-    input.appendOnlyRuntimeContext === true && input.prompt.effectiveTranscriptPrompt.trim()
-      ? [input.prompt.promptBuildPrependContext, input.prompt.promptBuildAppendContext]
-          .filter((value): value is string => Boolean(value?.trim()))
-          .join("\n\n") || undefined
-      : undefined;
+  // The published assembly decision applies even when the transcript prompt is
+  // empty: the runtime-only submission path delivers the carrier to the model.
+  const promptBuildContext = input.prompt.routePromptBuildContextThroughRuntimeCarrier
+    ? [input.prompt.promptBuildPrependContext, input.prompt.promptBuildAppendContext]
+        .filter((value): value is string => Boolean(value?.trim()))
+        .join("\n\n") || undefined
+    : undefined;
   const eventFragments: RuntimeContextFragment[] = [
     ...(promptBuildContext
       ? [{ kind: "conversation-data" as const, text: promptBuildContext }]
