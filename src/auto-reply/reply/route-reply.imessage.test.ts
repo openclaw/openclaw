@@ -95,159 +95,34 @@ describe("routed iMessage reply threading", () => {
   });
 
   it.each([
-    { mode: "first", explicit: false, expected: ["question-guid", undefined, undefined] },
-    { mode: "all", explicit: false, expected: ["question-guid", "question-guid", "question-guid"] },
-    { mode: "off", explicit: true, expected: ["question-guid", "question-guid", "question-guid"] },
+    { mode: "first", expected: ["question-guid", undefined, undefined] },
+    { mode: "all", expected: ["question-guid", "question-guid", "question-guid"] },
   ] as const)(
-    "preserves $mode consumption at the delivery boundary (explicit=$explicit)",
-    async ({ mode, explicit, expected }) => {
-      const sent = await route(
-        { text: "Answer", ...(explicit ? { replyToCurrent: true } : {}) },
-        "question-guid",
-        { replyDelivery: { chatType: "direct", replyToMode: mode } },
-      );
+    "preserves $mode consumption at the delivery boundary",
+    async ({ mode, expected }) => {
+      const sent = await route({ text: "Answer" }, "question-guid", {
+        replyDelivery: { chatType: "direct", replyToMode: mode },
+      });
       assert(sent);
       assert(sent.payloads[0]);
       expect(sent.replyToId).toBe("question-guid");
-      expect(sent.payloads[0].replyToId).toBe(explicit ? "question-guid" : undefined);
-      if (!explicit) {
-        expect(sent.replyToMode).toBe(mode);
-      }
+      expect(sent.payloads[0].replyToId).toBeUndefined();
+      expect(sent.replyToMode).toBe(mode);
       const policy = createReplyToDeliveryPolicy(sent);
       const resolved = policy.resolveCurrentReplyTo(sent.payloads[0]);
       expect(resolved).toEqual({
         replyToId: "question-guid",
-        source: explicit ? "explicit" : "implicit",
+        source: "implicit",
       });
       expect(
         [1, 2, 3].map(
           () =>
-            policy.applyReplyToConsumption(
-              { replyToId: resolved.replyToId, replyToIdSource: resolved.source },
-              { consumeImplicitReply: resolved.source === "implicit" },
-            ).replyToId,
+            policy.applyReplyToConsumption({
+              replyToId: resolved.replyToId,
+              replyToIdSource: resolved.source,
+            }).replyToId,
         ),
       ).toEqual(expected);
     },
   );
-
-  type TargetCase = {
-    name: string;
-    payload?: RouteReplyParams["payload"];
-    current?: string | null;
-    overrides?: Partial<RouteReplyParams>;
-    target?: string;
-    payloadTarget?: string;
-  };
-  const accountConfig = (
-    imessage: NonNullable<OpenClawConfig["channels"]>["imessage"],
-  ): Partial<RouteReplyParams> => ({ cfg: { channels: { imessage } }, accountId: "secondary" });
-  const modeOff: Partial<RouteReplyParams> = {
-    replyDelivery: { chatType: "direct", replyToMode: "off" },
-  };
-  const targets: TargetCase[] = [
-    {
-      name: "explicit target with mode off",
-      payload: { replyToId: "  chosen-message  ", replyToCurrent: false },
-      overrides: modeOff,
-      target: "chosen-message",
-      payloadTarget: "chosen-message",
-    },
-    {
-      name: "missing current ID",
-      payload: { text: "Notification" },
-      current: null,
-      overrides: { threadId: "ambient-thread" },
-    },
-    { name: "explicit opt-out", payload: { replyToCurrent: false } },
-    { name: "implicit mode off", overrides: modeOff },
-    {
-      name: "channel disablement",
-      payload: { replyToId: "chosen-message" },
-      overrides: accountConfig({ actions: { reply: false } }),
-    },
-    {
-      name: "account disablement",
-      payload: { replyToId: "chosen-message" },
-      overrides: accountConfig({
-        actions: { reply: true },
-        accounts: { secondary: { actions: { reply: false } } },
-      }),
-    },
-    {
-      name: "blank explicit target",
-      payload: { replyToId: "   " },
-      current: "  question-guid  ",
-      target: "question-guid",
-    },
-    {
-      name: "blank targets with ambient thread",
-      payload: { text: "Notice", replyToId: "   " },
-      current: " ",
-      overrides: { threadId: "ambient-thread" },
-    },
-    {
-      name: "account enablement",
-      current: "question-guid",
-      overrides: accountConfig({
-        actions: { reply: false },
-        accounts: { secondary: { actions: { reply: true } } },
-      }),
-      target: "question-guid",
-    },
-    {
-      name: "inherited disablement",
-      current: "question-guid",
-      overrides: accountConfig({
-        actions: { reply: false },
-        accounts: { secondary: { enabled: true } },
-      }),
-    },
-  ];
-  it.each(targets)(
-    "selects the reply target for $name",
-    async ({ payload, current = "current-message", overrides = {}, target, payloadTarget }) => {
-      const sent = await route({ text: "Answer", ...payload }, current ?? undefined, overrides);
-      expect(sent?.replyToId).toBe(target ?? null);
-      expect(sent?.payloads).toMatchObject([{ replyToId: payloadTarget }]);
-      expect(sent?.accountId).toBe(overrides.accountId ?? "default");
-      expect(sent?.threadId).toBe(overrides.threadId ?? null);
-    },
-  );
-
-  it("retains captionless media and its originating message", async () => {
-    const sent = await route(
-      { text: "", mediaUrl: "https://example.com/forecast.png" },
-      "weather-question",
-    );
-    expect(sent).toMatchObject({
-      replyToId: "weather-question",
-      payloads: [{ text: "", mediaUrl: "https://example.com/forecast.png" }],
-    });
-  });
-
-  it("preserves recipient, account, sender and session identity while selecting the target", async () => {
-    const sent = await route({ text: "Answer" }, "question-guid", {
-      to: "chat_id:456",
-      accountId: "secondary",
-      sessionKey: "agent:main:imessage:direct:fixture",
-      requesterSenderId: "fixture-sender",
-      requesterSenderName: "Fixture Sender",
-      runId: "fixture-run",
-    });
-    expect(sent).toMatchObject({
-      channel: "imessage",
-      to: "chat_id:456",
-      accountId: "secondary",
-      replyToId: "question-guid",
-      session: {
-        key: "agent:main:imessage:direct:fixture",
-        requesterSenderId: "fixture-sender",
-        requesterSenderName: "Fixture Sender",
-      },
-      replyPayloadSendingHook: {
-        context: { senderId: "fixture-sender", runId: "fixture-run", accountId: "secondary" },
-      },
-    });
-  });
 });

@@ -95,7 +95,12 @@ function summarizeVideoGenerationCapabilities(
 
 export function createVideoGenerateListActionResult(
   config?: OpenClawConfig,
-  options?: { workspaceDir?: string; agentDir?: string; authStore?: AuthProfileStore },
+  options?: {
+    workspaceDir?: string;
+    agentDir?: string;
+    authStore?: AuthProfileStore;
+    authProfileStoreSource?: boolean;
+  },
 ): MediaGenerateActionResult {
   const providers = listRuntimeVideoGenerationProviders({ config });
   return createMediaGenerateProviderListActionResult({
@@ -106,6 +111,7 @@ export function createVideoGenerateListActionResult(
     workspaceDir: options?.workspaceDir,
     agentDir: options?.agentDir,
     authStore: options?.authStore,
+    authProfileStoreSource: options?.authProfileStoreSource,
     listModes: listSupportedVideoGenerationModes,
     summarizeCapabilities: summarizeVideoGenerationCapabilities,
   });

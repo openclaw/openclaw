@@ -23,6 +23,21 @@ async function search(payload: Record<string, unknown>, count = 10) {
 }
 
 describe("Firecrawl search result selection", () => {
+  it.each([
+    { data: { news: [first] } },
+    { data: { images: [first] } },
+    { data: { web: [], news: [first] } },
+  ])("preserves source-specific results: %j", async (payload) => {
+    expect(await search(payload)).toMatchObject({ count: 1, results: [{ url: first.url }] });
+  });
+
+  it("combines populated Firecrawl source arrays", async () => {
+    expect(await search({ data: { web: [first], news: [second] } })).toMatchObject({
+      count: 2,
+      results: [{ url: first.url }, { url: second.url }],
+    });
+  });
+
   it("finds the last supported envelope after malformed candidates", async () => {
     expect(
       await search({ data: false, results: "invalid", web: { results: [first] } }),

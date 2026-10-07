@@ -141,9 +141,9 @@ vi.mock("../plugins/setup-registry.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Keep channel plugin loading and registry initialization outside config-flow repair coordination.
 vi.mock("./doctor/shared/channel-doctor.js", () => ({
   collectChannelDoctorCompatibilityMutations: vi.fn(() => []),
-  collectChannelDoctorEmptyAllowlistExtraWarnings: vi.fn(() => []),
   collectChannelDoctorMutableAllowlistWarnings: vi.fn(() => []),
   collectChannelDoctorPreviewWarnings: vi.fn(async () => []),
   collectChannelDoctorRepairMutations: vi.fn(async () => []),
@@ -154,10 +154,6 @@ vi.mock("./doctor/shared/channel-doctor.js", () => ({
       channelName === "googlechat" || channelName === "telegram",
   })),
   runChannelDoctorConfigSequences: vi.fn(async () => ({ changeNotes: [], warningNotes: [] })),
-  shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning: vi.fn(
-    ({ channelName }: { channelName: string }) =>
-      channelName === "googlechat" || channelName === "telegram",
-  ),
 }));
 
 vi.mock("./doctor/shared/preview-warnings.js", () => ({
@@ -692,9 +688,9 @@ describe("doctor config flow", () => {
 
     const result = await runConfig({ config, repair: true });
 
+    expect(result.pendingChangePanels).toContain("Discord allowlist ids normalized to strings.");
     expect(result.cfg.channels).toEqual(repaired.channels);
     expect(result.shouldWriteConfig).toBe(true);
-    expect(result.pendingChangePanels).toContain("Discord allowlist ids normalized to strings.");
   });
 
   it("does not restore top-level allowFrom when config is intentionally default-account scoped", async () => {

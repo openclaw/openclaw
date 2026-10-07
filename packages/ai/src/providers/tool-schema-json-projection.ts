@@ -29,7 +29,7 @@ function isNonFiniteNumberValue(value: unknown): boolean {
   return !Number.isFinite(Number.prototype.valueOf.call(value));
 }
 
-function serializeToolInputSchema(
+function projectToolInputSchema(
   value: unknown,
   path: string,
   captureJson?: (text: string) => void,
@@ -83,9 +83,19 @@ function serializeToolInputSchema(
   }
   const schema = JSON.parse(text) as RuntimeToolInputSchemaJson;
   captureJson?.(text);
+  const violations: string[] = [];
+  if (!isJsonObject(schema)) {
+    violations.push(`${path} must be a JSON object schema`);
+  } else if (schema.type !== undefined && schema.type !== "object") {
+    violations.push(`${path}.type must be "object"`);
+  }
+  // Valid schemas need no diagnostic strings; reuse this call's path while walking the JSON copy.
+  if (!inspectJsonSchema(schema, [path], violations)) {
+    return { schema: {}, violations: [`${path} is not a JSON value`] };
+  }
   return {
     schema,
-    violations: [],
+    violations,
   };
 }
 
@@ -166,27 +176,5 @@ export function prepareRuntimeToolInputSchema(
     ...(schema && typeof schema === "object" && inputJson && projection.violations.length === 0
       ? { normalization: { source: schema, inputJson } }
       : {}),
-  };
-}
-
-function projectToolInputSchema(
-  schema: unknown,
-  path: string,
-  captureJson?: (text: string) => void,
-): RuntimeToolInputSchemaProjection {
-  const projection = serializeToolInputSchema(schema, path, captureJson);
-  const violations = [...projection.violations];
-  if (!isJsonObject(projection.schema)) {
-    violations.push(`${path} must be a JSON object schema`);
-  } else if (projection.schema.type !== undefined && projection.schema.type !== "object") {
-    violations.push(`${path}.type must be "object"`);
-  }
-  // Valid schemas need no diagnostic strings; reuse this call's path while walking the JSON copy.
-  if (!inspectJsonSchema(projection.schema, [path], violations)) {
-    return { schema: {}, violations: [`${path} is not a JSON value`] };
-  }
-  return {
-    schema: projection.schema,
-    violations,
   };
 }

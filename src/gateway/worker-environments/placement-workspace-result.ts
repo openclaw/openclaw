@@ -14,7 +14,7 @@ import { publishPlacementWorkspaceResultState } from "./placement-turn-authority
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 import {
   matchesWorkspaceResultClaim,
-  isCurrentWorkerWorkspacePendingResultOwner,
+  isWorkerWorkspaceResultReconciling,
 } from "./placement-workspace-result-owner.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 export {
@@ -29,7 +29,7 @@ type WorkspaceResultDatabase = Pick<
 
 const query = (db: DatabaseSync) => getNodeSqliteKysely<WorkspaceResultDatabase>(db);
 
-function pendingResultFromRow(
+export function pendingResultFromRow(
   row: StateDatabase["worker_workspace_pending_results"],
 ): WorkerWorkspacePendingResult {
   return {
@@ -119,11 +119,7 @@ export function readWorkerWorkspaceReconciliationFacts(
   const reconcilingSessionIds = new Set(
     [...pendingResults.values()].flatMap((pending) => {
       const placement = placements.get(pending.sessionId);
-      const isPostTerminal =
-        placement?.turnClaim?.owner === "worker" || pending.stagedResultRef !== null;
-      return isPostTerminal && isCurrentWorkerWorkspacePendingResultOwner(placement, pending)
-        ? [pending.sessionId]
-        : [];
+      return isWorkerWorkspaceResultReconciling(placement, pending) ? [pending.sessionId] : [];
     }),
   );
   return {

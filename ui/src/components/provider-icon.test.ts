@@ -4,9 +4,20 @@ import { describe, expect, it } from "vitest";
 import { icons } from "./icons.ts";
 import {
   compareCloudProfiles,
+  providerDisplayLabel,
   renderProviderBrandIcon,
   resolveCloudProfileIcon,
 } from "./provider-icon.ts";
+
+describe("model provider labels", () => {
+  it.each([
+    ["constructor", "Constructor"],
+    ["__proto__", "Proto"],
+    ["openai", "OpenAI"],
+  ])("renders provider %s as display text", (provider, label) => {
+    expect(providerDisplayLabel(provider)).toBe(label);
+  });
+});
 
 describe("cloud provider presentation", () => {
   it.each(["google", "machine0"])(

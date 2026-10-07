@@ -20,8 +20,10 @@ import {
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
-import { insertLegacySession } from "./doctor-session-canonical-keys.test-support.js";
+import {
+  insertLegacySession,
+  repairCanonicalSessionKeys,
+} from "./doctor-session-canonical-keys.test-support.js";
 
 function openSessionDatabase(agentId: string, env: NodeJS.ProcessEnv, storePath: string) {
   return openOpenClawAgentDatabase({

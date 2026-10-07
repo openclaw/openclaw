@@ -51,6 +51,11 @@ on:
         required: false
         default: "[]"
         type: string
+      qualification_baselines_json:
+        description: Captured exact upgrade and survivor baselines from the qualification request
+        required: false
+        default: ""
+        type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
         required: false
@@ -123,6 +128,8 @@ jobs:
       run_plugin_prerelease_inspector: ${{ steps.manifest.outputs.run_plugin_prerelease_inspector }}
       run_plugin_prerelease_docker: ${{ steps.manifest.outputs.run_plugin_prerelease_docker }}
       plugin_prerelease_docker_lanes: ${{ steps.manifest.outputs.plugin_prerelease_docker_lanes }}
+      upgrade_baseline: ${{ steps.qualification_baselines.outputs.baseline }}
+      upgrade_baselines: ${{ steps.qualification_baselines.outputs.baselines }}
     steps:
       - name: Validate phase inputs
         env:
@@ -192,9 +199,28 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           path: .frv-tooling
-          sparse-checkout: scripts/frv-test-exclusions.mjs
+          sparse-checkout: |
+            scripts/frv-test-exclusions.mjs
+            scripts/lib/release-upgrade-baseline.mjs
+            scripts/lib/release-version.mjs
+            scripts/lib/canonical-json.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      - name: Validate captured qualification baselines
+        id: qualification_baselines
+        env:
+          QUALIFICATION_BASELINES_JSON: ${{ inputs.qualification_baselines_json }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$QUALIFICATION_BASELINES_JSON" ]]; then exit 0; fi
+          captured="$(node .frv-tooling/scripts/lib/release-upgrade-baseline.mjs \
+            --candidate-version "$(node -p 'require("./package.json").version')" \
+            --target-context-ref "$TARGET_CONTEXT_REF" \
+            --qualification-baselines-json "$QUALIFICATION_BASELINES_JSON")"
+          printf 'baseline=%s\n' "$(jq -er .upgradeBaseline <<< "$captured")" >> "$GITHUB_OUTPUT"
+          printf 'baselines=%s\n' "$(jq -er '.upgradeSurvivorBaselines | join(" ")' <<< "$captured")" >> "$GITHUB_OUTPUT"
 
       - name: Validate frozen-target Node exclusions
         id: node_test_exclusions
@@ -303,15 +329,11 @@ jobs:
             // so it gets file-bounded jobs like Telegram instead of one batch job.
             const fileSplitExtensionIds = ["telegram", "codex"].filter((id) => batchedExtensionIds.has(id));
             const fileSplitPlanGroups = hasJobSplitter
-              ? await Promise.all(fileSplitExtensionIds.map(async (extensionId) => {
-                  const planGroups = planner.createExtensionTestShards({ extensionIds: [extensionId], shardCount: 1 })
-                    .flatMap((shard) => shard.planGroups);
-                  // Telegram rows keep their historical Node-only runtime.
-                  const runtime = extensionId === "telegram"
-                    ? {}
-                    : await resolveExtensionRuntime({ planGroups, fullReleaseValidation, vitestArgs: extensionVitestArgs });
-                  return planGroups.map((group) => ({ ...group, family: extensionId, runtime }));
-                })).then((groups) => groups.flat())
+              ? fileSplitExtensionIds.flatMap((extensionId) =>
+                  planner.createExtensionTestShards({ extensionIds: [extensionId], shardCount: 1 })
+                    .flatMap((shard) => shard.planGroups)
+                    .map((group) => ({ ...group, family: extensionId })),
+                )
               : [];
             const sourcePlanGroups = new Map();
             if (hasJobSplitter) {
@@ -411,7 +433,9 @@ jobs:
                   runner: "blacksmith-8vcpu-ubuntu-2404",
                   shard_index: planner.DEFAULT_EXTENSION_TEST_SHARD_COUNT + index + 1,
                   task: "extension-file-shard",
-                  ...group.runtime,
+                  // Plain pnpm test does not consume the batch dual-runtime policy.
+                  test_runtime_policy: "node",
+                  requires_bun: false,
                 });
               }
             }
@@ -926,6 +950,8 @@ jobs:
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
       include_live_suites: false
       live_models_only: false
+      published_upgrade_survivor_baseline: ${{ needs.preflight.outputs.upgrade_baseline || 'openclaw@latest' }}
+      published_upgrade_survivor_baselines: ${{ needs.preflight.outputs.upgrade_baselines }}
       shared_image_artifact_namespace: plugin-prerelease
       package_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactName || '' }}
       package_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactId || '' }}

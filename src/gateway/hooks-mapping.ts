@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -7,7 +8,7 @@ import {
 import { resolveConfigPathCandidate } from "../config/paths.js";
 import type { HookMappingConfig, HooksConfig, HookSessionMode } from "../config/types.hooks.js";
 import { resolveGmailHookMaxBytes } from "../hooks/gmail.js";
-import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
+import { resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { HookMessageChannel } from "./hooks.types.js";
@@ -510,11 +511,9 @@ async function loadTransform(transform: HookMappingTransformResolved): Promise<H
     return cached;
   }
   const generation = transformCacheBustVersion;
-  const mod = await importFileModule({
-    modulePath: transform.modulePath,
-    cacheBust: true,
-    nowMs: generation,
-  });
+  const mod: Record<string, unknown> = await import(
+    `${pathToFileURL(transform.modulePath).href}?t=${generation}`
+  );
   const fn = resolveFunctionModuleExport<HookTransformFn>({
     mod,
     exportName: transform.exportName,

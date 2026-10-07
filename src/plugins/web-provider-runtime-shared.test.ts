@@ -192,14 +192,13 @@ describe("web-provider-runtime-shared", () => {
     expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 
-  it("ignores runtime web provider cache opt-outs after startup loading", () => {
+  it("reuses the loaded registry for runtime web providers", () => {
     const loadedRegistry = { source: "loaded" };
     const mapRegistryProviders = vi.fn(() => ["provider"]);
     mocks.getLoadedRuntimePluginRegistry.mockReturnValue(loadedRegistry as never);
 
     resolvePluginWebProviders(
       {
-        cache: false,
         config: {},
         onlyPluginIds: ["brave"],
       },
@@ -285,30 +284,6 @@ describe("web-provider-runtime-shared", () => {
     });
   });
 
-  it("loads the plugin registry when runtime activation is explicitly requested", () => {
-    const fallbackRegistry = { source: "activated" };
-    const mapRegistryProviders = vi.fn(() => ["provider"]);
-    const resolveBundledRuntimeArtifactProviders = vi.fn(() => ["artifact-provider"]);
-    mocks.loadOpenClawPlugins.mockReturnValue(fallbackRegistry as never);
-
-    const providers = resolvePluginWebProviders(
-      {
-        activate: true,
-        config: {},
-      },
-      resolution({
-        resolveCandidatePluginIds: () => ["firecrawl"],
-        mapRegistryProviders,
-        resolveBundledRuntimeArtifactProviders,
-      }),
-    );
-
-    expect(providers).toEqual(["provider"]);
-    expect(resolveBundledRuntimeArtifactProviders).not.toHaveBeenCalled();
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
-    expect(mockArg(mocks.loadOpenClawPlugins).activate).toBe(true);
-  });
-
   it("falls back to a scoped provider load when the active runtime registry has no web providers", () => {
     const activeRegistry = { source: "active" };
     const fallbackRegistry = { source: "fallback" };
@@ -366,26 +341,5 @@ describe("web-provider-runtime-shared", () => {
 
     expect(result).toEqual(["brave", "grok"]);
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps explicit setup web provider cache opt-outs", () => {
-    const loadedRegistry = { source: "setup" };
-    const mapRegistryProviders = vi.fn(() => ["provider"]);
-    mocks.loadOpenClawPlugins.mockReturnValue(loadedRegistry as never);
-
-    resolvePluginWebProviders(
-      {
-        cache: false,
-        config: {},
-        mode: "setup",
-      },
-      resolution({
-        mapRegistryProviders,
-        resolveBundledPublicArtifactProviders: () => null,
-      }),
-    );
-
-    expect(mockArg(mocks.loadOpenClawPlugins).cache).toBe(false);
-    expect(mockArg(mocks.loadOpenClawPlugins).onlyPluginIds).toEqual(["brave"]);
   });
 });

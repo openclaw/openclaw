@@ -156,7 +156,10 @@ describe("developer source observation", () => {
     invalidate!({ reason: "overflow" });
     await repository.reconcile();
     expect(onChange).not.toHaveBeenCalled();
-    await fs.writeFile(path.join(cwd, "package.json"), '{"private":true}');
+    // Reconciliation does not join the observer's pending overflow read.
+    const nextPackage = path.join(cwd, "package.json.next");
+    await fs.writeFile(nextPackage, '{"private":true}');
+    await fs.rename(nextPackage, path.join(cwd, "package.json"));
     invalidate!({ reason: "overflow" });
     await changed.promise;
     expect(onChange).toHaveBeenCalledExactlyOnceWith(path.join(cwd, "package.json"));

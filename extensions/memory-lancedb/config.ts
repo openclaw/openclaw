@@ -66,16 +66,10 @@ function resolveEmbeddingModel(
   return model;
 }
 
-function resolveBoundedIntegerConfig(params: {
-  value: unknown;
-  fallback: number;
-  min: number;
-  max: number;
-  label: string;
-}): number {
-  const resolved = resolveOptionalIntegerOption(params.value) ?? params.fallback;
-  if (resolved < params.min || resolved > params.max) {
-    throw new Error(`${params.label} must be between ${params.min} and ${params.max}`);
+function resolveTextLimit(value: unknown, fallback: number, label: string): number {
+  const resolved = resolveOptionalIntegerOption(value) ?? fallback;
+  if (resolved < 100 || resolved > 10_000) {
+    throw new Error(`${label} must be between 100 and 10000`);
   }
   return resolved;
 }
@@ -130,20 +124,16 @@ export const memoryConfigSchema = {
       throw new Error("embedding.provider must not be empty");
     }
 
-    const captureMaxChars = resolveBoundedIntegerConfig({
-      value: cfg.captureMaxChars,
-      fallback: DEFAULT_CAPTURE_MAX_CHARS,
-      min: 100,
-      max: 10_000,
-      label: "captureMaxChars",
-    });
-    const recallMaxChars = resolveBoundedIntegerConfig({
-      value: cfg.recallMaxChars,
-      fallback: DEFAULT_RECALL_MAX_CHARS,
-      min: 100,
-      max: 10_000,
-      label: "recallMaxChars",
-    });
+    const captureMaxChars = resolveTextLimit(
+      cfg.captureMaxChars,
+      DEFAULT_CAPTURE_MAX_CHARS,
+      "captureMaxChars",
+    );
+    const recallMaxChars = resolveTextLimit(
+      cfg.recallMaxChars,
+      DEFAULT_RECALL_MAX_CHARS,
+      "recallMaxChars",
+    );
     let customTriggers: string[] | undefined;
     if (cfg.customTriggers !== undefined) {
       if (!Array.isArray(cfg.customTriggers)) {

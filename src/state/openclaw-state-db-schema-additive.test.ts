@@ -28,7 +28,10 @@ vi.mock("./openclaw-state-schema.js", async (importOriginal) => {
   };
 });
 
-import { ensureSecretStoreSchema } from "./openclaw-state-db-schema-additive.js";
+import {
+  ensureAgentDatabaseLeaseSchema,
+  ensureSecretStoreSchema,
+} from "./openclaw-state-db-schema-additive.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -81,6 +84,39 @@ it("lazily adds allowed_hosts to a v6 secret store without changing user_version
         )
         .get("secret_store_entries", "allowed_hosts"),
     ).toEqual({ name: "allowed_hosts", type: "TEXT", notnull: 0, dflt_value: null });
+  } finally {
+    database.close();
+  }
+});
+
+it("adds lease provenance without certifying legacy owners or changing their identifiers", () => {
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec(`
+      PRAGMA user_version = 6;
+      CREATE TABLE agent_database_leases (
+        lease_id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        owner_pid INTEGER NOT NULL,
+        owner_start_time INTEGER,
+        opened_at INTEGER NOT NULL
+      ) STRICT;
+      INSERT INTO agent_database_leases VALUES ('abc-123', 'main', '/agent.sqlite', 123, 456, 789);
+    `);
+    const before = database.prepare("SELECT * FROM agent_database_leases").get();
+
+    database.exec("BEGIN");
+    ensureAgentDatabaseLeaseSchema(database);
+    database.exec("ROLLBACK");
+    expect(database.prepare("SELECT * FROM agent_database_leases").get()).toEqual(before);
+
+    ensureAgentDatabaseLeaseSchema(database);
+    expect(database.prepare("SELECT * FROM agent_database_leases").get()).toEqual({
+      ...before,
+      provenance: null,
+    });
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
   } finally {
     database.close();
   }

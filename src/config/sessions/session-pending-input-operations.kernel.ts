@@ -18,6 +18,7 @@ import {
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
+import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import type {
   PendingInputCustodyGrant,
@@ -97,6 +98,15 @@ export function mutatePendingInput(
       kind: "pending-input-settlement-custody",
       candidate: row,
       receipt,
+      ...(input.kind !== "finish" && input.authorityAgentId
+        ? {
+            authority: readSessionPendingInputAuthorityFacts(
+              current,
+              input.sessionKey,
+              input.authorityAgentId,
+            ),
+          }
+        : {}),
     };
     if (input.kind !== "finish") {
       if (readSessionEntryRow(current, input.sessionKey)?.entry.sessionId !== input.sessionId) {

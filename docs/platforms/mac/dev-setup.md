@@ -141,7 +141,7 @@ retains its current runtime until a signed fork Windows build is published;
 unsigned dry-run artifacts are not shippable.
 
 Every repin requires both gates on the same published tag: CI's paired Bun-lane
-replay and Bun-only smoke, plus the macOS runtime probes and two-binary test set.
+replay and Bun-only smoke, plus the macOS runtime checks and two-binary test set.
 Neither app nor CI advances when either gate fails. A Linux-only regression
 also stops the shared repin. Preserve the last tag admitted by both gates while
 investigating; a published prerelease alone is not admission. Record the exact

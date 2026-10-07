@@ -85,7 +85,10 @@ beforeEach(() => {
   root = fs.realpathSync(tempDirs.make("agent-worker-publication-"));
   options = { agentId: "main", path: path.join(root, "agent.sqlite") };
 });
-async function setup(input?: Parameters<typeof bindSqliteWorkerBackend>[0]) {
+async function setup(
+  input?: Parameters<typeof bindSqliteWorkerBackend>[0],
+  retainExecutionUntilClose?: true,
+) {
   const { db } = openOpenClawAgentDatabase(options);
   db.exec("CREATE TABLE worker_proof (value TEXT NOT NULL)");
   const execution =
@@ -99,6 +102,7 @@ async function setup(input?: Parameters<typeof bindSqliteWorkerBackend>[0]) {
     {
       moduleUrl: resolveRuntimeWorkerUrl(agentWorkerStoreFixtureEntrypoint),
       input: { ...input, receiptBroadcastName: receipts.broadcastName },
+      retainExecutionUntilClose,
     },
   );
   workers.add(worker);
@@ -169,56 +173,67 @@ it("retains an idle agent executor for thirty minutes and renews the window afte
   }
 });
 
-it("keeps one publication lease during grace and releases it before shutdown cleanup settles", async () => {
-  const { db, worker } = await setup();
-  const shared = openOpenClawStateDatabase();
-  const releaseState = retainOpenClawStateDatabaseForIdle(shared);
-  const readLeases = () =>
-    shared.db
-      .prepare("SELECT lease_id FROM agent_database_leases WHERE path = ? ORDER BY lease_id")
-      .all(options.path);
-  const hostLeases = readLeases();
-  try {
-    const firstThread = await worker.run(
-      async (scope) => {
-        const thread = await scope.execute({ type: "append", input: { value: "first" } });
-        markGatewayRestartDraining();
-        return thread;
-      },
-      () => undefined,
-    );
-    const retainedLeases = readLeases();
-    const secondThread = await worker.execute(
-      { type: "append", input: { value: "second" } },
-      () => undefined,
-    );
-    expect(secondThread).toBe(firstThread);
-    expect(retainedLeases).toHaveLength(hostLeases.length + 1);
-    expect(readLeases()).toEqual(retainedLeases);
-    await worker.run(
-      (scope) => scope.execute({ type: "append", input: { value: "third" } }),
-      () => undefined,
-    );
-    expect(readLeases()).toEqual(retainedLeases);
-    beginGatewayShutdownCleanup();
-    await worker.execute({ type: "append", input: { value: "cleanup" } }, () => undefined);
-    expect(readLeases()).toEqual(hostLeases);
-    expect(db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all()).toEqual([
-      { value: "first" },
-      { value: "second" },
-      { value: "third" },
-      { value: "cleanup" },
-    ]);
-    await worker.close();
-    expect(db.isOpen).toBe(false);
-    expect(readLeases()).toEqual([]);
-    expect(readOpenClawAgentIntegrityVerification(options.path)?.clean_close).toBe(1);
-  } finally {
-    await worker.close();
-    resetGatewayWorkAdmission();
-    releaseState();
-  }
-});
+it.each([undefined, true] as const)(
+  "releases settled publication leases at shutdown cleanup unless an accepted sequence retains them (%s)",
+  async (retainExecutionUntilClose) => {
+    const { db, worker } = await setup(undefined, retainExecutionUntilClose);
+    const shared = openOpenClawStateDatabase();
+    const releaseState = retainOpenClawStateDatabaseForIdle(shared);
+    const readLeases = () =>
+      shared.db
+        .prepare("SELECT lease_id FROM agent_database_leases WHERE path = ? ORDER BY lease_id")
+        .all(options.path);
+    const hostLeases = readLeases();
+    try {
+      const firstThread = await worker.run(
+        async (scope) => {
+          const thread = await scope.execute({ type: "append", input: { value: "first" } });
+          markGatewayRestartDraining();
+          return thread;
+        },
+        () => undefined,
+      );
+      const retainedLeases = readLeases();
+      const secondThread = await worker.execute(
+        { type: "append", input: { value: "second" } },
+        () => undefined,
+      );
+      expect(secondThread).toBe(firstThread);
+      expect(retainedLeases).toHaveLength(hostLeases.length + 1);
+      expect(readLeases()).toEqual(retainedLeases);
+      await worker.run(
+        (scope) => scope.execute({ type: "append", input: { value: "third" } }),
+        () => undefined,
+      );
+      expect(readLeases()).toEqual(retainedLeases);
+      beginGatewayShutdownCleanup();
+      const cleanupThread = await worker.execute(
+        { type: "append", input: { value: "cleanup" } },
+        () => undefined,
+      );
+      if (retainExecutionUntilClose) {
+        expect(cleanupThread).toBe(firstThread);
+        expect(readLeases()).toEqual(retainedLeases);
+      } else {
+        expect(readLeases()).toEqual(hostLeases);
+      }
+      expect(db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all()).toEqual([
+        { value: "first" },
+        { value: "second" },
+        { value: "third" },
+        { value: "cleanup" },
+      ]);
+      await worker.close();
+      expect(db.isOpen).toBe(false);
+      expect(readLeases()).toEqual([]);
+      expect(readOpenClawAgentIntegrityVerification(options.path)?.clean_close).toBe(1);
+    } finally {
+      await worker.close();
+      resetGatewayWorkAdmission();
+      releaseState();
+    }
+  },
+);
 
 it("records a clean sibling receipt while an admitted worker publication still owns its database", ({
   signal,

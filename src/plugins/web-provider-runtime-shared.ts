@@ -12,14 +12,11 @@ import {
   createPluginRuntimeLoaderLogger,
 } from "./runtime/load-context.js";
 
-/** Shared options for resolving plugin-backed web providers. */
 export type ResolvePluginWebProvidersParams = {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   onlyPluginIds?: readonly string[];
-  activate?: boolean;
-  cache?: boolean;
   mode?: "runtime" | "setup";
   origin?: PluginManifestRecord["origin"];
   sandboxed?: boolean;
@@ -28,7 +25,7 @@ export type ResolvePluginWebProvidersParams = {
 
 export type ResolveRuntimeWebProvidersParams = Omit<
   ResolvePluginWebProvidersParams,
-  "activate" | "cache" | "mode" | "sandboxed"
+  "mode" | "sandboxed"
 >;
 
 export type WebProviderRuntimeResolution<TEntry> = {
@@ -44,7 +41,7 @@ export type WebProviderRuntimeResolution<TEntry> = {
     manifestRecords?: readonly PluginManifestRecord[];
   };
   resolveCandidatePluginIds: (
-    params: Omit<ResolvePluginWebProvidersParams, "activate" | "cache" | "mode">,
+    params: Omit<ResolvePluginWebProvidersParams, "mode">,
   ) => string[] | undefined;
   mapRegistryProviders: (params: {
     registry: PluginRegistry;
@@ -64,12 +61,63 @@ export type WebProviderRuntimeResolution<TEntry> = {
   ) => TEntry[] | null;
 };
 
-function resolveWebProviderRuntimeContext<TEntry>(
+/** Resolves plugin web providers from setup, active runtime, or a scoped load. */
+export function resolvePluginWebProviders<TEntry>(
   params: ResolvePluginWebProvidersParams,
   deps: WebProviderRuntimeResolution<TEntry>,
-) {
+): TEntry[] {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
+  if (params.mode === "setup") {
+    const pluginIds =
+      deps.resolveCandidatePluginIds({
+        config: params.config,
+        workspaceDir,
+        env,
+        onlyPluginIds: params.onlyPluginIds,
+        origin: params.origin,
+        sandboxed: params.sandboxed,
+        ...(params.manifestRecords ? { manifestRecords: params.manifestRecords } : {}),
+      }) ?? [];
+    if (pluginIds.length === 0) {
+      return [];
+    }
+    const bundledArtifactProviders = deps.resolveBundledPublicArtifactProviders?.({
+      config: params.config,
+      workspaceDir,
+      env,
+      onlyPluginIds: pluginIds,
+      ...(params.manifestRecords ? { manifestRecords: params.manifestRecords } : {}),
+    });
+    if (bundledArtifactProviders) {
+      return bundledArtifactProviders;
+    }
+    const registry = loadOpenClawPlugins(
+      buildPluginRuntimeLoadOptions(
+        {
+          config: withActivatedPluginIds({
+            config: params.config,
+            pluginIds,
+          }),
+          activationSourceConfig: params.config,
+          autoEnabledReasons: {},
+          workspaceDir,
+          env,
+          logger: createPluginRuntimeLoaderLogger(),
+          ...(params.manifestRecords
+            ? { manifestRegistry: { plugins: [...params.manifestRecords], diagnostics: [] } }
+            : {}),
+        },
+        {
+          onlyPluginIds: pluginIds,
+          cache: true,
+          activate: false,
+        },
+      ),
+    );
+    return deps.mapRegistryProviders({ registry, onlyPluginIds: pluginIds });
+  }
+
   const shouldFilterProviders =
     params.config !== undefined ||
     params.onlyPluginIds !== undefined ||
@@ -102,109 +150,40 @@ function resolveWebProviderRuntimeContext<TEntry>(
   const candidatePluginIds = allowlistedPluginIds?.length
     ? allowlistedPluginIds
     : discoveredPluginIds;
-  return {
-    activationSourceConfig,
-    autoEnabledReasons,
-    config,
-    env,
-    manifestRecords,
-    ...(params.manifestRecords
-      ? { preparedManifestRegistry: { plugins: [...params.manifestRecords], diagnostics: [] } }
-      : {}),
-    loadPluginIds: candidatePluginIds,
-    onlyPluginIds: shouldFilterProviders ? candidatePluginIds : undefined,
-    workspaceDir,
-  };
-}
-
-/** Resolves plugin web providers from setup, active runtime, or a scoped load. */
-export function resolvePluginWebProviders<TEntry>(
-  params: ResolvePluginWebProvidersParams,
-  deps: WebProviderRuntimeResolution<TEntry>,
-): TEntry[] {
-  const env = params.env ?? process.env;
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
-  if (params.mode === "setup") {
-    const pluginIds =
-      deps.resolveCandidatePluginIds({
-        config: params.config,
-        workspaceDir,
-        env,
-        onlyPluginIds: params.onlyPluginIds,
-        origin: params.origin,
-        sandboxed: params.sandboxed,
-        ...(params.manifestRecords ? { manifestRecords: params.manifestRecords } : {}),
-      }) ?? [];
-    if (pluginIds.length === 0) {
-      return [];
-    }
-    if (params.activate !== true) {
-      const bundledArtifactProviders = deps.resolveBundledPublicArtifactProviders?.({
-        config: params.config,
-        workspaceDir,
-        env,
-        onlyPluginIds: pluginIds,
-        ...(params.manifestRecords ? { manifestRecords: params.manifestRecords } : {}),
-      });
-      if (bundledArtifactProviders) {
-        return bundledArtifactProviders;
-      }
-    }
-    const registry = loadOpenClawPlugins(
-      buildPluginRuntimeLoadOptions(
-        {
-          config: withActivatedPluginIds({
-            config: params.config,
-            pluginIds,
-          }),
-          activationSourceConfig: params.config,
-          autoEnabledReasons: {},
-          workspaceDir,
-          env,
-          logger: createPluginRuntimeLoaderLogger(),
-          ...(params.manifestRecords
-            ? { manifestRegistry: { plugins: [...params.manifestRecords], diagnostics: [] } }
-            : {}),
-        },
-        {
-          onlyPluginIds: pluginIds,
-          cache: params.cache ?? true,
-          activate: params.activate ?? false,
-        },
-      ),
-    );
-    return deps.mapRegistryProviders({ registry, onlyPluginIds: pluginIds });
-  }
-
-  const context = resolveWebProviderRuntimeContext(params, deps);
+  const onlyPluginIds = shouldFilterProviders ? candidatePluginIds : undefined;
   const loadOptions = buildPluginRuntimeLoadOptions(
     {
-      ...context,
+      config,
+      activationSourceConfig,
+      autoEnabledReasons,
+      workspaceDir,
+      env,
       logger: createPluginRuntimeLoaderLogger(),
-      manifestRegistry: context.preparedManifestRegistry,
+      manifestRegistry: params.manifestRecords
+        ? { plugins: [...params.manifestRecords], diagnostics: [] }
+        : undefined,
     },
     {
-      cache: params.cache ?? true,
-      activate: params.activate ?? false,
-      ...(hasExplicitPluginIdScope(context.loadPluginIds)
-        ? { onlyPluginIds: context.loadPluginIds }
+      cache: true,
+      activate: false,
+      ...(hasExplicitPluginIdScope(candidatePluginIds)
+        ? { onlyPluginIds: candidatePluginIds }
         : {}),
     },
   );
   const compatible = getLoadedRuntimePluginRegistry({
-    env: context.env,
+    env,
     loadOptions,
-    workspaceDir: context.workspaceDir,
-    requiredPluginIds: context.loadPluginIds,
+    workspaceDir,
+    requiredPluginIds: candidatePluginIds,
   });
-  const hasExplicitEmptyScope =
-    context.onlyPluginIds !== undefined && context.onlyPluginIds.length === 0;
+  const hasExplicitEmptyScope = onlyPluginIds !== undefined && onlyPluginIds.length === 0;
   // Candidate coverage is checked before reuse. An empty compatible registry is
   // authoritative only for an explicit empty scope; otherwise load below.
   if (compatible) {
     const providers = deps.mapRegistryProviders({
       registry: compatible,
-      onlyPluginIds: context.onlyPluginIds,
+      onlyPluginIds,
     });
     if (providers.length > 0 || hasExplicitEmptyScope) {
       return providers;
@@ -216,17 +195,13 @@ export function resolvePluginWebProviders<TEntry>(
   if (hasExplicitEmptyScope) {
     return [];
   }
-  if (
-    params.activate !== true &&
-    context.loadPluginIds &&
-    deps.resolveBundledRuntimeArtifactProviders
-  ) {
+  if (candidatePluginIds && deps.resolveBundledRuntimeArtifactProviders) {
     const bundledArtifactProviders = deps.resolveBundledRuntimeArtifactProviders({
-      config: context.config,
-      workspaceDir: context.workspaceDir,
-      env: context.env,
-      onlyPluginIds: context.loadPluginIds,
-      ...(context.manifestRecords ? { manifestRecords: context.manifestRecords } : {}),
+      config,
+      workspaceDir,
+      env,
+      onlyPluginIds: candidatePluginIds,
+      ...(manifestRecords ? { manifestRecords } : {}),
     });
     if (bundledArtifactProviders) {
       return bundledArtifactProviders;
@@ -235,6 +210,6 @@ export function resolvePluginWebProviders<TEntry>(
   const registry = loadOpenClawPlugins(loadOptions);
   return deps.mapRegistryProviders({
     registry,
-    onlyPluginIds: context.onlyPluginIds,
+    onlyPluginIds,
   });
 }

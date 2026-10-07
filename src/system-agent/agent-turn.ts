@@ -19,7 +19,6 @@ import { buildSystemAgentSystemPrompt } from "./assistant-prompts.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import type { SystemAgentProposalRef } from "./operator-approval.js";
-import type { SystemAgentOverview } from "./overview.js";
 import {
   resolveSystemAgentExpectedAgentHarnessRuntimeArtifact,
   resolveSystemAgentVerifiedInferenceRoute,
@@ -43,14 +42,12 @@ export type SystemAgentTurnDirective =
 
 type SystemAgentTurnReply = {
   text: string;
-  modelLabel?: string;
   /** Interactive handoff the tool requested; the host chat executes it. */
   directive?: SystemAgentTurnDirective;
 };
 
 export type SystemAgentTurnRunner = (params: {
   input: string;
-  overview: SystemAgentOverview;
   surface: "cli" | "gateway";
   /** Host-verified: the user's current message is an explicit approval. */
   approvalArmed: boolean;
@@ -407,13 +404,12 @@ async function runSystemAgentTurnWithDeps(
     if (!currentRoute) {
       throw new SystemAgentInferenceUnavailableError("agent-turn");
     }
-    const text = extractAgentRunText(result)?.trim();
+    const text = extractAgentRunText(result);
     if (!text) {
       throw new SystemAgentInferenceUnavailableError("agent-turn");
     }
     return {
       text,
-      modelLabel: plan.modelLabel,
       ...(directiveRef.current ? { directive: directiveRef.current } : {}),
     };
   } catch (error) {

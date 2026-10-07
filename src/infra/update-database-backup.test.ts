@@ -10,6 +10,8 @@ import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as diskSpace from "./disk-space.js";
+import * as fileDescriptor from "./file-descriptor.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import * as inspection from "./update-candidate-state.inspection.js";
 import { discoverUpdateStateSchemaInspectionInProcess } from "./update-candidate-state.js";
@@ -110,7 +112,9 @@ it.each(["legacy", "current"] as const)(
       sizeBytes: published.length,
     });
     {
-      using snapshot = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
+      using snapshot = openNodeSqliteDatabase(backup.databases[0]!.snapshotPath, {
+        readOnly: true,
+      });
       expect(snapshot.prepare("SELECT rowid,value FROM payload").all()).toEqual([
         { rowid: 42, value: "retained" },
       ]);
@@ -288,6 +292,7 @@ async function originalCaptureFixture(externalAgents = false) {
     configPath,
     authoredConfig,
     include,
+    applicationFile,
     skillLink,
     pluginDatabase,
     missingFile,
@@ -549,6 +554,78 @@ it("retires only expired sealed standalone Doctor captures and preserves incompl
   });
 });
 
+it.each([
+  { change: "link", phase: "during" },
+  { change: "unlink", phase: "after" },
+  { change: "content", phase: "during" },
+  { change: "content", phase: "after" },
+] as const)("validates $change changes $phase original file capture", async ({ change, phase }) => {
+  const f = await originalCaptureFixture();
+  const source = f.applicationFile;
+  const timestamp = new Date("2000-01-01T00:00:00.000Z");
+  await fs.utimes(source, timestamp, timestamp);
+  const before = await fs.stat(source, { bigint: true });
+  const alias = path.join(f.root, "outside-native-capture");
+  if (change === "unlink") {
+    await fs.link(source, alias);
+  }
+  let changed = false;
+  const mutate = async () => {
+    changed = true;
+    if (change === "link") {
+      await fs.link(source, alias);
+    } else if (change === "unlink") {
+      await fs.unlink(alias);
+    } else {
+      await fs.writeFile(source, Buffer.alloc(Number(before.size), 7));
+      await fs.utimes(source, timestamp, timestamp);
+    }
+  };
+  if (phase === "during") {
+    const copy = fileDescriptor.copyFileHandle;
+    vi.spyOn(fileDescriptor, "copyFileHandle").mockImplementation(async (...args) => {
+      const stat = await args[0].stat({ bigint: true });
+      if (stat.dev === before.dev && stat.ino === before.ino) {
+        await mutate();
+      }
+      return copy(...args);
+    });
+  } else {
+    const readGenerations = candidateState.readUpdateDatabaseGenerationsIsolated;
+    vi.spyOn(candidateState, "readUpdateDatabaseGenerationsIsolated").mockImplementationOnce(
+      async (...args) => {
+        await mutate();
+        return readGenerations(...args);
+      },
+    );
+  }
+  const capture = f.captureOriginal(`${change}-${phase}`);
+  if (change === "content") {
+    await expect(capture).rejects.toMatchObject({
+      cause: expect.objectContaining({
+        message: expect.stringMatching(/Original update (file|resource) changed/),
+      }),
+    });
+  } else {
+    const { ref } = await capture;
+    const manifest = parseUpdateRecoveryBackupManifest(await fs.readFile(ref.manifestPath, "utf8"));
+    const entry = manifest.entries.find((candidate) => candidate.sourcePath === source);
+    assert(entry?.kind === "file");
+    expect(await fs.readFile(path.join(ref.directory, entry.archivePath))).toEqual(
+      f.bytes.get(source),
+    );
+  }
+  expect(changed).toBe(true);
+  const after = await fs.stat(source, { bigint: true });
+  expect(after).toMatchObject({
+    dev: before.dev,
+    ino: before.ino,
+    size: before.size,
+    mtimeNs: before.mtimeNs,
+  });
+  expect(after.ctimeNs).not.toBe(before.ctimeNs);
+});
+
 it("retains an unsealed capture when the database changes after its snapshot", async () => {
   const f = await originalCaptureFixture();
   const owner = await import("./update-database-backup.js");
@@ -635,7 +712,7 @@ it.each(["insufficient", "unknown"] as const)(
         expect.stringMatching(/[\\/]external-b[\\/]agent\.sqlite$/u),
       ]);
       for (const entry of backup.databases) {
-        using db = new DatabaseSync(entry.snapshotPath, { readOnly: true });
+        using db = openNodeSqliteDatabase(entry.snapshotPath, { readOnly: true });
         expect(db.prepare("SELECT rowid,value FROM payload").all()).toEqual([
           {
             rowid: 42,

@@ -168,17 +168,12 @@ serveOwnedWorkerTasks(
       if (request.kind === "session-pending-archives") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const { runSqliteDeferredTransactionSync } =
-          await import("../../infra/sqlite-transaction.js");
         const { hasPendingSessionTranscriptArchives } =
           await import("./session-accessor.sqlite-archive-store-kernel.js");
-        const result = withOpenClawAgentDatabaseReadOnly(
-          (database) =>
-            runSqliteDeferredTransactionSync(database.db, () =>
-              hasPendingSessionTranscriptArchives(database),
-            ),
-          { ...request.database, env: cloneEnvWithPlatformSemantics(request.env) },
-        );
+        const result = withOpenClawAgentDatabaseReadOnly(hasPendingSessionTranscriptArchives, {
+          ...request.database,
+          env: cloneEnvWithPlatformSemantics(request.env),
+        });
         return {
           kind: "session-pending-archives" as const,
           pending: result.found && result.value,
@@ -324,8 +319,12 @@ serveOwnedWorkerTasks(
         const { readSessionEntryList } = await import("./session-entry-read.worker.js");
         return {
           kind: "session-entry-list" as const,
-          entries: readSessionEntryList(request),
+          ...readSessionEntryList(request),
         };
+      }
+      if (request.kind === "session-store-projection") {
+        const { readSessionStoreProjection } = await import("./session-entry-read.worker.js");
+        return readSessionStoreProjection(request);
       }
       if (request.kind === "session-store-summary") {
         const { readSessionStoreSummaryReadOnly } =
@@ -341,6 +340,11 @@ serveOwnedWorkerTasks(
             request,
           ),
         };
+      }
+      if (request.kind === "voice-sessions") {
+        const { readOpenVoiceSessions } =
+          await import("../../talk/client-voice-session-lookup.worker.js");
+        return readOpenVoiceSessions({ ...request.database, env: request.env }, request.request);
       }
       if (request.kind === "usage-cache") {
         const { readSessionCostUsageCache } =
@@ -376,24 +380,16 @@ serveOwnedWorkerTasks(
           await import("../../state/openclaw-agent-db-readonly.js");
         const { runSqliteDeferredTransactionSync } =
           await import("../../infra/sqlite-transaction.js");
-        const {
-          hasSessionsNeedingTranscriptIndexReconcile,
-          hasOrphanedTranscriptIndexRows,
-          sessionTranscriptIndexNeedsReconcile,
-        } = await import("./session-transcript-index.js");
+        const { sessionTranscriptIndexNeedsReconcile } =
+          await import("./session-transcript-index.js");
         const result = withOpenClawAgentDatabaseReadOnly(
           ({ db }) =>
             runSqliteDeferredTransactionSync(db, () =>
-              request.sessionId !== undefined
-                ? sessionTranscriptIndexNeedsReconcile(db, request.sessionId)
-                : hasSessionsNeedingTranscriptIndexReconcile(db) ||
-                  hasOrphanedTranscriptIndexRows(db),
+              sessionTranscriptIndexNeedsReconcile(db, request.sessionId),
             ),
           { ...request.database, env: request.env },
         );
-        return result.found
-          ? result.value
-          : request.sessionId === undefined && result.reason === "schema-missing";
+        return result.found && result.value;
       }
       if (request.kind === "session-members") {
         const { withOpenClawAgentDatabaseReadOnly } =

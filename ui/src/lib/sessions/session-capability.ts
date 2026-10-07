@@ -86,6 +86,7 @@ export type SessionListOptions = {
   excludeSubagents?: boolean;
   excludeCron?: boolean;
   excludeSystem?: boolean;
+  excludeDock?: boolean;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
   includeOwnerSessionCounts?: boolean;
@@ -108,7 +109,10 @@ export type SessionListScope = Readonly<Omit<SessionListOptions, "offset" | "app
 export type SessionListSnapshot = Pick<
   SessionState,
   "result" | "agentId" | "loading" | "error" | "startupPending"
->;
+> & {
+  /** Outcome of the latest settled managed-list read, including suppressed availability errors. */
+  readSucceeded?: boolean;
+};
 
 export type SessionRowTarget = Readonly<{ key: string; agentId: string }>;
 

@@ -27,6 +27,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
 import { killPidIfAlive } from "../../test-utils/process-tree.js";
+import { WORKTREE_MUTATION_LEASE_SCOPE } from "./capacity-contract.js";
 import * as worktreeRunLease from "./run-lease.js";
 import { ManagedWorktreeService, WorktreeSnapshotError } from "./service.js";
 import {
@@ -38,7 +39,6 @@ const execFileAsync = promisify(execFile);
 const realRunCommand = commandExec.runCommandWithTimeout;
 const realRunGitWorkerOperation = gitWorker.runGitWorkerOperation;
 const realAbortWorktreeRemoval = worktreeRunLease.abortWorktreeRemoval;
-const realWithOpenClawStateLease = stateLease.withOpenClawStateLease;
 const emptyFailure: SpawnResult = {
   stdout: "",
   stderr: "",
@@ -66,10 +66,11 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 }
 
 function gitCommandArgs(argv: readonly string[]): readonly string[] {
-  if (argv[0] !== "git") {
+  let command = argv[0] === "nice" ? 3 : 0;
+  if (argv[command] !== "git") {
     return [];
   }
-  let command = 1;
+  command++;
   while (argv[command] === "-c" || argv[command] === "-C") {
     command += 2;
   }
@@ -291,6 +292,16 @@ describe("ManagedWorktreeService failure diagnostics", () => {
       await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await git(repo, "rev-parse", snapshotRef!)).toBe(snapshot);
       expect(await git(repo, "show", `${snapshotRef}:README.md`)).toBe("complete recoverable edit");
+      expect(
+        (await service.listRegistryRecords()).find((record) => record.id === created.id),
+      ).toMatchObject({ removedAt: expect.any(Number), snapshotRef });
+      await expect(
+        git(repo, "show-ref", "--verify", `refs/openclaw/removals/${created.id}`),
+      ).rejects.toThrow();
+      const restored = await service.restore({ id: created.id });
+      expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+        "complete recoverable edit\n",
+      );
     } finally {
       abort.abort();
       await fs.writeFile(release, "release");
@@ -382,7 +393,10 @@ describe("ManagedWorktreeService removal timing", { concurrent: false }, () => {
     records = [];
     unsubscribe = onInternalDiagnosticEvent(
       (event) => {
-        if (event.type === "log.record" && event.message === "slow managed worktree removal") {
+        if (
+          event.type === "log.record" &&
+          event.message.startsWith("slow managed worktree removal ")
+        ) {
           records.push(event);
         }
       },
@@ -419,10 +433,15 @@ describe("ManagedWorktreeService removal timing", { concurrent: false }, () => {
     const finalizeEntered = createDeferredCore();
     const releaseFinalize = createDeferredCore();
     let callbackResult: unknown;
-    vi.spyOn(stateLease, "withOpenClawStateLease").mockImplementation(async (options, run) => {
+    const acquire = stateLease.withOpenClawStateLeaseAsync;
+    vi.spyOn(stateLease, "withOpenClawStateLeaseAsync").mockImplementation(async (...args) => {
+      // Nested reconciliation settles inside the removal body.
+      if (args[0].scope !== WORKTREE_MUTATION_LEASE_SCOPE) {
+        return await acquire(...args);
+      }
       admissionEntered.resolve();
       await releaseAdmission.promise;
-      const result = await realWithOpenClawStateLease(options, run);
+      const result = await acquire(...args);
       callbackResult = result;
       finalizeEntered.resolve();
       await releaseFinalize.promise;
@@ -482,13 +501,23 @@ describe("ManagedWorktreeService removal timing", { concurrent: false }, () => {
         bodyMs: 1_700,
         finalizeMs: 300,
         preparationMs: 200,
+        packRepairMs: 0,
         snapshotMs: 400,
         checkoutRemovalMs: 500,
         bodyFinalizeMs: 600,
         callbackEntered: true,
         outcome: "returned",
         omittedObservations: expect.any(Number),
+        id: worktree.id,
+        path: worktree.path,
+        tracked: 1,
+        untracked: 0,
+        deferred: false,
       });
+      expect({
+        subsystem: "agents/worktrees",
+        ...JSON.parse(records[0]!.message.slice("slow managed worktree removal ".length)),
+      }).toEqual(records[0]!.attributes);
     } finally {
       releaseAdmission.resolve();
       releaseBody.resolve();
@@ -540,12 +569,19 @@ describe("ManagedWorktreeService removal timing", { concurrent: false }, () => {
       bodyMs: 1_500,
       finalizeMs: 0,
       preparationMs: 0,
+      packRepairMs: 0,
       snapshotMs: 1_300,
       bodyFinalizeMs: 200,
       callbackEntered: true,
       outcome: "threw",
       omittedObservations: expect.any(Number),
+      id: worktree.id,
+      path: worktree.path,
+      deferred: false,
     });
+    expect(
+      JSON.parse(records[0]!.message.slice("slow managed worktree removal ".length)),
+    ).toMatchObject({ tracked: null, untracked: null });
     await expect(service.remove({ id: worktree.id, reason: "retry" })).resolves.toMatchObject({
       removed: true,
     });

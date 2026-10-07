@@ -1,7 +1,11 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { ok } from "@openclaw/normalization-core/result";
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import {
+  resolveSessionStoreCompatibilityAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../config/legacy.default-agent-owner.js";
 import { readPreparedSessionSharingChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import {
   assertSessionEntryCreationPublication,
@@ -14,6 +18,7 @@ import {
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
 import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import {
   captureSessionStoreReadCandidate,
   type SessionStoreReadCandidate,
@@ -23,6 +28,7 @@ import {
   prepareSessionStoreTargetInventory,
 } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
+import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   assertExistingDatabaseIdentity,
@@ -43,6 +49,10 @@ import {
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../state/openclaw-agent-db-resources.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import {
+  captureIncognitoSessionMutationFacts,
+  SessionMutationFactsUnavailableError,
+} from "./session-sharing-incognito.js";
 import type { PreparedSessionMutationFacts } from "./session-sharing-policy.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
@@ -60,27 +70,28 @@ type ExistingSessionMutationFacts = PreparedSessionSourceFacts & {
   target: NonNullable<PreparedSessionMutationFacts["target"]>;
 };
 
-export class SessionMutationFactsUnavailableError extends Error {
-  constructor(options?: ErrorOptions) {
-    super("Session access facts are unavailable; retry after session storage is ready.", options);
-    this.name = "SessionMutationFactsUnavailableError";
-  }
-}
+export { SessionMutationFactsUnavailableError } from "./session-sharing-incognito.js";
 
 function routeFacts(cfg: OpenClawConfig) {
   return {
     agents: listAgentIds(cfg),
+    storeOwner: resolveSessionStoreCompatibilityAgentId(cfg),
+    compatibilityOwner: tryResolveLegacyCompatibilityAgentId(cfg),
+    systemOwner: tryResolveAmbientOwnerAgentId(cfg),
     store: cfg.session?.store,
     mainKey: cfg.session?.mainKey,
     scope: cfg.session?.scope,
   };
 }
 
-export function captureSessionMutationRouting(cfg: OpenClawConfig) {
+export function captureSessionMutationRouting(
+  cfg: OpenClawConfig,
+  changed: () => Error = () => new SessionMutationFactsUnavailableError(),
+) {
   const route = routeFacts(cfg);
   return (current: OpenClawConfig) => {
     if (!isDeepStrictEqual(routeFacts(current), route)) {
-      throw new SessionMutationFactsUnavailableError();
+      throw changed();
     }
   };
 }
@@ -113,6 +124,10 @@ export async function prepareSessionMutationFacts(
   const { canonicalKey, agentId } = resolveSessionStoreIdentity(params);
   const initialStoreKeys = [params.sessionKey.trim(), canonicalKey];
   const incognito = isIncognitoSessionKey(canonicalKey);
+  const binding = captureIncognitoSessionBinding({ agentId, sessionKey: canonicalKey });
+  const actorRead =
+    binding &&
+    captureIncognitoSessionMutationFacts(binding, canonicalKey, Boolean(params.allowMissing));
   const releases: Array<() => void> = [];
   let active = true;
   let beforeDiscovery = params.storageReady !== undefined;
@@ -242,6 +257,14 @@ export async function prepareSessionMutationFacts(
     ) {
       return;
     }
+    if (binding && path.resolve(change.storePath) === binding.actor.path) {
+      try {
+        actorRead!.assertCurrent();
+      } catch {
+        invalidate();
+      }
+      return;
+    }
     if (
       active &&
       !invalidated &&
@@ -330,7 +353,15 @@ export async function prepareSessionMutationFacts(
     }
     let storageTarget: SessionFactsRead<PreparedSessionMutationFacts>["storageTarget"];
     let readFacts = () => facts!;
-    if (!discoveryInventory) {
+    if (binding) {
+      const { actor } = binding;
+      storageTarget = Object.freeze({ agentId, canonicalKey, storePath: actor.path });
+      selectedPaths.add(path.resolve(actor.path));
+      selectedDatabaseIdentity = actor.identity.incarnation;
+      assertSource = actorRead!.assertCurrent;
+      readFacts = actorRead!.readCurrent;
+      facts = readFacts();
+    } else if (!discoveryInventory) {
       const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId });
       storageTarget = Object.freeze({ agentId, canonicalKey, storePath });
       let database = getOpenIncognitoAgentDatabase(agentId, storePath);
@@ -406,6 +437,7 @@ export async function prepareSessionMutationFacts(
           preparedSources,
           registryDiscovery: inventory.registryDiscovery,
         }),
+        projectionLane,
       );
       const assertPaths = () => {
         for (const { candidate, identity } of candidateIdentities) {
@@ -669,6 +701,7 @@ export async function prepareSessionMutationFacts(
         databaseIdentity: selectedDatabaseIdentity,
       });
       creation = operation;
+      actorRead?.bindCreation(operation);
     };
     return { storageTarget, bindCreation, readCurrent, release };
   } catch (error) {

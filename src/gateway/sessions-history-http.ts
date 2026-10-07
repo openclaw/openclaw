@@ -164,7 +164,6 @@ export async function handleSessionHistoryHttpRequest(
     req,
     res,
     operatorMethod: "chat.history",
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
   });
   if (!authResult) {
     return true;

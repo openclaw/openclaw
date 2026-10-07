@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import { runSqlitePinnedReadSnapshotSync } from "../../infra/sqlite-pinned-read-snapshot.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import {
   requestSqliteWorkerOperationAdmission,
@@ -19,7 +20,10 @@ import {
   readSessionEntryByIdInDatabase,
   readSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
-import { createSessionEntryRevisionGuard } from "./session-accessor.sqlite-entry-revision.js";
+import {
+  createSessionEntryRevisionGuard,
+  SessionEntryRevisionChangedError,
+} from "./session-accessor.sqlite-entry-revision.js";
 import {
   assertCanonicalSessionKeyWrite,
   readWithCanonicalSessionAdmission,
@@ -65,7 +69,7 @@ function createCurrentEntryRead(
               projection: "list",
             })?.entry
           : lookup === "logical"
-            ? readSessionEntryRow(database, sessionKey, "full")?.entry
+            ? readSessionEntryRow(database, sessionKey, "list")?.entry
             : readExactSessionEntryRow(database, sessionKey, "list", "canonical")?.entry;
       if (options.projection === "capability") {
         entry = current ? projectSessionEntryCapabilityFacts(current) : undefined;
@@ -96,7 +100,15 @@ function createCurrentEntryRead(
     },
   );
   return () => {
-    guard();
+    try {
+      guard();
+    } catch (error) {
+      if (!(error instanceof SessionEntryRevisionChangedError)) {
+        throw error;
+      }
+      // Reprepare read facts in one snapshot; admission still compares them after the host grant.
+      runSqlitePinnedReadSnapshotSync(database.db, guard);
+    }
     return entry;
   };
 }

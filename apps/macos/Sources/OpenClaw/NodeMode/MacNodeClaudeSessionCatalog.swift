@@ -264,6 +264,15 @@ enum MacNodeClaudeSessionCatalog {
             MacNodeClaudeSessionCatalogContract.pluginId,
             root: root)
         else { return false }
+        let pluginConfig = OpenClawConfigFile.pluginEntry(
+            MacNodeClaudeSessionCatalogContract.pluginId,
+            root: root)?["config"] as? [String: Any]
+        let sessionCatalog = pluginConfig?["sessionCatalog"] as? [String: Any]
+        if let enabled = sessionCatalog?["enabled"] as? NSNumber,
+           CFGetTypeID(enabled) == CFBooleanGetTypeID(), !enabled.boolValue
+        {
+            return false
+        }
         let projectsURL = self.projectsURL(homeURL: homeURL, environment: environment)
         var isDirectory: ObjCBool = false
         return FileManager.default.fileExists(
@@ -933,8 +942,7 @@ extension MacNodeClaudeSessionCatalog {
 extension MacNodeClaudeSessionCatalog {
     private static func decodeObject(_ paramsJSON: String?) throws -> [String: Any] {
         guard let paramsJSON, !paramsJSON.isEmpty else { return [:] }
-        guard let data = paramsJSON.data(using: .utf8),
-              let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let value = try? JSONSerialization.jsonObject(with: Data(paramsJSON.utf8)) as? [String: Any]
         else { throw CatalogError.invalidParams("parameters must be valid JSON objects") }
         return value
     }

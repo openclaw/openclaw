@@ -48,7 +48,7 @@ async function evictAcceptedWorktree(
 ): Promise<WorktreeEvictionReason | "dirty-purged"> {
   const { env, record, guard } = params;
   const authority = guard.workerAuthority;
-  if (!authority?.lease) {
+  if (!authority?.leaseSet) {
     throw new Error("Worktree eviction requires the allocation lease's worker authority");
   }
   const token = randomUUID();
@@ -127,14 +127,15 @@ async function evictAcceptedWorktree(
                 signal,
                 assertCurrent: beforeRun,
                 workerAuthority: heldClaimsAuthority(),
+                requireDiskSpace: guard.requireDiskSpace,
               });
               snapshotRef = snapshot.snapshotRef;
               beforeRun();
-              updateRegistryWorktree(
+              await updateRegistryWorktree(
                 env,
                 record.id,
                 { snapshotRef, provisionedState: snapshot.provisionedState },
-                { assertCurrent: beforeRun },
+                { assertCurrent: beforeRun, workerAuthority: heldClaimsAuthority() },
               );
               dirty = Boolean(
                 await git.require(
@@ -156,7 +157,7 @@ async function evictAcceptedWorktree(
                   ["rev-parse", `${snapshotRef}^{commit}`],
                   { signal, beforeRun },
                 );
-                await accepted.prepareArchive(snapshotCommit);
+                await accepted.prepareArchive?.(snapshotCommit);
               }
             },
           );
@@ -190,7 +191,7 @@ async function evictAcceptedWorktree(
                 assertCurrent: assertEffectCurrent,
                 workerAuthority: deletionAdmitted
                   ? {
-                      lease: authority.lease,
+                      leaseSet: authority.leaseSet,
                       predicates: [{ kind: "binding", record }, claimsPredicate()],
                     }
                   : heldClaimsAuthority(),
@@ -233,17 +234,24 @@ async function evictAcceptedWorktree(
         );
         settleGuard();
         const removedAt = params.now();
-        updateRegistryWorktree(
+        await updateRegistryWorktree(
           env,
           record.id,
           { removedAt, snapshotRef },
-          { assertCurrent: settleGuard },
+          {
+            assertCurrent: settleGuard,
+            removalToken: token,
+            workerAuthority: {
+              leaseSet: authority.leaseSet,
+              predicates: [{ kind: "binding", record }, claimsPredicate()],
+            },
+          },
         );
         await finalizeWorktreeRemoval(
           env,
           { worktreeId: record.id, lastActiveAt: record.lastActiveAt, removedAt, token },
           // Deletion already holds custody; caller cancellation cannot abandon its settlement.
-          { lease: authority.lease, predicates: [claimsPredicate()] },
+          { leaseSet: authority.leaseSet, predicates: [claimsPredicate()] },
         );
         const reason = dirty || snapshotError ? "dirty-purged" : params.reason;
         log.warn(

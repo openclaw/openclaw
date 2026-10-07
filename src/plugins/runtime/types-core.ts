@@ -335,6 +335,8 @@ type RuntimeRunEmbeddedAgent = (
 /** Core runtime helpers exposed to trusted native plugins. */
 export type PluginRuntimeCore = {
   version: string;
+  /** Optional host behavior guarantees; absent capabilities remain unsupported on older hosts. */
+  readonly capabilities?: readonly string[];
   decisions: import("../../decisions/types.js").DecisionRuntimeV1;
   config: {
     /** Current process runtime config snapshot. Prefer config passed into the active call path. */

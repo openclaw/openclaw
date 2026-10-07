@@ -315,6 +315,58 @@ describe("transcript Gateway read authorization and errors", () => {
     });
   });
 
+  it.each(["authority", "archive role", "cancellation"])(
+    "refuses a public page after %s changes during its worker read",
+    async (kind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+        const { store } = await seed(stateDir);
+        const profile = ensureProfileForEmail("public-page-reader@example.test");
+        const cancellation = new AbortController();
+        let current = true;
+        const cfg = roles("view");
+        const read = store.listReadEntries.bind(store);
+        const observer = vi
+          .spyOn(TranscriptsStore.prototype, "listReadEntries")
+          .mockImplementationOnce(
+            new Proxy(read, {
+              async apply(target, receiver, args) {
+                const result = await Reflect.apply(target, receiver, args);
+                current = false;
+                if (kind === "cancellation") {
+                  cancellation.abort();
+                }
+                return result;
+              },
+            }),
+          );
+        const respond = vi.fn();
+        try {
+          await transcriptsHandlers["transcripts.list"]!({
+            req: { type: "req", id: "revoked-list", method: "transcripts.list" },
+            params: {},
+            client: client(profile.id),
+            signal: cancellation.signal,
+            respond,
+            hasCurrentClientAuthority: () => kind !== "authority" || current,
+            isWebchatConnect: () => false,
+            context: {
+              getRuntimeConfig: () => (kind === "archive role" && !current ? roles("none") : cfg),
+              logGateway,
+            } as unknown as GatewayRequestContext,
+          });
+          expect(observer).toHaveBeenCalledOnce();
+          expect(respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({ code: "UNAVAILABLE" }),
+          );
+        } finally {
+          observer.mockRestore();
+        }
+      });
+    },
+  );
+
   it("waits for the authenticated profile before reading the library", async () => {
     const caller = client();
     caller.authenticatedUserId = "pending@example.test";

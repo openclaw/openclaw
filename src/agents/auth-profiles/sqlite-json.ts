@@ -13,6 +13,7 @@ import {
   closeAuthProfileReadDatabase,
   closeAuthProfileReadPool,
 } from "./sqlite-read-pool.js";
+import { recordAuthProfileNativeCommit } from "./store-update-commit.js";
 import type { AuthProfileRowRead, PersistedAuthProfileStoreInspection } from "./types.js";
 
 type AgentAuthProfileDatabase = Pick<
@@ -171,8 +172,20 @@ export function readAuthProfileRows(
   databaseKind: "agent" | "shared-state",
 ): AuthProfileRowRead {
   const canCache = prepareSqliteReadCache(database, databasePath);
-  const store = inspectAuthProfileJsonCell(database, "store", databaseKind);
-  const state = inspectAuthProfileJsonCell(database, "state", databaseKind);
+  const inspect = (target: "store" | "state"): PersistedAuthProfileStoreInspection => {
+    try {
+      return inspectAuthProfileJsonCell(database, target, databaseKind);
+    } catch (error) {
+      // Shared-state read ownership handles native failures and poisoned-handle eviction.
+      if (databaseKind === "shared-state") {
+        throw error;
+      }
+      // A broken state table must not turn an absent credential row into a present source.
+      return { status: "unreadable" };
+    }
+  };
+  const store = inspect("store");
+  const state = inspect("state");
   return {
     store,
     state,
@@ -187,6 +200,7 @@ export function writeAuthProfileJsonCell(
   kind: "agent" | "shared-state",
   payload: unknown,
 ): void {
+  recordAuthProfileNativeCommit(database);
   const value = JSON.stringify(payload);
   const now = Date.now();
   if (kind === "shared-state") {
@@ -231,6 +245,7 @@ export function deleteAuthProfileJsonCell(
   target: "store" | "state",
   kind: "agent" | "shared-state",
 ): void {
+  recordAuthProfileNativeCommit(database);
   if (kind === "shared-state") {
     executeSqliteQuerySync(
       database,

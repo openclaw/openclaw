@@ -548,7 +548,7 @@
     },
     "computerUse.liveTestTimeoutMs": {
       "label": "Live Test Timeout",
-      "help": "Maximum time for the Computer Use list_apps readiness probe before status and startup treat the live test as failed.",
+      "help": "Maximum time for the Computer Use list_apps readiness check before status and startup treat the live test as failed.",
       "advanced": true
     },
     "computerUse.toolCallTimeoutMs": {
@@ -558,7 +558,7 @@
     },
     "computerUse.healthCheckEnabled": {
       "label": "Periodic Health Checks",
-      "help": "When true, run periodic Computer Use live probes on the configured cadence.",
+      "help": "When true, run periodic Computer Use live checks on the configured cadence.",
       "advanced": true
     },
     "computerUse.healthCheckIntervalMinutes": {
@@ -573,7 +573,7 @@
     },
     "computerUse.strictReadiness": {
       "label": "Strict Readiness",
-      "help": "When true, a failed Computer Use live probe stops Codex-mode startup. The default false value preserves existing enabled setups by continuing with a warning.",
+      "help": "When true, a failed Computer Use live check stops Codex-mode startup. The default false value preserves existing enabled setups by continuing with a warning.",
       "advanced": true
     },
     "computerUse.autoRepair": {

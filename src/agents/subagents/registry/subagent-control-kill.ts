@@ -24,17 +24,14 @@ import {
   type SubagentKillSession,
 } from "./subagent-control-session.js";
 import type { SubagentAdminKillParams, SubagentAdminKillResult } from "./subagent-control.types.js";
-import { SUBAGENT_KILL_TASK_ERROR } from "./subagent-control.types.js";
 import { resolveSubagentKillTargetState } from "./subagent-registry-completion.js";
 import {
   captureSubagentExecution,
   getSubagentExecutionCleanup,
 } from "./subagent-registry-execution-cleanup.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
-import {
-  listSubagentRunsForController,
-  listSubagentRunsForRequester,
-} from "./subagent-registry-read.js";
+import { listRunsForControllerFromRuns } from "./subagent-registry-queries.js";
+import { listSubagentRunsForRequester } from "./subagent-registry-read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 async function killSubagentRun(
@@ -405,7 +402,7 @@ export async function killSessionSubagentRuns(params: {
     assertCurrent: params.assertCurrent,
     runs: [
       ...listSubagentRunsForRequester(params.sessionKey, { requesterAgentId: params.agentId }),
-      ...listSubagentRunsForController(params.sessionKey, params.agentId),
+      ...listRunsForControllerFromRuns(subagentRuns, params.sessionKey, params.agentId),
     ],
     // Ordinary controller mutations retain their narrower authority. Only an admitted
     // lifecycle boundary can retire work whose completion belongs to this session.
@@ -516,15 +513,12 @@ export async function killSubagentRunAdmin(
       // Return the freshest registry state so task cancellation cannot make a stale kill sticky.
       const targetState = resolveSubagentKillTargetState(tree.entry) ?? stopResult.targetState;
       const killedTarget =
-        targetState?.state === "terminal" &&
-        targetState.task.status === "cancelled" &&
-        targetState.task.error === SUBAGENT_KILL_TASK_ERROR;
+        targetState?.state === "terminal" && targetState.task.status === "cancelled";
       const stopResultAlreadyClearedAbort =
         stopResult.targetState !== undefined &&
         !(
           stopResult.targetState.state === "terminal" &&
-          stopResult.targetState.task.status === "cancelled" &&
-          stopResult.targetState.task.error === SUBAGENT_KILL_TASK_ERROR
+          stopResult.targetState.task.status === "cancelled"
         );
       const resolved = stopped.session;
       if (targetState && !killedTarget && !stopResultAlreadyClearedAbort && resolved) {

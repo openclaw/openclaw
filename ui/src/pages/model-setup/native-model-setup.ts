@@ -132,7 +132,7 @@ export class NativeModelSetup {
     }
   }
 
-  private async loadNativeModels(refresh = true): Promise<void> {
+  private async loadNativeModels(refresh: boolean): Promise<void> {
     const connection = this.options.getConnection();
     const context = this.options.getContext();
     const client = context.gateway.snapshot.client;

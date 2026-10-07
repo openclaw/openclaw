@@ -95,6 +95,20 @@ export async function forkSessionAtMessage(
   return await mutateSqliteSessionAtMessage(params, "fork", expectedState);
 }
 
+/** Gateway-owned source predicates are checked beside the transaction's fresh session row. */
+export async function forkSessionAtMessageWithPreconditions(
+  params: SessionMessageCutMutationParams & { targetKey: string },
+  expectedState: SessionEntryExpectedState | undefined,
+  preconditions: { sourceRepositoryWorkspaceId: string },
+): Promise<SessionMessageCutMutationResult | { status: "conflict" }> {
+  return await mutateSqliteSessionAtMessage(
+    params,
+    "fork",
+    expectedState,
+    preconditions.sourceRepositoryWorkspaceId,
+  );
+}
+
 export async function switchSessionBranch(
   params: SessionBranchSwitchMutationParams,
   expectedState?: SessionEntryExpectedState,
@@ -110,6 +124,7 @@ function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: "fork" | "rewind",
   expectedState?: SessionEntryExpectedState,
+  sourceRepositoryWorkspaceId?: string,
 ): Promise<SessionMessageCutMutationResult | { status: "conflict" }>;
 function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
@@ -121,6 +136,7 @@ async function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: SessionTranscriptMutationMode,
   expectedState?: SessionEntryExpectedState,
+  sourceRepositoryWorkspaceId?: string,
 ): Promise<SessionTranscriptMutationResult> {
   const canonicalSourceKey = normalizeStoreSessionKey(params.sessionKey);
   const sourceKey = normalizeStoreSessionKey(params.sessionStoreKey ?? params.sessionKey);
@@ -134,8 +150,8 @@ async function mutateSqliteSessionAtMessage(
   });
   const intent: SessionMessageCutIntent = {
     canonicalSourceKey,
-    creation: params.creation,
-    forkWorkspace: params.forkWorkspace,
+    creation: params.creation ? structuredClone(params.creation) : undefined,
+    forkWorkspace: params.forkWorkspace ? structuredClone(params.forkWorkspace) : undefined,
     entryId: params.entryId,
     expectedState,
     mode,
@@ -144,7 +160,7 @@ async function mutateSqliteSessionAtMessage(
     targetKey,
   };
   const options = toDatabaseOptions(resolved);
-  if (isMainThread && mode !== "fork" && supportsOpenClawAgentDatabaseExecution(options)) {
+  if (isMainThread && supportsOpenClawAgentDatabaseExecution(options)) {
     const pathname = resolveOpenClawAgentSqlitePath(options);
     const source = readDatabasePathIdentitySync(pathname);
     if (intent.expectedState) {
@@ -172,8 +188,10 @@ async function mutateSqliteSessionAtMessage(
             { ...resolved, env },
             prepared,
             assertCurrent,
+            sourceRepositoryWorkspaceId,
           ),
         selection,
+        sourceRepositoryWorkspaceId,
       );
     } finally {
       selection?.release();
@@ -206,6 +224,7 @@ async function mutateSqliteSessionAtMessage(
       resolved,
       { ...intent, expectedState: preparedExpectedState },
       assertPreparedCurrent,
+      sourceRepositoryWorkspaceId,
     );
   return mode !== "fork" && preparedEntry
     ? await withSqliteSessionContextReset(
@@ -221,6 +240,7 @@ function mutatePreparedSqliteSessionAtMessage(
   resolved: ResolvedSqliteScope,
   intent: SessionMessageCutIntent,
   assertPreparedCurrent?: () => void,
+  sourceRepositoryWorkspaceId?: string,
 ): Promise<SessionTranscriptMutationResult> {
   return runExclusiveSqliteSessionWrite(
     resolved,
@@ -239,6 +259,7 @@ function mutatePreparedSqliteSessionAtMessage(
             database,
             resolved,
             intent,
+            { sourceRepositoryWorkspaceId },
           );
           const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
           return {
@@ -274,7 +295,11 @@ export function mutateSqliteSessionAtMessageInTransaction(
   database: OpenClawAgentDatabase,
   resolved: ResolvedSqliteScope,
   params: SessionMessageCutIntent,
-  projection?: { scheduleProjectionReconcile?: boolean; onProjectionReconcileNeeded?: () => void },
+  projection?: {
+    scheduleProjectionReconcile?: boolean;
+    onProjectionReconcileNeeded?: () => void;
+    sourceRepositoryWorkspaceId?: string;
+  },
 ): SessionTranscriptMutationResult {
   const currentEntry = readSessionEntryRow(database, params.sourceKey)?.entry;
   if (!currentEntry?.sessionId) {
@@ -286,6 +311,12 @@ export function mutateSqliteSessionAtMessageInTransaction(
     currentEntry.lifecycleRevision !== params.expectedState.lifecycleRevision
   ) {
     return { status: "conflict" };
+  }
+  if (
+    projection?.sourceRepositoryWorkspaceId !== undefined &&
+    currentEntry.repositoryWorkspaceId !== projection.sourceRepositoryWorkspaceId
+  ) {
+    throw new Error("Repository workspace changed before session fork");
   }
   // Local cuts rotate transcript identity and clear harness ownership. Locked
   // history must instead stay with its native owner, even without an upstream link.
@@ -363,20 +394,61 @@ export function mutateSqliteSessionAtMessageInTransaction(
 
   // Rotating transcript identity fences stale live managers: later snapshot-replace writes
   // target the old session and cannot erase this leaf repoint from the active session.
-  const nextEntry = {
-    ...cloneMessageCutSessionEntry({
-      currentEntry,
-      forked: params.mode === "fork",
-      forkSource:
-        params.mode === "fork"
-          ? {
-              sessionKey: params.canonicalSourceKey,
-              sessionId: currentEntry.sessionId,
-              entryId: params.entryId,
-            }
-          : undefined,
-      nextSessionId,
-    }),
+  const forked = params.mode === "fork";
+  const nextEntry: SessionEntry = {
+    // Rewind keeps retired history references so cleanup cannot orphan old transcripts.
+    ...(forked ? inheritSessionSelection(currentEntry) : currentEntry),
+    sessionId: nextSessionId,
+    lifecycleRevision: forked ? randomUUID() : currentEntry.lifecycleRevision,
+    updatedAt: Date.now(),
+    systemSent: false,
+    abortedLastRun: false,
+    lifecycleRunId: undefined,
+    lastRunId: undefined,
+    startedAt: undefined,
+    endedAt: undefined,
+    runtimeMs: undefined,
+    status: undefined,
+    inputTokens: undefined,
+    outputTokens: undefined,
+    cacheRead: undefined,
+    cacheWrite: undefined,
+    estimatedCostUsd: undefined,
+    totalTokens: undefined,
+    totalTokensFresh: undefined,
+    totalTokensVersion: undefined,
+    // A rotated transcript cannot resume provider/runtime identity from the old tail.
+    // Clear transcript-derived accounting too so the next turn rebuilds canonical state.
+    contextTokens: undefined,
+    contextTokensSource: undefined,
+    contextBudgetStatus: undefined,
+    compactionCount: undefined,
+    transcriptByteCompactionLatch: undefined,
+    memoryFlush: undefined,
+    cliSessionBindings: undefined,
+    cliSessionIds: undefined,
+    claudeCliSessionId: undefined,
+    agentHarnessId: undefined,
+    modelSelectionLocked: undefined,
+    skillsSnapshot: undefined,
+    systemPromptReport: undefined,
+    restartRecoveryRuns: undefined,
+    restartRecoveryForceSafeTools: undefined,
+    abortCutoffMessageSid: undefined,
+    abortCutoffTimestamp: undefined,
+    usageFamilyKey: forked ? undefined : currentEntry.usageFamilyKey,
+    usageFamilySessionIds: forked ? undefined : currentEntry.usageFamilySessionIds,
+    previousSessionId: forked ? undefined : currentEntry.sessionId,
+    ...(forked
+      ? {
+          forkSource: {
+            sessionKey: params.canonicalSourceKey,
+            sessionId: currentEntry.sessionId,
+            entryId: params.entryId,
+          },
+          parentSessionKey: params.canonicalSourceKey,
+        }
+      : {}),
     ...(params.mode === "fork" ? params.forkWorkspace : {}),
     ...(params.mode === "fork" && params.creation
       ? buildSessionCreationStamp(params.creation)
@@ -456,65 +528,6 @@ function resolveMessageCut(
     ...(editorMediaRefs ? { editorMediaRefs } : {}),
     parentId: target.parentId,
     prefix,
-  };
-}
-
-function cloneMessageCutSessionEntry(params: {
-  currentEntry: SessionEntry;
-  forked: boolean;
-  forkSource?: NonNullable<SessionEntry["forkSource"]>;
-  nextSessionId: string;
-}): SessionEntry {
-  // Rewind keeps retired history references so cleanup cannot orphan old transcripts.
-  const baseEntry = params.forked
-    ? inheritSessionSelection(params.currentEntry)
-    : params.currentEntry;
-  return {
-    ...baseEntry,
-    sessionId: params.nextSessionId,
-    lifecycleRevision: params.forked ? randomUUID() : params.currentEntry.lifecycleRevision,
-    updatedAt: Date.now(),
-    systemSent: false,
-    abortedLastRun: false,
-    lifecycleRunId: undefined,
-    lastRunId: undefined,
-    startedAt: undefined,
-    endedAt: undefined,
-    runtimeMs: undefined,
-    status: undefined,
-    inputTokens: undefined,
-    outputTokens: undefined,
-    cacheRead: undefined,
-    cacheWrite: undefined,
-    estimatedCostUsd: undefined,
-    totalTokens: undefined,
-    totalTokensFresh: undefined,
-    totalTokensVersion: undefined,
-    // A rotated transcript cannot resume provider/runtime identity from the old tail.
-    // Clear transcript-derived accounting too so the next turn rebuilds canonical state.
-    contextTokens: undefined,
-    contextTokensSource: undefined,
-    contextBudgetStatus: undefined,
-    compactionCount: undefined,
-    transcriptByteCompactionLatch: undefined,
-    memoryFlush: undefined,
-    cliSessionBindings: undefined,
-    cliSessionIds: undefined,
-    claudeCliSessionId: undefined,
-    agentHarnessId: undefined,
-    modelSelectionLocked: undefined,
-    skillsSnapshot: undefined,
-    systemPromptReport: undefined,
-    restartRecoveryRuns: undefined,
-    restartRecoveryForceSafeTools: undefined,
-    abortCutoffMessageSid: undefined,
-    abortCutoffTimestamp: undefined,
-    usageFamilyKey: params.forked ? undefined : params.currentEntry.usageFamilyKey,
-    usageFamilySessionIds: params.forked ? undefined : params.currentEntry.usageFamilySessionIds,
-    previousSessionId: params.forked ? undefined : params.currentEntry.sessionId,
-    ...(params.forkSource
-      ? { forkSource: params.forkSource, parentSessionKey: params.forkSource.sessionKey }
-      : {}),
   };
 }
 

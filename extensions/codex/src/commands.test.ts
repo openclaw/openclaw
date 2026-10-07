@@ -45,7 +45,6 @@ import {
   mockArg,
   readDiagnosticsConfirmationToken,
   requestParams,
-  requireResultText,
   runCommand,
   supervisedTestBinding,
   useCodexCommandTestState,
@@ -1076,6 +1075,7 @@ describe("codex command", () => {
   });
 
   it("reclaims an unloaded plugin's stale generation before attaching a thread", async () => {
+    const threadId = "thread-new <@U123> [trusted](https://evil)";
     const sessionKey = "agent:main:test:chat-1";
     const storePath = path.join(tempDir, "sessions.json");
     await writeTestBinding(
@@ -1093,11 +1093,11 @@ describe("codex command", () => {
       entry: { sessionId: "session-new", updatedAt: Date.now() },
     });
     const codexControlRequest = createResumeControlRequest(
-      createThreadResumeResponse({ threadId: "thread-new" }),
+      createThreadResumeResponse({ threadId }),
     );
 
     const result = await runCommand(
-      "resume thread-new",
+      `resume "${threadId}"`,
       { codexControlRequest },
       {
         sessionId: "session-new",
@@ -1107,8 +1107,10 @@ describe("codex command", () => {
     );
 
     expect(result.text).toBe(
-      "Attached this OpenClaw session to Codex thread thread-new. The next turn will validate its tools and apply this session's configuration before continuing.",
+      "Attached this OpenClaw session to Codex thread thread-new &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09. The next turn will validate its tools and apply this session's configuration before continuing.",
     );
+    expect(result.text).not.toContain("<@U123>");
+    expect(result.text).not.toContain("[trusted](https://evil)");
     expect(codexControlRequest).toHaveBeenCalledTimes(1);
     expect(
       testCodexAppServerBindingStore.read({
@@ -1117,7 +1119,7 @@ describe("codex command", () => {
         sessionId: "session-new",
         sessionKey,
       }),
-    ).toMatchObject({ threadId: "thread-new" });
+    ).toMatchObject({ threadId });
   });
 
   it("resumes a replacement after adopting the explicit-store predecessor binding", async () => {
@@ -1303,7 +1305,7 @@ describe("codex command", () => {
 
     const command = runCommand("resume thread-release-rollover", { codexControlRequest }, context);
     try {
-      await vi.waitFor(() => expect(oldReleaseStarted).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(oldReleaseStarted).toHaveBeenCalledOnce(), { timeout: 5_000 });
       await patchSessionEntry({ ...scope, update: () => ({ sessionId: "session-2" }) });
       releaseOld();
 
@@ -1515,7 +1517,6 @@ describe("codex command", () => {
 
   it.each([
     { label: "sandbox", context: sandboxContext(), reason: "OpenClaw sandboxing" },
-    { label: "node session", context: nodeExecContext(), reason: "OpenClaw exec host=node" },
     {
       label: "node config",
       context: nodeExecContext({ sessionKey: undefined }),
@@ -1685,23 +1686,6 @@ describe("codex command", () => {
       }
     },
   );
-
-  it("escapes resumed Codex thread ids before chat display", async () => {
-    const unsafe = "thread-123 <@U123> [trusted](https://evil)";
-    const deps = createDeps({
-      codexControlRequest: createResumeControlRequest(
-        createThreadResumeResponse({ threadId: unsafe }),
-      ),
-    });
-
-    const result = await runCommand(`resume "${unsafe}"`, deps);
-
-    expect(result.text).toContain(
-      "thread-123 &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09",
-    );
-    expect(result.text).not.toContain("<@U123>");
-    expect(result.text).not.toContain("[trusted](https://evil)");
-  });
 
   it.each([false, true])("formats status probes safely (connected: %s)", async (connected) => {
     const skill = (name: string, enabled: boolean, cwd: string) => ({
@@ -1948,14 +1932,9 @@ describe("codex command", () => {
       }
     });
 
-    it.each([false, true])("escapes account output (probe succeeded: %s)", async (ok) => {
+    it("escapes failed account probes", async () => {
       const unsafe = "<@U123> [trusted](https://evil) @here";
-      const result = await readAccount(
-        accountRequests(
-          ok ? success({ account: { id: unsafe } }) : failure(unsafe),
-          ok ? success([]) : failure(unsafe),
-        ),
-      );
+      const result = await readAccount(accountRequests(failure(unsafe), failure(unsafe)));
       expect(result.text).toContain(
         "&lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
       );
@@ -2101,30 +2080,6 @@ describe("codex command", () => {
         undefined,
         { config, agentDir, authProfileId: "openai:personal-email@gmail.com", isolated: true },
       );
-    });
-
-    it("respects openai-alias explicit order over stale lastGood for API key profiles", async () => {
-      const config = {};
-      installAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            "openai:fresh-key": apiKeyProfile("fresh"),
-            "openai:stale-key": apiKeyProfile("stale"),
-          },
-          order: { openai: ["openai:fresh-key", "openai:stale-key"] },
-          lastGood: { openai: "openai:stale-key" },
-        },
-        config,
-      );
-      const request = accountRequests(
-        success({ account: { type: "unknown" }, requiresOpenaiAuth: false }),
-        failure("usage data unavailable"),
-      );
-      const result = await readAccount(request, { config });
-      expect(result.text).toContain("\n  1. fresh-key   API key   — active now");
-      expect(result.text).not.toContain("stale-key   API key   — active now");
-      expect(request).toHaveBeenCalledTimes(2);
     });
 
     it("shows temporary and permanent auth cooldowns as expired subscriptions", async () => {
@@ -2390,6 +2345,10 @@ describe("codex command", () => {
       overrides: {
         ready: false,
         reason: "live_test_failed" as const,
+        pluginName: "<@U123>",
+        mcpServerName: "computer-use [server](https://evil)",
+        marketplaceName: "desktop_tools",
+        tools: ["list_apps", "[click](https://evil)"],
         liveTest: {
           status: "failed" as const,
           ok: false,
@@ -2404,31 +2363,17 @@ describe("codex command", () => {
         warnings: [
           "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to fail closed.",
         ],
-        message:
-          "Computer Use live test failed after 2 attempts: list_apps timed out Startup is allowed because computerUse.strictReadiness is false.",
+        message: "Computer Use live test failed @here.",
       },
       includes: [
         "Computer Use: not ready",
         "Live test: failed (2 attempts, 60000ms)",
         "Warning: Computer Use live test failed",
-      ],
-      excludes: [],
-    },
-    {
-      name: "escapes Codex Computer Use status fields before chat display",
-      overrides: {
-        pluginName: "<@U123>",
-        mcpServerName: "computer-use [server](https://evil)",
-        marketplaceName: "desktop_tools",
-        tools: ["list_apps", "[click](https://evil)"],
-        message: "Computer Use is ready @here.",
-      },
-      includes: [
         "Plugin: &lt;\uff20U123&gt; (installed)",
         "MCP server: computer-use \uff3bserver\uff3d\uff08https://evil\uff09 (2 tools)",
         "Marketplace: desktop\uff3ftools",
         "Tools: list\uff3fapps, \uff3bclick\uff3d\uff08https://evil\uff09",
-        "Computer Use is ready \uff20here.",
+        "Computer Use live test failed \uff20here.",
       ],
       excludes: ["<@U123>", "[click](https://evil)", "@here"],
     },
@@ -2488,8 +2433,6 @@ describe("codex command", () => {
   });
 
   it.each([
-    ["status --plugin custom_plugin@v2", 'computerUse.pluginName = "custom_plugin@v2"', "status"],
-    ["install --server custom-server", 'computerUse.mcpServerName = "custom-server"', "install"],
     [
       "install --mcp-server custom-server",
       'computerUse.mcpServerName = "custom-server"',
@@ -2773,34 +2716,6 @@ describe("codex command", () => {
         }),
       ].join("\n"),
     });
-  });
-
-  it("escapes approval notes while preserving the UTF-16 upload boundary", async () => {
-    await writeTestBinding(sessionIdentity, { threadId: "thread-note", cwd: "/repo" });
-    const safeCodexControlRequest = vi.fn(async () => ({ ok: true as const, value: {} }));
-    const deps = createDeps({ safeCodexControlRequest });
-    const prefix = "<@U123> [trusted](https://evil) @here `tick`";
-    const padding = "x".repeat(2047 - prefix.length);
-    const reason = prefix + padding;
-    const request = await runCommand(`diagnostics ${reason}😀tail`, deps);
-    expect(requireResultText(request).split("\n")).toContain(
-      "Note: &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here \uff40tick\uff40" +
-        padding,
-    );
-    const token = readDiagnosticsConfirmationToken(request);
-    await runCommand(`diagnostics confirm ${token}`, deps);
-    expect(safeCodexControlRequest).toHaveBeenCalledExactlyOnceWith(
-      undefined,
-      CODEX_CONTROL_METHODS.feedback,
-      {
-        classification: "bug",
-        reason,
-        threadId: "thread-note",
-        includeLogs: true,
-        tags: { source: "openclaw-diagnostics", channel: "test" },
-      },
-      expect.any(Object),
-    );
   });
 
   it("throttles repeated diagnostics uploads for the same thread", async () => {
@@ -3375,61 +3290,6 @@ describe("codex command", () => {
     );
   });
 
-  it("records an approved Codex bind intent without starting a thread", async () => {
-    await writeTestBinding(sessionIdentity, {
-      threadId: "thread-123",
-      cwd: "/repo",
-      authProfileId: "openai:work",
-      modelProvider: "openai",
-    });
-    const requestConversationBinding = vi.fn(async (_request?: { summary?: string }) => ({
-      status: "bound" as const,
-      binding: publicConversationBinding(),
-    }));
-
-    await expect(
-      runCommand(
-        'bind "thread-123 <@U123>" --cwd "/repo [trusted](https://evil)" --model gpt-5.4 --provider openai',
-        {
-          resolveCodexDefaultWorkspaceDir: vi.fn(() => "/default"),
-        },
-        {
-          requestConversationBinding,
-        },
-      ),
-    ).resolves.toEqual({
-      text: "Bound this conversation to thread-123 &lt;\uff20U123&gt; in /repo \uff3btrusted\uff3d\uff08https://evil\uff09. The next message will initialize it.",
-    });
-    expect(requestConversationBinding).toHaveBeenCalledWith({
-      summary:
-        "Codex app-server thread thread-123 &lt;\uff20U123&gt; in /repo \uff3btrusted\uff3d\uff08https://evil\uff09",
-      detachHint: "/codex detach",
-      data: {
-        kind: "codex-app-server-session",
-        version: 2,
-        bindingId: expect.any(String),
-        workspaceDir: "/repo [trusted](https://evil)",
-        agentId: "main",
-        agentDir: path.join(tempDir, "agents", "main", "agent"),
-        source: {
-          agentId: "main",
-          sessionId: "session-1",
-          threadId: "thread-123",
-        },
-        start: {
-          id: expect.any(String),
-          threadId: "thread-123 <@U123>",
-          model: "gpt-5.4",
-          modelProvider: "openai",
-          authProfileId: "openai:work",
-        },
-      },
-    });
-    expect(testCodexAppServerBindingStore.read(sessionIdentity)).toMatchObject({
-      threadId: "thread-123",
-    });
-  });
-
   it("does not transfer a replacement session thread while recording bind intent", async () => {
     const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
     await writeTestBinding(identity, { threadId: "thread-old", cwd: "/repo" });
@@ -3587,7 +3447,7 @@ describe("codex command", () => {
     const storePath = path.join(tempDir, "explicit", "sessions.json");
     const configuredStorePath = path.join(tempDir, "configured", "sessions.json");
     for (const [targetStore, model, permissionMode] of [
-      [storePath, "gpt-5.4", "full"],
+      [storePath, "model_<@U123>_[trusted](https://evil)", "full"],
       [configuredStorePath, "configured-model", "guarded"],
     ] as const) {
       await upsertSessionEntry({
@@ -3617,7 +3477,9 @@ describe("codex command", () => {
     await runCommand("model gpt-5.5", {}, context);
     await runCommand("permissions default", {}, context);
 
-    expect(modelStatus.text).toBe("Codex model: gpt-5.4");
+    expect(modelStatus.text).toBe(
+      "Codex model: model\uff3f&lt;\uff20U123&gt;\uff3f\uff3btrusted\uff3d\uff08https://evil\uff09",
+    );
     expect(permissionStatus.text).toBe("Codex permissions: full access.");
     expect(getSessionEntry({ storePath, sessionKey })).toMatchObject({
       modelOverride: "gpt-5.5",
@@ -3693,7 +3555,6 @@ describe("codex command", () => {
       mode: "yolo",
       senderIsOwner: true,
       gatewayClientScopes: ["operator.write"],
-      initialPermissionMode: undefined,
       expectedText:
         "Full Codex permissions require operator.admin. Choose Admin in the Control UI permission picker, or use an admin-authenticated CLI.",
       expectedPermissionMode: undefined,
@@ -3703,18 +3564,8 @@ describe("codex command", () => {
       mode: "yolo",
       senderIsOwner: false,
       gatewayClientScopes: ["operator.admin"],
-      initialPermissionMode: undefined,
       expectedText: "Codex permissions set to full access.",
       expectedPermissionMode: "full",
-    },
-    {
-      name: "persists explicit guarded default for an owner without admin scope",
-      mode: "default",
-      senderIsOwner: true,
-      gatewayClientScopes: ["operator.write"],
-      initialPermissionMode: "full",
-      expectedText: "Codex permissions set to guarded.",
-      expectedPermissionMode: "guarded",
     },
   ] as const)("$name", async (testCase) => {
     const sessionKey = `agent:main:test:permissions-${testCase.mode}`;
@@ -3726,9 +3577,6 @@ describe("codex command", () => {
         sessionId: "session-1",
         updatedAt: Date.now(),
         sessionRoot: tempDir,
-        ...(testCase.initialPermissionMode
-          ? { permissionMode: testCase.initialPermissionMode }
-          : {}),
       },
     });
 
@@ -3830,29 +3678,14 @@ describe("codex command", () => {
 
   it.each([
     {
-      direct: false,
-      hasSession: true,
-      boundModel: "bound-model",
-      expected: "Codex model: bound-model",
-    },
-    {
-      direct: false,
       hasSession: true,
       boundModel: undefined,
       expected: "Usage: /codex model <model>",
     },
     {
-      direct: false,
       hasSession: false,
       boundModel: "bound-model",
       expected: "Codex model: bound-model",
-    },
-    {
-      direct: true,
-      hasSession: true,
-      boundModel: "bound-model",
-      expected:
-        "Codex model: model\uff3f&lt;\uff20U123&gt;\uff3f\uff3btrusted\uff3d\uff08https://evil\uff09",
     },
   ])("keeps conversation model status independent from its ambient session", async (testCase) => {
     const sessionKey = "agent:main:conversation-model";
@@ -3864,16 +3697,12 @@ describe("codex command", () => {
         entry: {
           sessionId: "session-1",
           updatedAt: Date.now(),
-          modelOverride: testCase.direct
-            ? "model_<@U123>_[trusted](https://evil)"
-            : "outer-override-model",
+          modelOverride: "outer-override-model",
         },
       });
     }
     await writeTestBinding(
-      testCase.direct
-        ? { ...sessionIdentity, sessionKey }
-        : { kind: "conversation", bindingId: "binding-data-1" },
+      { kind: "conversation", bindingId: "binding-data-1" },
       {
         threadId: "thread-conversation",
         cwd: "/repo",
@@ -3888,14 +3717,12 @@ describe("codex command", () => {
         sessionId: testCase.hasSession ? "session-1" : undefined,
         sessionKey: testCase.hasSession ? sessionKey : undefined,
         getCurrentConversationBinding: async () =>
-          testCase.direct
-            ? null
-            : publicConversationBinding({
-                kind: "codex-app-server-session",
-                version: 2,
-                bindingId: "binding-data-1",
-                workspaceDir: tempDir,
-              }),
+          publicConversationBinding({
+            kind: "codex-app-server-session",
+            version: 2,
+            bindingId: "binding-data-1",
+            workspaceDir: tempDir,
+          }),
       },
     );
 

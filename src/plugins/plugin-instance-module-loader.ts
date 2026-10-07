@@ -144,7 +144,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     const tryNative =
       process.env.JITI_JSX === "1" || process.env.JITI_JSX === "true"
         ? false
-        : (process.versions.bun && artifact.boundaryRoot.includes("\\")) || bunNeedsNativeSource
+        : bunNeedsNativeSource
           ? true
           : undefined;
     const effectiveTryNative = tryNative ?? resolvePluginLoaderTryNative(params.source);

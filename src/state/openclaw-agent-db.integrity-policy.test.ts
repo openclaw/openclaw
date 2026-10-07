@@ -107,7 +107,7 @@ it.each([
         return result;
       });
       const queued = vi
-        .spyOn(verifier, "requestOpenClawAgentDatabaseQuickCheck")
+        .spyOn(verifier, "requestOpenClawAgentDatabaseIntegrityCheck")
         .mockImplementation(() => {});
       logger.info.mockClear();
       const reopened = openOpenClawAgentDatabase(options);

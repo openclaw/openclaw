@@ -12,6 +12,7 @@ const restartFailureReasons: Partial<Record<GatewayRestartWaitOutcome, string>> 
   "build-id-mismatch": "the running Gateway build did not match the expected build",
   "stale-pids": "stale Gateway processes remained",
   "generation-changed": "the Gateway process generation changed before readiness was confirmed",
+  "service-definition-refused": "the service definition refused startup",
 };
 
 function formatGatewayStillStarting(snapshot: GatewayRestartSnapshot): string {
@@ -29,13 +30,17 @@ export function renderGatewayPortHealthDiagnostics(snapshot: GatewayPortHealthSn
     lines.push(`Port diagnostics errors: ${snapshot.portUsage.errors.join("; ")}`);
   }
   if (snapshot.probeError) {
-    lines.push(`Gateway probe failed: ${snapshot.probeError}`);
+    lines.push(`Gateway check failed: ${snapshot.probeError}`);
   }
   return lines;
 }
 
 export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): string[] {
   const lines: string[] = [];
+  const refusal = snapshot.runtime?.systemd?.startRefusal;
+  if (refusal) {
+    lines.push(`SERVICE-DEFINITION: ${refusal.message}`);
+  }
   if (snapshot.waitOutcome === "still-starting") {
     lines.push(formatGatewayStillStarting(snapshot));
   }
@@ -59,7 +64,7 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
   }
   for (const [heading, errors] of [
     ["Activated plugin load errors:", snapshot.activatedPluginErrors],
-    ["Channel health probe errors:", snapshot.channelProbeErrors],
+    ["Channel health check errors:", snapshot.channelProbeErrors],
   ] as const) {
     if (errors?.length) {
       lines.push(heading);
@@ -88,6 +93,11 @@ export function formatGatewayRestartFailure(params: {
   port: number;
   defaultTimeoutSeconds: number;
 }): { statusLine: string; failMessage: string } {
+  const refusal = params.health.runtime?.systemd?.startRefusal;
+  if (params.health.waitOutcome === "service-definition-refused" && refusal) {
+    const message = `SERVICE-DEFINITION: ${refusal.message}`;
+    return { statusLine: message, failMessage: message };
+  }
   if (params.health.waitOutcome === "still-starting") {
     const message = formatGatewayStillStarting(params.health);
     return { statusLine: message, failMessage: message };

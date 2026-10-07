@@ -58,7 +58,7 @@ it("backfills a nested requested workspace once instead of using the agent defau
     agents: { entries: { main: { workspace: agentWorkspace } } },
     session: { store: storePath },
   };
-  insertRegistryWorktree(env, {
+  await insertRegistryWorktree(env, {
     id: "legacy",
     name: "legacy",
     repoFingerprint: "0123456789abcdef",
@@ -286,7 +286,7 @@ async function createRegisteredProjectMigrationFixture() {
     }),
     { env },
   );
-  insertRegistryWorktree(env, {
+  await insertRegistryWorktree(env, {
     id: "legacy-project",
     name: "legacy-project",
     repoFingerprint: "0123456789abcdef",

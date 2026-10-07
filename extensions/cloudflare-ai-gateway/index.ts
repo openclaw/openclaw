@@ -120,11 +120,9 @@ export default definePluginEntry({
               normalizeOptionalSecretInput(ctx.opts.cloudflareAiGatewayGatewayId) ??
               storedMetadata.gatewayId;
             if (!accountId || !gatewayId) {
-              ctx.runtime.error(
+              throw new Error(
                 "Cloudflare AI Gateway setup requires --cloudflare-ai-gateway-account-id and --cloudflare-ai-gateway-gateway-id.",
               );
-              ctx.runtime.exit(1);
-              return null;
             }
             const resolved = await ctx.resolveApiKey({
               provider: PROVIDER_ID,

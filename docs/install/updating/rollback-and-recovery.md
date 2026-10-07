@@ -151,7 +151,7 @@ updater owns this ordering; staging a newer candidate cannot change an
 already-running older updater.
 On Windows, an eligible capture first runs the same native SQLite exclusion check
 used by rollback. This settles any retained WAL before recording write fingerprints,
-so later probe cleanup is not mistaken for another writer. If another connection
+so later check cleanup is not mistaken for another writer. If another connection
 prevents exclusion, snapshots remain available for manual recovery.
 Snapshots taken while a Gateway may still be writing are available for
 manual recovery only until verified successful activation, even if it exits later.

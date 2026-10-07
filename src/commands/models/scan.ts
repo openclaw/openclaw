@@ -43,11 +43,7 @@ function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
 
     const aToolLatency = a.tool.latencyMs ?? Number.POSITIVE_INFINITY;
     const bToolLatency = b.tool.latencyMs ?? Number.POSITIVE_INFINITY;
-    if (aToolLatency !== bToolLatency) {
-      return aToolLatency - bToolLatency;
-    }
-
-    return compareScanMetadata(a, b);
+    return aToolLatency === bToolLatency ? compareScanMetadata(a, b) : aToolLatency - bToolLatency;
   });
 }
 
@@ -55,11 +51,7 @@ function sortImageResults(results: ModelScanResult[]): ModelScanResult[] {
   return results.toSorted((a, b) => {
     const aLatency = a.image.latencyMs ?? Number.POSITIVE_INFINITY;
     const bLatency = b.image.latencyMs ?? Number.POSITIVE_INFINITY;
-    if (aLatency !== bLatency) {
-      return aLatency - bLatency;
-    }
-
-    return compareScanMetadata(a, b);
+    return aLatency === bLatency ? compareScanMetadata(a, b) : aLatency - bLatency;
   });
 }
 
@@ -72,11 +64,7 @@ function compareScanMetadata(a: ModelScanResult, b: ModelScanResult): number {
 
   const aParams = a.inferredParamB ?? 0;
   const bParams = b.inferredParamB ?? 0;
-  if (aParams !== bParams) {
-    return bParams - aParams;
-  }
-
-  return a.modelRef.localeCompare(b.modelRef);
+  return aParams === bParams ? a.modelRef.localeCompare(b.modelRef) : bParams - aParams;
 }
 
 function buildScanHint(result: ModelScanResult): string {
@@ -112,7 +100,7 @@ function printMetadataOnlyNotice(params: {
 }) {
   if (params.autoDowngraded) {
     params.runtime.log(
-      "OpenRouter free models still require OPENROUTER_API_KEY for live probes and inference. Listing public catalog metadata only.",
+      "OpenRouter free models still require OPENROUTER_API_KEY for live checks and inference. Listing public catalog metadata only.",
     );
   }
   params.runtime.log(
@@ -204,7 +192,7 @@ export async function modelsScanCommand(
   const requestedProbe = opts.probe ?? true;
   if (!requestedProbe && (opts.setDefault || opts.setImage)) {
     throw new Error(
-      "Cannot apply metadata-only OpenRouter scan results. Remove --no-probe or configure OPENROUTER_API_KEY and rerun with probes before changing defaults.",
+      "Cannot apply metadata-only OpenRouter scan results. Remove --no-probe or configure OPENROUTER_API_KEY and rerun with checks before changing defaults.",
     );
   }
   let probe = requestedProbe;
@@ -226,7 +214,7 @@ export async function modelsScanCommand(
     if (!storedKey) {
       if (opts.setDefault || opts.setImage) {
         throw new Error(
-          "Cannot apply metadata-only OpenRouter scan results. Configure OPENROUTER_API_KEY and rerun with probes before changing defaults.",
+          "Cannot apply metadata-only OpenRouter scan results. Configure OPENROUTER_API_KEY and rerun with checks before changing defaults.",
         );
       }
       // Without a key, keep the command useful as catalog discovery only; writes
@@ -253,7 +241,7 @@ export async function modelsScanCommand(
           if (phase !== "probe") {
             return;
           }
-          const labelBase = probe ? "Probing models" : "Scanning models";
+          const labelBase = probe ? "Checking models" : "Scanning models";
           update({
             completed,
             total,
@@ -281,7 +269,7 @@ export async function modelsScanCommand(
   const toolOk = results.filter((entry) => entry.tool.ok);
   if (toolOk.length === 0) {
     throw new Error(
-      `No tool-capable OpenRouter free models found. Try ${formatCliCommand("openclaw models scan --no-probe")} to inspect metadata-only candidates, or configure OPENROUTER_API_KEY before probing.`,
+      `No tool-capable OpenRouter free models found. Try ${formatCliCommand("openclaw models scan --no-probe")} to inspect metadata-only candidates, or configure OPENROUTER_API_KEY before checking.`,
     );
   }
 
@@ -360,8 +348,9 @@ export async function modelsScanCommand(
           }
         : cfg.agents?.defaults?.imageModel;
     const existingModel = toAgentModelListLike(cfg.agents?.defaults?.model);
-    const defaults = {
-      ...cfg.agents?.defaults,
+    cfg.agents ??= {};
+    cfg.agents.defaults = {
+      ...cfg.agents.defaults,
       model: {
         ...(existingModel?.primary ? { primary: existingModel.primary } : undefined),
         fallbacks: selected,
@@ -369,14 +358,8 @@ export async function modelsScanCommand(
       },
       ...(nextImageModel ? { imageModel: nextImageModel } : {}),
       models: nextModels,
-    } satisfies NonNullable<NonNullable<typeof cfg.agents>["defaults"]>;
-    return {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults,
-      },
     };
+    return cfg;
   });
 
   if (opts.json) {

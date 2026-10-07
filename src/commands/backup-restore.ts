@@ -33,10 +33,7 @@ type BackupRestoreOptions = {
   json?: boolean;
 };
 
-type BackupRestoreResult = Awaited<ReturnType<typeof prepareBackupArchive>>["result"] & {
-  targetPath: string;
-  warnings: string[];
-};
+type BackupRestoreResult = Awaited<ReturnType<typeof backupRestoreCommand>>;
 
 async function assertTargetOutsideLiveState(targetPath: string): Promise<void> {
   const [canonicalTarget, canonicalStateDir] = await Promise.all([
@@ -161,10 +158,7 @@ function formatRestoreResult(result: BackupRestoreResult): string {
 }
 
 /** Verify first, then extract a whole backup archive into a fresh staging directory. */
-export async function backupRestoreCommand(
-  runtime: RuntimeEnv,
-  options: BackupRestoreOptions,
-): Promise<BackupRestoreResult> {
+export async function backupRestoreCommand(runtime: RuntimeEnv, options: BackupRestoreOptions) {
   const targetPath = resolveRequiredBackupPath(options.target, "--target");
   await assertTargetOutsideLiveState(targetPath);
   const {
@@ -208,7 +202,7 @@ export async function backupRestoreCommand(
     });
   }
 
-  const result: BackupRestoreResult = {
+  const result = {
     ...verified,
     targetPath,
     warnings: [

@@ -1,4 +1,4 @@
-// Vitest shared config wires the shared test shard.
+// Threads inherit admission; forks also run this bootstrap in their own process.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,10 +29,7 @@ import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest.timeouts.ts";
 import { compiledSubprocessesPlugin } from "./vitest.worker-artifacts.ts";
 
 if (process.versions.bun) {
-  // Threads capture this decision when created; late admission leaves their SQLite pools conservative.
-  const { initializeSqliteRuntimeCapabilities } =
-    await import("../../src/infra/bun-sqlite-library.ts");
-  await initializeSqliteRuntimeCapabilities();
+  await import("./vitest.sqlite-preload.mts");
 }
 
 export type { LocalVitestScheduling };
@@ -52,7 +49,7 @@ export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)
 export const nonIsolatedRunnerPath = path.join(repoRoot, "test", "non-isolated-runner.ts");
 const vitestConfigFiles = fs
   .readdirSync(path.join(repoRoot, "test", "vitest"), { withFileTypes: true })
-  .filter((entry) => entry.isFile() && /\.(?:mjs|ts)$/u.test(entry.name))
+  .filter((entry) => entry.isFile() && /\.(?:mjs|mts|ts)$/u.test(entry.name))
   .map((entry) => `test/vitest/${entry.name}`)
   .toSorted((left, right) => left.localeCompare(right));
 export function resolveRepoRootPath(value: string): string {
@@ -563,7 +560,7 @@ export const sharedVitestConfig = {
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",
       ...vitestConfigFiles,
-      "test/vitest/**/*.{ts,mjs}",
+      "test/vitest/**/*.{ts,mts,mjs}",
     ].map(resolveRepoRootPath),
     include: [
       "src/**/*.test.ts",

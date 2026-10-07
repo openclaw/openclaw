@@ -199,15 +199,12 @@ describe("/models browse catalog recovery", () => {
     async (view) => {
       let current = true;
       catalogMocks.isCurrent = () => current;
-      const evaluating = createDeferred();
-      const resume = createDeferred();
-      const evaluateModelAuth = vi.fn(async () => ({
+      const evaluateModelAuth = vi.fn(() => ({
         availability: true as const,
         routeResolution: null,
       }));
-      evaluateModelAuth.mockImplementationOnce(async () => {
-        evaluating.resolve();
-        await resume.promise;
+      evaluateModelAuth.mockImplementationOnce(() => {
+        current = false;
         return { availability: true, routeResolution: null };
       });
       const createDecisions = modelDecisions.createModelCatalogDecisions;
@@ -223,9 +220,6 @@ describe("/models browse catalog recovery", () => {
       const rejected = expect(first).rejects.toBeInstanceOf(
         PreparedModelRuntimePublicationSupersededError,
       );
-      await evaluating.promise;
-      current = false;
-      resume.resolve();
       await rejected;
       catalogMocks.isCurrent = () => true;
       catalogMocks.readSnapshot.mockReturnValueOnce({
@@ -335,7 +329,7 @@ describe("/models browse catalog recovery", () => {
       },
       env: { ANTHROPIC_API_KEY: "synthetic-provider-key" },
       authStore: { version: 1, profiles: {} },
-      allowPreparedRuntimeAuth: false,
+      preparedRuntimeAuthStore: { version: 1, profiles: {} },
     });
 
     expect(

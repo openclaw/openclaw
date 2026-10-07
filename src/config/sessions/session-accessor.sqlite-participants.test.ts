@@ -91,7 +91,9 @@ describe("SQLite session participants", () => {
       read();
       const database = openOpenClawAgentDatabase(scope);
       const reads = trackSqliteStatementExecutions(database.db, ["participants"], (sql) =>
-        sql.startsWith('select * from "session_participants"') ? "participants" : null,
+        sql.startsWith('select "session_key", "identity_namespace", "actor_id"')
+          ? "participants"
+          : null,
       );
       try {
         for (let index = 0; index < 100; index++) {

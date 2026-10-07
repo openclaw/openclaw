@@ -31,7 +31,6 @@ describe("pending final delivery restart proof", () => {
   ): Promise<void> {
     const entry: SessionEntry = {
       sessionId: "session",
-      status: "running",
       startedAt: 10,
       lifecycleRunId: "active-run",
       updatedAt,
@@ -130,7 +129,7 @@ describe("pending final delivery restart proof", () => {
     const entry = loadSessionEntry({ sessionKey, storePath }) as SessionEntry;
     expect(entry.pendingFinalDelivery).toBeUndefined();
     expect(entry.restartRecoverySourceIngress).toBeUndefined();
-    expect(entry.status).toBe("running");
+    expect(entry.status).toBeUndefined();
     expect(entry.lifecycleRunId).toBe("active-run");
     expect(entry.updatedAt).toBe(1);
   });

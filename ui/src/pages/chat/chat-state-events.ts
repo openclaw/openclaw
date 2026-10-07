@@ -10,6 +10,7 @@ import {
   shouldHideAssistantChatMessage,
 } from "../../lib/chat/message-visibility.ts";
 import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import {
@@ -104,11 +105,21 @@ function finishSessionMessageRunReconcile(
   const cleared = row
     ? reconcileChatRunFromSessionRow(state, row, { publishRunStatus: true })
     : reconcileChatRunFromCurrentSessionRow(state, { publishRunStatus: true });
-  if (!cleared) {
+  const session = row ?? selectedChatSessionRow(state);
+  const needsRunObservation = Boolean(
+    state.chatRunId && session?.hasActiveRun === false && !isSessionRunActive(session),
+  );
+  if (!cleared && !needsRunObservation) {
     return false;
   }
-  clearPendingQueueItemsForRun(state, runId ?? undefined);
-  void loadChatHistory(state, { deferBranches: !presentation() })
+  if (cleared) {
+    clearPendingQueueItemsForRun(state, runId ?? undefined);
+  }
+  // A different completed run cannot settle local ownership without a fresh read.
+  void loadChatHistory(state, {
+    deferBranches: !presentation(),
+    supersedeInFlight: needsRunObservation,
+  })
     .finally(() => {
       if (!areUiSessionKeysEquivalent(state.sessionKey, sessionKey)) {
         return;
@@ -207,7 +218,6 @@ function replayPendingSessionMessageReload(
   state: ChatPageHost,
   payload: ChatEventPayload | undefined,
   presentation: ChatPanePresentation,
-  supersedeInFlight = false,
 ): boolean {
   const pendingSessionKey = state.pendingSessionMessageReloadSessionKey;
   const payloadSessionKey = payload?.sessionKey?.trim();
@@ -223,7 +233,6 @@ function replayPendingSessionMessageReload(
   state.pendingSessionMessageReloadSessionKey = null;
   void loadChatHistory(state, {
     deferBranches: !presentation(),
-    supersedeInFlight,
   }).finally(() => state.requestUpdate?.());
   return true;
 }
@@ -557,7 +566,10 @@ export function handlePageGatewayEvent(
         refreshPullRequestsForStreamedLinks(state, payload.runId, payload.deltaText);
       }
       const shouldRefreshPullRequests = finalAssistantReplyHasPullRequestLink(state, payload);
-      handleChatGatewayEvent(state, payload);
+      if (handleChatGatewayEvent(state, payload) === "injected") {
+        requestChatPageUpdate(state);
+        return;
+      }
       if (terminalPayload && sessionMatches) {
         clearPendingQueueItemsForRun(state, terminalPayload.runId);
       }

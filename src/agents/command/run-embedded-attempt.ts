@@ -218,7 +218,12 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
   let liveSwitchRetries = 0;
   let autoFallbackPrimaryProbeInterruptedByLiveSwitch = false;
   const fastModeStartedAtMs = Date.now();
-  const fallbackTrajectoryRecorder = createTrajectoryRuntimeRecorder({
+  const assertTrajectoryCurrent = () => {
+    params.opts.abortSignal?.throwIfAborted();
+    params.preparedRunAdmission.assertSourceCurrent();
+  };
+  assertTrajectoryCurrent();
+  const fallbackTrajectoryRecorder = await createTrajectoryRuntimeRecorder({
     cfg,
     runId,
     sessionId,
@@ -228,6 +233,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
     modelId: model,
     workspaceDir,
   });
+  assertTrajectoryCurrent();
   const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
     runId,
     agentId: sessionAgentId,

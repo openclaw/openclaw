@@ -42,7 +42,7 @@ import { DefaultResourceLoader } from "../sessions/resource-loader.js";
 import { createAgentSession } from "../sessions/sdk.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
-import { resolveCompactionFailure } from "./compact-reasons.js";
+import { isSummaryTimeoutFailure, resolveCompactionFailure } from "./compact-reasons.js";
 import {
   containsRealConversationMessages,
   summarizeCompactionMessages,
@@ -297,6 +297,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           workKey: diagnosticCompactionRunId,
         });
         markDiagnosticEmbeddedRunStarted({ ...diagnosticOwner, owner: diagnosticOwner });
+        // Each request start and each streamed output delta is progress, so both the
+        // native and delegated watchdogs measure silence, not request duration.
+        const refreshCompactionWatchdogs = () => {
+          resetCompactionTimeout?.();
+          params.compactionTimeoutReset?.();
+        };
         session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(session.agent.streamFn, {
           config: params.config,
           runId: diagnosticCompactionRunId,
@@ -312,12 +318,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),
           nextCallId: nextDiagnosticModelCallId,
           ownerGeneration: diagnosticOwner.generation,
-          // Multi-stage compaction intentionally serializes provider calls. Each new
-          // request is progress, so both native and delegated watchdogs get a fresh window.
-          onStarted: () => {
-            resetCompactionTimeout?.();
-            params.compactionTimeoutReset?.();
-          },
+          onStarted: refreshCompactionWatchdogs,
+          onOutputDelta: refreshCompactionWatchdogs,
         });
 
         const prior = await sanitizeSessionHistory({
@@ -477,12 +479,15 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             });
         const activeSession = session;
         let clientResult: Awaited<ReturnType<typeof activeSession.compact>> | undefined;
+        let summaryTimedOut = false;
+        // A timeout after generation is persistence; recovery would discard a real summary.
+        let summaryReady = false;
         if (!serverResult) {
-          try {
-            // The client watchdog starts here; refresh the delegated host watchdog with it.
-            params.compactionTimeoutReset?.();
-            const outcome = await compactWithSafetyTimeout(
-              async (_signal, resetTimeout) => {
+          let summarySignal: AbortSignal | undefined;
+          const compactClient = (summaryOutputPolicy: "none" | "deterministic" | undefined) =>
+            compactWithSafetyTimeout(
+              async (signal, resetTimeout) => {
+                summarySignal = signal;
                 resetCompactionTimeout = resetTimeout;
                 setCompactionSafeguardCancellation(compactionSessionManager, undefined);
                 const requestState =
@@ -497,10 +502,13 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 return activeSession[agentSessionAutomaticCompaction](
                   params.customInstructions,
                   requestState,
-                  resolveEffectiveCompactionMode(params.config) === "default" ? undefined : "none",
+                  summaryOutputPolicy,
                   {
                     requestBudget: accountingRecorder?.requestBudget,
                     pendingUserEntryId: accountingRecorder?.pendingUserEntryId,
+                    onSummaryReady: () => {
+                      summaryReady = true;
+                    },
                   },
                 );
               },
@@ -508,8 +516,49 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               {
                 abortSignal: params.abortSignal,
                 onCancel: () => activeSession.abortCompaction(),
+                // Under a host ceiling, the summary stops one window early so its own
+                // timeout outcome (the deterministic reduction or a failure) can commit.
+                ...(params.compactionDeadlineAt !== undefined &&
+                summaryOutputPolicy !== "deterministic"
+                  ? { deadlineAt: params.compactionDeadlineAt - compactionTimeoutMs }
+                  : {}),
               },
             );
+          try {
+            // The client watchdog starts here; refresh the delegated host watchdog with it.
+            params.compactionTimeoutReset?.();
+            const outcome = await compactClient(
+              resolveEffectiveCompactionMode(params.config) === "default" ? undefined : "none",
+            ).catch(async (error: unknown) => {
+              // Caller Stop, run timeout, and the outer host deadline abort params.abortSignal
+              // (#133260, #159105, #130993); manual /compact reports its own failure.
+              if (
+                trigger === "manual" ||
+                params.abortSignal?.aborted ||
+                summaryReady ||
+                !isSummaryTimeoutFailure({
+                  error,
+                  summarySignal,
+                  abortSignal: params.abortSignal,
+                  safeguardCancellation:
+                    getCompactionSafeguardRuntime(sessionManager)?.cancellation,
+                })
+              ) {
+                throw error;
+              }
+              // The timed-out request consumed the delegated window too. Rearm it
+              // synchronously, before its same-window timer fires behind the commit.
+              params.compactionTimeoutReset?.();
+              // The same summary would time out again next turn (#164220): commit the
+              // prepared cut without one.
+              summaryTimedOut = true;
+              log.warn(
+                `[compaction-diag] fallback runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                  `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
+                  `reason=timeout summary=deterministic`,
+              );
+              return await compactClient("deterministic");
+            });
             if (outcome.status === "skipped") {
               assertActive();
               return { ok: true, compacted: false, reason: outcome.reason };
@@ -557,7 +606,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           log.debug(
             `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
               `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
-              `attempt=${attempt} maxAttempts=${maxAttempts} outcome=compacted reason=none ` +
+              `attempt=${attempt} maxAttempts=${maxAttempts} outcome=compacted ` +
+              `reason=${summaryTimedOut ? "timeout summary=deterministic" : "none"} ` +
               `durationMs=${Date.now() - compactStartedAt} retrying=false ` +
               `post.messages=${postMetrics.messages} post.historyTextChars=${postMetrics.historyTextChars} ` +
               `post.toolResultChars=${postMetrics.toolResultChars} post.estTokens=${postMetrics.estTokens ?? "unknown"} ` +

@@ -34,6 +34,13 @@ initialization warning and the `update.status` RPC reports
 Status reads reuse that result; an explicit Dev checkout refresh can recover it.
 Package directories without Git metadata skip the Git discovery subprocess.
 
+Reconnecting Control UI clients share one preparation of the Gateway's restart
+notification snapshot. Update producers and the update-run watcher refresh that
+snapshot when an update changes; ordinary status reads do not reread or finalize
+the notification. The watcher also waits for a detached updater's late terminal
+notification for up to 30 minutes, then logs a warning if it remains pending.
+Run history continues to report the recorded outcome independently.
+
 For a clean source checkout configured with `update.channel: "stable"` or `"beta"`, `update status --json` can include `update.git.preferredTarget` with `channel`, `tag`, and the exact commit `sha`.
 This uses the updater's release selector and fetches into a temporary private Git repository, preserving the installed refs and checkout.
 The selected tag must still resolve to that commit at the release remote; retained local-only tags do not count as fresh targets.
@@ -77,7 +84,7 @@ completes. If migration state cannot be read, `migrationWarningsError` reports
 that failure while availability and run history remain visible.
 
 When the Gateway is reachable, status also reads its recorded channel warnings
-without probing channel services. JSON exposes these as `channelIssues`. This
+without checking channel services. JSON exposes these as `channelIssues`. This
 includes blocked channel startup after a local plugin requests trusted runtime
 state, with the source and supported installation remedy. An unavailable Gateway
 does not prevent availability or run-history output.
@@ -401,9 +408,9 @@ service and port inspection, health settlement, and final identity checks. The
 report and warning log record settlement, timeout with elapsed time and phase,
 or an unverified observation. A timeout is a warning and leaves the run eligible
 for later reconciliation; repeated diagnostics do not renew its abandonment timer.
-Runs without a recorded completed managed-service restart skip the probe and
+Runs without a recorded completed managed-service restart skip the check and
 record that skip. No fresh service-status read can permanently exclude a managed run.
-If native probe cleanup is still pending at the deadline, completion remains
+If native check cleanup is still pending at the deadline, completion remains
 unknown. Later cleanup confirmation preserves the original timeout; cleanup
 failure records both facts and names the failure in the report and warning log.
 Unknown cleanup never records success. Inspect `openclaw update status` before

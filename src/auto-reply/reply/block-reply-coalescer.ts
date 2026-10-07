@@ -8,20 +8,11 @@ import {
 import type { ReplyPayload } from "../types.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
 
-/** Coalesces many streaming reply fragments into fewer outbound payloads. */
-type BlockReplyCoalescer = {
-  enqueue: (payload: ReplyPayload) => void;
-  flush: (options?: { force?: boolean }) => Promise<void>;
-  hasBuffered: () => boolean;
-  stop: () => void;
-};
-
-/** Creates a text coalescer with idle and size-based flush behavior. */
 export function createBlockReplyCoalescer(params: {
   config: BlockStreamingCoalescing;
   shouldAbort: () => boolean;
   onFlush: (payload: ReplyPayload) => Promise<void> | void;
-}): BlockReplyCoalescer {
+}) {
   const { config, shouldAbort, onFlush } = params;
   const minChars = Math.max(1, Math.floor(config.minChars));
   const maxChars = Math.max(minChars, Math.floor(config.maxChars));
@@ -213,6 +204,6 @@ export function createBlockReplyCoalescer(params: {
     enqueue,
     flush,
     hasBuffered: () => Boolean(bufferText),
-    stop: () => clearIdleTimer(),
+    stop: clearIdleTimer,
   };
 }

@@ -18,39 +18,44 @@ import {
   resolveJobLastRunStatus,
 } from "./jobs-scheduling.js";
 import { sortCronJobs } from "./list-page-sort.js";
-import type {
-  CronJobsEnabledFilter,
-  CronJobsLastRunStatusFilter,
-  CronJobsScheduleKindFilter,
-  CronJobsTriggerFilter,
-  CronListPageOptions,
-  CronListPageResult,
-} from "./list-page-types.js";
+import type { CronListPageOptions, CronListPageResult } from "./list-page-types.js";
 import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import { ensureLoadedForRead, resolveCurrentDefaultAgentId } from "./ops-shared.js";
 import type { CronServiceState } from "./state.js";
 import { captureCronJobMutationSource, ensureLoaded } from "./store.js";
 
-/** Returns cron service status after a read-only maintenance pass. */
+/** Called under the read lock, after loading passive or newly committed state. */
+async function readSnapshot(
+  state: CronServiceState,
+): Promise<NonNullable<CronServiceState["readSnapshot"]>> {
+  await ensureLoadedForRead(state);
+  const storeRevision = getCronJobsStoreRevision(state.deps.storePath);
+  const source = state.store?.jobs;
+  const cached = state.schedulerStarted ? state.readSnapshot : undefined;
+  if (cached?.storeRevision === storeRevision && cached.source === source) {
+    return cached;
+  }
+  const sqlitePath = resolveOpenClawStateSqlitePath();
+  return (state.readSnapshot = {
+    storeRevision,
+    source,
+    readJobs: new WeakMap<CronJob, CronJob>(),
+    status: Object.freeze({
+      enabled: state.deps.cronEnabled,
+      triggersEnabled: state.deps.cronConfig?.triggers?.enabled !== false,
+      storePath: sqlitePath,
+      storage: "sqlite" as const,
+      sqlitePath,
+      jobs: state.store?.jobs.length ?? 0,
+      nextWakeAtMs: state.deps.cronEnabled ? (nextWakeAtMs(state) ?? null) : null,
+    }),
+  });
+}
+
+/** Returns the current scheduler generation's immutable aggregate status. */
 export async function status(state: CronServiceState) {
-  return await locked(
-    state,
-    async () => {
-      await ensureLoadedForRead(state);
-      const sqlitePath = resolveOpenClawStateSqlitePath();
-      return {
-        enabled: state.deps.cronEnabled,
-        triggersEnabled: state.deps.cronConfig?.triggers?.enabled !== false,
-        storePath: sqlitePath,
-        storage: "sqlite" as const,
-        sqlitePath,
-        jobs: state.store?.jobs.length ?? 0,
-        nextWakeAtMs: state.deps.cronEnabled ? (nextWakeAtMs(state) ?? null) : null,
-      };
-    },
-    { readOnly: true },
-  );
+  return await locked(state, async () => (await readSnapshot(state)).status, { readOnly: true });
 }
 
 /** Lists cron jobs sorted by next run time, excluding disabled jobs unless requested. */
@@ -163,31 +168,6 @@ export async function writeScratch(
   });
 }
 
-/** Record a terminal failure from a scheduler-owned event source. */
-function resolveEnabledFilter(opts?: CronListPageOptions): CronJobsEnabledFilter {
-  if (opts?.enabled === "all" || opts?.enabled === "enabled" || opts?.enabled === "disabled") {
-    return opts.enabled;
-  }
-  return opts?.includeDisabled ? "all" : "enabled";
-}
-
-function resolveScheduleKindFilter(opts?: CronListPageOptions): CronJobsScheduleKindFilter {
-  const kind = opts?.scheduleKind;
-  return kind && ["all", "at", "every", "cron", "on-exit", "stream"].includes(kind) ? kind : "all";
-}
-
-function resolveLastRunStatusFilter(opts?: CronListPageOptions): CronJobsLastRunStatusFilter {
-  const lastRunStatus = opts?.lastRunStatus;
-  return lastRunStatus && ["all", "ok", "error", "skipped", "unknown"].includes(lastRunStatus)
-    ? lastRunStatus
-    : "all";
-}
-
-function resolveTriggerFilter(opts?: CronListPageOptions): CronJobsTriggerFilter {
-  const trigger = opts?.trigger;
-  return trigger && ["all", "conditional", "unconditional"].includes(trigger) ? trigger : "all";
-}
-
 const SLOW_LIST_PAGE_MS = 1_000;
 
 /** Lists a filtered, sorted, bounded page of cron jobs for CLI/RPC callers. */
@@ -207,12 +187,12 @@ export async function listPage(
       async () => {
         enteredAt = performance.now();
         try {
-          await ensureLoadedForRead(state);
+          const read = await readSnapshot(state);
           const query = normalizeLowercaseStringOrEmpty(opts?.query);
-          const enabledFilter = resolveEnabledFilter(opts);
-          const scheduleKindFilter = resolveScheduleKindFilter(opts);
-          const lastRunStatusFilter = resolveLastRunStatusFilter(opts);
-          const triggerFilter = resolveTriggerFilter(opts);
+          const enabledFilter = opts?.enabled ?? (opts?.includeDisabled ? "all" : "enabled");
+          const scheduleKindFilter = opts?.scheduleKind ?? "all";
+          const lastRunStatusFilter = opts?.lastRunStatus ?? "all";
+          const triggerFilter = opts?.trigger ?? "all";
           const sortBy = opts?.sortBy ?? "nextRunAtMs";
           const sortDir = opts?.sortDir ?? "asc";
           const requestedAgentId = normalizeOptionalAgentId(opts?.agentId);
@@ -266,12 +246,9 @@ export async function listPage(
           });
           // Recheck visibility per request; passive readers still reload and repair.
           // Empty visibility prepasses must not evict the prepared nonempty list.
-          const revision = getCronJobsStoreRevision(state.deps.storePath);
-          const cached = state.schedulerStarted ? state.listPageSnapshot : undefined;
-          let snapshot = cached;
+          let snapshot = read.list;
           if (
             !snapshot ||
-            snapshot.storeRevision !== revision ||
             snapshot.sortBy !== sortBy ||
             snapshot.sortDir !== sortDir ||
             snapshot.filteredJobs.length !== filtered.length ||
@@ -279,31 +256,26 @@ export async function listPage(
           ) {
             const jobs = sortCronJobs([...filtered], sortBy, sortDir);
             snapshot = {
-              storeRevision: revision,
               filteredJobs: filtered,
               sortBy,
               sortDir,
               jobs,
-              readJobs:
-                cached?.storeRevision === revision
-                  ? cached.readJobs
-                  : new WeakMap<CronJob, CronJob>(),
               snapshotRevision: resolveCronListSnapshotRevision(jobs),
             };
-            if (state.schedulerStarted && (jobs.length > 0 || cached?.storeRevision !== revision)) {
-              state.listPageSnapshot = snapshot;
+            if (jobs.length > 0 || !read.list) {
+              read.list = snapshot;
             }
           }
-          const { jobs: sortedJobs, readJobs, snapshotRevision } = snapshot;
+          const { jobs: sortedJobs, snapshotRevision } = snapshot;
           const total = sortedJobs.length;
           const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
           const defaultLimit = total === 0 ? 50 : total;
           const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
           const jobs = sortedJobs.slice(offset, offset + limit).map((job) => {
-            let frozenJob = readJobs.get(job);
+            let frozenJob = read.readJobs.get(job);
             if (!frozenJob) {
               frozenJob = freezeJsonSnapshot(structuredClone(job));
-              readJobs.set(job, frozenJob);
+              read.readJobs.set(job, frozenJob);
             }
             return frozenJob;
           });

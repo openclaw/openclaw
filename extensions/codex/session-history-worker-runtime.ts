@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import {
+  captureCodexSessionContextReader,
   captureCodexSessionTranscriptReadAdmission,
   SessionTranscriptReadFenceError,
   validateCodexSessionTranscriptReadAdmission,
@@ -71,13 +72,18 @@ export async function projectCodexSettledHistoryInWorker(
     throw new Error("Actor history requires a captured sessionTarget");
   }
   const resolved = resolveCodexHistoryTarget(target);
-  if (contextReader) {
+  const reader =
+    contextReader ??
+    (target.sessionTarget && resolved.kind === "sqlite"
+      ? captureCodexSessionContextReader({ ...target.sessionTarget, ...resolved.target }, signal)
+      : undefined);
+  if (reader) {
     if (resolved.kind !== "sqlite") {
       throw new Error("Actor history requires a complete matching sessionTarget");
     }
     let result: CodexHistoryReadResult<JsonValue[]>;
     try {
-      result = await contextReader(resolved.target, (messages, header) => {
+      result = await reader(resolved.target, (messages, header) => {
         signal?.throwIfAborted();
         try {
           return {

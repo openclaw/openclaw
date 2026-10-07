@@ -13,23 +13,11 @@ import {
   normalizeOptionalTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-type DiscordPermissionsAuditSummary = {
-  unresolvedChannels?: number;
-  channels?: Array<{
-    channelId: string;
-    ok?: boolean;
-    missing?: string[];
-    error?: string | null;
-    matchKey?: string;
-    matchSource?: string;
-  }>;
-};
-
 function isDiscordMessageContentIntentDisabled(value: unknown): boolean {
   return isRecord(value) && isRecord(value.intents) && value.intents.messageContent === "disabled";
 }
 
-function readDiscordPermissionsAuditSummary(value: unknown): DiscordPermissionsAuditSummary {
+function readDiscordPermissionsAuditSummary(value: unknown) {
   if (!isRecord(value)) {
     return {};
   }

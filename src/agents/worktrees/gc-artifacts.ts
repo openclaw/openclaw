@@ -11,8 +11,8 @@ import {
   resolveManagedWorktreePathKeys,
   shouldPreserveOrphanCandidate,
 } from "./orphan-paths.js";
-import { getRegistryWorktree, listRegistryWorktrees } from "./registry.js";
-import { retireManagedWorktreeSnapshot } from "./snapshot-host.js";
+import { listRegistryWorktrees } from "./registry.js";
+import { retireExpiredManagedWorktreeSnapshot } from "./snapshot-host.js";
 import { WORKTREE_TEMPLATE_DIRECTORY } from "./template-cache.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
@@ -64,18 +64,16 @@ export async function collectRetiredWorktreeArtifacts({
         }
         for (const record of expired) {
           try {
-            const current = getRegistryWorktree(env, record.id);
-            if (!current || current.removedAt === undefined || current.removedAt >= expiresBefore) {
-              continue;
+            if (
+              await retireExpiredManagedWorktreeSnapshot({
+                env,
+                id: record.id,
+                expiresBefore,
+                guard,
+              })
+            ) {
+              snapshotsPruned += 1;
             }
-            await retireManagedWorktreeSnapshot({
-              workerAuthority: guard.workerAuthority,
-              record: current,
-              env,
-              signal: guard.signal,
-              assertCurrent: () => guard.commitGuard?.(),
-            });
-            snapshotsPruned += 1;
           } catch (error) {
             progress.error("snapshots", error, record.id);
             log.warn(`snapshot retention failed for ${record.id}: ${String(error)}`);

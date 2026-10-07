@@ -296,13 +296,11 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
         sessionId: "",
         updatedAt: now,
       },
-      skipForkWhen: (entry) => Boolean(entry.sessionId?.trim()),
-      skipPatch: () => ({ ...deliveryFields, updatedAt: now }),
-      patch: () => ({
-        ...deliveryFields,
-        ...spawnLineage,
-        updatedAt: now,
-      }),
+      entryPatch: {
+        skipExisting: true,
+        skipped: { ...deliveryFields, updatedAt: now },
+        forked: { ...deliveryFields, ...spawnLineage, updatedAt: now },
+      },
     });
     if (forked.status === "forked" || forked.status === "skipped") {
       if (forked.status === "skipped" && forked.decision?.status === "skip") {
@@ -396,6 +394,7 @@ export async function consultRealtimeVoiceAgent(params: {
   fastMode?: RunEmbeddedAgentParams["fastMode"];
   timeoutMs?: number;
   toolsAllow?: string[];
+  toolBindings?: RunEmbeddedAgentParams["toolBindings"];
   extraSystemPrompt?: string;
   fallbackText?: string;
   abortSignal?: AbortSignal;
@@ -553,6 +552,7 @@ export async function consultRealtimeVoiceAgent(params: {
         toolResultFormat: "plain",
         execSession: sessionEntry,
         toolsAllow: params.toolsAllow,
+        toolBindings: params.toolBindings,
         timeoutMs,
         runId,
         lane: params.lane,

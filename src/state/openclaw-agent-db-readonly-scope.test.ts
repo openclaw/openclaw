@@ -23,7 +23,7 @@ import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 
-it("bounds query preparation while scoped reads observe new commits", async () => {
+it("reuses admitted metadata between commits while scoped reads observe foreign writes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const options = { agentId: "main", env: state.env };
     const { path } = openOpenClawAgentDatabase(options);
@@ -46,18 +46,20 @@ it("bounds query preparation while scoped reads observe new commits", async () =
               writer
                 .prepare("UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'")
                 .run(stamp);
-              expect(
-                withOpenClawAgentDatabaseReadOnly(
-                  (database) => executeSqliteQueryTakeFirstSync(database.db, query)?.updated_at,
-                  options,
-                ),
-              ).toEqual({ found: true, value: stamp });
+              for (let read = 0; read < 2; read++) {
+                expect(
+                  withOpenClawAgentDatabaseReadOnly(
+                    (database) => executeSqliteQueryTakeFirstSync(database.db, query)?.updated_at,
+                    options,
+                  ),
+                ).toEqual({ found: true, value: stamp });
+              }
             }
             const preparations = prepare.mock.calls.filter(([sql]) => sql === query.compile().sql);
             expect(preparations.length).toBeLessThanOrEqual(2);
             expect(
               observation.queries.filter((sql) => /^PRAGMA data_version$/iu.test(sql)),
-            ).toHaveLength(20);
+            ).toHaveLength(40);
             expect(
               observation.queries.filter((sql) =>
                 /^SELECT role, schema_version, agent_id/iu.test(sql),

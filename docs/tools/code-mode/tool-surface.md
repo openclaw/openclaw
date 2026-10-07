@@ -34,7 +34,7 @@ type CodeModeExecInput = {
   title: string;
   code: string;
   restartSafe?: boolean;
-  required?: boolean;
+  awaitResults?: boolean;
 };
 ```
 
@@ -145,14 +145,14 @@ as text rather than becoming Markdown links.
 
 ### Required results
 
-Use `required: true` when this program’s results are required to finish the
+Use `awaitResults: true` when this program’s results are required to finish the
 current task. The existing cell owner keeps the tool call open while the VM is
 parked, then resumes that exact continuation when pending tool results settle.
 It does not return a `waiting` handle or make model polling calls. Completed
 actions are not replayed. Failure, Stop, owner replacement, and existing run
 and tool deadlines still end the operation.
 
-`required` pauses only off-VM tool waiting. Preparation, guest execution,
+`awaitResults` pauses only off-VM tool waiting. Preparation, guest execution,
 checkpointing, and restoration share the original execution allowance; each
 settlement does **not** grant a fresh allowance. Output, memory, pending-call,
 and active-cell limits are unchanged. `yield_control` cannot abandon an
@@ -161,12 +161,12 @@ Ordinary cells retain their existing explicit-yield behavior.
 
 Required cells collect ordinary shell commands to completion. Explicit
 `background: true` remains the opt-out for intentionally detached servers.
-A shell `exec({required: true, ...})` or `agents_wait({required: true, ...})`
+A shell `exec({awaitResults: true, ...})` or `agents_wait({awaitResults: true, ...})`
 inside an ordinary cell also makes that cell required. These declarations do
 not enable `tools.exec.notifyOnExit`.
 
 For required collector results, await `agents.run(...)` in a required cell,
-or call `agents_wait({ids, required: true})`. Ordinary announcing children
+or call `agents_wait({ids, awaitResults: true})`. Ordinary announcing children
 still use their existing `sessions_yield` handoff. An accepted background
 handle is not a terminal result: this feature does not infer obligations from
 plan text or silently turn every asynchronous service into required work.

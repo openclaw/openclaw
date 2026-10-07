@@ -5,10 +5,8 @@ import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { readSessionEntrySummariesInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
-import type { AssembleResult } from "../../../context-engine/types.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
-import type { AgentMessage } from "../../runtime/index.js";
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
@@ -16,16 +14,10 @@ import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.j
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
 
-type PreparedEmbeddedAttemptHistory = {
-  contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
-  contextEngineAssemblySucceeded: boolean;
-  unwindowedContextEngineMessagesForPrecheck?: AgentMessage[];
-};
-
 export async function prepareEmbeddedAttemptHistory(
   input: EmbeddedAttemptExecutionPhaseInput,
   assertActive: () => void,
-): Promise<PreparedEmbeddedAttemptHistory> {
+) {
   const { attempt, activeContextEngine, isRawModelRun } = input;
   const {
     agentSession: { activeSession, settingsManager, setActiveSessionSystemPrompt },

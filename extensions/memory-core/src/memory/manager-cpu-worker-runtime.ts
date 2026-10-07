@@ -18,6 +18,8 @@ import type {
   MemorySearchWorkerOutput,
   MemoryVectorWorkerQuery,
 } from "./manager-search.worker.js";
+import { assertMemoryShadowIdentity, readMemoryShadowIdentity } from "./manager-shadow-task.js";
+import type { loadMemorySourceFileState } from "./manager-source-state.js";
 const MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES = 256 * 1024 * 1024;
 
 type MemoryTranscriptStatsScope = Omit<
@@ -174,6 +176,20 @@ export async function runMemoryRecallMetadata(
     },
     "recall metadata",
   );
+}
+
+export async function runMemorySourceState(
+  target: MemoryReadTarget,
+  query: Omit<Parameters<typeof loadMemorySourceFileState>[0], "db">,
+) {
+  const fileIdentity = readMemoryShadowIdentity(target.databasePath);
+  const result = await runRetrieval(
+    { ...target, kind: "source-state", query, fileIdentity },
+    { inputBytes: query.paths?.reduce((bytes, path) => bytes + path.length * 2, 0) ?? 0 },
+    "source state",
+  );
+  assertMemoryShadowIdentity(target.databasePath, fileIdentity);
+  return result.rows;
 }
 
 export async function runMemoryCuratedCandidates(

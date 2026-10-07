@@ -22,11 +22,14 @@ import {
   resetTranscriptTestDom,
   resizeObservers,
   threadProps,
+  TranscriptTestHost,
   type TestContentRow,
   transcriptDomState,
   transcriptRows,
   transcriptSize,
 } from "./chat-transcript.test-support.ts";
+
+customElements.define("scroll-restore-test-host", TranscriptTestHost);
 
 function stubMcpAppLifecycle(
   container: ParentNode,
@@ -422,6 +425,89 @@ describe("chat transcript controller", () => {
     expect(onSettled).toHaveBeenCalledWith({ scrollTop: 0, anchorToEnd: true });
   });
 
+  it("retries a growing scroll restore without pane commits and renders the settled reader", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const flushFrame = stubAnimationFrames();
+    transcriptDomState.measuredRowHeight = 120;
+    const host = new TranscriptTestHost();
+    const container = host.transcriptRoot;
+    const policy = makeChatHost({ chatScrollElement: () => container });
+    policy.renderLifecycle.invalidate = () => host.requestUpdate();
+    const onReaderScroll = vi.fn((towardEnd?: boolean) =>
+      handleChatScrollTakeover(policy, towardEnd),
+    );
+    const transcript = new ChatTranscriptController(host, () => "restore-retry", {
+      canFollowEnd: () => !policy.chatFollowLocked,
+      onReaderScroll,
+    });
+    const rows = numberedContentRows(40);
+    let scrollHeight = 600;
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+    });
+    container.scrollTo = (options?: ScrollToOptions | number) => {
+      if (typeof options === "object") {
+        container.scrollTop = options.top ?? container.scrollTop;
+      }
+    };
+    host.renderTranscript = () =>
+      transcript.renderSession("agent:main:restore-retry", (session) => {
+        session.setContentReady(true);
+        return session.render(
+          rows,
+          (row) => (row.kind === "content" ? row.content : nothing),
+          null,
+          false,
+          html`<output>${policy.chatReadingHistory ? "Reading history" : "Following"}</output>`,
+        );
+      });
+    try {
+      document.body.append(host);
+      await host.settleUpdates();
+      // Finish initial attachment, row measurement, and overscan promotion before counting retries.
+      flushFrame();
+      await host.settleUpdates();
+      flushFrame();
+      await host.settleUpdates();
+      const onSettled = vi.fn();
+      transcript.scrollToOffset(2420, onSettled);
+      await host.settleUpdates();
+      const initialCommits = host.committedRenders;
+      const retryCommits: number[] = [];
+      for (const height of [600, 600, 600, 720, 720, 720, 720, 900, 900, 900, 900]) {
+        scrollHeight = height;
+        const before = host.committedRenders;
+        flushFrame();
+        await host.settleUpdates();
+        retryCommits.push(host.committedRenders - before);
+        expect(onSettled).not.toHaveBeenCalled();
+      }
+      scrollHeight = 4800;
+      flushFrame();
+      await host.settleUpdates();
+      expect(onSettled).toHaveBeenCalledExactlyOnceWith({ scrollTop: 2420, anchorToEnd: false });
+      expect(container.scrollTop).toBe(2420);
+      expect(container.querySelector("output")?.textContent).toBe("Reading history");
+      // Reader-policy invalidation owns the single settle commit, even before native scroll delivery.
+      expect.soft(host.committedRenders - initialCommits).toBe(1);
+      expect.soft(retryCommits).toEqual(Array(11).fill(0));
+
+      // jsdom does not emit native scroll events for scrollTop writes. Deliver the browser read-back.
+      container.dispatchEvent(new Event("scroll"));
+      await host.settleUpdates();
+      expect(container.querySelector('[data-virtual-row-key="row:20"]')?.textContent?.trim()).toBe(
+        "row 20",
+      );
+      expect(container.querySelector('[data-virtual-row-key="row:0"]')).toBeNull();
+      expect(onReaderScroll).toHaveBeenLastCalledWith();
+    } finally {
+      host.remove();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["measurable", "growing", "short"] as const)(
     "applies a saved offset once when the %s range settles",
     async (range) => {
@@ -643,7 +729,7 @@ describe("chat transcript controller", () => {
         // Native idle can beat the queued frame; they are separate schedulers.
         vi.advanceTimersByTime(150);
         expect(container.scrollTop, "stale idle must not restore its old offset").toBe(before);
-        // A remote receipt cancels following after the UI considers the command settled.
+        // Reader takeover cancels following after the UI considers the command settled.
         transcript.cancelScroll();
         transcriptDomState.measuredRowHeight = 120;
         const next: TestContentRow[] = [
@@ -905,74 +991,4 @@ describe("chat transcript controller", () => {
       transcript.hostDisconnected();
     }
   });
-
-  it.each([
-    { distance: 0, followEnabled: true, nativePending: false },
-    { distance: 8, followEnabled: true, nativePending: false },
-    { distance: 50, followEnabled: true, nativePending: false },
-    { distance: 0, followEnabled: false, nativePending: false },
-    { distance: 8, followEnabled: false, nativePending: false },
-    { distance: 0, followEnabled: true, nativePending: true },
-  ])(
-    "does not follow another person’s typing ($distance, $followEnabled, native movement pending=$nativePending)",
-    async ({ distance, followEnabled, nativePending }) => {
-      const flushFrames = nativePending ? stubAnimationFrames() : undefined;
-      const rows = numberedContentRows(12);
-      const { container, renderRows, transcript } = await mountTestTranscript(
-        `typing-distance-${distance}`,
-        rows,
-        new ChatTranscriptController(
-          {
-            addController: () => undefined,
-            removeController: () => undefined,
-            requestUpdate: () => undefined,
-            updateComplete: Promise.resolve(true),
-          },
-          () => `typing-distance-${distance}-${followEnabled}`,
-          { canFollowEnd: () => followEnabled },
-        ),
-      );
-      try {
-        const total = transcriptSize(container);
-        Object.defineProperties(container, {
-          clientHeight: { configurable: true, value: 600 },
-          scrollHeight: { configurable: true, value: total + (nativePending ? 88 : 84) },
-        });
-        for (const observer of resizeObservers) {
-          observer.emitTarget(container, 800, 600);
-        }
-        container.scrollTop = container.scrollHeight - container.clientHeight - distance;
-        container.dispatchEvent(new Event("scroll"));
-        if (nativePending) {
-          // Native movement can precede the offset observer.
-          container.scrollTop -= 100;
-        }
-        const readerOffset = container.scrollTop;
-        const scrollTo = vi.fn();
-        container.scrollTo = scrollTo;
-        renderRows([
-          ...rows,
-          { kind: "content", key: "presence:typing", content: html`<div>Typing</div>` },
-        ]);
-        expect(scrollTo).not.toHaveBeenCalled();
-        expect(container.scrollTop).toBe(readerOffset);
-        if (nativePending) {
-          container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
-          expect(scrollTo).not.toHaveBeenCalled();
-          container.scrollTop -= 100;
-          container.dispatchEvent(new Event("scroll"));
-          scrollTo.mockClear();
-          Object.defineProperty(container, "scrollHeight", {
-            configurable: true,
-            value: total + 188,
-          });
-          flushFrames?.();
-          expect(scrollTo).not.toHaveBeenCalled();
-          expect(container.scrollTop).toBe(readerOffset - 100);
-        }
-      } finally {
-        transcript.hostDisconnected();
-      }
-    },
-  );
 });

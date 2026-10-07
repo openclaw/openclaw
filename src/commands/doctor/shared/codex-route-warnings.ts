@@ -338,11 +338,11 @@ function collectCodexComputerUseWarnings(cfg: OpenClawConfig): string[] {
   const repairLine =
     computerUse.autoRepair === true
       ? "- Stale Computer Use MCP child repair is enabled and limited to SkyComputerUseClient children."
-      : "- Stale Computer Use MCP child repair is disabled by default; set `computerUse.autoRepair` to true to repair before retrying a failed probe.";
+      : "- Stale Computer Use MCP child repair is disabled by default; set `computerUse.autoRepair` to true to repair before retrying a failed check.";
   return [
     [
       "- Codex Computer Use is enabled.",
-      "- Doctor config review found Computer Use enabled; run `/codex computer-use status` to inspect installation, exposure, and the live `list_apps` probe.",
+      "- Doctor config review found Computer Use enabled; run `/codex computer-use status` to inspect installation, exposure, and the live `list_apps` check.",
       healthCheckLine,
       repairLine,
     ].join("\n"),
@@ -457,7 +457,6 @@ export function maybeRepairCodexRoutes(params: {
   cfg: OpenClawConfigWithLegacyRoster;
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
-  codexRuntimeReady?: boolean;
   blockedProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
 }): { cfg: OpenClawConfigWithLegacyRoster; warnings: string[]; changes: string[] } {
   const env = params.env ?? process.env;

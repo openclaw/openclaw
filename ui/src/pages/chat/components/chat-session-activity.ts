@@ -45,16 +45,27 @@ export function renderInterSessionActivity(
             aria-disabled=${opts.searchResult ? "true" : nothing}
             tabindex=${opts.searchResult ? "-1" : nothing}
             @click=${(event: MouseEvent) => {
-              if (opts.searchResult) {
+              const target = event.target;
+              if (
+                opts.searchResult &&
+                !(target instanceof Element && target.closest("a.markdown-session-link"))
+              ) {
                 event.preventDefault();
               }
             }}
           >
-            ${renderForwardedAttribution(group, { ...opts, updateCount: count, linkSource: false })}
+            ${
+              expanded
+                ? renderForwardedAttribution(group, { ...opts, showAvatar: false })
+                : renderForwardedAttribution(group, {
+                    ...opts,
+                    updateCount: count,
+                    linkSource: false,
+                  })
+            }
             ${opts.searchResult ? nothing : html`<span class="chat-session-activity__chevron" aria-hidden="true">${icons.chevronRight}</span>`}
           </summary>
           <div class="chat-session-activity__body">
-            ${expanded ? renderForwardedAttribution(group, { ...opts, showAvatar: false }) : nothing}
             ${
               expanded || !opts.onToggleToolMessageExpanded
                 ? repeat(

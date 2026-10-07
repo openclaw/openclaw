@@ -37,6 +37,12 @@ vi.mock("../delegation-capability.js", () => ({
   resolveDelegationCapability: vi.fn(() => undefined),
 }));
 
+// mock-isolation: Dispatch fixtures provide an empty auth store and no credential database.
+vi.mock("../auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSource: () => false,
+  hasAnyAuthProfileStoreSourceAsync: async () => false,
+}));
+
 vi.mock("../model-auth.js", () => ({
   applyAuthHeaderOverride: vi.fn((model: unknown) => model),
   applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
@@ -230,13 +236,13 @@ describe("embedded run retry dispatch", () => {
     },
   ] satisfies Array<{
     session: ExecSessionDefaults;
-    expected: ReturnType<typeof resolveWorkerToolAuthority>["exec"];
+    expected: Awaited<ReturnType<typeof resolveWorkerToolAuthority>>["exec"];
   }>)(
     "resolves a projected $expected.host session's execution authority",
     async ({ session, expected }) => {
       const result = await dispatchExecSession(session);
 
-      const authority = resolveWorkerToolAuthority({
+      const authority = await resolveWorkerToolAuthority({
         modelRef: { provider: "openai", model: "gpt-5.6-luna" },
         turn: {
           ...result.preparedAttempt,

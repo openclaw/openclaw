@@ -13,6 +13,7 @@ import type {
   SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import type { AgentCreationClaimWitness } from "./agent-creation-claim.js";
 import type { AgentDatabaseRegistryChange } from "./openclaw-agent-db-registry-listing.js";
 import type { AgentDatabaseDomainOperations } from "./openclaw-agent-execution-domain.js";
 import type { RegisteredAgentWorkerOperations } from "./openclaw-agent-execution-operations.js";
@@ -67,6 +68,35 @@ export type OpenClawAgentDatabaseExecution = {
   release(): Promise<void>;
 };
 
+export type AgentDatabaseFileExecutionOwner = {
+  readonly kind: "file";
+  readonly agentId: string;
+  readonly sharedDatabaseKey: string;
+  readonly creationIdentity?: DatabasePathIdentity;
+  borrow(
+    pathname: string,
+    expectedIdentity?: AgentDatabaseExecutionFileIdentity,
+    expectedCreationIdentity?: DatabasePathIdentity,
+    requestedPath?: string,
+  ): OpenClawAgentDatabaseExecution;
+  closeIdle(): Promise<void>;
+  close(): Promise<void>;
+};
+
+export type AgentDatabaseNativeGeneration = {
+  failure(): "open-refused" | "native" | undefined;
+  isPrepared(): boolean;
+  captureClaim(): AgentDatabaseGenerationClaim;
+  run<T>(
+    source: AgentDatabaseRequestExecutionSource,
+    operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
+    assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
+    createIfMissing?: boolean,
+    signal?: AbortSignal,
+  ): Promise<T | undefined>;
+  close(): Promise<void>;
+};
+
 export type AgentDatabaseFileExecutionOpen = {
   kind?: "file";
   leaseId: string;
@@ -77,6 +107,7 @@ export type AgentDatabaseFileExecutionOpen = {
   expectedIdentity?: AgentDatabaseExecutionFileIdentity;
   /** Captured before a creating request yields; absence is an identity too. */
   creatingIdentity?: DatabasePathIdentity;
+  creationClaim?: AgentCreationClaimWitness;
 };
 
 /** Process-private locators; neither a handle nor its incarnation grants authority. */
@@ -113,6 +144,7 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations &
   RegisteredAgentWorkerOperations & {
     "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
     "database.prepareWrite": { input: undefined; output: void };
+    "database.recordIntegrity": { input: undefined; output: boolean };
   };
 
 /** A request owner composes its retained admission with the native owner's validation. */

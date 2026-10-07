@@ -46,7 +46,6 @@ type RenderableSessionSection = SidebarVisibleSections["sections"][number];
 
 type SidebarSessionListHost = SessionListHost & {
   readonly sidebarAgentsMode: "chip" | "roster";
-  readonly sessionInvolvingMeFilterActive: boolean;
   readonly sessionData: SessionListHost["sessionData"] &
     Pick<
       SessionDataController,
@@ -131,11 +130,6 @@ export function renderSessionSection(params: {
           : group
             ? "category"
             : "threads";
-  const personFilterActive =
-    host.sessionOwnerFilterActive && host.sessionOwnerFilterId === personOwner?.id;
-  const personFilterLabel = personFilterActive
-    ? t("chat.sidebar.showEveryone")
-    : t("chat.sidebar.showOnlyPerson", { name: label });
   // Collapsed Coding still signals live runs so background work stays visible.
   const collapsedRunningDot =
     collapsed &&
@@ -315,27 +309,6 @@ export function renderSessionSection(params: {
                       >
                         ${chevron}${ownerAvatar}${labelText}
                       </button>`
-                }
-                ${
-                  personOwner &&
-                  host.sessionOwnershipVisibility.filters &&
-                  host.sessionOwnerOptions.some((owner) => owner.id === personOwner.id)
-                    ? html`<button
-                        type="button"
-                        class="sidebar-session-group-actions sidebar-session-person-filter ${
-                          personFilterActive ? "sidebar-session-sort--filtered" : ""
-                        }"
-                        aria-pressed=${personFilterActive}
-                        title=${personFilterLabel}
-                        aria-label=${personFilterLabel}
-                        @click=${(event: MouseEvent) => {
-                          event.stopPropagation();
-                          host.setSessionOwnerFilter(personFilterActive ? null : personOwner.id);
-                        }}
-                      >
-                        ${icons.listFilter}
-                      </button>`
-                    : nothing
                 }
                 ${
                   group || section.id === "ungrouped"

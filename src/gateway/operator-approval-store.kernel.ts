@@ -35,7 +35,6 @@ import {
   decodeOperatorApprovalHistoryCursor,
   encodeOperatorApprovalHistoryCursor,
 } from "./operator-approval-store.rows.js";
-import { expireDueOperatorApprovalsInDatabase } from "./operator-approval-store.transitions.js";
 import type {
   NewOperatorApproval,
   OperatorApprovalKind,
@@ -230,10 +229,6 @@ export function listPendingOperatorApprovalsInDatabase(
     databaseOptions?: OpenClawStateDatabaseOptions;
   } = {},
 ): OperatorApprovalRecord[] {
-  expireDueOperatorApprovalsInDatabase({
-    nowMs: params.nowMs,
-    databaseOptions: params.databaseOptions,
-  });
   return runOpenClawStateWriteTransaction((database) => {
     const nowMs = params.nowMs ?? Date.now();
     const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);

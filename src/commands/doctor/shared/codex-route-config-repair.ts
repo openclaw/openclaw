@@ -67,7 +67,6 @@ function rewriteAgentModelRefs(params: {
   inheritedModelRef?: string;
   inheritedCompaction?: unknown;
   inheritedCompactionPath?: string;
-  rewriteModelsMap?: boolean;
   preserveUnsupportedCompactionOverrides?: SharedDefaultCompactionOverrideConsumers;
   preserveUnsupportedCompactionPaths?: ReadonlySet<string>;
   rewrittenInheritedCompactionModels?: Map<string, string>;
@@ -175,16 +174,14 @@ function rewriteAgentModelRefs(params: {
     blockedModelIdentities: params.blockedModelIdentities,
   });
   preserveCodexRuntimePolicyForNewHits(modelPolicyStart);
-  if (params.rewriteModelsMap) {
-    const start = params.hits.length;
-    rewriteModelsMap({
-      hits: params.hits,
-      models: asMutableRecord(params.agent.models),
-      path: `${params.path}.models`,
-      blockedModelIdentities: params.blockedModelIdentities,
-    });
-    preserveCodexRuntimePolicyForNewHits(start);
-  }
+  const modelsStart = params.hits.length;
+  rewriteModelsMap({
+    hits: params.hits,
+    models: asMutableRecord(params.agent.models),
+    path: `${params.path}.models`,
+    blockedModelIdentities: params.blockedModelIdentities,
+  });
+  preserveCodexRuntimePolicyForNewHits(modelsStart);
 }
 
 export function rewriteConfigModelRefs(params: {
@@ -217,7 +214,6 @@ export function rewriteConfigModelRefs(params: {
     hits,
     agent: asMutableRecord(nextConfig.agents?.defaults),
     path: "agents.defaults",
-    rewriteModelsMap: true,
     preserveUnsupportedCompactionOverrides: preserveSharedDefaultCompactionOverrides,
     preserveUnsupportedCompactionPaths: preservedLegacyLosslessCompactionPaths,
     rewrittenInheritedCompactionModels,
@@ -239,7 +235,6 @@ export function rewriteConfigModelRefs(params: {
       inheritedModelRef,
       inheritedCompaction: nextConfig.agents?.defaults?.compaction,
       inheritedCompactionPath: "agents.defaults.compaction",
-      rewriteModelsMap: true,
       preserveUnsupportedCompactionPaths: preservedLegacyLosslessCompactionPaths,
       rewrittenInheritedCompactionModels,
       runtimePolicyChanges,

@@ -84,32 +84,24 @@ export type OnboardingPluginInstallEntry = {
   versionBoundToOpenClaw?: boolean;
 };
 
-/** Outcome status for a single onboarding plugin install attempt. */
-export type OnboardingPluginInstallStatus = "installed" | "skipped" | "failed" | "timed_out";
-
 /** Config and status returned after attempting an onboarding plugin install. */
 type OnboardingPluginInstallResult = {
   cfg: OpenClawConfig;
   installed: boolean;
   pluginId: string;
-  status: OnboardingPluginInstallStatus;
+  status: "installed" | "skipped" | "failed" | "timed_out";
   /** Sanitized actionable detail for non-interactive callers. */
   error?: string;
 };
 
-type OnboardingPluginInstallParams = {
-  cfg: OpenClawConfig;
-  entry: OnboardingPluginInstallEntry;
-  prompter: WizardPrompter;
-  runtime: RuntimeEnv;
+type OnboardingPluginInstallParams = Parameters<typeof ensureOnboardingPluginInstalled>[0] & {
   onCapabilityConsent: PluginCapabilityConsentHandler;
-  beforePersistentEffect?: () => void | Promise<void>;
 };
 
 function incompletePluginInstall(
   cfg: OpenClawConfig,
   pluginId: string,
-  status: Exclude<OnboardingPluginInstallStatus, "installed">,
+  status: Exclude<OnboardingPluginInstallResult["status"], "installed">,
   error?: string,
 ): OnboardingPluginInstallResult {
   return { cfg, installed: false, pluginId, status, ...(error === undefined ? {} : { error }) };
@@ -291,24 +283,6 @@ function resolveBundledLocalPath(params: {
       },
     })?.localPath ?? null
   );
-}
-
-function resolveNpmSpecForOnboarding(install: PluginPackageInstall): string | null {
-  const npmSpec = install.npmSpec?.trim();
-  if (!npmSpec) {
-    return null;
-  }
-  const parsed = parseRegistryNpmSpec(npmSpec);
-  return parsed ? npmSpec : null;
-}
-
-function resolveClawHubSpecForOnboarding(install: PluginPackageInstall): string | null {
-  const clawhubSpec = install.clawhubSpec?.trim();
-  if (!clawhubSpec) {
-    return null;
-  }
-  const parsed = parseClawHubPluginSpec(clawhubSpec);
-  return parsed ? clawhubSpec : null;
 }
 
 function resolveInstallDefaultChoice(params: {
@@ -874,8 +848,11 @@ export async function ensureOnboardingPluginInstalled(params: {
   const allowLocal = hasGitWorkspace(workspaceDir);
   const bundledLocalPath = resolveBundledLocalPath({ entry, workspaceDir });
   const localPath = bundledLocalPath ?? resolveLocalPath({ entry, workspaceDir, allowLocal });
-  const clawhubSpec = resolveClawHubSpecForOnboarding(entry.install);
-  const npmSpec = resolveNpmSpecForOnboarding(entry.install);
+  const rawClawHubSpec = entry.install.clawhubSpec?.trim();
+  const clawhubSpec =
+    rawClawHubSpec && parseClawHubPluginSpec(rawClawHubSpec) ? rawClawHubSpec : null;
+  const rawNpmSpec = entry.install.npmSpec?.trim();
+  const npmSpec = rawNpmSpec && parseRegistryNpmSpec(rawNpmSpec) ? rawNpmSpec : null;
   const updateChannel = resolveRegistryUpdateChannel({
     configChannel: normalizeUpdateChannel(next.update?.channel),
     currentVersion: VERSION,

@@ -48,6 +48,7 @@ import { talkClientHandlers } from "./client.js";
 const nativeUpstream = await vi.hoisted(async () => {
   const { EventEmitter } = await import("node:events");
   const sockets: NativeSocket[] = [];
+  const events = new EventEmitter<{ socket: [] }>();
   class NativeSocket extends EventEmitter {
     static readonly OPEN = 1;
     static readonly CLOSED = 3;
@@ -57,6 +58,7 @@ const nativeUpstream = await vi.hoisted(async () => {
     constructor(readonly url: string) {
       super();
       sockets.push(this);
+      events.emit("socket");
     }
 
     open(): void {
@@ -90,6 +92,7 @@ const nativeUpstream = await vi.hoisted(async () => {
   return {
     NativeSocket,
     sockets,
+    events,
     fetch: vi.fn<typeof fetch>(),
     runEmbeddedAgent: vi.fn<typeof import("../../../agents/embedded-agent.js").runEmbeddedAgent>(),
     authConfigured: vi.fn(
@@ -373,18 +376,32 @@ export async function connectNativeSession(
   expect(result.clientControl).toEqual(negotiated ? { owner: "gateway" } : undefined);
   expect(upstream.fetch).toHaveBeenCalledTimes(fetchCount);
   const sdp = negotiated ? AUDIO_SDP : DATA_CHANNEL_SDP;
-  const { handling, response } = offer(requireString(result, "clientSecret"), sdp);
-  await vi.waitFor(() => expect(upstream.fetch).toHaveBeenCalledTimes(fetchCount + 1));
-  await vi.waitFor(() => expect(upstream.sockets).toHaveLength(socketIndex + 1));
-  expect(response.end).not.toHaveBeenCalled();
-  const socket = upstream.sockets[socketIndex];
-  if (!socket) {
-    throw new Error("Missing native sideband");
+  const socketCreated = createDeferredCore();
+  upstream.events.once("socket", socketCreated.resolve);
+  try {
+    const { handling, response } = offer(requireString(result, "clientSecret"), sdp);
+    await Promise.race([
+      socketCreated.promise,
+      handling.then(() => {
+        throw new Error(
+          `Native offer completed before sideband readiness (HTTP ${response.res.statusCode})`,
+        );
+      }),
+    ]);
+    expect(upstream.fetch).toHaveBeenCalledTimes(fetchCount + 1);
+    expect(upstream.sockets).toHaveLength(socketIndex + 1);
+    expect(response.end).not.toHaveBeenCalled();
+    const socket = upstream.sockets[socketIndex];
+    if (!socket) {
+      throw new Error("Missing native sideband");
+    }
+    socket.open();
+    await handling;
+    expect(response.res.statusCode).toBe(200);
+    return { result, socket };
+  } finally {
+    upstream.events.removeListener("socket", socketCreated.resolve);
   }
-  socket.open();
-  await handling;
-  expect(response.res.statusCode).toBe(200);
-  return { result, socket };
 }
 
 export function nativeDelegation(id: string, text: string) {
@@ -392,41 +409,6 @@ export function nativeDelegation(id: string, text: string) {
     type: "delegation.created",
     item: { type: "delegation", target: "client", id, content: [{ type: "input_text", text }] },
   };
-}
-
-type NativeCallSession = {
-  instructions: string;
-  initial_items?: unknown;
-  delegation?: Record<string, unknown>;
-};
-
-function isNativeCallSession(value: unknown): value is NativeCallSession {
-  return (
-    isRecord(value) &&
-    typeof value.instructions === "string" &&
-    (value.delegation === undefined || isRecord(value.delegation))
-  );
-}
-
-export async function nativeCallSession(): Promise<NativeCallSession> {
-  const init = upstream.fetch.mock.calls.at(-1)?.[1];
-  if (!init) {
-    throw new Error("Missing native call request");
-  }
-  const form = await new Request("https://example.test", {
-    method: "POST",
-    headers: init.headers,
-    body: init.body,
-  }).formData();
-  const sessionJson = form.get("session");
-  if (typeof sessionJson !== "string") {
-    throw new Error("Missing native call session");
-  }
-  const session: unknown = JSON.parse(sessionJson);
-  if (!isNativeCallSession(session)) {
-    throw new Error("Invalid native call session");
-  }
-  return session;
 }
 
 export function talkEventTypes(broadcast: ReturnType<typeof vi.fn>): string[] {

@@ -121,8 +121,7 @@ private struct RetryIdentity {
     let draft: String
     let message: String
     let thinking: String?
-    let sessionKey: String
-    let agentID: String?
+    let route: OpenClawChatSessionTarget
     let attachments: [OpenClawChatAttachmentPayload]
     let idempotencyKey: String
 }
@@ -326,9 +325,9 @@ final class QuickChatModel {
                 throw OpenClawChatTransportSendError.notDispatched
             }
             return try await lease.patchSessionSettings(
-                sessionKey: target.sessionKey,
-                agentID: target.agentID,
-                patch: settings)
+                target.sessionKey,
+                target.agentID,
+                settings)
         })
     {
         self.sessionKeyProvider = sessionKeyProvider
@@ -420,26 +419,20 @@ final class QuickChatModel {
         guard self.isCurrentPresentation(id) else { return }
         async let permissionStatus = self.permissionStatusProvider(Self.trackedPermissions)
 
-        let agentsResult: Result<AgentsListResult, Error>
-        do {
-            agentsResult = try await .success(self.agentsProvider())
-        } catch {
-            agentsResult = .failure(error)
-        }
+        let agentsResult = try? await self.agentsProvider()
 
         let status = await permissionStatus
         guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
         self.applyPermissionStatus(status)
 
-        switch agentsResult {
-        case let .success(result):
+        if let result = agentsResult {
             let resolution = self.resolveAgents(result)
             await self.awaitControlPatchSettlement(for: resolution.target)
             guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
             self.applyAgentsList(result, resolution: resolution)
             let modelControlsTask = self.modelControlsTask
             _ = await modelControlsTask?.value
-        case .failure:
+        } else {
             await self.refreshFallbackIdentity(id: id)
         }
     }
@@ -873,8 +866,7 @@ final class QuickChatModel {
            retryIdentity.draft == draft,
            retryIdentity.message == message,
            retryIdentity.thinking == thinking,
-           retryIdentity.sessionKey == sessionKey,
-           retryIdentity.agentID == agentID,
+           retryIdentity.route == route,
            retryIdentity.attachments == attachments
         {
             idempotencyKey = retryIdentity.idempotencyKey
@@ -884,8 +876,7 @@ final class QuickChatModel {
                 draft: draft,
                 message: message,
                 thinking: thinking,
-                sessionKey: sessionKey,
-                agentID: agentID,
+                route: route,
                 attachments: attachments,
                 idempotencyKey: idempotencyKey)
         }
@@ -1214,8 +1205,7 @@ extension QuickChatModel {
         do {
             _ = try await self.settingsPatchProvider(request.target, request.settings)
             if request.settings.fastMode != nil,
-               self.retryIdentity?.sessionKey == request.target.sessionKey,
-               self.retryIdentity?.agentID == request.target.agentID
+               self.retryIdentity?.route == request.target
             {
                 self.retryIdentity = nil
             }

@@ -58,7 +58,11 @@ import type {
   OpenClawStateDatabaseLifecycleEvent,
   StateDatabaseHandle,
 } from "./openclaw-state-db-contract.js";
-import { closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
+import {
+  closeTrackedStateDatabase,
+  readTrackedStateDatabaseIdentity,
+} from "./openclaw-state-db-handle.js";
+import { invalidateOpenClawStateRuntimeIntegrity } from "./openclaw-state-db-integrity-admission.js";
 import { assertExistingOpenClawStateSchemaCacheAdmission } from "./openclaw-state-db-schema-policy.js";
 import { openClawStateSnapshotOwners } from "./openclaw-state-db-snapshot-owner.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
@@ -297,6 +301,7 @@ function closeOpenClawStateDatabaseHandle(
 }
 
 function evictCachedOpenClawStateDatabase(database: OpenClawStateDatabase): boolean {
+  invalidateOpenClawStateRuntimeIntegrity(database.db);
   if (cachedDatabases.get(database.path) !== database) {
     return false;
   }
@@ -327,7 +332,8 @@ function publishOpenClawStateDatabase(
   const { db, path: pathname } = database;
   const schemaFacts = cacheAdmission.initialize(database);
   const { identity, admission } = asyncResources.publish(pathname);
-  databaseIdentities.set(db, identity);
+  // Lifecycle settlement retains this projection after native disposal clears its identity.
+  databaseIdentities.set(db, readTrackedStateDatabaseIdentity(db) ?? identity);
   cachedDatabases.set(pathname, Object.assign(database, { schemaFacts }));
   registerStateDatabaseWalAdmission(database, identity, admission, env);
   touchStateDatabase(database);
@@ -586,6 +592,8 @@ export function registerOpenClawStateDatabaseAsyncResource(
 
 /** Capture the canonical read generation before any asynchronous worker admission. */
 export const captureOpenClawStateDatabaseReadAdmission = asyncResources.capture;
+
+export const captureOpenClawStateIntegrityAdmission = asyncResources.integrity;
 
 /** Bind worker-created storage to its captured admission without publishing a native handle. */
 export function publishOpenClawStateDatabaseWorkerAdmission(

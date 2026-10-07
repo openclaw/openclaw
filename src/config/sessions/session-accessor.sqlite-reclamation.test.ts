@@ -536,11 +536,14 @@ test.each([false, true])(
           events: before.events,
           windows: before.windows,
         });
-        expect(after.leases).toHaveLength(1);
+        // Cold admission retains its worker alongside the adopted host handle.
+        expect(after.leases).toHaveLength(2);
         expect(loadSessionEntryReadOnly(current)).toBeUndefined();
       }
       expect(database.db.isOpen).toBe(false);
       expect(loadSessionEntryReadOnly(survivor)).toEqual(survivorEntry);
+      await closeOpenClawAgentDatabaseByPathAsync(database.path);
+      expect(inspect()).toMatchObject({ writerOpen: false, leases: [] });
     } finally {
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
       await closeOpenClawStateDatabaseAsync();

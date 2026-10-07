@@ -165,3 +165,12 @@ export function shouldClearTerminalPresentationForNativeItem(item: CodexThreadIt
       return false;
   }
 }
+
+export function shouldAdvancePersistableAssistantBarrier(item: CodexThreadItem): boolean {
+  // Sleep ends the answer segment without mutating terminal presentation.
+  return (
+    shouldClearTerminalPresentationForNativeItem(item) ||
+    item.type === "dynamicToolCall" ||
+    item.type === "sleep"
+  );
+}

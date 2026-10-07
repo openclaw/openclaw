@@ -240,6 +240,13 @@ export async function maybeRepairGatewayDaemon(params: {
     return;
   }
   if (params.healthOk) {
+    if (process.platform === "linux" && (await shouldManageGatewayService())) {
+      const state = await readGatewayServiceState(resolveGatewayService(), { env: process.env });
+      const refusal = state.runtime?.systemd?.startRefusal;
+      if (refusal) {
+        note(refusal.message, "Gateway");
+      }
+    }
     await maybeReportEstablishedGatewayClients(params.cfg, params.options.deep ?? false);
     return;
   }
@@ -282,6 +289,11 @@ export async function maybeRepairGatewayDaemon(params: {
   if (serviceOwner) {
     await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
     note(formatInstallOwnerMessage(serviceOwner), "Gateway");
+    return;
+  }
+  const startRefusal = serviceState.runtime?.systemd?.startRefusal;
+  if (startRefusal) {
+    note(startRefusal.message, "Gateway");
     return;
   }
   if (serviceState.loadState.status === "unknown") {

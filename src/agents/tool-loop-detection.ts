@@ -1,14 +1,8 @@
-/**
- * Tool-call loop detection.
- *
- * Watches recent tool history for repeated no-progress patterns and circuit-breaker thresholds.
- */
 import { stableStringify } from "@openclaw/normalization-core";
 import {
   normalizeNullableString as nonEmptyStringField,
   normalizeOptionalString as normalizeRunId,
 } from "@openclaw/normalization-core/string-coerce";
-import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import type { SessionState, ToolCallRecord } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -465,12 +459,8 @@ export function detectToolCallLoop(
   state: SessionState,
   toolName: string,
   params: unknown,
-  config?: ToolLoopDetectionConfig,
   scope?: ToolLoopDetectionScope,
 ): LoopDetectionResult {
-  if (!config?.enabled) {
-    return { stuck: false };
-  }
   const history = selectHistoryForScope(state.toolCallHistory ?? [], scope);
   const currentHash = hashToolCall(toolName, params);
   const unknownToolStreak = getUnknownToolRepeatStreak(history, toolName);
@@ -612,7 +602,6 @@ export function recordToolCall(
   toolName: string,
   params: unknown,
   toolCallId?: string,
-  _config?: ToolLoopDetectionConfig,
   scope?: ToolLoopDetectionScope,
 ): void {
   const runId = normalizeRunId(scope?.runId);
@@ -641,7 +630,6 @@ export function recordToolCallOutcome(
     toolCallId?: string;
     result?: unknown;
     error?: unknown;
-    config?: ToolLoopDetectionConfig;
     runId?: string;
   },
 ): ToolCallRecord | undefined {

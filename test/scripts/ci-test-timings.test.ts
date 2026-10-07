@@ -1069,7 +1069,7 @@ function samplerRun(id: number, overrides: Record<string, unknown> = {}) {
     created_at: "2026-08-27T22:00:00Z",
     status: "completed",
     conclusion: "success",
-    event: "push",
+    event: "schedule",
     head_branch: "main",
     head_sha: "a".repeat(40),
     ...overrides,
@@ -1114,6 +1114,7 @@ type SamplerFixture = {
   observedAt?: string;
   runs: ReturnType<typeof samplerRun>[];
   jobs: ReturnType<typeof samplerJob>[];
+  pushRuns?: ReturnType<typeof samplerRun>[];
   releaseRuns?: ReturnType<typeof samplerRun>[];
   toolingRuns?: ReturnType<typeof samplerRun>[];
   seedRuns?: Record<string, ReturnType<typeof samplerRun>>;
@@ -1170,7 +1171,7 @@ if (args[1] === "--help") {
   const ci = endpoint.pathname.includes("/ci.yml/");
   const tooling = ci && endpoint.searchParams.get("event") === "pull_request";
   const main = ci && !tooling;
-  const rows = tooling ? fixture.toolingRuns || [] : main ? fixture.runs : endpoint.pathname.includes("/openclaw-release-checks.yml/") ? fixture.releaseRuns || [] : [];
+  const rows = tooling ? fixture.toolingRuns || [] : main ? endpoint.searchParams.get("event") === "push" ? fixture.pushRuns || [] : fixture.runs : endpoint.pathname.includes("/openclaw-release-checks.yml/") ? fixture.releaseRuns || [] : [];
   const selected = main && fixture.runPages ? fixture.runPages[page - 1] || [] : slice(rows);
   console.log(JSON.stringify(args.at(-1).startsWith("[.workflow_runs") ? selected : {total_count: rows.length, workflow_runs: selected}));
 } else if (endpoint.pathname.endsWith("/jobs")) {
@@ -2312,7 +2313,7 @@ describe("CI timing sampler provenance", () => {
           run_attempt: id === 1 ? 2 : 1,
           event:
             source === "main"
-              ? "push"
+              ? "schedule"
               : source === "release"
                 ? "workflow_dispatch"
                 : "pull_request",
@@ -2415,6 +2416,28 @@ describe("CI timing sampler provenance", () => {
     );
   });
 
+  it("samples five scheduled main cohorts without scanning the disabled push backlog", () => {
+    withSamplerFixture(
+      {
+        runs: [1, 2, 3, 4, 5].map((id) => samplerRun(id, { conclusion: "failure" })),
+        pushRuns: Array.from({ length: 1_001 }, (_, index) =>
+          samplerRun(index + 10, { event: "push", conclusion: "cancelled" }),
+        ),
+        jobs: [1, 2, 3, 4, 5].map((id) => samplerJob(id, id, { log: compactLog(id * 10) })),
+      },
+      (fixture) => {
+        const result = fixture.invoke(false, 5);
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("Independent main compact contributors: 5");
+        expect(JSON.parse(fixture.contents()).compactGroupSeconds.blacksmith).toEqual({
+          "core-unit-src-security-2": 30,
+        });
+        expect(fixture.requests().some((args) => args[1]?.includes("event=push"))).toBe(false);
+        expect(fixture.requests().filter((args) => args[1]?.endsWith("/logs"))).toHaveLength(5);
+      },
+    );
+  });
+
   it("collects successful jobs from failed main workflows without pruning absent timings", () => {
     withSamplerFixture(
       {
@@ -2454,7 +2477,7 @@ describe("CI timing sampler provenance", () => {
         expect(timings.runtimePlacementTimings).toEqual(retained.runtimePlacementTimings);
         expect(result.stdout).toContain("| failure | blacksmith | 1 |");
         const requests = fixture.requests();
-        const mainPages = requests.filter((args) => args[1]?.includes("event=push"));
+        const mainPages = requests.filter((args) => args[1]?.includes("event=schedule"));
         expect(mainPages).toHaveLength(2);
         for (const args of mainPages) {
           const params = new URL(args[1]!, "https://api.github.com").searchParams;

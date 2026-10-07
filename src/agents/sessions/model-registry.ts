@@ -226,7 +226,6 @@ export class ModelRegistry {
         : {}),
       ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
       allowWorkspaceScopedCurrent: true,
-      useRuntimeConfig: true,
     });
     this.loadModels();
     this.baseCatalogSnapshot = this.captureCatalogSnapshot();
@@ -279,9 +278,6 @@ export class ModelRegistry {
     return new ModelRegistry(authStorage, undefined, { sourceSnapshot: this }, publishedModels);
   }
 
-  /**
-   * Reload models from disk (models.json).
-   */
   refresh(): void {
     this.providerRequestConfigs.clear();
     this.modelRequestHeaders.clear();
@@ -870,9 +866,6 @@ export class ModelRegistry {
     return providerApiKey ? resolveConfigValueUncached(providerApiKey) : undefined;
   }
 
-  /**
-   * Check if a model is using OAuth credentials (subscription).
-   */
   isUsingOAuth(model: Model): boolean {
     const cred = this.authStorage.get(model.provider);
     return cred?.type === "oauth";
@@ -889,7 +882,17 @@ export class ModelRegistry {
   registerProvider(providerName: string, config: ProviderConfigInput): void {
     this.validateProviderConfig(providerName, config);
     this.applyProviderConfig(providerName, config);
-    this.upsertRegisteredProvider(providerName, config);
+    const existing = this.registeredProviders.get(providerName);
+    if (!existing) {
+      this.registeredProviders.set(providerName, config);
+      return;
+    }
+    // Undefined registration fields preserve the stored provider configuration.
+    for (const k of Object.keys(config) as (keyof ProviderConfigInput)[]) {
+      if (config[k] !== undefined) {
+        (existing as Record<string, unknown>)[k] = config[k];
+      }
+    }
   }
 
   /**
@@ -906,25 +909,6 @@ export class ModelRegistry {
     }
     this.registeredProviders.delete(providerName);
     this.refresh();
-  }
-
-  /**
-   * Upsert a provider config into registeredProviders.
-   * If the provider is already registered, defined values in the incoming config
-   * override existing ones; undefined values are preserved from the stored config.
-   * If the provider is not registered, the incoming config is stored as-is.
-   */
-  private upsertRegisteredProvider(providerName: string, config: ProviderConfigInput): void {
-    const existing = this.registeredProviders.get(providerName);
-    if (!existing) {
-      this.registeredProviders.set(providerName, config);
-      return;
-    }
-    for (const k of Object.keys(config) as (keyof ProviderConfigInput)[]) {
-      if (config[k] !== undefined) {
-        (existing as Record<string, unknown>)[k] = config[k];
-      }
-    }
   }
 
   private validateProviderConfig(providerName: string, config: ProviderConfigInput): void {

@@ -121,6 +121,25 @@ It leaves unverified service definitions unchanged and skips their automatic
 restart. Restart the Gateway you launched manually after the update, or use its
 actual supervisor. Doctor still checks for active state writers before migrations.
 
+On Linux, unmask a managed systemd unit before updating. A masked unit
+(`masked` or `masked-runtime`), `RefuseManualStart=yes`, or a disabled and inactive
+unit with no start path causes preflight to refuse before replacing files or
+running migrations. For the default user service:
+
+```bash
+systemctl --user unmask openclaw-gateway.service
+openclaw update
+```
+
+Use the unit and scope reported by `openclaw gateway status --deep` for a custom
+profile or system service. If an operator applies a mask or another start
+restriction during the update, OpenClaw retains the activated candidate and
+reports a service-definition warning instead of rolling back because systemd
+refused to start it. Gateway readiness is still unverified; remove the reported
+restriction, run `openclaw gateway start`, then check `openclaw gateway status --deep`.
+These checks belong to the installed updater; unmask before updating from an
+older release too. See [Linux maintenance holds](/cli/gateway/service#linux-maintenance-holds).
+
 Service membership uses the running Gateway's process ancestry and native supervisor
 facts. An external terminal that inherited service environment markers can still update after native
 membership is verified as external. Reparented children remain inside when they
@@ -222,7 +241,7 @@ actual Bun executable against the Bun 1.4+ and WAL-safe `node:sqlite` requiremen
 Bun's emulated Node version is not checked against `engines.node`. If the updater
 runs on Node, its Node must also satisfy the target package's engine and SQLite
 requirements before package replacement, because finalization uses that runtime.
-Bun-owned package-manager probes and installs use that verified executable, and the
+Bun-owned package-manager checks and installs use that verified executable, and the
 existing install/restart path retains the recorded runtime pin. A path under
 `~/.openclaw` alone does not establish Bun package-manager ownership. See
 [Bun-only installs](/install/bun-compatibility#bun-only-installs).
@@ -333,7 +352,8 @@ installation where possible, and prints a short next action. A running updated
 Gateway can also report a plugin that did not load without turning the core update
 into a failure. Individual plugin outcomes remain available in `--json` output.
 Failures to install core, repair required configuration or state, or start the
-updated Gateway remain update failures.
+updated Gateway remain update failures, except for the service-definition refusals
+described above.
 Local copies selected through `plugins.load.paths` are operator-managed. Updates
 and `openclaw update repair` retain the selected copy and any npm install it
 shadows, and record a `plugin-operator-managed` warning in the outcome and update
@@ -472,6 +492,8 @@ the refusal.
 SQLite recovery and rollback custody verify file identity, size, and content.
 Timestamp-only changes are accepted after verifying identical bytes; replaced
 files or changed database or journal bytes still require recovery by their owner.
+Snapshot publication uses the same checks, including on older Linux kernels where
+reported file creation time changes after ordinary writes or hard-link removal.
 
 For older in-directory activation journals, `openclaw update status --json`
 reports the recorded phase and the original helper's `status` command. The

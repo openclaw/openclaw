@@ -199,15 +199,9 @@ function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "searc
   return url;
 }
 
-type ClawHubResponse = {
-  response: Response;
-  url: URL;
-  hasToken: boolean;
-  /** Successful archives keep only their chunk-idle timeout while streaming. */
-  releaseDeadline: () => void;
-};
+type ClawHubResponse = Awaited<ReturnType<typeof requestClawHub>>;
 
-async function requestClawHub(params: ClawHubRequestParams): Promise<ClawHubResponse> {
+async function requestClawHub(params: ClawHubRequestParams) {
   const url = buildUrl(params);
   const token = params.skipAuth
     ? undefined
@@ -234,6 +228,7 @@ async function requestClawHub(params: ClawHubRequestParams): Promise<ClawHubResp
       () => controller.abort(new Error(`ClawHub request timed out after ${timeoutMs}ms`)),
       timeoutMs,
     );
+    // Successful archives keep only their chunk-idle timeout while streaming.
     const releaseDeadline = () => {
       if (timeout !== undefined) {
         clearTimeout(timeout);

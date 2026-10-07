@@ -53,7 +53,10 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     readSourceReplyDeliveryRuntime(turn.followupRun.run) ??
     createSourceReplyDeliveryRuntime({
       origin: sourceReplyDeliveryRuntimeOptions?.sourceReplyDeliveryModeOrigin ?? "stable_policy",
-      initialMode: turn.followupRun.run.sourceReplyDeliveryMode ?? "automatic",
+      initialMode:
+        turn.followupRun.run.sourceReplyDeliveryMode ??
+        turn.opts?.sourceReplyDeliveryMode ??
+        "automatic",
       projections: [turn.followupRun.run, ...(turn.opts ? [turn.opts] : [])],
       promptComponentByMode: { automatic: "", message_tool_only: "" },
       promptComponentOffset: undefined,
@@ -262,6 +265,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           markAutoFallbackPrimaryProbe({ probe: activeProbe, sessionKey: turn.sessionKey });
         }
         turn.opts?.onModelSelected?.({ provider, model, thinkLevel: candidateThinkLevel });
+        const runStart = params.createAgentRunStartCallbacks();
         const signalExecutionPhaseForCandidate: AgentFallbackCandidateCommonParams["signalExecutionPhaseForTyping"] =
           (info) => {
             if (
@@ -270,7 +274,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             ) {
               params.state.postCompactionModelAttempted = true;
             }
-            params.signalExecutionPhaseForTyping(info);
+            runStart.signalExecutionPhaseForTyping(info);
           };
         const messageActionTurnCapability = mintReplyMessageActionTurnCapability(
           turn,
@@ -304,7 +308,8 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             bootstrapPromptWarningSignaturesSeen: params.state.bootstrapPromptWarningSignaturesSeen,
             currentTurnImages: params.currentTurnImages,
             signalExecutionPhaseForTyping: signalExecutionPhaseForCandidate,
-            notifyAgentRunStart: params.notifyAgentRunStart,
+            prepareAgentRunStart: runStart.prepareAgentRunStart,
+            notifyAgentRunStart: runStart.notifyAgentRunStart,
             preserveProgressCallbackStartOrder,
             presentation: params.presentation,
             timing: params.timing,
@@ -348,6 +353,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           );
           return result;
         } finally {
+          runStart.close();
           revokeMessageActionTurnCapability(messageActionTurnCapability);
         }
       },

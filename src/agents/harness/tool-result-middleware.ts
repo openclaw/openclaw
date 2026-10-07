@@ -1,6 +1,3 @@
-/**
- * Runs native harness tool-result middleware around tool execution results.
- */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -11,7 +8,7 @@ import type {
   OpenClawAgentToolResult,
 } from "../../plugins/agent-tool-result-middleware-types.js";
 import { getPluginValueInstance } from "../../plugins/plugin-instance-scope.js";
-import { getPluginRegistryGatewayOwner } from "../../plugins/registry-lifecycle.js";
+import { getPluginInstanceGatewayOwner } from "../../plugins/registry-lifecycle.js";
 import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
@@ -400,7 +397,7 @@ function isRemovedPluginMiddleware(handler: AgentToolResultMiddleware): boolean 
     return false;
   }
   // Decide against the plugin's own Gateway; without that owner a stale handler fails closed.
-  const successor = getPluginRegistryGatewayOwner(instance.owner.registry)?.current();
+  const successor = getPluginInstanceGatewayOwner(instance.owner)?.current();
   return (
     successor !== undefined &&
     !successor.plugins.some(

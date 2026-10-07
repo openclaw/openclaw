@@ -247,7 +247,7 @@ export function createQuestionHandlers(
           }
           if (narrow) {
             authority.assertCurrent();
-            if (!sessionAccess || !prepared?.canAccess(client, "mutate", true, sessionAccess)) {
+            if (!sessionAccess || !prepared?.canAccess(client, true, sessionAccess)) {
               respond(
                 false,
                 undefined,
@@ -504,6 +504,7 @@ export function createQuestionHandlers(
               return;
             }
             if ("cancel" in request) {
+              authorize.assertCurrent();
               respond(true, manager.cancel(request.id, request.resolvedBy), undefined);
               return;
             }
@@ -521,6 +522,7 @@ export function createQuestionHandlers(
                 );
                 return;
               }
+              authorize.assertCurrent();
               respond(
                 true,
                 manager.resolve(request.id, request.answers, request.resolvedBy, {

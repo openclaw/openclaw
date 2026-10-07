@@ -4,7 +4,7 @@
  *
  * Active runs stay in chatAbortControllers. Queued waits must NOT look like
  * active runs (projection, timeout ownership, terminal dedupe), but they must
- * remain abortable by authorized requesters after chat.send terminalizes.
+ * remain abortable by authorized requesters until their input is consumed.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -259,10 +259,7 @@ export function listQueuedChatTurnsForSession(params: {
   return matches;
 }
 
-/**
- * Abort all provided queued turns (already authorized by caller).
- * Order: abort signals first, then remove from map, so drain cannot promote mid-loop.
- */
+/** The caller authorizes each entry; its abort listeners run before its map removal. */
 export function abortQueuedChatTurns(
   chatQueuedTurns: QueuedChatTurnMap,
   matches: readonly QueuedChatTurnMatch[],

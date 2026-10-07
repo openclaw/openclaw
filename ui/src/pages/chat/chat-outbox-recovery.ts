@@ -1,9 +1,9 @@
 import { html, LitElement, nothing, type PropertyValues } from "lit";
+import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import "../../styles/chat/outbox-recovery.css";
 import type { DurableComposerRecoveryEntry } from "../../lib/chat/composer-draft-store.runtime.ts";
-import { observeOutboxRecoveryOwner } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import {
   captureChatOutboxRecoveryDestination,
   discardChatOutboxRecovery,
@@ -80,12 +80,12 @@ class ChatOutboxRecovery extends LitElement {
   }
   private owner() {
     const host = this.host;
-    if (!host || host.selectedChatSessionIncognito || !observeOutboxRecoveryOwner(host)) {
+    if (!host || host.selectedChatSessionIncognito || !readOfflineStorageScope(host)) {
       return null;
     }
     return {
       gatewayOwner: storageTargetForGateway(host.settings.gatewayUrl).gatewayOwner,
-      recoveryScope: observeOutboxRecoveryOwner(host)!,
+      recoveryScope: readOfflineStorageScope(host)!,
     };
   }
   private async refresh() {
@@ -114,16 +114,14 @@ class ChatOutboxRecovery extends LitElement {
       }
       this.entries = recovery?.entries ?? [];
       this.error = retirementError || (recovery?.blocked ? t("chat.outboxRecoveryFull") : "");
-      if (owner) {
-        const result = await (await draftStore).prepareDurableComposerRecovery(owner);
-        if (generation !== this.generation || !this.isConnected) {
-          return;
-        }
-        if (result.status === "storage-failed") {
-          throw new Error("storage-failed");
-        }
-        this.drafts = result.entries;
+      const result = await (await draftStore).prepareDurableComposerRecovery(owner);
+      if (generation !== this.generation || !this.isConnected) {
+        return;
       }
+      if (result.status === "storage-failed") {
+        throw new Error("storage-failed");
+      }
+      this.drafts = result.entries;
     } catch {
       if (generation !== this.generation || !this.isConnected) {
         return;

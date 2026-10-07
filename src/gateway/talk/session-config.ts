@@ -1,14 +1,12 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveRealtimeVoiceAgentContextInstructions } from "../../agents/realtime-bootstrap-context.js";
 import type { TalkRealtimeConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import type { RealtimeVoiceProviderPlugin } from "../../plugins/types.js";
 import {
   getRealtimeTranscriptionProvider,
   listRealtimeTranscriptionProviders,
@@ -16,43 +14,14 @@ import {
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME } from "../../talk/agent-run-control-shared.js";
-import { resolveInternalRealtimeVoiceGatewayRelayLaunchError } from "../../talk/provider-internal.js";
 import { listRealtimeVoiceProviders } from "../../talk/provider-registry.js";
-import type {
-  RealtimeVoiceBrowserSession,
-  RealtimeVoiceProviderConfig,
-} from "../../talk/provider-types.js";
-import type { TalkBrain, TalkMode, TalkTransport } from "../../talk/talk-events.js";
+import type { RealtimeVoiceProviderConfig } from "../../talk/provider-types.js";
 import {
   getVoiceProviderConfig,
   providerMatchesId,
   resolveSupportedVoiceModelRefs,
   type VoiceModelProvider,
 } from "../../tts/voice-models.js";
-
-export function normalizeTalkSessionMode(params: { mode?: string; transport?: string }): TalkMode {
-  return (
-    (normalizeOptionalLowercaseString(params.mode) as TalkMode | undefined) ??
-    (normalizeOptionalLowercaseString(params.transport) === "managed-room" ? "stt-tts" : "realtime")
-  );
-}
-
-export function normalizeTalkSessionTransport(params: {
-  mode: TalkMode;
-  transport?: string;
-}): TalkTransport {
-  return (
-    (normalizeOptionalLowercaseString(params.transport) as TalkTransport | undefined) ??
-    (params.mode === "stt-tts" ? "managed-room" : "gateway-relay")
-  );
-}
-
-export function normalizeTalkSessionBrain(params: { mode: TalkMode; brain?: string }): TalkBrain {
-  return (
-    (normalizeOptionalLowercaseString(params.brain) as TalkBrain | undefined) ??
-    (params.mode === "transcription" ? "none" : "agent-consult")
-  );
-}
 
 export async function resolveTalkRealtimeProviderInstructions(params: {
   config: OpenClawConfig;
@@ -332,32 +301,6 @@ export function buildRealtimeVoiceLaunchOptions(params: {
   };
 }
 
-export function resolveTalkRealtimeGatewayRelayLaunch(params: {
-  provider: RealtimeVoiceProviderPlugin;
-  providerConfig: RealtimeVoiceProviderConfig;
-  cfg: OpenClawConfig;
-  launchOptions: RealtimeVoiceLaunchOptions;
-  consultRouting?: string;
-}) {
-  const forceAgentConsultOnFinalTranscript = params.consultRouting === "force-agent-consult";
-  const overrides = pickRealtimeVoiceLaunchOptions({ ...params.launchOptions, model: undefined });
-  const providerConfig =
-    Object.keys(overrides).length > 0
-      ? { ...params.providerConfig, ...overrides }
-      : params.providerConfig;
-  return {
-    providerConfig,
-    forceAgentConsultOnFinalTranscript,
-    error: resolveInternalRealtimeVoiceGatewayRelayLaunchError({
-      provider: params.provider,
-      cfg: params.cfg,
-      providerConfig,
-      model: params.launchOptions.model,
-      autoRespondToAudio: !forceAgentConsultOnFinalTranscript,
-    }),
-  };
-}
-
 function pickRealtimeVoiceLaunchOptions(
   params: RealtimeVoiceLaunchOptionInput,
 ): RealtimeVoiceLaunchOptions {
@@ -375,12 +318,4 @@ function pickRealtimeVoiceLaunchOptions(
     }
   }
   return options;
-}
-
-export function isUnsupportedBrowserWebRtcSession(session: RealtimeVoiceBrowserSession): boolean {
-  const provider = normalizeLowercaseStringOrEmpty(session.provider);
-  const transport = session.transport ?? "webrtc";
-  // Google browser WebRTC sessions are exposed in provider types but not usable
-  // through the current client-owned Talk flow.
-  return provider === "google" && transport === "webrtc";
 }

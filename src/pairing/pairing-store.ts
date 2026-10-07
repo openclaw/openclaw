@@ -265,17 +265,15 @@ export async function upsertChannelPairingRequest(params: {
       const existingIndex = requests.findIndex(
         (request) => request.id === id && requestMatchesAccountId(request, accountId),
       );
-      const existingCodes = new Set(
-        requests.map((request) => (normalizeOptionalString(request.code) ?? "").toUpperCase()),
-      );
+      const existingCodes = new Set(requests.map((request) => request.code.toUpperCase()));
 
       if (existingIndex >= 0) {
-        const existing = requests[existingIndex];
-        const code = normalizeOptionalString(existing?.code) || generateUniqueCode(existingCodes);
+        const existing = requests[existingIndex]!;
+        const code = existing.code;
         requests[existingIndex] = {
           id,
           code,
-          createdAt: existing?.createdAt ?? now,
+          createdAt: existing.createdAt,
           lastSeenAt: now,
           meta,
         };

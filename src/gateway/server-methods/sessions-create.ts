@@ -1,14 +1,17 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../../packages/gateway-client/src/timeouts.js";
 import {
   ErrorCodes,
   errorShape,
   missingScopeErrorShape,
   validateSessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
+import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
@@ -56,7 +59,10 @@ import {
   prepareSessionCreateFilesystemRoot,
   resolveSessionCreateRootParameters,
 } from "./session-create-root.js";
-import { resolveSessionCreateSpawnContext } from "./session-create-spawn.js";
+import {
+  resolveSessionCreateSpawnContext,
+  validateSessionCreateSpawnRequest,
+} from "./session-create-spawn.js";
 import {
   bindGatewayRequestHandlerMutationAuthority,
   readGatewayRequestMutationAuthority,
@@ -106,21 +112,27 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
+    const creation = resolveOperatorSessionCreation(client, { allowTrustedHint: true });
+    if (p.surface && creation.via !== "operator") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "Dock conversations require operator creation"),
+      );
+      return;
+    }
     const sessionCreation = await prepareSkillLibrarySessionCreation(
       client,
       context.getRuntimeConfig,
-      resolveOperatorSessionCreation(client, { allowTrustedHint: true }),
+      { ...creation, ...(p.surface ? { surface: p.surface } : {}) },
     );
     const spawnRequesterSessionKey =
       sessionCreation.via === "spawn"
         ? normalizeOptionalString(sessionCreation.requesterSessionKey)
         : undefined;
-    if (sessionCreation.inheritedToolPolicy && parentSessionKey !== spawnRequesterSessionKey) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "spawn parent must match the trusted agent caller"),
-      );
+    const spawnError = validateSessionCreateSpawnRequest(sessionCreation, p);
+    if (spawnError) {
+      respond(false, undefined, spawnError);
       return;
     }
     const requestedModel = normalizeOptionalString(p.model);
@@ -461,6 +473,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         return prepared;
       };
     }
+    let publicRead = false;
     let runPayload: Record<string, unknown> | undefined;
     let initialTurnSourceAccepted = false;
     let runError: unknown;
@@ -472,6 +485,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (!authority.ensureActive()) {
       return;
     }
+    let catalogDeadline: number | undefined;
+    const catalogUnavailable = new Error(
+      "The model catalog is still loading. The session was not created; retry shortly.",
+    );
+    const stopCatalogWait = (): never => {
+      throw catalogUnavailable;
+    };
     const createParams: Parameters<typeof createGatewaySession>[0] = {
       cfg,
       getCurrentConfig,
@@ -531,10 +551,28 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       resetMainWhenUnspecified: !hasInitialTurn,
       commandSource: "webchat",
       creation: sessionCreation,
+      childSessionPublication: sessionCreation.childSessionPublication,
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       armSessionDiffBaselineCapture: !repository,
-      loadGatewayModelCatalogSnapshot: () =>
-        context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId }),
+      loadGatewayModelCatalogSnapshot: async () => {
+        const captured = await operatorCapture.preparation;
+        const waitSignal = AbortSignal.any(
+          [signal, client?.connectionSignal, captured?.authority.signal].filter(
+            (value): value is AbortSignal => value !== undefined,
+          ),
+        );
+        if (waitSignal.aborted) {
+          stopCatalogWait();
+        }
+        // Leave response headroom below the Node Gateway client's 30-second request budget.
+        catalogDeadline ??= performance.now() + (DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS * 2) / 3;
+        return raceWithTimeout(
+          () => context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId }),
+          Math.max(0, catalogDeadline - performance.now()),
+          stopCatalogWait,
+          { signal: waitSignal, onAbort: stopCatalogWait },
+        );
+      },
       commitGuard,
       afterSessionCommitted: (entry, source) =>
         registerCommittedSessionCategory(
@@ -543,6 +581,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           source,
         ),
       onCreatedSessionCommitted: (committed) => {
+        publicRead = Boolean(resolveSessionPublicShare(committed.entry));
         sessionMutationAuthorization?.recordCreatedSession?.({
           agentId: committed.agentId,
           sessionKey: committed.key,
@@ -591,6 +630,14 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       },
     };
     const created = await createGatewaySession(createParams).catch((error: unknown) => {
+      if (error === catalogUnavailable) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, catalogUnavailable.message, { retryable: true }),
+        );
+        return undefined;
+      }
       if (error instanceof ModelAccountConnectAuthorityError) {
         respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
         return undefined;
@@ -631,6 +678,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       sessionId: created.entry.sessionId,
       entry: responseEntry,
       runStarted,
+      publicRead,
       ...(!created.resetExisting && runPayload ? runPayload : {}),
       ...(!created.resetExisting && runError ? { runError } : {}),
       resolved: created.resolved,

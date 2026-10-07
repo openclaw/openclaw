@@ -16,7 +16,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { flushPendingSessionsChangedEvents } from "../server-methods/session-change-event.js";
 import {
   createGatewayWorkerPlacementChangePublisher,
-  subscribeGatewayWorkerMachineShapeChanges,
+  subscribeGatewayWorkerPlacementMetadataChanges,
 } from "../server-worker-placement-change-events.js";
 import { readWorkerPlacementIdentity } from "./placement-projector.js";
 import type { WorkerSessionPlacementChangeSnapshot } from "./placement-record.js";
@@ -119,8 +119,9 @@ it("coalesces machine metadata bursts off thread and selects only correlated pro
       getSessionEventSubscriberConnIds: () => new Set<string>(),
     };
     const warn = vi.fn();
-    const stop = subscribeGatewayWorkerMachineShapeChanges({
+    const changes = subscribeGatewayWorkerPlacementMetadataChanges({
       placements: store,
+      runnerAvailability: { read: () => undefined, version: () => 0 },
       environments: {
         subscribeMachineShapeChanged: (listener) => {
           changed = listener;
@@ -137,13 +138,13 @@ it("coalesces machine metadata bursts off thread and selects only correlated pro
         changed("development");
       }
       await published.promise;
-      await stop();
+      await changes.stop();
       changed("development");
       expect(received).toEqual(expected.map((id) => `agent:main:${id}`));
       calls.expectIdle();
       expect(warn).not.toHaveBeenCalled();
     } finally {
-      await stop();
+      await changes.stop();
       vi.restoreAllMocks();
       unlisten();
       await environments.close();

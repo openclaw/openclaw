@@ -1,4 +1,3 @@
-// Shared Control UI plugin catalog Gateway contracts.
 import type {
   PluginsInstallResult,
   PluginsCatalogGetResult,

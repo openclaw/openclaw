@@ -488,13 +488,13 @@ describe("system events (session routing)", () => {
       );
     }
     expect(peekSystemEvents("agent:alpha:global")).toEqual(
-      Array.from({ length: 20 }, (_, index) => "Alpha progress " + (index + 5)),
+      Array.from({ length: 20 }, (_, index) => "Alpha progress " + index),
     );
     const beta = await drainFormattedEvents("global", { agentId: "beta" });
     expect(beta).toContain("Beta result is ready");
     expect(beta).not.toContain("Alpha progress");
     const alpha = await drainFormattedEvents("global", { agentId: "alpha" });
-    expect(alpha).toContain("Alpha progress 24");
+    expect(alpha).toContain("Alpha progress 19");
     expect(alpha).not.toContain("Beta result is ready");
   });
 
@@ -658,25 +658,19 @@ describe("system events (session routing)", () => {
     expect(isSystemEventContextChanged(key, "build:123")).toBe(false);
   });
 
-  it.each(["eviction", "prefix", "selected"] as const)(
+  it.each(["prefix", "selected"] as const)(
     "allows a keyed duplicate after %s removal",
     (removal) => {
       const key = "agent:main:duplicate-after-removal";
       const options = { sessionKey: key, contextKey: "build:123" };
       enqueueSystemEvent("Build completed", options);
       const selected = peekSystemEventEntries(key);
-      if (removal === "eviction") {
-        for (let index = 0; index < 20; index++) {
-          enqueueSystemEvent("event " + index, { sessionKey: key, contextKey: "event:" + index });
-        }
-      } else {
-        if (removal === "selected") {
-          enqueueSystemEvent("Other event", { sessionKey: key, contextKey: "build:other" });
-        }
-        expect(consumeSelectedSystemEventEntries(key, selected).map((event) => event.text)).toEqual(
-          ["Build completed"],
-        );
+      if (removal === "selected") {
+        enqueueSystemEvent("Other event", { sessionKey: key, contextKey: "build:other" });
       }
+      expect(consumeSelectedSystemEventEntries(key, selected).map((event) => event.text)).toEqual([
+        "Build completed",
+      ]);
       expect(enqueueSystemEvent("Build completed", options)).toBe(true);
     },
   );

@@ -43,12 +43,9 @@ type InvalidTokenRateLimitState = {
 };
 
 class InvalidTokenRateLimiter {
-  private readonly limit: number;
   private readonly state = new Map<string, InvalidTokenRateLimitState>();
 
-  constructor(limit: number) {
-    this.limit = limit;
-  }
+  constructor(readonly limit: number) {}
 
   private normalizeState(key: string, nowMs: number): InvalidTokenRateLimitState | undefined {
     const existing = this.state.get(key);
@@ -62,37 +59,30 @@ class InvalidTokenRateLimiter {
     return existing;
   }
 
-  private touch(key: string, value: InvalidTokenRateLimitState): void {
-    this.state.delete(key);
-    this.state.set(key, value);
-    pruneMapToMaxSize(this.state, INVALID_TOKEN_MAX_TRACKED_KEYS);
-  }
-
-  isLocked(key: string, nowMs = Date.now()): boolean {
+  isLocked(key: string): boolean {
     if (!key) {
       return false;
     }
-    const existing = this.normalizeState(key, nowMs);
+    const existing = this.normalizeState(key, Date.now());
     return (existing?.count ?? 0) > this.limit;
   }
 
-  recordFailure(key: string, nowMs = Date.now()): boolean {
+  recordFailure(key: string): boolean {
     if (!key) {
       return false;
     }
+    const nowMs = Date.now();
     const existing = this.normalizeState(key, nowMs);
     const nextCount = (existing?.count ?? 0) + 1;
     const windowStartMs = existing?.windowStartMs ?? nowMs;
-    this.touch(key, { count: nextCount, windowStartMs });
+    this.state.delete(key);
+    this.state.set(key, { count: nextCount, windowStartMs });
+    pruneMapToMaxSize(this.state, INVALID_TOKEN_MAX_TRACKED_KEYS);
     return nextCount > this.limit;
   }
 
   clear(): void {
     this.state.clear();
-  }
-
-  maxRequests(): number {
-    return this.limit;
   }
 }
 
@@ -116,7 +106,7 @@ function getRateLimiter(account: ResolvedSynologyChatAccount): FixedWindowRateLi
 function getInvalidTokenRateLimiter(account: ResolvedSynologyChatAccount): InvalidTokenRateLimiter {
   const limit = Math.min(account.rateLimitPerMinute, PREAUTH_MAX_REQUESTS_PER_MINUTE);
   let rl = invalidTokenRateLimiters.get(account.accountId);
-  if (!rl || rl.maxRequests() !== limit) {
+  if (!rl || rl.limit !== limit) {
     rl?.clear();
     rl = new InvalidTokenRateLimiter(limit);
     invalidTokenRateLimiters.set(account.accountId, rl);
@@ -395,14 +385,6 @@ async function authorizeSynologyWebhook(params: {
   return { ok: true };
 }
 
-function sanitizeSynologyWebhookText(payload: SynologyWebhookPayload): string {
-  let cleanText = sanitizeInput(payload.text);
-  if (payload.trigger_word && cleanText.startsWith(payload.trigger_word)) {
-    cleanText = cleanText.slice(payload.trigger_word.length).trim();
-  }
-  return cleanText;
-}
-
 async function resolveSynologyReplyDeliveryUserId(params: {
   account: ResolvedSynologyChatAccount;
   payload: SynologyWebhookPayload;
@@ -427,27 +409,6 @@ async function resolveSynologyReplyDeliveryUserId(params: {
   return params.payload.user_id;
 }
 
-async function authorizeClaimedSynologyWebhook(params: {
-  account: ResolvedSynologyChatAccount;
-  payload: SynologyWebhookPayload;
-  contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding;
-}) {
-  const auth = await authorizeUserForDmWithIngress({
-    accountId: params.account.accountId,
-    userId: params.payload.user_id,
-    dmPolicy: params.account.dmPolicy,
-    allowedUserIds: params.account.allowedUserIds,
-    contextBinding: params.contextBinding,
-  });
-  if (!auth.senderAccess.allowed) {
-    throw new SynologyIngressPermanentError(
-      "synology-auth",
-      `Synology Chat user ${params.payload.user_id} is no longer authorized.`,
-    );
-  }
-  return auth;
-}
-
 export async function processSynologyWebhookIngressEvent(params: {
   account: ResolvedSynologyChatAccount;
   deliver: (
@@ -467,14 +428,27 @@ export async function processSynologyWebhookIngressEvent(params: {
   }
   const resolveChannelIngress = async (
     contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
-  ) =>
-    await authorizeClaimedSynologyWebhook({
-      account: params.account,
-      payload,
+  ) => {
+    const auth = await authorizeUserForDmWithIngress({
+      accountId: params.account.accountId,
+      userId: payload.user_id,
+      dmPolicy: params.account.dmPolicy,
+      allowedUserIds: params.account.allowedUserIds,
       contextBinding,
     });
+    if (!auth.senderAccess.allowed) {
+      throw new SynologyIngressPermanentError(
+        "synology-auth",
+        `Synology Chat user ${payload.user_id} is no longer authorized.`,
+      );
+    }
+    return auth;
+  };
   const channelIngress = await resolveChannelIngress();
-  const body = sanitizeSynologyWebhookText(payload);
+  let body = sanitizeInput(payload.text);
+  if (payload.trigger_word && body.startsWith(payload.trigger_word)) {
+    body = body.slice(payload.trigger_word.length).trim();
+  }
   if (!body) {
     return;
   }

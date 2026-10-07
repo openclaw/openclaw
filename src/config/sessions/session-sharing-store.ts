@@ -7,6 +7,8 @@ import {
 import { resolveStateDir } from "../state-dir.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import {
   hasSessionMemberInDatabase,
   listSessionMembersInDatabase,
@@ -34,13 +36,27 @@ export function listSessionMembers(scope: SessionAccessScope): SessionMember[] {
 
 /** Full membership evidence shares the existing read-only agent database worker. */
 export async function listSessionMembersInWorker(
-  input: SessionAccessScope,
+  input: SessionCollaborationScope,
 ): Promise<SessionMember[]> {
   const env = { ...(input.env ?? process.env) };
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const resolved = resolveSqliteScope({ ...input, env });
   const options = toDatabaseOptions(resolved);
   const databasePath = resolveOpenClawAgentSqlitePath(options);
+  const incognito = input.incognito ?? captureIncognitoSessionOperation(input);
+  if (incognito) {
+    const { actor, authority } = incognito;
+    if (actor.agentId !== resolved.agentId || actor.path !== databasePath) {
+      throw new Error("Membership target differs from its captured incognito actor");
+    }
+    const members = await actor.sessions.sideData(authority, {
+      type: "session.members.read",
+      input: { sessionKey: resolved.sessionKey },
+    });
+    authority.assertCurrent();
+    actor.assertReadable();
+    return members;
+  }
   if (isIncognitoOpenClawAgentSqlitePath(databasePath, options)) {
     // Incognito SQLite exists only in this process and keeps its native owner.
     return listSessionMembers({ ...input, env });

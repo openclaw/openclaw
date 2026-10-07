@@ -251,7 +251,12 @@ server.listen(port, "127.0.0.1", () => {
     expect(() => testing.parseOptions(["--installed-cpu-diagnostic"])).toThrow(
       "--installed-cpu-diagnostic requires --installed-cohort",
     );
-    for (const flag of ["--cpu-prof-dir", "--heap-prof-dir"]) {
+    for (const flag of [
+      "--cpu-prof-dir",
+      "--heap-prof-dir",
+      "--gateway-runtime",
+      "--gateway-cpus",
+    ]) {
       expect(() =>
         testing.parseOptions([
           "--installed-cohort",
@@ -295,6 +300,18 @@ server.listen(port, "127.0.0.1", () => {
     expect(() =>
       testing.parseOptions(["--output", "first.json", "--output", "second.json"]),
     ).toThrow("--output was provided more than once");
+  });
+
+  it("selects the Gateway runtime and affinity independently of the controller", () => {
+    expect(testing.parseOptions([]).gatewayRuntime).toBe(process.execPath);
+    expect(
+      testing.parseOptions(["--gateway-runtime", "/tmp/bun", "--gateway-cpus", "0,1"]),
+    ).toMatchObject({ gatewayRuntime: "/tmp/bun", gatewayCpus: "0,1" });
+    expect(() => testing.parseOptions(["--gateway-cpus", "0-1"])).toThrow("--gateway-cpus");
+    expect(() => testing.parseOptions(["--gateway-runtime", "bun\0"])).toThrow("--gateway-runtime");
+    expect(() =>
+      testing.parseOptions(["--gateway-runtime", "bun", "--gateway-runtime", "node"]),
+    ).toThrow("--gateway-runtime was provided more than once");
   });
 
   it("rejects unknown benchmark CLI args before running cases", () => {

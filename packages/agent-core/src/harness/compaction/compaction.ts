@@ -104,24 +104,43 @@ export const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fi
 const TURN_CONTEXT_PREFIX = "\n\n---\n\n**Turn Context (split turn):**\n\n";
 const MAX_LATEST_USER_REQUEST_CHARS = 800;
 const LATEST_USER_REQUEST_TRUNCATED_MARKER = "\n[... latest user request truncated ...]\n";
+const MAX_REQUIRED_ASK_CONTEXT_CHARS = 2_000;
+const REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER = "\n[... split-turn ask context truncated ...]\n";
 
-function extractLatestUserRequest(messages: AgentMessage[]): string | undefined {
-  let source = "";
+function latestUserText(messages: AgentMessage[]): string {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role === "user") {
-      source = getCompactionContent(message.content).text.trim();
+      const source = getCompactionContent(message.content).text.trim();
       if (source) {
-        break;
+        return source;
       }
     }
   }
+  return "";
+}
+
+function extractLatestUserRequest(messages: AgentMessage[]): string | undefined {
+  const source = latestUserText(messages);
   if (!source || source.length <= MAX_LATEST_USER_REQUEST_CHARS) {
     return source || undefined;
   }
   const contentBudget = MAX_LATEST_USER_REQUEST_CHARS - LATEST_USER_REQUEST_TRUNCATED_MARKER.length;
   const headBudget = Math.floor(contentBudget / 2);
   return `${truncateUtf16Safe(source, headBudget)}${LATEST_USER_REQUEST_TRUNCATED_MARKER}${sliceUtf16Safe(source, -(contentBudget - headBudget))}`;
+}
+
+/** Bounds a split turn's source ask; the safeguard summary and the no-summary reduction share it. */
+export function formatRequiredAskContext(rawAsk: string): string {
+  const source = rawAsk.trim();
+  if (source.length <= MAX_REQUIRED_ASK_CONTEXT_CHARS) {
+    return source;
+  }
+  const contentBudget =
+    MAX_REQUIRED_ASK_CONTEXT_CHARS - REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER.length;
+  const headBudget = Math.floor(contentBudget / 2);
+  const tailBudget = contentBudget - headBudget;
+  return `${truncateUtf16Safe(source, headBudget)}${REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER}${sliceUtf16Safe(source, -tailBudget)}`;
 }
 
 export function capCompactionSummary(
@@ -879,10 +898,7 @@ export async function compact(
     messagesToSummarize,
     turnPrefixMessages,
     isSplitTurn,
-    tokensBefore,
     previousSummary,
-    previousSummaryDetails,
-    fileOps,
     settings,
   } = preparation;
   if (!firstKeptEntryId) {
@@ -895,13 +911,6 @@ export async function compact(
   }
 
   const summarizeTurnPrefix = isSplitTurn && turnPrefixMessages.length > 0;
-  const previousFileOperations = previousSummaryDetails
-    ? formatFileOperations(previousSummaryDetails.readFiles, previousSummaryDetails.modifiedFiles)
-    : "";
-  const preservedPreviousSummary =
-    previousFileOperations && previousSummary?.endsWith(previousFileOperations)
-      ? previousSummary.slice(0, -previousFileOperations.length)
-      : previousSummary;
   const historyResult =
     messagesToSummarize.length > 0 || !summarizeTurnPrefix
       ? await generateSummary(
@@ -917,7 +926,9 @@ export async function compact(
           streamFn,
           runtime,
         )
-      : ok<string, CompactionError>(preservedPreviousSummary ?? "No prior history.");
+      : ok<string, CompactionError>(
+          previousSummaryWithoutFileOperations(preparation) ?? "No prior history.",
+        );
   if (!historyResult.ok) {
     return err(historyResult.error);
   }
@@ -943,19 +954,70 @@ export async function compact(
     }
     latestContext = `${TURN_CONTEXT_PREFIX}${turnPrefixResult.value}`;
   }
+  return finalizeCompaction(preparation, historyResult.value, latestContext);
+}
 
-  const { readFiles, modifiedFiles } = computeFileLists(fileOps);
-  const fileOperations = formatFileOperations(readFiles, modifiedFiles);
-  const unresolvedRequestContext = preparation.latestUnresolvedUserRequest
-    ? `## Latest unresolved user request\n${JSON.stringify(preparation.latestUnresolvedUserRequest)}\n\n`
+/**
+ * Builds the same commit-ready artifact without a model call, for when summary
+ * generation failed. The prepared cut keeps the recent suffix verbatim; the
+ * previous summary, a split turn's raw source ask, file operations, and the
+ * unresolved request carry forward, and the dropped span is named, not summarized.
+ */
+export function compactWithoutSummary(
+  preparation: CompactionPreparation,
+): Result<CompactionResult, CompactionError> {
+  const droppedCount =
+    preparation.messagesToSummarize.length + preparation.turnPrefixMessages.length;
+  const sourceAsk = preparation.isSplitTurn
+    ? formatRequiredAskContext(latestUserText(preparation.turnPrefixMessages))
     : "";
+  // The notice and the already-bounded split-turn source ask are required; only the
+  // carried summary shrinks to fit.
+  const requiredContext =
+    `[${droppedCount} earlier message(s) were removed without a summary because summarization failed. The messages after this summary are verbatim; ask the user if older details matter.]\n\n` +
+    (sourceAsk ? `## Original request of the current turn\n${JSON.stringify(sourceAsk)}\n\n` : "");
+  return finalizeCompaction(
+    preparation,
+    previousSummaryWithoutFileOperations(preparation) ?? "",
+    "",
+    requiredContext,
+  );
+}
+
+// File metadata is re-merged by finalizeCompaction, so the carried summary drops its old copy.
+function previousSummaryWithoutFileOperations(
+  preparation: CompactionPreparation,
+): string | undefined {
+  const { previousSummary, previousSummaryDetails } = preparation;
+  const previousFileOperations = previousSummaryDetails
+    ? formatFileOperations(previousSummaryDetails.readFiles, previousSummaryDetails.modifiedFiles)
+    : "";
+  return previousFileOperations && previousSummary?.endsWith(previousFileOperations)
+    ? previousSummary.slice(0, -previousFileOperations.length)
+    : previousSummary;
+}
+
+function finalizeCompaction(
+  preparation: CompactionPreparation,
+  historySummary: string,
+  latestContext: string,
+  requiredContext = "",
+): Result<CompactionResult, CompactionError> {
+  const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
+  const fileOperations = formatFileOperations(readFiles, modifiedFiles);
+  // Required prefix content survives fitting; only the history and split-turn context shrink.
+  const requiredPrefix = `${requiredContext}${
+    preparation.latestUnresolvedUserRequest
+      ? `## Latest unresolved user request\n${JSON.stringify(preparation.latestUnresolvedUserRequest)}\n\n`
+      : ""
+  }`;
   const fitted = fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) => {
-    const requiredChars = fileOperations.length + unresolvedRequestContext.length;
+    const requiredChars = fileOperations.length + requiredPrefix.length;
     if (maxChars <= requiredChars + SUMMARY_TRUNCATED_MARKER.length) {
       return undefined;
     }
     const preservedHistoryChars = Math.min(
-      historyResult.value.length,
+      historySummary.length,
       Math.floor(
         (preparation.summaryTokenBudget === undefined ? maxChars : maxChars - requiredChars) / 2,
       ),
@@ -973,9 +1035,9 @@ export async function compact(
     }
     const suffix = `${latestContextBudget > 0 ? capCompactionSummary(latestContext, latestContextBudget) : ""}${fileOperations}`;
     return {
-      summary: `${unresolvedRequestContext}${capCompactionSummary(
-        `${historyResult.value}${suffix}`,
-        maxChars - unresolvedRequestContext.length,
+      summary: `${requiredPrefix}${capCompactionSummary(
+        `${historySummary}${suffix}`,
+        maxChars - requiredPrefix.length,
         suffix,
       )}`,
     };
@@ -983,12 +1045,11 @@ export async function compact(
   if (!fitted.ok) {
     return fitted;
   }
-  const { summary } = fitted.value;
 
   return ok({
-    summary,
-    firstKeptEntryId,
-    tokensBefore,
+    summary: fitted.value.summary,
+    firstKeptEntryId: preparation.firstKeptEntryId,
+    tokensBefore: preparation.tokensBefore,
     details: {
       readFiles,
       modifiedFiles,

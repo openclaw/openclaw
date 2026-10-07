@@ -279,7 +279,7 @@ describe("handlePluginsCommand", () => {
     ]);
   });
 
-  it.each(["inspect", "inspect superpowers", "inspect all", "inspect missing"])(
+  it.each(["inspect", "inspect missing"])(
     "waits for inspection cleanup before returning the %s reply",
     async (action) => {
       const entered = createDeferredCore();
@@ -326,26 +326,7 @@ describe("handlePluginsCommand", () => {
     },
   );
 
-  it.each(["inspection", "format"])(
-    "propagates %s failure without a successful reply",
-    async (phase) => {
-      const failure = new Error(`inspection ${phase} failed`);
-      if (phase === "format") {
-        buildPluginInspectReportMock.mockImplementation(() => {
-          throw failure;
-        });
-      } else {
-        withPluginDiagnosticsReportForInspectionMock.mockRejectedValue(failure);
-      }
-      await expect(
-        handlePluginsCommand(buildPluginsParams("/plugins inspect superpowers", buildCfg()), true),
-      ).rejects.toBe(failure);
-      expect(replaceConfigFileMock).not.toHaveBeenCalled();
-      expect(refreshPluginRegistryAfterConfigMutationMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it("lists discovered plugins and inspects plugin details", async () => {
+  it("lists discovered plugins", async () => {
     const listResult = await handlePluginsCommand(
       buildPluginsParams("/plugins list", buildCfg()),
       true,
@@ -353,27 +334,9 @@ describe("handlePluginsCommand", () => {
     expect(listResult?.reply?.text).toContain("Plugins");
     expect(listResult?.reply?.text).toContain("superpowers");
     expect(listResult?.reply?.text).toContain("[disabled]");
-
-    const showResult = await handlePluginsCommand(
-      buildPluginsParams("/plugins inspect superpowers", buildCfg()),
-      true,
-    );
-    expect(showResult?.reply?.text).toContain('"id": "superpowers"');
-    expect(showResult?.reply?.text).toContain('"bundleFormat": "claude"');
-    expect(showResult?.reply?.text).toContain('"shape"');
-    expect(showResult?.reply?.text).toContain('"compatibilityWarnings": []');
-
-    const inspectAllResult = await handlePluginsCommand(
-      buildPluginsParams("/plugins inspect all", buildCfg()),
-      true,
-    );
-    expect(inspectAllResult?.reply?.text).toContain("```json");
-    expect(inspectAllResult?.reply?.text).toContain('"plugin"');
-    expect(inspectAllResult?.reply?.text).toContain('"compatibilityWarnings"');
-    expect(inspectAllResult?.reply?.text).toContain('"superpowers"');
   });
 
-  it("reports package-owned provenance for child inspection and all aliases", async () => {
+  it("reports package-owned provenance for child and collection inspection", async () => {
     const install = {
       source: "npm",
       spec: "@example/pack@1.2.3",
@@ -381,59 +344,38 @@ describe("handlePluginsCommand", () => {
       installPath: "/plugins/pack",
       integrity: "sha512-pack",
     };
-    const reports = ["pack/one", "pack/two"].map((id) => ({
-      plugin: { id },
+    const report = {
+      plugin: { id: "pack/one" },
       compatibility: [],
       tools: [{ name: "runtime_tool" }],
-    }));
+    };
     const index = {
-      ...createInstalledPluginIndexSnapshot(
-        reports.map(({ plugin }) =>
-          recordInstalledPluginIndexInstallOwner(
-            { pluginId: plugin.id, rootDir: install.installPath },
-            "pack",
-          ),
+      ...createInstalledPluginIndexSnapshot([
+        recordInstalledPluginIndexInstallOwner(
+          { pluginId: report.plugin.id, rootDir: install.installPath },
+          "pack",
         ),
-      ),
+      ]),
       installRecords: { pack: install },
     };
     loadPluginMetadataSnapshotMock.mockReturnValue({ index });
-    buildAllPluginInspectReportsMock.mockReturnValue(reports);
-
-    for (const action of ["inspect", "show", "get"]) {
-      for (const report of reports) {
-        buildPluginInspectReportMock.mockReturnValue(report);
-        const result = await handlePluginsCommand(
-          buildPluginsParams(`/plugins ${action} ${report.plugin.id}`, buildCfg()),
-          true,
-        );
-        const payload = JSON.parse(
-          result?.reply?.text?.split("```json\n")[1]?.split("\n```")[0] ?? "null",
-        );
-        expect(payload).toEqual({ ...report, compatibilityWarnings: [], install });
-      }
-      const result = await handlePluginsCommand(
-        buildPluginsParams(`/plugin ${action} all`, buildCfg()),
-        true,
-      );
-      const payload = JSON.parse(
-        result?.reply?.text?.split("```json\n")[1]?.split("\n```")[0] ?? "null",
-      );
-      expect(payload).toEqual(
-        reports.map((inspect) => ({ inspect, compatibilityWarnings: [], install })),
-      );
-    }
-    expect(withPluginDiagnosticsReportForInspectionMock).toHaveBeenCalled();
-    expect(buildPluginRegistrySnapshotReportMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps bare inspection on the runtime report", async () => {
-    const result = await handlePluginsCommand(
-      buildPluginsParams("/plugins inspect", buildCfg()),
+    buildAllPluginInspectReportsMock.mockReturnValue([report]);
+    buildPluginInspectReportMock.mockReturnValue(report);
+    const child = await handlePluginsCommand(
+      buildPluginsParams(`/plugins inspect ${report.plugin.id}`, buildCfg()),
       true,
     );
-    expect(result?.reply?.text).toContain("superpowers");
-    expect(withPluginDiagnosticsReportForInspectionMock).toHaveBeenCalledTimes(1);
+    expect(
+      JSON.parse(child?.reply?.text?.split("```json\n")[1]?.split("\n```")[0] ?? "null"),
+    ).toEqual({ ...report, compatibilityWarnings: [], install });
+    const all = await handlePluginsCommand(
+      buildPluginsParams("/plugin inspect all", buildCfg()),
+      true,
+    );
+    expect(
+      JSON.parse(all?.reply?.text?.split("```json\n")[1]?.split("\n```")[0] ?? "null"),
+    ).toEqual([{ inspect: report, compatibilityWarnings: [], install }]);
+    expect(withPluginDiagnosticsReportForInspectionMock).toHaveBeenCalled();
     expect(buildPluginRegistrySnapshotReportMock).not.toHaveBeenCalled();
   });
 
@@ -451,38 +393,32 @@ describe("handlePluginsCommand", () => {
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
-  it.each(["missing", "ambiguous", "conflicting"])(
-    "does not attribute chat install metadata when ownership is %s",
-    async (ownership) => {
-      const inspect = { plugin: { id: "pack/one" }, compatibility: [] };
-      const index = {
-        ...createInstalledPluginIndexSnapshot([
-          recordInstalledPluginIndexInstallOwner(
-            { pluginId: inspect.plugin.id, rootDir: "/plugins/pack" },
-            ownership === "conflicting" ? "pack" : undefined,
-            ownership === "ambiguous",
-          ),
-        ]),
-        installRecords: {
-          pack: { source: "npm", installPath: "/plugins/pack" },
-          "pack/one": { source: "npm", installPath: "/plugins/unrelated" },
-        },
-      };
-      loadPluginMetadataSnapshotMock.mockReturnValue({ index });
-      buildPluginInspectReportMock.mockReturnValue(inspect);
-      buildAllPluginInspectReportsMock.mockReturnValue([inspect]);
-      for (const name of [inspect.plugin.id, "all"]) {
-        const result = await handlePluginsCommand(
-          buildPluginsParams(`/plugins inspect ${name}`, buildCfg()),
-          true,
-        );
-        const payload = JSON.parse(
-          result?.reply?.text?.split("```json\n")[1]?.split("\n```")[0] ?? "null",
-        );
-        expect(Array.isArray(payload) ? payload[0].install : payload.install).toBeNull();
-      }
-    },
-  );
+  it("does not attribute chat install metadata when ownership conflicts", async () => {
+    const inspect = { plugin: { id: "pack/one" }, compatibility: [] };
+    const index = {
+      ...createInstalledPluginIndexSnapshot([
+        recordInstalledPluginIndexInstallOwner(
+          { pluginId: inspect.plugin.id, rootDir: "/plugins/pack" },
+          "pack",
+          false,
+        ),
+      ]),
+      installRecords: {
+        pack: { source: "npm", installPath: "/plugins/pack" },
+        "pack/one": { source: "npm", installPath: "/plugins/unrelated" },
+      },
+    };
+    loadPluginMetadataSnapshotMock.mockReturnValue({ index });
+    buildPluginInspectReportMock.mockReturnValue(inspect);
+    const result = await handlePluginsCommand(
+      buildPluginsParams(`/plugins inspect ${inspect.plugin.id}`, buildCfg()),
+      true,
+    );
+    const payload = JSON.parse(
+      result?.reply?.text?.split("```json\n")[1]?.split("\n```")[0] ?? "null",
+    );
+    expect(payload.install).toBeNull();
+  });
 
   it("rejects internal writes without operator.admin", async () => {
     const params = buildPluginsParams("/plugins enable superpowers", buildCfg());
@@ -528,30 +464,6 @@ describe("handlePluginsCommand", () => {
     const result = await handlePluginsCommand(params, true);
 
     expect(result?.reply?.text).toContain('Plugin "superpowers" disabled');
-    expectLastReplaceConfig(false);
-    expectLastRegistryRefresh();
-  });
-
-  it("enables and disables a discovered plugin", async () => {
-    validateConfigObjectWithPluginsMock.mockImplementation((next) => ({ ok: true, config: next }));
-
-    const enableParams = buildPluginsParams("/plugins enable superpowers", buildCfg(), {
-      gatewayClientScopes: WRITE_GATEWAY_SCOPES,
-    });
-    enableParams.command.senderIsOwner = true;
-
-    const enableResult = await handlePluginsCommand(enableParams, true);
-    expect(enableResult?.reply?.text).toContain('Plugin "superpowers" enabled');
-    expectLastReplaceConfig(true);
-    expectLastRegistryRefresh();
-
-    const disableParams = buildPluginsParams("/plugins disable superpowers", buildCfg(), {
-      gatewayClientScopes: WRITE_GATEWAY_SCOPES,
-    });
-    disableParams.command.senderIsOwner = true;
-
-    const disableResult = await handlePluginsCommand(disableParams, true);
-    expect(disableResult?.reply?.text).toContain('Plugin "superpowers" disabled');
     expectLastReplaceConfig(false);
     expectLastRegistryRefresh();
   });

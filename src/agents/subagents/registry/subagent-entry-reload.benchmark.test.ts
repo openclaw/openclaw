@@ -237,7 +237,7 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
               update: () => ({
                 result: undefined,
                 replacements: [
-                  { sessionKey: childSessionKey, entry: { ...entry, status: "running" } },
+                  { sessionKey: childSessionKey, entry: { ...entry, status: undefined } },
                 ],
               }),
             });

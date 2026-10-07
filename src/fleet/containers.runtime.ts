@@ -59,39 +59,12 @@ type FleetContainerLogsOptions = {
   redactValues: readonly string[];
 };
 export type FleetContainerInspectResult =
-  | {
-      kind: "ok";
-      containerId: string;
-      state: string;
-      running: boolean;
-      labels: Record<string, string>;
-      environment: Record<string, string>;
-      imageId: string;
-      memory: string;
-      cpus: string;
-      pidsLimit: number | undefined;
-      storageOpt: Record<string, string>;
-      capDrop: string[];
-      // Podman-only top-level inspect field: null means every capability is
-      // dropped, a list means caps remain, and Docker omits the field entirely.
-      effectiveCaps: string[] | undefined;
-      securityOpt: string[];
-      init: boolean | undefined;
-      restartPolicy: string | undefined;
-      portBindings: Array<{ containerPort: string; hostIp: string; hostPort: string }>;
-      user?: string;
-      usernsMode?: string;
-    }
+  | ReturnType<typeof parseInspectOutput>
   | { kind: "missing"; state: "missing" }
   | { kind: "unavailable"; state: "unknown"; error: string };
 
 export type FleetNetworkInspectResult =
-  | {
-      kind: "ok";
-      labels: Record<string, string>;
-      attachedContainers: Array<{ id: string; name?: string }>;
-      internal: boolean;
-    }
+  | ReturnType<typeof parseNetworkInspectOutput>
   | { kind: "missing" }
   | { kind: "unavailable"; error: string };
 
@@ -257,7 +230,7 @@ function parseInspectRecord(stdout: string): Record<string, unknown> {
   return requireRecord(parsed[0]);
 }
 
-function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult, { kind: "ok" }> {
+function parseInspectOutput(stdout: string) {
   const inspected = parseInspectRecord(stdout);
   const state = requireRecord(inspected.State);
   const config = requireRecord(inspected.Config);
@@ -267,7 +240,7 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
   const usernsMode = readOptionalInspectString(hostConfig.UsernsMode);
 
   return {
-    kind: "ok",
+    kind: "ok" as const,
     containerId: requireString(inspected.Id),
     state: requireString(state.Status),
     running: requireBoolean(state.Running),
@@ -280,6 +253,7 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
     pidsLimit: readPidsLimit(hostConfig.PidsLimit),
     storageOpt: readStringRecord(hostConfig.StorageOpt),
     capDrop: readStringArray(hostConfig.CapDrop),
+    // Podman null means every capability is dropped; Docker omits this field.
     effectiveCaps:
       inspected.EffectiveCaps === undefined ? undefined : readStringArray(inspected.EffectiveCaps),
     securityOpt: readStringArray(hostConfig.SecurityOpt),
@@ -291,12 +265,10 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
   };
 }
 
-function parseNetworkInspectOutput(
-  stdout: string,
-): Extract<FleetNetworkInspectResult, { kind: "ok" }> {
+function parseNetworkInspectOutput(stdout: string) {
   const inspected = parseInspectRecord(stdout);
   return {
-    kind: "ok",
+    kind: "ok" as const,
     labels: Object.assign({}, readStringRecord(inspected.Labels ?? inspected.labels)),
     attachedContainers: readNetworkAttachments(inspected.Containers ?? inspected.containers),
     internal: readOptionalBoolean(inspected.Internal ?? inspected.internal) ?? false,

@@ -33,7 +33,6 @@ import { resolveCodexAppServerFallbackApiKeyCacheKey } from "../app-server/auth-
 import { resolveCodexAppServerAuthProfileIdForAgent } from "../app-server/auth-profile.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
-  readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   type ResolvedCodexPluginPolicy,
 } from "../app-server/config.js";
@@ -303,7 +302,7 @@ async function applyCodexPluginInstallItem(
 
 function resolveTargetCodexAppServer(ctx: MigrationProviderContext) {
   return resolveCodexAppServerRuntimeOptions({
-    pluginConfig: readCodexPluginConfig(ctx.config),
+    pluginConfig: ctx.config.plugins?.entries?.codex?.config,
   });
 }
 

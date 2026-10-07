@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareAgentAuthProfileRowsRead } from "../agents/auth-profiles/sqlite-read.js";
@@ -35,11 +36,18 @@ afterEach(() => {
 });
 const skipBroker = process.platform === "win32" || Boolean(process.versions.bun);
 
-function createAuthDatabase(key = "synthetic") {
+function createAuthDatabase(key = "synthetic", metadata?: Record<string, string>) {
   const source = path.join(tempDirs.make("openclaw-auth-transport-"), "source.sqlite");
   const store = {
     version: 1,
-    profiles: { "fixture:default": { type: "api_key", provider: "fixture", key } },
+    profiles: {
+      "fixture:default": {
+        type: "api_key",
+        provider: "fixture",
+        key,
+        ...(metadata ? { metadata } : {}),
+      },
+    },
   };
   const state = { lastGood: { fixture: "fixture:default" } };
   const database = new (requireNodeSqlite().DatabaseSync)(source);
@@ -200,18 +208,30 @@ describe.each([
   );
 
   it.skipIf(transport.broker && skipBroker)(
-    "reads complete oversized auth rows and joins the child before returning",
+    "reads oversized auth fields in bounded records and joins the child before returning",
     async () => {
       const { source, rows: expectedRows } = createAuthDatabase(
         `${"synthetic".repeat(1_200_000)}🌊`,
+        { ["m".repeat(65_536)]: "synthetic-metadata" },
       );
       const sourceBefore = createHash("sha256").update(fs.readFileSync(source)).digest("hex");
       const broker = transport.broker ? createSpawnBrokerHost() : undefined;
       let child: ChildProcess | undefined;
       let closed = false;
       let stdoutBytes = 0;
+      let largestRecordBytes = 0;
       const observe = <T extends ChildProcess>(value: T): T => {
         child = value;
+        value.on("message", (message: unknown) => {
+          if (
+            isRecord(message) &&
+            isRecord(message.result) &&
+            isRecord(message.result.frame) &&
+            typeof message.result.frame.recordBytes === "number"
+          ) {
+            largestRecordBytes = Math.max(largestRecordBytes, message.result.frame.recordBytes);
+          }
+        });
         value.once("close", () => {
           closed = true;
         });
@@ -251,6 +271,8 @@ describe.each([
         expect(child?.exitCode).toBe(0);
         expect(child?.connected).toBe(false);
         expect(stdoutBytes).toBe(0);
+        expect(largestRecordBytes).toBeGreaterThan(0);
+        expect(largestRecordBytes).toBeLessThanOrEqual(64 * 1024);
         expect(createHash("sha256").update(fs.readFileSync(source)).digest("hex")).toBe(
           sourceBefore,
         );

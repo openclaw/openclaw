@@ -543,9 +543,7 @@ class SearchPage extends OpenClawLightDomElement {
                         options: [
                           {
                             value: "",
-                            label: result.model
-                              ? `${t("searchPage.agentDefault")} · ${result.model.provider}/${result.model.id}`
-                              : t("searchPage.agentDefault"),
+                            label: `${t("searchPage.agentDefault")} · ${result.model.provider}/${result.model.id}`,
                           },
                           ...this.models.map((model) => ({
                             value: `${model.provider}/${model.id}`,

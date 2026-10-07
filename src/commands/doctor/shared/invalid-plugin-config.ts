@@ -37,7 +37,6 @@ function scanInvalidPluginConfig(cfg: OpenClawConfig): Set<string> {
   return hits;
 }
 
-/** Disable plugin entries and clear config when plugin validation marks their config invalid. */
 export function maybeRepairInvalidPluginConfig(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
@@ -59,9 +58,7 @@ export function maybeRepairInvalidPluginConfig(cfg: OpenClawConfig): {
     if (!entry) {
       continue;
     }
-    if ("config" in entry) {
-      delete entry.config;
-    }
+    delete entry.config;
     entry.enabled = false;
     quarantined.push(pluginId);
   }

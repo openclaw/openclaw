@@ -239,7 +239,11 @@ async function main() {
   }
   async function sampleWorkflow(workflow: string, source: TimingSource) {
     const event =
-      source === "main" ? "push" : source === "pull-request" ? "pull_request" : "workflow_dispatch";
+      source === "main"
+        ? "schedule"
+        : source === "pull-request"
+          ? "pull_request"
+          : "workflow_dispatch";
     const pageSchema = z.object({
       total_count: z.number().int().nonnegative(),
       workflow_runs: z.array(
@@ -247,7 +251,7 @@ async function main() {
           conclusion: source === "main" ? z.string().nullable() : z.literal("success"),
           // PR measurements retain their merge-ref provenance and partial inventory.
           // Their workflow/job head_sha identifies the PR head, not that merge.
-          // A release dispatch can check out target_ref; push alone proves main.
+          // A release dispatch can check out target_ref; scheduled CI binds main.
           event: z.literal(event),
           head_branch: source === "main" ? z.literal("main") : z.string().min(1),
         }),
@@ -363,6 +367,7 @@ async function main() {
       );
     }
   } else {
+    // Scheduled CI owns main validation even when per-push test work is disabled.
     await sampleWorkflow("ci.yml", "main");
     const fresh = refitTestTimings(runs);
     const { blacksmith, github } = fresh.contributingRunIds;

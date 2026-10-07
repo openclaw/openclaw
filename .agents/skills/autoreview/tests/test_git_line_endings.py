@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import runpy
 import shlex
 import subprocess
 import sys
@@ -9,7 +10,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from .test_autoreview_hardening import load_helper
+from .test_autoreview_hardening import SCRIPT, load_helper
+
+
+FIXTURE_TOOLS = runpy.run_path(str(SCRIPT.with_name("test-review-harness.py")))
 
 
 class GitLineEndingTests(unittest.TestCase):
@@ -22,8 +26,16 @@ class GitLineEndingTests(unittest.TestCase):
         self.repo.mkdir()
         self.home.mkdir()
         self.helper = load_helper()
-        self.env = self.helper["safe_git_env"](self.repo)
-        self.env.update(HOME=str(self.home), GIT_CONFIG_GLOBAL=str(self.home / ".gitconfig"))
+        roots = FIXTURE_TOOLS["fixture_git_roots"](self.repo)
+        self.native_git = FIXTURE_TOOLS["fixture_git_binary"](roots)
+        self.env = FIXTURE_TOOLS["fixture_git_env"](str(self.home), roots)
+        for key in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
+            self.env.pop(key)
+        self.env.update({
+            "PATH": FIXTURE_TOOLS["fixture_git_path"](roots, self.native_git, self.env.get("PATH", "")),
+            "GIT_CONFIG_GLOBAL": str(self.home / ".gitconfig"),
+            "GIT_OPTIONAL_LOCKS": "0", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
+        })
         environment = mock.patch.dict(os.environ, self.env, clear=True)
         environment.start()
         self.addCleanup(environment.stop)
@@ -31,7 +43,7 @@ class GitLineEndingTests(unittest.TestCase):
 
     def git(self, *args):
         return subprocess.run(
-            ["git", "-c", "user.name=Line Ending Test", "-c", "user.email=test@example.invalid",
+            [self.native_git, "-c", "user.name=Line Ending Test", "-c", "user.email=test@example.invalid",
              "-c", "commit.gpgsign=false", *args],
             cwd=self.repo, env=self.env, check=True, capture_output=True,
         ).stdout

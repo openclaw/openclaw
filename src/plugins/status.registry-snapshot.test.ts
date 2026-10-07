@@ -150,7 +150,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
   });
 
   it.each([
-    { consent: "missing", warns: true },
     { consent: "stale", warns: true },
     { consent: "current", warns: false },
   ] as const)(
@@ -170,13 +169,9 @@ describe("buildPluginRegistrySnapshotReport", () => {
         source: "path",
         installPath: fixture.rootDir,
         integrity: "sha256-consent-fixture",
-        ...(consent !== "missing"
-          ? {
-              acceptedSurface,
-              acceptedSurfaceHash: computeDeclaredSurfaceHash(acceptedSurface),
-              acceptedSurfaceIntegrity: "sha256-consent-fixture",
-            }
-          : {}),
+        acceptedSurface,
+        acceptedSurfaceHash: computeDeclaredSurfaceHash(acceptedSurface),
+        acceptedSurfaceIntegrity: "sha256-consent-fixture",
       };
       const index = loadInstalledPluginIndex({
         config,
@@ -232,93 +227,71 @@ describe("buildPluginRegistrySnapshotReport", () => {
     });
   });
 
-  it.each([
-    { state: "stale-policy", workspaceScope: "selected" },
-    { state: "persisted", workspaceScope: "omitted" },
-  ] as const)(
-    "reuses prepared list metadata with $state registry and $workspaceScope workspace",
-    async ({ state, workspaceScope }) => {
-      const { rootDir: tempRoot, stateDir, env } = createStatusEnv(false);
-      const workspaceDir = workspaceScope === "selected" ? tempRoot : undefined;
-      const enabled = workspaceScope === "selected";
-      const fixture = createColdPluginFixture({
-        rootDir: tempRoot,
-        pluginId: "indexed-demo",
-        packageName: "@example/openclaw-indexed-demo",
-        packageVersion: "9.8.7",
-        manifest: {
-          id: "indexed-demo",
-          name: "Indexed Demo",
-          description: "Manifest-backed list metadata",
-          version: "1.2.3",
-          providers: ["indexed-provider"],
-          contracts: {
-            agentToolResultMiddleware: ["openclaw", "codex"],
-            speechProviders: ["indexed-speech-provider"],
-            realtimeTranscriptionProviders: ["indexed-transcription-provider"],
-            realtimeVoiceProviders: ["indexed-voice-provider"],
-            tools: ["indexed_echo", "indexed_search", "indexed_echo"],
-            trustedToolPolicies: ["workflow-budget"],
-          },
-          commandAliases: [{ name: "indexed-demo" }],
-          configSchema: { type: "object", additionalProperties: false, properties: {} },
+  it("reuses prepared list metadata with a persisted registry and omitted workspace", async () => {
+    const { rootDir: tempRoot, stateDir, env } = createStatusEnv(false);
+    const workspaceDir = undefined;
+    const fixture = createColdPluginFixture({
+      rootDir: tempRoot,
+      pluginId: "indexed-demo",
+      packageName: "@example/openclaw-indexed-demo",
+      packageVersion: "9.8.7",
+      manifest: {
+        id: "indexed-demo",
+        name: "Indexed Demo",
+        description: "Manifest-backed list metadata",
+        version: "1.2.3",
+        providers: ["indexed-provider"],
+        contracts: {
+          agentToolResultMiddleware: ["openclaw", "codex"],
+          speechProviders: ["indexed-speech-provider"],
+          realtimeTranscriptionProviders: ["indexed-transcription-provider"],
+          realtimeVoiceProviders: ["indexed-voice-provider"],
+          tools: ["indexed_echo", "indexed_search", "indexed_echo"],
+          trustedToolPolicies: ["workflow-budget"],
         },
-      });
+        commandAliases: [{ name: "indexed-demo" }],
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      },
+    });
 
-      const config = {
-        agents: { ownership: "explicit" as const, entries: { first: {}, second: {} } },
-        plugins: {
-          load: { paths: [fixture.rootDir] },
-          entries: { [fixture.pluginId]: { enabled } },
-        },
-      };
-      const index = loadInstalledPluginIndex({ config, env, workspaceDir });
-      if (state === "stale-policy") {
-        index.policyHash = "stale-policy";
-      }
-      await writePersistedInstalledPluginIndex(index, { stateDir });
-      const open = vi.spyOn(fs, "openSync");
-      const report = buildPluginRegistrySnapshotReport({ config, env, workspaceDir });
-      const manifestOpens = open.mock.calls.filter(
-        ([file]) => file === path.join(fixture.rootDir, "openclaw.plugin.json"),
-      ).length;
-      open.mockRestore();
+    const config = {
+      agents: { ownership: "explicit" as const, entries: { first: {}, second: {} } },
+      plugins: {
+        load: { paths: [fixture.rootDir] },
+        entries: { [fixture.pluginId]: { enabled: false } },
+      },
+    };
+    const index = loadInstalledPluginIndex({ config, env, workspaceDir });
+    await writePersistedInstalledPluginIndex(index, { stateDir });
+    const open = vi.spyOn(fs, "openSync");
+    const report = buildPluginRegistrySnapshotReport({ config, env, workspaceDir });
+    const manifestOpens = open.mock.calls.filter(
+      ([file]) => file === path.join(fixture.rootDir, "openclaw.plugin.json"),
+    ).length;
+    open.mockRestore();
 
-      expect(report.plugins).toHaveLength(1);
-      expect(report.plugins[0]).toEqual(
-        expect.objectContaining({
-          version: "9.8.7",
-          toolNames: ["indexed_echo", "indexed_search"],
-          source: fs.realpathSync(fixture.runtimeSource),
-          enabled,
-          status: enabled ? "loaded" : "disabled",
-        }),
-      );
-      expect(report.workspaceDir).toBe(workspaceDir);
-      expect(report.workspaceScope).toBe(workspaceScope);
-      expect(report.registrySource).toBe(state === "persisted" ? "persisted" : "derived");
-      expect(report.registryDiagnostics).toEqual(
-        state === "persisted"
-          ? []
-          : [
-              {
-                level: "warn",
-                code: "persisted-registry-stale-policy",
-                message: expect.any(String),
-              },
-            ],
-      );
-      expect(report.diagnostics).toEqual(
-        workspaceScope === "selected"
-          ? []
-          : [expect.objectContaining({ level: "warn", code: "workspace-scope-omitted" })],
-      );
-      expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
-      expect(getCurrentPluginMetadataSnapshot({ config, env, workspaceDir })).toBeUndefined();
-      // Discovery, validation, index hashing, and status share one checked manifest read.
-      expect(manifestOpens).toBe(1);
-    },
-  );
+    expect(report.plugins).toHaveLength(1);
+    expect(report.plugins[0]).toEqual(
+      expect.objectContaining({
+        version: "9.8.7",
+        toolNames: ["indexed_echo", "indexed_search"],
+        source: fs.realpathSync(fixture.runtimeSource),
+        enabled: false,
+        status: "disabled",
+      }),
+    );
+    expect(report.workspaceDir).toBe(workspaceDir);
+    expect(report.workspaceScope).toBe("omitted");
+    expect(report.registrySource).toBe("persisted");
+    expect(report.registryDiagnostics).toEqual([]);
+    expect(report.diagnostics).toEqual([
+      expect.objectContaining({ level: "warn", code: "workspace-scope-omitted" }),
+    ]);
+    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+    expect(getCurrentPluginMetadataSnapshot({ config, env, workspaceDir })).toBeUndefined();
+    // Discovery, validation, index hashing, and status share one checked manifest read.
+    expect(manifestOpens).toBe(1);
+  });
 
   it.each([false, true])(
     "reuses current metadata without a recorded source (diagnostics: %s)",

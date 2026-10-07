@@ -168,7 +168,10 @@ export async function recoverEmbeddedRunOverflow(
       assertActive();
       using promptState = retainEmbeddedSessionPromptState(input.getActiveSession().id);
       const projectionState = promptState.state.toolResults;
-      restoreCacheTtlToolResultProjections(projectionState, sessionManager.getBranch());
+      restoreCacheTtlToolResultProjections(
+        projectionState,
+        sessionManager.getToolResultProjectionEntries(),
+      );
       const result = await truncateOversizedToolResultsInSessionManager({
         sessionManager,
         contextWindowTokens: contextTokenBudget,
@@ -201,7 +204,7 @@ export async function recoverEmbeddedRunOverflow(
     `[context-overflow-diag] sessionKey=${runParams.sessionKey ?? runParams.sessionId} ` +
       `provider=${input.modelSelection.provider}/${input.modelSelection.model} source=${contextOverflowError.source} ` +
       `trigger=${compactionTrigger} ` +
-      `messages=${input.attempt.messagesSnapshot?.length ?? 0} sessionFile=${activeSession.file} ` +
+      `messages=${input.attempt.messagesSnapshot.length} sessionFile=${activeSession.file} ` +
       `diagId=${overflowDiagId} compactionAttempts=${input.state.overflowCompactionAttempts} ` +
       `observedTokens=${observedOverflowTokens ?? "unknown"} ` +
       `preflightEstimatedTokens=${preflightEstimatedPromptTokens ?? "unknown"} ` +
@@ -392,13 +395,11 @@ export async function recoverEmbeddedRunOverflow(
     const toolResultMaxChars = resolveLiveToolResultMaxChars({
       contextWindowTokens: input.contextTokenBudget,
     });
-    const hasOversized = input.attempt.messagesSnapshot
-      ? sessionLikelyHasOversizedToolResults({
-          messages: input.attempt.messagesSnapshot,
-          contextWindowTokens: input.contextTokenBudget,
-          maxCharsOverride: toolResultMaxChars,
-        })
-      : false;
+    const hasOversized = sessionLikelyHasOversizedToolResults({
+      messages: input.attempt.messagesSnapshot,
+      contextWindowTokens: input.contextTokenBudget,
+      maxCharsOverride: toolResultMaxChars,
+    });
     if (hasOversized) {
       input.state.toolResultTruncationAttempted = true;
       log.warn(

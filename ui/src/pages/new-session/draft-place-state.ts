@@ -16,7 +16,6 @@ import {
   adoptDraftPlaceRestorePreference,
   createDraftPlaceRestoreState,
   draftPlacePreferenceReady,
-  draftPlacePreferenceSelection,
   markDraftPlaceProjectChoice,
   restoreDraftPlacePreferences,
 } from "./draft-place-restore.ts";
@@ -220,18 +219,20 @@ export class DraftPlaceState {
   preferenceSelection(): NewSessionPreference {
     // Remember selection intent, not a temporary projection while discovery is pending.
     const where = this.restoreState.preferredWhereRestore ?? resolveNewSessionWhere(this);
-    return draftPlacePreferenceSelection({
-      state: this.restoreState,
-      browser: this.browser,
+    return {
       workspace: this.workspacePath(),
       folder: this.folderValue,
+      projectId: this.restoreState.preferredProjectRestore || this.browser.projectId,
+      remoteProject: this.restoreState.preferredRemoteProjectRestore ?? this.browser.remoteProject,
+      defaultRepositoryOptOut: this.restoreState.configuredDefaultRepositoryOptOut,
       where,
-      preferenceWorktree: this.repositoryState.preferenceWorktree,
-      remoteRepository: Boolean(this.remoteRepository),
+      worktree:
+        (where.kind !== "local" || this.repositoryState.preferenceWorktree) &&
+        !this.remoteRepository,
       freshWorkspace: this.freshWorkspaceValue,
       baseRef: this.repositoryState.baseRef,
       worktreeName: this.repositoryState.worktreeName,
-    });
+    };
   }
 
   get placementPreferenceReady(): boolean {

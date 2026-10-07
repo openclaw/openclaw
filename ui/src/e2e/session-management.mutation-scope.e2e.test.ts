@@ -170,7 +170,7 @@ suite.define(() => {
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         await sidebar
           .locator("wa-dropdown.sidebar-agent-menu")
-          .getByRole("menuitemradio", { name: "Research", exact: true })
+          .getByRole("menuitem", { name: "Research", exact: true })
           .click();
         await rowFor(researchRows[1]!.key).waitFor({ state: "visible" });
         await sidebar
@@ -244,7 +244,7 @@ suite.define(() => {
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         await sidebar
           .locator("wa-dropdown.sidebar-agent-menu")
-          .getByRole("menuitemradio", { name: "Main", exact: true })
+          .getByRole("menuitem", { name: "Main", exact: true })
           .click();
         if (operation === "rename") {
           await expect.poll(() => rowFor(original.key).textContent()).toContain("Renamed original");
@@ -267,7 +267,7 @@ suite.define(() => {
         await sidebar.getByRole("button", { name: /Switch agent/ }).click();
         await sidebar
           .locator("wa-dropdown.sidebar-agent-menu")
-          .getByRole("menuitemradio", { name: "Research", exact: true })
+          .getByRole("menuitem", { name: "Research", exact: true })
           .click();
         const returnedList = await gateway.waitForRequest("sessions.list", {
           match: researchMatch,

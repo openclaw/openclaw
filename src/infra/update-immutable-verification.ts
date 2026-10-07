@@ -32,21 +32,13 @@ import {
 export type ImmutableGatewayVerification = {
   pid: number;
   bootId: string;
-  port: number;
   version: string;
   buildId: string;
   generationSha: string;
-  buildDigest: string;
-  healthz: 200;
-  readyz: 200;
-  channelsReady: true;
-  pluginsReady: true;
 };
 
 export type ImmutableGatewayObservation = {
   outcome: "verified" | "still-starting" | "unverified" | "failed";
-  phase: string;
-  elapsedMs: number;
   service?: ImmutableServiceObservation;
   verification?: ImmutableGatewayVerification;
 };
@@ -54,7 +46,7 @@ export type ImmutableGatewayObservation = {
 /** Read-only settlement: the caller owns publication, rollback, and the durable receipt. */
 export async function waitForImmutableGateway(params: {
   descriptor: ImmutableInstallDescriptor;
-  generation: Pick<ImmutablePreparedGeneration, "path" | "sha" | "buildDigest">;
+  generation: Pick<ImmutablePreparedGeneration, "path" | "sha">;
   timeoutMs: number;
   assertCurrent: () => void;
   onReceipt?: (line: string) => void;
@@ -71,8 +63,6 @@ export async function waitForImmutableGateway(params: {
     params.onReceipt?.(`readiness-${outcome}`);
     return {
       outcome,
-      phase: waited?.startupPhase ?? deadline.expiredPhase ?? deadline.phase,
-      elapsedMs: Math.round(deadline.elapsedMs()),
       ...(observed ? { service: observed } : {}),
     };
   };
@@ -206,15 +196,9 @@ export async function waitForImmutableGateway(params: {
         verification: {
           pid: current.pid,
           bootId: after.gatewayBootId,
-          port,
           version,
           buildId,
           generationSha: params.generation.sha,
-          buildDigest: params.generation.buildDigest,
-          healthz: 200,
-          readyz: 200,
-          channelsReady: true,
-          pluginsReady: true,
         },
       };
     });

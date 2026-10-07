@@ -188,15 +188,15 @@ describe("package scripts", () => {
       const targets =
         buildAllIndex < 0
           ? extractNodeScriptTargets(script)
-          : resolveBuildAllSteps(parseBuildAllArgs(tokens.slice(buildAllIndex + 1)).profile)
-              .filter((step) => step.kind !== "pnpm")
-              .flatMap((step) => extractNodeScriptTargets(["node", ...step.args].join(" ")));
+          : resolveBuildAllSteps(
+              parseBuildAllArgs(tokens.slice(buildAllIndex + 1)).profile,
+            ).flatMap((step) => extractNodeScriptTargets(["node", ...step.args].join(" ")));
       const check = targets.indexOf("scripts/check-plugin-sdk-exports.mts");
 
       expect(check).toBeGreaterThanOrEqual(0);
       for (const prerequisite of [
         "scripts/runtime-postbuild.mts",
-        "scripts/write-plugin-sdk-entry-dts.ts",
+        "scripts/write-unified-entry-dts.ts",
       ]) {
         const publication = targets.indexOf(prerequisite);
         expect(publication, prerequisite).toBeGreaterThanOrEqual(0);

@@ -10,9 +10,11 @@ sidebarTitle: "Advanced configuration"
 
 ## GPT-5 prompt contribution
 
-OpenClaw adds a shared GPT-5 prompt contribution to matching GPT-5-family
-OpenClaw-assembled prompts. The OpenAI plugin setting below controls the
-friendly style on OpenAI-family routes. Older GPT-4.x model ids do not match.
+OpenClaw adds a shared GPT-5 prompt contribution to matching GPT-5 and GPT-6
+OpenClaw-assembled prompts (`gpt-5*` and `gpt-6*`, such as the default
+`gpt-6-astra`). The OpenAI plugin setting below controls the friendly style on
+OpenAI-family routes. Older GPT-4.x, `gpt-oss`, o-series, and `codex-mini` model
+ids do not match.
 
 The native Codex app-server harness does not receive the persona/tool-
 discipline behavior contract or the friendly interaction-style overlay through
@@ -153,18 +155,30 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     calls without fast mode. The cutoff defaults to 60 seconds; set
     `params.fastAutoOnSeconds` on the active model to change it.
 
-    For the embedded OpenClaw runtime, available API-key OpenAI Responses
-    routes that support Fast mode offer Standard, Fast, and Ultrafast in the
-    Control UI without requiring a catalog to advertise the tier, whether the
-    key comes from an auth profile, environment, or provider config (including
-    SecretRefs). If a response
-    to an Ultrafast request echoes a different `service_tier`, OpenClaw records
-    the downgrade for that selected credential, model, and route and removes
-    Ultrafast from later model-list results. Profile observations clear when
-    account discovery refreshes or credentials change; direct-key observations
-    clear when their configured binding changes. Both clear when the prepared
-    runtime retires. ChatGPT-account
-    availability remains based on authenticated account catalog discovery.
+    For the embedded OpenClaw runtime, the Control UI uses provider model and
+    route limits when offering Standard, Fast, and Ultrafast. This works for
+    auth profiles, environment keys, and provider config (including SecretRefs).
+    Models limited to Standard or Fast keep those restrictions. Custom endpoints
+    and ChatGPT account catalogs retain their own tier policy.
+
+    If a response to an Ultrafast request echoes a different `service_tier`,
+    OpenClaw records a temporary observation for that credential, model, and route.
+    Ultrafast stays selectable, and the composer's Speed tooltip shows the requested
+    and served tiers. Later calls keep requesting the selected tier. A response
+    honoring it clears the hint immediately; otherwise the observation expires
+    five minutes after its latest occurrence.
+
+    If the native OpenAI API explicitly rejects `service_tier` before output,
+    tool activity, or active-response steering, OpenClaw automatically retries
+    that request at a slower tier: Ultrafast → Fast → Standard. The hint records
+    that recovery without changing saved preferences or later requests. It does
+    not retry tier errors after cancellation or an ambiguous connection failure.
+    Explicit low-level tier overrides are still sent as configured.
+
+    Observations also clear on credential replacement, profile discovery refresh,
+    or retirement of the prepared runtime, and are not persisted across restarts.
+    ChatGPT-account availability remains based on authenticated account catalog
+    discovery.
 
     ```json5
     {
@@ -386,6 +400,10 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
       OpenAI does not get these headers, even though it is a native route)
     - Keep OpenAI-only request shaping (`service_tier`, `store`,
       reasoning-compat, prompt-cache hints)
+    - Send tool-bearing turns for reasoning models configured with
+      `openai-completions` on `api.openai.com` to `/v1/responses`, because
+      Chat Completions rejects function tools with reasoning for current GPT
+      models. Credentials, endpoint host, and proxy routes are unchanged.
 
     **Proxy/compatible routes:**
     - Use looser compat behavior

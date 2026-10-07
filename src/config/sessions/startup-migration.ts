@@ -44,6 +44,7 @@ import {
   type SessionStoreRegistryRead,
 } from "./session-sqlite-target.js";
 import {
+  isConfiguredAgentDatabaseTarget,
   resolveAllAgentSessionStoreTargetsSync,
   resolveConfiguredAgentDatabaseTargets,
 } from "./targets.js";
@@ -242,6 +243,7 @@ export async function runSessionStartupMigration(params: {
   }
 
   const databases = new Set<string>();
+  let interruptedSessions = 0;
   const registeredDatabases = new Set(
     listOpenClawRegisteredAgentDatabases({ env }).map((entry) => `${entry.agentId}\0${entry.path}`),
   );
@@ -271,13 +273,20 @@ export async function runSessionStartupMigration(params: {
           "database",
           "runtime",
         )(databasePath, options.agentId);
-        if (typeof retained !== "object") {
-          return operation().then(() => true);
+        if (typeof retained === "object") {
+          params.log.info(
+            `session: skipping deleted agent database for ${options.agentId} at ${databasePath} (cleanup complete); run "${formatCliCommand("openclaw doctor --fix", env)}" for explicit restoration guidance`,
+          );
+          return false;
         }
-        params.log.info(
-          `session: skipping deleted agent database for ${options.agentId} at ${databasePath} (cleanup complete); run "${formatCliCommand("openclaw doctor --fix", env)}" for explicit restoration guidance`,
-        );
-        return false;
+        // Missing registry entries still need recovery before runtime can discover their lineage.
+        if (
+          registeredDatabases.has(`${options.agentId}\0${databasePath}`) &&
+          !isConfiguredAgentDatabaseTarget(params.cfg, options.agentId, databasePath, env)
+        ) {
+          return false;
+        }
+        return operation().then(() => true);
       });
     const deletion = await readAgentDeletionJournalStatusInWorker(options.agentId, { env });
     params.assertCurrent?.();
@@ -290,11 +299,13 @@ export async function runSessionStartupMigration(params: {
     let alreadyOpen: boolean | undefined;
     let handedOff = false;
     try {
+      const { repairLegacySessionRunOutcomes } =
+        await import("../../commands/doctor/shared/session-entry-rewrite.js");
       if (
         !(await runUnlessDeleted(async () => {
           alreadyOpen = isOpenClawAgentDatabaseOpen(databasePath);
+          const mainKey = params.cfg.session?.mainKey;
           try {
-            const mainKey = params.cfg.session?.mainKey;
             if (
               !registeredDatabases.has(`${options.agentId}\0${databasePath}`) ||
               !isCanonicalSqliteSessionMainKeyCurrent(options, mainKey)
@@ -311,6 +322,10 @@ export async function runSessionStartupMigration(params: {
               `session: SQLite startup maintenance failed for ${target.agentId}; continuing: ${String(error)}`,
             );
           }
+          interruptedSessions += await repairLegacySessionRunOutcomes(
+            { agentId: options.agentId, env, storePath: databasePath },
+            () => params.assertCurrent?.(),
+          );
         }))
       ) {
         return;
@@ -375,5 +390,8 @@ export async function runSessionStartupMigration(params: {
       throw firstError;
     }
   });
+  if (interruptedSessions > 0) {
+    params.log.info(`session: normalized ${interruptedSessions} legacy run(s) to interrupted`);
+  }
   params.assertCurrent?.();
 }

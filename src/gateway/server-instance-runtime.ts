@@ -18,6 +18,7 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import "./agent-turn/agent-job.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { InternalAgentTurnPrincipalOptions } from "./agent-turn/internal-facade.types.js";
+import { retainInternalApprovalCommitGuard } from "./internal-approval-authority.js";
 import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   ADMIN_SCOPE,
@@ -128,7 +129,7 @@ export function createGatewayInstanceRuntime(
         requestIdPrefix: "gateway-internal",
         timeoutMs: params.timeoutMs,
         signal: params.signal,
-        sessionMutationCommitGuard: assertCurrent,
+        sessionMutationCommitGuard: retainInternalApprovalCommitGuard(assertCurrent),
       }),
     );
     assertCurrent();

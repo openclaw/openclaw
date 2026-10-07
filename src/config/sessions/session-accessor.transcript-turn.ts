@@ -54,7 +54,7 @@ function resolveTranscriptTurnAgentId(params: {
     throw new Error("Malformed agent session key; refusing transcript turn persistence.");
   }
   const scopedAgentId = params.scopeAgentId?.trim()
-    ? normalizeAgentId(params.scopeAgentId.trim())
+    ? normalizeAgentId(params.scopeAgentId)
     : undefined;
   const parsedAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
   const keyAgentId = parsedAgentId ? normalizeAgentId(parsedAgentId) : undefined;
@@ -153,6 +153,13 @@ export async function persistSessionTranscriptTurn(
   const expectedSessionId = options.expectedSessionId;
   if (expectedSessionId) {
     return await persistExpectedSessionTranscriptTurn(scope, { ...options, expectedSessionId });
+  }
+  if (
+    options.messages.some(
+      (append) => append.workerPreparation?.prepareMessageAfterIdempotencyCheckAsync,
+    )
+  ) {
+    throw new Error("Awaited transcript preparation requires an expected session id");
   }
   if (options.sessionLifecyclePatch || options.sessionTurnMutation || options.initialSessionEntry) {
     throw new Error("Cannot mutate a session turn without an expected session id");

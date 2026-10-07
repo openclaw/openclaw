@@ -1,3 +1,4 @@
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   buildSessionObserverPrompt,
   normalizeSessionObserverModelOutput,
@@ -54,13 +55,6 @@ export function createSessionObserverCompletion(params: {
       () => controller.abort(),
       SESSION_OBSERVER_MODEL_TIMEOUT_MS,
     );
-    const aborted = new Promise<never>((_resolve, reject) => {
-      controller.signal.addEventListener(
-        "abort",
-        () => reject(new Error("session observer model call timed out or was cancelled")),
-        { once: true },
-      );
-    });
     try {
       const execute = async () => {
         const prepared = await ensurePrepared(state);
@@ -95,7 +89,11 @@ export function createSessionObserverCompletion(params: {
           `session observer returned invalid JSON twice; last rejected output: ${prefix}`,
         );
       };
-      return await Promise.race([execute(), aborted]);
+      return await racePromiseWithAbortSignal(
+        execute(),
+        controller.signal,
+        () => new Error("session observer model call timed out or was cancelled"),
+      );
     } finally {
       params.clearTimeoutFn(timeout);
       if (state.activeController === controller) {
