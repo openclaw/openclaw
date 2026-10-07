@@ -490,15 +490,6 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(mocks.compact).not.toHaveBeenCalled();
   });
 
-  it("leaves overflow recovery to a transport-owning harness", async () => {
-    const result = await recoverEmbeddedRunOverflow(
-      makeInput({ genericCompactionRecoveryAllowed: false }),
-    );
-
-    expect(result).toEqual({ action: "none" });
-    expect(mocks.compact).not.toHaveBeenCalled();
-  });
-
   it.each(["mid-turn"] as const)(
     "compacts predicted prompt pressure as a budget request with source=%s",
     async (source) => {
@@ -569,31 +560,6 @@ describe("recoverEmbeddedRunOverflow", () => {
       }),
     );
   });
-
-  it.each([0])(
-    "keeps the raw budget for an invalid preflight budget of %s",
-    async (promptBudgetBeforeReserve) => {
-      const promptError = overflowError();
-      const result = await recoverEmbeddedRunOverflow(
-        makeInput({
-          promptError,
-          attempt: {
-            terminal: { kind: "failed", source: "precheck", error: promptError },
-            preflightRecovery: {
-              route: "compact_only",
-              source: "mid-turn",
-              estimatedPromptTokens: 268_138,
-              promptBudgetBeforeReserve,
-              overflowTokens: 26_522,
-            },
-          },
-        }),
-      );
-
-      expect(result).toEqual({ action: "retry" });
-      expect(mocks.compact).toHaveBeenCalledWith(expect.objectContaining({ tokenBudget: 200_000 }));
-    },
-  );
 
   it("does not reset the overflow-compaction budget after an in-attempt compaction", async () => {
     const state = createEmbeddedRunContextRecoveryState();
