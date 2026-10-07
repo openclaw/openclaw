@@ -5,12 +5,17 @@ import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promis
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   loadSessionEntryReadOnly,
+  patchSessionEntryCore,
   replaceSessionEntrySync,
+  replaceTranscriptEvents,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import * as workerPatches from "../config/sessions/session-entry-patch.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { readPublicSessionShare } from "./control-ui-public-session-read.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
@@ -18,6 +23,7 @@ import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as databaseFactsRead from "./session-row-projection-read.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import * as transcriptReaders from "./session-transcript-readers.js";
 import { projectWorkerSessionPlacement } from "./worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
 import {
@@ -745,3 +751,109 @@ it("prepares only the private response's child selections before consumption", a
     }
   });
 });
+
+async function withPublishedHistory(
+  run: (fixture: {
+    projection: Awaited<ReturnType<typeof createSessionRowProjection>>;
+    locator: { agentId: string; sessionKey: string; sessionId: string; shareId: string };
+  }) => Promise<void>,
+) {
+  // This file uses the existing Gateway database-worker fork profile.
+  vi.useRealTimers();
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const locator = {
+      agentId: "main",
+      sessionKey: "agent:main:public-worker-history",
+      sessionId: "public-worker-history-generation",
+      shareId: "a".repeat(48),
+    };
+    await upsertSessionEntryCore(locator, {
+      sessionId: locator.sessionId,
+      updatedAt: 1,
+      label: "Public example",
+      publicShare: { id: locator.shareId, sessionId: locator.sessionId, createdAt: 1 },
+    });
+    await replaceTranscriptEvents(locator, [
+      { type: "session", version: 3, id: locator.sessionId },
+      {
+        type: "message",
+        id: "published-message",
+        parentId: null,
+        message: { role: "user", content: "Still published" },
+      },
+    ]);
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      await projection.ensureMaterialized();
+      await run({ projection, locator });
+    } finally {
+      projection.dispose();
+    }
+  });
+}
+
+it("revalidates current sharing after a worker metadata publication during history", async () => {
+  await withPublishedHistory(async ({ projection, locator }) => {
+    const read = transcriptReaders.readSessionMessagesPageWithStatsAsync;
+    const workerPatch = vi.spyOn(workerPatches, "patchSessionEntryInWorker");
+    vi.spyOn(transcriptReaders, "readSessionMessagesPageWithStatsAsync").mockImplementationOnce(
+      async (...args) => {
+        const result = await read(...args);
+        const committed = await patchSessionEntryCore(
+          locator,
+          () => ({ updatedAt: 2, label: "Still public" }),
+          { workerGuard: {} },
+        );
+        expect(workerPatch).toHaveBeenCalledTimes(1);
+        expect(committed).toMatchObject({
+          label: "Still public",
+          publicShare: { id: locator.shareId },
+        });
+        return result;
+      },
+    );
+    expect(await readPublicSessionShare(cfg, locator, { projection })).toMatchObject({
+      title: "Still public",
+      messages: [{ content: "Still published" }],
+    });
+  });
+});
+
+it.each(["revoke", "reset"] as const)(
+  "rejects %s during post-history sharing readiness before releasing content",
+  async (action) => {
+    await withPublishedHistory(async ({ projection, locator }) => {
+      let armed = false;
+      let interleaved = false;
+      const prepare = projection.withPreparedExactRows.bind(projection);
+      vi.spyOn(projection, "withPreparedExactRows").mockImplementation(async (...args) => {
+        if (armed) {
+          armed = false;
+          interleaved = true;
+          const committed = await patchSessionEntryCore(
+            locator,
+            () => (action === "reset" ? { sessionId: "replacement" } : { publicShare: undefined }),
+            { workerGuard: {} },
+          );
+          expect(committed).not.toBeNull();
+          expect(committed?.publicShare).toBeUndefined();
+          if (action === "reset") {
+            expect(committed?.sessionId).toBe("replacement");
+          }
+        }
+        return prepare(...args);
+      });
+      const read = transcriptReaders.readSessionMessagesPageWithStatsAsync;
+      vi.spyOn(transcriptReaders, "readSessionMessagesPageWithStatsAsync").mockImplementationOnce(
+        async (...args) => {
+          const result = await read(...args);
+          armed = true;
+          return result;
+        },
+      );
+      const result = await readPublicSessionShare(cfg, locator, { projection });
+      expect(interleaved).toBe(true);
+      expect(result).toBeNull();
+    });
+  },
+);
