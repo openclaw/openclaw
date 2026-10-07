@@ -66,6 +66,9 @@ it.each([
       eventsBySession: {},
       schemaVersion: 19,
     });
+    const lockPath = `${pathname}.reindex-lock.sqlite`;
+    using lock = new DatabaseSync(lockPath);
+    lock.exec("CREATE TABLE coordination (id INTEGER)");
     const externalPath =
       column === "cleanup_paths_json"
         ? createLegacyDatabaseFixture({
@@ -139,6 +142,7 @@ it.each([
     const receipt = JSON.parse(fs.readFileSync(path.join(recoveryDir, files[0]!), "utf8"));
     expect(receipt.journal).toEqual([original]);
     expect(receipt.held).toContainEqual({ agentId, path: pathname });
+    expect(receipt.held).not.toContainEqual({ agentId, path: lockPath });
     if (externalPath) {
       expect(receipt.held).toContainEqual({ agentId, path: externalPath });
       expect(fs.readFileSync(externalPath)).toEqual(externalBefore);
@@ -184,7 +188,7 @@ it.each([
   },
 );
 
-it.each(["default", "external-registered", "canonical-custom-lost-state", "malformed-config"])(
+it.each(["default", "external-registered", "configured-custom-lost-state", "malformed-config"])(
   "reconstructs with a receipt and keeps %s stores held on the next Doctor pass",
   async (location) => {
     const stateDir = fs.realpathSync.native(tempDirs.make("doctor-journal-recovery-"));
@@ -197,15 +201,20 @@ it.each(["default", "external-registered", "canonical-custom-lost-state", "malfo
     const stores = ["main", "retired"].map((agentId) =>
       createLegacyDatabaseFixture({ agentId, env, eventsBySession: {}, schemaVersion: 19 }),
     );
+    const lockPath = `${stores[0]}.reindex-lock.sqlite`;
+    using lock = new DatabaseSync(lockPath);
+    lock.exec("CREATE TABLE coordination (id INTEGER)");
+    fs.copyFileSync(lockPath, path.join(path.dirname(stores[0]!), "capture.sqlite"));
     closeOpenClawStateDatabaseForTest();
     const statePath = resolveOpenClawStateSqlitePath(env);
     const db = new DatabaseSync(statePath);
     db.exec("DROP TABLE agent_deletion_journal");
-    const lostState = location === "canonical-custom-lost-state";
+    const lostState = location === "configured-custom-lost-state";
     if (lostState) {
       const custom = path.join(path.dirname(stores[0]!), "history.sqlite");
       fs.renameSync(stores[0]!, custom);
       stores[0] = custom;
+      cfg.session = { store: custom };
     } else if (location !== "default") {
       const custom = path.join(tempDirs.make("doctor-journal-custom-"), "history.main.sqlite");
       fs.renameSync(stores[0]!, custom);
@@ -219,9 +228,7 @@ it.each(["default", "external-registered", "canonical-custom-lost-state", "malfo
     }
     const configPath = path.join(stateDir, "openclaw.json");
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-    if (!lostState) {
-      fs.writeFileSync(configPath, JSON.stringify(cfg));
-    }
+    fs.writeFileSync(configPath, JSON.stringify(cfg));
     db.close();
     if (lostState) {
       for (const suffix of ["", "-wal", "-shm"]) {
@@ -310,20 +317,17 @@ it.each(["default", "external-registered", "canonical-custom-lost-state", "malfo
       releaseOpenClawAgentDatabaseLease(leaseId, { env }, "read-only");
     }
     stores.forEach((file, index) => expect(fs.readFileSync(file)).toEqual(bytes[index]));
-    if (lostState) {
-      expect(fs.existsSync(configPath)).toBe(false);
-    }
   },
 );
 
-it("keeps deletion history unavailable when only custom SQLite sidecars survive", async () => {
+it("keeps deletion history unavailable when only canonical SQLite sidecars survive", async () => {
   const stateDir = fs.realpathSync.native(tempDirs.make("doctor-journal-sidecars-"));
   const env = { OPENCLAW_STATE_DIR: stateDir };
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const agentDir = path.join(stateDir, "agents", "retired", "agent");
   fs.mkdirSync(agentDir, { recursive: true });
-  const sidecars = ["history.sqlite-wal", "pending.sqlite-shm", "rolled.sqlite-journal"].map(
-    (name) => path.join(agentDir, name),
+  const sidecars = ["-wal", "-shm", "-journal"].map((suffix) =>
+    path.join(agentDir, `openclaw-agent.sqlite${suffix}`),
   );
   for (const sidecar of sidecars) {
     fs.writeFileSync(sidecar, "preserved SQLite family fragment");
@@ -334,13 +338,12 @@ it("keeps deletion history unavailable when only custom SQLite sidecars survive"
   const repaired = await repairDoctorAgentDeletionJournal({ preflight, shouldRepair: true, env });
   expect(repaired.changes).toEqual([]);
   expect(repaired.warnings.join("\n")).toContain("recovery inventory is incomplete");
-  for (const name of ["history.sqlite", "pending.sqlite", "rolled.sqlite"]) {
-    expect(preflight.agentDatabaseMigrationDiscovery?.discovery.failures).toContainEqual({
-      path: path.join(agentDir, name),
-      reason: expect.stringContaining("without a regular main database"),
-    });
-    expect(fs.existsSync(path.join(agentDir, name))).toBe(false);
-  }
+  const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
+  expect(preflight.agentDatabaseMigrationDiscovery?.discovery.failures).toContainEqual({
+    path: databasePath,
+    reason: expect.stringContaining("without a regular main database"),
+  });
+  expect(fs.existsSync(databasePath)).toBe(false);
   expect(
     state.db.prepare("SELECT name FROM sqlite_schema WHERE name = 'agent_deletion_journal'").get(),
   ).toBeUndefined();

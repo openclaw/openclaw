@@ -38,6 +38,45 @@ afterEach(() => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("agent deletion journal initialization", () => {
+  it("ignores a reconstructed reindex-lock hold while still reporting a missing registered store", () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("journal-lock-artifact-") };
+    const pathname = createLegacyDatabaseFixture({ env, eventsBySession: {}, schemaVersion: 19 });
+    const lockPath = `${pathname}.reindex-lock.sqlite`;
+    using lock = new DatabaseSync(lockPath);
+    lock.exec("CREATE TABLE coordination (id INTEGER)");
+    const missingPath = path.join(
+      env.OPENCLAW_STATE_DIR,
+      "agents/openclaw/agent/openclaw-agent.sqlite",
+    );
+    openOpenClawStateDatabase({ env }).db.exec("DROP TABLE agent_deletion_journal");
+    runOpenClawStateWriteTransaction(
+      (database) =>
+        reconstructAgentDeletionJournal(database, [{ agentId: "main", path: lockPath }]),
+      { env },
+    );
+
+    const discovery = discoverAgentDatabaseMigrationTargets({
+      env,
+      configuredAgentDatabaseTargets: [{ agentId: "main", path: pathname }],
+      registeredAgentDatabases: [{ agentId: "openclaw", path: missingPath }],
+    });
+    expect(discovery.targets).toEqual([
+      expect.objectContaining({ agentId: "main", path: pathname }),
+    ]);
+    expect(discovery.unverifiedTargets).toEqual([]);
+    expect(discovery.warnings).toEqual([
+      `Skipped missing registered agent database ${missingPath}.`,
+    ]);
+    expect(discovery.registryRemovals).toEqual([
+      {
+        agentId: "openclaw",
+        path: missingPath,
+        change: `Removed missing agent database registry entry ${missingPath}.`,
+      },
+    ]);
+    expect(fs.existsSync(lockPath)).toBe(true);
+  });
+
   it.each([
     { history: "missing", location: "canonical" },
     { history: "missing", location: "external" },
@@ -261,6 +300,10 @@ describe("agent deletion journal initialization", () => {
       const customPath = path.join(path.dirname(agentPath), "history.sqlite");
       fs.renameSync(agentPath, customPath);
       agentPath = customPath;
+      fs.writeFileSync(
+        path.join(env.OPENCLAW_STATE_DIR, "openclaw.json"),
+        JSON.stringify({ session: { store: customPath } }),
+      );
     }
     if (
       missing === "missing-database-custom-store" ||
@@ -336,7 +379,7 @@ describe("agent deletion journal initialization", () => {
     }
   });
 
-  it.each(["include-env", "legacy-session-json", "empty-agent"])(
+  it.each(["include-env", "legacy-session-json", "empty-agent", "reindex-lock"])(
     "creates a known-empty journal for fresh state (config: %s)",
     (configSource) => {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("journal-fresh-") };
@@ -364,6 +407,15 @@ describe("agent deletion journal initialization", () => {
         );
         fs.mkdirSync(path.join(env.OPENCLAW_STATE_DIR, "agents"));
         fs.writeFileSync(path.join(env.OPENCLAW_STATE_DIR, "agents", ".DS_Store"), "");
+      }
+      if (configSource === "reindex-lock") {
+        const lockPath = path.join(
+          env.OPENCLAW_STATE_DIR,
+          "agents/main/agent/openclaw-agent.sqlite.reindex-lock.sqlite",
+        );
+        fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+        using lock = new DatabaseSync(lockPath);
+        lock.exec("CREATE TABLE coordination (id INTEGER)");
       }
       const opened = openOpenClawStateDatabase({ env });
       expect(

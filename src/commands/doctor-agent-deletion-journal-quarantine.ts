@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "../config/paths.js";
-import { listSqliteTargetCandidatePathsInDirectory } from "../config/sessions/session-sqlite-target-paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { writeTextAtomic } from "../infra/json-files.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -82,7 +81,6 @@ export async function quarantineAgentDeletionJournal(params: {
   for (const row of source.invalid) {
     const paths = new Set([
       path.join(row.agent_dir, "openclaw-agent.sqlite"),
-      ...listSqliteTargetCandidatePathsInDirectory(row.agent_dir),
       ...params.inventory
         .filter((target) => normalizeAgentId(target.agentId) === normalizeAgentId(row.agent_id))
         .map((target) => target.path),

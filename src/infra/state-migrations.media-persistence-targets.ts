@@ -5,7 +5,6 @@ import { resolveAgentSessionDirsFromAgentsDirSync } from "../agents/session-dirs
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isSessionArchiveArtifactName } from "../config/sessions/artifacts.js";
-import { listSqliteTargetCandidatePathsInDirectory } from "../config/sessions/session-sqlite-target-paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createAgentDatabaseDeletionClassifier } from "../state/agent-deletion-discovery.js";
 import { readAgentDatabaseDeletionSnapshot } from "../state/agent-deletion-journal.read.js";
@@ -15,6 +14,7 @@ import {
   createOpenClawAgentDatabasePathMatcher,
   isPersistentOpenClawAgentDatabasePath,
 } from "../state/openclaw-agent-db.paths.js";
+import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
 import { hasErrnoCode } from "./errno.js";
 import { isPathInside } from "./path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
@@ -149,19 +149,11 @@ export function discoverAgentDatabaseMigrationTargets(params: {
     for (const sessionsDir of resolveAgentSessionDirsFromAgentsDirSync(agentsDir)) {
       const agentDir = path.dirname(sessionsDir);
       const databaseDir = path.join(agentDir, "agent");
-      const paths = new Set([path.join(databaseDir, "openclaw-agent.sqlite")]);
-      if (deletionJournal.status === "unavailable") {
-        for (const candidate of listSqliteTargetCandidatePathsInDirectory(databaseDir)) {
-          paths.add(candidate);
-        }
-      }
-      for (const pathname of paths) {
-        candidates.push({
-          agentId: normalizeAgentId(path.basename(agentDir)),
-          path: pathname,
-          source: "disk",
-        });
-      }
+      candidates.push({
+        agentId: normalizeAgentId(path.basename(agentDir)),
+        path: path.join(databaseDir, "openclaw-agent.sqlite"),
+        source: "disk",
+      });
     }
   } catch (error) {
     failure(agentsDir, `Could not enumerate agent databases under ${agentsDir}: ${String(error)}`);
@@ -186,6 +178,11 @@ export function discoverAgentDatabaseMigrationTargets(params: {
     // Preserve the original locator: lexical normalization of `link/../file`
     // can select a different file than filesystem symlink traversal does.
     const pathname = candidate.path;
+    // Older reconstruction receipts can name coordination files; preserve them without
+    // treating their SQLite lease as an agent store or granting restoration authority.
+    if (isTransientSqliteBackupPath(pathname)) {
+      continue;
+    }
     if (!isPersistentOpenClawAgentDatabasePath(pathname, params.env)) {
       discard(
         candidate,
