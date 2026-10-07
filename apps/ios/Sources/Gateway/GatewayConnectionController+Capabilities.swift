@@ -177,11 +177,10 @@ extension GatewayConnectionController {
         permissions["camera"] = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
         permissions["microphone"] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         permissions["speechRecognition"] = SFSpeechRecognizer.authorizationStatus() == .authorized
-        let locationStatus = self.locationAuthorizationSnapshot.authorizationStatus
         let locationServicesEnabled = await LocationService.servicesEnabled()
         permissions["location"] = Self.isLocationAvailable(
             servicesEnabled: locationServicesEnabled,
-            status: locationStatus)
+            status: self.locationAuthorizationSnapshot.authorizationStatus)
         permissions["screenRecording"] = RPScreenRecorder.shared().isAvailable
 
         permissions["photos"] = PhotoLibraryAccess.canRead(PhotoLibraryAccess.authorizationStatus())

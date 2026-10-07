@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 import Network
 import Observation
@@ -157,7 +158,8 @@ private func waitUntil(
 {
     let deadline = ContinuousClock().now.advanced(by: timeout)
     while !condition(), ContinuousClock().now < deadline {
-        await Task.yield()
+        // Yield can immediately resume this task and starve the asynchronous work being observed.
+        try? await Task.sleep(for: .milliseconds(10))
     }
 }
 
@@ -1811,12 +1813,8 @@ private func waitUntil(
 
         let resetFinished = AsyncStream<Void>.makeStream()
         let resetRelease = AsyncStream<Void>.makeStream()
-        let appModel = NodeAppModel()
+        let appModel = NodeAppModel(locationService: MockLocationService(authorizationStatus: .denied))
         defer { appModel.disconnectGateway() }
-        let currentConfig = try Self.makeGatewayConnectConfig(
-            url: #require(URL(string: "wss://127.0.0.1:1")),
-            stableID: "manual|current.gateway.invalid|443")
-        appModel.applyGatewayConnectConfig(currentConfig)
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
@@ -1827,6 +1825,13 @@ private func waitUntil(
                     return
                 }
             })
+        // Use the current registration so lifecycle refresh does not replace a synthetic capability fixture.
+        let currentStableID = "manual|current.gateway.invalid|443"
+        let currentConfig = try Self.makeGatewayConnectConfig(
+            url: #require(URL(string: "wss://127.0.0.1:1")),
+            stableID: currentStableID,
+            nodeOptions: await controller.makeConnectOptions(deviceAuthGatewayID: nil))
+        appModel.applyGatewayConnectConfig(currentConfig)
         var finishedIterator = resetFinished.stream.makeAsyncIterator()
 
         await controller.connectManual(host: host, port: 443, useTLS: true, forceReconnect: true)
@@ -1967,14 +1972,17 @@ private func waitUntil(
             defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
             let resetRelease = AsyncStream<Void>.makeStream()
             defer { resetRelease.continuation.finish() }
-            let appModel = NodeAppModel()
+            let appModel = NodeAppModel(locationService: MockLocationService(authorizationStatus: .denied))
             defer {
                 appModel._test_setGatewaySessionResetTask(nil)
                 appModel.disconnectGateway()
             }
-            let currentConfig = try Self.makeGatewayConnectConfig(
+            // Use the current registration so lifecycle refresh does not replace a synthetic capability fixture.
+            let currentConfig = try await Self.makeGatewayConnectConfig(
                 url: #require(URL(string: "wss://127.0.0.1:1")),
-                stableID: "manual|current.gateway.invalid|443")
+                stableID: "manual|current.gateway.invalid|443",
+                nodeOptions: GatewayConnectionController(appModel: appModel, startDiscovery: false)
+                    .makeConnectOptions(deviceAuthGatewayID: nil))
             appModel.applyGatewayConnectConfig(currentConfig)
             await appModel.resetGatewaySessionsForForcedReconnect()
             let resetTask = Task {
@@ -2428,13 +2436,14 @@ private func waitUntil(
             port: 443,
             useTLS: true,
             lastConnectedAtMs: nil))
-        let appModel = NodeAppModel()
+        let appModel = NodeAppModel(locationService: MockLocationService(authorizationStatus: .denied))
         defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
         let connectedConfig = try Self.makeGatewayConnectConfig(
             url: #require(URL(string: "wss://connected.example.com")),
-            stableID: connectedID)
+            stableID: connectedID,
+            nodeOptions: await controller.makeConnectOptions(deviceAuthGatewayID: nil))
         appModel.applyGatewayConnectConfig(connectedConfig)
-        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
         await controller.forgetGateway(stableID: selectedID)
 
@@ -2656,14 +2665,15 @@ private func waitUntil(
         ]
         try await withUserDefaults(updates) {
             let defaults = UserDefaults.standard
-            let appModel = NodeAppModel()
+            let appModel = NodeAppModel(locationService: MockLocationService(authorizationStatus: .denied))
             defer { appModel.disconnectGateway() }
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
             let suspendedConfig = try Self.makeGatewayConnectConfig(
                 url: #require(URL(string: "ws://127.0.0.1:1")),
-                stableID: "manual|127.0.0.1|1")
+                stableID: "manual|127.0.0.1|1",
+                nodeOptions: await controller.makeConnectOptions(deviceAuthGatewayID: nil))
             appModel.applyGatewayConnectConfig(suspendedConfig)
             appModel.gatewayAutoReconnectEnabled = true
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
             _ = controller.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
 
             await controller.connectManual(host: "invalid.example.com", port: 70000, useTLS: true)
@@ -3030,7 +3040,8 @@ private func waitUntil(
     private static func makeGatewayConnectConfig(
         // Fail locally instead of making lifecycle tests depend on DNS or external network timing.
         url: URL = URL(string: "wss://127.0.0.1:1")!,
-        stableID: String = "manual|gateway.example.com|443") -> GatewayConnectConfig
+        stableID: String = "manual|gateway.example.com|443",
+        nodeOptions: GatewayConnectOptions? = nil) -> GatewayConnectConfig
     {
         GatewayConnectConfig(
             url: url,
@@ -3043,7 +3054,7 @@ private func waitUntil(
             token: "token",
             bootstrapToken: nil,
             password: nil,
-            nodeOptions: self.makeNodeOptions(
+            nodeOptions: nodeOptions ?? self.makeNodeOptions(
                 caps: ["screen", "camera"],
                 commands: ["notify", "location.get"],
                 permissions: ["screen": true]))
