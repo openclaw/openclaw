@@ -73,7 +73,9 @@ class PortalsPage extends OpenClawLightDomElement {
   private requestGeneration = 0;
   private portalSetRevision = 0;
   private portalProbeGeneration = 0;
+  @state() private portalFrameRevision = 0;
   private readonly portalProbeCache = new Map<string, PortalProbeResult>();
+  private readonly portalAccessLoginKeys = new Set<string>();
   private pendingPortalLoginKey: string | null = null;
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -106,6 +108,7 @@ class PortalsPage extends OpenClawLightDomElement {
       return;
     }
     this.portalProbeGeneration += 1;
+    this.portalFrameRevision += 1;
     this.portalProbeCache.set(key, "reachable");
     this.portalProbeState = { key, status: "reachable" };
   };
@@ -267,7 +270,9 @@ class PortalsPage extends OpenClawLightDomElement {
     this.error = null;
     this.closingPortalId = null;
     this.portalProbeGeneration += 1;
+    this.portalFrameRevision = 0;
     this.portalProbeCache.clear();
+    this.portalAccessLoginKeys.clear();
     this.portalProbeState = null;
     this.pendingPortalLoginKey = null;
   }
@@ -287,7 +292,7 @@ class PortalsPage extends OpenClawLightDomElement {
     this.error = null;
     const selectedPortal = portals.find((portal) => portal.id === selectedPortalId);
     if (selectedPortal) {
-      this.ensurePortalProbe(selectedPortal, selectedPortalId !== previousPortalId);
+      this.ensurePortalProbe(selectedPortal);
     } else {
       this.portalProbeGeneration += 1;
       this.portalProbeState = null;
@@ -338,6 +343,9 @@ class PortalsPage extends OpenClawLightDomElement {
       })
       .then((reachability) => {
         if (generation === this.portalProbeGeneration && this.portalProbeState?.key === key) {
+          if (reachability === "access-login-required") {
+            this.portalAccessLoginKeys.add(key);
+          }
           this.portalProbeCache.set(key, reachability);
           this.portalProbeState = { key, status: reachability };
         }
@@ -353,7 +361,7 @@ class PortalsPage extends OpenClawLightDomElement {
       return;
     }
     this.selectedPortalId = portal.id;
-    this.ensurePortalProbe(portal, true);
+    this.ensurePortalProbe(portal);
   }
 
   private async loadPortals() {
@@ -483,6 +491,7 @@ class PortalsPage extends OpenClawLightDomElement {
     const frameKey = `${portal.id}\u0000${portalUrl}`;
     const probeStatus =
       this.portalProbeState?.key === frameKey ? this.portalProbeState.status : "probing";
+    const accessLoginAvailable = this.portalAccessLoginKeys.has(frameKey);
     const noticeKey =
       probeStatus === "access-login-required"
         ? "accessLoginRequired"
@@ -505,6 +514,18 @@ class PortalsPage extends OpenClawLightDomElement {
             ${icon("externalLink")}
             <span class="sr-only">${t("portalsPage.openNewTab")}</span>
           </a>
+          ${
+            accessLoginAvailable && probeStatus !== "access-login-required"
+              ? html`<a
+                  class="btn portals-preview__login"
+                  href=${portalUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  @click=${() => this.markPortalLogin(frameKey)}
+                  >${t("portalsPage.accessLoginRetryAction")}</a
+                >`
+              : nothing
+          }
           <button
             class="btn btn--icon btn--ghost portals-preview__close"
             type="button"
@@ -570,7 +591,7 @@ class PortalsPage extends OpenClawLightDomElement {
                   </div>
                 `
               : keyed(
-                  frameKey,
+                  `${frameKey}\u0000${this.portalFrameRevision}`,
                   html`<iframe
                     ${ref((element) => {
                       if (element instanceof HTMLIFrameElement && !element.hasAttribute("src")) {

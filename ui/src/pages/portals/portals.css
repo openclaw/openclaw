@@ -109,6 +109,11 @@
   flex: 0 0 auto;
 }
 
+.portals-preview__login {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .portals-preview__close {
   opacity: 0.42;
   transition: opacity 120ms ease;

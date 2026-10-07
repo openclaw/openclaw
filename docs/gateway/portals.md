@@ -126,7 +126,10 @@ the UI shows **Sign in to portal** instead of a blank iframe. That action opens
 the authenticated portal URL in a top-level tab. After the operator signs in and
 returns to the Control UI, the preview is mounted again automatically. Only a
 write-capable operator receives that bearer URL; the Gateway-side check never
-sends the portal token to Cloudflare.
+sends the portal token to Cloudflare. The preview keeps a **Sign in again** action
+for an incomplete login, and returning to a portal during the same portal
+lifetime preserves the browser-side result instead of repeating the Gateway
+probe.
 
 For the wildcard Access application:
 

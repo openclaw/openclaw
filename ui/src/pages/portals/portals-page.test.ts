@@ -349,7 +349,61 @@ describe("PortalsPage", () => {
     await vi.waitFor(() =>
       expect(page.querySelector("iframe")?.getAttribute("src")).toBe(portal.url),
     );
+    const firstFrame = page.querySelector("iframe");
+    const retryLogin = [...page.querySelectorAll<HTMLAnchorElement>("a")].find(
+      (link) => link.textContent?.trim() === "Sign in again",
+    );
+    expect(retryLogin).toBeDefined();
+    retryLogin?.addEventListener("click", (event) => event.preventDefault(), { once: true });
+    retryLogin?.click();
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(page.querySelector("iframe")).not.toBe(firstFrame));
     expect(source.request).toHaveBeenCalledWith("portal.inspect", { id: portal.id });
+  });
+
+  it("keeps an authenticated portal preview when it is reselected", async () => {
+    const otherPortal = {
+      ...portal,
+      id: "other-portal",
+      title: "Other app",
+      url: "https://other.example.test/?openclaw_portal=other-token",
+      publicUrl: "https://other.example.test/",
+    } satisfies PortalSummary;
+    const source = createContext(["portal.inspect", "portal.list"], async (method, params) => {
+      if (method === "portal.inspect") {
+        return { access: params.id === portal.id ? "cloudflare" : "none" };
+      }
+      return { portals: [portal, otherPortal] } satisfies PortalListResult;
+    });
+    const page = await mountPage(source.context);
+    await vi.waitFor(() => expect(page.textContent).toContain("Sign in to this private portal"));
+    const login = [...page.querySelectorAll<HTMLAnchorElement>("a")].find(
+      (link) => link.textContent?.trim() === "Sign in to portal",
+    );
+    login?.addEventListener("click", (event) => event.preventDefault(), { once: true });
+    login?.click();
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() =>
+      expect(page.querySelector("iframe")?.getAttribute("src")).toBe(portal.url),
+    );
+
+    [...page.querySelectorAll<HTMLButtonElement>(".portals-rail__item")]
+      .find((button) => button.textContent?.includes("Other app"))
+      ?.click();
+    await vi.waitFor(() =>
+      expect(page.querySelector("iframe")?.getAttribute("src")).toBe(otherPortal.url),
+    );
+    [...page.querySelectorAll<HTMLButtonElement>(".portals-rail__item")]
+      .find((button) => button.textContent?.includes("Seeded app"))
+      ?.click();
+    await vi.waitFor(() =>
+      expect(page.querySelector("iframe")?.getAttribute("src")).toBe(portal.url),
+    );
+    expect(
+      source.request.mock.calls.filter(
+        ([method, params]) => method === "portal.inspect" && params.id === portal.id,
+      ),
+    ).toHaveLength(1);
   });
 
   it("requires write access instead of opening a portal without credentials", async () => {

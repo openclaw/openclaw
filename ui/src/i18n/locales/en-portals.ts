@@ -27,6 +27,7 @@ const enPortals = {
     accessLoginRequiredBody:
       "Cloudflare Access must authenticate this portal in a top-level tab before the embedded preview can load. Sign in, then return here; the preview reloads automatically.",
     accessLoginAction: "Sign in to portal",
+    accessLoginRetryAction: "Sign in again",
     newTabRequiredTitle: "Open this HTTP portal in a new tab",
     newTabRequiredBody:
       "This portal uses HTTP with a different hostname or scheme from the Control UI. Open the link in a new tab so its authentication cookies work, or use an HTTPS portal for an embedded preview.",
