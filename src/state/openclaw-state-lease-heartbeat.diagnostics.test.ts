@@ -50,7 +50,10 @@ vi.mock("../infra/gateway-state-owner.js", () => ({
   assertStateDatabaseAccessAllowed() {},
   GatewayStateOwnerContentionError: class extends Error {},
 }));
-vi.mock("../infra/sqlite-worker-identity.js", () => ({
+vi.mock("../infra/sqlite-worker-identity.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/sqlite-worker-identity.js")>(
+    "../infra/sqlite-worker-identity.js",
+  )),
   readDatabasePathIdentitySync: (canonicalPath: string) => ({ key: "file:12:34", canonicalPath }),
 }));
 vi.mock("../infra/sqlite-busy-timeout.js", () => ({
