@@ -191,8 +191,9 @@ describe("replaceDirectoryContents", () => {
     const source = await makeTmpDir();
     const target = await makeTmpDir();
 
-    await fs.mkdir(path.join(source, "sub", ".GIT", "hooks"), { recursive: true });
-    await fs.writeFile(path.join(source, "sub", ".GIT", "hooks", "pre-commit"), "malicious");
+    await fs.mkdir(path.join(source, "sub", ".git", "hooks"), { recursive: true });
+    await fs.writeFile(path.join(source, "sub", ".git", "hooks", "pre-commit"), "malicious");
+    await fs.writeFile(path.join(source, "sub", " .git "), "ordinary file");
     await fs.mkdir(path.join(source, "sub", "hooks"), { recursive: true });
     await fs.writeFile(path.join(source, "sub", "hooks", "index.ts"), "ok");
     await fs.mkdir(path.join(target, "kept", ".git"), { recursive: true });
@@ -206,7 +207,8 @@ describe("replaceDirectoryContents", () => {
     });
 
     expect(await fs.readFile(path.join(target, "sub", "hooks", "index.ts"), "utf8")).toBe("ok");
-    await expectPathMissing(path.join(target, "sub", ".GIT"));
+    await expectPathMissing(path.join(target, "sub", ".git"));
+    expect(await fs.readFile(path.join(target, "sub", " .git "), "utf8")).toBe("ordinary file");
     expect(await fs.readdir(path.join(target, "kept"))).toEqual([".git"]);
     expect(await fs.readFile(path.join(target, "kept", ".git", "HEAD"), "utf8")).toBe(
       "ref: refs/heads/main\n",
@@ -324,6 +326,7 @@ describe("stageDirectoryContents", () => {
     await fs.writeFile(path.join(source, "sub", ".git", "hooks", "pre-commit"), "trusted");
     await fs.mkdir(path.join(source, "sub", "hooks"), { recursive: true });
     await fs.writeFile(path.join(source, "sub", "hooks", "index.ts"), "ok");
+    await fs.writeFile(path.join(source, "sub", " .git "), "ordinary file");
 
     await stageDirectoryContents({
       sourceDir: source,
@@ -333,6 +336,7 @@ describe("stageDirectoryContents", () => {
 
     expect(await fs.readFile(path.join(staged, "sub", "hooks", "index.ts"), "utf8")).toBe("ok");
     await expectPathMissing(path.join(staged, "sub", ".git"));
+    expect(await fs.readFile(path.join(staged, "sub", " .git "), "utf8")).toBe("ordinary file");
   });
 
   it("stages upload content without symbolic links", async () => {

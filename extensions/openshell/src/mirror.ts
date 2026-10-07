@@ -8,9 +8,9 @@ export const DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS = ["hooks", "git-hooks", ".g
 const NESTED_MIRROR_EXCLUDE_DIRS = new Set([".git"]);
 const COPY_TREE_FS_CONCURRENCY = 16;
 
-function createExcludeMatcher(excludeDirs?: readonly string[]) {
+function createExcludeMatcher(excludeDirs?: readonly string[], exactNames = false) {
   const excluded = new Set((excludeDirs ?? []).map((d) => normalizeLowercaseStringOrEmpty(d)));
-  return (name: string) => excluded.has(normalizeLowercaseStringOrEmpty(name));
+  return (name: string) => excluded.has(exactNames ? name : normalizeLowercaseStringOrEmpty(name));
 }
 
 const runLimitedFs = pLimit(COPY_TREE_FS_CONCURRENCY);
@@ -51,6 +51,7 @@ async function reconcileMirrorPath(params: {
       targetDir: params.targetPath,
       replace: params.replace,
       excludeDirs: params.excludeDirs,
+      nested: true,
     });
     // A remote file cannot replace a directory containing preserved host entries.
     if (sourceDir || preservedEntries) {
@@ -73,9 +74,10 @@ async function reconcileMirrorDirectory(params: {
   targetDir: string;
   replace: boolean;
   excludeDirs?: readonly string[];
+  nested?: boolean;
 }): Promise<boolean> {
   const { sourceDir } = params;
-  const isExcluded = createExcludeMatcher(params.excludeDirs);
+  const isExcluded = createExcludeMatcher(params.excludeDirs, params.nested);
   const nestedExcludeDirs = params.excludeDirs?.filter((dir) =>
     NESTED_MIRROR_EXCLUDE_DIRS.has(normalizeLowercaseStringOrEmpty(dir)),
   );
