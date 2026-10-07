@@ -93,6 +93,10 @@ import UIKit
         #expect(intent.description != nil)
     }
 
+    @Test func `live voice intent requires authentication`() {
+        #expect(StartLiveVoiceIntent.authenticationPolicy == .requiresAuthentication)
+    }
+
     @Test @MainActor func `live voice intent survives cold launch and waits for an active scene`() async throws {
         try await withUserDefaults(["talk.enabled": false]) {
             let previousModel = OpenClawAppModelRegistry.appModel

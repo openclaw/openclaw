@@ -62,18 +62,6 @@ public struct OpenClawThermalStatusPayload: Codable, Sendable, Equatable {
     }
 }
 
-public struct OpenClawStorageStatusPayload: Codable, Sendable, Equatable {
-    public var totalBytes: Int64
-    public var freeBytes: Int64
-    public var usedBytes: Int64
-
-    public init(totalBytes: Int64, freeBytes: Int64, usedBytes: Int64) {
-        self.totalBytes = totalBytes
-        self.freeBytes = freeBytes
-        self.usedBytes = usedBytes
-    }
-}
-
 public struct OpenClawNetworkStatusPayload: Codable, Sendable, Equatable {
     public var status: OpenClawNetworkPathStatus
     public var isExpensive: Bool
@@ -96,22 +84,16 @@ public struct OpenClawNetworkStatusPayload: Codable, Sendable, Equatable {
 public struct OpenClawDeviceStatusPayload: Codable, Sendable, Equatable {
     public var battery: OpenClawBatteryStatusPayload
     public var thermal: OpenClawThermalStatusPayload
-    public var storage: OpenClawStorageStatusPayload
     public var network: OpenClawNetworkStatusPayload
-    public var uptimeSeconds: Double
 
     public init(
         battery: OpenClawBatteryStatusPayload,
         thermal: OpenClawThermalStatusPayload,
-        storage: OpenClawStorageStatusPayload,
-        network: OpenClawNetworkStatusPayload,
-        uptimeSeconds: Double)
+        network: OpenClawNetworkStatusPayload)
     {
         self.battery = battery
         self.thermal = thermal
-        self.storage = storage
         self.network = network
-        self.uptimeSeconds = uptimeSeconds
     }
 }
 

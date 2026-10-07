@@ -72,6 +72,8 @@ targets:
         buildPhase: resources
       - path: Sources/Fonts
         buildPhase: resources
+      - path: Sources/PrivacyInfo.xcprivacy
+        buildPhase: resources
       - path: Resources/Localizable.xcstrings
         buildPhase: resources
     dependencies:
@@ -175,7 +177,6 @@ targets:
           - "$(PRODUCT_BUNDLE_IDENTIFIER).bgrefresh"
         NSLocalNetworkUsageDescription: OpenClaw discovers and connects to your OpenClaw gateway on the local network.
         NSAppTransportSecurity:
-          NSAllowsArbitraryLoadsInWebContent: true
           NSAllowsLocalNetworking: true
         NSBonjourServices:
           - _openclaw-gw._tcp
@@ -218,6 +219,8 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: ShareExtension
+      - path: ShareExtension/PrivacyInfo.xcprivacy
+        buildPhase: resources
       - path: Resources/Localizable.xcstrings
         buildPhase: resources
     dependencies:
@@ -270,6 +273,8 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: ActivityWidget
+      - path: ActivityWidget/PrivacyInfo.xcprivacy
+        buildPhase: resources
       - path: Sources/LiveActivity/OpenClawActivityAttributes.swift
       # Shared continuous avatar waveform; dependency-free for widget isolation.
       - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/TalkWaveformView.swift
@@ -322,6 +327,8 @@ targets:
       - path: WatchApp
         excludes:
           - Info.plist
+      - path: WatchApp/PrivacyInfo.xcprivacy
+        buildPhase: resources
       - path: Sources/Services/WatchSessionActivationGate.swift
         group: Sources/Services
       - path: Sources/Services/ExactOpaqueIdentifier.swift

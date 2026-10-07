@@ -321,7 +321,7 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
             _ = await IOSDeviceSettingsActions.setNotificationsEnabled(
                 enabled, confirmDisclosure: { await self.confirm(.notificationEnrollment) }, isCurrent: isCurrent)
         case let (.cameraEnabled, .boolean(enabled)):
-            UserDefaults.standard.set(enabled, forKey: "camera.enabled")
+            NodeCapabilityPreferences.setCameraEnabled(enabled)
             return true
         case let (.keepAwakeEnabled, .boolean(enabled)):
             UserDefaults.standard.set(enabled, forKey: "screen.preventSleep")

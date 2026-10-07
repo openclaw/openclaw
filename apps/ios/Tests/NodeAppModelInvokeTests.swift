@@ -4701,6 +4701,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `audio camera clip cannot overlap PTT ownership`() async throws {
+        UserDefaults.standard.set(true, forKey: "camera.enabled")
+        defer { UserDefaults.standard.removeObject(forKey: "camera.enabled") }
         let camera = RecordingCameraService()
         let appModel = NodeAppModel(
             camera: camera,
@@ -4721,6 +4723,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `camera audio ownership blocks PTT and continuous Talk`() async throws {
+        UserDefaults.standard.set(true, forKey: "camera.enabled")
+        defer { UserDefaults.standard.removeObject(forKey: "camera.enabled") }
         let barrier = TalkPreparationBarrier()
         let talkMode = TalkModeManager(allowSimulatorCapture: true)
         let voiceNoteCapture = MockVoiceNoteAudioCapture()
@@ -4824,6 +4828,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `background cancels camera audio capture and retains suppression until exit`() async throws {
+        UserDefaults.standard.set(true, forKey: "camera.enabled")
+        defer { UserDefaults.standard.removeObject(forKey: "camera.enabled") }
         let barrier = TalkPreparationBarrier()
         let appModel = NodeAppModel(camera: BlockingAudioCameraService(barrier: barrier))
         defer {
@@ -8206,6 +8212,17 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(res.error?.message.contains("CAMERA_DISABLED") == true)
     }
 
+    @Test @MainActor func `handle invoke rejects camera on a fresh install`() async {
+        await withUserDefaults(["camera.enabled": nil, "gateway.onboardingComplete": nil]) {
+            let appModel = NodeAppModel()
+            let res = await appModel.handleInvoke(
+                BridgeInvokeRequest(id: "cam-fresh", command: OpenClawCameraCommand.snap.rawValue))
+
+            #expect(res.ok == false)
+            #expect(res.error?.message.contains("CAMERA_DISABLED") == true)
+        }
+    }
+
     @Test @MainActor func `cancelled camera invoke clears progress HUD`() async {
         let defaults = UserDefaults.standard
         let key = "camera.enabled"
@@ -8995,6 +9012,16 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(actionIDs == ["a1", "a2", "a3", "a4"])
     }
 
+    @Test func `gateway defined watch notification actions require device unlock`() {
+        let actions = WatchPromptNotificationBridge.categoryActions([
+            OpenClawWatchAction(id: "approve", label: "Approve"),
+            OpenClawWatchAction(id: "decline", label: "Decline", style: "destructive"),
+        ])
+        #expect(actions.count == 2)
+        #expect(actions.allSatisfy { $0.options.contains(.authenticationRequired) })
+        #expect(actions[1].options.contains(.destructive))
+    }
+
     @Test @MainActor func `handle invoke watch notify returns unavailable on delivery failure`() async throws {
         let watchService = MockWatchMessagingService()
         watchService.sendError = NSError(
@@ -9035,13 +9062,13 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
     @Test @MainActor func `handle deep link records oversized message rejection`() async throws {
         let appModel = NodeAppModel()
-        let msg = String(repeating: "a", count: 20001)
+        let msg = String(repeating: "a", count: 241)
         let url = try #require(URL(string: "openclaw://agent?message=\(msg)"))
         await appModel.handleDeepLink(url: url)
-        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("message too large") == true)
+        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("over 240 chars") == true)
     }
 
-    @Test @MainActor func `handle deep link requires confirmation when connected and unkeyed`() async {
+    @Test @MainActor func `handle deep link requires confirmation when connected`() async {
         let appModel = NodeAppModel()
         appModel.gatewayConnected = true
         appModel.testAgentRequestHandler = { _ in }
@@ -9057,7 +9084,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Sent to gateway") == true)
     }
 
-    @Test @MainActor func `handle deep link coalesces prompt when rate limited`() async throws {
+    @Test @MainActor func `handle deep link never replaces a displayed prompt`() async throws {
         let appModel = NodeAppModel()
         appModel.gatewayConnected = true
 
@@ -9065,29 +9092,31 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let firstPrompt = try #require(appModel.pendingAgentDeepLinkPrompt)
 
         await appModel.handleDeepLink(url: makeAgentDeepLinkURL(message: "second prompt"))
-        let coalescedPrompt = try #require(appModel.pendingAgentDeepLinkPrompt)
 
-        #expect(coalescedPrompt.id != firstPrompt.id)
-        #expect(coalescedPrompt.messagePreview.contains("second prompt"))
+        #expect(appModel.pendingAgentDeepLinkPrompt?.id == firstPrompt.id)
+        #expect(appModel.pendingAgentDeepLinkPrompt?.messagePreview == "first prompt")
+        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Queued local confirmation") == true)
     }
 
-    @Test @MainActor func `handle deep link strips delivery fields when unkeyed`() async throws {
+    @Test @MainActor func `handle deep link strips delivery fields and ignores any key`() async throws {
         let appModel = NodeAppModel()
         appModel.gatewayConnected = true
         let url = makeAgentDeepLinkURL(
             message: "route this",
             deliver: true,
             to: "123456",
-            channel: "telegram")
+            channel: "telegram",
+            key: "any-caller-supplied-key")
 
         await appModel.handleDeepLink(url: url)
         let prompt = try #require(appModel.pendingAgentDeepLinkPrompt)
         #expect(prompt.request.deliver == false)
         #expect(prompt.request.to == nil)
         #expect(prompt.request.channel == nil)
+        #expect(prompt.request.key == nil)
     }
 
-    @Test @MainActor func `handle deep link rejects long unkeyed message when connected`() async {
+    @Test @MainActor func `handle deep link rejects long message when connected`() async {
         let appModel = NodeAppModel()
         appModel.gatewayConnected = true
         let message = String(repeating: "x", count: 241)
@@ -9096,19 +9125,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         await appModel.handleDeepLink(url: url)
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
         #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Rejected") == true)
-    }
-
-    @Test @MainActor func `handle deep link bypasses prompt with valid key`() async {
-        let appModel = NodeAppModel()
-        appModel.gatewayConnected = true
-        appModel.testAgentRequestHandler = { _ in }
-        let key = NodeAppModel.expectedDeepLinkKey()
-        let url = makeAgentDeepLinkURL(message: "trusted request", key: key)
-
-        await appModel.handleDeepLink(url: url)
-        #expect(appModel.pendingAgentDeepLinkPrompt == nil)
-        #expect(appModel.openChatRequestID == 1)
-        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Sent to gateway") == true)
     }
 
     @Test @MainActor func `operator scopes use the active gateway token`() throws {

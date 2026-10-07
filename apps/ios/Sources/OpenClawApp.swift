@@ -577,7 +577,7 @@ enum WatchPromptNotificationBridge {
         "\(self.actionLabelKeyPrefix)\(index)"
     }
 
-    private static func categoryActions(_ actions: [OpenClawWatchAction]) -> [UNNotificationAction] {
+    static func categoryActions(_ actions: [OpenClawWatchAction]) -> [UNNotificationAction] {
         actions.enumerated().map { index, action in
             let identifier: String = switch index {
             case 0:
@@ -596,8 +596,8 @@ enum WatchPromptNotificationBridge {
 
     private static func notificationActionOptions(style: String?) -> UNNotificationActionOptions {
         style?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "destructive"
-            ? [.destructive]
-            : []
+            ? [.destructive, .authenticationRequired]
+            : [.authenticationRequired]
     }
 
     private static func isNotificationAuthorizationAllowed(
@@ -636,6 +636,8 @@ struct OpenClawApp: App {
         GatewaySettingsStore.bootstrapPersistence()
         (UserDefaults(suiteName: OpenClawAppGroup.identifier) ?? .standard)
             .removeObject(forKey: "share.defaultInstruction")
+        // Deletes a retired secret (the unattended deep-link key); removable after the 2026.12 train.
+        UserDefaults.standard.removeObject(forKey: "deeplink.agent.key")
         OpenClawType.installUIKitAppearance()
         let appModel = NodeAppModel(audioAdmissionInitiallyAllowed: false)
         #if DEBUG

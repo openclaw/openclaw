@@ -19,8 +19,8 @@ All camera access is gated behind a user-controlled setting per platform.
 
 ### iOS user setting
 
-- iOS Settings tab → **Camera** → **Allow Camera** (`camera.enabled`).
-  - Default: **on** (missing key is treated as enabled).
+- Dashboard → **This iPhone** (or **This iPad**) → **Camera** (`camera.enabled`).
+  - **Fresh installs default to off.** Installs that already completed onboarding keep the camera on when they update.
   - When off: `camera.*` commands return `CAMERA_DISABLED`.
 
 ### iOS commands (via Gateway `node.invoke`)

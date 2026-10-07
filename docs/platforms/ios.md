@@ -67,6 +67,10 @@ to update the Gateway. **Open Gateway** opens the native connection screen;
 Gateway setup and pairing remain available. The offline **Device** section also
 remains available without Dashboard support.
 
+Dashboard pages authenticate through the app's native signer, so the page never
+receives the device key or device token. A Gateway older than 2026.10.1 asks for
+browser approval instead.
+
 The **This iPhone** or **This iPad** page contains appearance, notification
 delivery, camera access, keep-awake behavior, and optional Health summaries.
 Its **Permissions** page shows notification, camera, microphone, speech, location,
@@ -551,10 +555,10 @@ it proceeds independently of the invoke.
 
 Direct watchOS node commands:
 
-| Surface       | Commands                       | Notes                                                   |
-| ------------- | ------------------------------ | ------------------------------------------------------- |
-| Device        | `device.info`, `device.status` | Watch identity, battery, thermal, storage, and network. |
-| Notifications | `system.notify`                | While the app is active; requires watch permission.     |
+| Surface       | Commands                       | Notes                                               |
+| ------------- | ------------------------------ | --------------------------------------------------- |
+| Device        | `device.info`, `device.status` | Watch identity, battery, thermal, and network.      |
+| Notifications | `system.notify`                | While the app is active; requires watch permission. |
 
 ## Relay-backed push for official builds
 
