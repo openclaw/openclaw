@@ -327,7 +327,7 @@ export async function deleteWorkspaceState(
     if (storedAlias && storedAlias.alias_path !== lexicalAlias.workspacePath) {
       throw new Error("workspace path alias key collision");
     }
-    const storedIdentity = storedAlias
+    let storedIdentity = storedAlias
       ? createWorkspaceStateIdentity(storedAlias.workspace_path)
       : undefined;
     if (storedIdentity && storedIdentity.workspaceKey !== storedAlias?.workspace_key) {
@@ -346,19 +346,15 @@ export async function deleteWorkspaceState(
           .deleteFrom("workspace_path_aliases")
           .where("alias_key", "=", lexicalAlias.workspaceKey),
       );
-      const currentResolution = resolveWorkspaceIdentityFromDatabase({
-        workspaceDir: currentCanonicalIdentity.workspacePath,
-        database,
-      });
-      return deleteWorkspaceRows(database, currentResolution.identity);
+      storedIdentity = undefined;
     }
-    if (storedIdentity) {
-      return deleteWorkspaceRows(database, storedIdentity);
-    }
-    const resolution = resolveWorkspaceIdentityFromDatabase({
-      workspaceDir: currentCanonicalIdentity.workspacePath,
+    return deleteWorkspaceRows(
       database,
-    });
-    return deleteWorkspaceRows(database, resolution.identity);
+      storedIdentity ??
+        resolveWorkspaceIdentityFromDatabase({
+          workspaceDir: currentCanonicalIdentity.workspacePath,
+          database,
+        }).identity,
+    );
   });
 }

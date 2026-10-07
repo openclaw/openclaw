@@ -253,15 +253,18 @@ export async function finalizeAcceptedContextEngineTurn(params: {
         onDeferredMaintenance: (promise) => params.lease.deferDisposalUntil(promise),
       });
     };
-    await drainContextEngineTurnOutbox({
-      store,
-      engine: params.lease.engine,
-      engineId: params.lease.effectiveEngineId,
-      ownerPluginId: params.lease.effectiveEnginePluginId,
-      sessionId: admission.sessionId,
-      onCommitted,
-      warn,
-    });
+    const drainSession = (sessionId: string, limit?: number) =>
+      drainContextEngineTurnOutbox({
+        store,
+        engine: params.lease.engine,
+        engineId: params.lease.effectiveEngineId,
+        ownerPluginId: params.lease.effectiveEnginePluginId,
+        sessionId,
+        ...(limit === undefined ? {} : { limit }),
+        onCommitted,
+        warn,
+      });
+    await drainSession(admission.sessionId);
     // Prioritize the accepted session, then preserve one bounded retry opportunity per
     // other pending session without immediately retrying a failed accepted-session row.
     const retrySessionIds = await store.listPendingSessions({
@@ -273,16 +276,7 @@ export async function finalizeAcceptedContextEngineTurn(params: {
       if (sessionId === admission.sessionId) {
         continue;
       }
-      await drainContextEngineTurnOutbox({
-        store,
-        engine: params.lease.engine,
-        engineId: params.lease.effectiveEngineId,
-        ownerPluginId: params.lease.effectiveEnginePluginId,
-        sessionId,
-        limit: 1,
-        onCommitted,
-        warn,
-      });
+      await drainSession(sessionId, 1);
     }
     // Finish draining before maintenance can read engine state. Replayed rows use their own
     // target and latest model facts; one offer per session lets the scheduler own coalescing.

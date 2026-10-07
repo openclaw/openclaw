@@ -338,6 +338,15 @@ export class AuthStorage {
       : null;
   }
 
+  private assertProviderReady(providerId: string, options?: { baseUrl?: string }): void {
+    this.storage.assertProviderReady?.(providerId, options?.baseUrl);
+    const error = this.getCanonicalLoadError();
+    if (error) {
+      // Canonical-store ownership blocks implicit env/config fallback.
+      throw error;
+    }
+  }
+
   private parseStorageData(content: string | undefined): AuthStorageData {
     if (!content) {
       return {};
@@ -539,21 +548,9 @@ export class AuthStorage {
       return runtimeKey;
     }
 
-    this.storage.assertProviderReady?.(providerId, options?.baseUrl);
-
-    const canonicalLoadError = this.getCanonicalLoadError();
-    if (canonicalLoadError) {
-      // Canonical-store ownership blocks implicit env/config fallback. An
-      // explicit runtime override above remains the only caller-owned escape.
-      throw canonicalLoadError;
-    }
-
+    this.assertProviderReady(providerId, options);
     const { apiKey, source } = await this.resolveStoredOrFallbackApiKey(providerId, options);
-    this.storage.assertProviderReady?.(providerId, options?.baseUrl);
-    const reloadedError = this.getCanonicalLoadError();
-    if (reloadedError) {
-      throw reloadedError;
-    }
+    this.assertProviderReady(providerId, options);
     if (source) {
       this.storage.assertCredentialReady?.(source, options?.baseUrl);
     }
