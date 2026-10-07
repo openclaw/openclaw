@@ -183,31 +183,40 @@ describe("runCommandWithTimeout", () => {
     });
   });
 
-  it("preserves matching output while tail capture continues", async () => {
-    const result = await runCommandWithTimeout(
-      [
-        process.execPath,
-        "-e",
+  it.each([
+    [undefined, 2],
+    [0, 0],
+    [1, 1],
+  ])(
+    "preserves matching output up to quota %s while tail capture continues",
+    async (limit, count) => {
+      const result = await runCommandWithTimeout(
         [
-          "process.stdout.write('Visit https://example.com/device and enter code ABCD-EFGH\\n')",
-          "process.stdout.write('x'.repeat(10_000) + 'enter code TAIL')",
-        ].join(";"),
-      ],
-      {
-        timeoutMs: 3_000,
-        maxOutputBytes: 24,
-        preserveOutputLine: (line) => line.includes("enter code"),
-      },
-    );
+          process.execPath,
+          "-e",
+          [
+            "process.stdout.write('Visit https://example.com/device and enter code ABCD-EFGH\\n')",
+            "process.stdout.write('x'.repeat(10_000) + 'enter code TAIL')",
+          ].join(";"),
+        ],
+        {
+          timeoutMs: 3_000,
+          maxOutputBytes: 24,
+          maxPreservedOutputLines: limit,
+          preserveOutputLine: (line) => line.includes("enter code"),
+        },
+      );
 
-    const tail = `${"x".repeat(9)}enter code TAIL`;
-    expect(result.stdout).toBe(tail);
-    expect(result.stdoutTruncatedBytes).toBeGreaterThan(0);
-    expect(result.preservedStdoutLines).toEqual([
-      "Visit https://example.com/device and enter code ABCD-EFGH",
-      tail,
-    ]);
-  });
+      const tail = `${"x".repeat(9)}enter code TAIL`;
+      expect(result.stdout).toBe(tail);
+      expect(result.stdoutTruncatedBytes).toBeGreaterThan(0);
+      expect(result.preservedStdoutLines).toEqual(
+        count
+          ? ["Visit https://example.com/device and enter code ABCD-EFGH", tail].slice(0, count)
+          : undefined,
+      );
+    },
+  );
 
   it("supports independent stdout head and stderr tail caps", async () => {
     const result = await runUtf8CommandWithTimeout(
