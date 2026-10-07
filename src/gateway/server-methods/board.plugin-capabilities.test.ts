@@ -325,11 +325,12 @@ function registeredWidgetHarness() {
       pluginSurfaceUrls: { diagram: "https://gateway.test/__openclaw__/cap/diagram-token" },
     },
   );
-  const put = (source: string) =>
+  const put = (source: string, declared?: { tools: string[] }) =>
     harness.invoke("board.widget.put", {
       sessionKey: "session",
       name: "status",
       content: { kind: "registered", contentKind: "diagram", source },
+      ...(declared ? { declared } : {}),
     });
   return { ...harness, ...plugin, put };
 }
@@ -392,5 +393,25 @@ describe("board registered widget content kinds", () => {
     expect(response.mock.calls[0]?.[2]?.message).toContain(
       'widget kind "diagram" is unavailable; enable the plugin that provides it and retry',
     );
+  });
+
+  it("composes registered widget prompt actions after an explicit grant", async () => {
+    const { context, invoke, store, put, composeDocument } = registeredWidgetHarness();
+    const response = await put("diagram:prompt", { tools: ["prompt"] });
+    const pending = (response.mock.calls[0]![1] as BoardSnapshot).widgets[0]!;
+    expect(pending.grantState).toBe("pending");
+    await invoke("board.widget.grant", {
+      sessionKey: "session",
+      name: "status",
+      decision: "granted",
+      revision: pending.revision,
+      instanceId: pending.instanceId,
+    });
+    const board = await invoke("board.get", { sessionKey: "session" });
+    const widget = (board.mock.calls[0]![1] as BoardSnapshot).widgets[0]!;
+    await withAuthorizedBoardWidgetView(store, widget.viewTicket!, () => {}, {
+      gatewayContext: context,
+    });
+    expect(composeDocument).toHaveBeenCalledWith(expect.objectContaining({ promptGranted: true }));
   });
 });

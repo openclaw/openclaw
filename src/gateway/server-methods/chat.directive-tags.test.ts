@@ -2412,6 +2412,26 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     },
   );
 
+  it("does not register tool-event recipients without tool-events capability", async () => {
+    await createReadyChatTranscript("openclaw-chat-send-tool-events-off-");
+    mockState.triggerAgentRunStart = true;
+    mockState.agentRunId = "run-no-cap";
+    const { context, send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-tool-events-off",
+      client: {
+        ...createScopedCliClient(undefined, {}, []),
+        connId: "conn-2",
+      },
+      expectBroadcast: false,
+    });
+
+    const register = context.registerToolEventRecipient;
+    expect(register).not.toHaveBeenCalled();
+    expect(mockState.lastDispatchCtx).toBeDefined();
+  });
+
   it.each([false, true])(
     "persists a reply beside the WebChat user turn (runtime owns source=%s)",
     async (ownsSource) => {

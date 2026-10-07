@@ -272,7 +272,17 @@ it("rejects duplicate ids and admits a bounded rich single-option question at th
     ],
   });
   expect(oneOption[0]).toBe(true);
-  expect(manager.get("rich-question")?.questions[0]?.url).toBe("https://example.test/connect");
+  const richQuestion = expect.objectContaining({
+    id: "rich-question",
+    questions: [expect.objectContaining({ url: "https://example.test/connect" })],
+  });
+  expect(broadcast).toHaveBeenCalledWith("question.requested", richQuestion, publicationOptions);
+  expect(await call("question.get", { id: "rich-question" })).toEqual([
+    true,
+    { question: richQuestion },
+    undefined,
+  ]);
+  expect(await call("question.list", {})).toEqual([true, { questions: [richQuestion] }, undefined]);
   expect(
     (
       await call("question.resolve", {
