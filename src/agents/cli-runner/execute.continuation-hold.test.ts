@@ -82,7 +82,26 @@ it("waits past both watchdogs for a background shell after the answer", async ()
       yield ANSWER;
       // The held shell leaves the live task list before its notification arrives.
       yield { type: "system", subtype: "background_tasks_changed", tasks: [] };
-      // A background agent's own Bash reports on the main stream without continuing the parent.
+      // A background agent streams its own work and Bash on the main stream without
+      // continuing the parent (Claude Code 2.1.284 live capture).
+      const subagent = { parent_tool_use_id: "toolu-background-agent" };
+      yield {
+        type: "assistant",
+        ...subagent,
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "subagent-tool", name: "Bash", input: {} }],
+        },
+      };
+      yield { type: "system", subtype: "task_progress", task_id: "background-agent" };
+      yield {
+        type: "user",
+        ...subagent,
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "subagent-tool", content: "" }],
+        },
+      };
       yield {
         type: "system",
         subtype: "task_started",

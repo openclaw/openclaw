@@ -27,6 +27,7 @@ import {
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import type { CliTerminalInterruption } from "../cli-output-contracts.js";
+import { isClaudeSubagentRecord } from "../cli-output-records.js";
 import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
 import { withAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import { buildHarnessHostRequester } from "../harness/host-requester.js";
@@ -574,16 +575,18 @@ export async function executePluginOwnedProcess(params: {
       ) {
         subagentTaskIds.add(next.value.task_id);
       }
-      // Task bookkeeping keeps the hold; a parent task notification or model output
-      // starts the continuation, which the ordinary watchdog and tool tracking cover
-      // again. A subagent's own task notifications have no parent continuation.
+      // Task bookkeeping and a background agent's own stream keep the hold; a parent
+      // task notification or parent model output starts the continuation, which the
+      // ordinary watchdog and tool tracking cover again.
       const awaitingContinuation =
         next.value.type === "result"
           ? next.value.openclaw_interim_result === true
           : outstanding.awaitingContinuation &&
-            next.value.type === "system" &&
-            (next.value.subtype !== "task_notification" ||
-              (typeof next.value.task_id === "string" && subagentTaskIds.has(next.value.task_id)));
+            (isClaudeSubagentRecord(next.value) ||
+              (next.value.type === "system" &&
+                (next.value.subtype !== "task_notification" ||
+                  (typeof next.value.task_id === "string" &&
+                    subagentTaskIds.has(next.value.task_id)))));
       outstanding.answered ||= awaitingContinuation;
       if (awaitingContinuation !== outstanding.awaitingContinuation) {
         outstanding.awaitingContinuation = awaitingContinuation;
