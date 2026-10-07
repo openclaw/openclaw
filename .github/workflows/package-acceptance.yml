@@ -1233,25 +1233,35 @@ jobs:
       contents: read
     steps:
       - name: Verify defining package workflow identity
+        id: defining_workflow
         env:
-          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
           RESOLVED_TOOLING_SHA: ${{ needs.resolve_package.outputs.tooling_sha }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$WORKFLOW_REPOSITORY" != "openclaw/openclaw" ||
-                ! "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ||
-                "$WORKFLOW_SHA" != "$RESOLVED_TOOLING_SHA" ]]; then
-            echo "::error::Package tooling must match the workflow defining this job."
-            exit 1
-          fi
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+
+          // Serialize current job fields until actionlint supports their native expressions.
+          const job = JSON.parse(process.env.JOB_CONTEXT ?? "null");
+          if (job === null || typeof job !== "object" || Array.isArray(job) ||
+              job.workflow_repository !== "openclaw/openclaw" ||
+              typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha) ||
+              job.workflow_sha !== process.env.RESOLVED_TOOLING_SHA) {
+            throw new Error("Package tooling must match the workflow defining this job.");
+          }
+          if (!process.env.GITHUB_OUTPUT) {
+            throw new Error("GITHUB_OUTPUT is required");
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `workflow_sha=${job.workflow_sha}\n`);
+          NODE
 
       - name: Checkout package workflow ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
+          repository: openclaw/openclaw
+          ref: ${{ steps.defining_workflow.outputs.workflow_sha }}
           fetch-depth: 1
           persist-credentials: false
 

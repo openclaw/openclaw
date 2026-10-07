@@ -8449,14 +8449,14 @@ test "$package_manager" = "pnpm@12.1.0"
     const checkout = workflowStep(job, "Checkout package workflow ref");
     expect(job.steps?.[0]).toBe(guard);
     expect(job.steps?.[1]).toBe(checkout);
+    expect(guard.id).toBe("defining_workflow");
     expect(guard.env).toEqual({
-      WORKFLOW_REPOSITORY: "${{ job.workflow_repository }}",
-      WORKFLOW_SHA: "${{ job.workflow_sha }}",
+      JOB_CONTEXT: "${{ toJSON(job) }}",
       RESOLVED_TOOLING_SHA: "${{ needs.resolve_package.outputs.tooling_sha }}",
     });
     expect(checkout.with).toMatchObject({
-      repository: "${{ job.workflow_repository }}",
-      ref: "${{ job.workflow_sha }}",
+      repository: "openclaw/openclaw",
+      ref: "${{ steps.defining_workflow.outputs.workflow_sha }}",
       "persist-credentials": false,
     });
     const ref = checkout.with?.ref;
@@ -8466,7 +8466,7 @@ test "$package_manager" = "pnpm@12.1.0"
     const calledSha = "a".repeat(40);
     expect(
       runInNewContext(ref.slice(3, -2), {
-        job: { workflow_sha: calledSha },
+        steps: { defining_workflow: { outputs: { workflow_sha: calledSha } } },
         github: { sha: "b".repeat(40), workflow_sha: "c".repeat(40) },
         inputs: { workflow_ref: "refs/heads/main", package_ref: "d".repeat(40) },
         needs: { resolve_package: { outputs: { tooling_sha: "e".repeat(40) } } },
@@ -8475,19 +8475,61 @@ test "$package_manager" = "pnpm@12.1.0"
   });
 
   it.each([
-    ["valid", "openclaw/openclaw", "a".repeat(40), "a".repeat(40), 0],
-    ["foreign repository", "example/other", "a".repeat(40), "a".repeat(40), 1],
-    ["missing defining SHA", "openclaw/openclaw", "", "a".repeat(40), 1],
-    ["malformed defining SHA", "openclaw/openclaw", "refs/heads/main", "refs/heads/main", 1],
-    ["resolver mismatch", "openclaw/openclaw", "a".repeat(40), "b".repeat(40), 1],
-    ["missing resolver SHA", "openclaw/openclaw", "a".repeat(40), "", 1],
+    [
+      "valid",
+      JSON.stringify({ workflow_repository: "openclaw/openclaw", workflow_sha: "a".repeat(40) }),
+      "a".repeat(40),
+      0,
+    ],
+    [
+      "foreign repository",
+      JSON.stringify({ workflow_repository: "example/other", workflow_sha: "a".repeat(40) }),
+      "a".repeat(40),
+      1,
+    ],
+    [
+      "missing defining SHA",
+      JSON.stringify({ workflow_repository: "openclaw/openclaw" }),
+      "a".repeat(40),
+      1,
+    ],
+    ["missing repository", JSON.stringify({ workflow_sha: "a".repeat(40) }), "a".repeat(40), 1],
+    [
+      "malformed defining SHA",
+      JSON.stringify({ workflow_repository: "openclaw/openclaw", workflow_sha: "refs/heads/main" }),
+      "refs/heads/main",
+      1,
+    ],
+    [
+      "non-string defining SHA",
+      JSON.stringify({ workflow_repository: "openclaw/openclaw", workflow_sha: 123 }),
+      "123",
+      1,
+    ],
+    [
+      "resolver mismatch",
+      JSON.stringify({ workflow_repository: "openclaw/openclaw", workflow_sha: "a".repeat(40) }),
+      "b".repeat(40),
+      1,
+    ],
+    [
+      "missing resolver SHA",
+      JSON.stringify({ workflow_repository: "openclaw/openclaw", workflow_sha: "a".repeat(40) }),
+      "",
+      1,
+    ],
+    ["invalid JSON", "{", "a".repeat(40), 1],
+    ["null", "null", "a".repeat(40), 1],
+    ["array", "[]", "a".repeat(40), 1],
+    ["string", '"workflow"', "a".repeat(40), 1],
   ])(
     "validates defining npm workflow identity before checkout: %s",
-    (_, repository, sha, resolved, status) => {
+    (_, context, resolved, status) => {
       const step = workflowStep(
         workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh"),
         "Verify defining package workflow identity",
       );
+      const output = join(tempDirs.make("defining-workflow-identity-"), "output");
       const result = spawnSync(
         process.platform === "darwin" ? "/bin/bash" : "bash",
         ["--noprofile", "--norc", "-c", step.run ?? ""],
@@ -8496,14 +8538,21 @@ test "$package_manager" = "pnpm@12.1.0"
           timeout: 30_000,
           env: {
             PATH: process.env.PATH,
-            WORKFLOW_REPOSITORY: repository,
-            WORKFLOW_SHA: sha,
+            JOB_CONTEXT: context,
             RESOLVED_TOOLING_SHA: resolved,
+            GITHUB_OUTPUT: output,
+            GITHUB_SHA: "b".repeat(40),
+            GITHUB_WORKFLOW_SHA: "c".repeat(40),
           },
         },
       );
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(status);
+      if (status === 0) {
+        expect(readFileSync(output, "utf8")).toBe(`workflow_sha=${"a".repeat(40)}\n`);
+      } else {
+        expect(existsSync(output)).toBe(false);
+      }
     },
   );
 
@@ -8714,6 +8763,7 @@ print("read-count=" + str(len(reads)))
     );
     expect(script).toContain("timeout --signal=KILL 3s python3");
     expect(script).toContain('diagnostic_holder_birth="$holder_birth"');
+    expect(script).not.toContain("birth=$holder_birth");
   });
 
   it("binds npm 12 installation to the supplied prerelease dependency artifact", () => {

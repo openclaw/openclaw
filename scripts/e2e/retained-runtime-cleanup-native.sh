@@ -253,7 +253,7 @@ run_doctor "$fixture/retained.log" retain
 [[ -d "$artifact" ]] || fail "Doctor removed a live holder's runtime"
 [[ "$(process_birth "$holder_pid")" == "$holder_birth" ]] || fail "holder exited before retention proof"
 assert_doctor_message "$fixture/retained.log" retain
-echo "native-cleanup retained: live owned holder pid=$holder_pid birth=$holder_birth"
+echo "native-cleanup retained: live owned holder pid=$holder_pid birth-paired=true"
 exec 3>&-
 wait "$holder_pid" || fail "owned holder did not settle successfully"
 [[ "$(process_birth "$holder_pid" || true)" != "$holder_birth" ]] || fail "settled holder still exists"
