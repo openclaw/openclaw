@@ -417,6 +417,61 @@ describe("give-up terminal failed delivery (#154834)", () => {
     expect(prompt ?? "").not.toContain("dead give-up result");
   });
 
+  it("drops a give-up terminal failed delivery past the hard expiry when no cleanup stamp landed", async () => {
+    // A crash (e.g. gateway restart) between the transport give-up and its cleanup
+    // bookkeeping leaves `failed` with no `cleanupCompletedAt`. Past the announce
+    // hard-expiry nothing can deliver it, so the absolute bound must drain it anyway.
+    const endedAt = Date.now() - 60 * 60_000;
+    seedSubagentRunForReadTest({
+      runId: "run-giveup-expired-no-stamp",
+      childSessionKey: "agent:main:subagent:giveup-expired-no-stamp",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "deliver the abandoned report",
+      expectsCompletionMessage: true,
+      execution: { status: "terminal", endedAt },
+      completion: { required: true, resultText: "expired undeliverable result" },
+      delivery: { status: "failed", lastError: "delivery path none did not complete" },
+    } satisfies SubagentRunRecordOverrides);
+
+    const prompt = await buildActiveSubagentRuntimeContext({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+    });
+
+    expect(prompt ?? "").not.toContain("## Child results awaiting delivery");
+    expect(prompt ?? "").not.toContain("expired undeliverable result");
+  });
+
+  it("does not bound a suspended successful completion by the hard expiry", async () => {
+    // `suspended` means the result is still wanted but the requester session was
+    // unavailable; it waits for the requester's next turn and must not be expired
+    // out from under it by the give-up time bound.
+    const endedAt = Date.now() - 60 * 60_000;
+    seedSubagentRunForReadTest({
+      runId: "run-suspended-old",
+      childSessionKey: "agent:main:subagent:suspended-old",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "deliver the held report",
+      expectsCompletionMessage: true,
+      execution: { status: "terminal", endedAt, outcome: { status: "ok" } },
+      endedReason: "complete",
+      completion: { required: true, resultText: "held-for-requester result" },
+      delivery: { status: "suspended", suspendedAt: endedAt + 1_000 },
+    } satisfies SubagentRunRecordOverrides);
+
+    const prompt = await buildActiveSubagentRuntimeContext({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+    });
+
+    expect(prompt ?? "").toContain("## Child results awaiting delivery");
+    expect(prompt ?? "").toContain("held-for-requester result");
+  });
+
   it("keeps a still-retrying failed delivery (no completed cleanup) awaiting delivery", async () => {
     const endedAt = Date.now() - 20_000;
     seedSubagentRunForReadTest({
@@ -429,8 +484,9 @@ describe("give-up terminal failed delivery (#154834)", () => {
       expectsCompletionMessage: true,
       execution: { status: "terminal", endedAt },
       completion: { required: true, resultText: "still-retrying result" },
-      // A transient failure between retries has not finished cleanup bookkeeping,
-      // so the requester must still see it as awaiting delivery.
+      // A transient failure between retries has not finished cleanup bookkeeping and
+      // is still inside the announce hard-expiry window, so the requester must still
+      // see it as awaiting delivery.
       delivery: { status: "failed", lastError: "transient send error" },
     } satisfies SubagentRunRecordOverrides);
 
