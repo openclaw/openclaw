@@ -90,10 +90,9 @@ export function gatewayClientSenderFields(client: GatewayClient | null): {
       },
     };
   }
-  if (client?.authenticatedGitHubIdentitySync) {
-    return {};
-  }
-  return client?.authenticatedUserId ? { sender: { id: client.authenticatedUserId } } : {};
+  return !client?.authenticatedGitHubIdentitySync && client?.authenticatedUserId
+    ? { sender: { id: client.authenticatedUserId } }
+    : {};
 }
 
 /** Returns the same durable human profile identity used for session creation attribution. */

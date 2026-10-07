@@ -44,7 +44,10 @@ function resourceConfig(mode: string): OpenClawConfig {
   };
 }
 
-export async function verifySharedResourceReplacement(createFixture: RecoveryFixtureFactory) {
+export async function verifySharedResourceReplacement(
+  createFixture: RecoveryFixtureFactory,
+  cleanup: "gateway_stop" | "runtime-lifecycle",
+) {
   const events: string[] = [];
   let shared: { closed: boolean; mode: unknown } | undefined;
   const fixture = await createFixture({
@@ -76,7 +79,18 @@ export async function verifySharedResourceReplacement(createFixture: RecoveryFix
         resource.closed = true;
         shared = undefined;
       };
-      api.on("gateway_stop", close);
+      if (cleanup === "gateway_stop") {
+        api.on("gateway_stop", close);
+      } else {
+        api.lifecycle.registerRuntimeLifecycle({
+          id: "shared-resource",
+          cleanup({ reason }) {
+            if (reason === "restart" || reason === "disable") {
+              close();
+            }
+          },
+        });
+      }
     },
   });
   const sibling = fixture.previousRegistry.plugins.find((record) => record.id === "sibling");

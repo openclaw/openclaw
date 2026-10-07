@@ -154,23 +154,13 @@ function readNativeMetadata(raw: unknown): Record<string, unknown> | undefined {
   return value;
 }
 
-function reconcileMetadataStrings(field: string, ...values: unknown[]): string | undefined {
-  let result: string | undefined;
-  for (const value of values) {
-    if (value == null) {
-      continue;
-    }
-    const candidate = readStringValue(value);
-    if (candidate === undefined || Buffer.byteLength(candidate) > MAX_METADATA_FIELD_BYTES) {
-      throw new Error(`Codex inference ${field} metadata is invalid or exceeds its limit`);
-    }
-    if (result !== undefined && candidate !== result) {
-      throw new Error(`Codex inference ${field} metadata disagrees`);
-    }
-    result = candidate;
-  }
-  return result;
-}
+const reconcileMetadataStrings = metadataReconciler((value) => {
+  const text = readStringValue(value);
+  return text !== undefined && Buffer.byteLength(text) <= MAX_METADATA_FIELD_BYTES
+    ? text
+    : undefined;
+}, "invalid or exceeds its limit");
+const reconcileMetadataBooleans = metadataReconciler(asBoolean, "invalid");
 
 function readId(field: string, ...values: unknown[]): string | undefined {
   const value = reconcileMetadataStrings(field, ...values);
@@ -180,20 +170,25 @@ function readId(field: string, ...values: unknown[]): string | undefined {
   return value;
 }
 
-function reconcileMetadataBooleans(field: string, ...values: unknown[]): boolean | undefined {
-  let result: boolean | undefined;
-  for (const value of values) {
-    if (value == null) {
-      continue;
+function metadataReconciler<T extends string | boolean>(
+  read: (value: unknown) => T | undefined,
+  invalid: string,
+) {
+  return (field: string, ...values: unknown[]): T | undefined => {
+    let result: T | undefined;
+    for (const value of values) {
+      if (value == null) {
+        continue;
+      }
+      const candidate = read(value);
+      if (candidate === undefined) {
+        throw new Error(`Codex inference ${field} metadata is ${invalid}`);
+      }
+      if (result !== undefined && candidate !== result) {
+        throw new Error(`Codex inference ${field} metadata disagrees`);
+      }
+      result = candidate;
     }
-    const candidate = asBoolean(value);
-    if (candidate === undefined) {
-      throw new Error(`Codex inference ${field} metadata is invalid`);
-    }
-    if (result !== undefined && candidate !== result) {
-      throw new Error(`Codex inference ${field} metadata disagrees`);
-    }
-    result = candidate;
-  }
-  return result;
+    return result;
+  };
 }

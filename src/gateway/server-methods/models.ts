@@ -114,25 +114,22 @@ export const modelsHandlers: GatewayRequestHandlers = {
               client?.connect.caps,
               GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
             );
+            const listParams = () => ({
+              agentId: resolved.agentId,
+              params,
+              includeManualSelection,
+              requesterProfileId: preparedScope.requesterProfileId,
+              readScope: scope,
+            });
             const prepared =
               params.refresh !== true
-                ? await context.readPreparedModelsList?.({
-                    agentId: resolved.agentId,
-                    params,
-                    includeManualSelection,
-                    requesterProfileId: preparedScope.requesterProfileId,
-                    readScope: scope,
-                  })
+                ? await context.readPreparedModelsList?.(listParams())
                 : undefined;
             const result =
               prepared ??
               (await buildModelsListResult({
                 source: { kind: "gateway", context },
-                agentId: resolved.agentId,
-                params,
-                includeManualSelection,
-                requesterProfileId: preparedScope.requesterProfileId,
-                readScope: scope,
+                ...listParams(),
                 publicationScope: preparedScope,
               }));
             const publish = () => {

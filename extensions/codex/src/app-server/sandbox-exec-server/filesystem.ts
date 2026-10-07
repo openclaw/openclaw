@@ -2,7 +2,6 @@ import { posix as pathPosix } from "node:path";
 import type { SandboxFsStat } from "openclaw/plugin-sdk/sandbox";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import {
-  assertFsSandboxAccess,
   assertNoReadOnlyDescendant,
   assertResolvedFsSandboxAccess,
   joinSandboxChildPath,
@@ -72,6 +71,14 @@ export async function openFile(
     reservedBytes: 0,
   };
   handles.set(handleId, handle);
+  const assertCurrent = () => {
+    if (handles.get(handleId) !== handle || handle.closeRequested || handles.closed) {
+      throw new JsonRpcProtocolError(
+        JSON_RPC_NOT_FOUND,
+        `unknown file read handle \`${handleId}\``,
+      );
+    }
+  };
   try {
     const readPolicy = await authorizePhysicalReadPath(
       fsBridge,
@@ -84,12 +91,7 @@ export async function openFile(
       signal: handle.abortController.signal,
       ...readPolicy,
     });
-    if (handles.get(handleId) !== handle || handle.closeRequested || handles.closed) {
-      throw new JsonRpcProtocolError(
-        JSON_RPC_NOT_FOUND,
-        `unknown file read handle \`${handleId}\``,
-      );
-    }
+    assertCurrent();
     if (!stat) {
       throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "file not found");
     }
@@ -117,12 +119,7 @@ export async function openFile(
       signal: handle.abortController.signal,
       ...readPolicy,
     });
-    if (handles.get(handleId) !== handle || handle.closeRequested || handles.closed) {
-      throw new JsonRpcProtocolError(
-        JSON_RPC_NOT_FOUND,
-        `unknown file read handle \`${handleId}\``,
-      );
-    }
+    assertCurrent();
     if (data.byteLength > handle.reservedBytes) {
       throw new JsonRpcProtocolError(
         -32600,
@@ -264,7 +261,7 @@ export async function writeFile(
     filePath,
     action: "write",
   });
-  assertFsSandboxAccess(execServer, record, [
+  assertResolvedFsSandboxAccess(resolveFsSandboxPolicy(execServer, record), [
     { path: filePath, access: "write" },
     ...(canonicalDestination
       ? [{ path: canonicalDestination.policyPath, access: "write" as const }]
@@ -296,7 +293,7 @@ export async function createDirectory(
     filePath,
     action: "mkdir",
   });
-  assertFsSandboxAccess(execServer, record, [
+  assertResolvedFsSandboxAccess(resolveFsSandboxPolicy(execServer, record), [
     { path: filePath, access: "write" },
     ...(canonicalDestination
       ? [{ path: canonicalDestination.policyPath, access: "write" as const }]

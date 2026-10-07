@@ -7,6 +7,10 @@ import { createAsyncLock, readFileWindowFully } from "@openclaw/fs-safe/advanced
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import type {
+  SessionFileBrowserEntry,
+  SessionFileRelevance,
+} from "../../../packages/gateway-protocol/src/index.js";
 import {
   getAgentWorkspaceAccess,
   type AgentWorkspaceAccess,
@@ -404,6 +408,34 @@ export function resolveWorkspacePath(
 /** Protocol timestamps are integer milliseconds. */
 export function toUpdatedAtMs(mtimeMs: number): number {
   return Math.floor(mtimeMs);
+}
+
+export function toWorkspaceBrowserEntry(
+  browserPath: string,
+  dirent: WorkspaceDirEntry,
+  relevance?: ReadonlyMap<string, SessionFileRelevance>,
+): SessionFileBrowserEntry | undefined {
+  const kind = dirent.isFile ? "file" : dirent.isDirectory ? "directory" : undefined;
+  if (!kind) {
+    return undefined;
+  }
+  let sessionKind = kind === "file" ? relevance?.get(browserPath) : undefined;
+  if (kind === "directory" && relevance) {
+    const prefix = browserPath ? `${browserPath}/` : "";
+    for (const [filePath, fileKind] of relevance) {
+      if (filePath.startsWith(prefix) && filePath !== browserPath) {
+        sessionKind = !sessionKind || sessionKind === fileKind ? fileKind : "mixed";
+      }
+    }
+  }
+  return {
+    path: browserPath,
+    name: dirent.name,
+    kind,
+    ...(kind === "file" ? { size: dirent.size } : {}),
+    updatedAtMs: toUpdatedAtMs(dirent.mtimeMs),
+    ...(sessionKind ? { sessionKind } : {}),
+  };
 }
 
 export function sortDirents<T extends { name: string }>(dirents: readonly T[]): T[] {

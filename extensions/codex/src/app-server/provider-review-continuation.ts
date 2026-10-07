@@ -26,7 +26,6 @@ export async function prepareCodexProviderReviewContinuation(params: {
   }
   let nativeChanged = false;
   let dispatched = false;
-  let dispose = () => {};
   const assertCurrent = () => {
     params.signal.throwIfAborted();
     params.assertCurrent();
@@ -54,7 +53,7 @@ export async function prepareCodexProviderReviewContinuation(params: {
   if (review.nativeThreadId !== params.turnStartParams.threadId || !review.review?.continuation) {
     throw new Error("Provider review no longer matches the native thread");
   }
-  dispose = params.client.addNotificationHandler((notification) => {
+  const dispose = params.client.addNotificationHandler((notification) => {
     const event = notification.params;
     if (!isJsonObject(event) || event.threadId !== review.nativeThreadId) {
       return;

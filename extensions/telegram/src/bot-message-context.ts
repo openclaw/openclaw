@@ -28,7 +28,6 @@ import {
 } from "./bot-message-context.session.js";
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
 import {
-  buildTelegramInboundOriginTarget,
   buildTypingThreadParams,
   extractTelegramForumFlag,
   resolveTelegramForumFlag,
@@ -187,12 +186,9 @@ export const buildTelegramMessageContext = async ({
   });
   const { bindingMode } = conversationRoute;
   let { route } = conversationRoute;
-  const requiresExplicitAccountBinding = (
-    candidate: Awaited<ReturnType<typeof resolveTelegramConversationRoute>>["route"],
-  ): boolean =>
-    normalizeAccountId(candidate.accountId) !==
-      normalizeAccountId(resolveDefaultTelegramAccountId(cfg)) && candidate.matchedBy === "default";
-  const isNamedAccountFallback = requiresExplicitAccountBinding(route);
+  const isNamedAccountFallback =
+    normalizeAccountId(route.accountId) !==
+      normalizeAccountId(resolveDefaultTelegramAccountId(cfg)) && route.matchedBy === "default";
   const hasExplicitTopicRoute = isGroup && Boolean(topicConfig?.agentId?.trim());
   if (isNamedAccountFallback && isGroup && !hasExplicitTopicRoute) {
     logInboundDrop({
@@ -308,7 +304,6 @@ export const buildTelegramMessageContext = async ({
   ) {
     return null;
   }
-  let initialTypingCueSent = false;
   const ensureConfiguredBindingReady = async (): Promise<boolean> => {
     if (bindingMode.kind !== "configured") {
       return true;
@@ -392,7 +387,6 @@ export const buildTelegramMessageContext = async ({
     direction: "inbound",
   });
 
-  const originatingTo = buildTelegramInboundOriginTarget(chatId, threadSpec);
   const bodyResult = await resolveTelegramInboundBody({
     nativeCommandNames,
     cfg,
@@ -405,9 +399,7 @@ export const buildTelegramMessageContext = async ({
     senderId,
     senderUsername,
     resolvedThreadId,
-    replyThreadId,
     threadSpec,
-    originatingTo,
     routeAgentId: route.agentId,
     sessionKey,
     acpBinding: bindingMode.kind === "configured",
@@ -432,8 +424,8 @@ export const buildTelegramMessageContext = async ({
 
   // Send the first typing cue before expensive context/session construction,
   // but only after intake has accepted the message as a non-room-event turn.
-  if (bodyResult.inboundEventKind !== "room_event") {
-    initialTypingCueSent = true;
+  const initialTypingCueSent = bodyResult.inboundEventKind !== "room_event";
+  if (initialTypingCueSent) {
     void sendTyping().catch((err: unknown) => {
       logVerbose(`telegram early typing cue failed for chat ${chatId}: ${String(err)}`);
     });
@@ -456,34 +448,18 @@ export const buildTelegramMessageContext = async ({
     dmThreadId,
     threadSpec,
     route,
-    rawBody: bodyResult.rawBody,
-    bodyText: bodyResult.bodyText,
-    historyKey: bodyResult.historyKey ?? "",
+    bodyResult,
     historyLimit,
     dmHistoryLimit,
     groupConfig,
     topicConfig,
-    effectiveWasMentioned: bodyResult.effectiveWasMentioned,
-    inboundEventKind: bodyResult.inboundEventKind,
     groupRequireMention,
-    mentionFacts: bodyResult.mentionFacts,
-    groupThread: bodyResult.groupThread,
-    commandSource: bodyResult.commandSource,
-    nativeCommandBody: bodyResult.nativeCommandBody,
-    stickerCacheHit: bodyResult.stickerCacheHit,
-    ...(bodyResult.audioTranscribedMediaIndex !== undefined
-      ? { audioTranscribedMediaIndex: bodyResult.audioTranscribedMediaIndex }
-      : {}),
-    locationData: bodyResult.locationData,
     options,
     dmAllowFrom: dmAllow.allowFrom,
     effectiveGroupAllow,
-    commandAuthorized: bodyResult.commandAuthorized,
     topicName,
     sessionRuntime,
   });
-  const isRoomEvent = ctxPayload.InboundEventKind === "room_event";
-  const canShowStatusReaction = !isRoomEvent;
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "telegram",
     accountId: account.accountId,
@@ -504,7 +480,9 @@ export const buildTelegramMessageContext = async ({
   );
   const statusReactionsConfig = cfg.messages?.statusReactions;
   const statusReactionsEnabled =
-    canShowStatusReaction && statusReactionsConfig?.enabled === true && shouldSendAckReaction;
+    ctxPayload.InboundEventKind !== "room_event" &&
+    statusReactionsConfig?.enabled === true &&
+    shouldSendAckReaction;
   const resolvedStatusReactionEmojis = statusReactionsEnabled
     ? resolveTelegramStatusReactionEmojis({
         initialEmoji: ackReaction,

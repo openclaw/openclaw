@@ -31,6 +31,10 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     return;
   }
 
+  const cancel = () => {
+    defaultRuntime.log(theme.muted("Update cancelled."));
+    defaultRuntime.exit(0);
+  };
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
 
   const root = await resolveUpdateRoot();
@@ -96,9 +100,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
   });
 
   if (typeof pickedChannel === "symbol") {
-    defaultRuntime.log(theme.muted("Update cancelled."));
-    defaultRuntime.exit(0);
-    return;
+    return cancel();
   }
 
   const requestedChannel = pickedChannel === "keep" ? null : pickedChannel;
@@ -122,9 +124,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
         initialValue: true,
       });
       if (isCancel(ok) || !ok) {
-        defaultRuntime.log(theme.muted("Update cancelled."));
-        defaultRuntime.exit(0);
-        return;
+        return cancel();
       }
     }
   }
@@ -134,9 +134,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     initialValue: true,
   });
   if (typeof restart === "symbol") {
-    defaultRuntime.log(theme.muted("Update cancelled."));
-    defaultRuntime.exit(0);
-    return;
+    return cancel();
   }
 
   try {

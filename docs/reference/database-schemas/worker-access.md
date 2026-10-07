@@ -226,6 +226,27 @@ major. Schemas, stored bytes, retention, and update behavior are unchanged.
 
 ## Keep one store owner
 
+Live Gateway clients, call authentication, public-share codecs, goal receipts,
+APNs consumers, probes, and monitor reconciliation prepare device identity through
+the existing shared-state worker. Read-only discovery never creates identity state.
+Process identities, loaded codecs, and anonymous misses retain their existing
+cache lifetimes; codec creation clears cached absence. Warm cache hits execute no
+SQLite. Client shutdown joins accepted identity preparation and
+refuses connection effects after its lifetime ends. Sharing and APNs callers
+recheck current authority after preparation; cron planners share one prepared seed.
+Sharing reads prepare codecs before their final authoritative row read. Warm
+codecs remain synchronous; a late cold miss starts one fresh row-read phase under
+the original target guard before authorization and response.
+Native identity access remains limited to Gateway/node boot, connect CLI,
+configuration preflight, and Doctor identity/cadence migration. Schemas, stored
+bytes, retention, the public client API, and update behavior are unchanged.
+
+Pairing snapshots share the current synchronous read admission's freshness probe.
+The next unpinned read still observes foreign commits, and a new snapshot
+transaction retains its fresh probe after `BEGIN`. Ordinary chat normalization
+remains synchronous; goal-start fingerprint preparation uses the asynchronous
+identity owner before admission.
+
 Sandbox reservation and removal-intent transactions run in the existing shared-state
 executor. Reservation selection and prune eligibility read authoritative rows inside
 the synchronous transaction. Removal retains its physical store through the provider
@@ -1389,6 +1410,19 @@ Each effect guard still rereads config files, includes, and environment substitu
 using the protected migration rows for validation. Source identity and durable
 lease checks remain live; prepared rows are not retained permission to delete.
 Stored formats and update behavior are unchanged.
+
+Gateway cleanup of retired plugin artifacts first inspects managed and
+state-qualified fallback capture directories and npm retention markers. A complete
+empty scan avoids lease acquisition, metadata queries, and cache invalidation;
+inspection errors produce a warning instead of an empty result. Candidate cleanup
+keeps the existing plugin lifecycle lease and prepares one fresh installed-index
+payload in an operation-scoped plugin cache. Install records and native capture
+protection share that payload without discarding malformed receipt evidence.
+The live lease and prepared fact are checked after awaited work and before
+deletion, and cache disposal finishes before lease release. The Gateway's retained
+metadata cache is unchanged. Artifacts created or retired after the candidate scan
+remain eligible for later owner cleanup, as with existing best-effort enumeration.
+Schedules, retention and deletion criteria, schemas, and update behavior are unchanged.
 
 Registry refresh, Doctor repair, and legacy index import hold that same plugin
 lease before reading or deriving replacement rows. Startup acquires plugin

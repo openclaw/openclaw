@@ -44,7 +44,7 @@ const channelMocks = vi.hoisted(() => ({
   resolveOutboundChannelMessageAdapter: vi.fn(),
 }));
 const completionMocks = vi.hoisted(() => ({
-  failDurableDelivery: vi.fn(),
+  settleUnknownDelivery: vi.fn(),
 }));
 const namespaceMocks = vi.hoisted(() => ({
   replacePendingDeliveryQueueEntry: vi.fn(),
@@ -59,7 +59,13 @@ vi.mock("./channel-resolution.js", () => ({
 }));
 vi.mock("./delivery-completion.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("./delivery-completion.js")>();
-  return { ...original, failDurableDelivery: completionMocks.failDurableDelivery };
+  return {
+    ...original,
+    settleDurableDelivery: (...args: Parameters<typeof original.settleDurableDelivery>) =>
+      "platformSendStarted" in args[1] && args[1].platformSendStarted
+        ? completionMocks.settleUnknownDelivery(...args)
+        : original.settleDurableDelivery(...args),
+  };
 });
 vi.mock("../delivery-queue-sqlite-namespace.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../delivery-queue-sqlite-namespace.js")>();
@@ -133,7 +139,7 @@ describe("outbound prepared queue migration", () => {
     hookMocks.runMessageSent.mockClear();
     channelMocks.resolveOutboundChannelMessageAdapter.mockReset();
     channelMocks.resolveOutboundChannelMessageAdapter.mockReturnValue(undefined);
-    completionMocks.failDurableDelivery.mockClear();
+    completionMocks.settleUnknownDelivery.mockClear();
     namespaceMocks.replacePendingDeliveryQueueEntry.mockClear();
     namespaceMocks.throwOnReplaceCall = 0;
     setActivePluginRegistry(
@@ -322,8 +328,9 @@ describe("outbound prepared queue migration", () => {
     await expect(migrate()).resolves.toEqual({ moved: 0, skipped: 1, remaining: 0 });
 
     expect(hookMocks.runMessageSending).not.toHaveBeenCalled();
-    expect(completionMocks.failDurableDelivery).toHaveBeenCalledWith(
+    expect(completionMocks.settleUnknownDelivery).toHaveBeenCalledWith(
       interrupted.deliveryCompletion,
+      { platformSendStarted: true },
       tmpDir(),
     );
     expect(getDeliveryQueueEntryStatus(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir())).toBe(
@@ -367,7 +374,7 @@ describe("outbound prepared queue migration", () => {
     await expect(migrate()).resolves.toEqual({ moved: 0, skipped: 1, remaining: 1 });
 
     expect(hookMocks.runMessageSending).not.toHaveBeenCalled();
-    expect(completionMocks.failDurableDelivery).not.toHaveBeenCalled();
+    expect(completionMocks.settleUnknownDelivery).not.toHaveBeenCalled();
     expect(getDeliveryQueueEntryStatus(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir())).toBe(
       "pending",
     );

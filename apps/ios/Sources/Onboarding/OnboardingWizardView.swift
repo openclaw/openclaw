@@ -539,11 +539,11 @@ struct OnboardingWizardView: View {
         Section {
             self.onboardingSecureField(
                 "Gateway Auth Token",
-                text: self.gatewayTokenBinding,
+                text: self.gatewayCredentialBinding(\.token),
                 focusedField: .gatewayToken)
             self.onboardingSecureField(
                 "Gateway Password",
-                text: self.gatewayPasswordBinding,
+                text: self.gatewayCredentialBinding(\.password),
                 focusedField: .gatewayPassword)
 
             if let problem = self.currentProblem {
@@ -719,11 +719,11 @@ extension OnboardingWizardView {
             if self.selectedMode == .remoteDomain {
                 self.onboardingSecureField(
                     "Gateway Auth Token",
-                    text: self.gatewayTokenBinding,
+                    text: self.gatewayCredentialBinding(\.token),
                     focusedField: .gatewayToken)
                 self.onboardingSecureField(
                     "Gateway Password",
-                    text: self.gatewayPasswordBinding,
+                    text: self.gatewayCredentialBinding(\.password),
                     focusedField: .gatewayPassword)
             }
             self.manualConnectButton
@@ -1050,7 +1050,7 @@ extension OnboardingWizardView {
         self.showQRScanner = true
     }
 
-    private func resumeAfterPairingApproval() {
+    private func resumeAfterPairingApproval(silent: Bool = false) {
         // We intentionally stop reconnect churn while unpaired to avoid generating multiple pending requests.
         self.appModel.gatewayAutoReconnectEnabled = true
         self.appModel.gatewayPairingPaused = false
@@ -1058,18 +1058,12 @@ extension OnboardingWizardView {
         // Pairing state is sticky to prevent UI flip-flop during reconnect churn.
         // Once the user explicitly resumes after approving, clear the sticky issue
         // so new status/auth errors can surface instead of being masked as pairing.
-        self.issue = .none
-        self.connectMessage = "Retrying after approval…"
-        self.statusLine = "Retrying after approval…"
-        Task { await self.retryLastAttempt() }
-    }
-
-    private func resumeAfterPairingApprovalInBackground() {
-        // Keep the pairing issue sticky to avoid visual flicker while we probe for approval.
-        self.appModel.gatewayAutoReconnectEnabled = true
-        self.appModel.gatewayPairingPaused = false
-        self.appModel.gatewayPairingRequestId = nil
-        Task { await self.retryLastAttempt(silent: true) }
+        if !silent {
+            self.issue = .none
+            self.connectMessage = "Retrying after approval…"
+            self.statusLine = "Retrying after approval…"
+        }
+        Task { await self.retryLastAttempt(silent: silent) }
     }
 
     private func attemptAutomaticPairingResumeIfNeeded() {
@@ -1083,7 +1077,7 @@ extension OnboardingWizardView {
             return
         }
         self.lastPairingAutoResumeAttemptAt = now
-        self.resumeAfterPairingApprovalInBackground()
+        self.resumeAfterPairingApproval(silent: true)
     }
 
     private func updateConnectionIssue(problem: GatewayConnectionProblem?, statusText: String) {
@@ -1299,22 +1293,13 @@ extension OnboardingWizardView {
             port: self.manualPort)
     }
 
-    private var gatewayTokenBinding: Binding<String> {
+    private func gatewayCredentialBinding(
+        _ field: WritableKeyPath<GatewayConnectionController.ManualAuthOverride.Fields, String>) -> Binding<String>
+    {
         Binding(
-            get: { self.gatewayAuthFields.token },
+            get: { self.gatewayAuthFields[keyPath: field] },
             set: { value in
-                self.gatewayAuthFields.token = value
-                self.gatewayAuthFields.persist(
-                    instanceId: GatewaySettingsStore.currentInstanceID(),
-                    targetStableID: self.gatewayCredentialTargetStableID)
-            })
-    }
-
-    private var gatewayPasswordBinding: Binding<String> {
-        Binding(
-            get: { self.gatewayAuthFields.password },
-            set: { value in
-                self.gatewayAuthFields.password = value
+                self.gatewayAuthFields[keyPath: field] = value
                 self.gatewayAuthFields.persist(
                     instanceId: GatewaySettingsStore.currentInstanceID(),
                     targetStableID: self.gatewayCredentialTargetStableID)
@@ -1325,13 +1310,8 @@ extension OnboardingWizardView {
         Binding(
             get: { self.manualHost },
             set: { value in
-                let previousStableID = self.currentManualGatewayStableID
-                self.manualContextPath = nil
-                self.manualHost = value
-                if GatewayStableIdentifier.key(previousStableID) !=
-                    GatewayStableIdentifier.key(self.currentManualGatewayStableID)
-                {
-                    self.gatewayAuthFields = .init()
+                self.updateManualTarget {
+                    self.manualHost = value
                 }
             })
     }
@@ -1340,15 +1320,10 @@ extension OnboardingWizardView {
         Binding(
             get: { self.manualPortText },
             set: { value in
-                let previousStableID = self.currentManualGatewayStableID
-                self.manualContextPath = nil
-                let digits = value.filter(\.isNumber)
-                self.manualPortText = digits
-                self.manualPort = min(Int(digits) ?? 0, 65535)
-                if GatewayStableIdentifier.key(previousStableID) !=
-                    GatewayStableIdentifier.key(self.currentManualGatewayStableID)
-                {
-                    self.gatewayAuthFields = .init()
+                self.updateManualTarget {
+                    let digits = value.filter(\.isNumber)
+                    self.manualPortText = digits
+                    self.manualPort = min(Int(digits) ?? 0, 65535)
                 }
             })
     }
@@ -1375,29 +1350,32 @@ extension OnboardingWizardView {
         self.applyModeDefaults(mode)
     }
 
-    private func applyModeDefaults(_ mode: OnboardingConnectionMode) {
+    private func updateManualTarget(_ update: () -> Void) {
         let previousStableID = self.currentManualGatewayStableID
         self.manualContextPath = nil
-        defer {
-            if GatewayStableIdentifier.key(previousStableID) !=
-                GatewayStableIdentifier.key(self.currentManualGatewayStableID)
-            {
-                self.gatewayAuthFields = .init()
-            }
+        update()
+        if GatewayStableIdentifier.key(previousStableID) !=
+            GatewayStableIdentifier.key(self.currentManualGatewayStableID)
+        {
+            self.gatewayAuthFields = .init()
         }
-        let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let hostIsDefaultLike = host.isEmpty || host == "openclaw.local" || host == "localhost"
+    }
 
-        switch mode {
-        case .homeNetwork:
-            if hostIsDefaultLike { self.manualHost = "openclaw.local" }
-        case .remoteDomain:
-            if host == "openclaw.local" || host == "localhost" { self.manualHost = "" }
-        case .developerLocal:
-            if hostIsDefaultLike { self.manualHost = "localhost" }
+    private func applyModeDefaults(_ mode: OnboardingConnectionMode) {
+        self.updateManualTarget {
+            let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let hostIsDefaultLike = host.isEmpty || host == "openclaw.local" || host == "localhost"
+            switch mode {
+            case .homeNetwork:
+                if hostIsDefaultLike { self.manualHost = "openclaw.local" }
+            case .remoteDomain:
+                if host == "openclaw.local" || host == "localhost" { self.manualHost = "" }
+            case .developerLocal:
+                if hostIsDefaultLike { self.manualHost = "localhost" }
+            }
+            self.manualTLS = mode != .developerLocal
+            if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         }
-        self.manualTLS = mode != .developerLocal
-        if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
     }
 
     private func connectManual(setupAttemptID: UUID? = nil) async {

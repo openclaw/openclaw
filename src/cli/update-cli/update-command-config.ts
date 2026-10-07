@@ -165,23 +165,6 @@ function restoreDroppedPreUpdateChannels(
   };
 }
 
-function hasRestorablePreUpdateChannels(
-  snapshot: ConfigFileSnapshot,
-  preUpdateConfig: PreUpdateConfigRestoreInput,
-): boolean {
-  if (!snapshot.valid) {
-    return false;
-  }
-  const preUpdateChannels = asNullableRecord(preUpdateConfig.sourceConfig.channels);
-  if (!preUpdateChannels) {
-    return false;
-  }
-  const postUpdateChannels = asNullableRecord(snapshot.sourceConfig.channels) ?? {};
-  return Object.keys(preUpdateChannels).some(
-    (channelId) => postUpdateChannels[channelId] === undefined,
-  );
-}
-
 function resolveRestoredAuthoredChannels(params: {
   currentChannels: unknown;
   currentAuthoredChannels: unknown;
@@ -490,31 +473,23 @@ async function readPostCoreSourceConfigFile(
     if (!parsed.ok || !isRecord(parsed.parsed)) {
       return undefined;
     }
-    return normalizePreUpdateConfigRestoreInput(parsed.parsed, options);
+    const { sourceConfig, authoredConfig } = parsed.parsed;
+    if (isRecord(sourceConfig) && isRecord(authoredConfig)) {
+      return {
+        sourceConfig: sourceConfig as OpenClawConfig,
+        authoredConfig: authoredConfig as OpenClawConfig,
+      };
+    }
+    const authored = parsed.parsed as OpenClawConfig;
+    return {
+      sourceConfig: options?.configPath
+        ? resolvePreUpdateSourceConfigFromAuthored(authored, options.configPath)
+        : authored,
+      authoredConfig: authored,
+    };
   } catch {
     return undefined;
   }
-}
-
-function normalizePreUpdateConfigRestoreInput(
-  parsed: Record<string, unknown>,
-  options?: { configPath?: string },
-): PreUpdateConfigRestoreInput | undefined {
-  const sourceConfig = parsed.sourceConfig;
-  const authoredConfig = parsed.authoredConfig;
-  if (isRecord(sourceConfig) && isRecord(authoredConfig)) {
-    return {
-      sourceConfig: sourceConfig as OpenClawConfig,
-      authoredConfig: authoredConfig as OpenClawConfig,
-    };
-  }
-  const authored = parsed as OpenClawConfig;
-  return {
-    sourceConfig: options?.configPath
-      ? resolvePreUpdateSourceConfigFromAuthored(authored, options.configPath)
-      : authored,
-    authoredConfig: authored,
-  };
 }
 
 function resolvePreUpdateSourceConfigFromAuthored(
@@ -534,25 +509,6 @@ function resolvePreUpdateSourceConfigFromAuthored(
   }
 }
 
-async function isFreshPreUpdateConfigSnapshot(params: {
-  currentConfigPath: string;
-  snapshotPath: string;
-  updateStartedAtMs: number;
-}): Promise<boolean> {
-  const snapshotStat = await fs.stat(params.snapshotPath).catch(() => null);
-  if (!snapshotStat) {
-    return false;
-  }
-  if (snapshotStat.mtimeMs + 1000 < params.updateStartedAtMs) {
-    return false;
-  }
-  if (Date.now() - snapshotStat.mtimeMs > PRE_UPDATE_CONFIG_SNAPSHOT_MAX_AGE_MS) {
-    return false;
-  }
-  const currentStat = await fs.stat(params.currentConfigPath).catch(() => null);
-  return !currentStat || snapshotStat.mtimeMs <= currentStat.mtimeMs + 1000;
-}
-
 export async function readPostCorePreUpdateSourceConfig(params: {
   sourceConfigPath: string | undefined;
   currentSnapshot: ConfigFileSnapshot;
@@ -567,21 +523,40 @@ export async function readPostCorePreUpdateSourceConfig(params: {
   }
   for (const suffix of [".pre-update", ".bak"]) {
     const snapshotPath = `${params.currentSnapshot.path}${suffix}`;
+    const currentConfigPath = params.currentSnapshot.path;
+    const updateStartedAtMs = params.updateStartedAtMs;
+    const snapshotStat = await fs.stat(snapshotPath).catch(() => null);
     if (
-      !(await isFreshPreUpdateConfigSnapshot({
-        currentConfigPath: params.currentSnapshot.path,
-        snapshotPath,
-        updateStartedAtMs: params.updateStartedAtMs,
-      }))
+      !snapshotStat ||
+      snapshotStat.mtimeMs + 1000 < updateStartedAtMs ||
+      Date.now() - snapshotStat.mtimeMs > PRE_UPDATE_CONFIG_SNAPSHOT_MAX_AGE_MS
     ) {
+      continue;
+    }
+    const currentStat = await fs.stat(currentConfigPath).catch(() => null);
+    const fresh = !currentStat || snapshotStat.mtimeMs <= currentStat.mtimeMs + 1000;
+    if (!fresh) {
       continue;
     }
     const preUpdateConfig = await readPostCoreSourceConfigFile(snapshotPath, {
       configPath: params.currentSnapshot.path,
     });
     // A fresh explicit snapshot is authoritative, even if it cannot restore channels.
-    return preUpdateConfig &&
-      hasRestorablePreUpdateChannels(params.currentSnapshot, preUpdateConfig)
+    if (!preUpdateConfig) {
+      return undefined;
+    }
+    const snapshot = params.currentSnapshot;
+    if (!snapshot.valid) {
+      return undefined;
+    }
+    const preUpdateChannels = asNullableRecord(preUpdateConfig.sourceConfig.channels);
+    if (!preUpdateChannels) {
+      return undefined;
+    }
+    const postUpdateChannels = asNullableRecord(snapshot.sourceConfig.channels) ?? {};
+    return Object.keys(preUpdateChannels).some(
+      (channelId) => postUpdateChannels[channelId] === undefined,
+    )
       ? preUpdateConfig
       : undefined;
   }

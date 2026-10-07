@@ -10,17 +10,10 @@ export function localPresentationProps(
     setTerminalFontFamily: (value: string | undefined) =>
       applySettings({ terminalFontFamily: value }),
     chatMessageMaxWidth: settings.chatMessageMaxWidth,
-    setChatMessageMaxWidth: (value: string | undefined) =>
-      applySettings({ chatMessageMaxWidth: value }),
     chatShowTaskProgress:
       settings.chatShowTaskProgress ?? UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
-    setChatShowTaskProgress: (enabled: boolean) => applySettings({ chatShowTaskProgress: enabled }),
     openLinksExternally: settings.openLinksExternally === true,
-    setOpenLinksExternally: (enabled: boolean) => applySettings({ openLinksExternally: enabled }),
     chatCollapseTaskProgress: settings.chatCollapseTaskProgress === true,
-    setChatCollapseTaskProgress: (enabled: boolean) =>
-      applySettings({ chatCollapseTaskProgress: enabled }),
     showAdvancedSettings: settings.showAdvancedSettings === true,
-    setShowAdvancedSettings: (enabled: boolean) => applySettings({ showAdvancedSettings: enabled }),
   };
 }

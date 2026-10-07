@@ -46,6 +46,12 @@ function renderEvaluationOutcome(outcome: SkillWorkshopEvaluationOutcome) {
   const pluginLabel = outcome.pluginVersion
     ? `${outcome.pluginId} ${outcome.pluginVersion}`
     : outcome.pluginId;
+  const runtimeLabels = [
+    result?.evaluatorVersion
+      ? t("skillWorkshop.evaluation.evaluatorVersion", { version: result.evaluatorVersion })
+      : null,
+    result?.mode ? t("skillWorkshop.evaluation.mode", { mode: result.mode }) : null,
+  ].filter((label) => label !== null);
   return html`
     <section class="sw-evaluation__outcome">
       <div class="sw-evaluation__outcome-head">
@@ -86,27 +92,10 @@ function renderEvaluationOutcome(outcome: SkillWorkshopEvaluationOutcome) {
           : nothing
       }
       ${
-        result?.evaluatorVersion || result?.mode
-          ? html`
-              <div class="sw-evaluation__runtime">
-                ${
-                  result.evaluatorVersion
-                    ? html`<span>
-                        ${t("skillWorkshop.evaluation.evaluatorVersion", {
-                          version: result.evaluatorVersion,
-                        })}
-                      </span>`
-                    : nothing
-                }
-                ${
-                  result.mode
-                    ? html`<span>
-                        ${t("skillWorkshop.evaluation.mode", { mode: result.mode })}
-                      </span>`
-                    : nothing
-                }
-              </div>
-            `
+        runtimeLabels.length
+          ? html`<div class="sw-evaluation__runtime">
+              ${runtimeLabels.map((label) => html`<span>${label}</span>`)}
+            </div>`
           : nothing
       }
     </section>

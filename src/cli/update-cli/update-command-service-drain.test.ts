@@ -36,8 +36,12 @@ vi.mock("../../gateway/local-http-probe.js", () => ({
     resolveWebSocketTarget: async () => ({ url: "ws://127.0.0.1:18789" }),
   }),
 }));
+// mock-isolation: Drain policy uses explicit fixture credentials, independent of device storage.
 vi.mock("../daemon-cli/restart-health-probe.js", () => ({
-  resolveGatewayRestartProbeContext: async () => ({ config: {}, auth: {} }),
+  resolveGatewayRestartProbeContext: async () => ({
+    config: {},
+    auth: { token: "fixture-token" },
+  }),
 }));
 vi.mock("./update-command-service-plan.js", () => ({
   resolveUpdatedGatewayRestartPort: async () => 18789,

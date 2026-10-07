@@ -6,10 +6,8 @@ export function isCodexNotificationForTurn(
   threadId: string,
   turnId: string,
 ): boolean {
-  if (!isJsonObject(value)) {
-    return false;
-  }
   return (
+    isJsonObject(value) &&
     readCodexNotificationThreadId(value) === threadId &&
     readCodexNotificationTurnId(value) === turnId
   );

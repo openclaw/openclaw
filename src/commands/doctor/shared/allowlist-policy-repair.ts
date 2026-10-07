@@ -1,4 +1,7 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asNullableRecord,
+  asOptionalObjectRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeChatChannelId } from "../../../channels/ids.js";
@@ -74,12 +77,9 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
     });
   };
 
-  const nextChannels = next.channels as Record<string, Record<string, unknown>>;
-  for (const [channelName, channelConfig] of Object.entries(nextChannels)) {
-    if (!channelConfig || typeof channelConfig !== "object") {
-      continue;
-    }
-    if (channelConfig.enabled === false) {
+  for (const [channelName, value] of Object.entries(next.channels ?? {})) {
+    const channelConfig = asOptionalObjectRecord(value);
+    if (!channelConfig || channelConfig.enabled === false) {
       continue;
     }
     const mode = getDoctorChannelCapabilities(channelName).dmAllowFromMode;
@@ -94,17 +94,15 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
     if (!accounts) {
       continue;
     }
-    for (const [accountId, accountConfig] of Object.entries(accounts)) {
-      if (!accountConfig || typeof accountConfig !== "object") {
-        continue;
-      }
-      if ((accountConfig as { enabled?: unknown }).enabled === false) {
+    for (const [accountId, accountValue] of Object.entries(accounts)) {
+      const accountConfig = asOptionalObjectRecord(accountValue);
+      if (!accountConfig || accountConfig.enabled === false) {
         continue;
       }
       await recoverAllowFromForAccount({
         channelName,
         mode,
-        account: accountConfig as Record<string, unknown>,
+        account: accountConfig,
         parent: channelConfig,
         accountId,
         prefix: `channels.${channelName}.accounts.${accountId}`,

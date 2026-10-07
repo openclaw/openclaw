@@ -211,28 +211,19 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   }
 
   if (totalPages > 1) {
-    const paginationRow: ButtonRow = [];
-
-    if (currentPage > 1) {
-      paginationRow.push({
-        text: "◀ Prev",
-        callback_data: buildProviderListCallbackData(provider, currentPage - 1),
-      });
-    }
-
-    paginationRow.push({
-      text: `${currentPage}/${totalPages}`,
-      callback_data: buildProviderListCallbackData(provider, currentPage), // noop
-    });
-
-    if (currentPage < totalPages) {
-      paginationRow.push({
-        text: "Next ▶",
-        callback_data: buildProviderListCallbackData(provider, currentPage + 1),
-      });
-    }
-
-    rows.push(paginationRow);
+    const pages = [
+      { page: currentPage - 1, text: "◀ Prev", show: currentPage > 1 },
+      { page: currentPage, text: `${currentPage}/${totalPages}`, show: true },
+      { page: currentPage + 1, text: "Next ▶", show: currentPage < totalPages },
+    ];
+    rows.push(
+      pages
+        .filter(({ show }) => show)
+        .map(({ page, text }) => ({
+          text,
+          callback_data: buildProviderListCallbackData(provider, page),
+        })),
+    );
   }
 
   rows.push([{ text: "<< Back", callback_data: CALLBACK_PREFIX.back }]);

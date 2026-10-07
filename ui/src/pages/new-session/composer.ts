@@ -127,21 +127,8 @@ function handleComposerKeydown(
   const isBackgroundShortcut = options.requiresModifier
     ? hasSubmitModifier && event.shiftKey
     : hasSubmitModifier && !event.shiftKey;
-  if (!event.altKey && isBackgroundShortcut && options.onBackgroundSubmit) {
-    if (event.repeat) {
-      event.preventDefault();
-      return;
-    }
-    if (options.canSubmit || options.submitDisabledReason !== undefined) {
-      event.preventDefault();
-      resetSkillMenuState(options.textareaController.skillMenuState);
-      resetSlashMenuState(options.textareaController.slashMenuState);
-      options.textareaController.mentionMenu.close();
-      options.onBackgroundSubmit();
-    }
-    return;
-  }
-  if (event.shiftKey || (options.requiresModifier && !hasSubmitModifier)) {
+  const background = Boolean(!event.altKey && isBackgroundShortcut && options.onBackgroundSubmit);
+  if (!background && (event.shiftKey || (options.requiresModifier && !hasSubmitModifier))) {
     return;
   }
   if (event.repeat) {
@@ -153,7 +140,14 @@ function handleComposerKeydown(
   // Only silent gates (busy button, empty draft) keep Enter native.
   if (options.canSubmit || options.submitDisabledReason !== undefined) {
     event.preventDefault();
-    submitNewSession(options);
+    if (background) {
+      resetSkillMenuState(options.textareaController.skillMenuState);
+      resetSlashMenuState(options.textareaController.slashMenuState);
+      options.textareaController.mentionMenu.close();
+      options.onBackgroundSubmit?.();
+    } else {
+      submitNewSession(options);
+    }
   }
 }
 

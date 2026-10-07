@@ -481,7 +481,6 @@ src/infra/device-pairing.test.ts
 src/infra/diagnostic-events.ts
 src/infra/exec-approvals-allowlist.ts
 src/infra/exec-authorization-plan.ts
-src/infra/host-env-security.test.ts
 src/infra/infra-runtime.test.ts
 src/infra/npm-managed-root.test.ts
 src/infra/npm-managed-root.ts

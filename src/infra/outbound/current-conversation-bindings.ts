@@ -30,7 +30,7 @@ import { createSqliteWorkerWriteAdmission } from "../sqlite-worker-store.js";
 import {
   CURRENT_BINDINGS_ID_PREFIX,
   buildBindingId,
-  bindingRowsToRecords,
+  bindingRowToRecord,
   isBindingExpired,
   deleteCurrentConversationBindingRow,
   listCurrentConversationBindingRowsBySession,
@@ -149,7 +149,7 @@ export function deleteCurrentConversationBindingRecordsBySession(
     );
     const removed: SessionBindingRecord[] = [];
     for (const row of rows) {
-      const record = bindingRowsToRecords([row])[0];
+      const record = bindingRowToRecord(row);
       if (genericOnly && !record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
         continue;
       }

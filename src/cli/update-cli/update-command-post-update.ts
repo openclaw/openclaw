@@ -1,10 +1,7 @@
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  buildControlPlaneUpdateRestartHealthPendingResult,
-  resolveManagedServiceUpdateFailureExitCode,
-} from "../../infra/update-control-plane-sentinel.js";
+import { buildControlPlaneUpdateRestartHealthPendingResult } from "../../infra/update-control-plane-sentinel.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -193,26 +190,16 @@ async function finishSettledUpdate(
       const rollback = await compensate(() =>
         withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, () =>
           rollbackFailedUpdate({
+            ...params,
             result,
             previousRoot: params.root,
-            packageTransaction: params.packageTransaction,
             databaseBackup:
               beganSuccessfully && !gatewayStartAttempted ? params.databaseBackup : undefined,
-            rollbackBlockedReason: params.rollbackBlockedReason,
-            schemaVersions: params.schemaVersions,
-            candidateSchemaVersions: params.candidateSchemaVersions,
-            previousSchemaVersions: params.previousSchemaVersions,
-            previousVerified: params.previousVerified,
-            originalManagedServiceRuntime: params.originalManagedServiceRuntime,
             allowGatewayRestart: params.shouldRestart,
             onGatewayStartAttempted,
-            configSnapshot: params.configSnapshot,
-            activationConfig: params.activationConfig,
-            opts: params.opts,
             preManagedServiceStop: currentServiceStop(),
             timeoutMs: params.updateStepTimeoutMs,
             nodeRunner: params.packageUpdateNodeRunner,
-            invocationCwd: params.invocationCwd,
             definitionRecovery,
           }),
         ),
@@ -420,12 +407,7 @@ async function finishSettledUpdate(
             cause: restoreFailure.cause,
           })
         : restoreFailure.cause;
-      throw createFailure(
-        reportedResult,
-        resolveManagedServiceUpdateFailureExitCode(reportedResult),
-        detail,
-        { cause },
-      );
+      throw createFailure(reportedResult, detail, { cause });
     }
     return reportedResult;
   };
@@ -449,12 +431,7 @@ async function finishSettledUpdate(
           { ...params.result, status: "error" },
           params.result.recovery?.serviceRestartSafe === true,
         );
-        throw createFailure(
-          reported,
-          resolveManagedServiceUpdateFailureExitCode(reported),
-          params.failure?.detail,
-          params.failure,
-        );
+        throw createFailure(reported, params.failure?.detail, params.failure);
       }
 
       if (params.result.status === "skipped" && !params.coreAlreadyCurrent) {
@@ -464,9 +441,9 @@ async function finishSettledUpdate(
         );
         throw createFailure(
           reported,
-          classifyUpdateOutcome(reported) === "failed"
-            ? resolveManagedServiceUpdateFailureExitCode(reported)
-            : 0,
+          undefined,
+          undefined,
+          classifyUpdateOutcome(reported) === "failed" ? undefined : 0,
         );
       }
 
@@ -483,11 +460,7 @@ async function finishSettledUpdate(
         if (convergence.resultWithPostUpdate.status === "error") {
           triageAllowed = !convergence.cancelled;
           const reported = await reportResult(convergence.resultWithPostUpdate);
-          throw createFailure(
-            reported,
-            resolveManagedServiceUpdateFailureExitCode(reported),
-            convergence.detail,
-          );
+          throw createFailure(reported, convergence.detail);
         }
         return convergence;
       };
@@ -546,14 +519,7 @@ async function finishSettledUpdate(
           status: "error",
           reason: "service-revalidation-failed",
         });
-        throw createFailure(
-          reported,
-          resolveManagedServiceUpdateFailureExitCode(reported),
-          message,
-          {
-            cause: error,
-          },
-        );
+        throw createFailure(reported, message, { cause: error });
       }
       const notifyRestart = () =>
         writeRestartSentinel(
@@ -624,7 +590,7 @@ async function finishSettledUpdate(
             reason: recovered.result.reason ?? verificationFailure,
           });
           const reported = await reportResult(recovered.result, false, undefined, false);
-          throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported));
+          throw createFailure(reported);
         }
         resultWithPostUpdate = recovered.result;
         return true;
@@ -699,7 +665,7 @@ async function finishSettledUpdate(
       );
       if (maintenanceFailure) {
         const reported = await reportResult(maintenanceFailure.result, false, undefined, false);
-        throw createFailure(reported, 1, maintenanceFailure.detail);
+        throw createFailure(reported, maintenanceFailure.detail, undefined, 1);
       }
 
       return resultWithPostUpdate;
@@ -719,9 +685,7 @@ async function finishSettledUpdate(
       const { result, message } = createPostUpdateFailureResult(params, error);
       defaultRuntime.error(`Post-update verification failed: ${message}`);
       const reported = await reportResult(result);
-      throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported), message, {
-        cause: error,
-      });
+      throw createFailure(reported, message, { cause: error });
     }
   };
   // Reporting cannot revoke verified activation or authorize another native rollback.

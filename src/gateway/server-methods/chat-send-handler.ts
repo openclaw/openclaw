@@ -86,7 +86,6 @@ async function handleChatSendWithOptions(
 ): Promise<void> {
   const {
     req,
-    params,
     respond,
     context,
     client,
@@ -99,7 +98,7 @@ async function handleChatSendWithOptions(
   const isDirectExternalUser =
     externalAuthorityAdmission !== undefined && isDirectGatewayUserClient(client);
   const setup = await prepareAndAdmitChatSend(
-    { params, respond, context, client, hasCurrentClientAuthority, sessionMutationAuthorization },
+    handlerOptions,
     onAdmissionOwned,
     { ...options, isDirectExternalUser },
     diagnostics,

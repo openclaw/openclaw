@@ -57,25 +57,6 @@ function hasCurrentSourceReplyContext(input: InternalSourceReplySinkInput): bool
   );
 }
 
-async function hasConfiguredCurrentSourceChannel(
-  input: InternalSourceReplySinkInput,
-): Promise<boolean> {
-  const provider =
-    normalizeMessageChannel(input.toolContext?.currentChannelProvider) ??
-    normalizeOptionalLowercaseString(input.toolContext?.currentChannelProvider);
-  if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) {
-    return false;
-  }
-  if (!isConfiguredChannel(input.cfg, provider)) {
-    return false;
-  }
-  if (!resolveOutboundChannelPlugin({ channel: provider, cfg: input.cfg, allowBootstrap: true })) {
-    return false;
-  }
-  const configuredChannels = await listConfiguredMessageChannels(input.cfg);
-  return configuredChannels.some((channel) => channel === provider);
-}
-
 /** Return whether this send resolves to the private current-run source-reply sink. */
 export async function shouldUseInternalSourceReplySink(
   input: InternalSourceReplySinkInput,
@@ -98,5 +79,17 @@ export async function shouldUseInternalSourceReplySink(
   }
   // Configured current-source channels can infer the target and deliver through
   // the normal plugin path; the sink is only the private fallback.
-  return !(await hasConfiguredCurrentSourceChannel(input));
+  const provider =
+    normalizeMessageChannel(input.toolContext?.currentChannelProvider) ??
+    normalizeOptionalLowercaseString(input.toolContext?.currentChannelProvider);
+  if (
+    !provider ||
+    provider === INTERNAL_MESSAGE_CHANNEL ||
+    !isConfiguredChannel(input.cfg, provider) ||
+    !resolveOutboundChannelPlugin({ channel: provider, cfg: input.cfg, allowBootstrap: true })
+  ) {
+    return true;
+  }
+  const configuredChannels = await listConfiguredMessageChannels(input.cfg);
+  return !configuredChannels.some((channel) => channel === provider);
 }

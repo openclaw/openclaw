@@ -33,7 +33,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
   const {
     connection,
     runtimeParams,
-    preparedAuthBinding,
+    clientOptions,
     startupAuthAccountCacheKey,
     startupEnvApiKeyCacheKey,
     bundleMcpThreadConfig,
@@ -54,9 +54,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     appServer,
     pluginConfig,
     computerUseConfig,
-    startupClientAuthProfileId,
     runtimeArtifactRequest,
-    startupPreparedAuth,
     agentDir,
     sessionAgentId,
     effectiveWorkspace,
@@ -67,7 +65,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     resolveReviewerPolicyContext,
     resolveRuntimeOptionsForCurrentBinding,
     startupAuthProfileId,
-    startupAuthRequirement,
   } = connection;
   let pluginAppServer = withCodexAppServerFastModeServiceTier(appServer, runtimeParams);
   const loopDetectionEnabled =
@@ -90,11 +87,8 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       appServer: pluginAppServer,
       pluginConfig,
       computerUseConfig,
-      startupAuthProfileId: startupClientAuthProfileId,
-      startupAuthRequirement,
-      startupAuthBindingFingerprint: preparedAuthBinding?.fingerprint,
+      clientOptions,
       ...(runtimeArtifactRequest ? { runtimeArtifactRequest } : {}),
-      startupPreparedAuth,
       startupAuthAccountCacheKey,
       startupEnvApiKeyCacheKey,
       agentDir,

@@ -3,13 +3,10 @@ import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 
-type DraftSessionStartupIntent = {
-  params: SessionCreateParams;
+type DraftSessionStartupIntent = DraftStartupResumption & {
   scope: string;
-  startedAt: number;
   deadline: number;
   interrupted: boolean;
-  background: boolean;
 };
 
 /** A creation attempt the submission flow resumes after reconnecting. */

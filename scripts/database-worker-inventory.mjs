@@ -1483,6 +1483,16 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T2",
+        operations: [
+          "readStoredIdentityRowFromDatabase",
+          "isEmptyBootstrapIdentityTableMiss",
+          "insertStoredDeviceIdentityIfAbsent",
+        ],
+        evidence:
+          "Live callers use device-identity-async.ts through openclaw-state.worker.ts. Native callers are startup-local-cli-pairing.ts (server-runtime-state-prepare boot), node-host/runner.ts and startup-state-readiness.ts (node boot/connect CLI), config-preflight-snapshot.ts, doctor-device-pairing.ts, heartbeat-schedule.ts (Doctor cadence migration only), and state-migrations.device-identity*.ts (Doctor).",
+      },
+      {
+        tier: "T2",
         operations: ["repairInvalidStoredDeviceIdentity"],
         evidence:
           "src/infra/state-migrations.device-identity.ts:475 enforces doctorOnlyStateMigrations, then :494 → state-migrations.device-identity-repair.ts:64.",

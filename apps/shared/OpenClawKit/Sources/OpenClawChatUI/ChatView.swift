@@ -694,7 +694,7 @@ extension OpenClawChatView {
                 .equatable()
         }
 
-        if let text = viewModel.streamingAssistantText {
+        if let text = viewModel.liveAssistantText {
             let preparedText = ChatStreamingAssistantText(
                 sourceText: text,
                 includesThinking: self.displayOptions.contains(.reasoning))
@@ -1033,7 +1033,7 @@ extension OpenClawChatView {
     }
 
     private var hasVisibleStreamingAssistantText: Bool {
-        guard let text = self.viewModel.streamingAssistantText else { return false }
+        guard let text = self.viewModel.liveAssistantText else { return false }
         return AssistantTextParser.hasVisibleContent(
             in: text,
             includeThinking: self.displayOptions.contains(.reasoning))

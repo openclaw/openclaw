@@ -162,9 +162,20 @@ async function prepareOwnedModelsListResult({
   const preparedRuntimeAuthMaterializations = preparedProjectionOwner?.authMaterializations;
   // Capture authority again after acquisition and before hydrating a personal projection.
   draft?.assertCurrent();
-  const projectorParams: ModelCatalogDecisionParams = {
+  const decisionOwner = () => ({
     cfg,
     agentId,
+    metadataSnapshot,
+    preparedAuthStore,
+    accountCatalog: preparedProjectionOwner?.accountCatalog,
+    preparedRuntimeAuthModes,
+    preparedRuntimeAuthMaterializations,
+    pluginRegistry: preparedPluginRegistry,
+    isCurrent,
+    observationConfig: preparedProjectionOwner?.observationConfig,
+  });
+  const projectorParams: ModelCatalogDecisionParams = {
+    ...decisionOwner(),
     agentDir: sourceOwner?.agentDir,
     workspaceDir,
     snapshot: {
@@ -177,11 +188,6 @@ async function prepareOwnedModelsListResult({
         return snapshot.refreshFailed;
       },
     },
-    metadataSnapshot,
-    preparedAuthStore,
-    accountCatalog: preparedProjectionOwner?.accountCatalog,
-    preparedRuntimeAuthModes,
-    preparedRuntimeAuthMaterializations,
     // A complete catalog and its synthetic-auth probes cross the worker boundary together.
     preparedSyntheticAuthComplete: publishedOwner
       ? isPreparedModelCatalogFull(publishedOwner.modelCatalog)
@@ -193,9 +199,6 @@ async function prepareOwnedModelsListResult({
         : (draft?.owner ?? params.requesterProfileId),
     ...(view === "provider-config" ? {} : profiles),
     routeResolverFactory: params.routeResolverFactory,
-    pluginRegistry: preparedPluginRegistry,
-    isCurrent,
-    observationConfig: preparedProjectionOwner?.observationConfig,
   };
   const projector = await withCurrentReadAuthority(
     authority,
@@ -491,17 +494,8 @@ async function prepareOwnedModelsListResult({
       ...(providerOutcomes?.length ? { providerOutcomes } : {}),
     };
     const inventoryProjector = createModelCatalogDecisions({
-      cfg,
-      agentId,
+      ...decisionOwner(),
       snapshot: inventorySnapshot,
-      metadataSnapshot,
-      preparedAuthStore,
-      accountCatalog: preparedProjectionOwner?.accountCatalog,
-      preparedRuntimeAuthModes,
-      preparedRuntimeAuthMaterializations,
-      pluginRegistry: preparedPluginRegistry,
-      isCurrent,
-      observationConfig: preparedProjectionOwner?.observationConfig,
       ...(params.routeResolverFactory ? { routeResolverFactory: params.routeResolverFactory } : {}),
     });
     const inventory = await inventoryProjector.projectCatalog(authority);

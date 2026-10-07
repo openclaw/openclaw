@@ -282,6 +282,15 @@ export async function maybeRestartService(params: {
     }
     return "reconciliation-pending" as const;
   };
+  const assertRestartFailureCurrent = (failure: unknown) => {
+    if (hasCommandProcessCleanupError(failure)) {
+      throw failure;
+    }
+    assertCurrent();
+    if (failure instanceof UpdateCommandRecoveryPendingError) {
+      throw failure;
+    }
+  };
   const readServiceStartRefusal = async (failure: unknown) => {
     if (failure instanceof ServiceStartRefusalError) {
       return failure.refusal;
@@ -472,13 +481,7 @@ export async function maybeRestartService(params: {
                 : undefined;
           }
         } catch (err) {
-          if (hasCommandProcessCleanupError(err)) {
-            throw err;
-          }
-          assertCurrent();
-          if (err instanceof UpdateCommandRecoveryPendingError) {
-            throw err;
-          }
+          assertRestartFailureCurrent(err);
           if (!activation.definitionRecovery?.unverified) {
             const refusal = await readServiceStartRefusal(err);
             if (refusal) {
@@ -648,13 +651,7 @@ export async function maybeRestartService(params: {
         defaultRuntime.log("");
       }
     } catch (err) {
-      if (hasCommandProcessCleanupError(err)) {
-        throw err;
-      }
-      assertCurrent();
-      if (err instanceof UpdateCommandRecoveryPendingError) {
-        throw err;
-      }
+      assertRestartFailureCurrent(err);
       if (!activation.definitionRecovery?.unverified) {
         const refusal = await readServiceStartRefusal(err);
         if (refusal) {

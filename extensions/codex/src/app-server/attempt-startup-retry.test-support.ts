@@ -36,8 +36,11 @@ export function startFixtureAttempt(
     appServer: resolveCodexAppServerRuntimeOptions({ pluginConfig: fixture.pluginConfig }),
     pluginConfig: fixture.pluginConfig,
     computerUseConfig: resolveCodexComputerUseConfig({ pluginConfig: fixture.pluginConfig }),
-    startupAuthProfileId: undefined,
-    startupAuthBindingFingerprint: undefined,
+    clientOptions: {
+      authProfileId: undefined,
+      authBindingFingerprint: undefined,
+      authRequirement: undefined,
+    },
     startupAuthAccountCacheKey: undefined,
     startupEnvApiKeyCacheKey: undefined,
     agentDir,

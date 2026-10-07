@@ -317,10 +317,7 @@ export async function verifyUpdatedGateway(
             : "Gateway: restarted and verified.",
         ),
       );
-      for (const warning of pluginWarnings) {
-        defaultRuntime.log(theme.warn(warning.message));
-      }
-      for (const warning of channelWarnings) {
+      for (const warning of [...pluginWarnings.map((entry) => entry.message), ...channelWarnings]) {
         defaultRuntime.log(theme.warn(warning));
       }
     }

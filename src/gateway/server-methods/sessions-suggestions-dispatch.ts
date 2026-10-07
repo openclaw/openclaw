@@ -65,9 +65,7 @@ export async function dispatchSuggestion(params: {
     agentId: params.target.agentId,
     sessionId: params.expectedSessionId,
     message: params.suggestion.text,
-    ...(params.resolution === "queue"
-      ? { queueMode: "followup" as const }
-      : { queueMode: "steer" as const }),
+    queueMode: params.resolution === "queue" ? ("followup" as const) : ("steer" as const),
     idempotencyKey: `session-suggestion:${params.suggestion.id}`,
   };
   const captureResponse: RespondFn = (...args) => {

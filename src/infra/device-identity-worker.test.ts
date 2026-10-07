@@ -8,6 +8,7 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   loadDeviceIdentityIfPresentAsync,
   loadOrCreateDeviceIdentityAsync,
+  loadOrCreateProcessDeviceIdentityAsync,
 } from "./device-identity-async.js";
 import type { DeviceIdentityStoreOptions } from "./device-identity-store.js";
 import { signDevicePayload, verifyDeviceSignature } from "./device-identity.js";
@@ -31,6 +32,23 @@ async function withIdentityWorkerState(
 }
 
 describe("device identity shared worker", () => {
+  it("keeps process identities cached by database path and identity key", async () => {
+    await withIdentityWorkerState(async (options, stateDir) => {
+      const secondaryOptions = { ...options, identityKey: "secondary" };
+      const primary = await loadOrCreateProcessDeviceIdentityAsync(options);
+      const secondary = await loadOrCreateProcessDeviceIdentityAsync(secondaryOptions);
+      expect(await loadOrCreateProcessDeviceIdentityAsync(options)).toBe(primary);
+      expect(await loadOrCreateProcessDeviceIdentityAsync(secondaryOptions)).toBe(secondary);
+      expect(secondary.deviceId).not.toBe(primary.deviceId);
+      const claimPath = path.join(stateDir, "identity", "device.json.doctor-importing");
+      await fs.mkdir(path.dirname(claimPath), { recursive: true });
+      await fs.writeFile(claimPath, "synthetic retired identity");
+      await closeOpenClawStateDatabaseByPathAsync(options.path);
+      expect(await loadOrCreateProcessDeviceIdentityAsync(options)).toBe(primary);
+      expect(await fs.readFile(claimPath, "utf8")).toBe("synthetic retired identity");
+    });
+  });
+
   it("does not initialize an existing empty database during a read", async () => {
     await withIdentityWorkerState(async (options) => {
       const directory = path.dirname(options.path);

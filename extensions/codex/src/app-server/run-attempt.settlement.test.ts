@@ -30,7 +30,7 @@ import {
   turnStartResult,
 } from "./run-attempt-test-harness.js";
 import * as sharedClient from "./shared-client.js";
-import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
+import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 import { createInferenceReadyClientHarness, waitForHarnessRequest } from "./test-support.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";

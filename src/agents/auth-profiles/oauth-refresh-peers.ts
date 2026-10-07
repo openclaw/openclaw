@@ -26,6 +26,12 @@ export type OAuthRefreshPeerClaim = {
   original?: OAuthCredential;
 };
 
+type OAuthRefreshPeerTransition = {
+  profileId: string;
+  fence: OAuthCredential;
+  claims: readonly OAuthRefreshPeerClaim[];
+};
+
 export class OAuthRefreshPeerFenceError extends Error {
   readonly claims: OAuthRefreshPeerClaim[];
 
@@ -260,11 +266,7 @@ export async function fenceOAuthRefreshPeers(params: {
 }
 
 /** Restore pre-I/O peer claims; a retained fence becomes terminal on restore failure. */
-export function rollbackOAuthRefreshPeerClaims(params: {
-  profileId: string;
-  fence: OAuthCredential;
-  claims: readonly OAuthRefreshPeerClaim[];
-}): void {
+export function rollbackOAuthRefreshPeerClaims(params: OAuthRefreshPeerTransition): void {
   const unresolved: Error[] = [];
   for (const claim of params.claims.toReversed()) {
     if (!claim.original) {
@@ -315,13 +317,12 @@ export function rollbackOAuthRefreshPeerClaims(params: {
  * inherit the authoritative shared credential. Otherwise leave a terminal
  * marker so merged resolution cannot expose another account.
  */
-export function settleOAuthRefreshPeerClaims(params: {
-  profileId: string;
-  fence: OAuthCredential;
-  claims: readonly OAuthRefreshPeerClaim[];
-  authoritativeSharedCredential?: OAuthCredential;
-  replacement: OAuthCredential;
-}): void {
+export function settleOAuthRefreshPeerClaims(
+  params: OAuthRefreshPeerTransition & {
+    authoritativeSharedCredential?: OAuthCredential;
+    replacement: OAuthCredential;
+  },
+): void {
   let firstError: Error | undefined;
   for (const claim of params.claims) {
     try {
@@ -358,11 +359,7 @@ export function settleOAuthRefreshPeerClaims(params: {
 }
 
 /** Convert every exact peer fence into a terminal no-replay marker. */
-export function failOAuthRefreshPeerClaims(params: {
-  profileId: string;
-  fence: OAuthCredential;
-  claims: readonly OAuthRefreshPeerClaim[];
-}): void {
+export function failOAuthRefreshPeerClaims(params: OAuthRefreshPeerTransition): void {
   const failed = createFailedOAuthRefreshFence(params.fence);
   let firstError: Error | undefined;
   for (const claim of params.claims) {
