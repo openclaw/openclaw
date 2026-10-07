@@ -7282,7 +7282,6 @@
 ["src/gateway/channel-avatar-http.test.ts","./session-utils-store.js","cc4cf33f065cc24a8fa2a4575bdbde9fd9e3d4556c949b1ca76b8707676906fb",1]
 ["src/gateway/chat-attachments.test.ts","../media/media-probe.js","1776924cc9cbc8eee8b248dfbfdf44aafd3b29657018390e08a38efe5992fc8e",1]
 ["src/gateway/chat-display-projection.cold-imports.test.ts","../../packages/markdown-core/src/image-spans.js","011cd80f4c0a2988affed6565c7856e55533b725f8fdfdacadc1f0074ff28987",1]
-["src/gateway/chat-display-projection.provider-owner.test.ts","../plugins/provider-failover.js","832f42d0b0fb80adccffc6cb5a5a698446edc26e45a6b43cf4a7409807a004a0",1]
 ["src/gateway/client-bootstrap.test.ts","../infra/tls/gateway.js","0a95ca9bc4dbce3d896fe57ea75306bd26fd5f96358a4148d2a076078f5f8b06",1]
 ["src/gateway/client-bootstrap.test.ts","./credentials-secret-inputs.js","49073cf501a1947875755a60e718445564bc76e090da577730592ca6c8181abd",1]
 ["src/gateway/client.ssh.test.ts","../../packages/gateway-client/src/index.js","3cd3387b812c45baad8abe1c401046ac5cd0ee29d2dfd37bb51800f72ae297f3",1]
