@@ -50,6 +50,8 @@ rejected). Recognized read-only boolean flags of the default bins (for example
 `wc -l`, `tr -d`, `uniq -c`) are accepted, while unrecognized short flags stay
 fail-closed and fall through to the configured approval policy, including the
 automatic reviewer in `mode=auto`.
+`head` and `tail` also accept the digits-only count form (`head -1`, `tail -20`)
+as a standalone token; clusters such as `tail -5f` stay fail-closed.
 
 Denied flags by safe-bin profile:
 

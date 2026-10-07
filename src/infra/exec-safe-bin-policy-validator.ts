@@ -73,6 +73,12 @@ export function validateSafeBinArgv(
       i += 1;
       continue;
     }
+    // The obsolete count form (`head -1`, `tail -20`): a standalone digits-only token, never a
+    // cluster with other letters (`tail -5f` follows), and never a file operand.
+    if (profile.allowNumericCount === true && /^-\d+$/.test(token.raw)) {
+      i += 1;
+      continue;
+    }
 
     let nextIndex = i + 1;
     if (token.style === "long") {
