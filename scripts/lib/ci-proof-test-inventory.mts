@@ -3444,7 +3444,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/plugin-sdk/provider-tools.test.ts",
   "src/plugin-sdk/qa-runner-runtime.integration.test.ts",
   "src/plugin-sdk/session-store-runtime.conversation.test.ts",
-  "src/plugin-sdk/session-store-runtime.maintenance.test.ts",
   "src/plugin-sdk/session-store-runtime.test.ts",
   "src/plugin-sdk/session-transcript-mirror-runtime.test.ts",
   "src/plugin-sdk/session-transcript-runtime-visible-delta.test.ts",
