@@ -405,7 +405,6 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
           key: scope.sessionKey,
           label: "Current label",
           sharingRole: "viewer",
-          lastMessagePreview: undefined,
           activitySummary: expect.objectContaining({
             text: "Current summary",
             updatedAt: 3,
@@ -413,6 +412,7 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
           }),
         }),
       ]);
+      expect(result.sessions[0]?.lastMessagePreview).toBeUndefined();
       expect(projection.describe(query)?.membership.has(viewer.id)).toBe(false);
       expect(projection.dirtyRowCount).toBe(0);
       await backfill.publishSuccessor();
