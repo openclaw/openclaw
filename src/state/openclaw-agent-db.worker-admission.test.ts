@@ -192,6 +192,8 @@ it.each([
   "alias",
   "warm-additive-table",
   "warm-missing-index",
+  "warm-rollback",
+  "foreign-missing-index",
   "idle-missing-index",
   "idle-revoked",
 ] as const)("readmits a host handle with its retained worker after %s", async (change) => {
@@ -205,8 +207,10 @@ it.each([
     const database = await withOpenClawAgentDatabaseWrite(options, (opened) => {
       if (change.endsWith("additive-table")) {
         opened.db.exec("CREATE TABLE coldadmit_fixture(value TEXT)");
-      } else if (change.endsWith("missing-index")) {
+      } else if (change.endsWith("missing-index") && !change.startsWith("foreign-")) {
         opened.db.exec("DROP INDEX idx_agent_cache_expiry");
+      } else if (change === "warm-rollback") {
+        opened.db.exec("BEGIN; CREATE TABLE rolled_back_fixture(value TEXT); ROLLBACK;");
       }
       return opened;
     });
@@ -237,6 +241,14 @@ it.each([
       closeCachedOpenClawAgentDatabase(database, { eviction: true });
     }
     expect(database.db.isOpen).toBe(change.startsWith("warm-"));
+    if (change === "foreign-missing-index") {
+      const foreign = openNodeSqliteDatabase(database.path);
+      try {
+        foreign.exec("DROP INDEX idx_agent_cache_expiry");
+      } finally {
+        foreign.close();
+      }
+    }
     nativeClaim.assertCurrent();
     const observed = observeCallerSchemaInspections(database.path, acquisitionPath);
     try {
@@ -246,6 +258,7 @@ it.each([
           const facts = expectAdmittedSchemaObjects(reopened.db);
           expect(facts?.tables.has("coldadmit_fixture")).toBe(change.endsWith("additive-table"));
           expect(facts?.tables.has("session_key_contract")).toBe(true);
+          expect(facts?.tables.has("rolled_back_fixture")).toBe(false);
           expect(facts?.indexes).toContain("idx_agent_cache_expiry");
           return reopened.db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()?.count;
         },

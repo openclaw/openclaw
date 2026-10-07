@@ -6,14 +6,9 @@ import {
   readAccountStatusSnapshot,
   resolveEnabledConfiguredAccountId,
 } from "openclaw/plugin-sdk/status-helpers";
+import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const A2A_ACCOUNT_STATUS_FIELDS = ["unresolvedPeers", "unresolvedOutboundPeers"] as const;
-
-function readPeerNames(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
-    : [];
-}
 
 /**
  * Surfaces peers that config loading left unusable because a `${VAR}` credential
@@ -32,7 +27,7 @@ export function collectA2aStatusIssues(accounts: ChannelAccountSnapshot[]): Chan
     if (account.enabled === false || typeof accountId !== "string" || !accountId) {
       continue;
     }
-    const inbound = readPeerNames(account.unresolvedPeers);
+    const inbound = filterStringEntries(account.unresolvedPeers).filter(Boolean);
     if (inbound.length > 0) {
       issues.push({
         channel: "a2a",
@@ -42,7 +37,7 @@ export function collectA2aStatusIssues(accounts: ChannelAccountSnapshot[]): Chan
         fix: `Set the environment variable referenced by channels.a2a.peers.<name>.token for ${inbound.join(", ")}, then reload or restart the gateway.`,
       });
     }
-    const outbound = readPeerNames(account.unresolvedOutboundPeers);
+    const outbound = filterStringEntries(account.unresolvedOutboundPeers).filter(Boolean);
     if (outbound.length > 0) {
       issues.push({
         channel: "a2a",

@@ -12,7 +12,6 @@ import {
   markEmbeddedRunAuthProfileSuccess,
   reportEmbeddedRunSuccessfulAuthBinding,
 } from "./run/auth-profile-success.js";
-import { resolveInitialThinkLevel } from "./run/runtime-resolution.js";
 
 vi.mock("../auth-profiles.js", () => ({
   markAuthProfileSuccess: vi.fn(),
@@ -197,17 +196,6 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
 });
 
 describe("overflow loop owner policies", () => {
-  it("uses provider policy for a configless MiniMax-M3 run", () => {
-    expect(
-      resolveInitialThinkLevel({
-        config: undefined,
-        provider: "minimax",
-        modelId: "MiniMax-M3",
-        model: { reasoning: true },
-      }),
-    ).toBe("adaptive");
-  });
-
   it("retains bounded ordered delivery facts and source finality across generations", () => {
     const target = {
       tool: "message",

@@ -1736,7 +1736,6 @@ describe("scripts/test-projects changed-target routing", () => {
       [`${failoverRoot}/failover-classification.corpus.test.ts`, "agents-core-isolated"],
       [`${failoverRoot}/provider-structured-signals.test.ts`, "agents-core-isolated"],
       [`${runtimeRoot}/materialize-model.test.ts`, "agents-support"],
-      [`${embeddedRoot}/run.inherited-auth-owner.test.ts`, "infra"],
       [
         `${embeddedRoot}/run.incomplete-turn.classification.test.ts`,
         "agents-embedded-agent-incomplete-turn",

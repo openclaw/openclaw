@@ -127,6 +127,24 @@ async function runCliIsolatedCompletion(
     async ({ dir }) => {
       const { runCliAgent } = await import("./cli-runner.runtime.js");
       request.assertCurrent?.();
+      const { cliBackendAcceptsAuthProfileForwarding, resolveCliExecutionAuthProfileId } =
+        await import("./cli-execution-auth.js");
+      request.assertCurrent?.();
+      // Fresh completions use the same account order as new CLI sessions.
+      const authProfileId = cliBackendAcceptsAuthProfileForwarding({
+        provider,
+        config: request.config,
+        agentId: request.agentId,
+      })
+        ? resolveCliExecutionAuthProfileId({
+            cliExecutionProvider: provider,
+            authProfileProvider: modelProvider,
+            config: request.config,
+            agentDir: request.agentDir,
+            selected: { authProfileId: request.authProfileId },
+          })
+        : request.authProfileId;
+      request.assertCurrent?.();
       const sessionId = `isolated-completion-${randomUUID()}`;
       const config = request.config;
       const preparedRunAdmission = prepareSystemAgentRunAdmission(
@@ -156,9 +174,7 @@ async function runCliIsolatedCompletion(
           modelProvider,
           requesterModel: { provider: modelProvider, model: request.model },
           model: request.model,
-          // The CLI runner treats a supplied profile as exact; it auto-selects only
-          // when this field is absent. This path has no embedded-run fallback loop.
-          authProfileId: request.authProfileId,
+          authProfileId,
           thinkLevel: request.thinkLevel,
           streamParams: request.streamParams,
           abortSignal: request.abortSignal,

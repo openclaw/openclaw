@@ -21,7 +21,6 @@ import {
   deletePendingCodexDiagnosticsConfirmation,
   formatCodexDiagnosticsTargetLines,
   formatCodexDiagnosticsUploadResult,
-  formatDiagnosticsUsage,
   normalizeDiagnosticsReason,
   parseDiagnosticsArgs,
   readCodexDiagnosticsConfirmationScope,
@@ -54,7 +53,6 @@ export async function handleCodexDiagnosticsFeedback(
   context: PluginCommandContext,
   pluginConfig: unknown,
   args: string,
-  commandPrefix: string,
 ): Promise<PluginCommandResult> {
   const ctx = { ...context };
   if (ctx.senderIsOwner !== true) {
@@ -62,7 +60,13 @@ export async function handleCodexDiagnosticsFeedback(
   }
   const parsed = parseDiagnosticsArgs(args);
   if (parsed.action === "usage") {
-    return { text: formatDiagnosticsUsage(commandPrefix) };
+    return {
+      text: [
+        "Usage: /codex diagnostics [note]",
+        "Usage: /codex diagnostics confirm <token>",
+        "Usage: /codex diagnostics cancel <token>",
+      ].join("\n"),
+    };
   }
   if (parsed.action === "confirm") {
     return {
@@ -92,14 +96,13 @@ export async function handleCodexDiagnosticsFeedback(
       text: previewCodexDiagnosticsFeedbackApproval(targets, ctx, parsed.note),
     };
   }
-  return requestCodexDiagnosticsFeedbackApproval(targets, ctx, parsed.note, commandPrefix);
+  return requestCodexDiagnosticsFeedbackApproval(targets, ctx, parsed.note);
 }
 
 function requestCodexDiagnosticsFeedbackApproval(
   targets: CodexDiagnosticsTarget[],
   ctx: PluginCommandContext,
   note: string,
-  commandPrefix: string,
 ): PluginCommandResult {
   const now = Date.now();
   const cooldownMessage = readCodexDiagnosticsTargetsCooldownMessage(targets, ctx, now);
@@ -122,8 +125,8 @@ function requestCodexDiagnosticsFeedbackApproval(
     ...readCodexDiagnosticsConfirmationScope(ctx),
     now,
   });
-  const confirmCommand = `${commandPrefix} confirm ${token}`;
-  const cancelCommand = `${commandPrefix} cancel ${token}`;
+  const confirmCommand = `/codex diagnostics confirm ${token}`;
+  const cancelCommand = `/codex diagnostics cancel ${token}`;
   const displayReason = reason ? formatCodexDisplayText(reason) : undefined;
   const lines = [
     targets.length === 1 ? "Codex runtime thread detected." : "Codex runtime threads detected.",

@@ -16,6 +16,7 @@ import { isUpdateDoctorLintPass } from "../commands/doctor/shared/update-phase.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -287,12 +288,13 @@ export async function collectRuntimeToolSchemaFindings(
         }
       }
     }
+    const toolRegistry = inspection?.registry ?? createEmptyPluginRegistry();
     for (const frame of frames) {
       const { agentId, agentDir, workspaceDir, modelRef, model } = frame;
       const collectForAgent = async () => {
         findings.push(
           ...(await withPluginRuntimeRegistryScope(inspection?.registry, () =>
-            collectAgentRuntimeToolSchemaFindings({ ...frame, cfg }),
+            collectAgentRuntimeToolSchemaFindings({ ...frame, cfg, toolRegistry }),
           )),
         );
         if (!shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true })) {

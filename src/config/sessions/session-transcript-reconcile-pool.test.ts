@@ -269,8 +269,8 @@ it.each(["complete", "native-exit"] as const)(
           database.db.prepare("SELECT message_id, text FROM session_transcript_fts").all(),
         ).toEqual([{ message_id: options.agentId, text: options.agentId }]);
       }
-      // The canonical executor retains one idle generation across both completed owners.
-      expect(retainedCanonicalLeases).toHaveLength(1);
+      // Closing reconciliation releases planner leases while both canonical executors stay idle.
+      expect(retainedCanonicalLeases).toHaveLength(2);
       const late = vi.fn(async () => undefined);
       for (const captured of [generation, duringClose]) {
         await expect(

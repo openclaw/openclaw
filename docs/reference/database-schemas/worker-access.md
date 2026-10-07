@@ -916,9 +916,14 @@ Local DDL revokes the shared schema proof, including rolled-back DDL. Revoked
 facts on live handles and host-handle eviction return to the retained worker for admission and
 publication; stale proof never falls back to schema scans on the Gateway thread.
 The worker validates changed schemas before publishing replacement facts while
-retaining its native generation. File replacement and revoked integrity still
-require fresh admission. Mutable agent ownership is checked again on acquisition
-and when each connection opens.
+retaining its native generation. Ordinary execution reuses completed preparation;
+explicit host readmission and startup recovery still request the worker's current
+validation. Re-adopting an unchanged schema preserves its facts identity, so
+standing-intent bindings skip already-covered additive DDL. A foreign schema change
+observed by the next unpinned freshness check also revokes the shared receipt;
+data-only commits preserve schema facts. File replacement and revoked integrity
+still require fresh admission. Mutable agent ownership is checked again on
+acquisition and when each connection opens.
 Cloud turns retain the admitted handle through execution and finalization, so
 their existing synchronous transcript-authority checks cannot become cold openers
 after an idle eviction.

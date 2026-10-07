@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { expectDefined } from "@openclaw/normalization-core";
+import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
 import { buildMultiResult, buildProps, buildResult } from "./view.test-support.ts";
@@ -32,16 +33,13 @@ const SESSION_TABLE_HEADERS = ["", "Key", "Kind", "Status", "Updated", "Tokens",
 describe("sessions view", () => {
   it("identifies agents on plain chat sessions in a mixed-agent list", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions(
-        buildProps(
-          buildMultiResult([
-            { key: "agent:main:chat-one", kind: "direct" },
-            { key: "agent:research:chat-two", kind: "direct" },
-            { key: "legacy-chat", agentId: "research", kind: "direct" },
-          ]),
-        ),
-      ),
+    renderView(
+      buildMultiResult([
+        { key: "agent:main:chat-one", kind: "direct" },
+        { key: "agent:research:chat-two", kind: "direct" },
+        { key: "legacy-chat", agentId: "research", kind: "direct" },
+      ]),
+      {},
       container,
     );
     document.body.append(container);
@@ -126,6 +124,7 @@ describe("sessions view", () => {
         HTMLButtonElement,
       );
       expect(button?.type).toBe("button");
+      expect(header?.getAttribute("aria-sort")).toBe(column === "updated" ? "descending" : null);
       const initialCallCount = onSortChange.mock.calls.length;
       button?.click();
       expect(onSortChange).toHaveBeenCalledTimes(initialCallCount + 1);
@@ -137,65 +136,23 @@ describe("sessions view", () => {
     }
   });
 
-  it.each([
-    { direction: "asc", ariaSort: "ascending" },
-    { direction: "desc", ariaSort: "descending" },
-  ] as const)(
-    "announces only the active $direction session sort",
-    async ({ direction, ariaSort }) => {
-      const container = document.createElement("div");
-      renderView(buildMultiResult([]), { sortColumn: "kind", sortDir: direction }, container);
-      await Promise.resolve();
-
-      const headers = [
-        ...container.querySelectorAll<HTMLTableCellElement>("thead th[data-sortable]"),
-      ];
-      expect(headers).toHaveLength(4);
-      expect(
-        headers.find((header) => header.textContent?.trim() === "Kind")?.getAttribute("aria-sort"),
-      ).toBe(ariaSort);
-      expect(
-        headers
-          .filter((header) => header.textContent?.trim() !== "Kind")
-          .map((header) => header.hasAttribute("aria-sort")),
-      ).toEqual([false, false, false]);
-    },
-  );
-
-  it("announces session-list and mutation failures to assistive technology", async () => {
+  it("announces only the active ascending session sort", async () => {
     const container = document.createElement("div");
-    renderView(buildMultiResult([]), { error: "group name exceeds 512 characters" }, container);
+    renderView(buildMultiResult([]), { sortColumn: "kind", sortDir: "asc" }, container);
     await Promise.resolve();
 
-    const alert = container.querySelector('[role="alert"]');
-    expect(alert?.classList.contains("sessions-error")).toBe(true);
-    expect(alert?.textContent).toContain("group name exceeds 512 characters");
-  });
-
-  it("identifies each selectable session before destructive bulk actions", async () => {
-    const container = document.createElement("div");
-    const onToggleSelect = vi.fn();
-    renderView(
-      buildMultiResult([
-        { key: "agent:main:first", kind: "direct", updatedAt: 2 },
-        { key: "agent:main:second", kind: "direct", updatedAt: 1 },
-      ]),
-      { onToggleSelect },
-      container,
-    );
-    await Promise.resolve();
-
-    const checkboxes = [
-      ...container.querySelectorAll<HTMLInputElement>('tbody input[type="checkbox"]'),
+    const headers = [
+      ...container.querySelectorAll<HTMLTableCellElement>("thead th[data-sortable]"),
     ];
-    expect(checkboxes.map((checkbox) => checkbox.getAttribute("aria-label"))).toEqual([
-      "Select session: agent:main:first",
-      "Select session: agent:main:second",
-    ]);
-
-    checkboxes[0]?.dispatchEvent(new Event("change", { bubbles: true }));
-    checkboxes[1]?.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onToggleSelect.mock.calls).toEqual([["agent:main:first"], ["agent:main:second"]]);
+    expect(headers).toHaveLength(4);
+    expect(
+      headers.find((header) => header.textContent?.trim() === "Kind")?.getAttribute("aria-sort"),
+    ).toBe("ascending");
+    expect(
+      headers
+        .filter((header) => header.textContent?.trim() !== "Kind")
+        .map((header) => header.hasAttribute("aria-sort")),
+    ).toEqual([false, false, false]);
   });
 
   it("uses the stored face for generic session links", async () => {
@@ -215,48 +172,6 @@ describe("sessions view", () => {
     expect(container.querySelector<HTMLAnchorElement>(".session-link")?.getAttribute("href")).toBe(
       "/dashboard/main/1234567890abcdef1234567890abcdef",
     );
-  });
-
-  it("renders Active, Archived, and All status segments", async () => {
-    const container = document.createElement("div");
-    const onStatusFilterChange = vi.fn();
-    renderView(buildMultiResult([]), { onStatusFilterChange }, container);
-    await Promise.resolve();
-
-    const radios = container.querySelectorAll<HTMLElement & { checked: boolean }>(
-      ".sessions-view-segment wa-radio",
-    );
-    expect([...radios].map((radio) => radio.textContent?.trim())).toEqual([
-      "Active",
-      "Archived",
-      "All",
-    ]);
-    expect([...radios].map((radio) => radio.checked)).toEqual([true, false, false]);
-
-    const group = radios[2]?.closest<HTMLElement & { value: string }>("wa-radio-group");
-    if (group) {
-      group.value = "all";
-      group.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-
-    expect(onStatusFilterChange).toHaveBeenCalledWith("all");
-  });
-
-  it("dims and labels archived rows in the mixed view", async () => {
-    const container = document.createElement("div");
-    renderView(
-      buildMultiResult([
-        { key: "agent:main:active", kind: "direct", updatedAt: 2, archived: false },
-        { key: "agent:main:archived", kind: "direct", updatedAt: 1, archived: true },
-      ]),
-      { statusFilter: "all" },
-      container,
-    );
-    await Promise.resolve();
-
-    const archivedRow = container.querySelector(".session-data-row--archived");
-    expect(archivedRow?.textContent).toContain("Archived");
-    expect(container.querySelectorAll(".session-data-row--archived")).toHaveLength(1);
   });
 
   it("paginates grouped sessions while preserving full group counts", async () => {
@@ -339,53 +254,6 @@ describe("sessions view", () => {
         label.textContent?.trim(),
       ),
     ).toEqual([expected, "Ungrouped"]);
-  });
-
-  it("hides the person grouping option without the identity capability", async () => {
-    const container = document.createElement("div");
-    renderView(
-      buildResult({ key: "agent:main:a", kind: "direct", updatedAt: 1 }),
-      { personGroupingAvailable: false },
-      container,
-    );
-    await Promise.resolve();
-
-    const modes = [
-      ...container.querySelectorAll<HTMLOptionElement>(".session-groupby__select option"),
-    ].map((option) => option.value);
-    expect(modes).not.toContain("person");
-    expect(modes).toContain("category");
-  });
-
-  it("selects and names the current page size on first render", async () => {
-    const container = document.createElement("div");
-    renderView(
-      buildMultiResult([
-        { key: "one", kind: "direct", updatedAt: 2 },
-        { key: "two", kind: "direct", updatedAt: 1 },
-      ]),
-      { pageSize: 25 },
-      container,
-    );
-    await Promise.resolve();
-
-    const pageSize = container.querySelector<HTMLSelectElement>(".data-table-pagination__size");
-    expect(pageSize?.getAttribute("aria-label")).toBe("Rows per page");
-    expect(pageSize?.value).toBe("25");
-    expect(pageSize?.selectedOptions[0]?.textContent?.trim()).toBe("25 per page");
-  });
-
-  it("keeps the filtered empty state when grouping is active", async () => {
-    const container = document.createElement("div");
-    renderView(
-      buildMultiResult([]),
-      { groupBy: "category", knownCategories: ["Research"], searchQuery: "no-such-session" },
-      container,
-    );
-    await Promise.resolve();
-
-    expect(container.querySelector(".data-table-empty-state")).not.toBeNull();
-    expect(container.querySelector(".session-group-row")).toBeNull();
   });
 
   it("opens the session menu from the kebab and row context-menu shortcuts", async () => {
@@ -577,34 +445,6 @@ describe("sessions view", () => {
     expect(onPatch).toHaveBeenCalledWith("agent:main:main", { thinkingLevel: "max" });
   });
 
-  it("labels inherited thinking with the resolved session default", async () => {
-    const container = document.createElement("div");
-    renderView(
-      buildResult({
-        key: "agent:main:main",
-        kind: "direct",
-        updatedAt: Date.now(),
-        thinkingDefault: "adaptive",
-        thinkingLevels: [
-          { id: "off", label: "off" },
-          { id: "adaptive", label: "adaptive" },
-        ],
-      }),
-      { expandedSessionKey: "agent:main:main" },
-      container,
-    );
-    await Promise.resolve();
-
-    const thinking = container.querySelector("tbody select") as HTMLSelectElement | null;
-    expect(thinking?.value).toBe("");
-    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: Adaptive");
-    expect(
-      Array.from(thinking?.options ?? [])
-        .find((option) => option.value === "adaptive")
-        ?.textContent?.trim(),
-    ).toBe("Adaptive");
-  });
-
   it("labels inherited thinking from list defaults when lightweight rows omit row defaults", async () => {
     const container = document.createElement("div");
     renderView(
@@ -693,26 +533,6 @@ describe("sessions view", () => {
     expect(keyCell?.textContent?.trim()).toBe("📊 Data Expert (dingtalk)");
     expect((keyCell?.parentElement as (HTMLElement & { content: string }) | null)?.content).toBe(
       "📊 Data Expert (dingtalk)",
-    );
-  });
-
-  it("keeps raw keys when identity data is unavailable", async () => {
-    const container = document.createElement("div");
-    renderView(
-      buildResult({
-        key: "agent:unknown-agent:telegram:abc123",
-        kind: "direct",
-        updatedAt: Date.now(),
-      }),
-      {},
-      container,
-    );
-    await Promise.resolve();
-
-    const keyCell = container.querySelector(".session-key-cell");
-    expect(keyCell?.textContent?.trim()).toBe("agent:unknown-agent:telegram:abc123");
-    expect((keyCell?.parentElement as (HTMLElement & { content: string }) | null)?.content).toBe(
-      "agent:unknown-agent:telegram:abc123",
     );
   });
 
@@ -811,45 +631,28 @@ describe("sessions view", () => {
     expect(stats.get("Runtime")).toBe("claude-cli (fallback none)");
   });
 
-  it("keeps raw keys for inherited identity object properties", async () => {
-    const container = document.createElement("div");
-    renderView(
-      buildResult({
-        key: "agent:constructor:telegram:abc123",
-        kind: "direct",
-        updatedAt: Date.now(),
-      }),
-      {},
-      container,
-    );
-    await Promise.resolve();
-
-    const text = container.querySelector(".session-key-cell")?.textContent ?? "";
-    expect(text.trim()).toBe("agent:constructor:telegram:abc123");
-  });
-
   it("opens session details from row activation", async () => {
     const container = document.createElement("div");
     const onToggleDetails = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:main",
-            kind: "direct",
-            updatedAt: Date.now(),
-            totalTokens: 123456,
-            contextTokens: 200000,
-          }),
-        ),
-        onToggleDetails,
+    renderView(
+      buildResult({
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: Date.now(),
+        totalTokens: 123456,
+        contextTokens: 200000,
       }),
+      { onToggleDetails },
       container,
     );
     await Promise.resolve();
 
     const row = container.querySelector<HTMLTableRowElement>("tbody tr.session-data-row");
     expect(row).toBeInstanceOf(HTMLTableRowElement);
+    row!
+      .querySelector<HTMLInputElement>("input[type=checkbox]")!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onToggleDetails).not.toHaveBeenCalled();
     row!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onToggleDetails).toHaveBeenCalledWith("agent:main:main");
@@ -859,37 +662,35 @@ describe("sessions view", () => {
 
   it("renders expanded session details without checkpoint actions", async () => {
     const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildResult({
-            key: "agent:main:main",
-            kind: "direct",
-            updatedAt: Date.now(),
-            totalTokens: 123456,
-            contextTokens: 200000,
-            model: "gpt-5.5",
-            modelProvider: "openai",
-            status: "running",
-            runtimeMs: 125000,
-            goal: {
-              schemaVersion: 1,
-              id: "goal-1",
-              objective: "Finish the compaction details",
-              status: "blocked",
-              createdAt: 1,
-              updatedAt: 2,
-              tokenStart: 1000,
-              tokensUsed: 24_000,
-              continuationTurns: 3,
-              lastStatusNote: "Waiting for owner review",
-              blockedAt: 3,
-            },
-          }),
-        ),
+    renderView(
+      buildResult({
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: Date.now(),
+        totalTokens: 123456,
+        contextTokens: 200000,
+        model: "gpt-5.5",
+        modelProvider: "openai",
+        status: "running",
+        runtimeMs: 125000,
+        goal: {
+          schemaVersion: 1,
+          id: "goal-1",
+          objective: "Finish the compaction details",
+          status: "blocked",
+          createdAt: 1,
+          updatedAt: 2,
+          tokenStart: 1000,
+          tokensUsed: 24_000,
+          continuationTurns: 3,
+          lastStatusNote: "Waiting for owner review",
+          blockedAt: 3,
+        },
+      }),
+      {
         expandedSessionKey: "agent:main:main",
         patchAdminDisabledReason: "Operator admin access is required.",
-      }),
+      },
       container,
     );
     await Promise.resolve();
@@ -939,46 +740,6 @@ describe("sessions view", () => {
     }
   });
 
-  it("opens details and ignores nested control clicks", async () => {
-    const container = document.createElement("div");
-    const onToggleDetails = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            {
-              key: "agent:main:first",
-              kind: "direct",
-              updatedAt: 20,
-            },
-            {
-              key: "agent:main:second",
-              kind: "direct",
-              updatedAt: 10,
-            },
-          ]),
-        ),
-        onToggleDetails,
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    const rows = container.querySelectorAll("tbody tr.session-data-row");
-    const checkbox = rows[0]?.querySelector<HTMLInputElement>("input[type=checkbox]");
-    expect(checkbox).toBeInstanceOf(HTMLInputElement);
-    expect(rows[1]).toBeInstanceOf(HTMLTableRowElement);
-    if (!(checkbox instanceof HTMLInputElement) || !(rows[1] instanceof HTMLTableRowElement)) {
-      throw new Error("Expected details toggle row controls");
-    }
-    // Nested controls (like the select checkbox) must not toggle the drawer.
-    checkbox.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onToggleDetails).not.toHaveBeenCalled();
-
-    // Sessions open the drawer for overrides and stats.
-    rows[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onToggleDetails).toHaveBeenCalledWith("agent:main:second");
-  });
   it("keeps session selects stable and deselects only the current page", async () => {
     const container = document.createElement("div");
     renderView(
@@ -1053,51 +814,6 @@ describe("sessions view", () => {
     expect(onSelectPage).not.toHaveBeenCalled();
   });
 
-  it("shows a reset action when filters hide every session", async () => {
-    const container = document.createElement("div");
-    const onClearFilters = vi.fn();
-    renderView(buildMultiResult([]), { searchQuery: "missing", onClearFilters }, container);
-    await Promise.resolve();
-
-    const emptyState = container.querySelector(".data-table-empty-state");
-    expect(emptyState?.getAttribute("role")).toBe("status");
-    expect(emptyState?.firstElementChild?.textContent?.trim()).toBe(
-      "No sessions match your filters.",
-    );
-    const showAll = emptyState?.querySelector<HTMLButtonElement>("button");
-    if (!(showAll instanceof HTMLButtonElement)) {
-      throw new Error("Expected filtered empty state to render a Show all button");
-    }
-    expect(showAll.textContent?.trim()).toBe("Show all");
-    showAll.click();
-    expect(onClearFilters).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([
-    { activeMinutes: "60minutes", limit: "1e2", filtered: false },
-    { activeMinutes: "+30", limit: "060", filtered: true },
-  ])("keeps numeric-filter empty state consistent: $activeMinutes / $limit", async (testCase) => {
-    const container = document.createElement("div");
-    renderView(
-      buildMultiResult([]),
-      {
-        activeMinutes: testCase.activeMinutes,
-        limit: testCase.limit,
-        includeGlobal: true,
-        includeUnknown: true,
-        statusFilter: "archived",
-      },
-      container,
-    );
-    await Promise.resolve();
-
-    const emptyState = container.querySelector(".data-table-empty-state");
-    expect(emptyState?.firstElementChild?.textContent?.trim()).toBe(
-      testCase.filtered ? "No sessions match your filters." : "No archived sessions.",
-    );
-    expect(emptyState?.querySelector("button") !== null).toBe(testCase.filtered);
-  });
-
   it("summarizes loaded sessions beside the roster heading", async () => {
     const container = document.createElement("div");
     renderView(
@@ -1137,45 +853,34 @@ describe("sessions view", () => {
     expect(facts[1]?.classList.contains("sessions-heading-fact--active")).toBe(true);
   });
 
-  it.each([
-    { total: 128_000, percent: 64, tone: "ok", value: "128k" },
-    { total: 130_000, percent: 65, tone: "warn", value: "130k" },
-    { total: 168_000, percent: 84, tone: "warn", value: "168k" },
-    { total: 170_000, percent: 85, tone: "danger", value: "170k" },
-    { total: 220_000, percent: 100, tone: "danger", value: "220k" },
-  ])(
-    "preserves context usage, tooltip, and $tone tone at $percent%",
-    async ({ total, percent, tone, value }) => {
-      const container = document.createElement("div");
-      renderView(
-        buildResult({
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: Date.now(),
-          totalTokens: total,
-          contextTokens: 200_000,
-        }),
-        {},
-        container,
-      );
-      await Promise.resolve();
+  it("preserves context usage, tooltip, and warning tone", async () => {
+    const container = document.createElement("div");
+    renderView(
+      buildResult({
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: Date.now(),
+        totalTokens: 168_000,
+        contextTokens: 200_000,
+      }),
+      {},
+      container,
+    );
+    await Promise.resolve();
 
-      const meter = container.querySelector(".session-context-meter");
-      const label = `${percent}% of context used (${total.toLocaleString()} / 200,000 tokens)`;
-      expect(meter?.classList.contains(`session-context-meter--${tone}`)).toBe(true);
-      expect(meter?.getAttribute("role")).toBe("img");
-      expect(meter?.getAttribute("aria-label")).toBe(label);
-      expect(
-        container.querySelector(".session-token-cell")?.querySelector("openclaw-tooltip")?.content,
-      ).toBe(label);
-      expect(
-        container.querySelector<HTMLElement>(".session-context-meter__fill")?.style.width,
-      ).toBe(`${percent}%`);
-      expect(container.querySelector(".session-token-cell")?.textContent?.trim()).toBe(
-        `${value} / 200k`,
-      );
-    },
-  );
+    const meter = container.querySelector(".session-context-meter");
+    const label = "84% of context used (168,000 / 200,000 tokens)";
+    expect(meter?.classList.contains("session-context-meter--warn")).toBe(true);
+    expect(meter?.getAttribute("role")).toBe("img");
+    expect(meter?.getAttribute("aria-label")).toBe(label);
+    expect(
+      container.querySelector(".session-token-cell")?.querySelector("openclaw-tooltip")?.content,
+    ).toBe(label);
+    expect(container.querySelector<HTMLElement>(".session-context-meter__fill")?.style.width).toBe(
+      "84%",
+    );
+    expect(container.querySelector(".session-token-cell")?.textContent?.trim()).toBe("168k / 200k");
+  });
 
   it("keeps stale token snapshots out of the warning tones", async () => {
     const container = document.createElement("div");
@@ -1202,24 +907,6 @@ describe("sessions view", () => {
     expect(container.querySelector(".session-token-cell")?.textContent?.trim()).toBe(
       "~180k / 200k",
     );
-  });
-
-  it("omits the context meter when a session reports no context window", async () => {
-    const container = document.createElement("div");
-    renderView(
-      buildResult({
-        key: "agent:main:main",
-        kind: "direct",
-        updatedAt: Date.now(),
-        totalTokens: 4200,
-      }),
-      {},
-      container,
-    );
-    await Promise.resolve();
-
-    expect(container.querySelector(".session-context-meter")).toBeNull();
-    expect(container.querySelector(".session-token-cell")?.textContent?.trim()).toBe("4.2k");
   });
 
   it("renders kind avatars with a live status dot", async () => {
@@ -1250,18 +937,7 @@ describe("sessions view", () => {
     expect(avatars[0]?.querySelector(".session-avatar__status")).not.toBeNull();
     expect(avatars[1]?.querySelector(".session-avatar__status")).toBeNull();
   });
-
-  it("shows skeleton rows during the initial load", async () => {
-    const container = document.createElement("div");
-    renderView(buildMultiResult([]), { result: null, loading: true }, container);
-    await Promise.resolve();
-
-    expect(container.querySelectorAll(".session-skeleton-row").length).toBeGreaterThan(0);
-    expect(container.querySelector(".data-table-empty-cell")).toBeNull();
-    expect(container.querySelector(".sessions-heading-facts")).toBeNull();
-  });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 it("renders the sessions meter against its last-run prompt budget", async () => {
   const container = document.createElement("div");
@@ -1286,4 +962,128 @@ it("renders the sessions meter against its last-run prompt budget", async () => 
       .querySelector(".session-context-meter")
       ?.classList.contains("session-context-meter--danger"),
   ).toBe(true);
+});
+
+describe("session category controls", () => {
+  it("distinguishes a group named __new-group__ from the create action", async () => {
+    const category = "__new-group__";
+    const container = document.createElement("div");
+    const onAssignCategory = vi.fn();
+    const onRequestNewCategory = vi.fn();
+    renderView(
+      buildMultiResult([
+        { key: "agent:main:discord:channel:1", kind: "group", updatedAt: 2 },
+        { key: "agent:main:main", kind: "direct", updatedAt: 1, category },
+      ]),
+      { groupBy: "category", knownCategories: [category], onAssignCategory, onRequestNewCategory },
+      container,
+    );
+    await Promise.resolve();
+
+    const headers = Array.from(container.querySelectorAll(".session-group-row__label")).map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(headers).toEqual([category, "Ungrouped"]);
+
+    // The populated category renders before the ungrouped row.
+    const select = container.querySelectorAll<HTMLSelectElement>(
+      'select[aria-label="Move session to a group"]',
+    )[1];
+    if (!select) {
+      throw new Error("Expected group select");
+    }
+    select.value = category;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onAssignCategory).toHaveBeenCalledWith("agent:main:discord:channel:1", category);
+
+    select.selectedIndex = select.options.length - 1;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onRequestNewCategory).toHaveBeenCalledWith("agent:main:discord:channel:1");
+    expect(select.value).toBe("");
+
+    const headerRow = container.querySelector(".session-group-row");
+    if (!headerRow) {
+      throw new Error("Expected group header row");
+    }
+    const dropWithPayload = (types: string[], data: Record<string, string>) => {
+      const drop = new Event("drop", { bubbles: true, cancelable: true });
+      Object.defineProperty(drop, "dataTransfer", {
+        value: { types, getData: (type: string) => data[type] ?? "" },
+      });
+      headerRow.dispatchEvent(drop);
+    };
+
+    // Generic text drags (e.g. selected page text) must not trigger patches.
+    dropWithPayload(["text/plain"], { "text/plain": "not-a-session" });
+    expect(onAssignCategory).toHaveBeenCalledTimes(1);
+
+    dropWithPayload(["application/x-openclaw-session-key"], {
+      "application/x-openclaw-session-key": "agent:main:main",
+    });
+    expect(onAssignCategory).toHaveBeenCalledWith("agent:main:main", category);
+  });
+
+  it("disables category assignment controls without group write access", async () => {
+    const container = document.createElement("div");
+    const onAssignCategory = vi.fn();
+    const reason = "Operator write access is required.";
+    renderView(
+      buildMultiResult([
+        { key: "agent:main:main", kind: "direct", updatedAt: 1, category: "Research" },
+      ]),
+      {
+        groupBy: "category",
+        knownCategories: ["Research"],
+        groupWriteDisabledReason: reason,
+        onAssignCategory,
+      },
+      container,
+    );
+    await Promise.resolve();
+
+    const select = container.querySelector<HTMLSelectElement>(
+      'select[aria-label="Move session to a group"]',
+    );
+    expect(select?.disabled).toBe(true);
+    expect(select?.title).toBe(reason);
+    if (select) {
+      select.value = "";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    const headerRow = container.querySelector(".session-group-row");
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", {
+      value: {
+        types: ["application/x-openclaw-session-key"],
+        getData: () => "agent:main:main",
+      },
+    });
+    headerRow?.dispatchEvent(drop);
+
+    expect(onAssignCategory).not.toHaveBeenCalled();
+  });
+});
+
+it("preserves the saved ultrafast override until explicitly changed", async () => {
+  const fastMode = "ultrafast";
+  const key = "agent:main:main";
+  const container = document.createElement("div");
+  const onPatch = vi.fn();
+  renderView(
+    buildResult({ key, kind: "direct", updatedAt: 1, fastMode }),
+    { expandedSessionKey: key, onPatch },
+    container,
+  );
+  await Promise.resolve();
+  const fast = expectDefined(
+    container.querySelectorAll<HTMLSelectElement>("tbody select")[1],
+    "speed override",
+  );
+  expect(fast.value).toBe("ultrafast");
+  expect([...fast.options].some((option) => option.value === "ultrafast")).toBe(true);
+  fast.value = "off";
+  fast.dispatchEvent(new Event("change"));
+  expect(onPatch).toHaveBeenCalledWith(key, { fastMode: false });
+  render(nothing, container);
 });

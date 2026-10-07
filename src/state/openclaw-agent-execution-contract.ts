@@ -53,8 +53,12 @@ export type OpenClawAgentDatabaseExecution = {
   captureGenerationClaim(): AgentDatabaseGenerationClaim;
   /** Reuse only a native generation whose preparation and registration publication settled. */
   capturePreparedGenerationClaim(): AgentDatabaseGenerationClaim | undefined;
-  /** Initialize first-use storage through the same admitted native owner. */
-  prepare(source: AgentDatabaseRequestExecutionSource, signal?: AbortSignal): Promise<void>;
+  /** Reuse native preparation; host handle admission explicitly requests current schema proof. */
+  prepare(
+    source: AgentDatabaseRequestExecutionSource,
+    signal?: AbortSignal,
+    options?: { readmitSchema: true },
+  ): Promise<void>;
   /** Admit a write against existing storage; a missing store remains missing. */
   runExisting<T>(
     source: AgentDatabaseRequestExecutionSource,
@@ -93,6 +97,7 @@ export type AgentDatabaseNativeGeneration = {
     assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing?: boolean,
     signal?: AbortSignal,
+    readmitSchema?: boolean,
   ): Promise<T | undefined>;
   close(): Promise<void>;
 };

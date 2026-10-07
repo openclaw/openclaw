@@ -688,7 +688,7 @@ describe("agents add command", () => {
       );
     });
 
-    it("renders binding conflicts returned by agent creation", async () => {
+    it("renders binding conflicts returned by agent creation and fails the command", async () => {
       await agentsAddCommand(
         { name: "Work", workspace: "/tmp/work", bind: ["telegram"], json: true },
         runtime,
@@ -700,6 +700,7 @@ describe("agents add command", () => {
       };
       expect(payload.bindings.added).toEqual([]);
       expect(payload.bindings.conflicts).toEqual(["telegram (agent=other-agent)"]);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
     });
   });
 });

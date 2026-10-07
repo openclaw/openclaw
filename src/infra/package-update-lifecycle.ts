@@ -13,11 +13,7 @@ import { classifyPackageUpdatePermissionFailure } from "./package-update-manager
 import type { StagedPackageInstall } from "./package-update-swap-contract.js";
 import { mergePathPrepend } from "./path-prepend.js";
 import { resolveEnvironmentValue } from "./process-env.js";
-import {
-  resolveNpmLifecyclePolicyGate,
-  verifyPackageUpdateRecovery,
-  type ResolvedGlobalInstallTarget,
-} from "./update-global.js";
+import { verifyPackageUpdateRecovery, type ResolvedGlobalInstallTarget } from "./update-global.js";
 import { prepareNativePackageStage } from "./update-native-package-stage.js";
 import {
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
@@ -26,32 +22,6 @@ import {
 import type { UpdateRecovery } from "./update-recovery.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-step-result.js";
-
-export async function resolveNpmUpdateLifecyclePolicy(params: {
-  installTarget: ResolvedGlobalInstallTarget;
-}): Promise<{
-  policy: ReturnType<typeof resolveNpmLifecyclePolicyGate>["policy"];
-  failedStep: UpdateStepResult | null;
-}> {
-  const gate = resolveNpmLifecyclePolicyGate(params.installTarget);
-  if (!gate.error) {
-    return { policy: gate.policy, failedStep: null };
-  }
-  const argv = [params.installTarget.command, "--version"];
-  const version = params.installTarget.npmOwner?.version ?? "";
-  return {
-    policy: null,
-    failedStep: {
-      name: "npm-lifecycle-policy-preflight",
-      command: argv.join(" "),
-      cwd: process.cwd(),
-      durationMs: 0,
-      exitCode: 1,
-      stdoutTail: version || null,
-      stderrTail: gate.error,
-    },
-  };
-}
 
 export type PackageUpdateStepRunner = (params: {
   name: string;
@@ -295,7 +265,6 @@ async function cleanupStagedPackageInstall(stage: StagedPackageInstall): Promise
 /** Dispose only after pending work is retired under its lifecycle generation. */
 export async function discardPackageUpdateStage(params: {
   stage: StagedPackageInstall;
-  manager: ResolvedGlobalInstallTarget["manager"];
   committed: boolean;
 }): Promise<PackageUpdateLifecycleResult | { status: "advisory"; step: UpdateStepResult }> {
   try {
@@ -323,7 +292,7 @@ export async function discardPackageUpdateStage(params: {
       status: "failed",
       preserveStage: true,
       step: {
-        name: `${params.manager}-package-lifecycle`,
+        name: `${params.stage.installTarget.manager}-package-lifecycle`,
         command: `discard ${params.stage.packageRoot}`,
         cwd: params.stage.packageRoot,
         durationMs: 0,

@@ -1,5 +1,5 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
@@ -31,15 +31,6 @@ type AgentsUnbindOptions = {
   json?: boolean;
 };
 
-function hasAgent(cfg: AgentConfig, agentId: string): boolean {
-  const targetAgentId = normalizeAgentId(agentId);
-  const agents = listAgentEntries(cfg);
-  if (agents.length === 0) {
-    return targetAgentId === normalizeAgentId(resolveDefaultAgentId(cfg));
-  }
-  return agents.some((agent) => normalizeAgentId(agent.id) === targetAgentId);
-}
-
 function failAgentBinding(message: string): never {
   throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
 }
@@ -55,8 +46,8 @@ function resolveTargetAgentId(params: {
       `Agent "${params.agentInput}" not found. Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
     );
   }
-  const agentId = normalized?.value ?? resolveDefaultAgentId(params.cfg);
-  if (!hasAgent(params.cfg, agentId)) {
+  const agentId = normalized?.value ?? resolveAgentOperationAgentId(params.cfg);
+  if (!listAgentIds(params.cfg).includes(agentId)) {
     failAgentBinding(
       `Agent "${agentId}" not found. Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
     );

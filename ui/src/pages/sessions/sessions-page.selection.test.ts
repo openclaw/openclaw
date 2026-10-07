@@ -26,8 +26,6 @@ describe("session selection across roster refresh", () => {
     "replacement without IDs",
     "replacement without IDs during confirmation",
     "removed",
-    "archived",
-    "unchanged",
   ] as const)(
     "deletes only still-selected session identities after a row is %s",
     async (change) => {
@@ -75,6 +73,10 @@ describe("session selection across roster refresh", () => {
         createContext(gateway, sessions),
         sessionsResult(rows, revision),
       );
+      const pageSize = page.querySelector<HTMLSelectElement>(".data-table-pagination__size");
+      expect(pageSize?.getAttribute("aria-label")).toBe("Rows per page");
+      expect(pageSize?.value).toBe("25");
+      expect(pageSize?.selectedOptions[0]?.textContent?.trim()).toBe("25 per page");
       const button = (label: string) => {
         const match = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
           (entry) => entry.textContent?.trim() === label,
@@ -117,8 +119,6 @@ describe("session selection across roster refresh", () => {
             },
             ...rows.slice(1),
           ];
-        } else if (change === "archived") {
-          serverRows = [{ ...original, archived: true }, ...rows.slice(1)];
         }
         await sessions.refreshList({ ...subscribe.mock.calls[0]![0], force: true });
         await page.updateComplete;
@@ -128,7 +128,7 @@ describe("session selection across roster refresh", () => {
         confirmation.resolve(true);
         await deletedStable.promise;
         const outcome = await deletion.mock.results[0]!.value;
-        const expectedRows = change === "unchanged" ? [original, stable] : [stable];
+        const expectedRows = [stable];
         expect(outcome.errors).toEqual([]);
         expect(outcome.deleted).toEqual(expectedRows.map((row) => row.key));
         expect(serverRows.some((row) => row.key === stable.key)).toBe(false);

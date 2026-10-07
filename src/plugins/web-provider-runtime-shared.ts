@@ -1,12 +1,18 @@
 import { withActivatedPluginIds } from "./activation-context.js";
-import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
+import {
+  getLoadedRuntimePluginRegistry,
+  registryContainsRuntimePluginIds,
+} from "./active-runtime-registry.js";
 import { normalizePluginId } from "./config-state.js";
 import { isPluginRegistryLoadInFlight, loadOpenClawPlugins } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { hasCompletedPluginRuntimeRegistration } from "./plugin-runtime-artifact-binding.js";
 import { hasExplicitPluginIdScope, normalizePluginIdScope } from "./plugin-scope.js";
 import type { PluginRegistry } from "./registry.js";
 import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-state.js";
 import {
   buildPluginRuntimeLoadOptions,
   createPluginRuntimeLoaderLogger,
@@ -151,6 +157,10 @@ export function resolvePluginWebProviders<TEntry>(
     ? allowlistedPluginIds
     : discoveredPluginIds;
   const onlyPluginIds = shouldFilterProviders ? candidatePluginIds : undefined;
+  const generationRegistry = getPluginRuntimeGenerationRegistry();
+  if (generationRegistry) {
+    return deps.mapRegistryProviders({ registry: generationRegistry, onlyPluginIds });
+  }
   const loadOptions = buildPluginRuntimeLoadOptions(
     {
       config,
@@ -171,21 +181,42 @@ export function resolvePluginWebProviders<TEntry>(
         : {}),
     },
   );
-  const compatible = getLoadedRuntimePluginRegistry({
-    env,
-    loadOptions,
-    workspaceDir,
-    requiredPluginIds: candidatePluginIds,
-  });
+  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const compatible = scopedRegistry
+    ? registryContainsRuntimePluginIds(scopedRegistry, candidatePluginIds)
+      ? scopedRegistry
+      : undefined
+    : getLoadedRuntimePluginRegistry({
+        env,
+        loadOptions,
+        workspaceDir,
+        requiredPluginIds: candidatePluginIds,
+      });
   const hasExplicitEmptyScope = onlyPluginIds !== undefined && onlyPluginIds.length === 0;
-  // Candidate coverage is checked before reuse. An empty compatible registry is
-  // authoritative only for an explicit empty scope; otherwise load below.
+  // Unknown candidates require a complete inspected inventory before absence is authoritative.
   if (compatible) {
     const providers = deps.mapRegistryProviders({
       registry: compatible,
       onlyPluginIds,
     });
-    if (providers.length > 0 || hasExplicitEmptyScope) {
+    if (compatible === scopedRegistry) {
+      const inspectedPluginIds = new Set(
+        compatible.plugins
+          .filter(
+            (plugin) =>
+              hasCompletedPluginRuntimeRegistration(plugin) ||
+              plugin.status === "error" ||
+              plugin.status === "disabled",
+          )
+          .map((plugin) => plugin.id),
+      );
+      if (
+        candidatePluginIds !== undefined ||
+        manifestRecords?.every((plugin) => inspectedPluginIds.has(plugin.id))
+      ) {
+        return providers;
+      }
+    } else if (providers.length > 0 || hasExplicitEmptyScope) {
       return providers;
     }
   }

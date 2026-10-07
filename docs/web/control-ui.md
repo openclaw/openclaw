@@ -103,7 +103,8 @@ Approval blocks and tool failures keep their separate outcomes.
 
 Open the parent conversation's side panel and select **Subagents** from its **+**
 menu to inspect ordinary child runs. The panel groups running and finished work,
-shows elapsed time and available tool activity, and opens each child's existing
+keeping children waiting on their own descendants under **Running**. It shows
+elapsed time and available tool activity, and opens each child's existing
 view-only transcript beside the parent. It does not add rows to the left sidebar;
 Swarm members remain in their parallel-tasks view. A directly opened child page
 offers **Open parent session**. The `/subagents list`, `/subagents info <id|#>`,

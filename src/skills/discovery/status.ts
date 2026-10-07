@@ -181,7 +181,7 @@ type BuildSkillStatusContext = Readonly<
 >;
 
 function buildSkillRequirements(entry: SkillEntry, context: SkillRequirementsContext) {
-  const skillKey = resolveSkillKey(entry.skill, entry);
+  const skillKey = resolveSkillKey(entry);
   const { config, eligibility, allowBundled } = context;
   const skillConfig = resolveSkillConfig(config, skillKey);
   const disabled = skillConfig?.enabled === false;
