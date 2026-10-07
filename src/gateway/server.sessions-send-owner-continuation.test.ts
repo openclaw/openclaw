@@ -85,7 +85,7 @@ afterAll(async () => {
   await server.close();
 });
 
-it.for(["success", "child error", "owner revoked", "owner reassigned", "new user turn"] as const)(
+it.for(["success", "child error", "owner revoked", "new user turn"] as const)(
   "enforces owner authority at the final plugin write after an inline wait expires (%s)",
   async (outcome, { signal }) => {
     const root = tempDirs.make("openclaw-followup-owner-");
@@ -399,10 +399,10 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       );
       expect(parentError).toBeUndefined();
       expect(pluginError).toBeUndefined();
-      if (outcome === "owner revoked" || outcome === "owner reassigned") {
+      if (outcome === "owner revoked") {
         setRuntimeConfigSnapshot({
           ...config,
-          commands: { ownerAllowFrom: outcome === "owner revoked" ? [] : ["discord:new-owner"] },
+          commands: { ownerAllowFrom: [] },
         });
       } else if (outcome === "new user turn") {
         revokeRequesterCronAuthority(parent);

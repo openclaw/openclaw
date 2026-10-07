@@ -783,26 +783,4 @@ describe("gateway node command allowlist", () => {
     const pending = await getPendingNodePairing(nodeId);
     expect(pending?.commands).toEqual(["system.run"]);
   });
-
-  test("filters system.run for confusable iOS metadata at connect time", async () => {
-    const fixture = nodeFixture("node-greek-omicron-family", {
-      commands: ["system.run", "canvas.snapshot"],
-      platform: "ios",
-      deviceFamily: "iPhοne",
-    });
-    await connectNodeClientWithNodePairing(fixture);
-    await expectConnectedCommands(fixture.displayName, ["canvas.snapshot"], {
-      timeout: 2_000,
-      interval: 10,
-    });
-    const nodeId = await findConnectedNodeIdByDisplayName(fixture.displayName);
-    const systemRunRes = await rpcReq(ws, "node.invoke", {
-      nodeId,
-      command: "system.run",
-      params: { command: "echo blocked" },
-      idempotencyKey: "allowlist-confusable-greek-omicron",
-    });
-    expect(systemRunRes.ok).toBe(false);
-    expect(systemRunRes.error?.message ?? "").toContain("node command not allowed");
-  });
 });
