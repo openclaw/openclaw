@@ -66,7 +66,10 @@ vi.mock("./openclaw-state-lease-storage.js", () => ({
 vi.mock("./openclaw-state-db-readonly.js", () => ({
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly: mocks.forbidden,
 }));
-vi.mock("../infra/sqlite-worker-identity.js", () => ({
+vi.mock("../infra/sqlite-worker-identity.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/sqlite-worker-identity.js")>(
+    "../infra/sqlite-worker-identity.js",
+  )),
   inspectDatabasePathIdentitySync: mocks.forbidden,
   readDatabasePathIdentitySync: mocks.forbidden,
 }));

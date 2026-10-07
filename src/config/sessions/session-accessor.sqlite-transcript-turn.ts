@@ -1,5 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
+import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
+import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -257,6 +259,7 @@ export async function appendExpectedSessionTranscriptTurn(
         { ...options, ...(preparedGoalId ? { preparedGoalId } : {}) },
         prepareSessionTurnRouting(mutation?.routingPredicate, resolved.env),
       );
+      const failures: unknown[] = [];
       const publish = runOpenClawAgentWriteTransaction(
         (transactionDb) => {
           const currentIdentity = identity
@@ -288,6 +291,31 @@ export async function appendExpectedSessionTranscriptTurn(
           }
           const committed = commit(transactionDb, messages);
           result = committed.result;
+          if (options.onCommittedSource && !result.rejectedReason && result.sessionEntry) {
+            const committedIdentity = readOpenClawAgentDatabaseIdentity(transactionDb);
+            const source = {
+              agentId: transactionDb.agentId,
+              path: transactionDb.path,
+              databaseIdentity: committedIdentity.identity,
+              databaseBirthtime: committedIdentity.birthtime,
+            };
+            const entry = result.sessionEntry;
+            if (
+              !stageSqliteTransactionState(transactionDb.db, {
+                stage: () => undefined,
+                commit: () => {
+                  try {
+                    options.onCommittedSource?.(source, entry);
+                  } catch (error) {
+                    failures.push(error);
+                  }
+                },
+                rollback: () => undefined,
+              })
+            ) {
+              throw new Error("Transcript source publication requires managed commit settlement");
+            }
+          }
           return committed.identity
             ? prepareSessionIdentityPublication(
                 transactionDb,
@@ -300,14 +328,19 @@ export async function appendExpectedSessionTranscriptTurn(
         toDatabaseOptions(resolved),
         { operationLabel: "session.transcript.append-turn" },
       );
-      publish?.();
-      const completion = completeSessionTranscriptCommit(
-        result.appendedMessages,
-        options.onMessageCommitted,
-      );
-      if (completion) {
-        await completion;
+      try {
+        publish?.();
+        const completion = completeSessionTranscriptCommit(
+          result.appendedMessages,
+          options.onMessageCommitted,
+        );
+        if (completion) {
+          await completion;
+        }
+      } catch (error) {
+        failures.push(error);
       }
+      throwSqliteLifecycleErrors(failures, "Transcript committed publication failed");
       return result;
     },
     "session.transcript.turn",

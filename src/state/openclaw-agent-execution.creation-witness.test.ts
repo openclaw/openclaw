@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -18,43 +17,22 @@ import {
   readOpenClawAgentDatabaseRegistryToken,
 } from "./openclaw-agent-db-registry-listing.js";
 import { unregisterOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
+import { getOpenClawAgentDatabaseValidationForTransfer } from "./openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
-  resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
+import {
+  agentCreationWitnessTempDirs as tempDirs,
+  createAgentCreationWitnessFixture as fixture,
+  createAliasedAgentCreationWitnessFixture as aliasedFixture,
+} from "./openclaw-agent-execution.creation-fixture.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
-
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    await closeOpenClawAgentDatabasesAsync();
-    await closeOpenClawStateDatabaseAsync();
-    cleanup();
-  }),
-);
-
-function fixture() {
-  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-creation-witness-")) };
-  const options = { agentId: "main", env };
-  return { ...options, path: resolveOpenClawAgentSqlitePath(options) };
-}
-
-function aliasedFixture() {
-  const options = fixture();
-  const alias = path.join(options.env.OPENCLAW_STATE_DIR, "alias");
-  const directory = path.dirname(options.path);
-  fs.mkdirSync(directory, { recursive: true });
-  fs.symlinkSync(directory, alias, process.platform === "win32" ? "junction" : "dir");
-  return {
-    options,
-    aliased: { ...options, path: path.join(alias, path.basename(options.path)) },
-  };
-}
 
 function source(
   beforeGrant: (request: SqliteWorkerAdmissionRequest) => void = () => {},
@@ -219,12 +197,31 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
     } finally {
       await reopened.release();
     }
+    const retainedValidation = getOpenClawAgentDatabaseValidationForTransfer(options);
+    assert(retainedValidation);
+    expect(Atomics.load(new Int32Array(retainedValidation.valid), 0)).toBe(1);
     fs.unlinkSync(options.path);
     const replacement = captureOpenClawAgentDatabaseExecution(options, {
       expectedCreationIdentity: readDatabasePathIdentitySync(options.path),
     });
     try {
-      await replacement.prepare(source());
+      let checkedReplacementProof = false;
+      await replacement.prepare(
+        source((request) => {
+          if (
+            request.stage === "prepare" &&
+            typeof request.facts === "object" &&
+            request.facts !== null &&
+            "kind" in request.facts &&
+            request.facts.kind === "shared-owner"
+          ) {
+            checkedReplacementProof = true;
+            expect(Atomics.load(new Int32Array(retainedValidation.valid), 0)).toBe(0);
+            expect(getOpenClawAgentDatabaseValidationForTransfer(options)).toBeUndefined();
+          }
+        }),
+      );
+      expect(checkedReplacementProof).toBe(true);
       expect(registry.assertCurrent).toThrow("registry changed");
       await expect(
         replacement.runExisting(source(), (scope) => scope.execute(command)),

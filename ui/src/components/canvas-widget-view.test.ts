@@ -481,16 +481,51 @@ describe("Canvas widget view", () => {
   });
 
   it.each([
-    { label: "short Unicode title", title: "Ready 😀", expectedTitle: "Ready 😀" },
-    { label: "ASCII title limit", title: "x".repeat(81), expectedTitle: "x".repeat(80) },
+    {
+      label: "short Unicode title",
+      title: "Ready 😀",
+      expectedTitle: "Ready 😀",
+      message: "x".repeat(600),
+      expectedMessage: "x".repeat(500),
+    },
+    {
+      label: "ASCII title limit",
+      title: "x".repeat(81),
+      expectedTitle: "x".repeat(80),
+      message: "x".repeat(600),
+      expectedMessage: "x".repeat(500),
+    },
     {
       label: "surrogate title boundary",
       title: `${"x".repeat(79)}😀tail`,
       expectedTitle: "x".repeat(79),
+      message: "x".repeat(600),
+      expectedMessage: "x".repeat(500),
+    },
+    {
+      label: "short Unicode message",
+      title: "Status",
+      expectedTitle: "Status",
+      message: "Ready 😀",
+      expectedMessage: "Ready 😀",
+    },
+    {
+      label: "surrogate message boundary",
+      title: "Status",
+      expectedTitle: "Status",
+      message: `${"x".repeat(499)}😀tail`,
+      expectedMessage: "x".repeat(499),
+    },
+    {
+      label: "stored dangling surrogate",
+      title: "Status",
+      expectedTitle: "Status",
+      message: `${"x".repeat(499)}\ud83d`,
+      expectedMessage: `${"x".repeat(499)}\ufffd`,
     },
   ])(
     "shows a bounded script error and wakes only once with a $label",
-    async ({ label, title, expectedTitle }) => {
+    async ({ label, title, expectedTitle, message: errorMessage, expectedMessage }) => {
       const now = 1_800_000_000_000;
       vi.spyOn(Date, "now").mockReturnValue(now);
       const client = { request: vi.fn().mockResolvedValue(documentView) };
@@ -501,7 +536,7 @@ describe("Canvas widget view", () => {
       const frame = await frameFor(view);
       const report = {
         type: "openclaw:widget-runtime-error",
-        message: "x".repeat(600),
+        message: errorMessage,
         source: "https://example.test/private/widget.js",
         line: 12,
         column: 7,
@@ -523,10 +558,10 @@ describe("Canvas widget view", () => {
       expect(client.request).toHaveBeenLastCalledWith("wake", {
         mode: "now",
         sessionKey: view.sessionKey,
-        text: `Inline widget "${expectedTitle}" (${docId}) threw a script error after rendering: ${"x".repeat(500)}, line 12, column 7. Fix the script and show the widget again; if show_widget is unavailable in this turn, reply with the corrected widget code and show it on the next turn.`,
+        text: `Inline widget "${expectedTitle}" (${docId}) threw a script error after rendering: ${expectedMessage}, line 12, column 7. Fix the script and show the widget again; if show_widget is unavailable in this turn, reply with the corrected widget code and show it on the next turn.`,
       });
       expect(view.querySelector('[role="status"]')?.textContent).toBe(
-        `Script error: ${"x".repeat(500)}`,
+        `Script error: ${expectedMessage}`,
       );
       expect(view.querySelector("iframe")).toBe(frame);
       view.remove();

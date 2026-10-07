@@ -19,6 +19,7 @@ import { hasAgentRunContextExecutionOwner } from "../../infra/agent-run-registry
 import * as mutationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { getUserProfileListItem } from "../../state/user-profile-list-item.test-support.js";
 import { captureResidentUserProfileAccess } from "../../state/user-profile-list.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
@@ -27,7 +28,6 @@ import {
   setCanonicalUserProfileRole,
   syncCanonicalGitHubIdentity,
 } from "../../state/user-profile-writes.js";
-import { getUserProfileListItem } from "../../state/user-profiles.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,

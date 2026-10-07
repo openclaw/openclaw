@@ -22,13 +22,13 @@ import {
   readUserProfileSnapshotSync,
   readUserProfileEmailBindings,
 } from "./user-profile-identity.read.js";
-import { readUserProfileIdentity, retainUserProfileCatalog } from "./user-profile-list.js";
+import { getUserProfileListItem } from "./user-profile-list-item.test-support.js";
+import { readUserProfileIdentity, prepareUserProfileCatalog } from "./user-profile-list.js";
 import { setUserProfileRole } from "./user-profile-writes.worker.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import {
   ensureProfileForEmail,
   getUserProfileDisplay,
-  getUserProfileListItem,
   getUserProfileRole,
   resolveUserProfileId,
 } from "./user-profiles.js";
@@ -125,12 +125,12 @@ describe("user profile email binding schema", () => {
 });
 
 describe("user profile role schema", () => {
-  it("lazily adds a downgrade-safe nullable role without changing the schema version", () => {
+  it("lazily adds a downgrade-safe nullable role without changing the schema version", async () => {
     const options = stateOptions();
     const database = createLegacyProfileDatabase(options);
     const versionBefore = database.prepare("PRAGMA user_version").get()?.user_version;
     const profile = ensureProfileForEmail("ada@example.com", options);
-    const release = retainUserProfileCatalog(options);
+    const release = (await prepareUserProfileCatalog(options)).release;
     try {
       expect(readUserProfileIdentity(profile.id, options)?.role).toBeNull();
 

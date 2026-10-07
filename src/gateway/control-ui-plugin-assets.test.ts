@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { TLSSocket } from "node:tls";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -10,7 +11,13 @@ import type { PluginRecord } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import * as userProfileCatalog from "../state/user-profile-list.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
+  handleControlUiPluginAssetRequest,
   listControlUiPluginCatalog,
   listControlUiPluginActivations,
   reportControlUiPluginActivation,
@@ -35,6 +42,7 @@ import {
   withGatewayServer,
 } from "./server-http.test-harness.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+import { makeMockHttpResponse } from "./test-http-response.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 const roots: string[] = [];
@@ -74,7 +82,9 @@ function activateFixture(origin: PluginRecord["origin"] = "bundled") {
   return { rootDir, directory, registry, record };
 }
 
-function cookieForGrant(overrides: { pluginId?: string; generation?: string } = {}): string {
+function cookieForGrant(
+  overrides: { pluginId?: string; generation?: string; profileId?: string } = {},
+): string {
   const response = createResponse();
   const [grant] = listControlUiPluginTabAuthGrants(["operator.read"]);
   if (!grant) {
@@ -84,6 +94,7 @@ function cookieForGrant(overrides: { pluginId?: string; generation?: string } = 
     response.res,
     [{ ...grant, pluginId: overrides.pluginId ?? grant.pluginId }],
     {
+      profileId: overrides.profileId,
       generation:
         overrides.generation ??
         resolveControlUiPluginAuthCookieGeneration(
@@ -529,6 +540,110 @@ describe("native Control UI browser assets", () => {
       },
     });
   });
+
+  it.each(["cold", "replaced"] as const)(
+    "serves profile-bound cookie assets with a %s profile catalog",
+    async (catalogState) => {
+      await withOpenClawTestState({ prefix: "native-ui-profile-cookie-" }, async () => {
+        activateFixture();
+        const entry = (await listControlUiPluginCatalog()).plugins[0]!;
+        const profile = ensureProfileForEmail("reader@example.test");
+        const previous =
+          catalogState === "replaced"
+            ? await userProfileCatalog.prepareUserProfileCatalog()
+            : undefined;
+        try {
+          if (previous) {
+            const databasePath = resolveOpenClawStateSqlitePath();
+            await closeOpenClawStateDatabaseByPathAsync(databasePath);
+            fs.renameSync(databasePath, `${databasePath}.previous`);
+            fs.copyFileSync(`${databasePath}.previous`, databasePath);
+          }
+          await withGatewayServer({
+            prefix: "native-ui-profile-http-",
+            resolvedAuth: AUTH_TOKEN,
+            overrides: { controlUiEnabled: true, controlUiBasePath: "" },
+            run: async (server) => {
+              const response = await sendRequest(server, {
+                path: entry.entryUrl,
+                headers: { cookie: cookieForGrant({ profileId: profile.id }) },
+              });
+              expect(response.res.statusCode).toBe(200);
+              expect(response.end.mock.calls[0]?.[0]?.toString()).toBe(firstSource);
+            },
+          });
+        } finally {
+          previous?.release();
+        }
+      });
+    },
+  );
+
+  it.each(["auth rotation", "response closure"] as const)(
+    "refuses asset disclosure after %s during profile preparation",
+    async (invalidation) => {
+      await withOpenClawTestState({ prefix: "native-ui-profile-authority-" }, async () => {
+        await withTempConfig({
+          cfg: {},
+          run: async () => {
+            activateFixture();
+            const entry = (await listControlUiPluginCatalog()).plugins[0]!;
+            const profile = ensureProfileForEmail("reader@example.test");
+            const prepared = createDeferred();
+            const resume = createDeferred();
+            const prepare = userProfileCatalog.prepareUserProfileCatalog;
+            const preparation = vi
+              .spyOn(userProfileCatalog, "prepareUserProfileCatalog")
+              .mockImplementationOnce(async () => {
+                const catalog = await prepare();
+                prepared.resolve();
+                await resume.promise;
+                return catalog;
+              });
+            let currentAuth = AUTH_TOKEN;
+            const request = createRequest({
+              path: entry.entryUrl,
+              headers: { cookie: cookieForGrant({ profileId: profile.id }) },
+            });
+            const response = makeMockHttpResponse();
+            const operation = handleControlUiPluginAssetRequest(request, response.res, {
+              auth: currentAuth,
+              getResolvedAuth: () => currentAuth,
+              basePath: "",
+            });
+            try {
+              await awaitGateBeforeSettlement(
+                prepared.promise,
+                operation,
+                "asset request completed before profile preparation",
+              );
+              if (invalidation === "auth rotation") {
+                currentAuth = { ...AUTH_TOKEN, token: "rotated-token" };
+              } else {
+                response.res.destroy();
+              }
+              resume.resolve();
+              expect(await operation).toBe(true);
+              if (invalidation === "auth rotation") {
+                expect(response.res.statusCode).toBe(401);
+              } else {
+                expect(response.end).not.toHaveBeenCalled();
+              }
+            } finally {
+              resume.resolve();
+              try {
+                await operation;
+              } finally {
+                preparation.mockRestore();
+                response.res.destroy();
+                request.destroy();
+              }
+            }
+          },
+        });
+      });
+    },
+  );
 
   it("retains advertised revisions and receipts only for the exact backend owner", async () => {
     const fixture = activateFixture();

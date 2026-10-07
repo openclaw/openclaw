@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
+import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import type {
   AcpSessionReadCommand,
   AcpSessionReadInput,
@@ -234,7 +235,8 @@ export type OpenClawStateReadCommand =
   | UserProfileAvatarReadCommand
   | { type: "userProfiles.channelIdentity.list"; profileId: string }
   | { type: "userProfiles.channelIdentity.resolve"; identity: UserChannelIdentitySelector }
-  | { type: "userProfiles.authority.resolve"; profileId: string }
+  | { type: "userProfiles.authority.resolve"; profileId: string; includeProfile?: boolean }
+  | { type: "userProfiles.aliases.resolve"; profileId: string }
   | ({ type: "userProfiles.githubIdentity.cached" } & CachedGitHubIdentityBinding)
   | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[] }
   | { type: "userProfiles.email.resolve"; email: string }
@@ -495,8 +497,9 @@ export type OpenClawStateReadResult =
     }
   | {
       type: "userProfiles.authority.resolve";
-      profile: UserProfileAuthority | undefined;
+      profile: (UserProfileAuthority & { listItem?: UserProfileListItem }) | undefined;
     }
+  | { type: "userProfiles.aliases.resolve"; profileId: string; aliases: string[] }
   | {
       type: "userProfiles.githubIdentity.cached";
       identity: CachedGitHubIdentity | undefined;
