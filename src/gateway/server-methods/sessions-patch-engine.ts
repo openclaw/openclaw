@@ -376,36 +376,26 @@ export async function executeSessionPatchMutations(params: {
                         const candidateKeys = currentTarget.storeKeys;
                         // Compare tool policy against the captured snapshot; the final
                         // commit rejects a selection changed during preparation.
-                        const expectationError =
+                        const projectionError =
                           sessionPatchExpectations.resolveSessionPatchTargetError(
                             existingEntry,
                             target,
-                          );
-                        if (expectationError) {
-                          projectedOutcomes.push({ ok: false, error: expectationError });
+                          ) ||
+                          (params.operatorAuthority &&
+                            mutationTargets[target.index]!.commitGuard()) ||
+                          (target.fullPatch.archived === true &&
+                            validateSessionPatchArchiveProjection({
+                              cfg,
+                              existingEntry,
+                              fullPatch: target.fullPatch,
+                              key: target.key,
+                              ...(pluginOwnerId ? { pluginOwnerId } : {}),
+                              preparation: target.archivePreparation!,
+                              primaryKey,
+                            }));
+                        if (projectionError) {
+                          projectedOutcomes.push({ ok: false, error: projectionError });
                           continue;
-                        }
-                        if (params.operatorAuthority) {
-                          const authorizationError = mutationTargets[target.index]!.commitGuard();
-                          if (authorizationError) {
-                            projectedOutcomes.push({ ok: false, error: authorizationError });
-                            continue;
-                          }
-                        }
-                        if (target.fullPatch.archived === true) {
-                          const archiveError = validateSessionPatchArchiveProjection({
-                            cfg,
-                            existingEntry,
-                            fullPatch: target.fullPatch,
-                            key: target.key,
-                            ...(pluginOwnerId ? { pluginOwnerId } : {}),
-                            preparation: target.archivePreparation!,
-                            primaryKey,
-                          });
-                          if (archiveError) {
-                            projectedOutcomes.push({ ok: false, error: archiveError });
-                            continue;
-                          }
                         }
                         const unreadAck = resolveSessionUnreadAck(existingEntry, target.fullPatch);
                         if (unreadAck.kind === "missing") {
