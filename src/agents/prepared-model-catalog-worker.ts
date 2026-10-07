@@ -21,6 +21,7 @@ import {
 } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { overlayPluginNativeAdmissions } from "../plugins/plugin-native-admission-state.js";
+import type { NativeReferenceProgress } from "../plugins/plugin-native-reference.js";
 import { captureProviderSyntheticAuthFacts } from "../plugins/provider-runtime.js";
 import type { PreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -36,6 +37,10 @@ import {
   CatalogWorkerTaskPool,
   GATEWAY_CATALOG_WORKERS,
 } from "./prepared-model-catalog-worker.pool.js";
+import {
+  PreparedModelCatalogAdmissionStalledError,
+  PreparedModelCatalogGenerationMismatchError,
+} from "./prepared-model-catalog.errors.js";
 import {
   setPreparedModelFullCatalogAuth,
   type PreparedModelRuntimeAuth,
@@ -118,8 +123,8 @@ export type PreparedModelWorkerResult =
     }>
   | Readonly<{ status: "failed"; error: string }>;
 
-// Cold source/plugin loading can take well over a minute. Three minutes preserves exact full-view
-// discovery while bounding a wedged provider; expiry rejects and never returns partial results.
+// Parent probes, queued requests and admitted provider discovery are bounded independently.
+// Native plugin admission belongs to the worker generation, outside its refresh deadline.
 export const PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS = 180_000;
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
@@ -162,20 +167,6 @@ export function getPreparedModelCatalogWorkerPoolSnapshot() {
   };
 }
 
-function createCatalogPool(
-  env: NodeJS.ProcessEnv,
-  validateResult: (result: PreparedModelWorkerResult) => void,
-  assertCurrent?: () => void,
-  onClose?: (error?: Error) => void,
-): CatalogPool {
-  return new CatalogWorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>(
-    env,
-    validateResult,
-    assertCurrent,
-    onClose,
-  );
-}
-
 async function getGatewayCatalogPool(
   input: PreparedModelCatalogWorkerInput,
   metadata: PluginMetadataSnapshot,
@@ -209,31 +200,33 @@ async function getGatewayCatalogPool(
     await gatewayCatalog.current?.close();
     const signal = getPluginCacheRetirementSignal(cache);
     signal.throwIfAborted();
-    const env = input.input.env;
+    let admissionStalled = false;
     const current: GatewayCatalogPool = {
       cache,
       envFingerprint: environmentFingerprint,
       borrowers: new Set(),
       recover: (error) =>
-        (current.recovery ??= (async () => {
-          const borrowers = [...current.borrowers];
-          if (!signal.aborted) {
-            for (const borrower of borrowers) {
-              borrower.notifyRecovery(error);
-            }
-          }
-          // Fence every old catalog before releasing the native slot. Recovery publishes new
-          // prepared owners; it never replays a failed request under its former source generation.
-          const stopping = borrowers.map((borrower) => borrower.stop(error));
-          await current.close(error);
-          await Promise.all(stopping);
-          if (gatewayCatalog.current === current) {
-            gatewayCatalog.current = undefined;
-          }
-          const { recoverPreparedModelRuntimeCatalogWorker } =
-            await import("./prepared-model-runtime.js");
-          await recoverPreparedModelRuntimeCatalogWorker(borrowers);
-        })()),
+        admissionStalled
+          ? Promise.resolve()
+          : (current.recovery ??= (async () => {
+              const borrowers = [...current.borrowers];
+              if (!signal.aborted) {
+                for (const borrower of borrowers) {
+                  borrower.notifyRecovery(error);
+                }
+              }
+              // Fence every old catalog before releasing the native slot. Recovery publishes new
+              // prepared owners; it never replays a failed request under its former source generation.
+              const stopping = borrowers.map((borrower) => borrower.stop(error));
+              await current.close(error);
+              await Promise.all(stopping);
+              if (gatewayCatalog.current === current) {
+                gatewayCatalog.current = undefined;
+              }
+              const { recoverPreparedModelRuntimeCatalogWorker } =
+                await import("./prepared-model-runtime.js");
+              await recoverPreparedModelRuntimeCatalogWorker(borrowers);
+            })()),
       close: async (error) => {
         current.closing = true;
         signal.removeEventListener("abort", retire);
@@ -242,8 +235,8 @@ async function getGatewayCatalogPool(
         release();
       },
       validate: undefined,
-      pool: createCatalogPool(
-        env,
+      pool: new CatalogWorkerTaskPool(
+        input.input.env,
         (result) => {
           const validate = current.validate;
           current.validate = undefined;
@@ -254,9 +247,10 @@ async function getGatewayCatalogPool(
           // Only the pool itself closes without its owner: its worker failed, exited or timed out.
           // Record it now, once per pool; an idle worker's exit has no request to report it.
           if (!current.closing && !signal.aborted) {
+            admissionStalled = error instanceof PreparedModelCatalogAdmissionStalledError;
             gatewayCatalog.workerFailures = (gatewayCatalog.workerFailures ?? 0) + 1;
             log.warn(
-              `model catalog worker failed; ${[...current.borrowers].filter((borrower) => borrower.isCurrent()).length} agent catalog(s) will be republished on a new worker (failure ${gatewayCatalog.workerFailures} since start): ${formatErrorMessage(error)}`,
+              `model catalog worker failed; ${admissionStalled ? "native admission will not be retried automatically" : `${[...current.borrowers].filter((borrower) => borrower.isCurrent()).length} agent catalog(s) will be republished on a new worker`} (failure ${gatewayCatalog.workerFailures} since start): ${formatErrorMessage(error)}`,
             );
           }
         },
@@ -283,19 +277,6 @@ async function getGatewayCatalogPool(
     gatewayCatalog.rotating = undefined;
   }
   return getGatewayCatalogPool(input, metadata, environmentFingerprint);
-}
-
-class PreparedModelCatalogGenerationMismatchError extends Error {
-  constructor(
-    readonly agentDir: string,
-    readonly generationFingerprint: string,
-    readonly reconstructedFingerprint: string,
-  ) {
-    super(
-      `prepared model catalog worker reconstructed a different runtime generation for ${agentDir} (owner=${generationFingerprint} worker=${reconstructedFingerprint})`,
-    );
-    this.name = "PreparedModelCatalogGenerationMismatchError";
-  }
 }
 
 export function fingerprintPreparedModelWorkerRequest(
@@ -551,10 +532,9 @@ export function createPreparedModelCatalogWorker(
     let pending: Promise<PreparedModelWorkerResult> | undefined;
     const task: { onRecovery?: (error: Error) => void } = {};
     const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort(new WorkerTaskError("worker task timed out", "timeout")),
-      PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
-    );
+    let progress: NativeReferenceProgress | undefined;
+    let expire = () => controller.abort(new WorkerTaskError("worker task timed out", "timeout"));
+    const timeout = setTimeout(() => expire(), PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS);
     try {
       assertCurrent();
       releaseProcessLifetime ??= registerPreparedModelRuntimeClose(stop);
@@ -568,6 +548,7 @@ export function createPreparedModelCatalogWorker(
       const { input } = workerInput;
       // Worker reconstruction consumes startup auth facts even for a scoped catalog request.
       const providerScope = [...workerInput.providerIds, ...(command.providerIds ?? [])];
+      const manifestRefs = listManifestSyntheticAuthProviderRefs(metadataSnapshot.index);
       const capture = withPluginRuntimeGenerationScope(
         { metadataSnapshot, pluginRegistry: params.pluginRegistry },
         () =>
@@ -578,7 +559,7 @@ export function createPreparedModelCatalogWorker(
             providerRefs:
               command.kind === "catalog" && !command.providerIds
                 ? [
-                    ...listManifestSyntheticAuthProviderRefs(metadataSnapshot.index),
+                    ...manifestRefs,
                     // Full discovery also runs credential-only providers, whose runtime hooks can
                     // answer for refs no manifest declares (such as the provider's own id). The
                     // closed worker cannot probe those refs, so capture them here.
@@ -587,10 +568,7 @@ export function createPreparedModelCatalogWorker(
                   ]
                 : [
                     ...providerScope,
-                    ...scopeSyntheticAuthProviderRefs(
-                      listManifestSyntheticAuthProviderRefs(metadataSnapshot.index),
-                      providerScope,
-                    ),
+                    ...scopeSyntheticAuthProviderRefs(manifestRefs, providerScope),
                   ],
             signal: controller.signal,
           }),
@@ -612,10 +590,22 @@ export function createPreparedModelCatalogWorker(
         shared.borrowers.add(borrower);
       }
       requestPool = pool =
-        shared?.pool ?? pool ?? createCatalogPool(workerInput.input.env, validate);
+        shared?.pool ?? pool ?? new CatalogWorkerTaskPool(workerInput.input.env, validate);
       pending = requestPool.run(
         () => {
           assertCurrent();
+          // The existing budget now bounds idle admission, renewed only by verified members.
+          expire = () => {
+            const failure = new PreparedModelCatalogAdmissionStalledError(
+              progress?.pluginId,
+              PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
+            );
+            borrower.notifyRecovery(failure);
+            void requestPool!
+              .close(failure)
+              .catch((error: unknown) => process.emitWarning(String(error)));
+          };
+          timeout.refresh();
           task.onRecovery = onRecovery;
           const workerRequest = {
             ...value,
@@ -627,13 +617,33 @@ export function createPreparedModelCatalogWorker(
           }
           return { value: workerInput, request: workerRequest };
         },
-        { timeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS, signal: controller.signal },
+        {
+          signal: controller.signal,
+          onNotification: (notification) => {
+            // SAFETY: The native verifier is the sole producer on this task's private channel.
+            const next = notification as NativeReferenceProgress;
+            if (!progress || next.completed > progress.completed) {
+              timeout.refresh();
+            }
+            progress = next;
+          },
+          onRequest: async () => {
+            clearTimeout(timeout);
+            return {
+              input: !stoppedError && params.isCurrent(),
+              timeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
+            };
+          },
+        },
       );
       tasks.set(pending, task);
       message = await pending;
       assertCurrent();
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
+      if (failure instanceof PreparedModelCatalogAdmissionStalledError) {
+        throw failure;
+      }
       if (failure instanceof WorkerTaskError && failure.code === "overloaded") {
         // Admission pressure rejects this request without retiring the prepared generation.
         throw failure;
@@ -711,9 +721,8 @@ export function createPreparedModelCatalogWorker(
       const normalizedProviderIds = [...new Set(providerIds)].toSorted((left, right) =>
         left.localeCompare(right),
       );
-      const normalizedProfileIds = profileIds
-        ? [...new Set(profileIds)].toSorted((left, right) => left.localeCompare(right))
-        : undefined;
+      const normalizedProfileIds =
+        profileIds && [...new Set(profileIds)].toSorted((left, right) => left.localeCompare(right));
       const key = JSON.stringify([normalizedProviderIds, normalizedProfileIds]);
       if (pendingAuth?.key === key) {
         return pendingAuth.promise;

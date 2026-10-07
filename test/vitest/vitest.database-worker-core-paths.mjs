@@ -70,6 +70,9 @@ export const databaseWorkerCoreTestFiles = [
   "src/system-agent/transcript-store.test.ts",
   "src/infra/restart-sentinel.update-result.test.ts",
   "src/auto-reply/reply/conversation-turn-capture.test.ts",
+  "src/auto-reply/reply/directive-handling.mixed-inline.test.ts",
+  "src/auto-reply/reply/directive-handling.model.test.ts",
+  "src/auto-reply/reply/get-reply-native-slash-fast-path.test.ts",
   "src/auto-reply/reply/agent-runner-result-accounting.persistence.test.ts",
   "src/auto-reply/reply/agent-runner.media-ownership.test.ts",
   "src/auto-reply/reply/directive-handling.model.test.ts",
@@ -911,7 +914,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/context.opencode-go.test.ts",
   "src/agents/simple-completion-runtime.selected-model.test.ts",
   "src/agents/tools/pdf-tool.resources.test.ts",
-  "src/talk/agent-consult-runtime.lineage.test.ts",
   "src/talk/agent-consult-runtime.storage.test.ts",
   "src/tts/tts-summary.static-catalog.test.ts",
   "src/tts/tts-summary.selection.test.ts",
@@ -1038,12 +1040,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-sdk/runtime-doctor-migrations.test.ts",
   "src/plugin-state/plugin-blob-store.test.ts",
   "src/plugin-state/plugin-blob-store.admission.test.ts",
-  "src/plugin-state/plugin-blob-store.readonly.test.ts",
   "src/plugin-state/plugin-state-store.test.ts",
-  "src/plugin-state/plugin-state-store.authority.test.ts",
-  "src/plugin-state/plugin-state-store.errors.test.ts",
-  "src/plugin-state/plugin-state-store.expiry.test.ts",
-  "src/plugin-state/plugin-state-store.namespace-independence.test.ts",
   "src/plugin-state/plugin-state-store.retained.test.ts",
   "src/plugin-state/plugin-state-store.retention.test.ts",
   "src/plugin-state/plugin-state-store.runtime.test.ts",
@@ -1097,6 +1094,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-sdk/session-store-runtime.conversation.test.ts",
   "src/plugin-sdk/session-store-runtime.maintenance.test.ts",
   "src/plugin-sdk/session-transcript-runtime-visible-delta.test.ts",
+  "src/gateway/control-ui-plugin-auth-cookie.test.ts",
 ];
 
 const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);

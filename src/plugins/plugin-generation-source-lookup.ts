@@ -129,7 +129,7 @@ export function createPluginGenerationSourceLookup({
             return false;
           },
         });
-        const assertReference = createPluginNativeReferenceValidator(recovery.directory);
+        const assertReference = createPluginNativeReferenceValidator(recovery.directory, rootDir);
         for (const [target, fact] of hardlinkedTargets) {
           assertReference(target, fact, native!.namespaces.get(fact.namespace)!);
         }

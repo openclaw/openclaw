@@ -1,10 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { realpathSync } from "node:fs";
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { hasErrnoCode } from "../infra/errno.js";
+import { normalizeDatabasePath } from "../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 
 type ExistingSchemaScope = { path: string; canonicalPath: string; active: boolean };
 const schemaPolicies = resolveGlobalSingleton(
@@ -16,9 +17,9 @@ const schemaPolicies = resolveGlobalSingleton(
 );
 
 function canonicalPath(pathname: string): string {
-  const resolved = path.resolve(pathname);
+  const resolved = resolveDatabasePath({ path: pathname });
   try {
-    return realpathSync.native(resolved);
+    return normalizeDatabasePath(realpathSync.native(resolved));
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
       return resolved;
@@ -40,7 +41,7 @@ export function withExistingOpenClawStateSchema<T>(
   getExistingOpenClawStateSchemaPath();
   const parent = schemaPolicies.scopes.getStore();
   const scope = {
-    path: path.resolve(options.path),
+    path: resolveDatabasePath(options),
     canonicalPath: canonicalPath(options.path),
     active: true,
   };
@@ -89,7 +90,7 @@ export function isExistingOpenClawStateSchema(pathname: string, database?: Datab
   const scopedPath = getExistingOpenClawStateSchemaPath();
   const scope = schemaPolicies.scopes.getStore();
   const admittedPath = database && schemaPolicies.existingDatabases.get(database);
-  const resolvedPath = path.resolve(pathname);
+  const resolvedPath = resolveDatabasePath({ path: pathname });
   const existing =
     scopedPath !== undefined &&
     (scopedPath === resolvedPath ||
@@ -129,7 +130,7 @@ export function assertExistingOpenClawStateSchemaCacheAdmission(
 ): void {
   const scopedPath = getExistingOpenClawStateSchemaPath();
   const scope = schemaPolicies.scopes.getStore();
-  const requested = path.resolve(pathname);
+  const requested = resolveDatabasePath({ path: pathname });
   let resolved =
     scope && (scopedPath === requested || scope.canonicalPath === requested)
       ? scope.canonicalPath

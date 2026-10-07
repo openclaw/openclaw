@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -120,7 +120,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("settles retention despite another append while its coalesced read is pending", async () => {
+it("settles retention while appends and session patches overlap its coalesced read", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const target = {
       agentId: "main",
@@ -149,6 +149,9 @@ it("settles retention despite another append while its coalesced read is pending
     retention.beforeRead = async () => {
       started.resolve();
       await release.promise;
+      await patchSessionEntryCore(target, () => ({ label: `metadata-${retention.reads}` }), {
+        workerGuard: {},
+      });
     };
     try {
       recorder.recordEvent("first");
@@ -169,6 +172,7 @@ it("settles retention despite another append while its coalesced read is pending
     expect(
       await loadSqliteTrajectoryRuntimeEvents({ ...target, sessionId: "old-trajectory" }),
     ).toEqual([]);
+    expect(retention.reads).toBe(1);
     const completedReads = retention.reads;
     recorder.recordEvent("same-window");
     await recorder.flush();

@@ -307,6 +307,7 @@ export function createCodexAppServerConfig({
       },
       connectionClass,
       ...(remoteWorkspaceRoot ? { remoteWorkspaceRoot } : {}),
+      ...(config.nativeHookRelay ? { nativeHookRelay: config.nativeHookRelay } : {}),
       codeModeOnly: config.codeModeOnly === true,
       loopDetectionPreToolUseRelay: config.loopDetectionPreToolUseRelay !== false,
       requestTimeoutMs: resolvePositiveTimerTimeoutMs(config.requestTimeoutMs, 60_000),

@@ -238,7 +238,10 @@ export type ModelCatalogProvider = {
   defaultModel?: string;
   /** Provider-recommended small model id for short internal utility tasks. */
   defaultUtilityModel?: string;
-  /** Ordered provider shortlist reserved for picker ordering; not yet used. */
+  /**
+   * Hosted catalog v2 projection of the curated global list onto this provider's
+   * model ids, best first; reserved for picker ordering and not yet used.
+   */
   recommendedModels?: string[];
   models: ModelCatalogModel[];
 };

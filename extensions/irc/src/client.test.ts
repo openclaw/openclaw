@@ -77,7 +77,8 @@ async function startLoopbackIrcServer(options?: {
 }
 
 async function connectAndCollectRegistration(params: {
-  nickserv: NonNullable<Parameters<typeof connectIrcClient>[0]["nickserv"]>;
+  nickserv?: NonNullable<Parameters<typeof connectIrcClient>[0]["nickserv"]>;
+  password?: string;
 }): Promise<{ lines: string[]; errors: Error[] }> {
   const server = await startLoopbackIrcServer();
   const errors: Error[] = [];
@@ -90,6 +91,7 @@ async function connectAndCollectRegistration(params: {
       nick: "bot",
       username: "bot",
       realname: "OpenClaw Bot",
+      password: params.password,
       nickserv: params.nickserv,
       onError: (error) => errors.push(error),
     });
@@ -184,6 +186,18 @@ describe("irc client nickserv", () => {
     });
 
     expect(result.lines).toContain("PRIVMSG NickServ :IDENTIFY secret JOIN #bad");
+  });
+});
+
+describe("irc client server password", () => {
+  it.each([
+    { password: "secret", expected: "PASS secret" },
+    { password: "correct horse battery staple", expected: "PASS :correct horse battery staple" },
+    { password: ":colon-first", expected: "PASS ::colon-first" },
+  ])("sends $password as $expected", async ({ password, expected }) => {
+    const result = await connectAndCollectRegistration({ password });
+
+    expect(result.lines[0]).toBe(expected);
   });
 });
 

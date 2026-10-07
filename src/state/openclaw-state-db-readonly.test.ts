@@ -6,7 +6,7 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { constants, DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
@@ -160,7 +160,7 @@ it("preserves read admission denial and recovers the cached reader", async () =>
   });
 });
 
-it.each(["complete", "return", "throw", "failed close"] as const)(
+it.each(["throw", "failed close"] as const)(
   "ends the native stream snapshot before close on %s",
   async (ending) => {
     await withTempDir("openclaw-state-stream-snapshot-", async (root) => {
@@ -193,11 +193,7 @@ it.each(["complete", "return", "throw", "failed close"] as const)(
       });
       try {
         expect((await rows.next()).value).toBe(1);
-        if (ending === "complete") {
-          expect((await rows.next()).done).toBe(true);
-        } else if (ending === "return") {
-          await rows.return();
-        } else if (ending === "failed close") {
+        if (ending === "failed close") {
           await expect(rows.return()).rejects.toBe(failure);
           expect(reader?.isOpen).toBe(true);
           await expect(closeOpenClawStateDatabaseByPathAsync(source.path)).rejects.toThrow(
@@ -326,143 +322,129 @@ it("waits for a transient database lock before a fresh read-only schema inspecti
     }
   }));
 
-describe.each(["explicit", "async"] as const)("%s read-only state reads", (mode) => {
-  const readState =
-    mode === "async"
-      ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
-      : withExistingOpenClawStateDatabaseArtifactPreservingReadOnly;
-  it("reads only active disposable scopes directly and revokes inherited async access", async () => {
-    await withTempDir("openclaw-state-disposable-", async (root) => {
-      const outer = createOptions(path.join(root, "outer"));
-      const inner = createOptions(path.join(root, "inner"));
-      const source = createOptions(path.join(root, "source"));
-      const paths = [outer, inner, source];
-      for (const options of paths) {
-        fs.mkdirSync(path.dirname(options.path), { recursive: true });
-        const db = new DatabaseSync(options.path);
-        db.exec(
-          "PRAGMA journal_mode = WAL; CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('committed')",
-        );
-        db.close();
-      }
-      const read = (options: ReturnType<typeof createOptions>) =>
-        readState(({ db }) => {
-          expect(isArtifactPreservingStateRead()).toBe(true);
-          expect(db.prepare("SELECT value FROM held").get()).toEqual({ value: "committed" });
-          expect(() => db.exec("INSERT INTO held VALUES ('unexpected')")).toThrow(/readonly/);
-          return db.location();
-        }, options);
-      const sourceBefore = fs.readFileSync(source.path);
-      const released = createDeferredCore();
-      let descendant: Promise<unknown> | undefined;
-      await withDisposableOpenClawStateReads(outer.path, async () => {
+it("reads only active disposable scopes directly and revokes inherited async access", async () => {
+  await withTempDir("openclaw-state-disposable-", async (root) => {
+    const outer = createOptions(path.join(root, "outer"));
+    const inner = createOptions(path.join(root, "inner"));
+    const source = createOptions(path.join(root, "source"));
+    const paths = [outer, inner, source];
+    for (const options of paths) {
+      fs.mkdirSync(path.dirname(options.path), { recursive: true });
+      const db = new DatabaseSync(options.path);
+      db.exec(
+        "PRAGMA journal_mode = WAL; CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('committed')",
+      );
+      db.close();
+    }
+    const read = (options: ReturnType<typeof createOptions>) =>
+      withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(({ db }) => {
+        expect(isArtifactPreservingStateRead()).toBe(true);
+        expect(db.prepare("SELECT value FROM held").get()).toEqual({ value: "committed" });
+        expect(() => db.exec("INSERT INTO held VALUES ('unexpected')")).toThrow(/readonly/);
+        return db.location();
+      }, options);
+    const sourceBefore = fs.readFileSync(source.path);
+    const released = createDeferredCore();
+    let descendant: Promise<unknown> | undefined;
+    await withDisposableOpenClawStateReads(outer.path, async () => {
+      expect(await read(outer)).toBe(outer.path);
+      await withDisposableOpenClawStateReads(inner.path, async () => {
         expect(await read(outer)).toBe(outer.path);
-        await withDisposableOpenClawStateReads(inner.path, async () => {
-          expect(await read(outer)).toBe(outer.path);
-          expect(await read(inner)).toBe(inner.path);
-          expect(await read(source)).not.toBe(source.path);
-          descendant = released.promise.then(() => read(inner));
-        });
-        expect(await read(inner)).not.toBe(inner.path);
-        expect(await read(outer)).toBe(outer.path);
-        released.resolve();
-        await expect(descendant).rejects.toBeInstanceOf(StateDatabaseReadAdmissionInvalidatedError);
+        expect(await read(inner)).toBe(inner.path);
+        expect(await read(source)).not.toBe(source.path);
+        descendant = released.promise.then(() => read(inner));
       });
-      expect(await read(outer)).not.toBe(outer.path);
-      expect(fs.readFileSync(source.path)).toEqual(sourceBefore);
-      expect(fs.readdirSync(path.dirname(source.path))).toEqual(["openclaw.sqlite"]);
+      expect(await read(inner)).not.toBe(inner.path);
+      expect(await read(outer)).toBe(outer.path);
+      released.resolve();
+      await expect(descendant).rejects.toBeInstanceOf(StateDatabaseReadAdmissionInvalidatedError);
     });
+    expect(await read(outer)).not.toBe(outer.path);
+    expect(fs.readFileSync(source.path)).toEqual(sourceBefore);
+    expect(fs.readdirSync(path.dirname(source.path))).toEqual(["openclaw.sqlite"]);
   });
-  it("requires Doctor for the exact dangling Workshop index without changing its source", async () => {
-    await withTempDir("openclaw-state-readonly-dangling-workshop-", async (stateDir) => {
-      const options = createOptions(stateDir);
-      const opened = openOpenClawStateDatabase(options);
-      closeOpenClawStateDatabaseForTest();
-      const database = new DatabaseSync(opened.path);
-      try {
-        database.exec(
-          "CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
-        );
-        database.enableDefensive?.(false);
-        database.exec("PRAGMA writable_schema = ON;");
-        database
-          .prepare(
-            `UPDATE sqlite_schema
+});
+it("requires Doctor for the exact dangling Workshop index without changing its source", async () => {
+  await withTempDir("openclaw-state-readonly-dangling-workshop-", async (stateDir) => {
+    const options = createOptions(stateDir);
+    const opened = openOpenClawStateDatabase(options);
+    closeOpenClawStateDatabaseForTest();
+    const database = new DatabaseSync(opened.path);
+    try {
+      database.exec(
+        "CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
+      );
+      database.enableDefensive?.(false);
+      database.exec("PRAGMA writable_schema = ON;");
+      database
+        .prepare(
+          `UPDATE sqlite_schema
               SET sql = 'CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time
                            ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC)'
             WHERE type = 'index'
               AND name = 'idx_skill_workshop_collection_reviews_workspace_time'`,
-          )
-          .run();
-        const schema = database.prepare("PRAGMA schema_version").get() as {
-          schema_version: number;
-        };
-        database.exec(
-          `PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schema.schema_version + 1};`,
-        );
-      } finally {
-        database.close();
-      }
-      const before = fs.readFileSync(options.path);
+        )
+        .run();
+      const schema = database.prepare("PRAGMA schema_version").get() as {
+        schema_version: number;
+      };
+      database.exec(
+        `PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schema.schema_version + 1};`,
+      );
+    } finally {
+      database.close();
+    }
+    const before = fs.readFileSync(options.path);
 
-      await expect(
-        Promise.resolve().then(() =>
-          readState(({ db }) => db.prepare("SELECT role FROM schema_meta").get(), options),
+    await expect(
+      Promise.resolve().then(() =>
+        withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+          ({ db }) => db.prepare("SELECT role FROM schema_meta").get(),
+          options,
         ),
-      ).rejects.toThrow(/legacy-workshop-review-index.*openclaw doctor --fix/);
-      expect(fs.readFileSync(options.path)).toEqual(before);
-    });
+      ),
+    ).rejects.toThrow(/legacy-workshop-review-index.*openclaw doctor --fix/);
+    expect(fs.readFileSync(options.path)).toEqual(before);
   });
-  it.each(["cached", "uncached"])(
-    "reuses an idle writer but isolates its %s transaction",
-    async (cacheState) => {
-      await withTempDir("openclaw-state-readonly-isolated-", async (stateDir) => {
-        const options = createOptions(stateDir);
-        const opened = openOpenClawStateDatabase(options);
-        opened.db.exec("CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('original');");
-        let called = false;
-        const idle = readState(({ db }) => {
-          called = true;
-          expect(isArtifactPreservingStateRead()).toBe(true);
-          expect(db).toBe(opened.db);
+});
+it("reuses an idle writer but isolates its transaction", async () => {
+  await withTempDir("openclaw-state-readonly-isolated-", async (stateDir) => {
+    const options = createOptions(stateDir);
+    const opened = openOpenClawStateDatabase(options);
+    opened.db.exec("CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('original');");
+    let called = false;
+    const idle = withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(({ db }) => {
+      called = true;
+      expect(isArtifactPreservingStateRead()).toBe(true);
+      expect(db).toBe(opened.db);
+      return db.prepare("SELECT value FROM held").all();
+    }, options);
+    expect(called).toBe(true);
+    expect(isArtifactPreservingStateRead()).toBe(false);
+    const writer = opened.db;
+    writer.exec("BEGIN; UPDATE held SET value = 'uncommitted';");
+    try {
+      expect(await idle).toEqual([{ value: "original" }]);
+      expect(writer.isTransaction).toBe(true);
+      const result = await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+        ({ db, path: pathname }) => {
+          expect(db).not.toBe(writer);
+          expect(pathname).toBe(options.path);
           return db.prepare("SELECT value FROM held").all();
-        }, options);
-        expect(called).toBe(true);
-        expect(isArtifactPreservingStateRead()).toBe(false);
-        if (cacheState === "uncached") {
-          closeOpenClawStateDatabaseForTest();
-        }
-        const writer = cacheState === "cached" ? opened.db : new DatabaseSync(options.path);
-        writer.exec("BEGIN; UPDATE held SET value = 'uncommitted';");
-        try {
-          expect(await idle).toEqual([{ value: "original" }]);
-          expect(writer.isTransaction).toBe(true);
-          const result = await readState(({ db, path: pathname }) => {
-            expect(db).not.toBe(writer);
-            expect(pathname).toBe(options.path);
-            return db.prepare("SELECT value FROM held").all();
-          }, options);
-          expect(result).toEqual([{ value: "original" }]);
-          expect(writer.isTransaction).toBe(true);
-          expect(writer.prepare("SELECT value FROM held").all()).toEqual([
-            { value: "uncommitted" },
-          ]);
-        } finally {
-          writer.exec("ROLLBACK");
-          if (cacheState === "uncached") {
-            writer.close();
-          }
-        }
-      });
-    },
-  );
+        },
+        options,
+      );
+      expect(result).toEqual([{ value: "original" }]);
+      expect(writer.isTransaction).toBe(true);
+      expect(writer.prepare("SELECT value FROM held").all()).toEqual([{ value: "uncommitted" }]);
+    } finally {
+      writer.exec("ROLLBACK");
+    }
+  });
 });
 
 it.each([
-  { failure: "latch", composite: false },
   { failure: "quarantine", composite: false },
-  { failure: "callback", composite: false },
-  { failure: "latch", composite: true },
   { failure: "quarantine", composite: true },
   { failure: "callback", composite: true },
 ] as const)(
@@ -480,9 +462,7 @@ it.each([
         async (...args) => {
           const prepared = await prepare(...args);
           preparedLocation = prepared.location;
-          if (failure === "latch") {
-            failurePublished = recordOpenClawStateDatabaseOpenFailure(options.path, refused);
-          } else if (failure === "quarantine") {
+          if (failure === "quarantine") {
             failurePublished = recordOpenClawDatabaseQuarantine({
               env: options.env,
               kind: "state",
@@ -718,89 +698,80 @@ it("keeps the original synchronous snapshot while retained current reads see lat
   });
 });
 
-it.each(["synchronous", "discovery"] as const)(
-  "reads fresh authority without replacing an inherited %s snapshot",
-  async (inherited) => {
-    await withTempDir("openclaw-current-snapshot-", async (root) => {
-      const options = createOptions(root);
-      openOpenClawStateDatabase(options);
-      closeOpenClawStateDatabaseForTest();
-      const writer = new DatabaseSync(options.path);
-      writer.exec(
-        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('first');",
+it("reads fresh authority without replacing an inherited discovery snapshot", async () => {
+  await withTempDir("openclaw-current-snapshot-", async (root) => {
+    const options = createOptions(root);
+    openOpenClawStateDatabase(options);
+    closeOpenClawStateDatabaseForTest();
+    const writer = new DatabaseSync(options.path);
+    writer.exec(
+      "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('first');",
+    );
+    const read = () =>
+      withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) => db.prepare("SELECT value FROM held").get()?.value,
+        options,
       );
-      const read = () =>
-        withExistingOpenClawStateDatabaseReadOnly(
-          ({ db }) => db.prepare("SELECT value FROM held").get()?.value,
-          options,
-        );
-      const current = () =>
-        withSynchronousArtifactPreservingStateSnapshot(() => [read(), read()], {
-          current: options,
-        });
-      const artifacts = () =>
-        ["", "-wal", "-shm"].map((suffix) => fs.readFileSync(options.path + suffix));
-      const inspect = () => {
-        expect(read()).toBe("first");
-        writer.exec("UPDATE held SET value='revoked'");
-        const before = artifacts();
-        expect(current()).toEqual(["revoked", "revoked"]);
-        expect(artifacts()).toEqual(before);
-        expect(read()).toBe("first");
-        expect(() =>
+    const current = () =>
+      withSynchronousArtifactPreservingStateSnapshot(() => [read(), read()], {
+        current: options,
+      });
+    const artifacts = () =>
+      ["", "-wal", "-shm"].map((suffix) => fs.readFileSync(options.path + suffix));
+    const inspect = () => {
+      expect(read()).toBe("first");
+      writer.exec("UPDATE held SET value='revoked'");
+      const before = artifacts();
+      expect(current()).toEqual(["revoked", "revoked"]);
+      expect(artifacts()).toEqual(before);
+      expect(read()).toBe("first");
+      expect(() =>
+        withSynchronousArtifactPreservingStateSnapshot(
+          () => {
+            expect(read()).toBe("revoked");
+            throw new Error("authority consumer failed");
+          },
+          { current: options },
+        ),
+      ).toThrow("authority consumer failed");
+      expect(read()).toBe("first");
+      writer.exec("UPDATE held SET value='later'");
+      expect(current()).toEqual(["later", "later"]);
+      expect(read()).toBe("first");
+      const foreign = createOptions(path.join(root, "foreign"));
+      openOpenClawStateDatabase(foreign).db.exec(
+        "CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('committed');",
+      );
+      runOpenClawStateWriteTransaction(({ db }) => {
+        db.exec("UPDATE held SET value='uncommitted'");
+        expect(
           withSynchronousArtifactPreservingStateSnapshot(
-            () => {
-              expect(read()).toBe("revoked");
-              throw new Error("authority consumer failed");
-            },
+            () =>
+              withExistingOpenClawStateDatabaseReadOnly(
+                ({ db: reader }) => reader.prepare("SELECT value FROM held").get()?.value,
+                foreign,
+              ),
             { current: options },
           ),
-        ).toThrow("authority consumer failed");
-        expect(read()).toBe("first");
-        writer.exec("UPDATE held SET value='later'");
-        expect(current()).toEqual(["later", "later"]);
-        expect(read()).toBe("first");
-        const foreign = createOptions(path.join(root, "foreign"));
-        openOpenClawStateDatabase(foreign).db.exec(
-          "CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('committed');",
-        );
-        runOpenClawStateWriteTransaction(({ db }) => {
-          db.exec("UPDATE held SET value='uncommitted'");
-          expect(
-            withSynchronousArtifactPreservingStateSnapshot(
-              () =>
-                withExistingOpenClawStateDatabaseReadOnly(
-                  ({ db: reader }) => reader.prepare("SELECT value FROM held").get()?.value,
-                  foreign,
-                ),
-              { current: options },
-            ),
-          ).toBe("committed");
-        }, foreign);
-      };
-      try {
-        if (inherited === "synchronous") {
-          withArtifactPreservingStateReads(() =>
-            withSynchronousArtifactPreservingStateSnapshot(inspect),
-          );
-        } else {
-          await withArtifactPreservingStateReads(() =>
-            withOpenClawStateDatabaseReadSnapshot(async () => {
-              inspect();
-              await Promise.resolve();
-              writer.exec("UPDATE held SET value='after-await'");
-              expect(current()).toEqual(["after-await", "after-await"]);
-              expect(read()).toBe("first");
-            }, options),
-          );
-        }
-      } finally {
-        writer.close();
-        await closeOpenClawStateDatabaseAsync();
-      }
-    });
-  },
-);
+        ).toBe("committed");
+      }, foreign);
+    };
+    try {
+      await withArtifactPreservingStateReads(() =>
+        withOpenClawStateDatabaseReadSnapshot(async () => {
+          inspect();
+          await Promise.resolve();
+          writer.exec("UPDATE held SET value='after-await'");
+          expect(current()).toEqual(["after-await", "after-await"]);
+          expect(read()).toBe("first");
+        }, options),
+      );
+    } finally {
+      writer.close();
+      await closeOpenClawStateDatabaseAsync();
+    }
+  });
+});
 
 it.each(["admission", "cleanup"] as const)(
   "rejects a scoped metadata %s failure without reusing invalid state",

@@ -12,6 +12,8 @@ import {
 } from "./lib/upgrade-survivor-policy.mjs";
 
 const BASELINE_SHARDED_LANES = new Set(["published-upgrade-survivor", "update-migration"]);
+// The 62-minute update-restart-auth lane needs room for runner setup and artifact upload.
+const LONG_LANE_JOB_TIMEOUT_MINUTES = new Map([["update-restart-auth", 75]]);
 
 function splitTokens(raw) {
   return [
@@ -117,6 +119,12 @@ export function planTargetedDockerLaneGroups({
       groupLanes.some((lane) => BASELINE_SHARDED_LANES.has(lane))
     ) {
       group.timeout_minutes = 90;
+    }
+    for (const lane of groupLanes) {
+      const minutes = LONG_LANE_JOB_TIMEOUT_MINUTES.get(lane);
+      if (minutes !== undefined && (group.timeout_minutes ?? 60) < minutes) {
+        group.timeout_minutes = minutes;
+      }
     }
     groups.push(group);
   };

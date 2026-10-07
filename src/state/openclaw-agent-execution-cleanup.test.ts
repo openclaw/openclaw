@@ -25,7 +25,10 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:worker_threads")>()),
   Worker: edge.forbidden,
 }));
-vi.mock("../infra/sqlite-worker-identity.js", () => ({
+vi.mock("../infra/sqlite-worker-identity.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/sqlite-worker-identity.js")>(
+    "../infra/sqlite-worker-identity.js",
+  )),
   readDatabasePathIdentity: async (canonicalPath: string) => ({
     key: "file:synthetic-state",
     canonicalPath,

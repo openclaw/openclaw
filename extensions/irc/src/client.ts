@@ -415,8 +415,15 @@ export async function connectIrcClient(options: IrcClientOptions) {
 
   socket.once("connect", () => {
     try {
-      if (options.password && options.password.trim()) {
-        sendRaw(`PASS ${options.password.trim()}`);
+      const password = options.password?.trim();
+      if (password) {
+        // Servers read only the first word of a middle parameter, so a passphrase
+        // with spaces or a leading ":" must go in the trailing parameter.
+        sendRaw(
+          password.includes(" ") || password.startsWith(":")
+            ? `PASS :${password}`
+            : `PASS ${password}`,
+        );
       }
       sendRaw(`NICK ${options.nick.trim()}`);
       sendRaw(`USER ${options.username.trim()} 0 * :${sanitizeIrcOutboundText(options.realname)}`);
