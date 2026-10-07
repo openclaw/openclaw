@@ -7,11 +7,13 @@ import * as walAdmission from "../infra/sqlite-wal-write-admission.js";
 import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { prepareOpenClawStateCurrentReader } from "../state/openclaw-state-db-current-reader.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDoctorMaintenanceState } from "./doctor-maintenance-state.js";
 
@@ -32,8 +34,8 @@ it("drains inherited shared-state WAL maintenance before opening Doctor resource
       settle: (operation) => operation(),
       warn: vi.fn(),
     });
-    const cancellationStarted = createDeferred<void>();
-    const allowCancellationToSettle = createDeferred<void>();
+    const cancellationStarted = createDeferred();
+    const allowCancellationToSettle = createDeferred();
     const cancel = walAdmission.cancelSqliteWalWriteAdmission;
     const cancellation = vi
       .spyOn(walAdmission, "cancelSqliteWalWriteAdmission")
@@ -59,6 +61,42 @@ it("drains inherited shared-state WAL maintenance before opening Doctor resource
       allowCancellationToSettle.resolve();
       cancellation.mockRestore();
       await maintenance.release();
+      await closeOpenClawStateDatabaseAsync();
+    }
+  });
+});
+
+it("settles the inherited WAL owner without closing an independent same-database reader", async () => {
+  await withOpenClawTestState({ scenario: "external-service" }, async (state) => {
+    openOpenClawStateDatabase({ env: state.env });
+    const reader = await prepareOpenClawStateCurrentReader(
+      captureOpenClawStateWorkerContext({ env: state.env }),
+    );
+    expect(reader).toBeDefined();
+    const maintenance = await createDoctorMaintenanceState({
+      params: {
+        root: null,
+        options: { repair: true, nonInteractive: true },
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      },
+      env: state.env,
+      signal: new AbortController().signal,
+      deadline: () => undefined,
+      assertReadCurrent() {},
+      settle: (operation) => operation(),
+      warn: vi.fn(),
+    });
+    let released = false;
+    try {
+      await maintenance.acquire();
+      await maintenance.release();
+      released = true;
+      expect(reader!.dataVersion()).toEqual(expect.any(Number));
+    } finally {
+      reader?.dispose();
+      if (!released) {
+        await maintenance.release();
+      }
       await closeOpenClawStateDatabaseAsync();
     }
   });

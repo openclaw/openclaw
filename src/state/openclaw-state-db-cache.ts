@@ -574,30 +574,47 @@ export function closeOpenClawStateDatabaseByPath(
   pathname: string,
   options?: OpenClawStateDatabaseCloseOptions,
 ): boolean {
-  const resolvedPath = path.resolve(pathname);
+  const resolvedPath = resolveDatabasePath({ path: pathname });
   return retireOpenClawStateDatabaseHandles(
     resolvedPath,
     options,
-    // A known cached owner already identifies the exact handle. Avoid opening
-    // a read-admission worker solely to re-resolve its identity before Doctor
-    // retires inherited runtime maintenance.
+    // A cached owner already identifies the exact handle; avoid opening a read worker.
     cachedDatabases.has(resolvedPath) ? undefined : asyncResources.identity(pathname),
   );
+}
+
+export async function retireOpenClawStateDatabaseCacheOwnerByPath(
+  pathname: string,
+  options?: OpenClawStateDatabaseCloseOptions,
+): Promise<boolean> {
+  const database = cachedDatabases.get(resolveDatabasePath({ path: pathname }));
+  if (!database) {
+    return false;
+  }
+  await stopOpenClawStateDatabaseMaintenance(database.path);
+  retireOpenClawStateDatabaseHandle(database, false, options);
+  return true;
 }
 
 export function closeOpenClawStateDatabase(options?: OpenClawStateDatabaseCloseOptions): void {
   retireOpenClawStateDatabaseHandles(undefined, options);
 }
 
+<<<<<<< HEAD
 /** Register a resource owner before it can admit any shared-state worker opens. */
 export const registerOpenClawStateDatabaseAsyncResource = asyncResources.register;
+=======
+export function registerOpenClawStateDatabaseAsyncResource(
+  resource: OpenClawStateDatabaseAsyncResource,
+): () => void {
+  return asyncResources.register(resource);
+}
+>>>>>>> 2952212e65f (fix(doctor): preserve independent state readers)
 
-/** Capture the canonical read generation before any asynchronous worker admission. */
 export const captureOpenClawStateDatabaseReadAdmission = asyncResources.capture;
 
 export const captureOpenClawStateIntegrityAdmission = asyncResources.integrity;
 
-/** Bind worker-created storage to its captured admission without publishing a native handle. */
 export function publishOpenClawStateDatabaseWorkerAdmission(
   admission: OpenClawStateDatabaseReadAdmission,
 ): void {
