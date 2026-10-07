@@ -5,6 +5,7 @@ import type { RealtimeTalkTranscriptItem, RealtimeTalkWebRtcSdpSessionResult } f
 import type { RealtimeTalkVideoFrame } from "./video.ts";
 
 const REALTIME_WEBRTC_OFFER_TIMEOUT_MS = 30_000;
+const REALTIME_DATA_CHANNEL_OPEN_TIMEOUT_MS = 15_000;
 const REALTIME_TALK_DEFAULT_MAX_MESSAGE_SIZE = 64 * 1024;
 const OPENAI_REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
 
@@ -275,6 +276,89 @@ export class RealtimeTalkWebRtcOfferExchange {
     if (this.pendingRequest === request) {
       this.pendingRequest = null;
     }
+  }
+}
+
+type RealtimeTalkDataChannelOpenResult = "already-open" | "opened" | "cancelled";
+
+export class RealtimeTalkDataChannelStartup {
+  private openedByEvent = false;
+  private readonly opened: Promise<void>;
+  private resolveOpen: () => void = () => undefined;
+  private cancelWait: (() => void) | null = null;
+
+  constructor(
+    private readonly channel: RTCDataChannel,
+    private readonly isCurrent: () => boolean,
+    private readonly fail: (detail: string) => void,
+  ) {
+    this.opened = new Promise<void>((resolve) => {
+      this.resolveOpen = resolve;
+    });
+    channel.addEventListener(
+      "open",
+      () => {
+        if (this.isCurrent()) {
+          this.openedByEvent = true;
+          this.resolveOpen();
+        }
+      },
+      { once: true },
+    );
+    channel.addEventListener("error", () => {
+      if (this.isCurrent()) {
+        this.fail("Realtime control channel failed");
+      }
+    });
+    channel.addEventListener("close", () => {
+      if (this.isCurrent()) {
+        this.fail("Realtime control channel closed");
+      }
+    });
+  }
+
+  async wait(): Promise<RealtimeTalkDataChannelOpenResult> {
+    if (this.openedByEvent) {
+      return "opened";
+    }
+    if (this.channel.readyState === "open") {
+      return "already-open";
+    }
+    if (this.channel.readyState === "closing" || this.channel.readyState === "closed") {
+      this.fail("Realtime control channel closed");
+      return "cancelled";
+    }
+    return await new Promise<RealtimeTalkDataChannelOpenResult>((resolve) => {
+      let settled = false;
+      const finish = (result: RealtimeTalkDataChannelOpenResult) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        globalThis.clearTimeout(timeout);
+        if (this.cancelWait === cancel) {
+          this.cancelWait = null;
+        }
+        resolve(result);
+      };
+      const cancel = () => finish("cancelled");
+      const timeout = globalThis.setTimeout(() => {
+        if (this.isCurrent()) {
+          this.fail(
+            `Realtime control channel did not open within ${REALTIME_DATA_CHANNEL_OPEN_TIMEOUT_MS}ms. Check the network and try again.`,
+          );
+        } else {
+          finish("cancelled");
+        }
+      }, REALTIME_DATA_CHANNEL_OPEN_TIMEOUT_MS);
+      this.cancelWait = cancel;
+      void this.opened.then(() => finish("opened"));
+    });
+  }
+
+  cancel(): void {
+    this.cancelWait?.();
+    this.cancelWait = null;
   }
 }
 

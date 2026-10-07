@@ -19,7 +19,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("guides a pending microphone request and clears guidance when voice connects", async () => {
+  it("shows granted-device startup guidance and clears it when voice connects", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         historyMessages: [TALK_READY_HISTORY_MESSAGE],
@@ -60,13 +60,12 @@ suite.define(() => {
         )
         .toBe(true);
       expect(await gateway.getRequests("talk.client.create")).toHaveLength(0);
-      await captureMicrophoneLossProof(suite, page, "prepared-input-pending.png");
       const guidance = page.locator('.agent-chat__talk-status[role="status"]');
       await expect
         .poll(() => guidance.allTextContents())
         .toEqual([
           expect.stringContaining(
-            "Waiting for microphone access. Bring this tab to the foreground and allow access if prompted.",
+            "Starting the selected microphone. This can take a moment if the device is busy.",
           ),
         ]);
       await expect.poll(() => guidance.isVisible()).toBe(true);
@@ -105,24 +104,26 @@ suite.define(() => {
       await page.getByRole("button", { name: "Start voice input" }).click();
       try {
         await expect
-          .poll(() =>
-            page.evaluate(() => {
-              const proof = (
-                window as Window & { openclawMicrophoneLossE2e?: MicrophoneLossE2eProof }
-              ).openclawMicrophoneLossE2e;
-              return {
-                status: document
-                  .querySelector(".agent-chat__voice-activity")
-                  ?.getAttribute("data-status"),
-                detail: document.querySelector(".agent-chat__talk-status")?.textContent,
-                stage: proof?.stage,
-                trackState: proof?.trackState,
-                localConnection: proof?.localConnection,
-                localIce: proof?.localIce,
-                remoteIce: proof?.remoteIce,
-                remoteGathering: proof?.remoteGathering,
-              };
-            }),
+          .poll(
+            () =>
+              page.evaluate(() => {
+                const proof = (
+                  window as Window & { openclawMicrophoneLossE2e?: MicrophoneLossE2eProof }
+                ).openclawMicrophoneLossE2e;
+                return {
+                  status: document
+                    .querySelector(".agent-chat__voice-activity")
+                    ?.getAttribute("data-status"),
+                  detail: document.querySelector(".agent-chat__talk-status")?.textContent,
+                  stage: proof?.stage,
+                  trackState: proof?.trackState,
+                  localConnection: proof?.localConnection,
+                  localIce: proof?.localIce,
+                  remoteIce: proof?.remoteIce,
+                  remoteGathering: proof?.remoteGathering,
+                };
+              }),
+            { timeout: 25_000 },
           )
           .toMatchObject({ status: "listening" });
       } catch (error) {
@@ -160,7 +161,7 @@ suite.define(() => {
       await gateway.waitForRequest("talk.client.close");
       await page.getByRole("button", { name: "Dismiss voice input error" }).click();
       console.info(
-        "[microphone-loss-e2e] native capture+local peer; injected track ended; visible error; track+peer+audio released",
+        "[microphone-loss-e2e] native track+local peer; injected track ended; visible error; track+peer+audio released",
       );
     });
   });

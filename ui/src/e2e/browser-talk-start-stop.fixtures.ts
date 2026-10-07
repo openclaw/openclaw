@@ -293,10 +293,19 @@ export async function installMicrophoneLossWebRtcFixture(page: Page) {
       endMicrophone: () => microphone?.dispatchEvent(new Event("ended")),
     };
     Object.defineProperty(window, "openclawMicrophoneLossE2e", { value: proof });
-    const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-    navigator.mediaDevices.getUserMedia = async (constraints) => {
+    navigator.mediaDevices.getUserMedia = async () => {
       proof.stage = "microphone-requested";
-      const stream = await getUserMedia(constraints);
+      const sourceContext = new AudioContext();
+      const destination = sourceContext.createMediaStreamDestination();
+      const stream = destination.stream;
+      const sourceTrack = stream.getAudioTracks()[0];
+      if (sourceTrack) {
+        const stop = sourceTrack.stop.bind(sourceTrack);
+        sourceTrack.stop = () => {
+          stop();
+          void sourceContext.close();
+        };
+      }
       proof.stage = "microphone-acquired";
       microphone = stream.getAudioTracks()[0];
       if (microphone) {
