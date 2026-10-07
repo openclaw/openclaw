@@ -22,7 +22,7 @@ export {
 } from "../../../gateway/method-scopes.js";
 export { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 export { resolveGatewaySessionStoreTargetInWorker } from "../../../gateway/session-utils-store-worker.js";
-export { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+export { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 export { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 export { prepareModelChoice } from "../../model-runtime-choice.js";
 export { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";

@@ -94,15 +94,10 @@ vi.mock("../../timeout.js", () => ({
   resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,
 }));
 
-vi.mock("../announce/subagent-announce.js", async (importOriginal) => {
-  const { hasUsableSessionEntry } =
-    await importOriginal<typeof import("../announce/subagent-announce.js")>();
-  return {
-    hasUsableSessionEntry,
-    captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
-    runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
-  };
-});
+vi.mock("../announce/subagent-announce.js", () => ({
+  captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
+  runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
+}));
 vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));

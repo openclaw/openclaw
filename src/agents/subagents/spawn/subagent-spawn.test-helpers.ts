@@ -368,14 +368,13 @@ export async function loadSubagentSpawnModuleForTest(params: {
     prepareModelChoice: params.prepareModelChoiceMock ?? supportedSpawnModelChoice,
     loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
       ((params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore)[scope.sessionKey],
-    withSessionEntryReadOnlyInWorker: async (
+    readSessionEntryReadOnlyInWorker: async (
       scope: { storePath?: string; sessionKey: string },
       assertCurrent: () => void,
-      consume: (read: { ok: true; value: Record<string, unknown> | undefined }) => Promise<unknown>,
     ) => {
       assertCurrent();
       const store = (params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore;
-      const value = await consume({ ok: true, value: store[scope.sessionKey] });
+      const value = await Promise.resolve(store[scope.sessionKey]);
       assertCurrent();
       return value;
     },

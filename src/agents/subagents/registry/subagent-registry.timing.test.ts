@@ -28,15 +28,10 @@ import {
 } from "./subagent-registry.test-helpers.js";
 
 const { announce } = vi.hoisted(() => ({ announce: vi.fn(async () => "delivered" as const) }));
-vi.mock("../announce/subagent-announce.js", async (importOriginal) => {
-  const { hasUsableSessionEntry } =
-    await importOriginal<typeof import("../announce/subagent-announce.js")>();
-  return {
-    hasUsableSessionEntry,
-    runSubagentAnnounceFlow: announce,
-    captureSubagentCompletionReply: vi.fn(async () => undefined),
-  };
-});
+vi.mock("../announce/subagent-announce.js", () => ({
+  runSubagentAnnounceFlow: announce,
+  captureSubagentCompletionReply: vi.fn(async () => undefined),
+}));
 
 describe("subagent timing completion", () => {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);

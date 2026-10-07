@@ -105,21 +105,18 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
   };
   const withLiveFacts = (compact: Map<string, SubagentRunReadRecord>) => {
     if (readScope !== "all") {
+      const live = getSubagentSessionReadLookup(inMemoryRuns);
+      const durable = getSessionListLookup(compactCache, compact);
       let liveKeys: string[];
       let persistedKeys: string[];
       if ("runIds" in readScope) {
-        liveKeys = getSubagentSessionReadLookup(inMemoryRuns).selectRunIds(readScope.runIds);
-        persistedKeys = getSessionListLookup(compactCache, compact).selectRunIds(
-          readScope.runIds,
-          liveKeys,
-        );
+        liveKeys = live.selectRunIds(readScope.runIds);
+        persistedKeys = durable.selectRunIds(readScope.runIds, liveKeys);
       } else if ("childSessionKeys" in readScope) {
         const keys = new Set(readScope.childSessionKeys.map((key) => key.trim()).filter(Boolean));
-        liveKeys = getSubagentSessionReadLookup(inMemoryRuns).selectChildren(keys);
-        persistedKeys = getSessionListLookup(compactCache, compact).selectChildren(keys);
+        liveKeys = live.selectChildren(keys);
+        persistedKeys = durable.selectChildren(keys);
       } else {
-        const live = getSubagentSessionReadLookup(inMemoryRuns);
-        const durable = getSessionListLookup(compactCache, compact)!;
         liveKeys = live.selectReadScope(readScope.sessionKeys, durable, readScope.descendants);
         persistedKeys = durable.selectReadScope(
           readScope.sessionKeys,
@@ -271,13 +268,8 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
   const roots = Object.freeze(
     [...new Set(params.sessionKeys.map((key) => key.trim()).filter(Boolean))].toSorted(),
   );
-  const localRuns = () =>
-    mergeSelectedFullRuns(fullCache, inMemoryRuns, new Map(), () => true, {
-      context,
-      freshPersisted: true,
-    });
   const topology = () =>
-    [...localRuns().values()]
+    [...inMemoryRuns.values()]
       .map(({ childSessionKey, requesterSessionKey }) => ({ childSessionKey, requesterSessionKey }))
       .toSorted(
         (left, right) =>

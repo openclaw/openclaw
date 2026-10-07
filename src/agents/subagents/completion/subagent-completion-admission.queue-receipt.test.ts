@@ -31,7 +31,10 @@ import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
-import { settleRequesterCompletionBatch } from "./subagent-completion-admission.store.js";
+import {
+  SubagentCompletionSourceChangedError,
+  mutateRequesterCompletionBatch,
+} from "./subagent-completion-admission.store.js";
 import { admitCompletionFixtureDatabase } from "./subagent-completion-admission.test-helpers.js";
 import type { RequesterWakeCommittedWrite } from "./subagent-completion-mutation.types.js";
 
@@ -96,11 +99,20 @@ describe("committed requester outcome queue receipts", () => {
       });
       let committed: RequesterWakeCommittedWrite | undefined;
       const settle = (onPublished: () => void) =>
-        settleRequesterCompletionBatch({
-          entries: [{ subagent: entry }],
-          outcome: { delivered: false, path: "none", error: "Requester unavailable" },
+        mutateRequesterCompletionBatch({
+          entries: [entry],
+          operation: {
+            kind: "settle",
+            outcome: { delivered: false, path: "none", error: "Requester unavailable" },
+          },
           context,
-          isCurrent: () => isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry),
+          assertCurrent: () => {
+            if (!isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry)) {
+              throw new SubagentCompletionSourceChangedError(
+                "Subagent completion owner changed before settlement",
+              );
+            }
+          },
           committed,
           onCommitted: (receipt) => {
             committed = receipt;

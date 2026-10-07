@@ -129,9 +129,9 @@ export function registerRequesterStartupAdmissionTests({
         });
       }
       if (failure === "result changed during reservation") {
-        const mutate = completionStore.mutateRequesterSettleWakeBatch;
+        const mutate = completionStore.mutateRequesterCompletionBatch;
         let changed = false;
-        vi.spyOn(completionStore, "mutateRequesterSettleWakeBatch").mockImplementation(
+        vi.spyOn(completionStore, "mutateRequesterCompletionBatch").mockImplementation(
           async (params) => {
             const result = await mutate(params);
             if (

@@ -31,10 +31,7 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { readSubagentRunAnnounceResultUsing } from "../announce/subagent-announce-result.js";
-import {
-  mutateRequesterSettleWakeBatch,
-  settleRequesterCompletionBatch,
-} from "../completion/subagent-completion-admission.store.js";
+import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
@@ -539,7 +536,7 @@ it("settles a requester cohort while many children finish, wake, and one is kill
     }),
   );
   const wakes = children.map((child) =>
-    mutateRequesterSettleWakeBatch({
+    mutateRequesterCompletionBatch({
       entries: [child],
       context,
       assertCurrent: () => {},
@@ -552,17 +549,17 @@ it("settles a requester cohort while many children finish, wake, and one is kill
     }),
   );
   const settlement = Promise.all(wakes).then(() =>
-    settleRequesterCompletionBatch({
+    mutateRequesterCompletionBatch({
       entries: children.map(({ runId }) => {
         const subagent = subagentRuns.get(runId);
         if (!subagent) {
           throw new Error("Requester wake lost its acknowledged child");
         }
-        return { subagent };
+        return subagent;
       }),
       context,
-      outcome: { delivered: true, path: "direct" },
-      isCurrent: () => true,
+      operation: { kind: "settle", outcome: { delivered: true, path: "direct" } },
+      assertCurrent: () => {},
     }),
   );
   const killed = manager.markSubagentRunTerminated({

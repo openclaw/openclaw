@@ -21,15 +21,10 @@ const { announceSpy } = vi.hoisted(() => ({
   announceSpy: vi.fn(async (): Promise<"delivered" | "retryable"> => "delivered"),
 }));
 
-vi.mock("../announce/subagent-announce.js", async (importOriginal) => {
-  const { hasUsableSessionEntry } =
-    await importOriginal<typeof import("../announce/subagent-announce.js")>();
-  return {
-    hasUsableSessionEntry,
-    runSubagentAnnounceFlow: announceSpy,
-    captureSubagentCompletionReply: vi.fn(async () => undefined),
-  };
-});
+vi.mock("../announce/subagent-announce.js", () => ({
+  runSubagentAnnounceFlow: announceSpy,
+  captureSubagentCompletionReply: vi.fn(async () => undefined),
+}));
 
 export { announceSpy };
 

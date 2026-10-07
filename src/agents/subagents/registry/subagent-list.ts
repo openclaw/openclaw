@@ -138,12 +138,9 @@ function buildChildSessionIndex(
       // the controller relationship.
       continue;
     }
-    const existing = childSessionsByController.get(controllerSessionKey);
-    if (existing) {
-      existing.push(childSessionKey);
-      continue;
-    }
-    childSessionsByController.set(controllerSessionKey, [childSessionKey]);
+    const children = childSessionsByController.get(controllerSessionKey) ?? [];
+    children.push(childSessionKey);
+    childSessionsByController.set(controllerSessionKey, children);
   }
   for (const [controllerSessionKey, childSessions] of childSessionsByController) {
     childSessionsByController.set(controllerSessionKey, childSessions.toSorted());
