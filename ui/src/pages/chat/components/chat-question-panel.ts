@@ -312,7 +312,6 @@ export class ChatQuestionPanel extends OpenClawLightDomElement {
       )?.focus({
         preventScroll: true,
       });
-      return;
     }
   }
 

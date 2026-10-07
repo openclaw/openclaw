@@ -276,8 +276,10 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
     do {
       retainedMessageWeight -= messageWeights[start] ?? 0;
       start += 1;
+      if (boundarySeq === null) {
+        break;
+      }
     } while (
-      boundarySeq !== null &&
       start < snapshot.messages.length &&
       readSessionMessageSequence(snapshot.messages[start]) === boundarySeq
     );

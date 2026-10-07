@@ -106,11 +106,12 @@ export const LAB_FEATURES = (
       configPath: ["cloudWorkers", "desktop"],
     },
   ] as const satisfies readonly Omit<LabFeature, "title" | "description">[]
-).map((feature) => ({
-  ...feature,
-  title: () => t(`labsPage.${feature.id}.title`),
-  description: () => t(`labsPage.${feature.id}.description`),
-}));
+).map((feature) =>
+  Object.assign({}, feature, {
+    title: () => t(`labsPage.${feature.id}.title`),
+    description: () => t(`labsPage.${feature.id}.description`),
+  }),
+);
 
 function recordAtPath(config: Record<string, unknown>, path: readonly string[]): unknown {
   let current: unknown = config;

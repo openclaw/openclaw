@@ -240,9 +240,9 @@ class ChatSubagentsPanel extends OpenClawLightDomElement {
     const finished = rows.filter((row) => !unfinished(row));
     const loading = this.data?.loading ?? false;
     const empty = this.data?.hasResult && !this.data.hasMore && !this.data.error;
-    const renderRows = (rows: SubagentsPanelRow[]) =>
+    const renderRows = (groupRows: SubagentsPanelRow[]) =>
       repeat(
-        rows,
+        groupRows,
         (row) => row.session.key,
         (row) => this.renderRow(row),
       );

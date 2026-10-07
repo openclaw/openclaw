@@ -42,7 +42,7 @@ export function selectIdentityAvatar(
   file: File,
   config?: ApplicationConfigCapability,
 ) {
-  const selection = Symbol();
+  const selection = Symbol("avatar-selection");
   avatarSelections.set(host, selection);
   if (!uploadsEnabled(config)) {
     host.identityError = uploadsDisabledMessage();
