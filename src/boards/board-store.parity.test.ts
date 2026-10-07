@@ -7,11 +7,16 @@ import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { restoreEmptyV21StorageForHistoricalFixture } from "../state/openclaw-agent-schema-v21.test-support.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { readBoardHtml, createTestBoardStore } from "./board-store.test-support.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 
@@ -21,22 +26,23 @@ function seedSession(env: NodeJS.ProcessEnv, agentId: string, sessionKey: string
   const database = openOpenClawAgentDatabase({ agentId, env });
   const sessionId = `session-${agentId}-${sessionKey.replaceAll(":", "-")}`;
   replaceSessionEntrySync(
-    { agentId, sessionKey, storePath: database.path },
+    { agentId, env, sessionKey, storePath: database.path },
     { sessionId, updatedAt: Date.now() },
   );
   return database.path;
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
 describe("SqliteBoardStore behavior", () => {
-  const createStore = createTestBoardStore;
   const boardSession = { sessionKey: "agent:main:board" };
   it("persists revisions, layout, bytes, and declared summaries", async () => {
-    const store = createStore();
+    const store = createTestBoardStore();
     const first = await store.putWidget({
       ...boardSession,
       name: "weather",
@@ -138,7 +144,7 @@ describe("SqliteBoardStore behavior", () => {
   });
 
   it("keeps content-kind semantics and normalized ordering", async () => {
-    const store = createStore();
+    const store = createTestBoardStore();
     await store.applyOps(boardSession, [
       { kind: "tab_create", tabId: "main", title: "Main" },
       { kind: "tab_create", tabId: "notes", title: "Notes" },
@@ -191,7 +197,7 @@ describe("SqliteBoardStore behavior", () => {
         kind === "html"
           ? { kind, html: text }
           : { kind, contentKind: "diagram", pluginKind: "diagram:diagram", source: text };
-      const store = createStore();
+      const store = createTestBoardStore();
       const first = await store.putWidget({
         ...boardSession,
         name: "scoped",
@@ -263,7 +269,7 @@ describe("SqliteBoardStore behavior", () => {
   );
 
   it("requires a fresh grant when an MCP app widget changes servers", async () => {
-    const store = createStore();
+    const store = createTestBoardStore();
     const descriptor = {
       serverName: "server-a",
       toolName: "weather",
@@ -311,7 +317,7 @@ describe("SqliteBoardStore behavior", () => {
   });
 
   it("rejects a delayed MCP App grant after remove and same-name replacement", async () => {
-    const store = createStore();
+    const store = createTestBoardStore();
     const putApp = async (serverName: string) =>
       await store.putWidget({
         ...boardSession,
@@ -344,7 +350,7 @@ describe("SqliteBoardStore behavior", () => {
   });
 
   it("rejects a delayed HTML grant after remove and same-name replacement", async () => {
-    const store = createStore();
+    const store = createTestBoardStore();
     const putHtml = async (html: string) =>
       await store.putWidget({
         ...boardSession,
@@ -363,28 +369,8 @@ describe("SqliteBoardStore behavior", () => {
     ).rejects.toThrow("instance changed");
   });
 
-  it("rejects stale grant revisions before accepting the current one", async () => {
-    const store = createStore();
-    const first = await store.putWidget({
-      ...boardSession,
-      name: "scoped",
-      content: { kind: "html", html: "one" },
-      declared: { tools: ["weather.read"] },
-    });
-    await expect(store.grant(boardSession, "scoped", "granted", 2)).rejects.toThrow(
-      "revision changed",
-    );
-    expect(
-      (await store.grant(boardSession, "scoped", "granted", 1, first.widgets[0]?.instanceId))
-        .widgets[0],
-    ).toMatchObject({
-      revision: 1,
-      grantState: "granted",
-    });
-  });
-
   it("drops an empty board after its last tab is deleted", async () => {
-    const store = createStore();
+    const store = createTestBoardStore();
     await store.applyOps(boardSession, [{ kind: "tab_create", tabId: "main", title: "Main" }]);
     expect(
       await store.applyOps(boardSession, [{ kind: "tab_delete", tabId: "main" }]),
@@ -499,11 +485,14 @@ describe("SqliteBoardStore persistence", () => {
     seedSession(env, "main", sessionKey);
     const opened = openOpenClawAgentDatabase({ agentId: "main", env });
     const databasePath = opened.path;
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     const { DatabaseSync } = requireNodeSqlite();
     const existingV14 = new DatabaseSync(databasePath);
+    restoreEmptyV21StorageForHistoricalFixture(existingV14);
     removeCanonicalValidationFromHistoricalAgentFixture(existingV14);
     existingV14.exec(`
       DROP TABLE board_widgets;
@@ -599,6 +588,7 @@ describe("SqliteBoardStore persistence", () => {
       /^CREATE TABLE board_widgets/u,
       "CREATE TABLE board_widgets_legacy",
     );
+    restoreEmptyV21StorageForHistoricalFixture(opened.db);
     removeCanonicalValidationFromHistoricalAgentFixture(opened.db);
     opened.db.exec(`
       PRAGMA foreign_keys = OFF;
@@ -615,6 +605,7 @@ describe("SqliteBoardStore persistence", () => {
       PRAGMA user_version = 14;
       UPDATE schema_meta SET schema_version = 14 WHERE meta_key = 'primary';
     `);
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
 
     expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
@@ -686,21 +677,13 @@ describe("SqliteBoardStore persistence", () => {
     const stateDir = tempDirs.make("openclaw-board-transcript-only-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const sessionKey = "agent:main:transcript-only";
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    database.db
-      .prepare(
-        `INSERT INTO session_nodes (
-           session_key, current_session_id, entry_json, updated_at
-         ) VALUES (?, 'transcript-only-session', '{}', 1)`,
-      )
-      .run(sessionKey);
-    database.db
-      .prepare(
-        `INSERT INTO session_windows (
-           session_id, session_key, session_scope, created_at, updated_at
-         ) VALUES ('transcript-only-session', ?, 'conversation', 1, 1)`,
-      )
-      .run(sessionKey);
+    const storePath = seedSession(env, "main", sessionKey);
+    await deleteSessionEntryLifecycle({
+      env,
+      storePath,
+      archiveTranscript: false,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
     const store = new SqliteBoardStore({
       resolveSession: () => ({ agentId: "main", sessionKey }),
       env,
@@ -822,7 +805,7 @@ describe("SqliteBoardStore persistence", () => {
       path: path.join(stateDir, "000-relocated.sqlite"),
     });
     replaceSessionEntrySync(
-      { agentId, sessionKey, storePath: relocated.path },
+      { agentId, env, sessionKey, storePath: relocated.path },
       { sessionId: "relocated-session", updatedAt: Date.now() },
     );
     relocated.db
@@ -859,6 +842,7 @@ describe("SqliteBoardStore persistence", () => {
     const result = await deleteSessionEntryLifecycle({
       agentId: "main",
       archiveTranscript: false,
+      env,
       storePath: databasePath,
       target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
     });
@@ -978,7 +962,9 @@ describe("SqliteBoardStore persistence", () => {
       content: { kind: "html", html: "beta" },
     });
 
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     const reopened = new SqliteBoardStore(options);

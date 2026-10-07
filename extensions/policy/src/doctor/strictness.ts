@@ -288,8 +288,8 @@ function channelProviderDenyRuleList(
     if (!isChannelDenyRule(entry)) {
       return undefined;
     }
-    const provider = entry.when?.provider?.trim();
-    if (provider !== undefined && provider !== "") {
+    const provider = entry.when.provider.trim();
+    if (provider !== "") {
       providers.push(metadata.caseSensitive === true ? provider : provider.toLowerCase());
     }
   }

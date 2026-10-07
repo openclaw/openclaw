@@ -26,7 +26,6 @@ function attachFilePersistence(params: {
 }): FileBackedSessionManagerForTest {
   const manager = params.manager as FileBackedSessionManagerForTest & {
     persistRecord(entry: unknown): void;
-    replacePersistedTranscript(): void;
   };
   const writeFullFile = () => {
     const target = params.target();
@@ -36,6 +35,8 @@ function attachFilePersistence(params: {
   };
   const originalNewSession = manager.newSession.bind(manager);
   const originalRemoveTrailingEntries = manager.removeTrailingEntries.bind(manager);
+  const originalRemoveTrailingEntriesAsync = manager.removeTrailingEntriesAsync.bind(manager);
+  const originalPrepareTranscriptRewriteAsync = manager.prepareTranscriptRewriteAsync.bind(manager);
   Object.assign(manager, {
     getSessionDir: () => params.sessionDir,
     getSessionFile: () => params.target(),
@@ -53,6 +54,25 @@ function attachFilePersistence(params: {
       }
       return removed;
     },
+    async removeTrailingEntriesAsync(
+      ...args: Parameters<SessionManager["removeTrailingEntriesAsync"]>
+    ) {
+      const removed = await originalRemoveTrailingEntriesAsync(...args);
+      if (removed > 0) {
+        writeFullFile();
+      }
+      return removed;
+    },
+    async prepareTranscriptRewriteAsync() {
+      const rewrite = await originalPrepareTranscriptRewriteAsync();
+      return {
+        sessionManager: rewrite.sessionManager,
+        commit: async (rewrittenEntryIds: ReadonlyMap<string, string>) => {
+          await rewrite.commit(rewrittenEntryIds);
+          writeFullFile();
+        },
+      };
+    },
     persistRecord(entry: unknown) {
       const target = params.target();
       fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -64,7 +84,6 @@ function attachFilePersistence(params: {
       }
       fs.appendFileSync(target, `${JSON.stringify(entry)}\n`);
     },
-    replacePersistedTranscript: writeFullFile,
   });
   if (params.initialize) {
     writeFullFile();

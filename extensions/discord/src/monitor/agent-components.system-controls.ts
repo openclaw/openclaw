@@ -1,7 +1,7 @@
-// Discord plugin module implements agent components.system controls behavior.
 import type { APIStringSelectComponent } from "discord-api-types/v10";
 import { ButtonStyle } from "discord-api-types/v10";
 import { logDebug, logError } from "openclaw/plugin-sdk/logging-core";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   Button,
   StringSelectMenu,
@@ -10,19 +10,21 @@ import {
   type StringSelectMenuInteraction,
 } from "../internal/discord.js";
 import {
-  AGENT_BUTTON_KEY,
-  AGENT_SELECT_KEY,
   ackComponentInteraction,
-  ensureAgentComponentInteractionAllowed,
-  parseAgentComponentData,
   replyUnavailableComponentInteraction,
   resolveAgentComponentRoute,
-  resolveInteractionContextWithDmAuth,
-  type AgentComponentContext,
-  type AgentComponentMessageInteraction,
-} from "./agent-components-helpers.js";
+} from "./agent-components-context.js";
+import { parseAgentComponentData } from "./agent-components-data.js";
+import { resolveInteractionContextWithDmAuth } from "./agent-components-dm-auth.js";
+import { ensureAgentComponentInteractionAllowed } from "./agent-components-guild-auth.js";
 import { resolveAgentComponentPolicyContext } from "./agent-components-live-policy.js";
-import { enqueueRoutedSystemEvent } from "./agent-components.deps.runtime.js";
+import type {
+  AgentComponentContext,
+  AgentComponentMessageInteraction,
+} from "./agent-components.types.js";
+
+const AGENT_BUTTON_KEY = "agent";
+const AGENT_SELECT_KEY = "agentsel";
 
 type AgentSystemControlParams = {
   ctx: AgentComponentContext;
@@ -55,7 +57,6 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
     interaction: params.interaction,
     label: params.label,
     componentLabel: params.interactionComponentLabel,
-    defer: false,
   });
   if (!interactionCtx) {
     return;
@@ -65,7 +66,6 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
     user,
     username,
     userId,
-    replyOpts,
     rawGuildId,
     isDirectMessage,
     isGroupDm,
@@ -79,7 +79,6 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
     rawGuildId,
     memberRoleIds,
     user,
-    replyOpts,
     componentLabel: params.authorizationComponentLabel,
     unauthorizedReply: params.unauthorizedReply,
   });
@@ -109,7 +108,6 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
 
   await ackComponentInteraction({
     interaction: params.interaction,
-    replyOpts,
     label: params.label,
   });
 }
@@ -118,11 +116,8 @@ class AgentComponentButton extends Button {
   override label = AGENT_BUTTON_KEY;
   customId = `${AGENT_BUTTON_KEY}:seed=1`;
   override style = ButtonStyle.Primary;
-  private ctx: AgentComponentContext;
-
-  constructor(ctx: AgentComponentContext) {
+  constructor(private readonly ctx: AgentComponentContext) {
     super();
-    this.ctx = ctx;
   }
 
   override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
@@ -145,11 +140,8 @@ class AgentComponentButton extends Button {
 class AgentSelectMenu extends StringSelectMenu {
   customId = `${AGENT_SELECT_KEY}:seed=1`;
   options: APIStringSelectComponent["options"] = [];
-  private ctx: AgentComponentContext;
-
-  constructor(ctx: AgentComponentContext) {
+  constructor(private readonly ctx: AgentComponentContext) {
     super();
-    this.ctx = ctx;
   }
 
   override async run(interaction: StringSelectMenuInteraction, data: ComponentData): Promise<void> {

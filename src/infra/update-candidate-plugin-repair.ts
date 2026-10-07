@@ -13,12 +13,16 @@ import {
   resolveUpdateCandidatePluginPath,
   resolveUpdateCandidatePluginSourcePath,
 } from "./update-candidate-paths.js";
-import { resolveUpdateCandidatePluginSourceEntries } from "./update-candidate-plugin-sources.js";
+import {
+  inspectUpdateCandidatePluginSource,
+  resolveUpdateCandidatePluginSourceEntries,
+} from "./update-candidate-plugin-sources.js";
 import {
   copyUpdateCandidatePluginTrees,
   prepareUpdateCandidatePluginTrees,
 } from "./update-candidate-plugin-tree.js";
 import { resolveUpdateRehearsalRoot } from "./update-rehearsal-paths.js";
+import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 
 async function readOptionalFile(file: string): Promise<Buffer | undefined> {
   return fs.readFile(file).catch((error: unknown) => {
@@ -47,7 +51,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
       !isPathInside(privateRoot, path.resolve(file)) ||
       !isPathInside(privateRoot, resolvePathViaExistingAncestorSync(file))
     ) {
-      throw new Error(`Plugin dependency escapes the update rehearsal: ${file}`);
+      throw new Error(`Plugin dependency is outside the temporary update copy: ${file}`);
     }
   };
   const isPrivateLookup = (specifier: string) => {
@@ -76,7 +80,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
   const candidateRoot =
     params.candidateRoot ?? resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
   if (!candidateRoot) {
-    throw new Error("Cannot locate the candidate host for plugin dependency preparation");
+    throw new Error("Cannot locate the staged OpenClaw installation for plugin setup");
   }
   const discovery = discoverConfiguredPluginLoadPaths({
     loadPaths: [...sources],
@@ -91,7 +95,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     ),
     params.config,
   );
-  const originals: Array<{ rootDir: string; entryFile: string }> = [];
+  const originals: Array<ReturnType<typeof inspectPluginSourceDependencies>> = [];
   const comparedFiles = new Map<string, string>();
   const project = (source: string) =>
     resolveUpdateCandidatePluginPath(privateRoot, privateRoot, source);
@@ -113,7 +117,22 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
   for (const entry of entries) {
     assertPrivate(entry.rootDir);
     assertPrivate(entry.entryFile);
-    const copiedGraph = inspectPluginSourceDependencies([entry]);
+    const copiedGraph = inspectUpdateCandidatePluginSource(entry, warnings, {
+      root: privateRoot,
+      onUnresolvable: (name, importer) => {
+        if (warnings.length < UPDATE_RUN_DIAGNOSTIC_LIMIT) {
+          warnings.push(
+            `Plugin dependency ${name} is unresolvable inside the temporary update copy: undeclared ancestor lookup from ${importer}. Continuing without this optional dependency.`.slice(
+              0,
+              UPDATE_RUN_TEXT_LIMIT,
+            ),
+          );
+        }
+      },
+    });
+    if (!copiedGraph) {
+      continue;
+    }
     for (const reference of copiedGraph.references) {
       // Explicit external imports retain their source semantics. Lookups naming
       // private paths must not escape through a symlink, including absolute paths.
@@ -136,7 +155,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     const entryFile = resolveUpdateCandidatePluginSourcePath(privateRoot, copiedEntry);
     if (!rootDir || !entryFile || !isPathInside(rootDir, entryFile)) {
       warnings.push(
-        `Update rehearsal could not recover the original plugin path for ${entry.entryFile}.`,
+        `Update checks could not recover the original plugin path for ${entry.entryFile}.`,
       );
       continue;
     }
@@ -153,16 +172,18 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
       throw error;
     });
     if (!canonicalSource) {
-      warnings.push(`Update rehearsal plugin source is no longer available: ${entryFile}.`);
+      warnings.push(`Plugin source for update checks is no longer available: ${entryFile}.`);
       continue;
     }
     let available: ReturnType<typeof inspectPluginSourceDependencies>;
     try {
       available = inspectPluginSourceDependencies([{ rootDir, entryFile }]);
-    } catch {
+    } catch (error) {
       // Source edits cannot invalidate an already runnable copy. Without a
       // supplied missing edge, candidate execution still owns optional imports.
-      warnings.push(`Update rehearsal could not inspect the original plugin source: ${entryFile}.`);
+      warnings.push(
+        `Update checks could not inspect the original source for plugin ${entry.pluginId} (${entryFile}): ${String(error)}`,
+      );
       continue;
     }
     if (
@@ -184,13 +205,14 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
       comparedFiles.set(source, copied);
     }
     available.assertSourceCurrent();
-    originals.push({ rootDir, entryFile });
+    originals.push(available);
   }
   if (originals.length === 0) {
     return { copiedFiles: 0, warnings };
   }
-  const graph = inspectPluginSourceDependencies(originals);
-  for (const source of graph.files) {
+  const files = new Set(originals.flatMap((graph) => graph.files));
+  const assertSourcesCurrent = () => originals.forEach((graph) => graph.assertSourceCurrent());
+  for (const source of files) {
     const copied = project(source);
     assertPrivate(copied);
     if (await readOptionalFile(copied)) {
@@ -202,18 +224,20 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
       params.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1" ||
       resolveUpdateRehearsalRoot(params.env) !== rehearsalRoot
     ) {
-      throw new Error("Update rehearsal authority changed during plugin dependency preparation");
+      throw new Error("Update authority changed during plugin dependency preparation");
     }
-    graph.assertSourceCurrent();
+    assertSourcesCurrent();
     for (const [source, copied] of comparedFiles) {
       await assertMatchingFile(source, copied);
     }
-    graph.assertSourceCurrent();
+    assertSourcesCurrent();
   };
   await assertCurrent();
   const plan = await prepareUpdateCandidatePluginTrees({
     roots: new Map(
-      [...graph.packageRoots, ...graph.files].map((source) => [source, project(source)]),
+      originals
+        .flatMap((graph) => graph.packageRoots.concat(graph.files))
+        .map((source) => [source, project(source)]),
     ),
     project,
     targetStateDir: privateRoot,

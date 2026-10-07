@@ -24,7 +24,7 @@ describe("applySessionHints", () => {
     let entry: SessionEntry = {
       sessionId,
       updatedAt: 1,
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
       restartRecoveryDeliveryRunId: "interrupted-claim",
       restartRecoveryDeliverySourceRunId: "channel-user:original-input",
@@ -53,6 +53,7 @@ describe("applySessionHints", () => {
     expect(body).toContain("organize my sessions");
 
     const controller = createReplyRestartRecoveryClaimController({
+      agentId: "main",
       admissionRunId: "new-input",
       lifecycleGeneration,
       getEntry: () => entry,
@@ -75,7 +76,7 @@ describe("applySessionHints", () => {
     });
     expect(loadSessionEntry(scope)).toMatchObject({
       abortedLastRun: true,
-      status: "running",
+      status: "interrupted",
       restartRecoveryDeliveryRunId: "interrupted-claim",
       restartRecoveryDeliverySourceRunId: "channel-user:original-input",
     });

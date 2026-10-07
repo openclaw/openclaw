@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 vi.mock("../infra/device-bootstrap.js", () => ({
@@ -8,12 +9,8 @@ vi.mock("../infra/device-bootstrap.js", () => ({
 async function stopMaintenanceTimers(
   timers: ReturnType<typeof import("./server-maintenance.js").startGatewayMaintenanceTimers>,
 ): Promise<void> {
-  clearInterval(timers.tickInterval);
-  clearInterval(timers.healthInterval);
-  clearInterval(timers.dedupeCleanup);
-  clearInterval(timers.worktreeCleanup);
-  await timers.stopMediaCleanup();
-  await timers.stopSessionColdStorageMaintenance();
+  await timers.stopPeriodicTasks();
+  await timers.skillUsageCleanup();
 }
 
 describe("gateway tool-event recipient maintenance", () => {
@@ -25,7 +22,6 @@ describe("gateway tool-event recipient maintenance", () => {
   it("prunes idle tool-event recipients while preserving grace and registered run state", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = {
       ...createGatewayMaintenanceStateForTest(),
       logHealth: { info: vi.fn(), error: vi.fn() },

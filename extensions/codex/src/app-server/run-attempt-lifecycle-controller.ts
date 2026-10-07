@@ -1,3 +1,4 @@
+import { createAgentHarnessAttemptLifecycle } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   embeddedAgentLog,
   FAST_MODE_AUTO_PROGRESS_KIND,
@@ -5,18 +6,14 @@ import {
   formatFastModeAutoProgressText,
   resolveAgentRunAbortLifecycleFields,
   resolveFastModeForElapsed,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { reportCodexExecutionNotification } from "./attempt-notification-state.js";
+import { readCodexNotificationItem } from "./attempt-notifications.js";
 import {
   resolveTerminalDynamicToolBatchAction,
   shouldReleaseTurnAfterTerminalDynamicTool,
 } from "./dynamic-tool-execution.js";
-import type {
-  CodexDynamicToolCallParams,
-  CodexDynamicToolCallResponse,
-  CodexServerNotification,
-} from "./protocol.js";
+import { itemName } from "./event-projector-items.js";
+import type { CodexServerNotification } from "./protocol.js";
 import { buildCodexLifecycleTerminalMeta } from "./run-attempt-lifecycle-terminal.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
@@ -36,18 +33,18 @@ export function createCodexAttemptLifecycleController(
     fastModeAutoProgressState,
   } = connection;
   const { state, activeTurnItemIds, pendingOpenClawDynamicToolCompletionIds } = turnRuntime;
-  const releaseTurnAfterTerminalDynamicTool = (value: {
-    call: CodexDynamicToolCallParams;
-    response: CodexDynamicToolCallResponse;
-    durationMs: number;
-  }) => {
+  type TerminalToolRelease = NonNullable<typeof state.pendingTerminalDynamicToolRelease>;
+  // A captured tool-authored final reply completes its batch: ordinary sibling results
+  // still settle, but they cannot reopen the turn for another model step.
+  const batchHadNonTerminalResult = () =>
+    state.currentTurnHadNonTerminalDynamicToolResult && !state.currentTurnHadToolAuthoredFinalReply;
+  const releaseTurnAfterTerminalDynamicTool = (value: TerminalToolRelease) => {
     if (
       !shouldReleaseTurnAfterTerminalDynamicTool({
         completed: state.completed,
         aborted: runAbortController.signal.aborted,
         responseSuccess: value.response.success,
-        currentTurnHadNonTerminalDynamicToolResult:
-          state.currentTurnHadNonTerminalDynamicToolResult,
+        currentTurnHadNonTerminalDynamicToolResult: batchHadNonTerminalResult(),
         activeAppServerTurnRequests: state.activeAppServerTurnRequests,
         activeTurnItemIdsCount: activeTurnItemIds.size,
         pendingOpenClawDynamicToolCompletionIdsCount: pendingOpenClawDynamicToolCompletionIds.size,
@@ -56,6 +53,7 @@ export function createCodexAttemptLifecycleController(
       return;
     }
     state.pendingTerminalDynamicToolRelease = undefined;
+    state.currentTurnHadToolAuthoredFinalReply = false;
     trajectoryRecorder?.recordEvent("turn.dynamic_tool_terminal_release", {
       threadId: value.call.threadId,
       turnId: value.call.turnId,
@@ -90,7 +88,7 @@ export function createCodexAttemptLifecycleController(
       state.terminalDynamicToolReleaseCheckScheduled = false;
       if (
         state.pendingTerminalDynamicToolRelease?.response.success === true &&
-        !state.currentTurnHadNonTerminalDynamicToolResult &&
+        !batchHadNonTerminalResult() &&
         state.activeAppServerTurnRequests === 0 &&
         pendingOpenClawDynamicToolCompletionIds.size === 0
       ) {
@@ -102,8 +100,7 @@ export function createCodexAttemptLifecycleController(
         activeAppServerTurnRequests: state.activeAppServerTurnRequests,
         activeTurnItemIdsCount: activeTurnItemIds.size,
         pendingOpenClawDynamicToolCompletionIdsCount: pendingOpenClawDynamicToolCompletionIds.size,
-        currentTurnHadNonTerminalDynamicToolResult:
-          state.currentTurnHadNonTerminalDynamicToolResult,
+        currentTurnHadNonTerminalDynamicToolResult: batchHadNonTerminalResult(),
         hasPendingTerminalDynamicToolRelease: state.pendingTerminalDynamicToolRelease !== undefined,
       });
       if (action === "release-pending-terminal" && state.pendingTerminalDynamicToolRelease) {
@@ -111,49 +108,40 @@ export function createCodexAttemptLifecycleController(
       } else if (action === "clear-nonterminal-batch") {
         state.pendingTerminalDynamicToolRelease = undefined;
         state.currentTurnHadNonTerminalDynamicToolResult = false;
+        state.currentTurnHadToolAuthoredFinalReply = false;
       }
     });
     immediate.unref?.();
   };
-  const scheduleTurnReleaseAfterTerminalDynamicTool = (value: {
-    call: CodexDynamicToolCallParams;
-    response: CodexDynamicToolCallResponse;
-    durationMs: number;
-  }) => {
+  const scheduleTurnReleaseAfterTerminalDynamicTool = (value: TerminalToolRelease) => {
     state.pendingTerminalDynamicToolRelease = value;
     scheduleTerminalDynamicToolReleaseCheck();
   };
-  const emitLifecycleStart = (model: { provider: string; model: string }) => {
-    void emitCodexAppServerEvent(params, {
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: attemptStartedAt },
-    });
-    void emitCodexAppServerEvent(params, {
-      stream: "lifecycle",
-      data: { phase: "model", ...model },
-    });
-    state.lifecycleStarted = true;
-  };
-  const emitLifecycleTerminal = (data: Record<string, unknown> & { phase: "end" | "error" }) => {
-    if (
-      !state.lifecycleStarted ||
-      state.lifecycleTerminalEmitted ||
-      state.permissionChangeRestart ||
-      params.pluginRuntimeRefreshPending?.()
-    ) {
-      return;
+  const recordDynamicToolResult = (value: TerminalToolRelease) => {
+    if (value.response.success && value.response.toolAuthoredFinalReply === true) {
+      state.currentTurnHadToolAuthoredFinalReply = true;
     }
-    void emitCodexAppServerEvent(params, {
-      stream: "lifecycle",
-      data: {
-        startedAt: attemptStartedAt,
-        endedAt: Date.now(),
-        ...data,
-        ...(params.deferTerminalLifecycle ? { phase: "finishing" } : {}),
-      },
-    });
-    state.lifecycleTerminalEmitted = true;
+    if (value.response.terminate === true && value.response.success) {
+      scheduleTurnReleaseAfterTerminalDynamicTool(value);
+    } else if (value.response.asyncStarted === true) {
+      scheduleTerminalDynamicToolReleaseCheck();
+    } else {
+      state.currentTurnHadNonTerminalDynamicToolResult = true;
+      if (!state.currentTurnHadToolAuthoredFinalReply) {
+        state.pendingTerminalDynamicToolRelease = undefined;
+      }
+    }
   };
+  const { emitLifecycleStart, emitLifecycleTerminal, emitExecutionPhaseOnce } =
+    createAgentHarnessAttemptLifecycle({
+      attempt: params,
+      backend: "codex-app-server",
+      startedAtMs: attemptStartedAt,
+      state,
+      emitEvent: (event) => emitCodexAppServerEvent(params, event),
+      shouldSuppressTerminal: () =>
+        Boolean(state.permissionChangeRestart || params.pluginRuntimeRefreshPending?.()),
+    });
   const buildLifecycleTerminalMeta = (input: {
     aborted: boolean;
     timedOut: boolean;
@@ -167,24 +155,27 @@ export function createCodexAttemptLifecycleController(
       abortStopReason: abortFields?.stopReason,
     });
   };
-  const executionPhaseKeys = new Set<string>();
-  const emitExecutionPhaseOnce = (
-    key: string,
-    info: Parameters<NonNullable<EmbeddedRunAttemptParams["onExecutionPhase"]>>[0],
-  ) => {
-    if (executionPhaseKeys.has(key)) {
+  const reportExecutionNotification = (notification: CodexServerNotification) => {
+    if (notification.method === "turn/started") {
+      emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
       return;
     }
-    executionPhaseKeys.add(key);
-    params.onExecutionPhase?.({
-      provider: params.provider,
-      model: params.modelId,
-      backend: "codex-app-server",
-      ...info,
-    });
-  };
-  const reportExecutionNotification = (notification: CodexServerNotification) => {
-    reportCodexExecutionNotification({ notification, emitExecutionPhaseOnce });
+    if (notification.method === "item/agentMessage/delta") {
+      emitExecutionPhaseOnce("assistant_output_started", { phase: "assistant_output_started" });
+      return;
+    }
+    if (notification.method !== "item/started") {
+      return;
+    }
+    const item = readCodexNotificationItem(notification.params);
+    const tool = item ? itemName(item) : undefined;
+    if (item && tool) {
+      emitExecutionPhaseOnce(`tool:${item.id}`, {
+        phase: "tool_execution_started",
+        tool,
+        itemId: item.id,
+      });
+    }
   };
   const emitFastModeAutoProgress = async (payload: {
     enabled: boolean;
@@ -224,24 +215,21 @@ export function createCodexAttemptLifecycleController(
     fastModeAutoProgressState.offAnnounced = true;
     await emitFastModeAutoProgress(next);
   };
-  const maybeEmitFastModeAutoReset = async () => {
-    if (
-      params.fastModeAuto !== true ||
-      !fastModeAutoProgressState.offAnnounced ||
-      fastModeAutoProgressState.resetAnnounced
-    ) {
-      return;
-    }
-    fastModeAutoProgressState.resetAnnounced = true;
-    await emitFastModeAutoProgress({
-      enabled: true,
-      elapsedSeconds: 0,
-      fastAutoOnSeconds: params.fastModeAutoOnSeconds,
-    });
-  };
   const maybeEmitFastModeAutoResetBestEffort = async () => {
     try {
-      await maybeEmitFastModeAutoReset();
+      if (
+        params.fastModeAuto !== true ||
+        !fastModeAutoProgressState.offAnnounced ||
+        fastModeAutoProgressState.resetAnnounced
+      ) {
+        return;
+      }
+      fastModeAutoProgressState.resetAnnounced = true;
+      await emitFastModeAutoProgress({
+        enabled: true,
+        elapsedSeconds: 0,
+        fastAutoOnSeconds: params.fastModeAutoOnSeconds,
+      });
     } catch (error) {
       embeddedAgentLog.warn(
         `codex app-server fast mode auto reset progress failed: ${formatErrorMessage(error)}`,
@@ -249,6 +237,7 @@ export function createCodexAttemptLifecycleController(
     }
   };
   return {
+    recordDynamicToolResult,
     scheduleTerminalDynamicToolReleaseCheck,
     scheduleTurnReleaseAfterTerminalDynamicTool,
     emitLifecycleStart,

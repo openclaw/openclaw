@@ -13,7 +13,6 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { createApiKeyCredential, oauthCred } from "./credential-fixtures.test-support.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
@@ -23,8 +22,13 @@ import {
 } from "./mutation-lineage.js";
 import { withOAuthProfileLock } from "./oauth-profile-lock.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
-import { reloadSharedAuthStoreOwnership, SHARED_AUTH_STORE_STATE_KEY } from "./path-resolve.js";
+import { reloadSharedAuthStoreOwnership } from "./path-resolve.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
+import {
+  expectOAuthCredentialFields,
+  failNextRuntimeAuthSnapshotPublication,
+  withAuthProfileTestState,
+} from "./profile-mutations.test-support.js";
 import {
   clearLastGoodProfileWithLock,
   markAuthProfileSuccess,
@@ -42,6 +46,7 @@ import {
   listOwnedRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./runtime-snapshots.js";
+import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import {
   resolveAuthProfileDatabasePath,
   runAuthProfileWriteTransaction,
@@ -59,7 +64,6 @@ import {
   getRuntimeAuthProfileStoreSnapshot,
   restoreAuthProfileStorePersistenceSnapshot,
 } from "./store.js";
-import { testing as storeTesting } from "./store.test-support.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
@@ -76,69 +80,10 @@ vi.mock("../provider-auth-aliases.js", async (importOriginal) => {
   };
 });
 
-type ExpectedOAuthCredentialFields = {
-  provider: string;
-  access?: string;
-  refresh?: string;
-  idToken?: string;
-  expires?: number;
-  email?: string;
-  accountId?: string;
-  chatgptPlanType?: string;
-};
-
-type AuthProfileTestState = {
-  stateDir: string;
-  agentDir: string;
-  agentDirFor: (agentId: string) => string;
-};
-
 afterEach(() => {
-  storeTesting.resetRuntimeSnapshotPublisherForTest();
+  vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
 });
-
-async function withAuthProfileTestState<T>(
-  prefix: string,
-  run: (state: AuthProfileTestState) => Promise<T> | T,
-  options: { clearOAuthDir?: boolean } = {},
-): Promise<T> {
-  return withOpenClawTestState(
-    {
-      prefix,
-      layout: "state-only",
-      env: options.clearOAuthDir ? { OPENCLAW_OAUTH_DIR: undefined } : undefined,
-    },
-    async (state) =>
-      run({ stateDir: state.stateDir, agentDir: state.agentDir(), agentDirFor: state.agentDir }),
-  );
-}
-
-function expectOAuthCredentialFields(
-  value: unknown,
-  expected: ExpectedOAuthCredentialFields,
-): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error("Expected OAuth credential object");
-  }
-  const credential = value as Record<string, unknown>;
-  expect(credential.type).toBe("oauth");
-  expect(credential.provider).toBe(expected.provider);
-  for (const field of [
-    "access",
-    "refresh",
-    "idToken",
-    "expires",
-    "email",
-    "accountId",
-    "chatgptPlanType",
-  ] as const) {
-    if (field in expected) {
-      expect(credential[field]).toBe(expected[field]);
-    }
-  }
-  return credential;
-}
 
 describe("promoteAuthProfileInOrder", () => {
   it("refreshes inherited main selection state without advancing credential ownership", async () => {
@@ -351,10 +296,7 @@ describe("promoteAuthProfileInOrder", () => {
           { agentDir: savingAgentDir, store: loadAuthProfileStoreForRuntime(savingAgentDir) },
           { agentDir: siblingAgentDir, store: siblingStore },
         ]);
-        storeTesting.setRuntimeSnapshotPublisherForTest((publish) => {
-          publish();
-          throw new Error("postcommit publication failed");
-        });
+        failNextRuntimeAuthSnapshotPublication();
 
         saveAuthProfileStore(
           {
@@ -478,20 +420,8 @@ describe("promoteAuthProfileInOrder", () => {
       replaceRuntimeAuthProfileStoreSnapshots([
         { agentDir, store: loadAuthProfileStoreForRuntime(agentDir) },
       ]);
-      storeTesting.setRuntimeSnapshotPublisherForTest((publish) => {
-        publish();
-        throw new Error("postcommit publication failed");
-      });
-      let result: ReturnType<typeof saveAuthProfileStore> = undefined;
-      try {
-        expect(() => {
-          result = saveAuthProfileStore(store("sk-new"), agentDir);
-        }).not.toThrow();
-      } finally {
-        storeTesting.resetRuntimeSnapshotPublisherForTest();
-      }
-
-      expect(result).toBeUndefined();
+      failNextRuntimeAuthSnapshotPublication();
+      expect(saveAuthProfileStore(store("sk-new"), agentDir)).toBeUndefined();
       expect(loadPersistedAuthProfileStore(agentDir)?.profiles["openai:default"]).toMatchObject({
         key: "sk-new",
       });
@@ -791,11 +721,7 @@ describe("promoteAuthProfileInOrder", () => {
             },
           });
           if (mutationTiming === "before publication") {
-            storeTesting.setRuntimeSnapshotPublisherForTest((publish) => {
-              storeTesting.resetRuntimeSnapshotPublisherForTest();
-              mutateRuntimeStore();
-              publish();
-            });
+            mutateRuntimeStore();
           }
           expect(committed.publishRuntimeSnapshots()).toBe(true);
           const { owned } = committed;
@@ -1699,22 +1625,17 @@ describe("promoteAuthProfileInOrder", () => {
         };
         const replacement = { ...original, token: "synthetic-replacement" };
         const unrelated = createApiKeyCredential("other", "synthetic-other");
-        saveAuthProfileStore(
-          {
-            version: AUTH_STORE_VERSION,
-            profiles: { [profileId]: original, "other:default": unrelated },
-          },
-          agentDir,
-        );
+        const store = {
+          version: AUTH_STORE_VERSION,
+          profiles: { [profileId]: original, "other:default": unrelated },
+        };
+        saveAuthProfileStore(store, agentDir);
         expect(reloadSharedAuthStoreOwnership().location).toBe("legacy-main");
         const beforeRemove = vi.fn(async () => {
           expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toEqual(original);
           if (replaceDuringCleanup) {
             saveAuthProfileStore(
-              {
-                version: AUTH_STORE_VERSION,
-                profiles: { [profileId]: replacement, "other:default": unrelated },
-              },
+              { ...store, profiles: { ...store.profiles, [profileId]: replacement } },
               agentDir,
             );
           }
@@ -1730,7 +1651,7 @@ describe("promoteAuthProfileInOrder", () => {
         });
 
         expect(removed).toBe(!replaceDuringCleanup);
-        expect(beforeRemove).toHaveBeenCalledExactlyOnceWith([profileId]);
+        expect(beforeRemove).toHaveBeenCalledExactlyOnceWith([profileId], expect.any(Array));
         for (const owner of [agentDir, undefined]) {
           const persisted = loadPersistedAuthProfileStore(owner);
           expect(persisted?.profiles[profileId]).toEqual(
@@ -1739,7 +1660,10 @@ describe("promoteAuthProfileInOrder", () => {
           expect(persisted?.profiles["other:default"]).toEqual(unrelated);
         }
         if (replaceDuringCleanup) {
-          expect(onIncomplete).toHaveBeenCalledExactlyOnceWith(new Map([[profileId, replacement]]));
+          expect(onIncomplete).toHaveBeenCalledExactlyOnceWith(
+            new Map([[profileId, replacement]]),
+            expect.any(Array),
+          );
         } else {
           expect(onIncomplete).not.toHaveBeenCalled();
         }

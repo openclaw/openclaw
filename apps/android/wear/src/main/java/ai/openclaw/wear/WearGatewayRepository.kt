@@ -3,6 +3,9 @@ package ai.openclaw.wear
 import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRealtimeTalkCodec
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
+import ai.openclaw.wear.shared.WearReplyText
+import ai.openclaw.wear.shared.WearReplyTextPage
+import ai.openclaw.wear.shared.WearReplyTextStatus
 import ai.openclaw.wear.shared.WearRpcMethod
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -25,21 +28,7 @@ internal data class WearProxyStatus(
   val eventSequence: Long?,
   val phoneNodeId: String,
   val eventStreamId: String? = null,
-)
-
-internal enum class WearAgentPulseTaskState {
-  Ready,
-  Unavailable,
-}
-
-internal data class WearAgentPulseTasks(
-  val state: WearAgentPulseTaskState,
-  val queued: Int? = null,
-  val running: Int? = null,
-  val completed: Int? = null,
-  val failed: Int? = null,
-  val activeAtLimit: Boolean? = null,
-  val recentAtLimit: Boolean? = null,
+  val failure: WearConversationFailure? = null,
 )
 
 internal enum class WearAgentPulseSwarmState {
@@ -78,7 +67,6 @@ internal data class WearAgentPulseApprovals(
 )
 
 internal data class WearAgentPulseSnapshot(
-  val tasks: WearAgentPulseTasks,
   val swarm: WearAgentPulseSwarm,
   val approvals: WearAgentPulseApprovals,
   val eventSequence: Long?,
@@ -91,13 +79,6 @@ internal data class WearAgent(
   val name: String,
   val emoji: String?,
   val selected: Boolean,
-)
-
-internal data class WearAgentList(
-  val agents: List<WearAgent>,
-  val eventSequence: Long?,
-  val phoneNodeId: String,
-  val eventStreamId: String? = null,
 )
 
 internal data class WearSession(
@@ -147,6 +128,8 @@ internal data class WearChatMessage(
   val text: String,
   val timestamp: Long?,
   val idempotencyKey: String? = null,
+  val entryId: String? = null,
+  val textTruncated: Boolean? = null,
 )
 
 // These exact keys belong to terminal transcript writers. CLI keys can also
@@ -319,7 +302,6 @@ internal class WearGatewayRepository(
       )
     val result = response.payload.asObject("agent.pulse")
     return WearAgentPulseSnapshot(
-      tasks = parseAgentPulseTasks(result["tasks"]),
       swarm = parseAgentPulseSwarm(result["swarm"]),
       approvals = parseAgentPulseApprovals(result["approvals"]),
       eventStreamId = response.eventStreamId,
@@ -331,7 +313,7 @@ internal class WearGatewayRepository(
   suspend fun agents(
     expectedNodeId: String,
     capabilities: Set<WearProxyCapability>,
-  ): WearAgentList {
+  ): List<WearAgent> {
     capabilities.require(WearProxyCapability.AgentControls)
     val response =
       requester.request(
@@ -341,15 +323,7 @@ internal class WearGatewayRepository(
         requirePreferredNode = true,
       )
     val result = response.payload.asObject("agents.list")
-    return WearAgentList(
-      agents =
-        (result["agents"] as? JsonArray)
-          .orEmpty()
-          .mapNotNull(::parseAgent),
-      eventStreamId = response.eventStreamId,
-      eventSequence = response.eventSequence,
-      phoneNodeId = response.sourceNodeId,
-    )
+    return (result["agents"] as? JsonArray).orEmpty().mapNotNull(::parseAgent)
   }
 
   suspend fun selectAgent(
@@ -488,6 +462,43 @@ internal class WearGatewayRepository(
     )
   }
 
+  suspend fun replyText(
+    target: WearReplyTarget,
+    offset: Int,
+    revision: String?,
+  ): WearReplyTextPage {
+    val response =
+      requester.request(
+        WearRpcMethod.ReplyText,
+        buildJsonObject {
+          put("source", if (target.attemptId == null) "chat" else "talk")
+          put("sessionKey", target.sessionKey)
+          target.agentId?.let { put("agentId", it) }
+          put("entryId", target.entryId)
+          target.attemptId?.let { put("attemptId", it) }
+          put("offset", offset)
+          revision?.let { put("revision", it) }
+        },
+        target.phoneNodeId,
+        requirePreferredNode = true,
+      )
+    if (response.sourceNodeId != target.phoneNodeId) return WearReplyTextPage(WearReplyTextStatus.Changed)
+    val page = WearReplyText.decode(response.payload)
+    val nextOffset = page.nextOffset
+    if (page.status == WearReplyTextStatus.Ready &&
+      (
+        page.offset != offset || page.text.length > WearReplyText.PAGE_LENGTH || page.revision.isNullOrBlank() ||
+          (revision != null && page.revision != revision) || page.totalLength !in offset..WearReplyText.MAX_TEXT_LENGTH ||
+          page.offset + page.text.length > page.totalLength ||
+          (nextOffset != null && (nextOffset != offset + page.text.length || nextOffset <= offset || nextOffset >= page.totalLength)) ||
+          (page.nextOffset == null && offset + page.text.length != page.totalLength)
+      )
+    ) {
+      return WearReplyTextPage(WearReplyTextStatus.Failed)
+    }
+    return page
+  }
+
   suspend fun history(
     sessionKey: String,
     expectedNodeId: String,
@@ -518,10 +529,7 @@ internal class WearGatewayRepository(
   }
 
   // True only for an explicit runless control completion, not ordinary send acceptance.
-  suspend fun send(
-    attempt: WearSendAttempt,
-    requirePreferredPhone: Boolean = false,
-  ): Boolean {
+  suspend fun send(attempt: WearSendAttempt): Boolean {
     val response =
       requester.request(
         WearRpcMethod.ChatSend,
@@ -531,7 +539,7 @@ internal class WearGatewayRepository(
           put("idempotencyKey", attempt.idempotencyKey)
         },
         attempt.phoneNodeId,
-        requirePreferredNode = requirePreferredPhone,
+        requirePreferredNode = true,
       )
     val ack = response.payload as? JsonObject ?: return false
     // Phone projectAck forwards the stop result as {aborted: false/true}; it
@@ -598,6 +606,7 @@ private fun WearRpcResult.toProxyStatus(method: String): WearProxyStatus {
   val result = payload.asObject(method)
   return WearProxyStatus(
     connected = result.boolean("connected") ?: false,
+    failure = wearConversationFailureForConnection(result),
     activeAgentId = result.string("activeAgentId"),
     activeSessionKey = result.string("activeSessionKey"),
     selectedModelRef = result.string("selectedModelRef"),
@@ -620,32 +629,6 @@ internal fun parseWearChatEvent(payload: JsonElement?): WearChatEvent? {
     streamTextComplete = source.boolean("streamTextComplete") ?: false,
     message = parseChatMessage(source["message"]),
   )
-}
-
-private fun parseAgentPulseTasks(element: JsonElement?): WearAgentPulseTasks {
-  val source = element as? JsonObject ?: invalidAgentPulse()
-  return when (source.string("state")) {
-    "ready" -> {
-      if (source.string("scope") != "bounded") invalidAgentPulse()
-      WearAgentPulseTasks(
-        state = WearAgentPulseTaskState.Ready,
-        queued = source.nonNegativeInt("queued"),
-        running = source.nonNegativeInt("running"),
-        completed = source.nonNegativeInt("completed"),
-        failed = source.nonNegativeInt("failed"),
-        activeAtLimit = source.requiredBoolean("activeAtLimit"),
-        recentAtLimit = source.requiredBoolean("recentAtLimit"),
-      )
-    }
-
-    "unavailable" -> {
-      WearAgentPulseTasks(state = WearAgentPulseTaskState.Unavailable)
-    }
-
-    else -> {
-      invalidAgentPulse()
-    }
-  }
 }
 
 private fun parseAgentPulseSwarm(element: JsonElement?): WearAgentPulseSwarm {
@@ -779,6 +762,8 @@ internal fun parseChatMessage(element: JsonElement?): WearChatMessage? {
     text = text,
     timestamp = source.long("timestamp"),
     idempotencyKey = source.string("idempotencyKey"),
+    entryId = source.string("entryId"),
+    textTruncated = source.boolean("textTruncated"),
   )
 }
 
@@ -807,9 +792,9 @@ private fun contentText(element: JsonElement?): String =
 
 private fun JsonElement.asObject(method: String): JsonObject = this as? JsonObject ?: throw WearProxyException("invalid_response", "$method returned invalid data")
 
-private fun JsonObject.string(name: String): String? = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+internal fun JsonObject?.string(name: String): String? = (this?.get(name) as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 
-private fun JsonObject.boolean(name: String): Boolean? = (this[name] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
+internal fun JsonObject?.boolean(name: String): Boolean? = (this?.get(name) as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
 
 private fun JsonObject.long(name: String): Long? = (this[name] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
 

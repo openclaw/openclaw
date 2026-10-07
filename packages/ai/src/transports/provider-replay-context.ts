@@ -1,12 +1,27 @@
 import type { Model, ProviderReplayState } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { shortHash } from "../utils/hash.js";
 
-type ProviderReplayContext = Readonly<
+export type ProviderReplayContext = Readonly<
   Pick<
     ProviderReplayState,
     "provider" | "api" | "model" | "baseUrlHash" | "sessionHash" | "authProfileHash"
   >
 >;
+
+export function isProviderReplayContext(
+  value: unknown,
+): value is ProviderReplayContext & Record<string, unknown> {
+  return (
+    isRecord(value) &&
+    typeof value.provider === "string" &&
+    typeof value.api === "string" &&
+    typeof value.model === "string" &&
+    (value.baseUrlHash === undefined || typeof value.baseUrlHash === "string") &&
+    (value.sessionHash === undefined || typeof value.sessionHash === "string") &&
+    (value.authProfileHash === undefined || typeof value.authProfileHash === "string")
+  );
+}
 
 function hashReplayContextValue(value: string | undefined): string | undefined {
   const normalized = value?.trim();

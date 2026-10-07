@@ -3,6 +3,7 @@ import type {
   OpenClawPluginNodeInvokePolicyResult,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { bindFileTransferAudit } from "./audit-context.js";
 import { appendFileTransferAudit, type FileTransferAuditOp } from "./audit.js";
 import { DIR_FETCH_MAX_ENTRIES } from "./dir-fetch-limits.js";
 import { type GrantedAuthorization, promptVerb } from "./node-invoke-policy-approval.js";
@@ -12,10 +13,6 @@ import {
   evaluateFilePolicyConstraints,
   type FilePolicyKind,
 } from "./policy.js";
-
-function readResultPayload(result: { payload?: unknown }): Record<string, unknown> | null {
-  return asNullableRecord(result.payload);
-}
 
 function joinRemotePolicyPath(root: string, relPath: string): string {
   const rel = relPath.replace(/\\/gu, "/").replace(/^\.\//u, "");
@@ -84,6 +81,10 @@ export async function validateDirFetchEntries(input: {
   phase: "preflight" | "archive";
 }): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
   const nodeDisplayName = input.ctx.node?.displayName;
+  const audit = bindFileTransferAudit(
+    { op: input.op, nodeId: input.ctx.nodeId, nodeDisplayName, requestedPath: input.requestedPath },
+    input.startedAt,
+  );
   const missingCode =
     input.phase === "preflight" ? "PREFLIGHT_ENTRIES_MISSING" : "ARCHIVE_ENTRIES_MISSING";
   const invalidCode =
@@ -91,16 +92,11 @@ export async function validateDirFetchEntries(input: {
   const tooManyCode =
     input.phase === "preflight" ? "PREFLIGHT_ENTRIES_TOO_MANY" : "ARCHIVE_ENTRIES_TOO_MANY";
   if (!Array.isArray(input.entries)) {
-    await appendFileTransferAudit({
-      op: input.op,
-      nodeId: input.ctx.nodeId,
-      nodeDisplayName,
-      requestedPath: input.requestedPath,
+    await audit({
       canonicalPath: input.canonicalPath,
       decision: "error",
       errorCode: missingCode,
       reason: `dir.fetch ${input.phase} did not return entries`,
-      durationMs: Date.now() - input.startedAt,
     });
     return policyDeniedResult({
       op: input.op,
@@ -111,16 +107,11 @@ export async function validateDirFetchEntries(input: {
   }
   const rejectEntryLimit = async (count: number, label: "entries" | "descendant paths") => {
     const reason = `dir.fetch ${input.phase} contains ${count} ${label}; limit ${DIR_FETCH_MAX_ENTRIES}`;
-    await appendFileTransferAudit({
-      op: input.op,
-      nodeId: input.ctx.nodeId,
-      nodeDisplayName,
-      requestedPath: input.requestedPath,
+    await audit({
       canonicalPath: input.canonicalPath,
       decision: "denied:policy",
       errorCode: tooManyCode,
       reason,
-      durationMs: Date.now() - input.startedAt,
     });
     return policyDeniedResult({
       op: input.op,
@@ -136,16 +127,11 @@ export async function validateDirFetchEntries(input: {
   const entries: string[] = [];
   for (const entry of input.entries) {
     if (typeof entry !== "string" || entry.length === 0) {
-      await appendFileTransferAudit({
-        op: input.op,
-        nodeId: input.ctx.nodeId,
-        nodeDisplayName,
-        requestedPath: input.requestedPath,
+      await audit({
         canonicalPath: input.canonicalPath,
         decision: "denied:policy",
         errorCode: invalidCode,
         reason: "entry is not a non-empty string",
-        durationMs: Date.now() - input.startedAt,
       });
       return policyDeniedResult({
         op: input.op,
@@ -157,16 +143,11 @@ export async function validateDirFetchEntries(input: {
     const entryValidation = validateDirFetchPreflightEntry(entry);
     if (!entryValidation.ok) {
       const candidate = joinRemotePolicyPath(input.canonicalPath, entry);
-      await appendFileTransferAudit({
-        op: input.op,
-        nodeId: input.ctx.nodeId,
-        nodeDisplayName,
-        requestedPath: input.requestedPath,
+      await audit({
         canonicalPath: candidate,
         decision: "denied:policy",
         errorCode: invalidCode,
         reason: entryValidation.reason,
-        durationMs: Date.now() - input.startedAt,
       });
       return policyDeniedResult({
         op: input.op,
@@ -202,16 +183,11 @@ export async function validateDirFetchEntries(input: {
     if (policy.ok) {
       continue;
     }
-    await appendFileTransferAudit({
-      op: input.op,
-      nodeId: input.ctx.nodeId,
-      nodeDisplayName,
-      requestedPath: input.requestedPath,
+    await audit({
       canonicalPath: candidate,
       decision: "denied:policy",
       errorCode: policy.code,
       reason: policy.reason,
-      durationMs: Date.now() - input.startedAt,
     });
     return policyDeniedResult({
       op: input.op,
@@ -266,6 +242,10 @@ async function invokePreflight(input: {
   expectedCanonicalPath?: string;
 }): Promise<PreflightResult> {
   const nodeDisplayName = input.ctx.node?.displayName;
+  const audit = bindFileTransferAudit(
+    { op: input.op, nodeId: input.ctx.nodeId, nodeDisplayName, requestedPath: input.requestedPath },
+    input.startedAt,
+  );
   const preflight = await input.ctx.invokeNode({
     params: {
       ...input.params,
@@ -276,15 +256,10 @@ async function invokePreflight(input: {
     },
   });
   if (!preflight.ok) {
-    await appendFileTransferAudit({
-      op: input.op,
-      nodeId: input.ctx.nodeId,
-      nodeDisplayName,
-      requestedPath: input.requestedPath,
+    await audit({
       decision: "error",
       errorCode: preflight.code,
       errorMessage: preflight.message,
-      durationMs: Date.now() - input.startedAt,
     });
     return {
       ok: false,
@@ -297,21 +272,16 @@ async function invokePreflight(input: {
       },
     };
   }
-  const payload = readResultPayload(preflight);
+  const payload = asNullableRecord(preflight.payload);
   if (payload?.ok === false) {
     const code = typeof payload.code === "string" ? payload.code : "PREFLIGHT_FAILED";
     const canonicalPath =
       typeof payload.canonicalPath === "string" ? payload.canonicalPath : undefined;
-    await appendFileTransferAudit({
-      op: input.op,
-      nodeId: input.ctx.nodeId,
-      nodeDisplayName,
-      requestedPath: input.requestedPath,
+    await audit({
       canonicalPath,
       decision: "error",
       errorCode: code,
       errorMessage: typeof payload.message === "string" ? payload.message : undefined,
-      durationMs: Date.now() - input.startedAt,
     });
     if (code === "CANONICAL_PATH_CHANGED" && canonicalPath) {
       return {
@@ -322,6 +292,21 @@ async function invokePreflight(input: {
       };
     }
     return { ok: false, result: preflight };
+  }
+  // Old nodes ignore unknown request fields; confirm this restriction before the mutating call.
+  if (
+    input.op === "file.write" &&
+    input.params.rejectHardlinks === true &&
+    payload?.rejectHardlinks !== true
+  ) {
+    return {
+      ok: false,
+      result: policyDeniedResult({
+        op: input.op,
+        code: "HARDLINK_REJECTION_UNSUPPORTED",
+        message: "node does not support hardlink-safe workspace writes; update the node and retry",
+      }),
+    };
   }
   const canonicalPath = payload && typeof payload.path === "string" ? payload.path : "";
   if (!canonicalPath) {
@@ -335,7 +320,8 @@ async function invokePreflight(input: {
     };
   }
   const binding = readPathBinding(payload?.binding);
-  const expectedBindingKind = input.op === "file.write" ? "write" : "existing";
+  const expectedBindingKind =
+    input.op === "file.write" || input.op === "file.create" ? "write" : "existing";
   if (!binding || binding.kind !== expectedBindingKind) {
     return {
       ok: false,
@@ -359,6 +345,10 @@ export async function validateCanonicalAuthorization(input: {
   startedAt: number;
 }): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
   const nodeDisplayName = input.ctx.node?.displayName;
+  const audit = bindFileTransferAudit(
+    { op: input.op, nodeId: input.ctx.nodeId, nodeDisplayName, requestedPath: input.requestedPath },
+    input.startedAt,
+  );
   if (
     input.authorization.source === "literal" &&
     input.authorization.expectedCanonicalPath !== input.canonicalPath
@@ -370,16 +360,11 @@ export async function validateCanonicalAuthorization(input: {
       toolName: input.op,
     });
     if (approval?.decision !== "allow-once" && approval?.decision !== "allow-always") {
-      await appendFileTransferAudit({
-        op: input.op,
-        nodeId: input.ctx.nodeId,
-        nodeDisplayName,
-        requestedPath: input.requestedPath,
+      await audit({
         canonicalPath: input.canonicalPath,
         decision: "denied:symlink_escape",
         errorCode: "CANONICAL_PATH_CHANGED",
         reason: "canonical path differs from the standing approval",
-        durationMs: Date.now() - input.startedAt,
       });
       return policyDeniedResult({
         op: input.op,
@@ -408,84 +393,17 @@ export async function validateCanonicalAuthorization(input: {
   if (policy.ok) {
     return null;
   }
-  await appendFileTransferAudit({
-    op: input.op,
-    nodeId: input.ctx.nodeId,
-    nodeDisplayName,
-    requestedPath: input.requestedPath,
+  await audit({
     canonicalPath: input.canonicalPath,
     decision: "denied:symlink_escape",
     errorCode: policy.code,
     reason: policy.reason,
-    durationMs: Date.now() - input.startedAt,
   });
   return policyDeniedResult({
     op: input.op,
     code: "SYMLINK_TARGET_DENIED",
     message: `requested path resolved to ${input.canonicalPath} which is not allowed by policy`,
   });
-}
-
-async function invokeAuthorizedPreflight(input: {
-  ctx: OpenClawPluginNodeInvokePolicyContext;
-  op: FileTransferAuditOp;
-  kind: FilePolicyKind;
-  authorization: GrantedAuthorization;
-  params: Record<string, unknown>;
-  requestedPath: string;
-  startedAt: number;
-}): Promise<PreflightResult> {
-  const expectedCanonicalPath =
-    input.authorization.source === "literal"
-      ? input.authorization.expectedCanonicalPath
-      : undefined;
-  const preflight = await invokePreflight({ ...input, expectedCanonicalPath });
-  if (preflight.ok || preflight.canonicalChanged !== true) {
-    return preflight;
-  }
-
-  const denied = await validateCanonicalAuthorization({
-    ctx: input.ctx,
-    op: input.op,
-    kind: input.kind,
-    authorization: input.authorization,
-    requestedPath: input.requestedPath,
-    canonicalPath: preflight.canonicalPath,
-    startedAt: input.startedAt,
-  });
-  if (denied) {
-    return { ok: false, result: denied };
-  }
-
-  // The operator approved the newly resolved target. Bind the retry to that
-  // exact target so another replacement cannot race ahead of preflight I/O.
-  const retry = await invokePreflight({
-    ...input,
-    expectedCanonicalPath: input.authorization.expectedCanonicalPath,
-  });
-  if (retry.ok || retry.canonicalChanged !== true) {
-    return retry;
-  }
-  await appendFileTransferAudit({
-    op: input.op,
-    nodeId: input.ctx.nodeId,
-    nodeDisplayName: input.ctx.node?.displayName,
-    requestedPath: input.requestedPath,
-    canonicalPath: retry.canonicalPath,
-    decision: "denied:symlink_escape",
-    errorCode: "CANONICAL_PATH_CHANGED",
-    reason: "canonical path changed again after reapproval",
-    durationMs: Date.now() - input.startedAt,
-  });
-  return {
-    ok: false,
-    result: policyDeniedResult({
-      op: input.op,
-      code: "CANONICAL_PATH_CHANGED",
-      message: "the canonical path changed again after reapproval; retry the operation",
-      details: { path: retry.canonicalPath },
-    }),
-  };
 }
 
 export async function runPathPreflight(input: {
@@ -500,62 +418,69 @@ export async function runPathPreflight(input: {
   | { ok: true; canonicalPath: string; binding: PathBinding }
   | { ok: false; result: OpenClawPluginNodeInvokePolicyResult }
 > {
-  const preflight = await invokeAuthorizedPreflight(input);
-  if (!preflight.ok) {
-    return { ok: false, result: preflight.result };
-  }
-  const denied = await validateCanonicalAuthorization({
-    ctx: input.ctx,
-    op: input.op,
-    kind: input.kind,
-    authorization: input.authorization,
-    requestedPath: input.requestedPath,
-    canonicalPath: preflight.canonicalPath,
-    startedAt: input.startedAt,
-  });
-  return denied
-    ? { ok: false, result: denied }
-    : { ok: true, canonicalPath: preflight.canonicalPath, binding: preflight.binding };
-}
+  const expectedCanonicalPath =
+    input.authorization.source === "literal"
+      ? input.authorization.expectedCanonicalPath
+      : undefined;
+  let preflight = await invokePreflight({ ...input, expectedCanonicalPath });
+  if (!preflight.ok && preflight.canonicalChanged === true) {
+    const denied = await validateCanonicalAuthorization({
+      ...input,
+      canonicalPath: preflight.canonicalPath,
+    });
+    if (denied) {
+      return { ok: false, result: denied };
+    }
 
-export async function runDirFetchPreflight(input: {
-  ctx: OpenClawPluginNodeInvokePolicyContext;
-  op: FileTransferAuditOp;
-  authorization: GrantedAuthorization;
-  params: Record<string, unknown>;
-  requestedPath: string;
-  startedAt: number;
-}): Promise<
-  | { ok: true; canonicalPath: string; binding: PathBinding }
-  | { ok: false; result: OpenClawPluginNodeInvokePolicyResult }
-> {
-  const preflight = await invokeAuthorizedPreflight({ ...input, kind: "read" });
+    // Bind the approved retry to this exact target so another replacement
+    // cannot race ahead of preflight I/O.
+    preflight = await invokePreflight({
+      ...input,
+      expectedCanonicalPath: input.authorization.expectedCanonicalPath,
+    });
+    if (!preflight.ok && preflight.canonicalChanged === true) {
+      await appendFileTransferAudit({
+        op: input.op,
+        nodeId: input.ctx.nodeId,
+        nodeDisplayName: input.ctx.node?.displayName,
+        requestedPath: input.requestedPath,
+        canonicalPath: preflight.canonicalPath,
+        decision: "denied:symlink_escape",
+        errorCode: "CANONICAL_PATH_CHANGED",
+        reason: "canonical path changed again after reapproval",
+        durationMs: Date.now() - input.startedAt,
+      });
+      return {
+        ok: false,
+        result: policyDeniedResult({
+          op: input.op,
+          code: "CANONICAL_PATH_CHANGED",
+          message: "the canonical path changed again after reapproval; retry the operation",
+          details: { path: preflight.canonicalPath },
+        }),
+      };
+    }
+  }
   if (!preflight.ok) {
     return { ok: false, result: preflight.result };
   }
   const denied = await validateCanonicalAuthorization({
-    ctx: input.ctx,
-    op: input.op,
-    kind: "read",
-    authorization: input.authorization,
-    requestedPath: input.requestedPath,
+    ...input,
     canonicalPath: preflight.canonicalPath,
-    startedAt: input.startedAt,
   });
   if (denied) {
     return { ok: false, result: denied };
   }
-  const entryDeny = await validateDirFetchEntries({
-    ctx: input.ctx,
-    op: input.op,
-    authorization: input.authorization,
-    requestedPath: input.requestedPath,
-    canonicalPath: preflight.canonicalPath,
-    entries: preflight.payload?.entries,
-    startedAt: input.startedAt,
-    phase: "preflight",
-  });
-  return entryDeny
-    ? { ok: false, result: entryDeny }
-    : { ok: true, canonicalPath: preflight.canonicalPath, binding: preflight.binding };
+  if (input.op === "dir.fetch") {
+    const entryDeny = await validateDirFetchEntries({
+      ...input,
+      canonicalPath: preflight.canonicalPath,
+      entries: preflight.payload?.entries,
+      phase: "preflight",
+    });
+    if (entryDeny) {
+      return { ok: false, result: entryDeny };
+    }
+  }
+  return { ok: true, canonicalPath: preflight.canonicalPath, binding: preflight.binding };
 }

@@ -4,30 +4,87 @@ import { resolveSessionFilePathCore } from "../config/sessions/paths.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import { resolveRealpathOrAbsolute as canonicalFilePath } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
-import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
 import {
   type ActiveSessionSqliteMigrationRun,
   canonicalMigrationFilePath,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
 import {
+  countTranscriptEventsForPath,
   readOnlySqliteDbStats,
   resolveTargetSqlitePath,
   scanReadOnlySqliteActiveTranscriptFiles,
-} from "./doctor-session-sqlite-readers.js";
-import {
-  createDoctorSessionSqliteTotals,
-  sumDoctorSessionSqliteTargets,
-  type DoctorSessionSqliteMode,
-  type DoctorSessionSqliteReport,
-  type DoctorSessionSqliteTargetReport,
+} from "../infra/session-sqlite-migration-readers.js";
+import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
+import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
+import type {
+  DoctorSessionSqliteMode,
+  DoctorSessionSqliteReport,
+  DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
+
+export function countLegacyTranscript(
+  record: { transcriptPath?: string; sessionKey: string },
+  report: DoctorSessionSqliteTargetReport,
+): void {
+  const result = countTranscriptEventsForPath(record.transcriptPath);
+  if (result.status === "missing") {
+    report.issues.push({
+      code: "transcript_missing",
+      message: `Transcript file is missing: ${record.transcriptPath}`,
+      sessionKey: record.sessionKey,
+    });
+    return;
+  }
+  if (result.status === "malformed") {
+    report.issues.push({
+      code: "transcript_malformed",
+      message: result.message,
+      sessionKey: record.sessionKey,
+    });
+    return;
+  }
+  report.validatedEntries += 1;
+  report.validatedTranscriptEvents += result.events;
+}
+
+export function appendRetainedPluginSessionSourceIssue(
+  report: DoctorSessionSqliteTargetReport,
+  pluginIds: readonly string[],
+): void {
+  const pending = pluginIds.length
+    ? `remain pending for plugin(s): ${pluginIds.join(", ")}. Install the plugin and run openclaw doctor --fix to finish.`
+    : "await archival. Run openclaw doctor --fix to finish.";
+  report.issues.push({
+    code: "plugin_migration_source_retained",
+    message: `Canonical session import is verified. Original session migration inputs, including unindexed history, ${pending}`,
+  });
+}
 
 export function appendActiveSqliteTranscriptFileIssues(
   target: SessionStoreTarget,
   report: DoctorSessionSqliteTargetReport,
   retainedPaths?: ReadonlySet<string>,
 ): void {
+  try {
+    for (const { sessionKey, transcriptPath } of readActiveSqliteTranscriptFiles(target)) {
+      if (!retainedPaths?.has(canonicalMigrationFilePath(transcriptPath))) {
+        report.issues.push({
+          code: "active_sqlite_transcript_jsonl",
+          message: `SQLite-backed session has a legacy JSONL transcript awaiting verification: ${transcriptPath}. Run openclaw doctor --fix or openclaw doctor --session-sqlite recover with the Gateway stopped to verify, import any missing events, and archive the original.`,
+          sessionKey,
+        });
+      }
+    }
+  } catch (error) {
+    report.issues.push({
+      code: "sqlite_active_transcript_scan_failed",
+      message: `Could not scan SQLite-backed sessions for active JSONL transcript files: ${String(error)}`,
+    });
+  }
+}
+
+export function readActiveSqliteTranscriptFiles(target: SessionStoreTarget) {
+  const sources: Array<{ sessionKey: string; sessionId: string; transcriptPath: string }> = [];
   const result = scanReadOnlySqliteActiveTranscriptFiles(
     target,
     (sessionKey, sessionId, sessionFile) => {
@@ -35,21 +92,15 @@ export function appendActiveSqliteTranscriptFileIssues(
         ...(sessionFile ? { sessionFile } : {}),
         sessionId,
       });
-      if (transcriptPath && !retainedPaths?.has(canonicalMigrationFilePath(transcriptPath))) {
-        report.issues.push({
-          code: "active_sqlite_transcript_jsonl",
-          message: `SQLite-backed session still has an unverified active JSONL transcript file: ${transcriptPath}. It may contain history absent from SQLite. Preserve this file, inspect openclaw update status --json, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents with the Gateway stopped.`,
-          sessionKey,
-        });
+      if (transcriptPath) {
+        sources.push({ sessionKey, sessionId, transcriptPath });
       }
     },
   );
   if (!result.ok) {
-    report.issues.push({
-      code: "sqlite_active_transcript_scan_failed",
-      message: `Could not scan SQLite-backed sessions for active JSONL transcript files: ${String(result.error)}`,
-    });
+    throw result.error;
   }
+  return sources;
 }
 
 export function appendSqliteDbStats(
@@ -133,9 +184,17 @@ export function summarizeDoctorSessionSqliteReport(
   activeRun?: ActiveSessionSqliteMigrationRun,
 ): DoctorSessionSqliteReport {
   const sum = (value: (target: DoctorSessionSqliteTargetReport) => number) =>
-    sumDoctorSessionSqliteTargets(targets, value);
+    targets.reduce((total, target) => total + value(target), 0);
   const archives = (paths: (target: DoctorSessionSqliteTargetReport) => string[]) =>
     new Set(targets.flatMap(paths)).size;
+  const sqliteEntries = new Map<string, number>();
+  for (const target of targets) {
+    sqliteEntries.set(
+      target.sqlitePath,
+      Math.max(sqliteEntries.get(target.sqlitePath) ?? 0, target.sqliteEntries),
+    );
+  }
+  const reportsArchival = mode !== "restore" && mode !== "recover";
   return {
     ...(activeRun
       ? {
@@ -153,17 +212,24 @@ export function summarizeDoctorSessionSqliteReport(
       : {}),
     mode,
     targets,
-    totals: createDoctorSessionSqliteTotals(targets, {
-      archivedLegacyStoreFiles: archives((target) => target.archivedLegacyStoreFiles ?? []),
+    totals: {
+      ...(reportsArchival
+        ? { archivedLegacyStoreFiles: archives((target) => target.archivedLegacyStoreFiles ?? []) }
+        : {}),
       archivedTranscriptFiles: archives((target) => target.archivedTranscriptFiles),
       archivedUnreferencedJsonlFiles: archives((target) => target.archivedUnreferencedJsonlFiles),
       importedEntries: sum((target) => target.importedEntries),
       importedTranscriptEvents: sum((target) => target.importedTranscriptEvents),
+      issues: sum((target) => target.issues.length),
       legacyEntries: sum((target) => target.legacyEntries),
-      reclaimedBytes: sum((target) => target.compact?.reclaimedBytes ?? 0),
+      ...(reportsArchival
+        ? { reclaimedBytes: sum((target) => target.compact?.reclaimedBytes ?? 0) }
+        : {}),
+      sqliteEntries: [...sqliteEntries.values()].reduce((total, count) => total + count, 0),
+      targets: targets.length,
       unreferencedJsonlFiles: sum((target) => target.unreferencedJsonlFiles.length),
       validatedEntries: sum((target) => target.validatedEntries),
       validatedTranscriptEvents: sum((target) => target.validatedTranscriptEvents),
-    }),
+    },
   };
 }

@@ -1,28 +1,34 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import type { ApplicationGateway } from "../../app/gateway.ts";
 import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
 import { renderLazyViewError } from "../../components/lazy-view-error.ts";
+import { t } from "../../i18n/index.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { uiConversationMatches } from "../../lib/sessions/session-key.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+import type { SidebarFullMessageLoader } from "./components/chat-sidebar-content-types.ts";
 import type {
   SidebarPanelDefinition,
-  SidebarPanelTemplates,
   SidebarRegionCallbacks,
 } from "./components/chat-sidebar-region-types.ts";
-import type { SidebarFullMessageLoader } from "./components/chat-sidebar.ts";
-import type { LinkFaviconFetcher } from "./link-favicon-loader.ts";
+import type { LinkFaviconFetcher } from "./link-favicon-cache.ts";
 import {
   activatePanel,
   toggleSidebarPanelExpanded,
   closeSlot,
   fitSidebarLayout,
-  isSidebarRegionCollapsed,
+  SIDEBAR_NARROW_BREAKPOINT_PX,
   openSlot,
   reorderPanel,
   sidebarDock,
@@ -39,7 +45,7 @@ type LazyPanelRuntime = {
   pending?: Promise<void>;
 };
 
-type LazyElementKey = "region" | SidebarSlotId;
+type LazyElementKey = "region" | "detail-panel" | SidebarSlotId;
 type LazyElement = readonly [tagName: string, loadModule: () => Promise<unknown>];
 
 const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
@@ -47,13 +53,29 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
     "openclaw-chat-sidebar-region",
     () => import("./components/chat-sidebar-region.runtime.ts"),
   ],
+  // Not a slot key: the detail slot also renders tool output and status
+  // templates synchronously, so only its panel branch waits for this element.
+  "detail-panel": ["openclaw-chat-detail-panel", () => import("./components/chat-detail-panel.ts")],
   terminal: [
     "openclaw-terminal-panel",
     () => import("../../components/terminal/terminal-panel-registration.ts"),
   ],
+  "link-reader": [
+    "openclaw-link-reader-panel",
+    () => import("../../components/link-reader-panel.ts"),
+  ],
   browser: ["openclaw-browser-panel", () => import("../../components/browser/browser-panel.ts")],
   desktop: ["openclaw-desktop-panel", () => import("../../components/desktop/desktop-panel.ts")],
+  portal: ["openclaw-portals-page", () => import("../portals/portals-page.ts")],
   companion: ["openclaw-chat-session-rail", () => import("./components/chat-session-rail.ts")],
+  processes: [
+    "openclaw-chat-processes-panel",
+    () => import("./components/chat-processes-panel.ts"),
+  ],
+  subagents: [
+    "openclaw-chat-subagents-panel",
+    () => import("./components/chat-subagents-panel.ts"),
+  ],
   discussion: [
     "openclaw-session-discussion",
     () => import("./components/session-discussion-panel.ts"),
@@ -62,7 +84,7 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
 
 const lazyRuntimes = new Map<LazyElementKey, LazyPanelRuntime>();
 
-function ensureLazyElement(
+export function ensureLazySidebarElement(
   key: LazyElementKey,
   requestUpdate: () => void,
 ): TemplateResult | null | undefined {
@@ -150,35 +172,41 @@ export function sidebarRegionCallbacks(params: {
 }
 
 export function renderSidebarRegion(params: {
+  presentationId: string;
+  conversationTab?: Pick<SidebarPanelDefinition, "label" | "icon">;
   fetchFavicon?: LinkFaviconFetcher;
   availableWidth: number;
   callbacks: SidebarRegionCallbacks;
-  availableSlots: SidebarSlotId[];
   layout: SidebarLayout;
   narrow: boolean;
+  /** The layout given is a narrow pane's view of the saved one; see presentNarrowSidebarLayout. */
+  sideFocusLocked?: boolean;
+  sideFocusOrigin?: () => HTMLElement | null;
   panelDefinitions?: SidebarPanelDefinition[];
-  panelActions: SidebarPanelTemplates;
-  panelTemplates: SidebarPanelTemplates;
   header?: TemplateResult | typeof nothing;
   primary: TemplateResult;
   requestUpdate: () => void;
 }): TemplateResult {
-  const panelDefinitions = params.panelDefinitions ?? sidebarPanelDefinitions();
+  const panelIdPrefix = `chat-panel-${encodeURIComponent(params.presentationId)}`;
+  let panelDefinitions = params.panelDefinitions ?? sidebarPanelDefinitions();
   const panelOpen = params.layout.open === true;
   const hasPanels = params.layout.columns.length > 0;
-  const regionError = hasPanels ? ensureLazyElement("region", params.requestUpdate) : undefined;
-  let panelTemplates: SidebarPanelTemplates | null = null;
+  const regionError = hasPanels
+    ? ensureLazySidebarElement("region", params.requestUpdate)
+    : undefined;
   for (const panel of params.layout.columns[0]?.panels ?? []) {
-    const lazyState = ensureLazyElement(panel.slot, params.requestUpdate);
+    const lazyState = ensureLazySidebarElement(panel.slot, params.requestUpdate);
     if (lazyState !== undefined) {
-      panelTemplates ??= { ...params.panelTemplates };
-      panelTemplates[panel.slot] =
-        lazyState ?? panelDefinitions.find((definition) => definition.slot === panel.slot)?.loading;
+      panelDefinitions = panelDefinitions.map((definition) =>
+        definition.slot === panel.slot
+          ? { ...definition, content: lazyState ?? definition.loading }
+          : definition,
+      );
     }
   }
   const availableWidth =
     params.availableWidth > 0 ? params.availableWidth : Number.POSITIVE_INFINITY;
-  const collapsed = params.narrow || isSidebarRegionCollapsed(params.layout, availableWidth);
+  const collapsed = params.narrow || availableWidth < SIDEBAR_NARROW_BREAKPOINT_PX;
   const main = sidebarMainPanel(params.layout);
   const chatMain = !main || main.slot === "conversation";
   const column = params.layout.columns[0];
@@ -205,19 +233,23 @@ export function renderSidebarRegion(params: {
           ? (regionLoading ?? null)
           : null
         : html`<openclaw-chat-sidebar-region
+            .panelIdPrefix=${panelIdPrefix}
+            .conversationTab=${params.conversationTab}
             .layout=${params.layout}
             .fetchFavicon=${params.fetchFavicon}
             .panelDefinitions=${panelDefinitions}
-            .panelTemplates=${panelTemplates ?? params.panelTemplates}
-            .panelActions=${params.panelActions}
-            .availableSlots=${params.availableSlots}
             .callbacks=${params.callbacks}
             .narrow=${params.narrow}
+            .sideFocusLocked=${params.sideFocusLocked === true}
+            .sideFocusOrigin=${params.sideFocusOrigin}
             .availableWidth=${params.availableWidth}
           ></openclaw-chat-sidebar-region>`
     }
     <div
+      id=${`${panelIdPrefix}-conversation`}
       class="sidebar-region__primary"
+      role="region"
+      aria-label=${t("chat.sidePanel.conversation")}
       data-region=${chatMain ? "main" : "side"}
       ?hidden=${!isSidebarSlotVisible(params.layout, "conversation")}
     >
@@ -235,31 +267,134 @@ export function resolveSidebarLayoutForBoard(params: {
   let layout = params.layout;
   if (!params.board.available) {
     layout = closeSlot(layout, "dashboard");
-    return fitSidebarLayout(layout, params.paneWidth) ?? layout;
+  } else if (params.board.face === "dashboard" && layout.columns.length === 0) {
+    layout = openSlot(layout, "dashboard");
   }
-  if (params.board.face !== "dashboard" || layout.columns.length > 0) {
-    return fitSidebarLayout(layout, params.paneWidth) ?? layout;
-  }
-  layout = openSlot(layout, "dashboard");
   return fitSidebarLayout(layout, params.paneWidth) ?? layout;
 }
 
+type FullMessageScope = {
+  owner: object;
+  sessionKey?: string;
+  agentId?: string;
+  sessionId?: string;
+  displayedSessionId?: string;
+  lifecycleRevision?: string;
+  authorizationKey?: string;
+};
+
+function readSidebarFullMessageScope(
+  state: ChatPageHost,
+  gateway: ApplicationGateway,
+): FullMessageScope {
+  const auth = gateway.snapshot.hello?.auth;
+  const session = selectedChatSessionRow(state);
+  return {
+    owner: gatewayPresentationScope(gateway),
+    sessionKey: state.sessionKey,
+    agentId: resolveChatAgentId(state),
+    sessionId: session?.sessionId,
+    displayedSessionId: state.currentSessionId ?? undefined,
+    lifecycleRevision: session?.lifecycleRevision,
+    authorizationKey: JSON.stringify([
+      state.mediaPolicyEpoch ?? 0,
+      auth?.role,
+      (auth?.scopes ?? []).toSorted(),
+    ]),
+  };
+}
+
+type FullMessageCache = FullMessageScope & {
+  messages: Map<string, Awaited<ReturnType<SidebarFullMessageLoader>>>;
+};
+const fullMessageCaches = new WeakMap<object, FullMessageCache>();
+
 export function createSidebarFullMessageLoader(
-  state: { client: GatewayBrowserClient | null; connected: boolean },
-  disabled: boolean,
+  state: ChatPageHost,
+  gateway: ApplicationGateway,
 ): SidebarFullMessageLoader | null {
-  if (disabled || !state.client || !state.connected) {
+  if (parseCatalogSessionKey(state.sessionKey) || !state.client || !state.connected) {
     return null;
   }
+  const readScope = () => readSidebarFullMessageScope(state, gateway);
   return async (request) => {
     if (!state.client || !state.connected) {
       return null;
     }
-    return state.client.request("chat.message.get", {
-      sessionKey: request.sessionKey,
-      ...(request.agentId ? { agentId: request.agentId } : {}),
-      messageId: request.messageId,
-      maxChars: DETAIL_FULL_MESSAGE_MAX_CHARS,
-    });
+    const client = state.client;
+    const generation = state.connectionEpoch;
+    const scope = { ...readScope() };
+    const sameScope = (other: FullMessageScope) =>
+      scope.owner === other.owner &&
+      scope.sessionKey === other.sessionKey &&
+      scope.agentId === other.agentId &&
+      scope.sessionId === other.sessionId &&
+      scope.displayedSessionId === other.displayedSessionId &&
+      scope.lifecycleRevision === other.lifecycleRevision &&
+      scope.authorizationKey === other.authorizationKey;
+    let cache = fullMessageCaches.get(state);
+    if (!cache || !sameScope(cache)) {
+      cache = { ...scope, messages: new Map() };
+      fullMessageCaches.set(state, cache);
+    }
+    const maxChars = request.maxChars ?? DETAIL_FULL_MESSAGE_MAX_CHARS;
+    const pendingInput = request.messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX);
+    const sameConversation = uiConversationMatches(
+      state,
+      scope.sessionKey,
+      request.sessionKey,
+      request.agentId,
+      scope.agentId,
+    );
+    const sessionId =
+      request.sessionId ??
+      (sameConversation && !pendingInput && scope.displayedSessionId !== scope.sessionId
+        ? scope.displayedSessionId
+        : undefined);
+    const cacheable =
+      !pendingInput &&
+      sameConversation &&
+      scope.sessionId !== undefined &&
+      scope.sessionId === scope.displayedSessionId &&
+      (sessionId === undefined || sessionId === scope.sessionId) &&
+      scope.lifecycleRevision !== undefined;
+    const key = JSON.stringify([scope.sessionKey, scope.agentId, request.messageId, maxChars]);
+    const cached = cacheable ? cache.messages.get(key) : undefined;
+    if (cached) {
+      return cached;
+    }
+    const result = await client.request<Awaited<ReturnType<SidebarFullMessageLoader>>>(
+      "chat.message.get",
+      {
+        sessionKey: request.sessionKey,
+        ...(request.agentId ? { agentId: request.agentId } : {}),
+        ...(sessionId ? { sessionId } : {}),
+        messageId: request.messageId,
+        maxChars,
+      },
+    );
+    if (
+      !state.connected ||
+      state.client !== client ||
+      state.connectionEpoch !== generation ||
+      !sameScope(readScope())
+    ) {
+      return null;
+    }
+    const message = asOptionalRecord(result?.message);
+    if (
+      cacheable &&
+      result?.ok &&
+      message &&
+      !asOptionalRecord(message["__openclaw"])?.importedFrom &&
+      !(message.role === "assistant" && message.stopReason === "error")
+    ) {
+      // Imported content and retry-hidden errors can change without a session lifecycle change.
+      if (cache.messages.size >= 16) {
+        cache.messages.delete(cache.messages.keys().next().value!);
+      }
+      cache.messages.set(key, result);
+    }
+    return result;
   };
 }

@@ -1,4 +1,3 @@
-// Line plugin module implements markdown to line behavior.
 import type { messagingApi } from "@line/bot-sdk";
 import {
   markdownToIRWithMeta,
@@ -9,30 +8,17 @@ import {
   type MarkdownTableCell,
   type MarkdownTableMeta,
 } from "openclaw/plugin-sdk/text-chunking";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { fitsLineFlexBubble, toFlexMessage } from "./flex-templates/message.js";
 import { createReceiptCard } from "./flex-templates/schedule-cards.js";
 import type { FlexBubble } from "./flex-templates/types.js";
-export { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
 
 type FlexMessage = messagingApi.FlexMessage;
 type FlexComponent = messagingApi.FlexComponent;
-type FlexText = messagingApi.FlexText;
 type FlexSpan = messagingApi.FlexSpan;
-type FlexBox = messagingApi.FlexBox;
 
-export interface ProcessedLineMessage {
-  /** The processed text with markdown stripped */
-  text: string;
-  /** Flex messages extracted from tables/code blocks */
-  flexMessages: FlexMessage[];
-  /** Source-ordered delivery parts whenever Markdown contains rich blocks. */
-  segments?: Array<{ type: "text"; text: string } | { type: "flex"; message: FlexMessage }>;
-}
+type LineMessageSegment = { type: "text"; text: string } | { type: "flex"; message: FlexMessage };
 
-type LineMessageSegment = NonNullable<ProcessedLineMessage["segments"]>[number];
-
-export interface CodeBlock {
+interface CodeBlock {
   language?: string;
   code: string;
 }
@@ -54,10 +40,6 @@ const LINE_FLEX_CODE_CARD_MAX_CHARS = 2000;
 
 function parseLineMarkdown(text: string, tableMode: "block" | "bullets" = "block") {
   return markdownToIRWithMeta(text, { ...LINE_MARKDOWN_OPTIONS, tableMode });
-}
-
-function codeBlockSpans(ir: MarkdownIR): MarkdownStyleSpan[] {
-  return ir.styles.filter((span) => span.style === "code_block");
 }
 
 function toCodeBlock(ir: MarkdownIR, span: MarkdownStyleSpan): CodeBlock {
@@ -212,9 +194,9 @@ function sameSpanStyle(left: FlexSpan, right: FlexSpan): boolean {
   );
 }
 
-function renderTableCell(cell: MarkdownTableCell | undefined, fallback: string): RenderedCell {
-  if (!cell?.text.trim()) {
-    return { text: fallback, hasMarkup: false };
+function renderTableCell(cell: MarkdownTableCell): RenderedCell {
+  if (!cell.text.trim()) {
+    return { text: "-", hasMarkup: false };
   }
 
   const codeSpans = cell.styles.filter((span) => span.style === "code");
@@ -294,7 +276,7 @@ function renderTableCell(cell: MarkdownTableCell | undefined, fallback: string):
     spans
       .map((span) => span.text ?? "")
       .join("")
-      .trim() || fallback;
+      .trim() || "-";
   return {
     text: renderedText,
     ...(hasMarkup ? { contents: spans } : {}),
@@ -302,7 +284,6 @@ function renderTableCell(cell: MarkdownTableCell | undefined, fallback: string):
   };
 }
 
-/** Convert a table to a Flex bubble when its rows fit the layout. */
 function convertTableToFlexBubble(table: MarkdownTableMeta): FlexBubble | undefined {
   // Receipt cards keep 12 plain rows; generic and styled layouts keep only 10.
   const requiresPlainCells = table.rowCells.length > 10;
@@ -313,7 +294,7 @@ function convertTableToFlexBubble(table: MarkdownTableMeta): FlexBubble | undefi
   const renderCells = (cells: MarkdownTableCell[]): RenderedCell[] | undefined => {
     const rendered: RenderedCell[] = [];
     for (const cell of cells) {
-      const prepared = renderTableCell(cell, "-");
+      const prepared = renderTableCell(cell);
       if (requiresPlainCells && prepared.hasMarkup) {
         return undefined;
       }
@@ -357,11 +338,11 @@ function convertTableToFlexBubble(table: MarkdownTableMeta): FlexBubble | undefi
       color: "#333333",
       flex: 1,
       wrap: true,
-    })) as FlexText[],
+    })),
     paddingBottom: "sm",
-  } as FlexBox;
+  };
 
-  const dataRows: FlexComponent[] = rowCells.map((row, rowIndex) => ({
+  const dataRows = rowCells.map<messagingApi.FlexBox>((row, rowIndex) => ({
     type: "box",
     layout: "horizontal",
     contents: table.headers.map((_, colIndex) => {
@@ -374,10 +355,10 @@ function convertTableToFlexBubble(table: MarkdownTableMeta): FlexBubble | undefi
         color: "#666666",
         flex: 1,
         wrap: true,
-      } as FlexText;
+      };
     }),
     margin: rowIndex === 0 ? "md" : "sm",
-  })) as FlexBox[];
+  }));
 
   return {
     type: "bubble",
@@ -390,13 +371,8 @@ function convertTableToFlexBubble(table: MarkdownTableMeta): FlexBubble | undefi
   };
 }
 
-/** Convert a code block to a LINE Flex Message bubble. */
-export function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
+function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
   const titleText = block.language ? `Code (${block.language})` : "Code";
-  const displayCode =
-    block.code.length > LINE_FLEX_CODE_CARD_MAX_CHARS
-      ? `${truncateUtf16Safe(block.code, LINE_FLEX_CODE_CARD_MAX_CHARS)}\n...`
-      : block.code;
 
   return {
     type: "bubble",
@@ -410,24 +386,24 @@ export function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
           weight: "bold",
           size: "sm",
           color: "#666666",
-        } as FlexText,
+        },
         {
           type: "box",
           layout: "vertical",
           contents: [
             {
               type: "text",
-              text: displayCode,
+              text: block.code,
               size: "xs",
               color: "#333333",
               wrap: true,
-            } as FlexText,
+            },
           ],
           backgroundColor: "#F5F5F5",
           paddingAll: "md",
           cornerRadius: "md",
           margin: "sm",
-        } as FlexBox,
+        },
       ],
       paddingAll: "lg",
     },
@@ -435,9 +411,9 @@ export function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
 }
 
 /** Parse once, route existing block surfaces to Flex, and project the remainder as plain text. */
-export function processLineMessage(text: string): ProcessedLineMessage {
+export function processLineMessage(text: string): LineMessageSegment[] {
   const { ir, tables } = parseLineMarkdown(text);
-  const codeSpans = codeBlockSpans(ir);
+  const codeSpans = ir.styles.filter((span) => span.style === "code_block");
   const plainTextInsertions: PlainTextInsertion[] = [];
 
   for (const table of tables) {
@@ -474,24 +450,6 @@ export function processLineMessage(text: string): ProcessedLineMessage {
   }
 
   const segments: LineMessageSegment[] = [];
-  const processedText = projectPlainText(ir, codeSpans, plainTextInsertions, (segment) =>
-    segments.push(segment),
-  );
-  return {
-    text: processedText,
-    flexMessages: segments.flatMap((segment) => (segment.type === "flex" ? [segment.message] : [])),
-    ...(plainTextInsertions.length > 0 ? { segments } : {}),
-  };
-}
-
-/** Check if text contains markdown that needs conversion. */
-export function hasMarkdownToConvert(text: string): boolean {
-  const { ir, tables } = parseLineMarkdown(text);
-  return (
-    tables.length > 0 ||
-    ir.styles.length > 0 ||
-    ir.links.length > 0 ||
-    /<\/?u>/i.test(ir.text) ||
-    ir.text !== text.trimEnd()
-  );
+  projectPlainText(ir, codeSpans, plainTextInsertions, (segment) => segments.push(segment));
+  return segments;
 }

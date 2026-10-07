@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements monitor behavior.
 import type { WAMessageKey } from "baileys";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
@@ -6,8 +5,7 @@ import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   registerUnhandledRejectionHandler,
@@ -44,8 +42,8 @@ import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
 import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
 import { getRuntimeConfig } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
-import { buildMentionConfig } from "./mentions.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
+import type { GroupHistoryEntry } from "./monitor/inbound-context.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
 import type { WebMonitorTuning } from "./types.js";
@@ -61,10 +59,6 @@ function isNonRetryableWebCloseStatus(statusCode: unknown): boolean {
 
 type ReplyResolver = typeof import("./reply-resolver.runtime.js").getReplyFromConfig;
 type WhatsAppRuntimeConfig = ReturnType<typeof getRuntimeConfig>;
-
-const loadReplyResolverRuntime = createLazyRuntimeModule(
-  () => import("./reply-resolver.runtime.js"),
-);
 
 function resolveWebMonitorConfigSnapshot(params: {
   cfg: WhatsAppRuntimeConfig;
@@ -131,7 +125,7 @@ export async function monitorWebChannel(
   tuning: WebMonitorTuning = {},
 ) {
   const activeReplyResolver =
-    replyResolver ?? (await loadReplyResolverRuntime()).getReplyFromConfig;
+    replyResolver ?? (await import("./reply-resolver.runtime.js")).getReplyFromConfig;
   const runId = newConnectionId();
   const replyLogger = getChildLogger({ module: "web-auto-reply", runId });
   const heartbeatLogger = getChildLogger({ module: "web-heartbeat", runId });
@@ -148,25 +142,15 @@ export async function monitorWebChannel(
     }).cfg;
 
   const maxMediaBytes = resolveWhatsAppMediaMaxBytes(account);
-  const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
-  const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
+  const heartbeatSeconds = resolveHeartbeatSeconds(tuning.heartbeatSeconds);
+  const reconnectPolicy = resolveReconnectPolicy(tuning.reconnect);
   const socketTiming = resolveWhatsAppSocketTiming(tuning.socketTiming);
-  const baseMentionConfig = buildMentionConfig(cfg);
-  const groupHistoryLimit =
+  const groupHistoryLimit = resolvePromptHistoryLimit(
     account.historyLimit ??
-    cfg.channels?.whatsapp?.historyLimit ??
-    cfg.messages?.groupChat?.historyLimit ??
-    DEFAULT_GROUP_HISTORY_LIMIT;
-  const groupHistories = new Map<
-    string,
-    Array<{
-      sender: string;
-      body: string;
-      timestamp?: number;
-      id?: string;
-      senderJid?: string;
-    }>
-  >();
+      cfg.channels?.whatsapp?.historyLimit ??
+      cfg.messages?.groupChat?.historyLimit,
+  );
+  const groupHistories = new Map<string, GroupHistoryEntry[]>();
   const groupMemberNames = new Map<string, Map<string, string>>();
   const groupMetadataCache: WhatsAppGroupMetadataCache = new Map();
   const recentMessageKeys: WhatsAppBaileysMessageCache = new Map();
@@ -259,8 +243,6 @@ export async function monitorWebChannel(
               backgroundTasks: connectionLocal.backgroundTasks,
               replyResolver: activeReplyResolver,
               replyLogger,
-              baseMentionConfig,
-              account,
               buildContext: pluginChannelRuntime?.inbound.buildContext,
               // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
               dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
@@ -500,43 +482,27 @@ export async function monitorWebChannel(
       });
 
       const normalizedAccountId = normalizeReconnectAccountId(account.accountId);
-      void drainPendingDeliveries({
-        drainKey: `whatsapp:${normalizedAccountId}`,
-        logLabel: "WhatsApp reconnect drain",
-        cfg,
-        log: reconnectLogger,
-        selectEntry: (entry) => ({
-          match:
-            entry.channel === "whatsapp" &&
-            normalizeReconnectAccountId(entry.accountId) === normalizedAccountId,
-          bypassBackoff: isNoListenerReconnectError(entry.lastError),
-        }),
-      }).catch((err: unknown) => {
-        reconnectLogger.warn(
-          { connectionId: connection.connectionId, error: String(err) },
-          "reconnect drain failed",
-        );
-      });
-
-      const periodicDrainInterval = setInterval(() => {
+      const drainDeliveries = (mode: "reconnect" | "periodic") => {
         void drainPendingDeliveries({
           drainKey: `whatsapp:${normalizedAccountId}`,
-          logLabel: "WhatsApp periodic drain",
+          logLabel: `WhatsApp ${mode} drain`,
           cfg,
           log: reconnectLogger,
           selectEntry: (entry) => ({
             match:
               entry.channel === "whatsapp" &&
               normalizeReconnectAccountId(entry.accountId) === normalizedAccountId,
-            bypassBackoff: false,
+            bypassBackoff: mode === "reconnect" && isNoListenerReconnectError(entry.lastError),
           }),
         }).catch((err: unknown) => {
           reconnectLogger.warn(
             { connectionId: connection.connectionId, error: String(err) },
-            "periodic drain failed",
+            `${mode} drain failed`,
           );
         });
-      }, 30_000);
+      };
+      drainDeliveries("reconnect");
+      const periodicDrainInterval = setInterval(() => drainDeliveries("periodic"), 30_000);
 
       const inboundPolicy = resolveWhatsAppInboundPolicy({
         cfg,

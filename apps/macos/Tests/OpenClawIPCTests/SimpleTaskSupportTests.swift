@@ -1,4 +1,5 @@
 import Testing
+import XCTest
 @testable import OpenClaw
 
 private actor SimpleTaskSignal {
@@ -70,50 +71,6 @@ struct SimpleTaskSupportTests {
 
     @Test
     @MainActor
-    func `rescheduling cancels the superseded operation`() async {
-        let firstSleepStarted = SimpleTaskSignal()
-        let operation = SimpleTaskOperationProbe()
-        var task: Task<Void, Never>?
-
-        SimpleTaskSupport.schedule(
-            task: &task,
-            delay: 60,
-            sleep: { nanoseconds in
-                await firstSleepStarted.signal()
-                try await Task.sleep(nanoseconds: nanoseconds)
-            },
-            operation: {
-                await operation.recordCall("first")
-            })
-
-        await firstSleepStarted.wait()
-        guard let firstTask = task else {
-            Issue.record("first scheduled task did not start")
-            return
-        }
-
-        SimpleTaskSupport.schedule(
-            task: &task,
-            delay: 0,
-            sleep: { _ in },
-            operation: {
-                await operation.recordCall("second")
-            })
-        guard let secondTask = task else {
-            Issue.record("replacement task did not start")
-            return
-        }
-
-        await firstTask.value
-        await secondTask.value
-        SimpleTaskSupport.stop(task: &task)
-
-        #expect(await operation.calls() == ["second"])
-        #expect(task == nil)
-    }
-
-    @Test
-    @MainActor
     func `cancelling after sleep completes does not run the scheduled operation`() async {
         let operation = SimpleTaskOperationProbe()
         var task: Task<Void, Never>?
@@ -141,5 +98,43 @@ struct SimpleTaskSupportTests {
 
         #expect(await operation.calls().isEmpty)
         #expect(task == nil)
+    }
+}
+
+final class SimpleTaskSupportSchedulingTests: XCTestCase {
+    @MainActor
+    func testRapidReschedulingOnlyRunsTheLatestOperation() async throws {
+        let firstSleepStarted = SimpleTaskSignal()
+        let operation = SimpleTaskOperationProbe()
+        var task: Task<Void, Never>?
+        defer { SimpleTaskSupport.stop(task: &task) }
+
+        SimpleTaskSupport.schedule(
+            task: &task,
+            delay: 60,
+            sleep: { nanoseconds in
+                await firstSleepStarted.signal()
+                try await Task.sleep(nanoseconds: nanoseconds)
+            },
+            operation: {
+                await operation.recordCall("superseded")
+            })
+        await firstSleepStarted.wait()
+        var scheduled = try [XCTUnwrap(task)]
+
+        for generation in 0..<32 {
+            SimpleTaskSupport.schedule(task: &task, delay: 0) {
+                await operation.recordCall(String(generation))
+            }
+            try scheduled.append(XCTUnwrap(task))
+        }
+        for scheduledTask in scheduled {
+            await scheduledTask.value
+        }
+
+        let calls = await operation.calls()
+        XCTAssertEqual(calls, ["31"])
+        SimpleTaskSupport.stop(task: &task)
+        XCTAssertNil(task)
     }
 }

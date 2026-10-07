@@ -17,9 +17,40 @@ const QuestionSecretStoreAllowedHostsSchema = Type.Array(
   { maxItems: 128, uniqueItems: true },
 );
 
+const QuestionResourcePreviewSchema = Type.Union([
+  closedObject({
+    type: Type.Literal("mcp_app_tool"),
+    name: NonEmptyString,
+    arguments: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  }),
+  closedObject({
+    type: Type.Literal("resource_link"),
+    uri: NonEmptyString,
+    name: NonEmptyString,
+    title: Type.Optional(Type.String()),
+    description: Type.Optional(Type.String()),
+    mimeType: Type.Optional(Type.String()),
+  }),
+]);
+
+const QuestionResourceInputSchema = closedObject({
+  viewId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  selection: Type.Union([Type.Literal("explicit"), Type.Literal("implicit")]),
+  userOptions: Type.Optional(
+    closedObject({
+      kind: Type.Union([Type.Literal("file"), Type.Literal("directory")]),
+      accept: Type.Optional(Type.Array(Type.String({ maxLength: 128 }), { maxItems: 32 })),
+    }),
+  ),
+});
+
 export const QuestionOptionSchema = closedObject({
   label: NonEmptyString,
   description: Type.Optional(Type.String()),
+  value: Type.Optional(withSince("2026.9", Type.String({ minLength: 1, maxLength: 4096 }))),
+  thumbnail: Type.Optional(Type.String({ minLength: 1, maxLength: 65536 })),
+  resourceUri: Type.Optional(Type.String({ minLength: 1, maxLength: 2048 })),
+  preview: Type.Optional(QuestionResourcePreviewSchema),
 });
 
 export const QuestionSecretStoreBindingSchema = closedObject({
@@ -40,8 +71,13 @@ const QuestionInputFields = {
   question: NonEmptyString,
   // Opening an external page is separate from submitting the question's answer.
   url: Type.Optional(withSince("2026.8", Type.String({ minLength: 1, maxLength: 2048 }))),
-  options: Type.Array(QuestionOptionSchema, { maxItems: 4 }),
+  options: Type.Array(QuestionOptionSchema, { maxItems: 64 }),
+  presentation: Type.Optional(Type.Literal("form")),
+  resource: Type.Optional(QuestionResourceInputSchema),
   multiSelect: Type.Optional(Type.Boolean()),
+  answerFormat: Type.Optional(Type.Literal("lines")),
+  allowEmpty: Type.Optional(Type.Boolean()),
+  defaultAnswers: Type.Optional(Type.Array(Type.String({ maxLength: 4096 }), { maxItems: 64 })),
   isOther: Type.Optional(Type.Boolean()),
   isSecret: Type.Optional(Type.Boolean()),
   secretStore: Type.Optional(withSince("2026.8", QuestionSecretStoreBindingSchema)),
@@ -164,6 +200,8 @@ export const QuestionResolvedEventSchema = withSince(
   ]),
 );
 
+export type QuestionResourceInput = Static<typeof QuestionResourceInputSchema>;
+export type QuestionResourcePreview = Static<typeof QuestionResourcePreviewSchema>;
 export type QuestionOption = Static<typeof QuestionOptionSchema>;
 export type Question = Static<typeof QuestionSchema>;
 export type QuestionRequestQuestion = Static<typeof QuestionRequestQuestionSchema>;

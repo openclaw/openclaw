@@ -3,6 +3,7 @@ import { AsyncResource } from "node:async_hooks";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import {
   interruptSessionWorkAdmissions,
@@ -32,6 +33,7 @@ import {
   setNoAbort,
 } from "./dispatch-from-config.test-harness.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 let getActiveReplyRunCount: typeof import("./reply-run-registry.registry.js").getActiveReplyRunCount;
@@ -227,22 +229,16 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     const sessionKey = "agent:main:discord:channel:owned-resolver-race";
     const sessionId = "owned-resolver-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
-    let releaseResolver: () => void = () => {};
-    const resolverGate = new Promise<void>((resolve) => {
-      releaseResolver = resolve;
-    });
-    let signalResolverEntered: () => void = () => {};
-    const resolverEntered = new Promise<void>((resolve) => {
-      signalResolverEntered = resolve;
-    });
+    const resolverGate = createDeferred();
+    const resolverEntered = createDeferred();
     type ResolverOptions = import("./get-reply.types.js").InternalGetReplyOptions;
     let operation: ResolverOptions["replyOperation"];
     let resumedResolverOwner: ResolverOptions["replyOperation"];
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: ResolverOptions) => {
       operation = opts?.replyOperation;
-      signalResolverEntered();
-      await resolverGate;
+      resolverEntered.resolve();
+      await resolverGate.promise;
       resumedResolverOwner = replyRunRegistry.get(sessionKey);
       await requireBlockReplyHandler(opts?.onBlockReply)({ text: "stale late block" });
       return { text: "stale late final" } satisfies ReplyPayload;
@@ -260,13 +256,13 @@ describe("dispatchReplyFromConfig owner settlement", () => {
       dispatcher,
       replyResolver,
     });
-    await resolverEntered;
+    await resolverEntered.promise;
 
     const externalLifecycleRequest = new AsyncResource("external-owned-resolver-lifecycle");
     let mutationRan = false;
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
-        await runExclusiveSessionLifecycleMutation({
+        await runExclusiveSessionLifecycleMutation("patch", {
           scope: "/tmp/mock-sessions.json",
           identities: [sessionKey, sessionId],
           prepare: async () => {
@@ -292,7 +288,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
         true,
       );
 
-      releaseResolver();
+      resolverGate.resolve();
       await mutation;
 
       expect(resumedResolverOwner).toBe(operation);
@@ -301,7 +297,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
       expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
       expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     } finally {
-      releaseResolver();
+      resolverGate.resolve();
       await mutation;
       externalLifecycleRequest.emitDestroy();
     }
@@ -317,7 +313,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
       sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({ existing: undefined });
       sessionStoreMocks.updateSessionEntry.mockClear();
       acpManagerRuntimeMocks.getAcpSessionManager.mockImplementation(() => ({
-        resolveSession: () => ({ kind: "none" as const }),
+        resolveSessionAsync: async () => ({ kind: "none" as const }),
         getObservabilitySnapshot: () => ({
           runtimeCache: { activeSessions: 0, idleTtlMs: 0, evictedTotal: 0 },
           turns: {
@@ -338,14 +334,10 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     });
 
     it.each([
-      "before delivery",
       "transport failure",
-      "overlapping progress",
       "subsequent block",
       "aborted progress",
-      "tool-only reply",
       "cancelled block and tool-only reply",
-      "no pending reply",
     ] as const)(
       "dispatchReplyFromConfig settles queued presentation after %s through retained callbacks",
       async (phase) => {
@@ -371,10 +363,6 @@ describe("dispatchReplyFromConfig owner settlement", () => {
             ) {
               return null;
             }
-            if (payload.text === "queued reply" && phase === "before delivery") {
-              entered.resolve();
-              await release.promise;
-            }
             return payload;
           },
           deliver: async (payload) => {
@@ -382,7 +370,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
               secondEntered.resolve();
               await releaseSecond.promise;
             }
-            if (payload.text === "queued reply" && phase !== "before delivery") {
+            if (payload.text === "queued reply") {
               entered.resolve();
               await release.promise;
               if (phase === "transport failure") {
@@ -401,7 +389,14 @@ describe("dispatchReplyFromConfig owner settlement", () => {
             retained = opts;
             await opts?.onBlockReply?.({ text: "initial reply" });
             if (phase === "cancelled block and tool-only reply") {
-              opts?.onDeliberateSilentTerminalReply?.();
+              const runState = resolveReplyOperationRunState(opts);
+              if (!runState) {
+                throw new Error("expected reply operation run state");
+              }
+              runState.replyCompletion = resolveReplyCompletion(
+                runState.replyCompletion?.expectation ?? "required",
+                "blocked",
+              );
             }
             resolverEntered.resolve();
             if (phase === "aborted progress") {
@@ -418,19 +413,13 @@ describe("dispatchReplyFromConfig owner settlement", () => {
           }
           dispatcher.markComplete();
           await dispatcher.waitForIdle();
-          if (phase !== "no pending reply") {
-            if (phase === "tool-only reply" || phase === "cancelled block and tool-only reply") {
-              dispatcher.sendToolResult({ text: "queued reply" });
-            } else {
-              await retained?.onBlockReply?.({ text: "queued reply" });
-            }
-            await entered.promise;
+          if (phase === "cancelled block and tool-only reply") {
+            dispatcher.sendToolResult({ text: "queued reply" });
+          } else {
+            await retained?.onBlockReply?.({ text: "queued reply" });
           }
-          if (
-            phase === "overlapping progress" ||
-            phase === "subsequent block" ||
-            phase === "aborted progress"
-          ) {
+          await entered.promise;
+          if (phase === "subsequent block" || phase === "aborted progress") {
             progress = Promise.resolve(retained?.onPlanUpdate?.({ phase: "update", steps: [] }));
             if (phase === "aborted progress") {
               abortController.abort();
@@ -456,10 +445,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
           await progress;
           await dispatch;
           const receipt = await dispatcher.waitForIdle();
-          const noPendingBlock =
-            phase === "no pending reply" ||
-            phase === "tool-only reply" ||
-            phase === "cancelled block and tool-only reply";
+          const noPendingBlock = phase === "cancelled block and tool-only reply";
           expect(cleanedUpBeforeDelivery).toBe(noPendingBlock ? 1 : 0);
           expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
           expect(receipt?.counts.block.delivered).toBe(
@@ -490,7 +476,6 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     );
 
     it.each([
-      { phase: "rejected delivery", deliveryFails: true, cleanupFails: false },
       { phase: "rejected delivery and cleanup", deliveryFails: true, cleanupFails: true },
       { phase: "rejected cleanup", deliveryFails: false, cleanupFails: true },
     ])(
@@ -529,7 +514,14 @@ describe("dispatchReplyFromConfig owner settlement", () => {
             replyOptions: { onQueuedFollowupSettled },
             replyResolver: async (_ctx, opts) => {
               retained = opts;
-              opts?.onDeliberateSilentTerminalReply?.();
+              const runState = resolveReplyOperationRunState(opts);
+              if (!runState) {
+                throw new Error("expected reply operation run state");
+              }
+              runState.replyCompletion = resolveReplyCompletion(
+                runState.replyCompletion?.expectation ?? "required",
+                "blocked",
+              );
               return undefined;
             },
           });

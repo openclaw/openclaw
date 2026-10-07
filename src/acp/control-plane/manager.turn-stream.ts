@@ -1,4 +1,3 @@
-/** Normalizes ACP runtime turn event/result streams into manager-facing outcomes. */
 import type {
   AcpRuntime,
   AcpRuntimeEvent,
@@ -15,7 +14,6 @@ type AcpTurnEventGate = {
   pendingDelivery?: Promise<void>;
 };
 
-/** Summary of whether a turn stream emitted user-visible output or terminal events. */
 type AcpTurnStreamOutcome = {
   sawOutput: boolean;
   terminalStatus?: "completed" | "cancelled";
@@ -134,7 +132,6 @@ export async function emitCancelledAcpTurn(
   return { sawOutput: false, terminalStatus: "cancelled" };
 }
 
-/** Consumes runtime turn APIs and emits normalized events while tracking output/terminal state. */
 export async function consumeAcpTurnStream(params: {
   runtime: AcpRuntime;
   turn: AcpRuntimeTurnInput;
@@ -164,23 +161,35 @@ export async function consumeAcpTurnStream(params: {
     // Submission readiness and terminal cleanup are independent backend-owned turn boundaries.
     const turn = params.runtime.startTurn(params.turn);
     let promptReadinessOpen = true;
+    let promptNotificationStarted = false;
     const readinessPromise = turn.promptStarted?.then(
       async () => {
-        if (!promptReadinessOpen) {
+        if (!promptReadinessOpen || !params.eventGate.open) {
           return { kind: "prompt-start-closed" as const };
         }
-        await params.onPromptStarted?.({ authoritative: true });
+        promptNotificationStarted = true;
+        try {
+          await params.onPromptStarted?.({ authoritative: true });
+        } catch (error) {
+          return { kind: "prompt-start-error" as const, error };
+        }
         return { kind: "prompt-started" as const };
       },
       (error: unknown) => ({ kind: "prompt-start-error" as const, error }),
     );
     const resultPromise = turn.result.then(
-      (result) => {
+      async (result) => {
         promptReadinessOpen = false;
+        if (promptNotificationStarted) {
+          await readinessPromise;
+        }
         return { kind: "result" as const, result };
       },
-      (error: unknown) => {
+      async (error: unknown) => {
         promptReadinessOpen = false;
+        if (promptNotificationStarted) {
+          await readinessPromise;
+        }
         return { kind: "result-error" as const, error };
       },
     );
@@ -216,30 +225,18 @@ export async function consumeAcpTurnStream(params: {
       await params.onPromptStarted?.({ authoritative: false });
     }
 
-    let eventOutcome: AcpTurnStreamOutcome | null = null;
-    let result: AcpRuntimeTurnResult | null = null;
     const firstOutcome = await Promise.race([eventsPromise, resultPromise]);
     if (firstOutcome.kind === "event-error") {
       throw firstOutcome.error;
     }
-    if (firstOutcome.kind === "events") {
-      eventOutcome = firstOutcome.outcome;
-    } else if (firstOutcome.kind === "result-error") {
+    const terminalOutcome = firstOutcome.kind === "events" ? await resultPromise : firstOutcome;
+    if (terminalOutcome.kind === "result-error") {
       await turn.closeStream({ reason: "turn-result-error" }).catch(() => {});
-      throw firstOutcome.error;
-    } else {
-      result = firstOutcome.result;
+      throw terminalOutcome.error;
     }
+    const result = terminalOutcome.result;
 
-    if (!result) {
-      const terminalOutcome = await resultPromise;
-      if (terminalOutcome.kind === "result-error") {
-        await turn.closeStream({ reason: "turn-result-error" }).catch(() => {});
-        throw terminalOutcome.error;
-      }
-      result = terminalOutcome.result;
-    }
-
+    let eventOutcome = firstOutcome.kind === "events" ? firstOutcome.outcome : null;
     let closedTerminalStream = false;
     while (!eventOutcome) {
       // Channel delivery can outlive the backend result. Only an idle event

@@ -5,7 +5,6 @@ import {
   type CronScheduledToolCallerOrigin,
   type CronScheduledToolPolicy,
 } from "../cron/scheduled-tool-policy.js";
-import type { ExecAsk, ExecMode, ExecSecurity, ExecTarget } from "../infra/exec-approvals-core.js";
 
 /** Trusted runtime context for a scheduled run with a server-stamped tool cap. */
 export type ScheduledToolPolicyContext = (
@@ -18,29 +17,6 @@ export type ScheduledToolPolicyContext = (
   /** Restrict-only policy for the rebuilt exec tool; absence keeps baseline exec. */
   execTarget?: { host: "gateway"; ask?: "always" };
 };
-
-type ScheduledExecPolicy = {
-  host?: ExecTarget;
-  mode?: ExecMode;
-  security?: ExecSecurity;
-  ask?: ExecAsk;
-};
-
-/** A captured target resolves auto placement but never replaces a current explicit host. */
-export function resolveScheduledExecPolicy(
-  policy: ScheduledExecPolicy,
-  target: ScheduledToolPolicyContext["execTarget"],
-): ScheduledExecPolicy {
-  return {
-    host:
-      policy.host === undefined || policy.host === "auto"
-        ? (target?.host ?? policy.host)
-        : policy.host,
-    mode: target?.ask ? undefined : policy.mode,
-    security: policy.security,
-    ask: target?.ask ?? policy.ask,
-  };
-}
 
 /** Separates a scheduled creator's authorization identity from its delivery route. */
 export function resolveScheduledToolCallerContext(params: {

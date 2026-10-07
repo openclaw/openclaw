@@ -1,4 +1,7 @@
-// Process supervisor types describe supervised runs and termination reasons.
+import type { WindowsJobExtinction } from "../../../scripts/lib/managed-windows-job.mts";
+import type { SpawnInitiation } from "../spawn-initiation.js";
+
+export type ProcessExtinctionResult = void | WindowsJobExtinction;
 
 export type TerminationReason =
   | "manual-cancel"
@@ -35,8 +38,8 @@ export type ManagedRun = {
   startedAtMs: number;
   stdin?: ManagedRunStdin;
   wait: () => Promise<RunExit>;
-  /** Join the adapter's native ownership boundary; deliberately detached outsiders are excluded. */
-  waitForExtinction?: () => Promise<void>;
+  /** Join cleanup; unavailable Windows Job certification resolves with an uncertain outcome. */
+  waitForExtinction?: () => Promise<ProcessExtinctionResult>;
   cancel: (reason?: TerminationReason) => void;
   /** Stop every decoded, raw, captured, and output-clock update for this run. */
   detachOutput?: () => void;
@@ -59,11 +62,12 @@ export type SpawnSecretInput = {
 
 export type ProcessAdapterConstruction = {
   assertCurrent?: () => void;
+  initiateSpawn?: SpawnInitiation;
   /** Synchronous launch admission; never recheck after the target command starts. */
   beforeSpawn?: () => void;
   abortSignal?: AbortSignal;
   /** Publish resource cleanup before readiness or private-input delivery can fail. */
-  onSpawnCleanup?: (cleanup: Promise<void>) => void;
+  onSpawnCleanup?: (cleanup: Promise<ProcessExtinctionResult>) => void;
 };
 
 export type AwaitedStdoutConsumer = {
@@ -93,7 +97,7 @@ export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
     listener: (error: Error, source: "process" | "stdin" | "stdout" | "stderr") => void,
   ) => void;
   wait: () => Promise<{ code: number | null; signal: WaitSignal }>;
-  waitForExtinction?: () => Promise<void>;
+  waitForExtinction?: () => Promise<ProcessExtinctionResult>;
   readonly cleanupResult?: ProcessCleanupResult;
   kill: (signal?: NodeJS.Signals) => void;
   dispose: () => void;
@@ -106,6 +110,7 @@ export type ProcessAdapterStartup<Adapter extends SpawnProcessAdapter> = {
 };
 
 type SpawnBaseInput = {
+  initiateSpawn?: SpawnInitiation;
   /** The local subprocess transports execution owned outside its local process tree. */
   cleanupOwnership?: "external";
   /** Revalidate the caller at deferred spawn and private-input delivery boundaries. */

@@ -1,4 +1,13 @@
+import type { SqliteWalHealth } from "../../infra/sqlite-wal-checkpoint.js";
 import type {
+  SessionEntrySummary,
+  TranscriptEvent,
+  TranscriptMessageAppendResult,
+} from "./session-accessor.types.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
+export type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
+export type {
   DeletedAgentSessionEntryPurgeParams,
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
@@ -11,10 +20,44 @@ import type {
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
 } from "./session-accessor.lifecycle-types.js";
-import type { SessionEntrySummary } from "./session-accessor.types.js";
-import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
-export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
+export type TranscriptWriteSnapshot<T> = {
+  result: T;
+  lifecycleRevision?: string;
+  before: SessionTranscriptContextVersion;
+  after: SessionTranscriptContextVersion;
+};
+
+export type TranscriptMessageWriteSnapshot<TMessage> = TranscriptWriteSnapshot<
+  TranscriptMessageAppendResult<TMessage> | undefined
+> & {
+  visibleTail: { entryId: string | null; generation: string | null };
+};
+
+export type TranscriptEventAppendResult =
+  | { appended: false }
+  | { appended: true; effectiveParentId?: string | null };
+
+export type CacheTtlProjectionPrefix = {
+  anchorIds: string[];
+  entries: Record<string, unknown>[];
+};
+
+export type SessionTranscriptBoundedActiveContext = {
+  activeLeafEntryId: string | null;
+  version: SessionTranscriptContextVersion;
+  opaqueParents: Map<string, string | null>;
+  parents: Map<string, string | null>;
+  firstKeptRanges: Map<string, { startIndex: number; endIndex: number }>;
+  persistedSuffixStartSeq: number;
+  boundaryCount: number;
+  events: TranscriptEvent[];
+  cacheTtlProjectionPrefixes?: CacheTtlProjectionPrefix[];
+  serializedBytes: number;
+  totalEvents: number;
+  transcriptMutationAt: number | null;
+  truncated: boolean;
+};
 
 export type CanonicalSessionValidationResult = {
   validatedRows: number;
@@ -26,10 +69,21 @@ export type CanonicalSessionValidationResult = {
 /** Worker operation facts; no Worker object or plan payload is retained. */
 export type SqliteSessionReclamationDiagnostics = {
   kind?:
+    | "archive-publish-prepare"
+    | "archive-publish-record"
+    | "deletion-plan"
     | "entry"
     | "lifecycle-artifacts"
+    | "lifecycle-projection-plan"
+    | "lifecycle-projection-commit"
+    | "lifecycle-projection-count"
     | "history-eviction"
     | "historical-generation"
+    | "maintenance-plan"
+    | "maintenance-finalize"
+    | "maintenance-statistics"
+    | "maintenance-age"
+    | "maintenance-pages"
     | "cold-batch"
     | "cold-maintain"
     | "cold-restore";
@@ -67,11 +121,13 @@ export type SqliteSessionArtifactPreparationDiagnostics =
 /** One pruning attempt retains only aggregate stage observations. */
 export type SqliteSessionArchivePruningDiagnostics = {
   trigger: "initial" | "after-eviction" | "final";
-  admissionMs?: number;
-  cachedAdmissions?: number;
-  asyncAdmissions?: number;
   checkpointCalls?: number;
   checkpointIncomplete?: number;
+  checkpoint?: SqliteWalHealth;
+  totalBytesBefore?: number;
+  totalBytesAfter?: number;
+  walBytesBefore?: number;
+  walBytesAfter?: number;
   checkpointMs?: number;
   checkpointMaxMs?: number;
   vacuumMs?: number;
@@ -91,7 +147,6 @@ export type SqliteSessionArchivePruningDiagnostics = {
 
 export type SqliteSessionWriteDiagnostics = SqliteSessionReclamationDiagnostics & {
   artifactPreparation?: SqliteSessionArtifactPreparationDiagnostics;
-  archivePruning?: SqliteSessionArchivePruningDiagnostics;
   reclamationAdmission?: SqliteSessionReclamationAdmissionDiagnostics;
 };
 
@@ -129,20 +184,7 @@ export type TranscriptEventAppendOptions = {
   expectedMutationAt?: number | null;
 };
 
-export type TranscriptAppendRefusal =
-  | {
-      actualSessionIdHash: string;
-      agentIdHash: string;
-      code: "session-rebound";
-      expectedSessionIdHash: string;
-      sessionKeyHash: string;
-    }
-  | {
-      agentIdHash: string;
-      code: "session-entry-missing";
-      expectedSessionIdHash: string;
-      sessionKeyHash: string;
-    };
+export type { TranscriptAppendRefusal } from "./session-transcript-writer-claim-error.js";
 
 export type {
   ForkSessionEntryFromParentTargetParams,
@@ -160,31 +202,6 @@ export type {
 export type LatestTranscriptAssistantMessage = {
   id?: string;
   message: unknown;
-};
-
-type SessionEntryBatchProjectionMutation = {
-  entry: SessionEntry;
-  previousSessionKeys?: readonly string[];
-  sessionKey: string;
-};
-
-export type SessionEntryBatchProjectionUpdate<T> = {
-  mutations?: Iterable<SessionEntryBatchProjectionMutation>;
-  result: T;
-};
-
-export type {
-  DeletedAgentSessionEntryPurgeParams,
-  DeleteSessionEntryLifecycleParams,
-  DeleteSessionEntryLifecycleResult,
-  ResetSessionEntryLifecycleParams,
-  ResetSessionEntryLifecycleResult,
-  SessionEntryLifecycleMutationResult,
-  SessionEntryLifecycleRemoval,
-  SessionEntryLifecycleUpsert,
-  SessionLifecycleArchivedTranscript,
-  SessionLifecycleArtifactCleanupParams,
-  SessionLifecycleArtifactCleanupResult,
 };
 
 export type {

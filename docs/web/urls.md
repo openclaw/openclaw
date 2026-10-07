@@ -21,7 +21,8 @@ when `gateway.publicOrigin` is configured, including its
 connects through a local SSH tunnel. Without a public origin, copied links use
 the connected Gateway's HTTP(S) address; a tunnel-only address remains local.
 Normal navigation and **Open in** continue using the current UI. Copied links
-contain no connection credentials, and recipients still need Gateway access.
+contain no connection credentials. Recipients need Gateway access unless the
+thread has [public access](/web/urls#public-session-transcripts) enabled.
 
 If the Gateway disconnects while a session link is loading, the Control UI retries
 the interrupted load after reconnecting. Navigating elsewhere cancels that recovery;
@@ -56,7 +57,7 @@ The path grammar is:
 agent's main session. The other forms encode one immutable session key in one of
 two ways.
 
-The short-id form applies when the session key's rest, everything after
+The short-id form applies to non-Incognito sessions when the key's rest, everything after
 `agent:<agentId>:`, ends in a UUID. `<sessionRef>` is an optional display-name
 slug plus a short id, such as `deploy-monitor-6db92d48`. The short id is the
 authoritative part: at least eight lowercase hexadecimal characters from the
@@ -64,11 +65,25 @@ start of the key's trailing UUID, with UUID dashes omitted. Longer prefixes up
 to all 32 hexadecimal characters are accepted. The row's rotating `sessionId`
 is not part of the URL identity.
 
+The Control UI generates links with all 32 UUID characters by default, so a
+selected session keeps its identity even when another session shares its prefix
+and display name. Existing shorter links still resolve, and the disambiguation
+view can offer the shortest unique prefix. Resolving a literal or display-name
+link to a UUID session also keeps the full UUID in its canonical URL.
+
 Every other key uses the literal-key form. Each colon-delimited segment after
 `agent:<agentId>:` becomes one URL-encoded path segment. For example,
 `agent:main:telegram:12345` becomes `/chat/main/telegram/12345`, and
 `agent:main:cron:nightly:run:8821` becomes
 `/chat/main/cron/nightly/run/8821`.
+
+Incognito sessions always use the literal-key form, even when their keys end
+in a UUID. For example, an Incognito link looks like
+`/chat/main/dashboard/incognito-12345678-90ab-cdef-1234-567890abcdef`.
+Incognito sessions are excluded from short-id and display-name discovery;
+their exact links still require administrator access and work only while the
+session exists. Reopen an existing session from the sidebar to replace an old
+short-id link that reports **Session not found**.
 
 Literal rest segments exactly equal to `.` or `..` use `~dot` and `~dotdot` so
 browsers cannot collapse them as relative path segments. A literal segment that
@@ -208,65 +223,90 @@ access from this feature.
 
 ## Public session transcripts
 
-Session creators and Gateway admins can open the session's sharing menu and select
-**Public access → Enable public access**. Confirming publishes the session's
-existing and future conversation text to anyone with its public URL. Recipients
-do not need an account or Gateway credentials. **Copy public link** copies that
-URL; **Disable public access** revokes it. The chat header shows **Public** while
-access is enabled.
+A thread has one normal `/chat/<agentId>/<sessionRef>` URL for signed-in people
+and anonymous readers. Session creators and Gateway admins can open **Session
+sharing → Public access → Enable public access** to publish its existing and
+future conversation text. **Copy public link** copies the normal thread URL,
+not a separate viewer address. The chat header shows **Public** while access is enabled.
 
-Assigning another owner does not transfer public-sharing authority. If the public
+A signed-out visitor sees the public conversation with a **Log in** button.
+Signing in returns to the same thread and applies the person's existing
+permissions; it does not grant editing or access to other sessions. A signed-in
+person without private access can still read the public version. Private,
+missing, and ambiguous anonymous targets show the same unavailable page without
+revealing names or candidate sessions.
+
+Assigning another owner does not transfer public-sharing authority. If the
 controls are unavailable, confirm that the session is saved, is not incognito,
 and you are its creator or a Gateway admin. See
 [Multi-user mode](/concepts/multi-user#world-readable-session-links).
 
 Public access is separate from teammate visibility and editing permissions.
-Publishing does not let anonymous visitors send messages, invoke tools, open
-private dashboards, or connect to the Gateway. Incognito sessions cannot be
-published. Review the conversation before enabling public access: text can
-contain sensitive information, and disabling access cannot recall saved copies.
+The public reader does not open a Gateway WebSocket, subscribe to the session
+roster, send messages, invoke tools, or open private dashboards. It shows user
+messages and assistant final answers with Markdown formatting. Tool output,
+reasoning, files, images, executable widgets, internal metadata, and hidden
+messages are omitted. Credential-pattern redaction is best effort, not a
+guarantee that sensitive prose is detected. Review the conversation before
+publishing and remember that future messages become public too.
 
-The public page shows user messages and assistant final answers, with Markdown
-formatting. Tool output, reasoning, files, images, executable widgets, internal
-metadata, and hidden messages are omitted. Recognized credential patterns are
-redacted, but this is not a guarantee that all sensitive text is detected.
-The latest view refreshes every 15 seconds. **Older messages** opens earlier
-pages without automatic refresh; **Back to latest** returns to the live view.
-Each page is bounded, and oversized content is explicitly marked as omitted.
-The initial page and its social metadata work without JavaScript.
+The latest public view checks for updates approximately every 15 seconds while
+visible. **Older messages** opens earlier pages without automatic refresh;
+**Back to latest** returns to the live view. Pages and long messages are bounded,
+with visible omission notices. The initial conversation and social metadata
+work without JavaScript.
 
-Public URLs have this form, prefixed by the configured Control UI base path:
+### Revocation and older links
 
-```text
-/share/session?token=<opaque-publication-token>
-```
+**Disable public access** stops anonymous reads through the normal thread URL.
+Re-enabling publication makes that same URL readable again. Resetting, replacing,
+forking, or deleting a session does not transfer its publication to a new
+instance. Disabling access cannot recall copies already downloaded by readers.
 
-The token is an encrypted bearer capability. It does not expose the agent,
-session key, session ID, or internal publication ID in the URL. Anyone who has
-the complete URL can read the published text, so handle it like any other
-public link. Copying the link again can produce a different token for the same
-publication; every copy remains valid until public access is disabled.
+Previously issued `/share/session` token links remain bound to their original
+publication and exact session instance. Disabling and re-enabling public access
+does not revive those older token links. Their encrypted tokens remain bound to
+the installation identity, independently of the Gateway login password or token.
+A full backup preserves that identity and the session databases; moving only an
+agent database to another installation invalidates its old token links. The
+normal thread URL is not a secret capability: current public-sharing state
+determines whether anonymous access is allowed.
 
-The publication is bound to one exact session instance. Resetting, replacing,
-forking, or deleting the session does not transfer public access to another
-instance. Disabling and enabling again creates a new URL; the old link remains
-invalid. The publication record lives with existing session metadata and does
-not require a database schema migration. Normal session retention still applies.
+### Login-proxy deployment
 
-Tokens are bound to the Gateway installation identity, not its login token or
-password. Rotating Gateway authentication does not break public links. A full
-OpenClaw backup preserves both the installation identity and agent session
-databases, so links survive a full restore. Restoring only an agent database to
-another installation, or replacing the installation identity during repair,
-invalidates its existing links; disable and enable public access again to issue
-new links.
+Deploy the public thread handler before changing the proxy. Permit anonymous
+thread-document requests under the Control UI's `/chat/*` namespace and the
+existing `/share/*` namespace, including the configured base path. The Gateway
+rejects mutation methods on public thread documents. Keep the root application,
+WebSocket, bootstrap, APIs, media, dashboards, settings, and the protected
+`/__openclaw__/session-entry` login handoff behind authentication. Do not bypass
+authentication for the whole host or for the `__openclaw__` namespace.
 
-Behind a login proxy, apply the same narrow `/share/*` routing described in
-[Behind a login proxy](/web/urls#behind-a-login-proxy). Keep all other routes protected.
-The proxy must overwrite `X-Forwarded-Proto` with the external request scheme;
-public session reads require its exact value to be `https`. The viewer and social
-card must both be reachable without cookies. OpenClaw
-does not change the proxy's access policies automatically.
+The public thread route does not trust identity headers on the bypassed path.
+Its small browser helper checks the protected session-entry route and enters
+the authenticated app only through the existing authentication and session
+permission owners. The login return target must be a same-origin chat path;
+external URLs and arbitrary application/API paths are rejected.
+
+Set `gateway.publicOrigin` to the external HTTPS origin and make the trusted
+proxy overwrite `X-Forwarded-Proto` with the external scheme. Verify public
+threads and the share card without cookies, private-thread non-disclosure,
+login returning to the same thread, and authentication on all protected routes.
+OpenClaw does not change Cloudflare Access or other proxy policies automatically.
+
+### Reader capacity
+
+Public pages share bounded rendered representations and in-flight work.
+Committed session and transcript changes invalidate affected pages; every
+response, including `304 Not Modified`, still checks live publication authority.
+Representations are retained only on the server, not in a shared browser/CDN
+cache. Eight distinct builds may run at once, two for one publication, with
+32 additional builds queued. Overload returns `503` and `Retry-After`.
+
+Request budgets are 120 per minute for one attributed client and 240 per minute
+for one publication, including cached responses. These accommodate 20 readers
+behind one IP at the default refresh interval without removing abuse limits.
+They are admission budgets, not a guarantee of throughput on every host.
 
 ## Person activity URLs
 
@@ -475,7 +515,6 @@ no route-specific URL parameters.
 | Plugins             | `/plugins`                                     | -                         | -                                                                                 |
 | Plugin settings     | `/settings/plugins`                            | -                         | `?tab=advanced`, `/settings/plugins/<pluginId>`                                   |
 | Automations         | `/automations`                                 | `/cron`                   | `?job=<jobId>`, `?job=<jobId>&run=<runId>`                                        |
-| Tasks               | `/tasks`                                       | -                         | -                                                                                 |
 | Devices             | `/settings/devices`                            | `/nodes`                  | Shared settings parameters below                                                  |
 | Plugin tab host     | `/<slug>` when advertised; `/plugin` otherwise | -                         | Generic host: `?plugin=<pluginId>&id=<tabId>`; tab parameters: `?p.<key>=<value>` |
 
@@ -499,6 +538,8 @@ they do not change the route identity.
 Links to Settings sections that moved to another page replace the old URL with
 the current destination while keeping the setting anchor. Back returns to the
 page before the link, and Forward returns to the current destination.
+
+Model setup links with `?firstRun=1` or `?firstRun=explicit` retain the first-run onboarding flow. Without either marker, `/settings/model-setup` and `/model-setup` redirect to `/settings/model-providers?connect=1`, which opens the connection dialog on Models. The Models page otherwise stays in place while connecting a provider or reviewing Gateway discovery.
 
 The retired General route and its `/config` alias are replaced once with
 `/settings/appearance?section=__appearance__#settings-language`. The historical

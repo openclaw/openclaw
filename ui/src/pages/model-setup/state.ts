@@ -1,4 +1,5 @@
 import type {
+  ProviderLoginOption,
   SystemAgentSetupActivateResult,
   SystemAgentSetupDetectResult,
   SystemAgentSetupVerifyResult,
@@ -18,6 +19,20 @@ export type ModelSetupPageState =
   | { phase: "loading" }
   | { phase: "ready"; result: SystemAgentSetupDetectResult }
   | { phase: "detect-error"; message: string };
+
+export function preparedModelPageState(
+  result: SystemAgentSetupDetectResult,
+  modelTarget?: "utility",
+): ModelSetupPageState {
+  // Preparation may persist an unverified model; hide only the prepared role.
+  return {
+    phase: "ready",
+    result:
+      modelTarget === "utility"
+        ? { ...result, utilityModel: undefined, setupModel: undefined }
+        : { ...result, configuredModel: undefined, setupComplete: false },
+  };
+}
 
 export type ModelSetupActivationState =
   | { phase: "idle" }
@@ -48,9 +63,15 @@ export type ModelSetupWizardResult =
   | WizardNextResult
   | { done: true; status: "not-admitted"; error: string };
 
+export type ModelSetupWizardRecovery = {
+  sessionId: string;
+  authChoice: string;
+  authKind?: ProviderLoginOption["kind"];
+};
+
 type ModelSetupWizardPhase =
   | { phase: "idle" }
-  | { phase: "starting"; authChoice: string }
+  | { phase: "starting"; authChoice: string; notice?: string }
   | {
       phase: "step";
       authChoice: string;
@@ -59,11 +80,25 @@ type ModelSetupWizardPhase =
       busy: boolean;
       validationError: string | null;
     }
-  | { phase: "done"; authChoice: string; preparedModelRef?: string }
+  | { phase: "done" }
   | { phase: "cancelled"; message: string }
   | { phase: "error"; message: string };
 
 export type ModelSetupWizardState = ModelSetupWizardPhase & { authLabel?: string };
+export type ModelSetupWizardDraft = { stepId: string | null; value: unknown };
+
+export function updateModelSetupWizardDraft(
+  draft: ModelSetupWizardDraft,
+  state: ModelSetupWizardState,
+): ModelSetupWizardDraft {
+  if (state.phase === "idle") {
+    return { stepId: null, value: undefined };
+  }
+  if (state.phase === "step" && state.step.id !== draft.stepId) {
+    return { stepId: state.step.id, value: initialWizardValue(state.step) };
+  }
+  return draft;
+}
 
 export function activationTimeoutForKind(kind: string): number {
   // Match the Gateway-owned provider-auth wizard lifetime, including user sign-in.
@@ -135,11 +170,7 @@ export function wizardStateFromResult(
     };
   }
   if (result.done && result.status === "done") {
-    return {
-      phase: "done",
-      authChoice,
-      ...(result.preparedModelRef ? { preparedModelRef: result.preparedModelRef } : {}),
-    };
+    return { phase: "done" };
   }
   if (result.status === "cancelled") {
     return { phase: "cancelled", message: formatUiExternalText(result.error, fallbackError) };

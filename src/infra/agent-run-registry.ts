@@ -1,10 +1,11 @@
 // Owns process-local agent run context, ownership, and projection state.
 import { randomUUID } from "node:crypto";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { registerListener } from "../shared/listeners.js";
 import { recordAgentEventRouting } from "./agent-event-execution-context.js";
 import {
   AgentRunApprovalLeases,
+  isCurrentAgentRunApprovalAuthority,
   type AgentRunApprovalClosureReason,
 } from "./agent-run-approval-leases.js";
 import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
@@ -13,8 +14,13 @@ import {
   buildAgentRunProjectionIndex,
   projectedAgentRunInputKey,
   projectedRunIdentity,
+  resolveAgentRunProjectionProgressState,
 } from "./agent-run-projection.js";
-import { getAgentRunRegistryState, bumpAgentRunIndexVersion } from "./agent-run-registry-state.js";
+import {
+  getAgentRunRegistryState,
+  bumpAgentRunIndexVersion,
+  getAgentRunContextOwnerStatus,
+} from "./agent-run-registry-state.js";
 import type {
   AgentRunContext,
   AgentRunContextOwnership,
@@ -26,7 +32,18 @@ import type {
 import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
 
 export type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
+export { getAgentRunContextOwnerStatus } from "./agent-run-registry-state.js";
+export { listAgentRunsForSession } from "./agent-run-registry-state.js";
 export type { ProjectedAgentRunIndex } from "./agent-run-registry.types.js";
+
+const delegatedAuthorityFailures = new WeakMap<AgentRunDelegatedAuthority, { cause: unknown }>();
+
+/** Diagnostic only: a retained failure never restores a released claim. */
+export function readAgentRunDelegatedAuthorityFailure(
+  authority: AgentRunDelegatedAuthority,
+): { cause: unknown } | undefined {
+  return delegatedAuthorityFailures.get(authority);
+}
 
 /** Reads the process-local version of the active-run projection inputs. */
 export function readAgentRunIndexVersion(): number {
@@ -88,8 +105,10 @@ export function registerAgentRunSequenceResetHandler(handler: (runId: string) =>
 }
 
 function storeRunContext(runId: string, context: AgentRunContext, predecessor?: AgentRunContext) {
-  // Callers supply a fresh record; scheduler leases never transfer with its metadata.
+  // Scheduler leases and observed activity never transfer to a fresh registration.
   context.capacityWaits = undefined;
+  context.executionActivity = undefined;
+  context.eventState = { seq: 0 };
   context.registeredAt ??= Date.now();
   getAgentRunRegistryState().contexts.set(runId, context);
   recordAgentEventRouting(runId, context, predecessor);
@@ -117,7 +136,7 @@ export function registerAgentRunContext(
   const existing = state.contexts.get(runId);
   if (!existing) {
     storeRunContext(runId, { ...context, lifecycleGeneration });
-    bumpAgentRunIndexVersion();
+    bumpAgentRunIndexVersion(context);
     return;
   }
   if (
@@ -128,33 +147,26 @@ export function registerAgentRunContext(
     return;
   }
   const runIndexInputBefore = projectedAgentRunInputKey(existing);
-  if (context.sessionKey && existing.sessionKey !== context.sessionKey) {
-    existing.sessionKey = context.sessionKey;
-  }
-  if (context.sessionId && existing.sessionId !== context.sessionId) {
-    existing.sessionId = context.sessionId;
-  }
-  if (context.agentId && existing.agentId !== context.agentId) {
-    existing.agentId = context.agentId;
+  const previous = { sessionKey: existing.sessionKey, agentId: existing.agentId };
+  for (const key of ["sessionKey", "sessionId", "agentId"] as const) {
+    if (context[key] && existing[key] !== context[key]) {
+      existing[key] = context[key];
+    }
   }
   if (context.verboseLevel && existing.verboseLevel !== context.verboseLevel) {
     existing.verboseLevel = context.verboseLevel;
   }
   existing.completionSource ??= context.completionSource;
-  if (context.isControlUiVisible !== undefined) {
-    existing.isControlUiVisible = context.isControlUiVisible;
-  }
-  if (
-    context.projectSessionActive !== undefined &&
-    existing.projectSessionActive !== context.projectSessionActive
-  ) {
-    existing.projectSessionActive = context.projectSessionActive;
-  }
-  if (context.projectSessionLifecycle !== undefined) {
-    existing.projectSessionLifecycle = context.projectSessionLifecycle;
-  }
-  if (context.projectSessionMessages !== undefined) {
-    existing.projectSessionMessages = context.projectSessionMessages;
+  for (const key of [
+    "isControlUiVisible",
+    "projectSessionActive",
+    "projectSessionLifecycle",
+    "projectSessionMessages",
+    "isHeartbeat",
+  ] as const) {
+    if (context[key] !== undefined) {
+      existing[key] = context[key];
+    }
   }
   if (context.mainSessionRestartRecovery === true) {
     existing.mainSessionRestartRecovery = true;
@@ -165,19 +177,15 @@ export function registerAgentRunContext(
       existing.cronRunsByJobId.set(jobId, cronRun);
     }
   }
-  if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
-    existing.isHeartbeat = context.isHeartbeat;
-  }
-  if (context.registeredAt !== undefined) {
-    existing.registeredAt = context.registeredAt;
-  }
-  if (context.lastActiveAt !== undefined) {
-    existing.lastActiveAt = context.lastActiveAt;
-  }
-  if (runIndexInputBefore !== projectedAgentRunInputKey(existing)) {
-    bumpAgentRunIndexVersion();
+  for (const key of ["registeredAt", "lastActiveAt"] as const) {
+    if (context[key] !== undefined) {
+      existing[key] = context[key];
+    }
   }
   recordAgentEventRouting(runId, existing);
+  if (runIndexInputBefore !== projectedAgentRunInputKey(existing)) {
+    bumpAgentRunIndexVersion(existing, previous);
+  }
 }
 
 /** Claims a run id for a newly admitted execution, replacing stale ownership. */
@@ -185,8 +193,6 @@ export function claimAgentRunContext(
   runId: string,
   context: AgentRunContext,
   options: {
-    /** Adopt a same-generation context only when no tracked execution owns it. */
-    adoptExistingUnowned?: boolean;
     trackOwner?: boolean;
     ownsContext?: boolean;
     exclusive?: boolean;
@@ -203,16 +209,10 @@ export function claimAgentRunContext(
   const existingOwners = state.owners.get(runId);
   const currentOwners =
     existingOwners?.lifecycleGeneration === lifecycleGeneration ? existingOwners : undefined;
-  const adoptsExistingUnowned =
-    options.exclusive === true &&
-    options.adoptExistingUnowned === true &&
-    existing?.lifecycleGeneration === lifecycleGeneration &&
-    currentOwners === undefined;
   if (
     currentOwners?.exclusiveClaimId ||
     (options.exclusive &&
-      ((existing?.lifecycleGeneration === lifecycleGeneration && !adoptsExistingUnowned) ||
-        currentOwners !== undefined))
+      (existing?.lifecycleGeneration === lifecycleGeneration || currentOwners !== undefined))
   ) {
     return undefined;
   }
@@ -254,14 +254,14 @@ export function claimAgentRunContext(
     const versionBeforeRegister = readAgentRunIndexVersion();
     registerAgentRunContext(runId, { ...context, lifecycleGeneration }, claimId);
     if (readAgentRunIndexVersion() === versionBeforeRegister) {
-      bumpAgentRunIndexVersion();
+      bumpAgentRunIndexVersion(existing);
     }
     return claimId;
   }
   storeRunContext(runId, { ...context, lifecycleGeneration }, existing);
   state.sequenceResetHandler?.(runId);
   clearAgentRunUsage(runId);
-  bumpAgentRunIndexVersion();
+  bumpAgentRunIndexVersion(context, existing);
   return claimId;
 }
 
@@ -285,8 +285,12 @@ export function retainQueuedAgentRunContext(
     return undefined;
   }
 
+  const wasLive = hasLiveAgentRunContext(runId);
   const leases = (state.queuedRunContextLeases ??= new WeakMap<AgentRunContext, number>());
   leases.set(context, (leases.get(context) ?? 0) + 1);
+  if (!wasLive) {
+    bumpAgentRunIndexVersion(context);
+  }
   let released = false;
 
   return (outcome) => {
@@ -303,12 +307,16 @@ export function retainQueuedAgentRunContext(
 
     // A recycled run id or rotated lifecycle must not inherit the old queue's activity.
     if (
-      outcome === "admitted" &&
       state.contexts.get(runId) === context &&
       context.lifecycleGeneration === lifecycleGeneration &&
       state.lifecycleGeneration === lifecycleGeneration
     ) {
-      context.lastActiveAt = Date.now();
+      if (outcome === "admitted") {
+        context.lastActiveAt = Date.now();
+      }
+      if (!hasLiveAgentRunContext(runId)) {
+        bumpAgentRunIndexVersion(context);
+      }
     }
   };
 }
@@ -343,23 +351,6 @@ export function consumeCronNextCheckProposal(runId: string, jobId: string): numb
     delete context.cronRunsByJobId;
   }
   return cronRun.nextCheckMs;
-}
-
-export function getAgentRunContextOwnerStatus(
-  runId: string,
-  claimId: string,
-  lifecycleGeneration: string,
-): "active" | "clear-requested" | undefined {
-  const state = getAgentRunRegistryState();
-  const owners = state.owners.get(runId);
-  if (
-    lifecycleGeneration !== state.lifecycleGeneration ||
-    owners?.lifecycleGeneration !== lifecycleGeneration ||
-    !owners.claimIds.has(claimId)
-  ) {
-    return undefined;
-  }
-  return owners.clearRequested ? "clear-requested" : "active";
 }
 
 /** Claims approval authority for the exact admitted operational execution. */
@@ -430,6 +421,15 @@ export function claimAgentRunDelegatedAuthority(
 export function getActiveAgentRunDelegatedAuthority(
   operationalRunInstance: Readonly<{ instanceId: string; runId: string }>,
 ): AgentRunDelegatedAuthority | undefined {
+  return readActiveAgentRunDelegatedAuthority(operationalRunInstance, (context) =>
+    context.assertSourceCurrent?.(),
+  );
+}
+
+function readActiveAgentRunDelegatedAuthority(
+  operationalRunInstance: Readonly<{ instanceId: string; runId: string }>,
+  assertSource: (context: AgentRunContext) => void,
+): AgentRunDelegatedAuthority | undefined {
   const context = getAgentRunRegistryState().contexts.get(operationalRunInstance.runId);
   const authority = context?.delegatedAuthority;
   if (
@@ -447,7 +447,7 @@ export function getActiveAgentRunDelegatedAuthority(
     return undefined;
   }
   try {
-    context.assertSourceCurrent?.();
+    assertSource(context);
     return getAgentRunContext(operationalRunInstance.runId) === context &&
       context.delegatedAuthority === authority &&
       getAgentRunContextOwnerStatus(
@@ -457,21 +457,61 @@ export function getActiveAgentRunDelegatedAuthority(
       ) !== undefined
       ? authority
       : undefined;
-  } catch {
+  } catch (error) {
+    if (!delegatedAuthorityFailures.has(authority)) {
+      delegatedAuthorityFailures.set(authority, { cause: error });
+    }
     // A copied approval cannot outlive its source; retire the exact owner at detection.
     releaseAgentRunContext(operationalRunInstance.runId, authority.claimId);
     return undefined;
   }
 }
 
-export function validateAgentRunDelegatedAuthority(authority: AgentRunDelegatedAuthority): boolean {
-  const active = getActiveAgentRunDelegatedAuthority(authority.operationalRunInstance);
-  if (!active || active.lifecycleGeneration !== authority.lifecycleGeneration) {
-    return false;
+/** Retain the exact source binding while its storage checks prepare outside writer grants. */
+export function captureAgentRunDelegatedSourceAssertion(
+  authority: AgentRunDelegatedAuthority,
+  refuse: () => never,
+) {
+  const instance = authority.operationalRunInstance;
+  const context = getAgentRunContext(instance.runId);
+  const source = context?.assertSourceCurrent;
+  const assertActive = (assertSource: () => void) => {
+    const active = readActiveAgentRunDelegatedAuthority(instance, (current) => {
+      if (current !== context || current.assertSourceCurrent !== source) {
+        refuse();
+      }
+      assertSource();
+    });
+    if (
+      !active ||
+      !isCurrentAgentRunApprovalAuthority(active, context?.approvalLeases, authority)
+    ) {
+      refuse();
+    }
+  };
+  const active = readActiveAgentRunDelegatedAuthority(instance, () => {});
+  if (!active || !isCurrentAgentRunApprovalAuthority(active, context?.approvalLeases, authority)) {
+    return undefined;
   }
-  const leases = getAgentRunContext(authority.operationalRunInstance.runId)?.approvalLeases;
-  return (
-    active.claimId === authority.claimId || leases?.isActive(active, authority.claimId) === true
+  return {
+    assertBinding: () => assertActive(() => {}),
+    assertCurrent: composeSessionSourceAssertion([source], assertActive),
+  };
+}
+
+export function validateAgentRunDelegatedAuthority(
+  authority: AgentRunDelegatedAuthority,
+  ancestor?: AgentRunDelegatedAuthority,
+): boolean {
+  const active = getActiveAgentRunDelegatedAuthority(authority.operationalRunInstance);
+  return Boolean(
+    active &&
+    isCurrentAgentRunApprovalAuthority(
+      active,
+      getAgentRunContext(authority.operationalRunInstance.runId)?.approvalLeases,
+      authority,
+      ancestor,
+    ),
   );
 }
 
@@ -482,13 +522,13 @@ export function claimAgentRunApprovalAuthority(
 ): AgentRunDelegatedAuthority {
   const state = getAgentRunRegistryState();
   const context = state.contexts.get(parent.operationalRunInstance.runId);
-  if (context?.delegatedAuthority !== parent || !validateAgentRunDelegatedAuthority(parent)) {
+  if (!context?.delegatedAuthority || !validateAgentRunDelegatedAuthority(parent)) {
     throw new Error("agent run approval authority is no longer active");
   }
   const leases = (context.approvalLeases ??= new AgentRunApprovalLeases((authority, reason) =>
     notifyDelegatedAuthorityClosed(state, authority, reason),
   ));
-  return leases.claim(parent, inputSignals);
+  return leases.claim(context.delegatedAuthority, parent, inputSignals);
 }
 
 /** Compare-releases only the exact authority owned by one admitted execution. */
@@ -527,6 +567,17 @@ export function hasAgentRunContextExecutionOwner(runId: string): boolean {
   );
 }
 
+/** Counts admitted executions, excluding retained display-only context. */
+export function getActiveAgentRunContextCount(): number {
+  let count = 0;
+  for (const runId of getAgentRunRegistryState().contexts.keys()) {
+    if (hasAgentRunContextExecutionOwner(runId)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 /** Live display projection also includes a producer's active-session marker. */
 export function hasLiveAgentRunContext(runId: string): boolean {
   const state = getAgentRunRegistryState();
@@ -535,24 +586,6 @@ export function hasLiveAgentRunContext(runId: string): boolean {
     context?.lifecycleGeneration === state.lifecycleGeneration &&
     (hasAgentRunContextExecutionOwner(runId) || context.projectSessionActive === true)
   );
-}
-
-/** Lists registered runs bound to one current session identity. */
-export function listAgentRunsForSession(params: {
-  sessionKey: string;
-  sessionId?: string;
-}): Array<{ runId: string; lifecycleGeneration: string }> {
-  const state = getAgentRunRegistryState();
-  const runs: Array<{ runId: string; lifecycleGeneration: string }> = [];
-  for (const [runId, context] of state.contexts) {
-    const matches =
-      context.sessionKey === params.sessionKey &&
-      (!context.sessionId || context.sessionId === params.sessionId);
-    if (matches && context.lifecycleGeneration === state.lifecycleGeneration) {
-      runs.push({ runId, lifecycleGeneration: context.lifecycleGeneration });
-    }
-  }
-  return runs.toSorted((a, b) => a.runId.localeCompare(b.runId));
 }
 
 export function recordAgentRunModel(runId: string, model: AgentRunModel | undefined): void {
@@ -568,7 +601,7 @@ export function recordAgentRunModel(runId: string, model: AgentRunModel | undefi
   } else {
     delete context.activeModel;
   }
-  bumpAgentRunIndexVersion();
+  bumpAgentRunIndexVersion(context);
 }
 
 export function resolveProjectedAgentRunModel(params: {
@@ -588,41 +621,15 @@ export function buildProjectedAgentRunIndex(): ProjectedAgentRunIndex {
   return buildAgentRunProjectionIndex({ contexts: contexts.values(), lifecycleGeneration });
 }
 
-export function resolveProjectedAgentRunProgressState(params: {
-  sessionKeys: readonly string[];
-  sessionId?: string;
-  agentId?: string;
-  defaultAgentId?: string;
-  index?: ProjectedAgentRunIndex;
-}): ProjectedAgentRunState | undefined {
-  const index = params.index ?? buildProjectedAgentRunIndex();
-  const agentId =
-    params.agentId ??
-    params.sessionKeys.flatMap((key) => parseAgentSessionKey(key)?.agentId ?? [])[0] ??
-    params.defaultAgentId;
-  if (!agentId) {
-    return undefined;
-  }
-  const mayAdoptOwnerless =
-    params.defaultAgentId !== undefined &&
-    normalizeAgentId(agentId) === normalizeAgentId(params.defaultAgentId);
-  const statuses = params.sessionKeys.flatMap((sessionKey) => [
-    index.sessionKeys.get(projectedRunIdentity(agentId, sessionKey)),
-    ...(mayAdoptOwnerless ? [index.ownerlessSessionKeys.get(sessionKey)] : []),
-  ]);
-  if (params.sessionId !== undefined) {
-    statuses.push(index.sessionIds.get(projectedRunIdentity(agentId, params.sessionId)));
-    if (mayAdoptOwnerless) {
-      statuses.push(index.ownerlessSessionIds.get(params.sessionId));
-    }
-  }
-  return statuses.includes("running")
-    ? "running"
-    : statuses.includes("queued")
-      ? "queued"
-      : statuses.includes("capacity-wait")
-        ? "capacity-wait"
-        : undefined;
+export function resolveProjectedAgentRunProgressState(
+  params: Parameters<typeof resolveAgentRunProjectionProgressState>[0] & {
+    index?: ProjectedAgentRunIndex;
+  },
+): ProjectedAgentRunState | undefined {
+  return resolveAgentRunProjectionProgressState(
+    params,
+    params.index ?? buildProjectedAgentRunIndex(),
+  );
 }
 
 /** Clears context state for a run that has ended or been discarded. */
@@ -662,7 +669,7 @@ export function clearAgentRunContext(
         listener(ownerClaimId);
       }
       if (!wasClearRequested) {
-        bumpAgentRunIndexVersion();
+        bumpAgentRunIndexVersion(existing);
       }
     }
     return;
@@ -671,7 +678,7 @@ export function clearAgentRunContext(
   state.sequenceResetHandler?.(runId);
   clearAgentRunUsage(runId, lifecycleGeneration ?? existing?.lifecycleGeneration);
   if (removed) {
-    bumpAgentRunIndexVersion();
+    bumpAgentRunIndexVersion(existing);
   }
 }
 
@@ -699,7 +706,7 @@ export function releaseAgentRunContext(runId: string, claimId: string | undefine
     owners.exclusiveClaimId = undefined;
   }
   if (owners.claimIds.size > 0) {
-    bumpAgentRunIndexVersion();
+    bumpAgentRunIndexVersion(context);
     return;
   }
   state.owners.delete(runId);
@@ -707,7 +714,7 @@ export function releaseAgentRunContext(runId: string, claimId: string | undefine
     clearAgentRunContext(runId, owners.lifecycleGeneration);
   }
   if (readAgentRunIndexVersion() === versionBeforeRelease) {
-    bumpAgentRunIndexVersion();
+    bumpAgentRunIndexVersion(context);
   }
 }
 

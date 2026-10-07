@@ -8,12 +8,14 @@ import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suit
 import { controlUiSessionUrl } from "../../../ui/src/test-helpers/control-ui-e2e.ts";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.ts";
 import { createQaGatewayChild } from "./gateway-child.ts";
+import { redactQaGatewayDebugText } from "./gateway-log-redaction.ts";
 import { hasToolDefinition } from "./providers/mock-openai/mock-openai-directives.ts";
 import { buildAssistantEvents } from "./providers/mock-openai/mock-openai-events.ts";
 import {
   extractLastUserText,
   extractToolOutput,
   hasToolOutput,
+  splitMockConversationContext,
 } from "./providers/mock-openai/mock-openai-input.ts";
 import { buildToolCallEventsWithArgs } from "./providers/mock-openai/mock-openai-tooling.ts";
 
@@ -25,7 +27,7 @@ const suite = createControlUiE2eSuite({
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 type AutomationAction = "list" | "get" | "update" | "run" | "remove";
 const actions = ["list", "get", "update", "run", "remove"] as const;
-const automationName = "Telegram-created reminder";
+const automationName = "Telegram-created reminder _literal_";
 const updatedReminderMessage = "Complete the reminder updated from Control UI.";
 const scheduledReply = "Scheduled reminder completed.";
 
@@ -41,6 +43,12 @@ async function startAutomationProvider() {
   const requests = new Map<string, Record<string, unknown>>();
   const results = new Map<string, string>();
   const toolAvailability = new Map<string, boolean>();
+  const observations: {
+    marker: string | null;
+    currentMarker: string | null;
+    hasOutput: boolean;
+    toolAvailable: boolean;
+  }[] = [];
   const server = createServer((request, response) => {
     void (async () => {
       const chunks: Buffer[] = [];
@@ -56,11 +64,23 @@ async function startAutomationProvider() {
         throw new Error("Expected a Responses request");
       }
       const input = body.input.filter(isRecord);
-      const marker = /\[automation-proof:([a-z-]+)\]/u.exec(extractLastUserText(input))?.[1];
+      const userText = extractLastUserText(input);
+      const markerPattern = /\[automation-proof:([a-z-]+)\]/u;
+      const marker = markerPattern.exec(userText)?.[1];
+      const currentMarker = markerPattern.exec(splitMockConversationContext(userText).current)?.[1];
       const args = marker ? requests.get(marker) : undefined;
       const output = extractToolOutput(input);
       const hasOutput = hasToolOutput(input);
       const toolAvailable = hasToolDefinition(body, "automations");
+      observations.push({
+        marker: marker && requests.has(marker) ? marker : null,
+        currentMarker: currentMarker && requests.has(currentMarker) ? currentMarker : null,
+        hasOutput,
+        toolAvailable,
+      });
+      if (observations.length > 16) {
+        observations.shift();
+      }
       if (marker && args && !hasOutput) {
         // A retry must not erase an earlier exposure of an owner-only tool.
         toolAvailability.set(marker, toolAvailability.get(marker) === true || toolAvailable);
@@ -73,7 +93,9 @@ async function startAutomationProvider() {
           ? toolAvailable
             ? buildToolCallEventsWithArgs("automations", args)
             : buildAssistantEvents(`${marker}: Automation tools are unavailable for this caller.`)
-          : buildAssistantEvents(marker && args ? `${marker}: ${output}` : scheduledReply);
+          : buildAssistantEvents(
+              marker && args ? `${marker}:\n\n\`\`\`json\n${output}\n\`\`\`` : scheduledReply,
+            );
       if (body.stream === true) {
         response.writeHead(200, { "content-type": "text/event-stream" });
         response.end(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
@@ -99,6 +121,7 @@ async function startAutomationProvider() {
     requests,
     results,
     toolAvailability,
+    observations,
     async stop() {
       server.closeAllConnections();
       await new Promise<void>((resolve) => {
@@ -215,11 +238,7 @@ suite.define(() => {
           name: automationName,
           owner: { sessionKey: expect.stringContaining(":telegram:") },
           scheduledToolPolicy: { mode: "account" },
-          payload: {
-            kind: "agentTurn",
-            toolsAllow: expect.arrayContaining(["automations"]),
-            toolsAllowIsDefault: true,
-          },
+          payload: { kind: "agentTurn", toolsAllow: ["*"] },
         });
         if (!isRecord(created.payload)) {
           throw new Error("Created automation has no payload");
@@ -292,6 +311,7 @@ suite.define(() => {
           label: "Manage Telegram reminder",
         });
         const adminResults: Record<string, string> = {};
+        let observedCronRuns: string | undefined;
         await suite.withPage(
           {
             locale: "en-US",
@@ -323,7 +343,21 @@ suite.define(() => {
                 await page.screenshot({ path: path.join(proofDir, `${marker}-request.png`) });
               }
               await page.getByRole("button", { name: "Send message" }).click();
-              await expect.poll(() => provider.results.has(marker), { timeout: 60_000 }).toBe(true);
+              try {
+                await expect
+                  .poll(() => provider.results.has(marker), { timeout: 60_000 })
+                  .toBe(true);
+              } catch (error) {
+                throw new Error(
+                  `Automation ${marker} did not complete: ${JSON.stringify({
+                    completed: Object.keys(adminResults),
+                    toolAvailability: [...provider.toolAvailability],
+                    results: [...provider.results.keys()],
+                    observations: provider.observations,
+                  })}`,
+                  { cause: error },
+                );
+              }
               const result = readResult(provider.results.get(marker) ?? "null");
               if (action === "list") {
                 expect(result.jobs).toEqual(
@@ -344,20 +378,23 @@ suite.define(() => {
                   expect.objectContaining(updatedJob),
                 );
               } else if (action === "run") {
-                expect(result).toMatchObject({ ok: true });
+                expect(result).toMatchObject({ ok: true, enqueued: true });
                 await expect
                   .poll(
                     async () => {
                       const runs = await gateway.call("cron.runs", { id: jobId });
-                      return (
-                        isRecord(runs) &&
-                        Array.isArray(runs.entries) &&
-                        runs.entries.some((entry) => isRecord(entry) && entry.status === "ok")
-                      );
+                      observedCronRuns = redactQaGatewayDebugText(JSON.stringify(runs));
+                      return {
+                        succeeded:
+                          isRecord(runs) &&
+                          Array.isArray(runs.entries) &&
+                          runs.entries.some((entry) => isRecord(entry) && entry.status === "ok"),
+                        runs: observedCronRuns,
+                      };
                     },
                     { timeout: 60_000 },
                   )
-                  .toBe(true);
+                  .toMatchObject({ succeeded: true });
               } else {
                 expect(result).toMatchObject({ removed: true });
               }
@@ -383,6 +420,7 @@ suite.define(() => {
               provider: "deterministic local Responses API",
               creator: "Telegram conversation",
               admin: adminResults,
+              cronRuns: observedCronRuns,
               configuredTelegramOwner: ownerResults,
               nonOwnerTelegramConversation: {
                 automationsAvailable: provider.toolAvailability.get(nonOwnerMarker),

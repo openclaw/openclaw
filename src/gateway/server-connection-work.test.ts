@@ -1,5 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
+import { createSpawnBrokerHost, type SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 
@@ -89,3 +92,88 @@ describe("Gateway connection work", () => {
     }
   });
 });
+
+describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
+  "Gateway connection broker ownership",
+  () => {
+    let firstBroker: SpawnBrokerHost;
+    let secondBroker: SpawnBrokerHost;
+    beforeAll(async () => {
+      firstBroker = createSpawnBrokerHost();
+      secondBroker = createSpawnBrokerHost();
+      await Promise.all([firstBroker.ready(), secondBroker.ready()]);
+    });
+    afterAll(async () => {
+      await Promise.all([firstBroker?.close(), secondBroker?.close()]);
+    });
+
+    it("restores only the owning broker when received work enters from another context", async () => {
+      const callerContext = new AsyncLocalStorage<string>();
+      const first = callerContext.run("startup", () =>
+        runWithSpawnBroker(firstBroker, () => new GatewayConnectionWork()),
+      );
+      const second = runWithSpawnBroker(secondBroker, () => new GatewayConnectionWork());
+      const withoutBroker = new GatewayConnectionWork();
+      const firstGate = createDeferredCore();
+      const entered: string[] = [];
+      try {
+        const pending = callerContext.run("request", () =>
+          runWithSpawnBroker(secondBroker, () =>
+            first.track(async () => {
+              entered.push("first");
+              expect(getSpawnBroker()).toBe(firstBroker);
+              expect(callerContext.getStore()).toBe("request");
+              await firstGate.promise;
+              expect(getSpawnBroker()).toBe(firstBroker);
+              expect(callerContext.getStore()).toBe("request");
+            }),
+          ),
+        );
+        expect(entered).toEqual(["first"]);
+        await runWithSpawnBroker(firstBroker, async () => {
+          await second.track(async () => {
+            await nextTurn();
+            expect(getSpawnBroker()).toBe(secondBroker);
+          });
+          expect(getSpawnBroker()).toBe(firstBroker);
+          await withoutBroker.track(async () => {
+            await nextTurn();
+            expect(getSpawnBroker()).toBeUndefined();
+          });
+          expect(getSpawnBroker()).toBe(firstBroker);
+        });
+        firstGate.resolve();
+        await pending;
+      } finally {
+        firstGate.resolve();
+        await Promise.all([first.drain(), second.drain(), withoutBroker.drain()]);
+      }
+    });
+
+    it("keeps closing cleanup on its broker and refuses work after that owner drains", async () => {
+      const first = runWithSpawnBroker(firstBroker, () => new GatewayConnectionWork());
+      const second = runWithSpawnBroker(secondBroker, () => new GatewayConnectionWork());
+      first.beginClose();
+      try {
+        await runWithSpawnBroker(secondBroker, () =>
+          first.trackCleanup(async () => {
+            await nextTurn();
+            expect(getSpawnBroker()).toBe(firstBroker);
+          }),
+        );
+        await first.drain();
+        const late = vi.fn();
+        await expect(runWithSpawnBroker(secondBroker, () => first.track(late))).rejects.toThrow(
+          "Async work scope is closed",
+        );
+        expect(late).not.toHaveBeenCalled();
+        await second.track(async () => {
+          await nextTurn();
+          expect(getSpawnBroker()).toBe(secondBroker);
+        });
+      } finally {
+        await Promise.all([first.drain(), second.drain()]);
+      }
+    });
+  },
+);

@@ -1,10 +1,9 @@
-// Reads effective SSH target config from the local ssh client.
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveSshClient } from "./ssh-client.js";
 import type { SshParsedTarget } from "./ssh-tunnel.js";
 import { parseTcpPort } from "./tcp-port.js";
 
-export const SSH_CONFIG_OUTPUT_MAX_CHARS = 64 * 1024;
+const SSH_CONFIG_OUTPUT_MAX_CHARS = 64 * 1024;
 
 export type SshResolvedConfig = {
   user?: string;
@@ -13,7 +12,7 @@ export type SshResolvedConfig = {
   identityFiles: string[];
 };
 
-export function parseSshConfigOutput(output: string): SshResolvedConfig {
+function parseSshConfigOutput(output: string): SshResolvedConfig {
   const result: SshResolvedConfig = { identityFiles: [] };
   const lines = output.split("\n");
   for (const raw of lines) {

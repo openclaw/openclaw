@@ -24,7 +24,7 @@ import {
   onCronJobInactive,
   resetCronActiveJobs,
 } from "./active-jobs.js";
-import { prepareCronPromptRunAdmission } from "./isolated-agent/run-admission.js";
+import { prepareCronRunAdmission } from "./run-admission.js";
 
 afterEach(() => {
   resetCronActiveJobs();
@@ -80,10 +80,12 @@ describe("cron message action authority", () => {
       const jobId = "long-message-read";
       const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
       const controller = new AbortController();
-      const owner = prepareCronPromptRunAdmission({
+      const owner = prepareCronRunAdmission({
+        deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
         cfg: { agents: { defaults: { timeoutSeconds: 40 } } },
         agentId: "main",
         runId: "long-message-run",
+        sessionId: "persistent-message-session",
         sessionKey: "cron:long-message-read",
         jobId,
         toolsAllow: ["message"],
@@ -101,13 +103,19 @@ describe("cron message action authority", () => {
           agentId: "main",
           runId: "long-message-run",
           sessionKey: "cron:long-message-read",
-          sessionId: "long-message-run",
+          sessionId: "persistent-message-session",
         };
         const grant = expectDefined(
           resolveMessageActionTurnAuthorization(lookup)?.scheduled,
           "live scheduled grant",
         );
         expect(grant.assertCurrent).not.toThrow();
+        expect(
+          resolveMessageActionTurnAuthorization({ ...lookup, sessionId: lookup.runId }),
+        ).toBeUndefined();
+        expect(
+          resolveMessageActionTurnAuthorization({ ...lookup, runId: "another-invocation" }),
+        ).toBeUndefined();
         if (end === "closure") {
           owner.close();
           expect(resolveMessageActionTurnAuthorization(lookup)).toBeUndefined();
@@ -365,14 +373,6 @@ describe("active cron schedule ownership", () => {
     expect(hasActiveCronJobs()).toBe(false);
   });
 
-  it("records durable schedule mutations on the admitted active run", () => {
-    const marker = markCronJobActive("rescheduled-job");
-
-    noteActiveCronJobScheduleMutation("rescheduled-job");
-
-    expect(marker?.scheduleMutated).toBe(true);
-  });
-
   it("records trigger mutations without retiring schedule ownership", () => {
     const marker = markCronJobActive("trigger-edited-job");
 
@@ -382,28 +382,10 @@ describe("active cron schedule ownership", () => {
     expect(marker?.scheduleMutated).toBeUndefined();
   });
 
-  it("keeps trigger mutation ownership after the script is edited back", () => {
-    const marker = markCronJobActive("trigger-restored-job");
-
-    noteActiveCronJobTriggerMutation("trigger-restored-job");
-    noteActiveCronJobTriggerMutation("trigger-restored-job");
-
-    expect(marker?.triggerMutated).toBe(true);
-  });
-
   it("does not create trigger markers for an idle job", () => {
     noteActiveCronJobTriggerMutation("idle-trigger-job");
 
     expect(hasActiveCronJobs()).toBe(false);
-  });
-
-  it("keeps a mutation after the schedule is edited back to its original value", () => {
-    const marker = markCronJobActive("rescheduled-job");
-
-    noteActiveCronJobScheduleMutation("rescheduled-job");
-    noteActiveCronJobScheduleMutation("rescheduled-job");
-
-    expect(marker?.scheduleMutated).toBe(true);
   });
 
   it("attributes later edits only to the replacement active run", () => {

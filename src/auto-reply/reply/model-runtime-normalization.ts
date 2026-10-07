@@ -1,5 +1,10 @@
 /** Prepared plugin metadata handoff for runtime model normalization. */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core";
+import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
+import type { AgentHarness } from "../../agents/harness/types.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import {
   findNormalizedProviderKey,
   modelKey,
@@ -23,6 +28,14 @@ import {
   resolveModelRuntimeDirective,
 } from "./directive-handling.model-runtime.js";
 
+export function normalizeRuntimeChoiceId(runtime: string | undefined): string {
+  const normalized = normalizeLowercaseStringOrEmpty(runtime);
+  if (!normalized || normalized === "auto" || normalized === "default") {
+    return "openclaw";
+  }
+  return normalized;
+}
+
 export type RuntimeModelNormalization = NonNullable<Parameters<typeof normalizeModelRef>[2]>;
 
 /** Carries the Gateway-owned metadata snapshot through one model-selection run. */
@@ -34,14 +47,6 @@ export function resolveRuntimeNormalization(cfg: OpenClawConfig): RuntimeModelNo
       allowWorkspaceScopedSnapshot: true,
     }),
   };
-}
-
-export function normalizeRuntimeRef(
-  provider: string,
-  model: string,
-  normalization: RuntimeModelNormalization = RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-) {
-  return normalizeModelRef(provider, model, normalization);
 }
 
 export function findSelectedCatalogEntry(params: {
@@ -88,6 +93,7 @@ type ModelSelectionPreparation =
       catalog: ModelCatalogEntry[];
       runtime: Exclude<ReturnType<typeof resolveModelRuntimeDirective>, { kind: "invalid" }>;
       validateRuntimeSelection?: () => string | undefined;
+      harness?: AgentHarness;
     }
   | { status: "rejected"; reason: "invalid-runtime" | "unknown-provider"; message: string };
 
@@ -100,6 +106,7 @@ export async function prepareModelSelectionRuntime(params: {
   model: string;
   catalog: readonly ModelCatalogEntry[];
   rawRuntime?: string;
+  hydrateThinkingCatalog?: boolean;
   profileOverride?: string;
   sessionEntry?: Pick<
     SessionEntry,
@@ -119,7 +126,7 @@ export async function prepareModelSelectionRuntime(params: {
         authProfileOverrideSource: "user" as const,
       }
     : params.sessionEntry;
-  const runtime = resolveModelRuntimeDirective(params);
+  let runtime = resolveModelRuntimeDirective(params);
   if (runtime.kind === "invalid") {
     return { status: "rejected", reason: "invalid-runtime", message: runtime.errorText };
   }
@@ -132,18 +139,57 @@ export async function prepareModelSelectionRuntime(params: {
     };
   }
   let validateRuntimeSelection: (() => string | undefined) | undefined;
-  if (runtime.kind === "set") {
+  let harness: AgentHarness | undefined;
+  let inheritedCliRuntime: string | undefined;
+  let needsRuntimeChoice = runtime.kind === "set";
+  if (!params.rawRuntime) {
+    const runtimeFacts = {
+      agentId: params.agentId,
+      provider: params.provider,
+      modelId: params.model,
+      modelApi: selected?.api,
+      modelBaseUrl: selected?.baseUrl,
+    };
+    const policy = resolveAgentHarnessPolicy({ ...runtimeFacts, config: params.cfg });
+    const effectiveRuntime = resolveEffectiveAgentRuntime({
+      ...runtimeFacts,
+      cfg: params.cfg,
+      sessionEntry,
+    });
+    if (runtime.kind === "clear" || !sessionEntry?.agentRuntimeOverride) {
+      inheritedCliRuntime = resolveCliRuntimeExecutionProvider({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        provider: params.provider,
+        modelId: params.model,
+        authProfileId: sessionEntry?.authProfileOverride,
+      });
+    }
+    needsRuntimeChoice = Boolean(
+      selected?.nativeRuntime ||
+      effectiveRuntime !== "openclaw" ||
+      inheritedCliRuntime ||
+      (policy.forcedByEnvironment && policy.runtime !== "openclaw"),
+    );
+  }
+  if (needsRuntimeChoice) {
     const { preparePublishedModelRuntimeChoice } =
       await import("../../agents/model-runtime-choice.js");
     const choice = await preparePublishedModelRuntimeChoice({
       ...params,
       sessionEntry,
-      runtimeId: runtime.runtime,
+      runtimeId: runtime.kind === "set" ? runtime.runtime : undefined,
+      preferredRuntimeId:
+        (runtime.kind === "unchanged"
+          ? normalizeOptionalAgentRuntimeId(sessionEntry?.agentRuntimeOverride)
+          : undefined) ?? inheritedCliRuntime,
     });
     if (choice.kind === "unavailable") {
       return { status: "rejected", reason: "invalid-runtime", message: choice.message };
     }
     validateRuntimeSelection = choice.validate;
+    harness = choice.harness;
+    runtime = { kind: "set", runtime: choice.runtimeId };
   }
   const runtimeEntry = { ...sessionEntry };
   applyModelRuntimeDirective(runtimeEntry, runtime);
@@ -159,8 +205,17 @@ export async function prepareModelSelectionRuntime(params: {
           modelBaseUrl: selected?.baseUrl,
           sessionEntry: runtimeEntry,
         });
-  if (!needsThinkHydration(params.catalog, params.provider, params.model, agentRuntime)) {
-    return { status: "ready", runtime, catalog: [...params.catalog], validateRuntimeSelection };
+  if (
+    params.hydrateThinkingCatalog === false ||
+    !needsThinkHydration(params.catalog, params.provider, params.model, agentRuntime)
+  ) {
+    return {
+      status: "ready",
+      runtime,
+      catalog: [...params.catalog],
+      validateRuntimeSelection,
+      harness,
+    };
   }
   // The selected route owns its capabilities. A prepared default-provider row cannot
   // supply thinking or context metadata for an explicit cross-provider selection.
@@ -179,6 +234,7 @@ export async function prepareModelSelectionRuntime(params: {
     status: "ready",
     runtime,
     validateRuntimeSelection,
+    harness,
     catalog: resolved
       ? [resolved, ...params.catalog.filter((entry) => entry !== selected)]
       : [...params.catalog],

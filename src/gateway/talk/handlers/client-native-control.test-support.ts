@@ -5,11 +5,9 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { createAttemptNestedToolActivityState } from "../../../agents/embedded-agent-runner/run/attempt-nested-tool-activity.js";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
-import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../../agents/embedded-agent-runner/runs.js";
+import * as embeddedRuns from "../../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../../agents/embedded-agent-runner/runs.test-support.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../../agents/harness/tool-authority.runtime.js";
 import type { AgentSession } from "../../../agents/sessions/agent-session.js";
@@ -50,6 +48,7 @@ import { talkClientHandlers } from "./client.js";
 const nativeUpstream = await vi.hoisted(async () => {
   const { EventEmitter } = await import("node:events");
   const sockets: NativeSocket[] = [];
+  const events = new EventEmitter<{ socket: [] }>();
   class NativeSocket extends EventEmitter {
     static readonly OPEN = 1;
     static readonly CLOSED = 3;
@@ -59,6 +58,7 @@ const nativeUpstream = await vi.hoisted(async () => {
     constructor(readonly url: string) {
       super();
       sockets.push(this);
+      events.emit("socket");
     }
 
     open(): void {
@@ -92,6 +92,7 @@ const nativeUpstream = await vi.hoisted(async () => {
   return {
     NativeSocket,
     sockets,
+    events,
     fetch: vi.fn<typeof fetch>(),
     runEmbeddedAgent: vi.fn<typeof import("../../../agents/embedded-agent.js").runEmbeddedAgent>(),
     authConfigured: vi.fn(
@@ -164,11 +165,11 @@ export async function withRegisteredNativeEmbeddedRun<T>(
     }),
     async () => {
       const handle = createEmbeddedRunHandle({ runId: params.runId });
-      setActiveEmbeddedRun(params.sessionId, handle, sessionKey);
+      embeddedRuns.setActiveEmbeddedRun(params.sessionId, handle, sessionKey);
       try {
         return await run();
       } finally {
-        clearActiveEmbeddedRun(params.sessionId, handle, sessionKey);
+        embeddedRuns.clearActiveEmbeddedRun(params.sessionId, handle, sessionKey);
       }
     },
   );
@@ -375,18 +376,32 @@ export async function connectNativeSession(
   expect(result.clientControl).toEqual(negotiated ? { owner: "gateway" } : undefined);
   expect(upstream.fetch).toHaveBeenCalledTimes(fetchCount);
   const sdp = negotiated ? AUDIO_SDP : DATA_CHANNEL_SDP;
-  const { handling, response } = offer(requireString(result, "clientSecret"), sdp);
-  await vi.waitFor(() => expect(upstream.fetch).toHaveBeenCalledTimes(fetchCount + 1));
-  await vi.waitFor(() => expect(upstream.sockets).toHaveLength(socketIndex + 1));
-  expect(response.end).not.toHaveBeenCalled();
-  const socket = upstream.sockets[socketIndex];
-  if (!socket) {
-    throw new Error("Missing native sideband");
+  const socketCreated = createDeferredCore();
+  upstream.events.once("socket", socketCreated.resolve);
+  try {
+    const { handling, response } = offer(requireString(result, "clientSecret"), sdp);
+    await Promise.race([
+      socketCreated.promise,
+      handling.then(() => {
+        throw new Error(
+          `Native offer completed before sideband readiness (HTTP ${response.res.statusCode})`,
+        );
+      }),
+    ]);
+    expect(upstream.fetch).toHaveBeenCalledTimes(fetchCount + 1);
+    expect(upstream.sockets).toHaveLength(socketIndex + 1);
+    expect(response.end).not.toHaveBeenCalled();
+    const socket = upstream.sockets[socketIndex];
+    if (!socket) {
+      throw new Error("Missing native sideband");
+    }
+    socket.open();
+    await handling;
+    expect(response.res.statusCode).toBe(200);
+    return { result, socket };
+  } finally {
+    upstream.events.removeListener("socket", socketCreated.resolve);
   }
-  socket.open();
-  await handling;
-  expect(response.res.statusCode).toBe(200);
-  return { result, socket };
 }
 
 export function nativeDelegation(id: string, text: string) {
@@ -418,12 +433,18 @@ type ParkedNativeTask = NativePluginFixture &
 export async function withParkedNativeTask(
   run: (task: ParkedNativeTask) => Promise<void>,
   prompt = "Keep working until I cancel.",
-  embeddedSession?: AgentSession,
+  ...embedded: [] | [session: AgentSession, finish: () => void]
 ): Promise<void> {
+  const [embeddedSession, finishEmbeddedSession] = embedded;
   const releaseBackend = createDeferredCore();
+  const registered =
+    createDeferredCore<
+      Awaited<ReturnType<typeof embeddedRuns.prepareEmbeddedAgentRunCompletionClaim>["registered"]>
+    >();
+  const failed = createDeferredCore<never>();
   const runAbortController = new AbortController();
   let activeRun: RunEmbeddedAgentParams | undefined;
-  let startupError: unknown;
+  let phase = "waiting for delegation";
   let backendAborted = false;
   const abortOwned = vi.fn(() => {
     backendAborted = true;
@@ -436,118 +457,137 @@ export async function withParkedNativeTask(
   );
   upstream.runEmbeddedAgent
     .mockImplementationOnce(async (params) => {
-      if (!params.preparedRunAdmission) {
-        throw new Error("Expected real Talk admission");
-      }
-      const admittedRunContext = await params.preparedRunAdmission.admit(
-        "embedded",
-        "native-test-backend",
-      );
-      return await withPreparedEmbeddedRunToolAuthority(
-        { admittedRunContext },
-        {
-          ...params,
-          provider: "test-provider",
-          modelId: "test-model",
-          sessionFile: "/tmp/native-control-test-session.jsonl",
-        },
-        undefined,
-        async (prepared) => {
-          let stream:
-            | ReturnType<
-                typeof import("../../../agents/embedded-agent-runner/run/attempt-stream-prepare.js").prepareEmbeddedAttemptStream
-              >
-            | undefined;
-          if (embeddedSession) {
-            const { prepareEmbeddedAttemptStream } =
-              await import("../../../agents/embedded-agent-runner/run/attempt-stream-prepare.js");
-            const model = embeddedSession.model;
-            if (!model) {
-              throw new Error("Expected an embedded test model");
+      try {
+        phase = "admitting backend";
+        if (!params.preparedRunAdmission) {
+          throw new Error("Expected real Talk admission");
+        }
+        const admittedRunContext = await params.preparedRunAdmission.admit(
+          "embedded",
+          "native-test-backend",
+        );
+        phase = "preparing tool authority";
+        return await withPreparedEmbeddedRunToolAuthority(
+          { admittedRunContext },
+          {
+            ...params,
+            provider: "test-provider",
+            modelId: "test-model",
+            sessionFile: "/tmp/native-control-test-session.jsonl",
+          },
+          undefined,
+          async (prepared) => {
+            let stream:
+              | ReturnType<
+                  typeof import("../../../agents/embedded-agent-runner/run/attempt-stream-prepare.js").prepareEmbeddedAttemptStream
+                >
+              | undefined;
+            if (embeddedSession) {
+              phase = "loading embedded stream";
+              const { prepareEmbeddedAttemptStream } =
+                await import("../../../agents/embedded-agent-runner/run/attempt-stream-prepare.js");
+              const model = embeddedSession.model;
+              if (!model) {
+                throw new Error("Expected an embedded test model");
+              }
+              phase = "publishing embedded registration";
+              stream = prepareEmbeddedAttemptStream({
+                attempt: {
+                  ...prepared,
+                  admittedRunContext,
+                  model,
+                  modelRegistry: embeddedSession.modelRegistry,
+                  authStorage: AuthStorage.inMemory(),
+                  authProfileStore: { version: 1, profiles: {} },
+                  thinkLevel: "off",
+                  fastMode: undefined,
+                },
+                agentSession: {
+                  activeSession: embeddedSession,
+                  hookRunner: null,
+                  clientToolCallSlots: [],
+                  hasDeliveredSourceReply: () => false,
+                  markSourceReplyDelivered: () => {},
+                  builtinToolNames: new Set(),
+                  sourceReplyCapableToolNames: new Set(),
+                  coreBuiltinToolNames: new Set(),
+                  replaySafeToolNames: new Set(),
+                  codeModeExecToolNames: new Set(),
+                  sideEffectToolOwners: new Map(),
+                  trustedLocalMediaToolNames: new Set(),
+                },
+                hookAgentId: AGENT_ID,
+                diagnosticTrace: createDiagnosticTraceContext(),
+                diagnosticOwner: createDiagnosticEmbeddedRunOwner({
+                  sessionId: params.sessionId,
+                  runId: params.runId,
+                }),
+                nestedToolActivityState: createAttemptNestedToolActivityState(),
+                isReplaySafeTool: () => false,
+                runAbortController,
+                abortRun: abortOwned,
+                markExternalAbort: () => {},
+                getRunState: () => ({
+                  aborted: backendAborted,
+                  promptError: undefined,
+                  timedOut: false,
+                  yieldDetected: false,
+                }),
+                onBlockReply: undefined,
+                onBlockReplyFlush: undefined,
+              });
             }
-            stream = prepareEmbeddedAttemptStream({
-              attempt: {
-                ...prepared,
-                admittedRunContext,
-                model,
-                modelRegistry: embeddedSession.modelRegistry,
-                authStorage: AuthStorage.inMemory(),
-                authProfileStore: { version: 1, profiles: {} },
-                thinkLevel: "off",
-                fastMode: undefined,
-              },
-              activeSession: embeddedSession,
-              hookRunner: null,
-              hookAgentId: AGENT_ID,
-              diagnosticTrace: createDiagnosticTraceContext(),
-              diagnosticOwner: createDiagnosticEmbeddedRunOwner({
-                sessionId: params.sessionId,
+            const handle =
+              stream?.queueHandle ??
+              createEmbeddedRunHandle({
                 runId: params.runId,
-              }),
-              clientToolCallSlots: [],
-              nestedToolActivities: [],
-              isReplaySafeTool: () => false,
-              runAbortController,
-              abortRun: abortOwned,
-              markExternalAbort: () => {},
-              getRunState: () => ({
-                aborted: backendAborted,
-                promptError: undefined,
-                timedOut: false,
-                yieldDetected: false,
-              }),
-              hasDeliveredSourceReply: () => false,
-              markSourceReplyDelivered: () => {},
-              onBlockReply: undefined,
-              onBlockReplyFlush: undefined,
-              sandboxSessionKey: SESSION_KEY,
-              builtinToolNames: new Set(),
-              replaySafeToolNames: new Set(),
-              trustedLocalMediaToolNames: new Set(),
-            });
-          }
-          const handle =
-            stream?.queueHandle ??
-            createEmbeddedRunHandle({
-              runId: params.runId,
-              toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
-              abort: abortOwned,
-              queueMessage,
-            });
-          const releaseOnAbort = () => releaseBackend.resolve();
-          if (!stream) {
-            handle.messageInjectionV2 = {
-              version: 2,
-              isAvailable: () => !backendAborted,
-              queueMessage: async (text, options, assertCurrent) => {
-                assertCurrent();
-                return await queueMessage(text, options);
-              },
-            };
-            setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, prepared.sessionFile);
-          }
-          activeRun = params;
-          params.abortSignal?.addEventListener("abort", releaseOnAbort, { once: true });
-          try {
-            await embeddedSession?.prompt(params.prompt);
-            await releaseBackend.promise;
-            return {
-              payloads: [{ text: "Original task completed normally." }],
-              meta: {
-                durationMs: 0,
-                aborted: backendAborted || params.abortSignal?.aborted === true,
-              },
-            };
-          } finally {
-            params.abortSignal?.removeEventListener("abort", releaseOnAbort);
-            stream?.subscription.unsubscribe();
-            clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
-          }
-        },
-      ).catch((error: unknown) => {
-        startupError = error;
+                toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
+                abort: abortOwned,
+                queueMessage,
+              });
+            const releaseOnAbort = () => releaseBackend.resolve();
+            if (!stream) {
+              handle.messageInjectionV2 = {
+                version: 2,
+                isAvailable: () => !backendAborted,
+                queueMessage: async (text, options, assertCurrent) => {
+                  assertCurrent();
+                  return await queueMessage(text, options);
+                },
+              };
+              phase = "publishing embedded registration";
+              embeddedRuns.setActiveEmbeddedRun(
+                params.sessionId,
+                handle,
+                params.sessionKey,
+                prepared.sessionFile,
+              );
+            }
+            activeRun = params;
+            params.abortSignal?.addEventListener("abort", releaseOnAbort, { once: true });
+            try {
+              phase = "running embedded prompt";
+              await embeddedSession?.prompt(params.prompt);
+              phase = "waiting for backend release";
+              await releaseBackend.promise;
+              return {
+                payloads: [{ text: "Original task completed normally." }],
+                meta: {
+                  durationMs: 0,
+                  aborted: backendAborted || params.abortSignal?.aborted === true,
+                },
+              };
+            } finally {
+              params.abortSignal?.removeEventListener("abort", releaseOnAbort);
+              stream?.subscription.unsubscribe();
+              embeddedRuns.clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+            }
+          },
+        );
+      } catch (error) {
+        failed.reject(error);
         throw error;
-      });
+      }
     })
     .mockImplementation(
       async (params) =>
@@ -567,15 +607,52 @@ export async function withParkedNativeTask(
     await nextEventLoopTurn();
   };
   await withNativePlugin(async (fixture) => {
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    let stopObservingCompletion: (() => void) | undefined;
+    const timeoutMs = 1000;
+    const prepare = embeddedRuns.prepareEmbeddedAgentRunCompletionClaim;
+    const observeRegistration = vi
+      .spyOn(embeddedRuns, "prepareEmbeddedAgentRunCompletionClaim")
+      .mockImplementation((sessionId, runId) => {
+        const claim = prepare(sessionId, runId);
+        if (sessionId === SESSION_ID && deadline === undefined) {
+          // Workspace and session preparation precede the registration owner's lifetime.
+          phase = "waiting for embedded registration";
+          deadline = setTimeout(() => {
+            failed.reject(
+              new Error(
+                `registration readiness not observed within ${timeoutMs} ms; last phase: ${phase}`,
+              ),
+            );
+          }, timeoutMs);
+          registered.resolve(claim.registered);
+        }
+        return claim;
+      });
     try {
       const session = await connectNativeSession(fixture);
-      session.socket.serverEvent(nativeDelegation("original-task", prompt));
-      await vi.waitFor(() => {
-        if (startupError) {
-          throw new Error("Native backend startup failed", { cause: startupError });
+      const readiness = Promise.race([registered.promise, failed.promise]);
+      const send = session.socket.send.bind(session.socket);
+      const observeCompletion = vi.spyOn(session.socket, "send").mockImplementation((payload) => {
+        send(payload);
+        const event: unknown = JSON.parse(payload);
+        if (
+          isRecord(event) &&
+          event.type === "delegation.context.append" &&
+          event.delegation_item_id === "original-task"
+        ) {
+          failed.reject(new Error("Native delegation completed before backend registration"));
         }
-        expect(activeRun).toBeDefined();
       });
+      stopObservingCompletion = () => observeCompletion.mockRestore();
+      session.socket.serverEvent(nativeDelegation("original-task", prompt));
+      const registration = await readiness;
+      stopObservingCompletion();
+      stopObservingCompletion = undefined;
+      clearTimeout(deadline);
+      if (!registration) {
+        throw new Error(`registration closed before readiness; last phase: ${phase}`);
+      }
       if (!activeRun?.abortSignal) {
         throw new Error("Native delegation did not admit a cancellable model run");
       }
@@ -593,7 +670,18 @@ export async function withParkedNativeTask(
         settleBackend,
       });
     } finally {
-      await settleBackend();
+      stopObservingCompletion?.();
+      clearTimeout(deadline);
+      // Setup can fail before the callback that would otherwise release this stream.
+      try {
+        finishEmbeddedSession?.();
+      } finally {
+        try {
+          await settleBackend();
+        } finally {
+          observeRegistration.mockRestore();
+        }
+      }
     }
   });
 }

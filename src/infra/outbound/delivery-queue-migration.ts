@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import type { HookRunner } from "../../plugins/hooks.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import {
   movePendingDeliveryQueueEntryNamespace,
@@ -55,24 +56,20 @@ const LEGACY_PREPARATION_LEASE_RENEW_MS = 30_000;
 function withLegacyPreparationLease(
   entry: LegacyQueuedDeliveryPreparation,
   ownerId: string,
-  now = Date.now(),
 ): LegacyQueuedDeliveryPreparation {
   return {
     ...entry,
     retainOnFailure: true,
     legacyPreparationOwnerId: ownerId,
-    legacyPreparationLeaseExpiresAt: now + LEGACY_PREPARATION_LEASE_MS,
+    legacyPreparationLeaseExpiresAt: Date.now() + LEGACY_PREPARATION_LEASE_MS,
   };
 }
 
-function hasActiveLegacyPreparationLease(
-  entry: LegacyQueuedDeliveryPreparation,
-  now = Date.now(),
-): boolean {
+function hasActiveLegacyPreparationLease(entry: LegacyQueuedDeliveryPreparation): boolean {
   return Boolean(
     entry.legacyPreparationOwnerId &&
     typeof entry.legacyPreparationLeaseExpiresAt === "number" &&
-    entry.legacyPreparationLeaseExpiresAt > now,
+    entry.legacyPreparationLeaseExpiresAt > Date.now(),
   );
 }
 
@@ -106,7 +103,6 @@ function buildLegacyPreparationParams(entry: LegacyQueuedDelivery, cfg: OpenClaw
     preparedMessageId: entry.preparedMessageId,
     deliveryCompletion: entry.deliveryCompletion,
     completionRetention: entry.completionRetention,
-    skipQueue: true,
   } as const;
 }
 
@@ -116,6 +112,7 @@ async function prepareLegacyEntryCheckpoint(params: {
   cfg: OpenClawConfig;
   log: RecoveryLogger;
   stateDir?: string;
+  hookRunner?: HookRunner;
 }): Promise<"checkpointed" | "skipped"> {
   const preparationParams = buildLegacyPreparationParams(params.entry, params.cfg);
   const reply = preparationParams.reply;
@@ -158,27 +155,24 @@ async function prepareLegacyEntryCheckpoint(params: {
   if (prepareForReplay) {
     let modifiersStarted = false;
     let leaseLost = false;
-    const renewLease = (): void => {
-      if (leaseLost) {
-        return;
-      }
-      const renewed = withLegacyPreparationLease(sourceEntry, params.ownerId);
-      if (
-        !replacePendingDeliveryQueueEntry({
-          queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
-          expectedEntry: sourceEntry,
-          replacementEntry: renewed,
-          stateDir: params.stateDir,
-        })
-      ) {
-        leaseLost = true;
-        return;
-      }
-      sourceEntry = renewed;
-    };
     const renewLeaseSafely = (): void => {
       try {
-        renewLease();
+        if (leaseLost) {
+          return;
+        }
+        const renewed = withLegacyPreparationLease(sourceEntry, params.ownerId);
+        if (
+          !replacePendingDeliveryQueueEntry({
+            queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+            expectedEntry: sourceEntry,
+            replacementEntry: renewed,
+            stateDir: params.stateDir,
+          })
+        ) {
+          leaseLost = true;
+          return;
+        }
+        sourceEntry = renewed;
       } catch (error) {
         leaseLost = true;
         params.log.warn(
@@ -190,6 +184,7 @@ async function prepareLegacyEntryCheckpoint(params: {
     leaseTimer.unref();
     try {
       preparedBatch = await prepareOutboundPayloadBatch(preparationParams, {
+        hookRunner: params.hookRunner,
         onBeforeFirstModifier: async () => {
           if (leaseLost) {
             throw new Error(`Legacy delivery ${params.entry.id} preparation lease was lost`);
@@ -389,13 +384,11 @@ async function finalizePreparedMigration(params: {
       ...params.entry,
       cfg: params.cfg,
       payloads: acceptedPayloads,
-      skipQueue: true,
     };
     const staged = await stageQueuePayloadMedia({
       payloads: acceptedPayloads,
       mediaAccess: resolveOutboundMediaAccessForSend(
         mediaParams,
-        params.entry.channel,
         collectPayloadMediaSources(acceptedPayloads),
       ),
       maxBytes: resolveOutboundMediaMaxBytes({
@@ -460,7 +453,7 @@ async function finalizePreparedMigration(params: {
     return "moved";
   } finally {
     if (!stagedArtifactsTransferred) {
-      cancelDeliveryQueueMediaRetention(mediaStageId, params.stateDir);
+      await cancelDeliveryQueueMediaRetention(mediaStageId, params.stateDir);
       await releaseSpoolArtifacts(stagedArtifacts, params.stateDir);
     }
   }
@@ -479,6 +472,7 @@ export async function migrateLegacyPendingOutboundDeliveries(params: {
   cfg: OpenClawConfig;
   log: RecoveryLogger;
   stateDir?: string;
+  hookRunner?: HookRunner;
 }): Promise<LegacyOutboundDeliveryMigrationResult> {
   const migrationKey = params.stateDir ?? "<default-state>";
   return await getOrCreatePromise(
@@ -493,6 +487,7 @@ async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
   cfg: OpenClawConfig;
   log: RecoveryLogger;
   stateDir?: string;
+  hookRunner?: HookRunner;
 }): Promise<LegacyOutboundDeliveryMigrationResult> {
   let moved = 0;
   let skipped = 0;

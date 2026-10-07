@@ -18,6 +18,7 @@ afterEach(() => {
 function readerProps(): Parameters<typeof renderTranscripts>[0] {
   return {
     basePath: "",
+    now: Date.parse(meetingEntry.updatedAt),
     search: "?selector=meeting",
     drafts: {},
     onDraft: vi.fn(),
@@ -36,16 +37,15 @@ function readerProps(): Parameters<typeof renderTranscripts>[0] {
       ],
       loading: false,
       error: null,
-      trimmed: false,
     },
     readerTab: "text",
+    summaryGeneration: { kind: "idle" },
+    onSummaryRetry: vi.fn(),
     exportState: { kind: "idle" },
     onNavigate: vi.fn(),
     onRefresh: vi.fn(),
     onReaderRetry: vi.fn(),
     onReaderTab: vi.fn(),
-    onLoadMore: vi.fn(),
-    onReaderStart: vi.fn(),
     onDownload: vi.fn(),
   };
 }
@@ -115,7 +115,7 @@ describe.skipIf(!hasBrowserLayout)("meeting transcript responsive reader", () =>
     expect(preview.scrollWidth).toBeLessThanOrEqual(preview.clientWidth + 1);
   });
 
-  it("renders stored Markdown notes with bounded paragraph spacing", async () => {
+  it("preserves stored Markdown notes while keeping transcript speech in its own tab", async () => {
     const { page } = await import("vitest/browser");
     await page.viewport(1440, 1000);
     const props = readerProps();
@@ -125,11 +125,16 @@ describe.skipIf(!hasBrowserLayout)("meeting transcript responsive reader", () =>
       summary: {
         ...meetingPage.summary!,
         markdown:
-          "# Design review\n\nFirst paragraph.\n\nSecond paragraph.\n\n## Next steps\n- Follow up.\n",
+          "# Design review\n\nFirst paragraph.\n\nSecond paragraph.\n\n## Next steps\n- Follow up.\n\n```md\n## Transcript\nA heading example, not recorded speech.\n```\n\n## Transcript\n- Avery: Raw recorded speech.\n",
       },
     };
     render(renderTranscripts(props), container);
     const notes = container.querySelector<HTMLElement>(".meetings-notes")!;
+    expect([...notes.querySelectorAll("h2")].map((heading) => heading.textContent)).toEqual([
+      "Next steps",
+    ]);
+    expect(notes.textContent).not.toContain("Raw recorded speech.");
+    expect(notes.querySelector("code")?.textContent).toContain("## Transcript");
     const paragraphs = notes.querySelectorAll("p");
     expect([...paragraphs].map((paragraph) => paragraph.textContent)).toEqual([
       "First paragraph.",

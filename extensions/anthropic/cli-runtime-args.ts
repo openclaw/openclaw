@@ -5,6 +5,7 @@ const PROTOCOL_FLAGS = new Set([
   "--print",
   "--verbose",
   "--include-partial-messages",
+  "--replay-user-messages",
   "--dangerously-skip-permissions",
   "--allow-dangerously-skip-permissions",
 ]);
@@ -94,6 +95,7 @@ export function prepareClaudeCliTransportArgs(context: CliBackendExecuteContext)
     "stream-json",
     "--verbose",
     "--include-partial-messages",
+    "--replay-user-messages",
     "--permission-prompt-tool",
     "stdio",
     "--permission-mode",

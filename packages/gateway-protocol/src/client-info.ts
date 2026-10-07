@@ -28,7 +28,6 @@ export const GATEWAY_CLIENT_IDS = {
   PROBE: "openclaw-probe",
 } as const;
 
-/** Stable gateway client ids used on the wire during hello/connect handshakes. */
 export type GatewayClientId = (typeof GATEWAY_CLIENT_IDS)[keyof typeof GATEWAY_CLIENT_IDS];
 
 // Back-compat naming (internal): these values are IDs, not display names.
@@ -48,12 +47,9 @@ export const GATEWAY_CLIENT_MODES = {
   TEST: "test",
 } as const;
 
-/** Coarse client category used for gateway policy and diagnostics. */
 export type GatewayClientMode = (typeof GATEWAY_CLIENT_MODES)[keyof typeof GATEWAY_CLIENT_MODES];
 
-/** Client metadata sent during gateway connection setup. */
 export type GatewayClientInfo = {
-  /** Stable product/client identifier from `GATEWAY_CLIENT_IDS`. */
   id: GatewayClientId;
   /** Human-readable label for diagnostics; not used for policy decisions. */
   displayName?: string;
@@ -69,7 +65,6 @@ export type GatewayClientInfo = {
   modelIdentifier?: string;
   /** Self-reported IANA time zone, such as `Europe/Vienna`, for presence display. */
   timeZone?: string;
-  /** Coarse category from `GATEWAY_CLIENT_MODES` for policy and diagnostics. */
   mode: GatewayClientMode;
   /** Per-installation or per-process id used to distinguish same-product clients. */
   instanceId?: string;
@@ -79,12 +74,14 @@ export type GatewayClientInfo = {
 export const GATEWAY_CLIENT_CAPS = {
   AGENT_KIND: "agent-kind",
   APPROVALS: "approvals",
+  CHAT_ONLY_ASSISTANT_TEXT: "chat-only-assistant-text",
   EXEC_APPROVALS: "exec-approvals",
   INLINE_WIDGETS: "inline-widgets",
   MODEL_CATALOG_SNAPSHOT: "model-catalog-snapshot",
   MODEL_SELECTION_POLICY: "model-selection-policy",
   RUN_TOOL_BINDINGS: "run-tool-bindings",
   SESSION_SCOPED_EVENTS: "session-scoped-events",
+  SKILL_CURATOR_LIVE_INVENTORY: "skill-curator-live-inventory",
   PLUGIN_APPROVALS: "plugin-approvals",
   TASK_SUGGESTIONS: "task-suggestions",
   TERMINAL_OFFSET_SEQ: "terminal-offset-seq",
@@ -92,10 +89,10 @@ export const GATEWAY_CLIENT_CAPS = {
   TERMINAL_UPLOAD_PATH_STYLE: "terminal-upload-path-style",
   TOOL_EVENTS: "tool-events",
   UI_COMMANDS: "ui-commands",
+  ULTRAFAST: "ultrafast",
   USAGE_REFRESHING: "usage-refreshing",
 } as const;
 
-/** Optional capability advertised by clients during gateway handshake. */
 export type GatewayClientCap = (typeof GATEWAY_CLIENT_CAPS)[keyof typeof GATEWAY_CLIENT_CAPS];
 
 const GATEWAY_CLIENT_ID_SET = new Set<GatewayClientId>(Object.values(GATEWAY_CLIENT_IDS));

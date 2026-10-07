@@ -2,7 +2,6 @@ import {
   attachChannelToResult,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-// Discord plugin module implements outbound payload behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   getReplyPayloadTtsSupplement,
@@ -30,7 +29,6 @@ import type { DiscordSendResult } from "./send.types.js";
 type DiscordOutboundPayloadContext = Parameters<
   NonNullable<ChannelOutboundAdapter["sendPayload"]>
 >[0];
-type DiscordPayloadSendContext = Awaited<ReturnType<typeof createDiscordPayloadSendContext>>;
 
 const log = createSubsystemLogger("discord/outbound");
 
@@ -46,46 +44,6 @@ function createDiscordUnknownPayloadResult(target: string) {
   };
 }
 
-function resolveDiscordDeliveryOptions(
-  ctx: DiscordOutboundPayloadContext,
-  sendContext: DiscordPayloadSendContext,
-  reply = sendContext.resolveReply(),
-) {
-  return {
-    reply,
-    accountId: ctx.accountId ?? undefined,
-    silent: ctx.silent ?? undefined,
-    cfg: ctx.cfg,
-    onPlatformSendDispatch: ctx.onPlatformSendDispatch,
-    assertPlatformSendAuthorized: ctx.assertDirectAdapterHandoff,
-  };
-}
-
-function resolveDiscordFormattedDeliveryOptions(
-  ctx: DiscordOutboundPayloadContext,
-  sendContext: DiscordPayloadSendContext,
-  reply = sendContext.resolveReply(),
-) {
-  return {
-    ...resolveDiscordDeliveryOptions(ctx, sendContext, reply),
-    ...sendContext.formatting,
-  };
-}
-
-function resolveDiscordMediaDeliveryOptions(
-  ctx: DiscordOutboundPayloadContext,
-  sendContext: DiscordPayloadSendContext,
-  mediaUrl: string,
-) {
-  return {
-    mediaUrl,
-    mediaAccess: ctx.mediaAccess,
-    mediaLocalRoots: ctx.mediaLocalRoots,
-    mediaReadFile: ctx.mediaReadFile,
-    ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
-  };
-}
-
 export async function sendDiscordOutboundPayload(params: {
   ctx: DiscordOutboundPayloadContext;
   fallbackAdapter: ChannelOutboundAdapter;
@@ -97,6 +55,25 @@ export async function sendDiscordOutboundPayload(params: {
   });
   const mediaUrls = resolvePayloadMediaUrls(payload);
   const sendContext = await createDiscordPayloadSendContext(ctx);
+  const deliveryOptions = (reply = sendContext.resolveReply()) => ({
+    reply,
+    accountId: ctx.accountId ?? undefined,
+    silent: ctx.silent ?? undefined,
+    cfg: ctx.cfg,
+    onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+    assertPlatformSendAuthorized: ctx.assertDirectAdapterHandoff,
+  });
+  const formattedDeliveryOptions = (reply = sendContext.resolveReply()) => ({
+    ...deliveryOptions(reply),
+    ...sendContext.formatting,
+  });
+  const mediaDeliveryOptions = (mediaUrl: string) => ({
+    mediaUrl,
+    mediaAccess: ctx.mediaAccess,
+    mediaLocalRoots: ctx.mediaLocalRoots,
+    mediaReadFile: ctx.mediaReadFile,
+    ...formattedDeliveryOptions(),
+  });
   const payloadContext = { ...ctx, payload };
   const deliveredResults: DiscordSendResult[] = [];
   let createdThreadId: string | undefined;
@@ -142,7 +119,7 @@ export async function sendDiscordOutboundPayload(params: {
     try {
       const voiceUrl = expectDefined(mediaUrls.at(0), "non-empty Discord voice media URLs");
       lastResult = await sendContext.sendVoice(sendContext.target, voiceUrl, {
-        ...resolveDiscordDeliveryOptions(ctx, sendContext, voiceReply),
+        ...deliveryOptions(voiceReply),
         mediaAccess: ctx.mediaAccess,
         mediaLocalRoots: ctx.mediaLocalRoots,
         mediaReadFile: ctx.mediaReadFile,
@@ -165,7 +142,7 @@ export async function sendDiscordOutboundPayload(params: {
       if (fallbackText) {
         await sendContext.send(sendContext.target, fallbackText, {
           verbose: false,
-          ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext, voiceReply),
+          ...formattedDeliveryOptions(voiceReply),
           onDeliveryResult,
         });
       }
@@ -178,7 +155,7 @@ export async function sendDiscordOutboundPayload(params: {
       if (payload.text?.trim()) {
         lastResult = await sendContext.send(sendContext.target, payload.text, {
           verbose: false,
-          ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
+          ...formattedDeliveryOptions(),
           onDeliveryResult,
         });
       }
@@ -187,7 +164,7 @@ export async function sendDiscordOutboundPayload(params: {
       try {
         lastResult = await sendContext.send(sendContext.target, "", {
           verbose: false,
-          ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
+          ...mediaDeliveryOptions(mediaUrl),
           onDeliveryResult,
         });
       } catch (err) {
@@ -231,13 +208,13 @@ export async function sendDiscordOutboundPayload(params: {
             components: nativeComponents,
             embeds,
             filename,
-            ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
+            ...formattedDeliveryOptions(),
             onDeliveryResult,
           }),
         send: async ({ text, mediaUrl, isFirst }) =>
           await sendContext.send(sendContext.target, text, {
             verbose: false,
-            ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
+            ...mediaDeliveryOptions(mediaUrl),
             components: isFirst ? nativeComponents : undefined,
             embeds: isFirst ? embeds : undefined,
             filename: isFirst ? filename : undefined,
@@ -260,7 +237,7 @@ export async function sendDiscordOutboundPayload(params: {
     fallbackResult: createDiscordUnknownPayloadResult(sendContext.target),
     sendNoMedia: async () => {
       return await sendDiscordComponentMessageLazy(sendContext.target, componentSpec, {
-        ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
+        ...formattedDeliveryOptions(),
         filename,
         onDeliveryResult,
       });
@@ -268,14 +245,14 @@ export async function sendDiscordOutboundPayload(params: {
     send: async ({ text, mediaUrl, isFirst }) => {
       if (isFirst) {
         return await sendDiscordComponentMessageLazy(sendContext.target, componentSpec, {
-          ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
+          ...mediaDeliveryOptions(mediaUrl),
           filename,
           onDeliveryResult,
         });
       }
       return await sendContext.send(sendContext.target, text, {
         verbose: false,
-        ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
+        ...mediaDeliveryOptions(mediaUrl),
         onDeliveryResult,
       });
     },

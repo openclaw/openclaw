@@ -1,14 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withIsolatedTestHome } from "../../../../test/test-env.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import type { BundledProviderPolicySurface } from "../../../plugins/provider-policy-surface.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
+import { VERSION } from "../../../version.js";
 
 const mocks = vi.hoisted(() => ({
   installPluginFromClawHub: vi.fn(),
@@ -17,12 +19,17 @@ const mocks = vi.hoisted(() => ({
   loadManifestMetadataSnapshot: vi.fn(),
   listOfficialExternalPluginCatalogEntries: vi.fn(),
   updateNpmInstalledPlugins: vi.fn(),
+  resolveNpmSpecMetadata: vi.fn(),
   writePersistedInstalledPluginIndexInstallRecordsWithLease:
     vi.fn<
       typeof import("../../../plugins/installed-plugin-index-records.js").writePersistedInstalledPluginIndexInstallRecordsWithLease
     >(),
 }));
 
+vi.mock("../../../infra/install-source-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/install-source-utils.js")>()),
+  resolveNpmSpecMetadata: mocks.resolveNpmSpecMetadata,
+}));
 vi.mock("../../../plugins/clawhub.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/clawhub.js")>()),
   installPluginFromClawHub: mocks.installPluginFromClawHub,
@@ -106,6 +113,21 @@ afterAll(async () => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("configured plugin cohort availability", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
+    mocks.loadManifestMetadataSnapshot.mockReturnValue(
+      createPluginMetadataSnapshotFixture({ plugins: [] }),
+    );
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([]);
+    mocks.resolveNpmSpecMetadata.mockImplementation(async ({ spec }: { spec: string }) => {
+      const name = spec.slice(0, spec.lastIndexOf("@"));
+      return {
+        ok: true,
+        metadata: { name, version: VERSION, resolvedSpec: `${name}@${VERSION}` },
+      };
+    });
+  });
   beforeAll(async () => {
     await import("./missing-configured-plugin-install.js");
   });
@@ -162,13 +184,14 @@ describe("configured plugin cohort availability", () => {
     });
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
-    const result = await repairMissingConfiguredPluginInstalls({
-      cfg: {
-        update: { channel: "stable" },
-        agents: {
-          defaults: { model: "openai/gpt-5.5", agentRuntime: { id: "codex" } },
-        },
+    const cfg: OpenClawConfigWithLegacyRoster = {
+      update: { channel: "stable" },
+      agents: {
+        defaults: { model: "openai/gpt-5.5", agentRuntime: { id: "codex" } },
       },
+    };
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg,
       env: testEnv,
     });
 

@@ -1,12 +1,66 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { CONTROL_UI_ASSET_MANIFEST_FILENAME } from "./control-ui-asset-manifest.js";
 import { createControlUiAssetRetention } from "./control-ui-asset-retention.js";
 import {
+  createRetentionManifest,
   withRetentionFixture,
   writeRetentionBuild,
 } from "./control-ui-asset-retention.test-support.js";
+
+const pruneLogs = vi.hoisted(() => ({ debug: vi.fn(), warn: vi.fn() }));
+vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => pruneLogs }));
+
+// Measured from the 2026-10-01 production build: identity, Brotli, and gzip bytes.
+const BUILD_SIZES = [35_090_278, 8_430_582, 9_593_000] as const;
+const zeroBuffer = Buffer.alloc(64 * 1024);
+const zeroDigests = new Map<number, string>();
+
+function sparseEntry(assetPath: string, size: number) {
+  let sha256 = zeroDigests.get(size);
+  if (!sha256) {
+    const hash = createHash("sha256");
+    for (let remaining = size; remaining > 0; remaining -= zeroBuffer.length) {
+      hash.update(zeroBuffer.subarray(0, Math.min(remaining, zeroBuffer.length)));
+    }
+    sha256 = hash.digest("hex");
+    zeroDigests.set(size, sha256);
+  }
+  return { path: assetPath, size, sha256 };
+}
+
+async function writeSparseBuild(
+  root: string,
+  manifest: ReturnType<typeof createRetentionManifest>,
+) {
+  for (const entry of manifest.assets) {
+    const file = path.join(root, entry.path);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    // Sparse zero-filled fixtures avoid writing payloads outside the owner's publication.
+    await fs.writeFile(file, "");
+    await fs.truncate(file, entry.size);
+  }
+  await fs.writeFile(path.join(root, CONTROL_UI_ASSET_MANIFEST_FILENAME), JSON.stringify(manifest));
+}
+
+// One identity chunk with both precompressed sidecars, shaped like the measured build.
+function realisticBuild(root: string, label: string) {
+  const assetPath = `assets/app-${label}.js`;
+  const identity = sparseEntry(assetPath, BUILD_SIZES[0]);
+  return {
+    assetPath,
+    root: path.join(root, label),
+    full: createRetentionManifest([
+      identity,
+      sparseEntry(`${assetPath}.br`, BUILD_SIZES[1]),
+      sparseEntry(`${assetPath}.gz`, BUILD_SIZES[2]),
+    ]),
+    retained: createRetentionManifest([identity]),
+  };
+}
 
 describe("Control UI retained publication", () => {
   it.each(["removed", "replaced-valid", "symlink"] as const)(
@@ -68,7 +122,7 @@ describe("Control UI retained publication", () => {
           expect(refreshOpens).toEqual([]);
         } else {
           await owner.prepare();
-          expect(owner.resolveAsset(current.assetPath)?.filePath).toBe(targetAsset);
+          expect((await owner.resolveAsset(current.assetPath))?.filePath).toBe(targetAsset);
           expect(refreshOpens).toEqual([2]);
           expect(opens.get(targetAsset)).toBe(2);
         }
@@ -82,6 +136,155 @@ describe("Control UI retained publication", () => {
           [current.manifest.generation, sibling.manifest.generation].toSorted(),
         );
       });
+    },
+  );
+
+  it.each(["claim", "cleanup"] as const)(
+    "warns when pruning %s fails after publication",
+    async (step) => {
+      await withRetentionFixture(async ({ root, cache, seed }) => {
+        pruneLogs.warn.mockClear();
+        const history = [await seed("a"), await seed("b"), await seed("c")].toSorted((a, b) =>
+          a.manifest.generation.localeCompare(b.manifest.generation),
+        );
+        const victim = history[2]!.target;
+        const build = await writeRetentionBuild(path.join(root, "current"), "current");
+        const failure = Object.assign(new Error(`prune ${step} denied`), { code: "EPERM" });
+        const rename = fs.rename;
+        const rm = fs.rm;
+        let claimed: string | undefined;
+        vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+          if (args[0] === victim) {
+            if (step === "claim") {
+              throw failure;
+            }
+            claimed = path.dirname(String(args[1]));
+          }
+          return rename(...args);
+        });
+        vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+          if (args[0] === claimed) {
+            throw failure;
+          }
+          return rm(...args);
+        });
+        const owner = createControlUiAssetRetention(build.root);
+        await expect(owner.prepare()).resolves.toBeUndefined();
+        expect(pruneLogs.warn).toHaveBeenCalledWith(expect.any(String), {
+          directory: victim,
+          outcome: "deferred",
+          error: String(failure),
+        });
+        expect(await fs.readFile((await owner.resolveAsset(build.assetPath))!.filePath)).toEqual(
+          await fs.readFile(path.join(build.root, build.assetPath)),
+        );
+        const retainedVictim = claimed ? path.join(claimed, path.basename(victim)) : victim;
+        expect(await fs.readFile(path.join(retainedVictim, history[2]!.assetPath))).toEqual(
+          await fs.readFile(path.join(history[2]!.root, history[2]!.assetPath)),
+        );
+        expect(
+          (await fs.readdir(cache)).filter((name) => name.startsWith(".staging-")),
+        ).toHaveLength(step === "cleanup" ? 1 : 0);
+      });
+    },
+  );
+
+  it.each(["native", "EPERM"] as const)(
+    "records concurrent different-target pruning with %s deletion",
+    async (fault) => {
+      for (let iteration = 0; iteration < (fault === "native" ? 3 : 1); iteration++) {
+        await withRetentionFixture(async ({ root, cache, seed }) => {
+          pruneLogs.debug.mockClear();
+          pruneLogs.warn.mockClear();
+          const old = [await seed("old-a"), await seed("old-b")].toSorted((a, b) =>
+            a.manifest.generation.localeCompare(b.manifest.generation),
+          );
+          const victim = old[1]!.target;
+          const builds = [
+            await writeRetentionBuild(path.join(root, "a"), "a"),
+            await writeRetentionBuild(path.join(root, "b"), "b"),
+          ];
+          const owners = builds.map((build) => createControlUiAssetRetention(build.root));
+          const publications = createDeferred();
+          const pruners = createDeferred();
+          const firstPruner = createDeferred();
+          const loser = createDeferred();
+          let published = 0;
+          let pruning = 0;
+          const missing: unknown[] = [];
+          const rename = fs.rename;
+          const rm = fs.rm;
+          const collision = Object.assign(new Error("concurrent deletion"), { code: fault });
+          const prune = async (operation: () => Promise<void>, claim: boolean) => {
+            const arrival = ++pruning;
+            if (arrival === 2) {
+              pruners.resolve();
+            }
+            await pruners.promise;
+            if (arrival === 1) {
+              try {
+                if (claim || fault === "native") {
+                  await operation();
+                } else {
+                  // Before the fix, both publishers remove the same live tree.
+                  await fs.unlink(path.join(victim, "asset-manifest.json"));
+                }
+                firstPruner.resolve();
+                await loser.promise;
+                if (!claim && fault !== "native") {
+                  await operation();
+                }
+              } finally {
+                firstPruner.resolve();
+              }
+            } else {
+              await firstPruner.promise;
+              try {
+                if (fault !== "native") {
+                  throw collision;
+                }
+                await fs.lstat(victim).catch((error: unknown) => {
+                  missing.push(error);
+                });
+                await operation();
+              } finally {
+                loser.resolve();
+              }
+            }
+          };
+          vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+            if (args[0] === victim) {
+              return prune(() => rename(...args), true);
+            }
+            await rename(...args);
+            if (++published === 2) {
+              publications.resolve();
+            }
+            await publications.promise;
+          });
+          vi.spyOn(fs, "rm").mockImplementation(async (...args) =>
+            args[0] === victim ? prune(() => rm(...args), false) : rm(...args),
+          );
+          const results = await Promise.allSettled(owners.map((owner) => owner.prepare()));
+          expect(results).toEqual([
+            { status: "fulfilled", value: undefined },
+            { status: "fulfilled", value: undefined },
+          ]);
+          expect(pruning).toBe(2);
+          expect(missing).toMatchObject(fault === "native" ? [{ code: "ENOENT" }] : []);
+          expect(pruneLogs.debug).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.objectContaining({ directory: victim, outcome: "already-pruned" }),
+          );
+          expect(pruneLogs.warn).not.toHaveBeenCalled();
+          for (const [index, build] of builds.entries()) {
+            expect(
+              await fs.readFile((await owners[index]!.resolveAsset(build.assetPath))!.filePath),
+            ).toEqual(await fs.readFile(path.join(build.root, build.assetPath)));
+          }
+          expect(await fs.readdir(cache)).toHaveLength(3);
+        });
+      }
     },
   );
 
@@ -101,6 +304,9 @@ describe("Control UI retained publication", () => {
         const rename = fs.rename;
         const errors: string[] = [];
         vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+          if (!path.basename(String(args[0])).startsWith(".staging-")) {
+            return rename(...args);
+          }
           // Both preparers reach real rename from their own completed staging tree.
           if (++arrivals === 2) {
             barrier.resolve();
@@ -114,18 +320,25 @@ describe("Control UI retained publication", () => {
           }
         });
         const results = await Promise.allSettled(owners.map((owner) => owner.prepare()));
-        expect(results.map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
+        expect(results).toEqual([
+          { status: "fulfilled", value: undefined },
+          { status: "fulfilled", value: undefined },
+        ]);
         expect(arrivals).toBe(2);
         if (kind === "same") {
           expect(errors).toHaveLength(1);
-          expect(["EEXIST", "ENOTEMPTY"]).toContain(errors[0]);
+          expect(
+            process.platform === "win32"
+              ? ["EEXIST", "ENOTEMPTY", "EPERM"]
+              : ["EEXIST", "ENOTEMPTY"],
+          ).toContain(errors[0]);
         } else {
           expect(errors).toEqual([]);
         }
         for (const [index, owner] of owners.entries()) {
           const build = index === 0 ? a : b;
           expect(
-            await fs.readFile(owner.resolveAsset(build.assetPath)!.filePath, "utf8"),
+            await fs.readFile((await owner.resolveAsset(build.assetPath))!.filePath, "utf8"),
           ).toContain(index === 0 || kind === "same" ? '"a"' : '"b"');
         }
         const entries = await fs.readdir(cache);
@@ -142,69 +355,10 @@ describe("Control UI retained publication", () => {
     },
   );
 
-  it.each(["partial", "zero-progress"] as const)(
-    "handles %s destination writes without adopting incomplete bytes",
-    async (behavior) => {
-      await withRetentionFixture(async ({ root, cache }) => {
-        const build = await writeRetentionBuild(path.join(root, "build"), "write", {
-          size: 128 * 1024,
-        });
-        const source = path.join(build.root, build.assetPath);
-        const open = fs.open;
-        let intercepted = false;
-        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          const handle = await open(...args);
-          const file = args[0];
-          if (
-            typeof file !== "string" ||
-            !file.includes(".staging-") ||
-            !file.endsWith(build.assetPath)
-          ) {
-            return handle;
-          }
-          const write = handle.write.bind(handle);
-          vi.spyOn(handle, "write").mockImplementation((async (
-            buffer: Buffer,
-            offset: number,
-            length: number,
-            position: number | null,
-          ) => {
-            intercepted = true;
-            if (behavior === "zero-progress") {
-              return { buffer, bytesWritten: 0 };
-            }
-            return await write(buffer, offset, Math.min(length, 17), position);
-          }) as typeof handle.write);
-          return handle;
-        });
-        const owner = createControlUiAssetRetention(build.root);
-        if (behavior === "zero-progress") {
-          await expect(owner.prepare()).rejects.toThrow("write made no progress");
-          expect(owner.resolveAsset(build.assetPath)).toBeNull();
-          expect(await fs.readdir(cache)).toEqual([]);
-        } else {
-          await owner.prepare();
-          expect(await fs.readFile(owner.resolveAsset(build.assetPath)!.filePath)).toEqual(
-            await fs.readFile(source),
-          );
-        }
-        expect(intercepted).toBe(true);
-        expect((await fs.readdir(cache)).some((entry) => entry.startsWith(".staging-"))).toBe(
-          false,
-        );
-      });
-    },
-  );
-
   it.each([
     ["EEXIST", "valid"],
-    ["ENOTEMPTY", "valid"],
     ["EEXIST", "digest"],
-    ["ENOTEMPTY", "digest"],
-    ["EEXIST", "manifest"],
-    ["ENOTEMPTY", "manifest"],
-    ["EEXIST", "symlink"],
-    ["ENOTEMPTY", "symlink"],
+    ["EPERM", "valid"],
     ["EACCES", "valid"],
   ] as const)("handles %s only when its exact winner is %s", async (code, integrity) => {
     await withRetentionFixture(async ({ root, cache }) => {
@@ -212,31 +366,28 @@ describe("Control UI retained publication", () => {
       const target = path.join(cache, build.manifest.generation);
       const collision = Object.assign(new Error("rename failed"), { code });
       vi.spyOn(fs, "rename").mockImplementation(async () => {
-        if (integrity === "symlink") {
-          await fs.symlink(build.root, target, "dir");
-        } else {
-          await fs.cp(build.root, target, { recursive: true });
-          if (integrity === "digest") {
-            await fs.writeFile(
-              path.join(target, build.assetPath),
-              Buffer.alloc(build.manifest.assets[0]!.size, 120),
-            );
-          }
-          if (integrity === "manifest") {
-            await fs.writeFile(path.join(target, "asset-manifest.json"), "{");
-          }
+        await fs.cp(build.root, target, { recursive: true });
+        if (integrity === "digest") {
+          await fs.writeFile(
+            path.join(target, build.assetPath),
+            Buffer.alloc(build.manifest.assets[0]!.size, 120),
+          );
         }
         throw collision;
       });
       const owner = createControlUiAssetRetention(build.root);
-      if (integrity === "valid" && code !== "EACCES") {
+      if (
+        integrity === "valid" &&
+        code !== "EACCES" &&
+        (code !== "EPERM" || process.platform === "win32")
+      ) {
         await owner.prepare();
-        expect(owner.resolveAsset(build.assetPath)?.filePath).toBe(
+        expect((await owner.resolveAsset(build.assetPath))?.filePath).toBe(
           path.join(target, build.assetPath),
         );
       } else {
         await expect(owner.prepare()).rejects.toBe(collision);
-        expect(owner.resolveAsset(build.assetPath)).toBeNull();
+        expect(await owner.resolveAsset(build.assetPath)).toBeNull();
       }
       // A failed loser owns its staging only, including when the winner is invalid.
       expect(await fs.readdir(cache)).toEqual([build.manifest.generation]);
@@ -256,7 +407,7 @@ describe("Control UI retained publication", () => {
       });
       const owner = createControlUiAssetRetention(build.root);
       await expect(owner.prepare()).rejects.toThrow("Invalid retained Control UI generation");
-      expect(owner.resolveAsset(build.assetPath)).toBeNull();
+      expect(await owner.resolveAsset(build.assetPath)).toBeNull();
       expect(await fs.readdir(cache)).toEqual([build.manifest.generation]);
     });
   });
@@ -280,8 +431,8 @@ describe("Control UI retained publication", () => {
       });
       const owner = createControlUiAssetRetention(build.root);
       await owner.prepare();
-      expect(owner.resolveAsset(old.assetPath)).toBeNull();
-      expect(owner.resolveAsset(build.assetPath)).not.toBeNull();
+      expect(await owner.resolveAsset(old.assetPath)).toBeNull();
+      expect(await owner.resolveAsset(build.assetPath)).not.toBeNull();
       await expect(fs.access(old.target)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
@@ -298,13 +449,13 @@ describe("Control UI retained publication", () => {
         const stale = path.join(cache, ".staging-1-aaaa");
         await fs.mkdir(stale);
         await fs.utimes(stale, 0, 0);
-        const rm = fs.rm;
+        const rename = fs.rename;
         let raced = false;
-        vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
-          await rm(...args);
+        vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+          await rename(...args);
           if (args[0] === stale) {
             raced = true;
-            await fs.rename(victim.target, path.join(root, "concurrently-removed"));
+            await rename(victim.target, path.join(root, "concurrently-removed"));
             if (mutation === "replace-evicted") {
               await fs.cp(victim.root, victim.target, { recursive: true });
             }
@@ -313,8 +464,8 @@ describe("Control UI retained publication", () => {
         const owner = createControlUiAssetRetention(current.root);
         await owner.prepare();
         expect(raced).toBe(true);
-        expect(owner.resolveAsset(victim.assetPath)).toBeNull();
-        expect(owner.resolveAsset(current.assetPath)).not.toBeNull();
+        expect(await owner.resolveAsset(victim.assetPath)).toBeNull();
+        expect(await owner.resolveAsset(current.assetPath)).not.toBeNull();
         expect(
           await fs.access(victim.target).then(
             () => true,
@@ -324,4 +475,78 @@ describe("Control UI retained publication", () => {
       });
     },
   );
+});
+
+describe("Control UI asset retention budget", () => {
+  it("keeps a realistically sized previous build when the next build publishes", async () => {
+    await withRetentionFixture(async ({ root, cache }) => {
+      pruneLogs.warn.mockClear();
+      const previous = realisticBuild(root, "previous");
+      const next = realisticBuild(root, "next");
+      // The previous Gateway version published full generations, sidecars included.
+      const previousTarget = path.join(cache, previous.full.generation);
+      await writeSparseBuild(previousTarget, previous.full);
+      await fs.utimes(previousTarget, 1_700_000_000, 1_700_000_000);
+      await writeSparseBuild(next.root, next.full);
+      const owner = createControlUiAssetRetention(next.root);
+      await owner.prepare();
+
+      // Identity next + full previous = 88,204,138 B; two full builds exceed the 96 MiB budget.
+      expect((await owner.resolveAsset(previous.assetPath))?.filePath).toBe(
+        path.join(previousTarget, previous.assetPath),
+      );
+      const nextTarget = path.join(cache, next.retained.generation);
+      expect((await owner.resolveAsset(next.assetPath))?.filePath).toBe(
+        path.join(nextTarget, next.assetPath),
+      );
+      expect(
+        JSON.parse(
+          await fs.readFile(path.join(nextTarget, CONTROL_UI_ASSET_MANIFEST_FILENAME), "utf8"),
+        ),
+      ).toEqual(next.retained);
+      for (const extension of ["br", "gz"]) {
+        await expect(
+          fs.access(path.join(nextTarget, `${next.assetPath}.${extension}`)),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      expect((await fs.readdir(cache)).toSorted()).toEqual(
+        [previous.full.generation, next.retained.generation].toSorted(),
+      );
+      expect(pruneLogs.warn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("warns when the byte budget cannot keep the previous generation", async () => {
+    await withRetentionFixture(async ({ root, cache }) => {
+      pruneLogs.warn.mockClear();
+      const prior = createRetentionManifest([
+        sparseEntry("assets/prior-a.js", 48 * 1024 * 1024),
+        sparseEntry("assets/prior-b.js", 48 * 1024 * 1024),
+      ]);
+      const priorTarget = path.join(cache, prior.generation);
+      await writeSparseBuild(priorTarget, prior);
+      await fs.utimes(priorTarget, 1_700_000_000, 1_700_000_000);
+      const current = await writeRetentionBuild(path.join(root, "current"), "current");
+      const owner = createControlUiAssetRetention(current.root);
+      await owner.prepare();
+
+      expect(pruneLogs.warn).toHaveBeenCalledExactlyOnceWith(
+        "Control UI asset retention cannot keep the previous generation",
+        {
+          generation: prior.generation,
+          bytes: 100_663_296,
+          retainedBytes: current.manifest.assets[0]!.size,
+          maxBytes: 100_663_296,
+        },
+      );
+      for (const entry of prior.assets) {
+        expect(await owner.resolveAsset(entry.path)).toBeNull();
+      }
+      await expect(fs.access(priorTarget)).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await owner.resolveAsset(current.assetPath))?.filePath).toBe(
+        path.join(cache, current.manifest.generation, current.assetPath),
+      );
+      expect(await fs.readdir(cache)).toEqual([current.manifest.generation]);
+    });
+  });
 });

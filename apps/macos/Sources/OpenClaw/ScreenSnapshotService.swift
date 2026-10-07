@@ -40,8 +40,15 @@ final class ScreenSnapshotService {
         format: OpenClawScreenSnapshotFormat?) async throws
         -> ScreenSnapshotResult
     {
+        guard AppLaunchRuntimePlan.current.allowsActivation ||
+            PermissionManager.screenRecordingPermissions.checkScreenRecordingPermission()
+        else {
+            throw ScreenSnapshotError.captureFailed(
+                "Screen Recording permission required; relaunch without --no-activate and retry")
+        }
         let format = format ?? .jpeg
-        let normalized = Self.normalize(maxWidth: maxWidth, quality: quality, format: format)
+        let maxWidth = maxWidth.flatMap { $0 > 0 ? $0 : nil } ?? (format == .png ? 900 : 1600)
+        let quality = min(1.0, max(0.05, quality ?? 0.72))
 
         let content = try await SCShareableContent.current
         let displays = content.displays.sorted { $0.displayID < $1.displayID }
@@ -56,14 +63,14 @@ final class ScreenSnapshotService {
         let display = displays[idx]
         let displayFrameId = try Self.displayFrameId(
             for: display,
-            referenceWidth: normalized.maxWidth)
+            referenceWidth: maxWidth)
 
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let config = SCStreamConfiguration()
         let targetSize = Self.targetSize(
             width: display.width,
             height: display.height,
-            maxWidth: normalized.maxWidth)
+            maxWidth: maxWidth)
         config.width = targetSize.width
         config.height = targetSize.height
         config.showsCursor = true
@@ -80,27 +87,21 @@ final class ScreenSnapshotService {
         // pixels were captured, no stable frame exists to authorize later input.
         let finalDisplayFrameId = try Self.displayFrameId(
             for: display,
-            referenceWidth: normalized.maxWidth)
+            referenceWidth: maxWidth)
         guard displayFrameId == finalDisplayFrameId else {
             throw ScreenSnapshotError.captureFailed("display changed during screen capture")
         }
 
         let bitmap = NSBitmapImageRep(cgImage: cgImage)
-        let data: Data
-        switch format {
-        case .png:
-            guard let encoded = bitmap.representation(using: .png, properties: [:]) else {
-                throw ScreenSnapshotError.encodeFailed("png encode failed")
-            }
-            data = encoded
-        case .jpeg:
-            guard let encoded = bitmap.representation(
-                using: .jpeg,
-                properties: [.compressionFactor: normalized.quality])
-            else {
-                throw ScreenSnapshotError.encodeFailed("jpeg encode failed")
-            }
-            data = encoded
+        let encoding: (NSBitmapImageRep.FileType, [NSBitmapImageRep.PropertyKey: Any]) = switch format {
+        case .png: (.png, [:])
+        case .jpeg: (.jpeg, [.compressionFactor: quality])
+        }
+        guard let data = bitmap.representation(
+            using: encoding.0,
+            properties: encoding.1)
+        else {
+            throw ScreenSnapshotError.encodeFailed("\(format.rawValue) encode failed")
         }
 
         return ScreenSnapshotResult(
@@ -136,17 +137,6 @@ final class ScreenSnapshotService {
             sourceHeight: sourceHeight,
             referenceWidth: referenceWidth,
             display: geometry)
-    }
-
-    private static func normalize(
-        maxWidth: Int?,
-        quality: Double?,
-        format: OpenClawScreenSnapshotFormat)
-        -> (maxWidth: Int, quality: Double)
-    {
-        let resolvedMaxWidth = maxWidth.flatMap { $0 > 0 ? $0 : nil } ?? (format == .png ? 900 : 1600)
-        let resolvedQuality = min(1.0, max(0.05, quality ?? 0.72))
-        return (maxWidth: resolvedMaxWidth, quality: resolvedQuality)
     }
 
     private static func targetSize(width: Int, height: Int, maxWidth: Int) -> (width: Int, height: Int) {

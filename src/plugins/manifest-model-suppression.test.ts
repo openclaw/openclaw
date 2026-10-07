@@ -5,6 +5,8 @@ import {
   normalizeModelCatalogProviderRows,
 } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import { projectModelProviderConfig } from "../config/model-provider-config.js";
 
 const mocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
@@ -316,6 +318,141 @@ describe("manifest model suppression", () => {
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { name: "native", baseUrl: "https://api.x.ai/v1", id: "auto", retired: true },
+    { name: "custom", baseUrl: "https://custom.invalid/v1", id: "auto", retired: false },
+    { name: "private ID", baseUrl: "https://api.x.ai/v1", id: "private-model", retired: false },
+    { name: "ambiguous", baseUrl: "https://api.x.ai/v1", id: "auto", retired: false },
+    { name: "owned logical provider", baseUrl: "https://api.x.ai/v1", id: "auto", retired: false },
+    { name: "model override", baseUrl: "https://custom.invalid/v1", id: "auto", retired: false },
+  ])("applies captured physical retirement policy for $name", (scenario) => {
+    const native = { api: "openai-responses", baseUrl: "https://api.x.ai/v1", models: [] };
+    const plugins: Record<string, unknown>[] = [
+      {
+        id: "xai",
+        providers: ["xai"],
+        providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
+        modelCatalog: {
+          providers: { xai: native },
+          suppressions: [
+            {
+              provider: "xai",
+              model: "auto",
+              retirement: { replacedBy: "current" },
+              when: { baseUrlHosts: ["api.x.ai"] },
+            },
+          ],
+        },
+      },
+    ];
+    if (scenario.name === "ambiguous") {
+      plugins.push({
+        id: "other",
+        providers: ["other"],
+        modelCatalog: { providers: { other: native } },
+      });
+    }
+    if (scenario.name === "owned logical provider") {
+      plugins.push({ id: "personal", providers: ["personal"] });
+    }
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(createMetadataSnapshot(plugins));
+    const config = {
+      models: {
+        providers: {
+          personal: {
+            api: "openai-responses" as const,
+            baseUrl: scenario.name === "model override" ? native.baseUrl : scenario.baseUrl,
+            models: [
+              makeProviderModelFixture<"openai-responses">({
+                id: scenario.id,
+                name: scenario.id,
+                provider: "personal",
+                api: "openai-responses",
+                baseUrl: scenario.baseUrl,
+              }),
+            ].map(({ provider: _provider, api: _api, ...model }) => model),
+          },
+        },
+      },
+    };
+    const resolver = buildManifestBuiltInModelSuppressionResolver({ config });
+    const input = { provider: "personal", id: scenario.id };
+    expect(resolver.hasRetirementCandidate(input)).toBe(scenario.retired);
+    const result = resolver({ ...input, baseUrl: scenario.baseUrl });
+    expect(Boolean(result?.retirement)).toBe(scenario.retired);
+    if (scenario.retired) {
+      expect(result?.errorMessage).toContain("personal/auto");
+    }
+    expect(
+      resolver({ ...input, baseUrl: scenario.baseUrl, unconditionalOnly: true }),
+    ).toBeUndefined();
+    expect(resolver({ provider: "xai", id: "auto", baseUrl: native.baseUrl })?.retirement).toEqual({
+      replacedBy: "current",
+    });
+  });
+
+  it("uses the model-level API for physical retirement candidate knowledge", () => {
+    const baseUrl = "https://api.x.ai/v1";
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(
+      createMetadataSnapshot([
+        {
+          id: "xai",
+          providers: ["xai"],
+          providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
+          modelCatalog: {
+            providers: { xai: { api: "openai-responses", baseUrl, models: [] } },
+            suppressions: [
+              {
+                provider: "xai",
+                model: "auto",
+                retirement: { replacedBy: "current" },
+                when: { baseUrlHosts: ["api.x.ai"], providerConfigApiIn: ["openai-responses"] },
+              },
+            ],
+          },
+        },
+      ]),
+    );
+    const config = {
+      models: {
+        providers: {
+          personal: {
+            api: "openai-completions" as const,
+            baseUrl,
+            models: [
+              makeProviderModelFixture<"openai-responses">({
+                id: "auto",
+                name: "Auto",
+                provider: "personal",
+                api: "openai-responses",
+                baseUrl,
+              }),
+            ].map(({ provider: _provider, baseUrl: _baseUrl, ...model }) => model),
+          },
+        },
+      },
+    };
+    const resolver = buildManifestBuiltInModelSuppressionResolver({ config });
+    const input = { provider: "personal", id: "auto", baseUrl };
+    expect(resolver.hasRetirementCandidate(input)).toBe(true);
+    expect(resolver(input)).toBeUndefined();
+    const selected = projectModelProviderConfig(config, "personal", {
+      api: "openai-responses",
+      baseUrl,
+    });
+    expect(
+      buildManifestBuiltInModelSuppressionResolver({ config: selected })(input)?.retirement,
+    ).toEqual({ replacedBy: "current" });
+    Object.defineProperty(config.models.providers.personal, "models", {
+      get() {
+        throw new Error("Nonretired model knowledge must not read configured rows");
+      },
+    });
+    expect(resolver.hasRetirementCandidate({ provider: "personal", id: "private-model" })).toBe(
+      false,
+    );
+  });
+
   it("keeps the OpenAI API route available while retiring the ChatGPT route", () => {
     const manifest = JSON.parse(
       fs.readFileSync(
@@ -490,54 +627,44 @@ describe("manifest model suppression", () => {
     ).toBeUndefined();
   });
 
-  describe.each(["qwen", "modelstudio"])("%s plan availability", (provider) => {
-    describe.each(["openai-completions", undefined] as const)("api=%s", (api) => {
-      it.each([
-        ["https://coding.dashscope.aliyuncs.com/v1", true],
-        ["https://coding-intl.dashscope.aliyuncs.com/v1", true],
-        ["https://dashscope.aliyuncs.com/compatible-mode/v1", false],
-        ["https://dashscope-intl.aliyuncs.com/compatible-mode/v1", false],
-        ["https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", false],
-        ["https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1", false],
-        ["https://proxy.example/v1", false],
-      ] as const)("matches the plan at %s", (baseUrl, suppressed) => {
-        // Public metadata is fixture data; core's type graph must not compile plugin files.
-        const qwenManifest: Record<string, unknown> = JSON.parse(
-          fs.readFileSync(
-            new URL("../../extensions/qwen/openclaw.plugin.json", import.meta.url),
-            "utf8",
-          ),
-        );
-        mocks.loadPluginMetadataSnapshot.mockReturnValue(createMetadataSnapshot([qwenManifest]));
-        const providerCatalog = normalizeModelCatalog(qwenManifest.modelCatalog, {
-          ownedProviders: new Set(["qwen"]),
-        })?.providers?.qwen;
-        if (!providerCatalog) {
-          throw new Error("Qwen manifest catalog is missing");
-        }
-        const rows = normalizeModelCatalogProviderRows({
-          provider,
-          providerCatalog,
-          source: "manifest",
-        });
-        const resolver = buildManifestBuiltInModelSuppressionResolver({
-          config: {
-            models: {
-              providers: { [provider]: { baseUrl, ...(api ? { api } : {}), models: [] } },
-            },
-          },
-          env: process.env,
-        });
-
-        for (const id of ["qwen3.6-flash", "qwen3.7-max", "qwen3.8-max", "qwen3.8-flash"]) {
-          const row = rows.find((entry) => entry.id === id);
-          expect(row, id).toBeDefined();
-          expect(Boolean(resolver({ provider, id, baseUrl: row?.baseUrl })?.suppress), id).toBe(
-            suppressed,
-          );
-        }
-        expect(resolver({ provider, id: "qwen3.7-plus" })).toBeUndefined();
-      });
+  it.each([
+    ["qwen", "https://coding.dashscope.aliyuncs.com/v1", true],
+    ["modelstudio", "https://coding-intl.dashscope.aliyuncs.com/v1", true],
+    ["qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1", false],
+    ["modelstudio", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", false],
+    ["qwen", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", false],
+    ["modelstudio", "https://proxy.example/v1", false],
+  ] as const)("matches %s plan availability at %s", (provider, baseUrl, suppressed) => {
+    const qwenManifest: Record<string, unknown> = JSON.parse(
+      fs.readFileSync(
+        new URL("../../extensions/qwen/openclaw.plugin.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(createMetadataSnapshot([qwenManifest]));
+    const providerCatalog = normalizeModelCatalog(qwenManifest.modelCatalog, {
+      ownedProviders: new Set(["qwen"]),
+    })?.providers?.qwen;
+    if (!providerCatalog) {
+      throw new Error("Qwen manifest catalog is missing");
+    }
+    const rows = normalizeModelCatalogProviderRows({
+      provider,
+      providerCatalog,
+      source: "manifest",
     });
+    const resolver = buildManifestBuiltInModelSuppressionResolver({
+      config: { models: { providers: { [provider]: { baseUrl, models: [] } } } },
+      env: process.env,
+    });
+
+    for (const id of ["qwen3.6-flash", "qwen3.7-max", "qwen3.8-max", "qwen3.8-flash"]) {
+      const row = rows.find((entry) => entry.id === id);
+      expect(row, id).toBeDefined();
+      expect(Boolean(resolver({ provider, id, baseUrl: row?.baseUrl })?.suppress), id).toBe(
+        suppressed,
+      );
+    }
+    expect(resolver({ provider, id: "qwen3.7-plus" })).toBeUndefined();
   });
 });

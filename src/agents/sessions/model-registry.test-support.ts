@@ -26,7 +26,7 @@ export function installModelRegistryTestFixtures() {
     root: unknown;
     pluginRelativePath: string;
     pluginCatalog: unknown;
-  }): string {
+  }): Promise<string> {
     return writeModelsJsonWithPluginCatalogs({
       root: params.root,
       pluginCatalogs: [
@@ -38,16 +38,16 @@ export function installModelRegistryTestFixtures() {
     });
   }
 
-  function writeModelsJsonWithPluginCatalogs(params: {
+  async function writeModelsJsonWithPluginCatalogs(params: {
     root: unknown;
     pluginCatalogs: Array<{
       pluginRelativePath: string;
       pluginCatalog: unknown;
     }>;
-  }): string {
+  }): Promise<string> {
     const file = writeModelsJson(params.root);
     const dir = dirname(file);
-    replacePersistedPluginModelCatalogs({
+    await replacePersistedPluginModelCatalogs({
       agentDir: dir,
       pluginCatalogWrites: Object.fromEntries(
         params.pluginCatalogs.map((pluginCatalog) => [
@@ -88,6 +88,7 @@ export function pluginOwnerSnapshotEntries(
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      providerAuthContributions: [],
       modelIdNormalizationPolicies: new Map(),
     },
   };

@@ -1,10 +1,10 @@
-// Discord plugin module implements access behavior.
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import type { Guild } from "../internal/discord.js";
 import {
   allowListMatches,
+  hasConfiguredDiscordChannels,
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   resolveDiscordChannelConfigWithFallback,
@@ -21,7 +21,6 @@ export async function authorizeDiscordVoiceIngress(initialParams: {
   discordConfig: DiscordAccountConfig;
   accountId?: string;
   groupPolicy?: "open" | "disabled" | "allowlist";
-  useAccessGroups?: boolean;
   guild?: Guild<true> | Guild | null;
   guildName?: string;
   guildId: string;
@@ -87,8 +86,7 @@ export async function authorizeDiscordVoiceIngress(initialParams: {
     return { ok: false, message: "This channel is disabled." };
   }
 
-  const channelAllowlistConfigured =
-    Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
+  const channelAllowlistConfigured = hasConfiguredDiscordChannels(guildInfo?.channels);
   if (!params.channelId && groupPolicy === "allowlist" && channelAllowlistConfigured) {
     return {
       ok: false,
@@ -128,20 +126,12 @@ export async function authorizeDiscordVoiceIngress(initialParams: {
     ? allowListMatches(admissionAllowList, params.sender, { allowNameMatching: false })
     : false;
 
-  const useAccessGroups = params.useAccessGroups ?? true;
-  const authorizers = useAccessGroups
-    ? [
-        {
-          configured: admissionAllowList != null,
-          allowed: admissionAllowed,
-        },
-        { configured: hasAccessRestrictions, allowed: memberAllowed },
-      ]
-    : [{ configured: hasAccessRestrictions, allowed: memberAllowed }];
-
   const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
-    useAccessGroups,
-    authorizers,
+    useAccessGroups: true,
+    authorizers: [
+      { configured: admissionAllowList != null, allowed: admissionAllowed },
+      { configured: hasAccessRestrictions, allowed: memberAllowed },
+    ],
     modeWhenAccessGroupsOff: "configured",
   });
   return commandAuthorized

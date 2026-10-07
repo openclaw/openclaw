@@ -281,7 +281,8 @@ vi.mock("../status/summary.js", () => ({
 vi.mock("../commands/agent.js", () => ({
   agentCommand: agentCommandMock,
   agentCommandFromGatewayIngress: agentCommandMock,
-  agentCommandFromIngress: agentCommandMock,
+  agentCommandFromIngress: (...args: Parameters<typeof agentCommandMock>) =>
+    agentCommandMock(...args),
 }));
 vi.mock("../agents/btw.js", () => ({
   runBtwSideQuestion: (...args: Parameters<RunBtwSideQuestionFn>) =>
@@ -320,7 +321,7 @@ vi.mock("../cli/deps.js", async () => {
     ...actual,
     createDefaultDeps: () => ({
       ...base,
-      sendMessageWhatsApp: (...args: unknown[]) =>
+      whatsapp: (...args: unknown[]) =>
         (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
     }),
   };

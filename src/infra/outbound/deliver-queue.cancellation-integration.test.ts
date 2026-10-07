@@ -14,7 +14,7 @@ import { resolveDeliveryQueueMediaDir } from "../../config/paths.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.js";
+import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.kernel.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import {
@@ -458,7 +458,7 @@ describe("queued cancellation during adapter preparation", () => {
         if (artifact) {
           expect(fs.existsSync(artifact)).toBe(true);
           expect(
-            loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0, stateDir })
+            (await loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0, stateDir }))
               .stagedArtifacts,
           ).toEqual([artifact]);
           expect(
@@ -480,7 +480,7 @@ describe("queued cancellation during adapter preparation", () => {
         if (artifact) {
           expect(fs.existsSync(artifact)).toBe(false);
           expect(
-            loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0, stateDir })
+            (await loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0, stateDir }))
               .stagedArtifacts,
           ).toEqual([]);
         }
@@ -553,7 +553,7 @@ describe("queued cancellation during adapter preparation", () => {
         await markDeliveryPlatformOutcomeUnknown(id, stateDir, producerClaimId);
       }
 
-      expect(retireUnsentDelivery({ id, producerClaimId, stateDir })).toBeUndefined();
+      expect(await retireUnsentDelivery({ id, producerClaimId, stateDir })).toBeUndefined();
       expect(readQueuedEntry(stateDir, id).recoveryState).toBe(state);
     },
   );
@@ -615,7 +615,7 @@ describe("queued cancellation during adapter preparation", () => {
   ] as const)(
     "preserves $result delivery after adapter dispatch has started ($authority, bestEffort: $bestEffort)",
     async ({ result, authority, bestEffort }) => {
-      vi.useFakeTimers();
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
       const stateDir = fixtures.tmpDir();
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       const adapter = installHeldAdapter();

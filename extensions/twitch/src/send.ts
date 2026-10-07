@@ -3,20 +3,9 @@ import {
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
 import type { TwitchClientManager } from "./twitch-client.js";
 import type { TwitchAccountConfig } from "./types.js";
-import { stripMarkdownForTwitch } from "./utils/markdown.js";
-
-/**
- * Result from sending a message to Twitch.
- */
-interface SendMessageResult {
-  outcome?: "not_sent";
-  /** The message ID (generated for tracking) */
-  messageId: string;
-  /** Receipt for visible sends; empty when no Twitch message was sent */
-  receipt: MessageReceipt;
-}
 
 function createTwitchSendReceipt(messageId?: string, channel?: string): MessageReceipt {
   return createMessageReceiptFromOutboundResults({
@@ -33,11 +22,16 @@ export async function sendMessageTwitchInternal(params: {
   account: TwitchAccountConfig;
   accountId: string;
   clientManager: TwitchClientManager | undefined;
-}): Promise<SendMessageResult> {
-  const cleanedText = stripMarkdownForTwitch(params.text);
+}) {
+  const cleanedText = stripMarkdown(params.text, { linkStyle: "label-and-url" })
+    .replace(/\r/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n/g, " ")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
   if (!cleanedText) {
     return {
-      outcome: "not_sent",
+      outcome: "not_sent" as const,
       messageId: "",
       receipt: createTwitchSendReceipt(),
     };

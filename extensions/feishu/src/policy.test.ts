@@ -1,15 +1,20 @@
 // Feishu tests cover policy plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
 import {
   hasExplicitFeishuGroupConfig,
-  resolveFeishuGroupConfig,
   resolveFeishuGroupSenderActivationIngressAccess,
   resolveFeishuGroupToolPolicy,
   resolveFeishuReplyPolicy,
 } from "./policy.js";
+import { setFeishuRuntime } from "./runtime.js";
 import type { FeishuConfig } from "./types.js";
+
+beforeEach(() => {
+  setFeishuRuntime(createPluginRuntimeMock());
+});
 
 function createCfg(feishu: Record<string, unknown>): OpenClawConfig {
   return {
@@ -90,56 +95,6 @@ describe("resolveFeishuReplyPolicy", () => {
         groupId: "oc_1",
       }),
     ).toEqual({ requireMention: true });
-  });
-});
-
-describe("resolveFeishuGroupConfig", () => {
-  it("falls back to wildcard group config when direct match is missing", () => {
-    const cfg = createFeishuConfig({
-      groups: {
-        "*": { requireMention: false },
-        "oc-explicit": { requireMention: true },
-      },
-    });
-
-    const resolved = resolveFeishuGroupConfig({
-      cfg,
-      groupId: "oc-missing",
-    });
-
-    expect(resolved).toEqual({ requireMention: false });
-  });
-
-  it("prefers exact group config over wildcard", () => {
-    const cfg = createFeishuConfig({
-      groups: {
-        "*": { requireMention: false },
-        "oc-explicit": { requireMention: true },
-      },
-    });
-
-    const resolved = resolveFeishuGroupConfig({
-      cfg,
-      groupId: "oc-explicit",
-    });
-
-    expect(resolved).toEqual({ requireMention: true });
-  });
-
-  it("keeps case-insensitive matching for explicit group ids", () => {
-    const cfg = createFeishuConfig({
-      groups: {
-        "*": { requireMention: false },
-        OC_UPPER: { requireMention: true },
-      },
-    });
-
-    const resolved = resolveFeishuGroupConfig({
-      cfg,
-      groupId: "oc_upper",
-    });
-
-    expect(resolved).toEqual({ requireMention: true });
   });
 });
 

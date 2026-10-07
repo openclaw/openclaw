@@ -74,9 +74,7 @@ export async function executeMemoryReadResult(
     run: async (signal) => {
       const [memory, wiki] = await Promise.all([
         attemptMemoryCorpus({
-          corpus: "memory",
           signal,
-          unavailableValue: null,
           run: params.read,
         }),
         readWiki(params, signal),

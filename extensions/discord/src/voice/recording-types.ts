@@ -10,6 +10,7 @@ export type DiscordVoiceTranscriptCapture = {
 
 export type DiscordVoiceAudioReceipt = {
   capture: DiscordVoiceTranscriptCapture | undefined;
+  recordingEpoch: bigint;
   startedAt: number;
 };
 

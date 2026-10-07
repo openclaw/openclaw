@@ -16,19 +16,12 @@ function resolveDiscordProxyUrl(
   return normalizeOptionalString(cfg?.channels?.discord?.proxy);
 }
 
-function resolveDiscordProxyFetchByUrl(
-  proxyUrl: string | undefined,
-  runtime?: Pick<RuntimeEnv, "error">,
-): typeof fetch | undefined {
-  return withValidatedDiscordProxy(proxyUrl, runtime, (proxy) => makeProxyFetch(proxy));
-}
-
 export function resolveDiscordProxyFetchForAccount(
   account: Pick<ResolvedDiscordAccount, "config">,
   cfg: OpenClawConfig,
   runtime?: Pick<RuntimeEnv, "error">,
 ): typeof fetch | undefined {
-  return resolveDiscordProxyFetchByUrl(resolveDiscordProxyUrl(account, cfg), runtime);
+  return withValidatedDiscordProxy(resolveDiscordProxyUrl(account, cfg), runtime, makeProxyFetch);
 }
 
 export function withValidatedDiscordProxy<T>(

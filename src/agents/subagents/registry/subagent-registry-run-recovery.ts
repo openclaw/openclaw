@@ -1,9 +1,5 @@
-import {
-  resolveAgentIdFromSessionKey,
-  resolveSessionStorePathCore,
-} from "../../../config/sessions.js";
-import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -13,27 +9,33 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
-import { prepareCanonicalTaskActivation } from "../../../tasks/task-backing-authority-write.js";
-import { createSubagentTaskBackingDetail } from "../../../tasks/task-backing-authority.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
-import type { AgentRunSessionTarget } from "../../run-session-target.js";
+import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { replaceRequesterCronAuthorityEntry } from "../requester-cron-authority.js";
+import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import {
   clearDeliveryState,
-  ensureCompletionState,
   normalizeSubagentRunState,
+  resetRequesterSettleWakeRetry,
 } from "./subagent-delivery-state.js";
-import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import {
+  safeRemoveAttachmentsDir,
+  shouldRemoveSubagentAttachments,
+} from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { commitSubagentTaskReplacement } from "./subagent-registry-replacement-store.js";
+import {
+  mutateSubagentRuns,
+  SubagentRegistryMutationRejectedError,
+} from "./subagent-registry-persistence.js";
+import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
 import { SubagentWaitManager } from "./subagent-registry-run-wait.js";
-import type {
-  RequesterSettleWakeState,
-  SubagentRestartRecoveryReceipt,
-  SubagentRunRecord,
-} from "./subagent-registry.types.js";
+import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
+import { hasRequesterCompletionCohort } from "./subagent-requester-settle-identity.js";
 import {
   compareSubagentRunGeneration,
+  getSubagentRunRuntimeKey,
+  isSameSubagentRunOwner,
   nextSubagentRunGeneration,
 } from "./subagent-run-generation.js";
 import {
@@ -43,19 +45,174 @@ import {
 
 const log = createSubsystemLogger("agents/subagent-registry");
 
-export class SubagentRecoveryManager extends SubagentWaitManager {
-  private readonly unpersistedAcceptances = new WeakMap<
-    SubagentRunRecord,
-    SubagentRestartRecoveryReceipt
-  >();
+function continuesPausedSubagentRun(row: SubagentRunRecord): boolean {
+  return (
+    row.expectsCompletionMessage !== true &&
+    row.execution.status === "running" &&
+    !row.collect &&
+    !row.killIntent &&
+    !row.killReconciliation &&
+    row.suppressCompletionDelivery !== true &&
+    !row.requesterSettleWake &&
+    !row.requesterTurnRunId &&
+    row.pauseReason === undefined
+  );
+}
 
-  readonly replaceSubagentRunAfterSteer = (replaceParams: {
+export class SubagentRecoveryManager extends SubagentWaitManager {
+  protected planSupersededKillReconciliations(
+    rows: ReadonlyMap<string, SubagentRunRecord>,
+    next: SubagentRunRecord,
+  ): Map<string, SubagentRunRecord | null> {
+    const postimages = new Map<string, SubagentRunRecord | null>();
+    for (const current of rows.values()) {
+      if (
+        !matchesSubagentChildSessionOwner(current, next.childSessionKey, next.childAgentId) ||
+        current.runId === next.runId ||
+        compareSubagentRunGeneration(current, next) >= 0 ||
+        !current.killReconciliation
+      ) {
+        continue;
+      }
+      postimages.set(current.runId, {
+        ...current,
+        killReconciliation: {
+          ...current.killReconciliation,
+          supersededAt: Math.min(
+            current.killReconciliation.supersededAt ?? next.createdAt,
+            next.createdAt,
+          ),
+        },
+      });
+    }
+    return postimages;
+  }
+
+  /**
+   * Continues a `sessions_yield`-paused run under a new gateway runId.
+   *
+   * A follow-up dispatched to a paused child session is the same unit of work as
+   * the run that yielded, so it must adopt that row instead of minting a sibling.
+   * Registering a new row would move the requester to the child's own main session
+   * and strand the original requester's paused row as merely superseded: its
+   * announce stays gated on `pauseReason`, and its settle batch keeps deferring
+   * because the row still counts as an unsettled descendant. Returns false when no
+   * paused row owns the session, leaving ordinary registration to the caller.
+   */
+  readonly adoptPausedSubagentRunForFollowUp = async (params: {
+    childSessionKey: string;
+    childAgentId?: string;
+    runId: string;
+    task: string;
+    /** Exact paused owner captured by explicit task-resume admission. */
+    expected?: SubagentRunRecord;
+    gatewayContextResolver?: GatewayContextResolver;
+    assertCurrent?: () => void;
+    onPublished?: (entry: SubagentRunRecord) => void;
+  }): Promise<boolean> => {
+    const childSessionKey = params.childSessionKey.trim();
+    const runId = params.runId.trim();
+    if (!childSessionKey || !runId) {
+      return false;
+    }
+    const childAgentId = params.childAgentId ?? params.expected?.childAgentId;
+    // Select the newest paused row rather than the newest row overall: a
+    // requester-bound follow-up stays a sibling at a higher generation, and
+    // matching on generation alone would let that sibling hide the paused owner
+    // and park its requester for good.
+    const paused = getLatestSubagentRunByChildSessionKeyFromRuns(
+      this.options.getRunsForChildSession(childSessionKey, childAgentId),
+      childSessionKey,
+      (entry) => entry.pauseReason === "sessions_yield",
+      childAgentId,
+    );
+    if (!paused || (params.expected && !isSameSubagentRunOwner(paused, params.expected))) {
+      return false;
+    }
+    return this.replaceSubagentRunAfterSteer({
+      assertCurrent: params.assertCurrent,
+      onPublished: params.onPublished,
+      previousRunId: paused.runId,
+      nextRunId: runId,
+      expected: paused,
+      // A paused row is terminal by construction; adoption is exactly the case the
+      // ended-source gate exists to keep out of unrelated replacement callers.
+      allowEndedSource: true,
+      // The original requester is idle behind its own yield, so its wake credential
+      // is the only path back to it once this follow-up settles.
+      preserveRequesterSettleWake: true,
+      // Persist the follow-up text so restart recovery cannot reissue the task that
+      // the child already yielded on.
+      task: params.task,
+      ...(params.gatewayContextResolver
+        ? { gatewayContextResolver: params.gatewayContextResolver }
+        : {}),
+    });
+  };
+
+  /**
+   * A follow-up admitted while the yielding turn still runs registers a sibling.
+   * Whichever commit lands second hands the pause's requester, completion custody,
+   * and settle-wake to that follow-up. Requester-bound follow-ups keep their own delivery.
+   */
+  readonly adoptPausedSubagentRunIntoSuccessor = async (params: {
+    childSessionKey: string;
+    childAgentId?: string;
+    assertCurrent?: () => void;
+  }): Promise<boolean> => {
+    const { childSessionKey, childAgentId } = params;
+    const runs = [...this.options.getRunsForChildSession(childSessionKey, childAgentId)];
+    const paused = getLatestSubagentRunByChildSessionKeyFromRuns(
+      runs,
+      childSessionKey,
+      (entry) => entry.pauseReason === "sessions_yield",
+      childAgentId,
+    );
+    if (!paused) {
+      return false;
+    }
+    const successor = runs
+      .filter(
+        (row) =>
+          matchesSubagentChildSessionOwner(row, paused.childSessionKey, paused.childAgentId) &&
+          compareSubagentRunGeneration(row, paused) > 0 &&
+          continuesPausedSubagentRun(row),
+      )
+      .toSorted(compareSubagentRunGeneration)[0];
+    if (!successor) {
+      return false;
+    }
+    try {
+      return await this.replaceSubagentRunAfterSteer({
+        previousRunId: paused.runId,
+        nextRunId: successor.runId,
+        expected: paused,
+        successor,
+        allowEndedSource: true,
+        preserveRequesterSettleWake: true,
+        task: successor.task,
+        gatewayContextResolver: getGatewayContextResolver(successor),
+        assertCurrent: params.assertCurrent,
+      });
+    } catch (error) {
+      log.warn("failed to adopt paused subagent run into its admitted follow-up", {
+        error,
+        pausedRunId: paused.runId,
+        successorRunId: successor.runId,
+      });
+      return false;
+    }
+  };
+
+  readonly replaceSubagentRunAfterSteer = async (replaceParams: {
     previousRunId: string;
     nextRunId: string;
-    fallback?: SubagentRunRecord;
     expected?: SubagentRunRecord;
+    successor?: SubagentRunRecord;
     runTimeoutSeconds?: number;
     allowEndedSource?: boolean;
+    /** Ordinary next turns retain the completed execution's independent delivery. */
+    preserveCompletedRun?: boolean;
     preserveFrozenResultFallback?: boolean;
     // A follow-up that continues a paused run inherits the original requester's
     // wake credential. An operator steer intentionally drops it: the operator is
@@ -65,621 +222,329 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     preserveRequesterSettleWake?: boolean;
     transcriptTarget?: AgentRunSessionTarget;
     task?: string;
-    restartRecovery?: SubagentRestartRecoveryReceipt;
     lifecycleGeneration?: string;
-    persistenceFailure?: "return-false" | "throw";
     gatewayContextResolver?: GatewayContextResolver;
-  }): boolean => {
+    assertCurrent?: () => void;
+    onPublished?: (entry: SubagentRunRecord) => void;
+  }): Promise<boolean> => {
     const previousRunId = replaceParams.previousRunId.trim();
     const nextRunId = replaceParams.nextRunId.trim();
     if (!previousRunId || !nextRunId) {
       return false;
     }
-    if (
-      replaceParams.lifecycleGeneration !== undefined &&
-      !isAgentEventLifecycleGenerationCurrent(replaceParams.lifecycleGeneration)
-    ) {
+    const lifecycleGeneration =
+      replaceParams.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
+    if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
       return false;
     }
-
-    const previous = this.options.runs.get(previousRunId);
-    if (replaceParams.expected && previous !== replaceParams.expected) {
-      return false;
-    }
-    if (
-      replaceParams.expected &&
-      previous &&
-      ((typeof previous.execution.endedAt === "number" &&
-        replaceParams.allowEndedSource !== true) ||
-        previous.killReconciliation !== undefined ||
-        previous.killIntent !== undefined)
-    ) {
-      return false;
-    }
-    const source = previous ?? replaceParams.fallback;
-    if (!source) {
-      return false;
-    }
-    const sourceSnapshot = structuredClone(source);
-
-    const now = Date.now();
-    const generation = nextSubagentRunGeneration(
-      [...this.options.getRunsForChildSession(source.childSessionKey), source],
-      source.childSessionKey,
-    );
-    const cfg = this.options.getRuntimeConfig();
-    const acceptedReceipt = this.unpersistedAcceptances.get(source);
-    const acceptanceSessionTarget =
-      acceptedReceipt && this.currentRunOwnsSession(source)
-        ? {
-            storePath: resolveSessionStorePathCore(cfg.session?.store, {
-              agentId: resolveAgentIdFromSessionKey(source.childSessionKey),
-            }),
-            sessionKey: source.childSessionKey,
-            clone: false,
-          }
-        : undefined;
-    const spawnMode = source.spawnMode === "session" ? "session" : "run";
-    const runTimeoutSeconds = replaceParams.runTimeoutSeconds ?? source.runTimeoutSeconds ?? 0;
-    const waitTimeoutMs = this.options.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
-    const preserveFrozenResultFallback = replaceParams.preserveFrozenResultFallback === true;
-    const sessionStartedAt = getSubagentSessionStartedAt(source) ?? now;
-    const accumulatedRuntimeMs =
-      getSubagentSessionRuntimeMs(
-        source,
-        typeof source.execution.endedAt === "number" ? source.execution.endedAt : now,
-      ) ?? 0;
-
-    const sourceCompletion = ensureCompletionState(source);
-    // Prefer the caller-supplied task (the text actually dispatched to the
-    // child session during steer/wake/orphan-resume) over the previous run's
-    // stale `task`. Falling back to the prior task preserves behavior for any
-    // caller that does not pass a replacement message. The orphan-session
-    // registry restart recovery flow rewraps the persisted `task` into the
-    // `[Subagent Task]` block after a gateway restart; using stale text would
-    // silently re-run the original instruction and lose the user's steer
-    // update.
-    const nextTask =
-      typeof replaceParams.task === "string" && replaceParams.task.length > 0
-        ? replaceParams.task
-        : source.task;
-    // The frozen batch is addressed by runId. Adoption retires the previous id,
-    // so an unmapped membership list would drop this row from its own batch and
-    // let the wave complete without ever waking the requester.
-    const sourceRequesterSettleWake = replaceParams.preserveRequesterSettleWake
-      ? source.requesterSettleWake
-      : undefined;
-    const remapRequesterSettleWake = (
-      wake: RequesterSettleWakeState,
-    ): RequesterSettleWakeState => ({
-      ...wake,
-      ...(wake.batchRunIds
-        ? {
-            batchRunIds: wake.batchRunIds
-              .map((runId) => (runId === previousRunId ? nextRunId : runId))
-              .toSorted(),
-          }
-        : {}),
-    });
-    const next: SubagentRunRecord = normalizeSubagentRunState({
-      ...source,
-      runId: nextRunId,
-      // Materialize the legacy run-id fallback so later replacements keep the
-      // same canonical task owner after this source row is retired.
-      taskRunId: source.taskRunId ?? source.runId,
-      task: nextTask,
-      generation,
-      createdAt: now,
-      sessionStartedAt,
-      accumulatedRuntimeMs,
-      endedReason: undefined,
-      pauseReason: undefined,
-      endedHookEmittedAt: undefined,
-      browserCleanupDispatchedAt: undefined,
-      deleteCleanupDispatchedAt: undefined,
-      wakeOnDescendantSettle: undefined,
-      requesterSettleWake: sourceRequesterSettleWake
-        ? remapRequesterSettleWake(sourceRequesterSettleWake)
-        : undefined,
-      execution: {
-        status: "running",
-        startedAt: now,
-        lifecycleGeneration:
-          replaceParams.lifecycleGeneration ??
-          replaceParams.restartRecovery?.lifecycleGeneration ??
-          getAgentEventLifecycleGeneration(),
-        transcriptTarget: replaceParams.transcriptTarget,
-        restartRecovery: replaceParams.restartRecovery,
-      },
-      swarmLaunchPending: false,
-      completion: {
-        required: source.expectsCompletionMessage === true,
-        fallbackResultText: preserveFrozenResultFallback ? sourceCompletion.resultText : undefined,
-        fallbackCapturedAt: preserveFrozenResultFallback ? sourceCompletion.capturedAt : undefined,
-      },
-      cleanupCompletedAt: undefined,
-      cleanupHandled: false,
-      suppressAnnounceReason: undefined,
-      terminalOwner: undefined,
-      killReconciliation: undefined,
-      killIntent: undefined,
-      suppressCompletionDelivery: undefined,
-      delivery: {
-        status: source.expectsCompletionMessage === false ? "not_required" : "pending",
-      },
-      spawnMode,
-      archiveAtMs: undefined,
-      runTimeoutSeconds,
-    });
-    bindGatewayContextResolver(
-      next,
-      replaceParams.gatewayContextResolver ?? getGatewayContextResolver(source),
-    );
-    clearDeliveryState(next);
-
-    const taskActivation =
-      source.expectsCompletionMessage === false
-        ? undefined
-        : prepareCanonicalTaskActivation({
-            runtime: "subagent",
-            childSessionKey: next.childSessionKey,
-            runId: source.taskRunId ?? source.runId,
-            detail: createSubagentTaskBackingDetail(generation),
-            startedAt: now,
-            // An admitted kill owns the provisional task projection until its
-            // reconciliation settles. An unclaimed marker yields to the admitted
-            // successor and must not leave its task cancelled.
-            preserveProvisionalCancellation:
-              source.killReconciliation?.taskCancellationAccepted === true,
-          });
-
-    if (previousRunId !== nextRunId) {
-      this.options.runs.delete(previousRunId);
-    }
-    this.options.runs.set(nextRunId, next);
-    const killReconciliationSnapshots = this.markOlderKillReconciliationsSuperseded(next);
-    const wakeSnapshots = new Map<SubagentRunRecord, RequesterSettleWakeState>();
-    // Every member carries the frozen cohort. Remap them atomically with the
-    // successor so a settled sibling cannot drop a still-running replacement.
-    for (const memberRunId of sourceRequesterSettleWake?.batchRunIds ?? []) {
-      const member = this.options.runs.get(memberRunId);
-      const wake = member?.requesterSettleWake;
-      if (
-        !member ||
-        member === next ||
-        member.requesterSessionKey !== source.requesterSessionKey ||
-        member.requesterAgentId !== source.requesterAgentId ||
-        !wake?.batchRunIds?.includes(previousRunId) ||
-        wake.rearmGeneration !== sourceRequesterSettleWake?.rearmGeneration
-      ) {
-        continue;
+    const assertCurrent = () => {
+      replaceParams.assertCurrent?.();
+      if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
+        throw new SubagentRegistryMutationRejectedError(
+          "Subagent replacement lifecycle changed before commit",
+        );
       }
-      wakeSnapshots.set(member, wake);
-      member.requesterSettleWake = remapRequesterSettleWake(wake);
+    };
+    const selected = this.options.runs.get(previousRunId);
+    if (!selected) {
+      return false;
     }
-    const changedRunIds = [
+    const preserveCompletedRun = replaceParams.preserveCompletedRun === true;
+    const authority = preserveCompletedRun
+      ? await captureOperatorToolGatewayContinuationContext()
+      : undefined;
+    let custodyTransferred = false;
+    const runIds = new Set([
       previousRunId,
       nextRunId,
-      ...[...killReconciliationSnapshots.keys()].map((entry) => entry.runId),
-      ...[...wakeSnapshots.keys()].map((entry) => entry.runId),
-    ];
-    const canReconcileAcceptedReceipt = () => {
-      // Staging replaces the map entry before commit. Only this exact
-      // live acceptance may bridge its failed write, never a restored copy.
-      if (
-        !acceptedReceipt ||
-        !acceptanceSessionTarget ||
-        this.unpersistedAcceptances.get(source) !== acceptedReceipt ||
-        source.execution.restartRecovery !== acceptedReceipt ||
-        replaceParams.restartRecovery !== acceptedReceipt ||
-        acceptedReceipt.idempotencyKey !== nextRunId ||
-        !acceptedReceipt.lifecycleGeneration ||
-        !isAgentEventLifecycleGenerationCurrent(acceptedReceipt.lifecycleGeneration) ||
-        this.options.runs.get(nextRunId) !== next ||
-        source.generation !== sourceSnapshot.generation ||
-        source.createdAt !== sourceSnapshot.createdAt ||
-        typeof source.execution.endedAt === "number" ||
-        source.killIntent ||
-        source.killReconciliation ||
-        source.pauseReason === "sessions_yield" ||
-        source.suppressAnnounceReason === "steer-restart" ||
-        Array.from(this.options.getRunsForChildSession(source.childSessionKey)).some(
-          (candidate) =>
-            candidate !== next && compareSubagentRunGeneration(candidate, sourceSnapshot) > 0,
-        )
-      ) {
-        return false;
-      }
-      const session = loadSessionEntryReadOnly(acceptanceSessionTarget);
-      return (
-        session?.sessionId === acceptedReceipt.sessionId &&
-        (acceptedReceipt.sessionLifecycleRevision === undefined ||
-          session.lifecycleRevision === acceptedReceipt.sessionLifecycleRevision)
-      );
-    };
+      ...Array.from(
+        this.options.getRunsForChildSession(selected.childSessionKey, selected.childAgentId),
+        (row) => row.runId,
+      ),
+      ...(selected.requesterSettleWake?.batchRunIds ?? []),
+    ]);
+    let replacement: { source: SubagentRunRecord; next: SubagentRunRecord } | undefined;
+    let publishedNext: SubagentRunRecord | undefined;
     try {
-      if (taskActivation) {
-        commitSubagentTaskReplacement({
+      replacement = await mutateSubagentRuns(
+        [...runIds],
+        (rows) => {
+          const source = rows.get(previousRunId);
+          if (
+            !source ||
+            !isSameSubagentRunOwner(source, selected) ||
+            (preserveCompletedRun &&
+              (source.execution.status !== "terminal" ||
+                source.pauseReason === "sessions_yield" ||
+                previousRunId === nextRunId)) ||
+            (replaceParams.expected && !isSameSubagentRunOwner(source, replaceParams.expected)) ||
+            (replaceParams.expected &&
+              ((typeof source.execution.endedAt === "number" && !replaceParams.allowEndedSource) ||
+                source.killReconciliation ||
+                source.killIntent)) ||
+            !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)
+          ) {
+            return { value: undefined };
+          }
+          const absorbed = replaceParams.successor ? rows.get(nextRunId) : undefined;
+          if (replaceParams.successor) {
+            if (
+              source.pauseReason !== "sessions_yield" ||
+              !absorbed ||
+              !isSameSubagentRunOwner(absorbed, replaceParams.successor) ||
+              compareSubagentRunGeneration(absorbed, source) <= 0 ||
+              !continuesPausedSubagentRun(absorbed)
+            ) {
+              return { value: undefined };
+            }
+          } else if (previousRunId !== nextRunId && rows.get(nextRunId)) {
+            throw new SubagentRegistryMutationRejectedError(
+              "Replacement subagent id already exists",
+            );
+          }
+          const siblings = [
+            ...this.options.getRunsForChildSession(source.childSessionKey, source.childAgentId),
+          ];
+          if (
+            siblings.some((row) => !runIds.has(row.runId)) ||
+            (source.requesterSettleWake?.batchRunIds ?? []).some((id) => !runIds.has(id))
+          ) {
+            throw new SubagentRegistryMutationRejectedError("Replacement subagent cohort changed");
+          }
+          const now = Date.now();
+          const generation = nextSubagentRunGeneration(
+            [...siblings, source],
+            source.childSessionKey,
+            source.childAgentId,
+          );
+          const spawnMode = source.spawnMode === "session" ? "session" : "run";
+          const runTimeoutSeconds =
+            replaceParams.runTimeoutSeconds ?? source.runTimeoutSeconds ?? 0;
+          const preserveFrozenResultFallback = replaceParams.preserveFrozenResultFallback === true;
+          const sessionStartedAt = getSubagentSessionStartedAt(source) ?? now;
+          const accumulatedRuntimeMs =
+            getSubagentSessionRuntimeMs(
+              source,
+              typeof source.execution.endedAt === "number" ? source.execution.endedAt : now,
+            ) ?? 0;
+
+          // Follow-up work keeps the latest direction in the task's durable record.
+          const nextTask =
+            typeof replaceParams.task === "string" && replaceParams.task.length > 0
+              ? replaceParams.task
+              : source.task;
+          // The frozen batch is addressed by runId. Adoption retires the previous id,
+          // so an unmapped membership list would drop this row from its own batch and
+          // let the wave complete without ever waking the requester.
+          // A child-only pause notice ends with adoption; it never owns the result.
+          const sourceRequesterSettleWake =
+            replaceParams.preserveRequesterSettleWake && hasRequesterCompletionCohort(source)
+              ? source.requesterSettleWake
+              : undefined;
+          const remapRequesterSettleWake = (
+            wake: RequesterSettleWakeState,
+          ): RequesterSettleWakeState => ({
+            ...(wake === sourceRequesterSettleWake && wake.pauseNotice
+              ? { ...resetRequesterSettleWakeRetry(wake), pauseNotice: undefined }
+              : wake),
+            ...(wake.batchRunIds
+              ? {
+                  batchRunIds: wake.batchRunIds
+                    .map((runId) => (runId === previousRunId ? nextRunId : runId))
+                    .toSorted(),
+                }
+              : {}),
+          });
+          const next: SubagentRunRecord = normalizeSubagentRunState({
+            ...source,
+            runId: nextRunId,
+            // Completed follow-ups start a new task; steer retains its task's lineage.
+            taskRunId: preserveCompletedRun ? nextRunId : (source.taskRunId ?? source.runId),
+            requesterTurnRunId: preserveCompletedRun ? undefined : source.requesterTurnRunId,
+            requesterTurnYielded: preserveCompletedRun ? undefined : source.requesterTurnYielded,
+            retireAfterRequesterTurn: preserveCompletedRun
+              ? undefined
+              : source.retireAfterRequesterTurn,
+            task: nextTask,
+            generation,
+            createdAt: now,
+            ...(absorbed
+              ? {
+                  childSessionIdentity:
+                    absorbed.childSessionIdentity ?? source.childSessionIdentity,
+                }
+              : {}),
+            sessionStartedAt,
+            accumulatedRuntimeMs,
+            endedReason: undefined,
+            pauseReason: undefined,
+            endedHookEmittedAt: undefined,
+            browserCleanupDispatchedAt: undefined,
+            deleteCleanupDispatchedAt: undefined,
+            wakeOnDescendantSettle: undefined,
+            requesterSettleWake: sourceRequesterSettleWake
+              ? remapRequesterSettleWake(sourceRequesterSettleWake)
+              : undefined,
+            execution: absorbed?.execution ?? {
+              status: "running",
+              startedAt: now,
+              lifecycleGeneration,
+              transcriptTarget: replaceParams.transcriptTarget,
+            },
+            swarmLaunchPending: false,
+            completion: {
+              required: source.expectsCompletionMessage === true,
+              fallbackResultText: preserveFrozenResultFallback
+                ? source.completion?.resultText
+                : undefined,
+              fallbackCapturedAt: preserveFrozenResultFallback
+                ? source.completion?.capturedAt
+                : undefined,
+            },
+            cleanupCompletedAt: undefined,
+            cleanupHandled: false,
+            suppressAnnounceReason: undefined,
+            terminalOwner: undefined,
+            killReconciliation: undefined,
+            killIntent: undefined,
+            suppressCompletionDelivery: undefined,
+            spawnMode,
+            archiveAtMs: undefined,
+            runTimeoutSeconds,
+          });
+          clearDeliveryState(next);
+          const postimages = this.planSupersededKillReconciliations(rows, next);
+          for (const memberRunId of sourceRequesterSettleWake?.batchRunIds ?? []) {
+            const member = rows.get(memberRunId);
+            const wake = member?.requesterSettleWake;
+            if (
+              !member ||
+              memberRunId === previousRunId ||
+              memberRunId === nextRunId ||
+              member.requesterSessionKey !== source.requesterSessionKey ||
+              member.requesterAgentId !== source.requesterAgentId ||
+              !wake?.batchRunIds?.includes(previousRunId) ||
+              wake.rearmGeneration !== sourceRequesterSettleWake?.rearmGeneration
+            ) {
+              continue;
+            }
+            postimages.set(memberRunId, {
+              ...(postimages.get(memberRunId) ?? member),
+              requesterSettleWake: remapRequesterSettleWake(wake),
+            });
+          }
+          postimages.set(nextRunId, next);
+          if (preserveCompletedRun) {
+            postimages.set(previousRunId, {
+              ...source,
+              execution: { ...source.execution, suppressSessionEffects: true },
+            });
+          } else if (previousRunId !== nextRunId) {
+            postimages.set(previousRunId, null);
+          }
+          return { value: { source, next }, postimages };
+        },
+        {
           runs: this.options.runs,
-          changedRunIds,
-          source: sourceSnapshot,
-          successor: next,
-          task: taskActivation,
-          canReconcileAcceptedReceipt,
-        });
-      } else {
-        this.options.persistOrThrow(...changedRunIds);
-      }
+          assertCurrent: () => {
+            assertCurrent();
+            authority?.assertCurrent();
+          },
+          onPublished: (postimages, value) => {
+            const next = postimages.get(nextRunId);
+            if (!value || !next) {
+              return;
+            }
+            publishedNext = next;
+            bindGatewayContextResolver(
+              next,
+              replaceParams.gatewayContextResolver ?? getGatewayContextResolver(value.source),
+            );
+            if (preserveCompletedRun) {
+              if (authority?.operatorAuthority) {
+                subagentRuns.bindCompletionAuthority(next, authority);
+                custodyTransferred = true;
+              }
+            } else {
+              subagentRuns.transferCompletionAuthority(value.source, next);
+            }
+            subagentRuns.commitOwnership(next);
+            if (replaceParams.successor) {
+              subagentRuns.releaseCompletionAuthority(replaceParams.successor);
+            }
+            replaceParams.onPublished?.(next);
+          },
+        },
+      );
     } catch (error) {
-      this.restoreKillReconciliationSnapshots(killReconciliationSnapshots);
-      for (const [member, wake] of wakeSnapshots) {
-        member.requesterSettleWake = wake;
-      }
-      this.options.runs.delete(nextRunId);
-      this.options.runs.set(previousRunId, source);
-      log.warn("failed to persist replacement subagent recovery run; restored source lease", {
+      log.warn("failed to persist replacement subagent recovery run", {
         error,
         previousRunId,
         nextRunId,
       });
-      if (
-        replaceParams.persistenceFailure === "return-false" ||
-        replaceParams.lifecycleGeneration !== undefined
-      ) {
+      if (replaceParams.lifecycleGeneration !== undefined) {
         return false;
       }
       throw error;
+    } finally {
+      if (!custodyTransferred) {
+        authority?.release();
+      }
     }
-    this.unpersistedAcceptances.delete(source);
-    // Atomic publication can synchronously trigger another replacement. Do not
-    // start stale cleanup or completion work after that newer owner takes over.
-    if (this.options.runs.get(nextRunId) !== next) {
+    if (!replacement) {
+      return false;
+    }
+    const source = replacement.source;
+    const next = publishedNext ?? replacement.next;
+    if (!isSameSubagentRunOwner(this.options.runs.get(nextRunId), next)) {
       return true;
     }
-    replaceRequesterCronAuthorityEntry({
-      previous: source,
-      next,
-      preserve: replaceParams.preserveRequesterSettleWake === true,
-    });
-    if (!taskActivation) {
-      subagentRuns.commitOwnership(next);
+    if (!preserveCompletedRun) {
+      replaceRequesterCronAuthorityEntry({
+        previous: source,
+        next,
+        preserve: replaceParams.preserveRequesterSettleWake === true,
+      });
     }
-    if (previousRunId !== nextRunId) {
+    if (preserveCompletedRun && !source.cleanupHandled) {
+      this.options.resumedRuns.delete(getSubagentRunRuntimeKey(source));
+      this.options.resumeSubagentRun(previousRunId);
+    } else if (!preserveCompletedRun && previousRunId !== nextRunId) {
       this.options.clearPendingLifecycleError(previousRunId);
-      this.options.resumedRuns.delete(previousRunId);
-      if (this.shouldDeleteAttachments(source)) {
+      this.options.resumedRuns.delete(getSubagentRunRuntimeKey(source));
+      if (shouldRemoveSubagentAttachments(source)) {
         void safeRemoveAttachmentsDir(source);
       }
       if (
         source.execution.transcriptTarget &&
-        source.execution.transcriptTarget !== replaceParams.transcriptTarget
+        source.execution.transcriptTarget !== next.execution.transcriptTarget
       ) {
-        void removeInternalSessionEffectsSession(source.execution.transcriptTarget);
+        const retiredTarget = source.execution.transcriptTarget;
+        // The committed replacement owns cleanup beyond its caller's lifetime,
+        // including when restart closes admission before this tail settles.
+        void runWithGatewayDetachedWorkContinuation(
+          () => removeInternalSessionEffectsSession(retiredTarget),
+          "subagents:replacement-cleanup",
+        ).catch((error: unknown) => {
+          log.warn("failed to remove replaced subagent internal session effects", {
+            previousRunId,
+            nextRunId,
+            error,
+          });
+        });
       }
     }
     this.options.ensureListener();
     // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
     this.options.startSweeper();
-    if (!next.execution.restartRecovery) {
-      void this.waitForSubagentCompletion(nextRunId, waitTimeoutMs, next);
-    }
-    return true;
-  };
-
-  readonly reserveSubagentRestartRecoveryLaunch = (reserveParams: {
-    runId: string;
-    expected: SubagentRunRecord;
-    sessionId: string;
-    sessionMarker: string;
-    sessionLifecycleRevision?: string;
-    idempotencyKey: string;
-  }): string | undefined => {
-    const runId = reserveParams.runId.trim();
-    const sessionId = reserveParams.sessionId.trim();
-    const sessionMarker = reserveParams.sessionMarker.trim();
-    const idempotencyKey = reserveParams.idempotencyKey.trim();
-    const entry = this.options.runs.get(runId);
-    if (
-      !runId ||
-      !sessionId ||
-      !sessionMarker ||
-      !idempotencyKey ||
-      entry !== reserveParams.expected ||
-      typeof entry.execution.endedAt === "number" ||
-      entry.killReconciliation !== undefined ||
-      entry.killIntent !== undefined ||
-      entry.suppressAnnounceReason === "steer-restart"
-    ) {
-      return undefined;
-    }
-    const existing = entry.execution.restartRecovery;
-    if (existing?.sessionMarker === sessionMarker && existing.idempotencyKey.trim().length > 0) {
-      return existing.idempotencyKey;
-    }
-    const previousLease = existing;
-    const previousCollectorLaunch = {
-      idempotencyKey: entry.swarmLaunchIdempotencyKey,
-      pending: entry.swarmLaunchPending,
-    };
-    entry.execution.restartRecovery = {
-      sessionId,
-      sessionMarker,
-      sessionLifecycleRevision: reserveParams.sessionLifecycleRevision,
-      idempotencyKey,
-      phase: "reserved",
-    };
-    if (entry.collect === true) {
-      entry.swarmLaunchIdempotencyKey = idempotencyKey;
-      entry.swarmLaunchPending = true;
-    }
-    try {
-      // The exact source row owns this dispatch identity before Gateway can
-      // accept it. A lost response can then replay the same logical run.
-      this.options.persistOrThrow(runId);
-    } catch (error) {
-      entry.execution.restartRecovery = previousLease;
-      entry.swarmLaunchIdempotencyKey = previousCollectorLaunch.idempotencyKey;
-      entry.swarmLaunchPending = previousCollectorLaunch.pending;
-      throw error;
-    }
-    return idempotencyKey;
-  };
-
-  readonly markSubagentRestartRecoveryLaunchAttempted = (markParams: {
-    runId: string;
-    expected: SubagentRunRecord;
-    sessionMarker: string;
-    idempotencyKey: string;
-    lifecycleGeneration: string;
-  }): SubagentRestartRecoveryReceipt | undefined => {
-    const runId = markParams.runId.trim();
-    const entry = this.options.runs.get(runId);
-    const receipt = entry?.execution.restartRecovery;
-    if (
-      !runId ||
-      entry !== markParams.expected ||
-      receipt?.sessionMarker !== markParams.sessionMarker ||
-      receipt.idempotencyKey !== markParams.idempotencyKey ||
-      !isAgentEventLifecycleGenerationCurrent(markParams.lifecycleGeneration) ||
-      typeof entry.execution.endedAt === "number" ||
-      entry.killReconciliation !== undefined ||
-      entry.killIntent !== undefined ||
-      entry.suppressAnnounceReason === "steer-restart"
-    ) {
-      return undefined;
-    }
-    if (receipt.phase !== "reserved") {
-      return receipt;
-    }
-    const attempted = {
-      ...receipt,
-      phase: "attempted" as const,
-      lifecycleGeneration: markParams.lifecycleGeneration,
-    };
-    entry.execution.restartRecovery = attempted;
-    try {
-      // This is the at-most-once boundary. After it commits, recovery adopts
-      // this run identity instead of replaying provider-visible side effects.
-      this.options.persistOrThrow(runId);
-    } catch (error) {
-      entry.execution.restartRecovery = receipt;
-      throw error;
-    }
-    return attempted;
-  };
-
-  readonly abandonSubagentRestartRecoveryLaunch = (abandonParams: {
-    runId: string;
-    expected: SubagentRunRecord;
-    sessionMarker: string;
-    idempotencyKey: string;
-  }): boolean => {
-    const runId = abandonParams.runId.trim();
-    const entry = this.options.runs.get(runId);
-    const receipt = entry?.execution.restartRecovery;
-    if (
-      !runId ||
-      entry !== abandonParams.expected ||
-      receipt?.sessionMarker !== abandonParams.sessionMarker ||
-      receipt.idempotencyKey !== abandonParams.idempotencyKey ||
-      (receipt.phase !== "attempted" && receipt.phase !== "consumed")
-    ) {
-      return receipt?.phase === "abandoned";
-    }
-    const abandoned = { ...receipt, phase: "abandoned" as const };
-    entry.execution.restartRecovery = abandoned;
-    try {
-      this.options.persistOrThrow(runId);
-    } catch (error) {
-      entry.execution.restartRecovery = receipt;
-      throw error;
-    }
-    return true;
-  };
-
-  readonly markSubagentRestartRecoveryLaunchConsumed = (markParams: {
-    runId: string;
-    expected: SubagentRunRecord;
-    sessionMarker: string;
-    idempotencyKey: string;
-  }): SubagentRestartRecoveryReceipt | undefined => {
-    const runId = markParams.runId.trim();
-    const entry = this.options.runs.get(runId);
-    const receipt = entry?.execution.restartRecovery;
-    if (
-      !runId ||
-      entry !== markParams.expected ||
-      receipt?.sessionMarker !== markParams.sessionMarker ||
-      receipt.idempotencyKey !== markParams.idempotencyKey ||
-      typeof entry.execution.endedAt === "number" ||
-      entry.killReconciliation !== undefined ||
-      entry.killIntent !== undefined ||
-      entry.suppressAnnounceReason === "steer-restart"
-    ) {
-      return undefined;
-    }
-    if (receipt.phase !== "attempted") {
-      return receipt;
-    }
-    const consumed = { ...receipt, phase: "consumed" as const };
-    entry.execution.restartRecovery = consumed;
-    // Handoff consumption is irreversible in this process. A failed write must
-    // leave the in-memory fact available for the definitive Gateway response.
-    this.options.persistOrThrow(runId);
-    return consumed;
-  };
-
-  readonly markSubagentRestartRecoveryLaunchAccepted = (markParams: {
-    runId: string;
-    expected: SubagentRunRecord;
-    sessionMarker: string;
-    idempotencyKey: string;
-  }): SubagentRestartRecoveryReceipt | undefined => {
-    const runId = markParams.runId.trim();
-    const entry = this.options.runs.get(runId);
-    const receipt = entry?.execution.restartRecovery;
-    if (
-      !runId ||
-      entry !== markParams.expected ||
-      receipt?.sessionMarker !== markParams.sessionMarker ||
-      receipt.idempotencyKey !== markParams.idempotencyKey ||
-      typeof entry.execution.endedAt === "number" ||
-      entry.killReconciliation !== undefined ||
-      entry.killIntent !== undefined ||
-      entry.suppressAnnounceReason === "steer-restart"
-    ) {
-      return undefined;
-    }
-    if (receipt.phase !== "consumed") {
-      return receipt;
-    }
-    const accepted = Object.freeze({ ...receipt, phase: "accepted" as const });
-    entry.execution.restartRecovery = accepted;
-    try {
-      this.options.persistOrThrow(runId);
-    } catch (error) {
-      // Gateway acceptance is irreversible. Keep the in-memory fact and let the
-      // caller immediately attempt the strict successor remap.
-      this.unpersistedAcceptances.set(entry, accepted);
-      log.warn("failed to persist accepted subagent restart recovery receipt", {
-        error,
-        runId,
-      });
-    }
-    return accepted;
-  };
-
-  readonly clearAcceptedSubagentRestartRecovery = (clearParams: {
-    runId: string;
-    expected: SubagentRunRecord;
-    sessionId: string;
-    idempotencyKey: string;
-    pendingNoticeIdempotencyKey?: string;
-  }): boolean => {
-    const runId = clearParams.runId.trim();
-    const entry = this.options.runs.get(runId);
-    const receipt = entry?.execution.restartRecovery;
-    if (
-      !runId ||
-      entry !== clearParams.expected ||
-      receipt?.phase !== "accepted" ||
-      receipt.sessionId !== clearParams.sessionId ||
-      receipt.idempotencyKey !== clearParams.idempotencyKey
-    ) {
-      return false;
-    }
-    const previousNotice = entry.resumptionNotice;
-    entry.execution.restartRecovery = undefined;
-    if (clearParams.pendingNoticeIdempotencyKey) {
-      entry.resumptionNotice = {
-        idempotencyKey: clearParams.pendingNoticeIdempotencyKey,
-      };
-    }
-    try {
-      this.options.persistOrThrow(runId);
-    } catch (error) {
-      entry.execution.restartRecovery = receipt;
-      entry.resumptionNotice = previousNotice;
-      throw error;
-    }
-    return true;
-  };
-
-  readonly clearPendingSubagentRecoveryNotice = (noticeParams: {
-    runId: string;
-    expected: SubagentRunRecord;
-    idempotencyKey: string;
-  }): boolean => {
-    const runId = noticeParams.runId.trim();
-    const entry = this.options.runs.get(runId);
-    if (
-      !runId ||
-      entry !== noticeParams.expected ||
-      entry.resumptionNotice?.idempotencyKey !== noticeParams.idempotencyKey
-    ) {
-      return false;
-    }
-    const previous = entry.resumptionNotice;
-    entry.resumptionNotice = undefined;
-    try {
-      this.options.persistOrThrow(runId);
-    } catch (error) {
-      entry.resumptionNotice = previous;
-      throw error;
-    }
-    return true;
-  };
-
-  readonly resumeSettledSubagentRestartRecovery = (resumeParams: {
-    runId: string;
-    expected: SubagentRunRecord;
-  }): boolean => {
-    const runId = resumeParams.runId.trim();
-    const entry = this.options.runs.get(runId);
-    const receipt = entry?.execution.restartRecovery;
-    if (!runId || entry !== resumeParams.expected || receipt !== undefined) {
-      return false;
-    }
-    if (entry.killIntent || entry.killReconciliation) {
-      return true;
-    }
-    this.options.resumedRuns.delete(runId);
-    this.options.resumeSubagentRun(runId);
-    return true;
-  };
-
-  readonly resetSubagentRestartRecoveryLaunchAttempt = (resetParams: {
-    runId: string;
-    expected: SubagentRunRecord;
-    sessionMarker: string;
-    idempotencyKey: string;
-  }): boolean => {
-    const runId = resetParams.runId.trim();
-    const entry = this.options.runs.get(runId);
-    const receipt = entry?.execution.restartRecovery;
-    if (
-      !runId ||
-      entry !== resetParams.expected ||
-      receipt?.sessionMarker !== resetParams.sessionMarker ||
-      receipt.idempotencyKey !== resetParams.idempotencyKey ||
-      receipt.phase !== "attempted"
-    ) {
-      return receipt?.phase === "reserved";
-    }
-    const reserved = {
-      sessionId: receipt.sessionId,
-      sessionMarker: receipt.sessionMarker,
-      sessionLifecycleRevision: receipt.sessionLifecycleRevision,
-      idempotencyKey: receipt.idempotencyKey,
-      phase: "reserved" as const,
-    };
-    entry.execution.restartRecovery = reserved;
-    try {
-      this.options.persistOrThrow(runId);
-    } catch (error) {
-      entry.execution.restartRecovery = receipt;
-      throw error;
-    }
+    void this.waitForSubagentCompletion(
+      nextRunId,
+      this.options.resolveSubagentWaitTimeoutMs(
+        this.options.getRuntimeConfig(),
+        next.runTimeoutSeconds,
+      ),
+      next,
+    );
     return true;
   };
 }

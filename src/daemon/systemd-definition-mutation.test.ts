@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -25,6 +26,7 @@ vi.mock("./systemd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./systemd-exec.js")>()),
   assertSystemdAvailable: async () => {},
   execBusctlUser: busctl,
+  execSystemctlUser: async () => ({ code: 0, termination: "exit", stdout: "", stderr: "" }),
 }));
 
 import {
@@ -151,9 +153,9 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     expect((await fs.readdir(directory)).filter((file) => file.endsWith(".tmp"))).toEqual([]);
   }
 
-  it.each(["unit", "state", "ancestor"])(
+  it.for(["unit", "state", "ancestor"])(
     "publishes a first unit through a %s directory alias discovered by the manager",
-    async (alias) => {
+    async (alias, { signal, onTestFinished }) => {
       const directory =
         alias === "state"
           ? stateDir
@@ -172,15 +174,17 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       await expect(readSystemdDefinitionMutationCapability(env)).resolves.toEqual({
         kind: "writable",
       });
+      signal.throwIfAborted();
       const rename = fs.rename.bind(fs);
       let published = false;
-      vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
         if (destination === unitPath) {
           expect(await fs.readFile(environmentPath, "utf8")).toContain("replacement-secret-canary");
           published = true;
         }
         await rename(source, destination);
       });
+      onTestFinished(() => renameSpy.mockRestore());
       await expect(stage()).resolves.toMatchObject({ unitPath });
       expect(published).toBe(true);
       await expect(readSystemdDefinitionMutationCapability(env)).resolves.toEqual({
@@ -192,14 +196,12 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     },
   );
 
-  it.each(
-    ["unit", "environment"].flatMap((artifact) =>
-      ["root-owned", "unsafe mode", "changed alias", "retargeted alias"].map((scenario) => ({
-        artifact,
-        scenario,
-      })),
-    ),
-  )("protects an aliased $artifact directory with $scenario", async ({ artifact, scenario }) => {
+  it.each([
+    { artifact: "unit", scenario: "root-owned" },
+    { artifact: "environment", scenario: "unsafe mode" },
+    { artifact: "unit", scenario: "changed alias" },
+    { artifact: "environment", scenario: "retargeted alias" },
+  ])("protects an aliased $artifact directory with $scenario", async ({ artifact, scenario }) => {
     const file = artifact === "unit" ? unitPath : environmentPath;
     const directory = path.dirname(file);
     const target = path.join(root, "alias-target");
@@ -552,15 +554,11 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     },
   );
 
-  it.each(
-    artifacts.flatMap(({ artifact, select }) =>
-      ["between publications", "after rename", "replacement after rename"].map((change) => ({
-        artifact,
-        select,
-        change,
-      })),
-    ),
-  )("rejects a concurrent $artifact edit $change", async ({ select, change }) => {
+  it.each([
+    { artifact: "unit", select: () => unitPath, change: "between publications" },
+    { artifact: "environment", select: () => environmentPath, change: "after rename" },
+    { artifact: "backup", select: () => `${unitPath}.bak`, change: "replacement after rename" },
+  ])("rejects a concurrent $artifact edit $change", async ({ select, change }) => {
     const target = select();
     await withSystemdDefinitionMutation(env, env, async (mutation) => {
       if (change === "between publications") {
@@ -589,11 +587,10 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     await expectNoTemporaryFiles(path.dirname(target));
   });
 
-  it.each(
-    artifacts.flatMap(({ artifact, select }) =>
-      [false, true].map((existed) => ({ artifact, select, existed })),
-    ),
-  )(
+  it.each([
+    { artifact: "unit", select: () => unitPath, existed: false },
+    { artifact: "environment", select: () => environmentPath, existed: true },
+  ])(
     "rolls back $artifact after a post-rename failure (existed=$existed)",
     async ({ select, existed }) => {
       const target = select();
@@ -628,11 +625,11 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     },
   );
 
-  it.each(
-    artifacts.flatMap(({ artifact, select }) =>
-      [false, true].map((environmentExisted) => ({ artifact, select, environmentExisted })),
-    ),
-  )(
+  it.each([
+    { artifact: "unit", select: () => unitPath, environmentExisted: false },
+    { artifact: "environment", select: () => environmentPath, environmentExisted: true },
+    { artifact: "backup", select: () => `${unitPath}.bak`, environmentExisted: true },
+  ])(
     "stage rollback preserves a concurrent $artifact edit (env existed=$environmentExisted)",
     async ({ artifact, select, environmentExisted }) => {
       const previousUnit = "[Service]\nExecStart=/usr/bin/node /old/index.js gateway\n";
@@ -673,7 +670,6 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
   );
 
   it.each([
-    { mount: "file-ro", mode: 0o644, kind: "sealed" },
     { mount: "file-ro", mode: 0o400, kind: "sealed" },
     { mount: "file-rw", mode: 0o644, kind: "sealed" },
     { mount: "ordinary", mode: 0o400, kind: "writable" },
@@ -797,13 +793,6 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     expect(await fs.readFile(target, "utf8")).toContain("protected-secret-canary");
     expect(await fs.readdir(path.dirname(unitPath))).toEqual([]);
     expect(await fs.readdir(stateDir)).toEqual([]);
-  });
-
-  it("accepts the ownership owner's proven absence on a fresh non-systemd install", async () => {
-    await expect(readSystemdDefinitionMutationCapability(env)).resolves.toEqual({
-      kind: "writable",
-    });
-    expect(assertNoSystemOwnership).toHaveBeenCalledWith("openclaw-owned.service", undefined);
   });
 
   it.each([

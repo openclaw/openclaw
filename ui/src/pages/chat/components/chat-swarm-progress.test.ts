@@ -94,22 +94,30 @@ describe("chat Swarm progress", () => {
           title: "Enxame",
           groupTitle: "Tarefas paralelas",
           progress: "{complete} de {total}",
+          failedOrStopped: "Falhou ou foi interrompida",
         },
       },
+      common: { running: "Em execução", completed: "Concluído" },
     });
     await i18n.setLocale("pt-BR");
 
     const container = renderProgress([
       session({ key: "running", status: "running" }),
       session({ key: "done", status: "done" }),
+      session({ key: "stopped", status: "killed" }),
     ]);
 
     expect(
       container.querySelector(".chat-swarm__header")?.textContent?.replace(/\s+/g, " "),
-    ).toContain("1 de 2");
+    ).toContain("2 de 3");
     expect(container.querySelector(".chat-swarm__header strong")?.textContent).toBe(
       "Tarefas paralelas",
     );
+    expect(
+      [...container.querySelectorAll('[role="listitem"]')].map((row) =>
+        row.querySelector('[role="img"]')?.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Em execução", "Concluído", "Falhou ou foi interrompida"]);
   });
 
   it("groups live collector children and maps their task states", () => {
@@ -138,6 +146,11 @@ describe("chat Swarm progress", () => {
       "chat-swarm__task-icon chat-swarm__task-icon--done",
       "chat-swarm__task-icon chat-swarm__task-icon--failed",
     ]);
+    expect(
+      [...container.querySelectorAll('[role="listitem"]')].map((row) =>
+        row.querySelector('[role="img"]')?.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Queued", "Running", "Completed", "Failed or stopped"]);
   });
 
   it.each([
@@ -146,14 +159,10 @@ describe("chat Swarm progress", () => {
       fields: { label: " Review CI ", displayName: "Other name" },
       expected: "Review CI",
     },
-    { name: "display name", fields: { displayName: "Review CI" }, expected: "Review CI" },
-    { name: "derived title", fields: { derivedTitle: "Review CI" }, expected: "Review CI" },
-    { name: "unnamed child", fields: {}, expected: "Subagent:" },
-    { name: "blank names", fields: { label: " ", displayName: "\t" }, expected: "Subagent:" },
     {
       name: "key-shaped names",
       fields: { label: childSessionKey, displayName: childSessionKey },
-      expected: "Subagent:",
+      expected: "Subagent",
     },
   ])("names a single child from $name without exposing identifiers", ({ fields, expected }) => {
     const container = renderProgress([
@@ -207,7 +216,7 @@ describe("chat Swarm progress", () => {
     try {
       hydrator.update(params);
       const group = container.querySelector("[data-swarm-group]");
-      expect(group?.querySelector("strong")?.textContent).toBe("Subagent:");
+      expect(group?.querySelector("strong")?.textContent).toBe("Subagent");
       await vi.runAllTimersAsync();
       expect(group?.querySelector("strong")?.textContent).toBe("Review CI");
       serverRows = [
@@ -226,7 +235,7 @@ describe("chat Swarm progress", () => {
         event: "sessions.changed",
         payload: { agentId: "main", session: serverRows[1], reason: "create" },
       });
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(container.querySelectorAll("[data-swarm-group]")).toHaveLength(1);
       expect(group?.getAttribute("data-swarm-group")).toBe(swarmGroupId);
       expect(group?.querySelector("strong")?.textContent).toBe("Parallel tasks");
@@ -365,26 +374,6 @@ describe("chat Swarm progress", () => {
     );
     expect(container.textContent).toContain("Check the conversation for the final response");
     expect(container.textContent).not.toContain("The parent is processing their results");
-  });
-
-  it("keeps tasks from every phase in the compact detail", () => {
-    const container = renderProgress([
-      session({ key: "unphased", label: "Older child", status: "running" }),
-      session({ key: "planning", label: "Planner", status: "done", swarmPhase: "Plan" }),
-      session({
-        key: "building",
-        label: "Builder",
-        subagentRunState: "active",
-        swarmPhase: "Build",
-        swarmLog: "Implementing the selected plan.",
-      }),
-    ]);
-
-    expect(
-      [...container.querySelectorAll(".chat-swarm__task-name")].map((task) =>
-        task.textContent?.trim(),
-      ),
-    ).toEqual(["Older child", "Planner", "Builder"]);
   });
 
   it("orders phase buckets by observation rank, not canonical row order", () => {

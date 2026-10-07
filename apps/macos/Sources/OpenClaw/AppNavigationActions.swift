@@ -63,7 +63,7 @@ enum AppNavigationActions {
     }
 
     static func openChat(sessionKey: String? = nil, agentID: String? = nil, draft: String? = nil) {
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.shared.activate()
         if AppStateStore.shared.nativeExperienceEnabled {
             WebChatManager.shared.show(sessionKey: sessionKey, agentID: agentID, draft: draft)
             return
@@ -107,7 +107,7 @@ enum AppNavigationActions {
                 let alert = NSAlert()
                 alert.messageText = "Could Not Open Chat"
                 alert.informativeText = "Connect to the Gateway, then select this conversation in the Dashboard."
-                alert.runModal()
+                AppActivation.shared.presentAlert(alert)
             }
         }
     }
@@ -118,31 +118,11 @@ enum AppNavigationActions {
     }
 
     static func openConnection(tab: ConnectionTab = .connection) {
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.shared.activate()
         ConnectionWindowOpener.shared.open(tab: tab, debugEnabled: AppStateStore.shared.debugPaneEnabled)
     }
 
     static func openAbout() {
-        let build = ArtifactBuildInfo(infoDictionary: Bundle.main.infoDictionary ?? [:])
-        let credits = NSMutableAttributedString(string: String(localized:
-            "Menu bar companion for notifications, screenshots, and privileged agent actions."))
-        credits.append(NSAttributedString(string: "\n\n" + build.copyText + "\n\n"))
-        for (title, address) in [
-            (String(localized: "Website"), "https://openclaw.ai"),
-            (String(localized: "Docs"), "https://docs.openclaw.ai"),
-            (String(localized: "GitHub"), "https://github.com/openclaw/openclaw"),
-            (String(localized: "Discord"), "https://discord.gg/clawd"),
-        ] {
-            credits.append(NSAttributedString(string: title + "\n", attributes: [.link: address]))
-        }
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.orderFrontStandardAboutPanel(options: [
-            .applicationName: "OpenClaw",
-            .applicationVersion: build.version,
-            .version: build.build,
-            .credits: credits,
-            NSApplication.AboutPanelOptionKey(rawValue: "Copyright"):
-                String(localized: "© 2026 OpenClaw Foundation — MIT License."),
-        ])
+        self.openConnection(tab: .about)
     }
 }

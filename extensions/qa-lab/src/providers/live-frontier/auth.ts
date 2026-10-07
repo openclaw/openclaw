@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements auth behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyAuthProfileConfig,
@@ -42,36 +41,21 @@ function isQaLiveOfficialOpenAiBaseUrl(baseUrl: unknown): boolean {
   if (typeof baseUrl !== "string" || !baseUrl.trim()) {
     return true;
   }
-  try {
-    const url = new URL(baseUrl.trim());
-    return (
-      url.protocol === "https:" &&
-      url.hostname.toLowerCase() === "api.openai.com" &&
-      (url.pathname === "" ||
-        url.pathname === "/" ||
-        url.pathname === "/v1" ||
-        url.pathname === "/v1/")
-    );
-  } catch {
-    return false;
-  }
+  const url = URL.parse(baseUrl.trim());
+  return (
+    url?.protocol === "https:" &&
+    url.hostname.toLowerCase() === "api.openai.com" &&
+    (url.pathname === "" ||
+      url.pathname === "/" ||
+      url.pathname === "/v1" ||
+      url.pathname === "/v1/")
+  );
 }
 
 function qaLiveOpenAiUsesCodexByDefault(cfg: OpenClawConfig): boolean {
   return isQaLiveOfficialOpenAiBaseUrl(
     resolveQaLiveProviderConfig({ cfg, providerId: "openai" })?.baseUrl,
   );
-}
-
-function expandQaLiveApiKeyProviderIds(params: {
-  cfg: OpenClawConfig;
-  providerIds: readonly string[];
-}) {
-  const expanded = new Set(normalizeQaLiveProviderIds(params.providerIds));
-  if (expanded.has(QA_OPENAI_PROVIDER_ID) && qaLiveOpenAiUsesCodexByDefault(params.cfg)) {
-    expanded.add(QA_OPENAI_PROVIDER_ID);
-  }
-  return [...expanded].toSorted();
 }
 
 function resolveQaLiveEnvApiKey(params: {
@@ -223,7 +207,7 @@ export async function stageQaLiveApiKeyProfiles(params: {
   agentIds?: readonly string[];
 }): Promise<OpenClawConfig> {
   const env = params.env ?? process.env;
-  const providerIds = uniqueStrings(normalizeStringEntries(params.providerIds)).toSorted();
+  const providerIds = normalizeQaLiveProviderIds(params.providerIds);
   const profiles: Record<
     string,
     {
@@ -234,7 +218,7 @@ export async function stageQaLiveApiKeyProfiles(params: {
     }
   > = {};
   let next = params.cfg;
-  for (const providerId of expandQaLiveApiKeyProviderIds({ cfg: next, providerIds })) {
+  for (const providerId of providerIds) {
     const resolved = resolveQaLiveApiKey({ providerId, env, cfg: next });
     if (!resolved?.apiKey) {
       continue;

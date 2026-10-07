@@ -1,4 +1,3 @@
-// Slack data-visualization Block Kit contract, projection, and text fallback.
 import type { Block } from "@slack/web-api";
 import {
   normalizeMessagePresentation,
@@ -56,7 +55,6 @@ function hasUniqueStrings(values: readonly string[]): boolean {
   return new Set(values).size === values.length;
 }
 
-/** True when a portable chart satisfies Slack's complete native-block contract. */
 export function canRenderSlackDataVisualization(block: MessagePresentationChartBlock): boolean {
   if (!isStringWithin(block.title, SLACK_CHART_TITLE_MAX)) {
     return false;
@@ -94,7 +92,6 @@ export function canRenderSlackDataVisualization(block: MessagePresentationChartB
   );
 }
 
-/** Map a validated portable chart to Slack's app-facing Block Kit shape. */
 export function buildSlackDataVisualizationBlock(
   block: MessagePresentationChartBlock,
 ): SlackDataVisualizationBlock | undefined {
@@ -216,30 +213,21 @@ function parseSlackDataVisualizationBlock(
   return normalizedBlock?.type === "chart" ? normalizedBlock : undefined;
 }
 
-/** Extract a deterministic accessible summary from a native Slack chart block. */
-export function renderSlackDataVisualizationFallbackText(value: unknown): string | undefined {
+/** Extract an accessible summary, escaping mrkdwn control tokens when requested. */
+export function renderSlackDataVisualizationFallbackText(
+  value: unknown,
+  mrkdwnSafe = false,
+): string | undefined {
   const block = asOptionalRecord(value);
   if (block?.type !== "data_visualization") {
     return undefined;
   }
   const parsed = parseSlackDataVisualizationBlock(block);
   if (parsed) {
-    return renderMessagePresentationChartFallbackText(parsed);
+    return mrkdwnSafe
+      ? renderSlackMessagePresentationChartFallbackText(parsed)
+      : renderMessagePresentationChartFallbackText(parsed);
   }
-  return typeof block.title === "string" && block.title.trim() ? block.title.trim() : undefined;
-}
-
-/** Render a native chart as mrkdwn without activating raw data control tokens. */
-export function renderSlackDataVisualizationMrkdwnFallbackText(value: unknown): string | undefined {
-  const block = asOptionalRecord(value);
-  if (block?.type !== "data_visualization") {
-    return undefined;
-  }
-  const parsed = parseSlackDataVisualizationBlock(block);
-  if (parsed) {
-    return renderSlackMessagePresentationChartFallbackText(parsed);
-  }
-  return typeof block.title === "string" && block.title.trim()
-    ? escapeSlackMrkdwn(block.title.trim())
-    : undefined;
+  const title = typeof block.title === "string" ? block.title.trim() : "";
+  return title ? (mrkdwnSafe ? escapeSlackMrkdwn(title) : title) : undefined;
 }

@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, describe, expect, it } from "vitest";
 import { setCliSessionBinding } from "../agents/cli-session.js";
 import {
   loadSessionEntryReadOnly,
@@ -10,18 +9,15 @@ import {
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-});
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cli-fork-recovery-");
 
 describe("CLI fork recovery process", () => {
   it("keeps a concurrent durable rebind when a stale fork reports its successor", async () => {
-    const root = tempDirs.make("openclaw-cli-fork-recovery-");
+    const root = sessionDirs.make();
     const stateDir = path.join(root, "state");
     const tmpDir = path.join(root, "tmp");
     const workspaceDir = path.join(root, "workspace");
@@ -66,6 +62,12 @@ describe("CLI fork recovery process", () => {
       }),
     );
 
+    const env = {
+      ...process.env,
+      HOME: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_STATE_DIR: stateDir,
+    };
     const entry: InternalSessionEntry = {
       sessionId: "openclaw-process-session",
       lifecycleRevision: "process-lifecycle",
@@ -78,7 +80,7 @@ describe("CLI fork recovery process", () => {
       forkNextResume: true,
       resumeCheckpointId: checkpointId,
     });
-    await replaceSessionEntry({ sessionKey, storePath }, entry);
+    await replaceSessionEntry({ sessionKey, storePath, env }, entry);
     closeOpenClawAgentDatabasesForTest();
 
     const result = await runCliProcessChild({
@@ -95,18 +97,15 @@ describe("CLI fork recovery process", () => {
         "--json",
       ],
       env: {
-        ...process.env,
-        HOME: root,
+        ...env,
         USERPROFILE: root,
         TMPDIR: tmpDir,
         NODE_DISABLE_COMPILE_CACHE: "1",
         NODE_ENV: undefined,
         NODE_OPTIONS: undefined,
-        OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         OPENCLAW_HOME: root,
         OPENCLAW_NO_RESPAWN: "1",
-        OPENCLAW_STATE_DIR: stateDir,
         PR135168_BACKEND_SCRIPT: backendScript,
         PR135168_NEWER_CLI_SESSION_ID: newerCliSessionId,
         PR135168_REBIND_SCRIPT: rebindScript,
@@ -124,7 +123,7 @@ describe("CLI fork recovery process", () => {
     );
     closeOpenClawAgentDatabasesForTest();
     expect(
-      loadSessionEntryReadOnly({ sessionKey, storePath })?.cliSessionBindings?.["proof-cli"]
+      loadSessionEntryReadOnly({ sessionKey, storePath, env })?.cliSessionBindings?.["proof-cli"]
         ?.sessionId,
     ).toBe(newerCliSessionId);
     const spawn = JSON.parse((await fs.readFile(spawnLog, "utf8")).trim()) as {

@@ -7,15 +7,13 @@ type TestApi = {
     mainStore: AuthProfileStore;
     profileIds: Set<string>;
     now: number;
-  }): { store: AuthProfileStore; removedProfileIds: string[] };
+  }): string[];
   repairStaleOAuthProfilesForAgent(params: {
     agentDir: string;
     mainStore: AuthProfileStore;
     profileIds: Set<string>;
     now: number;
-  }): Promise<
-    { status: "changed"; removedProfileIds: string[] } | { status: "missing" | "unchanged" }
-  >;
+  }): Promise<string[]>;
 };
 
 function getTestApi(): TestApi {

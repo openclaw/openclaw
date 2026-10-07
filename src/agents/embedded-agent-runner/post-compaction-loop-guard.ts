@@ -1,6 +1,3 @@
-/**
- * Guards against repeated tool-loop compactions that never make progress.
- */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 /**
@@ -36,133 +33,95 @@ type PostCompactionGuardVerdict =
       message: string;
     };
 
-type PostCompactionLoopGuard = {
-  armPostCompaction: () => void;
-  observe: (call: PostCompactionGuardObservation) => PostCompactionGuardVerdict;
-  snapshot: () => { armed: boolean; remainingAttempts: number };
-};
-
-type GuardState = {
-  enabled: boolean;
-  windowSize: number;
-  remainingAttempts: number;
-  history: PostCompactionGuardObservation[];
-  recentCalls: PostCompactionGuardObservation[];
-  baselineSignatures: Set<string> | undefined;
-  windowObserved: number;
-  windowRepeats: number;
-  repeatTools: Set<string>;
-};
-
 const observationSignature = (call: PostCompactionGuardObservation): string =>
   `${call.toolName}\0${call.argsHash}`;
 
-/** Creates a stateful post-compaction loop detector for one embedded run. */
-export function createPostCompactionLoopGuard(options?: {
-  enabled?: boolean;
-}): PostCompactionLoopGuard {
-  const state: GuardState = {
-    enabled: options?.enabled ?? true,
-    windowSize: DEFAULT_WINDOW_SIZE,
-    remainingAttempts: 0,
-    history: [],
-    recentCalls: [],
-    baselineSignatures: undefined,
-    windowObserved: 0,
-    windowRepeats: 0,
-    repeatTools: new Set<string>(),
-  };
+export function createPostCompactionLoopGuard(options?: { enabled?: boolean }) {
+  const enabled = options?.enabled ?? true;
+  const recentCalls: PostCompactionGuardObservation[] = [];
+  let remainingAttempts = 0;
+  let history: PostCompactionGuardObservation[] = [];
+  let baselineSignatures: Set<string> | undefined;
+  let windowRepeats = 0;
+  let repeatTools = new Set<string>();
 
   const armPostCompaction = (): void => {
     // Snapshot the pre-compaction call tail before the new window starts. A re-arm
     // mid-window replaces the unclosed window's counts; compaction success implies
     // the prior attempt ended, so that loss is accepted.
-    state.baselineSignatures =
-      state.enabled && state.recentCalls.length > 0
-        ? new Set(state.recentCalls.map(observationSignature))
+    baselineSignatures =
+      enabled && recentCalls.length > 0
+        ? new Set(recentCalls.map(observationSignature))
         : undefined;
-    state.remainingAttempts = state.windowSize;
-    state.history = [];
-    state.windowObserved = 0;
-    state.windowRepeats = 0;
-    state.repeatTools = new Set<string>();
-    if (state.enabled) {
-      log.info(`post-compaction guard armed for ${state.windowSize} attempts`);
+    remainingAttempts = DEFAULT_WINDOW_SIZE;
+    history = [];
+    windowRepeats = 0;
+    repeatTools = new Set<string>();
+    if (enabled) {
+      log.info(`post-compaction guard armed for ${DEFAULT_WINDOW_SIZE} attempts`);
     }
-  };
-
-  const logWindowSummary = (): void => {
-    const tools = [...state.repeatTools].toSorted().join(",");
-    log.info(
-      `post-compaction window closed: toolCalls=${state.windowObserved} ` +
-        `preCompactionRepeats=${state.windowRepeats}${tools ? ` tools=${tools}` : ""}`,
-    );
   };
 
   const observe = (call: PostCompactionGuardObservation): PostCompactionGuardVerdict => {
-    if (!state.enabled) {
+    if (!enabled) {
       return { shouldAbort: false, armed: false, remainingAttempts: 0 };
     }
-    state.recentCalls.push(call);
-    if (state.recentCalls.length > BASELINE_WINDOW_SIZE) {
-      state.recentCalls.shift();
+    recentCalls.push(call);
+    if (recentCalls.length > BASELINE_WINDOW_SIZE) {
+      recentCalls.shift();
     }
-    if (state.remainingAttempts <= 0) {
+    if (remainingAttempts <= 0) {
       return { shouldAbort: false, armed: false, remainingAttempts: 0 };
     }
-    state.remainingAttempts -= 1;
-    state.windowObserved += 1;
-    if (state.baselineSignatures?.has(observationSignature(call))) {
-      state.windowRepeats += 1;
-      state.repeatTools.add(call.toolName);
+    remainingAttempts -= 1;
+    if (baselineSignatures?.has(observationSignature(call))) {
+      windowRepeats += 1;
+      repeatTools.add(call.toolName);
     }
-    state.history.push(call);
-    const armedAfter = state.remainingAttempts > 0;
+    history.push(call);
+    const armedAfter = remainingAttempts > 0;
 
     // Compare full tool name + args + result. Repeated args alone can be legitimate polling;
     // identical results after compaction prove the compression did not change the loop.
-    const matches = state.history.filter(
+    const matches = history.filter(
       (entry) =>
         entry.toolName === call.toolName &&
         entry.argsHash === call.argsHash &&
         entry.resultHash === call.resultHash,
     );
 
-    if (matches.length >= state.windowSize) {
+    if (matches.length >= DEFAULT_WINDOW_SIZE) {
       log.error(
         `post-compaction loop persisted: tool=${call.toolName} repeated ${matches.length} times with identical args+result post-compaction`,
       );
       return {
         shouldAbort: true,
         armed: armedAfter,
-        remainingAttempts: state.remainingAttempts,
+        remainingAttempts,
         detector: "compaction_loop_persisted",
         count: matches.length,
         toolName: call.toolName,
-        message: `CRITICAL: tool ${call.toolName} repeated ${matches.length} times with identical arguments and identical results within ${state.windowSize} attempts after auto-compaction. The compaction did not break the loop. Aborting to prevent runaway resource use.`,
+        message: `CRITICAL: tool ${call.toolName} repeated ${matches.length} times with identical arguments and identical results within ${DEFAULT_WINDOW_SIZE} attempts after auto-compaction. The compaction did not break the loop. Aborting to prevent runaway resource use.`,
       };
     }
 
     if (!armedAfter) {
-      logWindowSummary();
-      state.baselineSignatures = undefined;
-      state.windowObserved = 0;
-      state.windowRepeats = 0;
-      state.repeatTools = new Set<string>();
+      const tools = [...repeatTools].toSorted().join(",");
+      log.info(
+        `post-compaction window closed: toolCalls=${history.length} ` +
+          `preCompactionRepeats=${windowRepeats}${tools ? ` tools=${tools}` : ""}`,
+      );
+      baselineSignatures = undefined;
+      windowRepeats = 0;
+      repeatTools = new Set<string>();
     }
 
-    return { shouldAbort: false, armed: armedAfter, remainingAttempts: state.remainingAttempts };
+    return { shouldAbort: false, armed: armedAfter, remainingAttempts };
   };
 
-  const snapshot = () => ({
-    armed: state.remainingAttempts > 0,
-    remainingAttempts: state.remainingAttempts,
-  });
-
-  return { armPostCompaction, observe, snapshot };
+  return { armPostCompaction, observe };
 }
 
-/** Error raised when the post-compaction loop guard aborts a run. */
 export class PostCompactionLoopPersistedError extends Error {
   readonly detector: "compaction_loop_persisted";
   readonly count: number;
@@ -186,10 +145,6 @@ export class PostCompactionLoopPersistedError extends Error {
   static fromVerdict(
     verdict: Extract<PostCompactionGuardVerdict, { shouldAbort: true }>,
   ): PostCompactionLoopPersistedError {
-    return new PostCompactionLoopPersistedError(verdict.message, {
-      detector: verdict.detector,
-      count: verdict.count,
-      toolName: verdict.toolName,
-    });
+    return new PostCompactionLoopPersistedError(verdict.message, verdict);
   }
 }

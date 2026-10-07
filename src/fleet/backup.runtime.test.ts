@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { backupFleetCell, restoreFleetCell } from "./backup.runtime.js";
 import { cellAuthSecretDir, cellOwnerId } from "./cell-profile.js";
 import type { FleetContainerInspectResult, FleetContainerRuntime } from "./containers.runtime.js";
@@ -16,7 +16,7 @@ let root: string;
 let record: FleetCellRecord;
 
 const tempRoot = createSuiteTempRootTracker({ prefix: "openclaw-fleet-backup-test-" });
-const nativeConfig = getFsSafeNativeConfig();
+let nativeModeEnv: ReturnType<typeof captureEnv>;
 
 function inspection(running = false): Extract<FleetContainerInspectResult, { kind: "ok" }> {
   return {
@@ -67,10 +67,17 @@ function containerMock(current: FleetContainerInspectResult = inspection()) {
     removeNetwork: vi.fn(async () => undefined),
     logs: vi.fn(async () => undefined),
     start: vi.fn(async () => undefined),
-    stop: vi.fn(async () => undefined),
+    stop: vi.fn<FleetContainerRuntime["stop"]>(async () => undefined),
     restart: vi.fn(async () => undefined),
     remove: vi.fn(async () => undefined),
   } satisfies FleetContainerRuntime;
+}
+
+function stopInspection(current: ReturnType<typeof inspection>) {
+  return async () => {
+    current.running = false;
+    current.state = "exited";
+  };
 }
 
 async function createArchive(
@@ -100,6 +107,7 @@ async function createArchive(
 }
 
 beforeEach(async () => {
+  nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
   root = await tempRoot.setup();
   record = {
     tenantId: "acme",
@@ -118,7 +126,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   __setFsSafeTestHooksForTest(undefined);
-  configureFsSafeNative(nativeConfig);
+  nativeModeEnv.restore();
   vi.restoreAllMocks();
   await tempRoot.cleanup();
 });
@@ -130,14 +138,44 @@ describe("fleet backup runtime", () => {
       stateDir: root,
       containers: containerMock(),
       now: () => 0,
-      checkpoint: () => {},
+      checkpoint: async () => {},
       out,
     };
   }
 
+  it("settles one asynchronous lease probe at a time before returning a regular archive", async () => {
+    let nowMs = 0;
+    let active = 0;
+    let peak = 0;
+    let completed = 0;
+    const result = await backupFleetCell({
+      ...backupParams(path.join(root, "regular.tgz")),
+      now: () => (nowMs += 30_000),
+      checkpoint: async () => {
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        active -= 1;
+        completed += 1;
+      },
+    });
+
+    expect(peak).toBe(1);
+    expect(active).toBe(0);
+    expect(completed).toBeGreaterThanOrEqual(2);
+    expect(result.fileCount).toBe(3);
+    const entries: string[] = [];
+    await tar.t({ file: result.archivePath, onentry: (entry) => entries.push(entry.path) });
+    expect(entries).toEqual(
+      expect.arrayContaining(["manifest.json", "data/state.txt", "auth/secret.txt"]),
+    );
+  });
+
   function forceJavaScriptCopyFallback() {
     // These fixtures exercise publication without native or filesystem hard-link support.
-    configureFsSafeNative({ mode: "off" });
+    setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
     vi.spyOn(fs, "link").mockRejectedValue(
       Object.assign(new Error("unsupported"), { code: "ENOTSUP" }),
     );
@@ -160,6 +198,10 @@ describe("fleet backup runtime", () => {
     const outside = path.join(root, "outside-secret");
     await fs.writeFile(outside, "must-not-archive");
     await fs.symlink(outside, path.join(record.dataDir, "outside-link"));
+    await fs.link(
+      path.join(record.dataDir, "state.txt"),
+      path.join(record.dataDir, "state-copy.txt"),
+    );
     const containers = containerMock();
     const publicationMethods: string[] = [];
     __setFsSafeTestHooksForTest({
@@ -172,7 +214,7 @@ describe("fleet backup runtime", () => {
       stateDir: root,
       containers,
       now: () => 0,
-      checkpoint: () => {},
+      checkpoint: async () => {},
       out: path.join(root, "backup.tgz"),
     });
     expect((await fs.stat(result.archivePath)).mode & 0o777).toBe(0o600);
@@ -180,16 +222,30 @@ describe("fleet backup runtime", () => {
     expect(result.skippedSymlinks).toBe(1);
     const entries: string[] = [];
     const contents: string[] = [];
+    const stateFiles = new Map<string, string>();
     await tar.t({
       file: result.archivePath,
       onentry: (entry) => {
         entries.push(entry.path);
+        if (entry.path === "data/state.txt" || entry.path === "data/state-copy.txt") {
+          expect(entry.type).toBe("File");
+          entry.on("data", (chunk) => {
+            stateFiles.set(entry.path, (stateFiles.get(entry.path) ?? "") + String(chunk));
+          });
+        }
         entry.on("data", (chunk) => contents.push(String(chunk)));
       },
     });
     expect(entries).toEqual(
-      expect.arrayContaining(["manifest.json", "data/state.txt", "auth/secret.txt"]),
+      expect.arrayContaining([
+        "manifest.json",
+        "data/state.txt",
+        "data/state-copy.txt",
+        "auth/secret.txt",
+      ]),
     );
+    expect(stateFiles.get("data/state.txt")).toBe("state");
+    expect(stateFiles.get("data/state-copy.txt")).toBe("state");
     expect(entries).not.toContain("data/outside-link");
     expect(contents.join("")).not.toContain("must-not-archive");
     const leftovers = (await fs.readdir(path.dirname(result.archivePath))).filter((name) =>
@@ -302,7 +358,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers: containerMock(inspection(true)),
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
       }),
     ).rejects.toThrow(/stop it first/iu);
     await fs.rm(cellAuthSecretDir(root, "acme"), { recursive: true });
@@ -312,7 +368,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers: containerMock(),
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
       }),
     ).rejects.toThrow(/no auth-secret directory/iu);
     await fs.rm(record.dataDir, { recursive: true });
@@ -322,7 +378,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers: containerMock(),
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
       }),
     ).rejects.toThrow(/no cell data/iu);
   });
@@ -335,7 +391,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers,
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
         maxBytes: 1,
         out: path.join(root, "capped.tgz"),
       }),
@@ -348,7 +404,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers,
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
         out: existing,
       }),
     ).rejects.toThrow(/overwrite/iu);
@@ -359,7 +415,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers,
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
         out: path.join(record.dataDir, "bad.tgz"),
       }),
     ).rejects.toThrow(/inside/iu);
@@ -373,7 +429,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers: containerMock(),
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
         out: path.join(root, "unrestorable.tgz"),
       }),
     ).rejects.toThrow(/restore path rules would reject/iu);
@@ -389,7 +445,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers: containerMock(),
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
         maxEntries: 2,
         out: path.join(root, "entry-capped.tgz"),
       }),
@@ -409,7 +465,7 @@ describe("fleet backup runtime", () => {
         containers: containerMock(),
         // Each filter probe advances well past the lease-probe interval.
         now: () => (clock += 60_000),
-        checkpoint: () => {
+        checkpoint: async () => {
           throw new Error("Fleet operation lease was lost for acme.");
         },
         out: archivePath,
@@ -428,7 +484,7 @@ describe("fleet restore runtime", () => {
       fetchImpl: vi.fn<typeof fetch>(async () => new Response(null, { status: 200 })),
       now: () => 0,
       sleep: async () => {},
-      checkpoint: () => {},
+      checkpoint: async () => {},
       generateToken: () => "new-token",
       generateAttemptId: () => NEXT_ATTEMPT,
       hostIdentity: undefined,
@@ -654,10 +710,7 @@ describe("fleet restore runtime", () => {
         );
         return running;
       });
-      containers.stop.mockImplementation(async () => {
-        running.running = false;
-        running.state = "exited";
-      });
+      containers.stop.mockImplementation(stopInspection(running));
 
       await restoreFleetCell({ ...restoreParams(containers, archive), force: true });
 
@@ -674,10 +727,7 @@ describe("fleet restore runtime", () => {
     const archive = await createArchive();
     const running = inspection(true);
     const containers = containerMock(running);
-    containers.stop.mockImplementation(async () => {
-      running.running = false;
-      running.state = "exited";
-    });
+    containers.stop.mockImplementation(stopInspection(running));
     containers.remove.mockRejectedValue(new Error("transient removal failure"));
     await expect(
       restoreFleetCell({ ...restoreParams(containers, archive), force: true }),
@@ -692,10 +742,7 @@ describe("fleet restore runtime", () => {
     const archive = await createArchive();
     const running = inspection(true);
     const containers = containerMock(running);
-    containers.stop.mockImplementation(async () => {
-      running.running = false;
-      running.state = "exited";
-    });
+    containers.stop.mockImplementation(stopInspection(running));
     containers.run.mockImplementation(async () => {
       running.running = true;
       running.state = "running";

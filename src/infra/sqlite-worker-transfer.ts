@@ -1,9 +1,8 @@
 import { deserialize, serialize } from "node:v8";
-import {
-  SQLITE_WORKER_TRANSFER_FRAME_BYTES,
-  type SqliteWorkerTransferHandle,
-} from "./sqlite-worker-contract.js";
-export type SqliteWorkerTransferValue = { kind: string; value: unknown };
+import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
+export const SQLITE_WORKER_TRANSFER_FRAME_BYTES = 8 * 1024 * 1024;
+export type SqliteWorkerTransferHandle = { id: number; kinds: string[] };
+type SqliteWorkerTransferValue = { kind: string; value: unknown };
 export type SqliteWorkerTransferInput =
   | SqliteWorkerTransferValue
   /** Already serialized bytes remain owned by the producer and immutable until release. */
@@ -56,12 +55,7 @@ export function createSqliteWorkerTransferOwner() {
         errors.push(error);
       }
     }
-    if (errors.length === 1) {
-      throw errors[0];
-    }
-    if (errors.length) {
-      throw new AggregateError(errors, "SQLite read transfer cleanup failed", { cause: errors[0] });
-    }
+    throwSqliteLifecycleErrors(errors, "SQLite read transfer cleanup failed");
   };
   const cancel = () => {
     if (current) {

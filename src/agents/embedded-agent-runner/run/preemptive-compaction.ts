@@ -1,6 +1,3 @@
-/**
- * Estimates prompt pressure and decides pre-prompt compaction routing.
- */
 import { resolveCompactionReplayPressure } from "@openclaw/ai/transports";
 import type { Model } from "@openclaw/llm-core";
 import type { SessionContextBudgetStatus } from "../../../config/sessions.js";
@@ -94,20 +91,15 @@ function resolveProviderContextBoundary(
   return undefined;
 }
 
-/** Estimates token pressure from serialized tool definitions sent alongside the prompt. */
 export function estimateToolSchemaTokenPressure(
   tools: Parameters<typeof estimateToolSchemaTokens>[0],
 ): number {
   return Math.ceil(estimateToolSchemaTokens(tools) * SAFETY_MARGIN);
 }
 
-function estimateTranscriptBoundaryTokenPressure(params: {
-  messages: AgentMessage[];
-  systemPrompt?: string;
-  prompt: string;
-  replay?: CompactionReplayPressureContext;
-  toolSchemaTokens?: number;
-}): TranscriptBoundaryTokenPressure {
+function estimateTranscriptBoundaryTokenPressure(
+  params: Parameters<typeof estimateLlmBoundaryTokenPressure>[0],
+): TranscriptBoundaryTokenPressure {
   const replay = params.replay
     ? resolveCompactionReplayPressure(
         params.messages,
@@ -181,9 +173,6 @@ function normalizeLlmBoundaryTokenPressure(
   return {
     estimatedPromptTokens,
     source: pressure.source.trim() || "rendered_llm_boundary",
-    ...(typeof pressure.renderedChars === "number" && Number.isFinite(pressure.renderedChars)
-      ? { renderedChars: Math.max(0, Math.ceil(pressure.renderedChars)) }
-      : {}),
   };
 }
 
@@ -313,7 +302,6 @@ function resolveCompactionPressureDecision(
   };
 }
 
-/** Formats the compact operator log line for one pre-prompt budget check. */
 export function formatPrePromptPrecheckLog(params: {
   result: PreemptiveCompactionDecision;
   sessionKey?: string;
@@ -346,7 +334,6 @@ export function formatPrePromptPrecheckLog(params: {
   );
 }
 
-/** Converts the pre-prompt decision into the persisted session context-budget status record. */
 export function buildPrePromptContextBudgetStatus(params: {
   result: PreemptiveCompactionDecision;
   provider: string;

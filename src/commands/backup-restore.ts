@@ -1,8 +1,10 @@
 // Restores one verified whole-archive backup into a fresh staging directory.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import * as tar from "tar";
 import { readConfigFileSnapshot, resolveStateDir } from "../config/config.js";
+import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
@@ -13,8 +15,7 @@ import {
   resolveRequiredBackupPath,
 } from "./backup-shared.js";
 import { prepareBackupArchive } from "./backup-verify.js";
-import { isPathWithin } from "./cleanup-utils.js";
-import { resolveStartupConfigSnapshot } from "./doctor/shared/automatic-startup-config-repair.js";
+import { resolveLegacyConfigSnapshotForBackup } from "./doctor/shared/automatic-config-repair.js";
 
 const BACKUP_RESTORE_WARNINGS = [
   "Restoring an archive is time travel: every restored state surface rolls back to the archive timestamp.",
@@ -24,35 +25,34 @@ const BACKUP_RESTORE_WARNINGS = [
   "Generated plugin-skills links are not archived; after activation, run `openclaw skills list` or start an agent session to rebuild them.",
 ] as const;
 
+const BACKUP_RESTORE_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
+
 type BackupRestoreOptions = {
   archive: string;
   target?: string;
   json?: boolean;
 };
 
-type BackupRestoreResult = Awaited<ReturnType<typeof prepareBackupArchive>>["result"] & {
-  targetPath: string;
-  warnings: string[];
-};
+type BackupRestoreResult = Awaited<ReturnType<typeof backupRestoreCommand>>;
 
 async function assertTargetOutsideLiveState(targetPath: string): Promise<void> {
   const [canonicalTarget, canonicalStateDir] = await Promise.all([
     canonicalizePathForContainment(targetPath),
     canonicalizePathForContainment(resolveStateDir()),
   ]);
-  if (isPathWithin(canonicalTarget, canonicalStateDir)) {
+  if (isPathInside(canonicalStateDir, canonicalTarget)) {
     throw new Error(
       `Backup restore target must be outside the live OpenClaw state directory: ${targetPath}`,
     );
   }
   const configSnapshot = await readConfigFileSnapshot({ observe: false });
-  const discoverySnapshot = resolveStartupConfigSnapshot(configSnapshot);
+  const discoverySnapshot = resolveLegacyConfigSnapshotForBackup(configSnapshot);
   if (!discoverySnapshot) {
     return;
   }
   const agentRoots = await resolveBackupAgentRoots(discoverySnapshot.config);
   for (const { sourcePath } of agentRoots) {
-    if (isPathWithin(canonicalTarget, sourcePath)) {
+    if (isPathInside(sourcePath, canonicalTarget)) {
       throw new Error(
         `Backup restore target must be outside the live OpenClaw agent directory: ${targetPath}`,
       );
@@ -78,6 +78,24 @@ async function prepareRestoreTarget(targetPath: string): Promise<{ created: bool
 
   await fs.mkdir(targetPath, { recursive: true, mode: 0o700 });
   return { created: true };
+}
+
+function assertRestoreCapacity(targetPath: string, extractionBytes: number): void {
+  const diskSpace = tryReadDiskSpace(targetPath);
+  if (!diskSpace) {
+    return;
+  }
+  const requiredBytes = extractionBytes + BACKUP_RESTORE_FREE_SPACE_RESERVE_BYTES;
+  if (requiredBytes <= diskSpace.availableBytes) {
+    return;
+  }
+  const location =
+    path.resolve(targetPath) === path.resolve(diskSpace.checkedPath)
+      ? targetPath
+      : `${targetPath} (volume checked at ${diskSpace.checkedPath})`;
+  throw new Error(
+    `Backup restore requires ${formatDiskSpaceBytes(requiredBytes)} of free space at ${location} (${formatDiskSpaceBytes(extractionBytes)} archive data plus ${formatDiskSpaceBytes(BACKUP_RESTORE_FREE_SPACE_RESERVE_BYTES)} reserve), but only ${formatDiskSpaceBytes(diskSpace.availableBytes)} is available. Choose a target on a volume with enough free space.`,
+  );
 }
 
 async function cleanupFailedRestore(targetPath: string, created: boolean): Promise<void> {
@@ -140,17 +158,16 @@ function formatRestoreResult(result: BackupRestoreResult): string {
 }
 
 /** Verify first, then extract a whole backup archive into a fresh staging directory. */
-export async function backupRestoreCommand(
-  runtime: RuntimeEnv,
-  options: BackupRestoreOptions,
-): Promise<BackupRestoreResult> {
+export async function backupRestoreCommand(runtime: RuntimeEnv, options: BackupRestoreOptions) {
   const targetPath = resolveRequiredBackupPath(options.target, "--target");
   await assertTargetOutsideLiveState(targetPath);
   const {
     result: verified,
     hardlinkTargets,
     symbolicLinks,
+    regularFileExtractionBytes,
   } = await prepareBackupArchive(options.archive);
+  assertRestoreCapacity(targetPath, regularFileExtractionBytes);
   const target = await prepareRestoreTarget(targetPath);
 
   try {
@@ -185,7 +202,7 @@ export async function backupRestoreCommand(
     });
   }
 
-  const result: BackupRestoreResult = {
+  const result = {
     ...verified,
     targetPath,
     warnings: [

@@ -4,7 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   openOpenClawStateDatabase,
@@ -17,15 +17,11 @@ import {
   createTestStorePath,
   createVoiceCallStateRuntimeForTests,
   makePersistedCall,
-  writeLegacyCallsJsonl,
 } from "../manager.test-harness.js";
 import { setVoiceCallStateRuntime } from "../runtime-state.js";
 import { CallRecordSchema } from "../types.js";
 import { MAX_CALL_REPLAY_KEYS } from "./replay-keys.js";
 import {
-  CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
-  CALL_RECORD_EVENTS_NAMESPACE,
-  CALL_RECORD_CHUNK_MAX_ENTRIES,
   findCallInStore,
   getCallHistoryFromStore,
   loadActiveCallsFromStore,
@@ -38,6 +34,10 @@ vi.mock("../../api.js", async (importOriginal) => ({
   sleep: sleepMock,
 }));
 
+// These names are persisted storage contracts, independent of private store declarations.
+const CALL_RECORD_EVENTS_NAMESPACE = "call-record-events";
+const CALL_RECORD_EVENT_CHUNKS_NAMESPACE = "call-record-event-chunks";
+const CALL_RECORD_CHUNK_MAX_ENTRIES = 48_048;
 const MANAGER_REPLAY_KEY_LIMIT = 10_000;
 
 function installStateRuntime({
@@ -55,7 +55,7 @@ function installStateRuntime({
   setVoiceCallStateRuntime({
     state: {
       ...state,
-      openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+      openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
         const backingStore = state.openKeyedStore<T>(options);
         const store = beforeOperation
           ? {
@@ -140,53 +140,6 @@ describe("voice-call call record store", () => {
     }
   });
 
-  it("does not import legacy JSONL records at runtime", async () => {
-    const storePath = createTestStorePath();
-    const call = CallRecordSchema.parse(
-      makePersistedCall({ callId: "call-legacy", processedEventIds: ["evt-1"] }),
-    );
-    writeLegacyCallsJsonl(storePath, [call]);
-
-    const restored = await loadActiveCallsFromStore(storePath);
-    expect(restored.activeCalls.has("call-legacy")).toBe(false);
-    expect(restored.processedEventIds.has("evt-1")).toBe(false);
-    expect(fs.existsSync(path.join(storePath, "calls.jsonl"))).toBe(true);
-
-    const history = await getCallHistoryFromStore(storePath);
-    expect(history).toEqual([]);
-  });
-
-  it("persists new call snapshots without recreating the JSONL log", async () => {
-    const storePath = createTestStorePath();
-    const call = CallRecordSchema.parse(
-      makePersistedCall({ callId: "call-sqlite", transcript: [] }),
-    );
-
-    await persistCallRecord(storePath, call);
-
-    expect(fs.existsSync(path.join(storePath, "calls.jsonl"))).toBe(false);
-    const restored = await loadActiveCallsFromStore(storePath);
-    expect(restored.activeCalls.get("call-sqlite")?.providerCallId).toBe(call.providerCallId);
-  });
-
-  it("does not read the JSONL fallback when SQLite state cannot open", async () => {
-    const storePath = createTestStorePath();
-    const call = CallRecordSchema.parse(makePersistedCall({ callId: "call-jsonl" }));
-    writeLegacyCallsJsonl(storePath, [call]);
-    setVoiceCallStateRuntime({
-      state: {
-        ...createVoiceCallStateRuntimeForTests(),
-        openKeyedStore: () => {
-          throw new Error("sqlite unavailable");
-        },
-      },
-    });
-
-    const restored = await loadActiveCallsFromStore(storePath);
-    expect(restored.activeCalls.has("call-jsonl")).toBe(false);
-    expect(fs.existsSync(path.join(storePath, "calls.jsonl"))).toBe(true);
-  });
-
   it("bounds bulk chunk reads across retained call snapshots", async () => {
     const storePath = createTestStorePath();
     const calls = Array.from({ length: 129 }, (_, index) =>
@@ -212,7 +165,7 @@ describe("voice-call call record store", () => {
       setVoiceCallStateRuntime({
         state: {
           ...state,
-          openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
             const store = state.openKeyedStore<T>(options);
             if (options.namespace !== CALL_RECORD_EVENT_CHUNKS_NAMESPACE) {
               return store;
@@ -245,9 +198,6 @@ describe("voice-call call record store", () => {
       }
       const restored = await loadActiveCallsFromStore(storePath);
       expect([...restored.activeCalls.values()]).toEqual(calls);
-      expect([...restored.providerCallIdMap]).toEqual(
-        calls.map((call) => [call.providerCallId, call.callId]),
-      );
       expect([...restored.processedEventIds]).toEqual(
         calls.flatMap((call) => call.processedEventIds),
       );

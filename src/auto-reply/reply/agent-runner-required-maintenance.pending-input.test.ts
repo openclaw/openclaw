@@ -7,6 +7,10 @@ import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "../../agents/admitted-run-context.js";
+import {
+  getSessionMcpRuntimeManagerForTesting,
+  setSessionMcpRuntimeScheduler,
+} from "../../agents/agent-bundle-mcp-manager-api.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
@@ -23,13 +27,15 @@ import {
   createRestartSafeChatRequest,
   resolveRestartSafeChatAdmission,
 } from "../../gateway/server-methods/chat-restart-recovery.js";
-import { clearMemoryPluginState, registerMemoryCapability } from "../../plugins/memory-state.js";
+import { clearMemoryPluginState } from "../../plugins/memory-state.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runReplyAgent } from "./agent-runner.js";
 import {
   createTestFollowupRun,
+  installAgentRunnerMemoryFixture,
   isModelRuntimeContextCarrier,
 } from "./agent-runner.test-fixtures.js";
 import { createTypingController } from "./typing.js";
@@ -47,6 +53,7 @@ describe("required maintenance with restart-safe admitted input", () => {
     async (history) => {
       await withOpenClawTestState({ label: "required-maintenance-pending" }, async (state) => {
         const requests: ModelRequest[] = [];
+        const runtimeContext = "Synthetic current runtime fact for the approved request.";
         const approved =
           "Approved current request: preserve ünicode 🦞 and exact newlines.\n" +
           "Current background information.\n".repeat(1_600) +
@@ -175,7 +182,7 @@ describe("required maintenance with restart-safe admitted input", () => {
         const scope = { agentId: "main", sessionKey, sessionId, storePath };
         const cfg: OpenClawConfig = {
           agents: {
-            list: [{ id: "main", default: true, workspace: state.workspaceDir }],
+            entries: { main: { workspace: state.workspaceDir } },
             defaults: {
               workspace: state.workspaceDir,
               model: { primary: "test-provider/test-model" },
@@ -212,7 +219,9 @@ describe("required maintenance with restart-safe admitted input", () => {
           "pending-regression",
         );
         let recorder: ReturnType<typeof createUserTurnTranscriptRecorder> | undefined;
+        const scheduler = createTestGatewayScheduler();
         try {
+          await setSessionMcpRuntimeScheduler(scheduler);
           await state.writeConfig(cfg);
           setRuntimeConfigSnapshot(cfg);
           const admittedRunContext = await admissionOwner.admit("embedded");
@@ -263,13 +272,15 @@ describe("required maintenance with restart-safe admitted input", () => {
               }),
             );
           }
-          const request = createRestartSafeChatRequest({
+          const request = await createRestartSafeChatRequest({
             eligible: true,
             message: approved,
             senderIsOwner: true,
             cfg,
           });
           const restartSafeAdmission = resolveRestartSafeChatAdmission({
+            acpMeta: null,
+            activeRunScopeKey: sessionKey,
             agentId: "main",
             cfg,
             clientRunId: runId,
@@ -277,6 +288,7 @@ describe("required maintenance with restart-safe admitted input", () => {
             entry,
             initialSessionEntry: entry,
             now: Date.now(),
+            placement: undefined,
             request,
             sessionId,
             sessionKey,
@@ -292,6 +304,7 @@ describe("required maintenance with restart-safe admitted input", () => {
             },
             input: { text: approved, timestamp: Date.now(), idempotencyKey: `${runId}:user` },
             ...buildRestartSafeChatTranscriptState({
+              sourceIngress: "control-ui",
               admission: restartSafeAdmission!,
               clientRunId: runId,
               startedAt: Date.now(),
@@ -319,19 +332,18 @@ describe("required maintenance with restart-safe admitted input", () => {
             conversationToolPolicy: { deny: ["read"] },
           });
           followupRun.prompt = approved;
+          followupRun.currentInboundContext = { text: runtimeContext };
           followupRun.userTurnTranscriptRecorder = recorder;
           entry = loadSessionEntry(scope)!;
           const sessionStore = { [sessionKey]: entry };
-          registerMemoryCapability("memory-core", {
-            flushPlanResolver: () => ({
-              softThresholdTokens: 4_000,
-              reserveTokensFloor: 8_192,
-              forceFlushTranscriptBytes: 2 * 1024 * 1024,
-              prompt: "Checkpoint durable notes. Reply NO_REPLY.",
-              systemPrompt: "Write durable notes only.",
-              relativePath: "memory/checkpoint.md",
-            }),
-          });
+          installAgentRunnerMemoryFixture(() => ({
+            softThresholdTokens: 4_000,
+            reserveTokensFloor: 8_192,
+            forceFlushTranscriptBytes: 2 * 1024 * 1024,
+            prompt: "Checkpoint durable notes. Reply NO_REPLY.",
+            systemPrompt: "Write durable notes only.",
+            relativePath: "memory/checkpoint.md",
+          }));
           const foregroundContexts: unknown[][] = [];
           observeForeground = () => {
             foregroundContexts.push(
@@ -406,6 +418,9 @@ describe("required maintenance with restart-safe admitted input", () => {
           expect(providerText(lastUser?.content).endsWith(approved)).toBe(true);
           expect(providerText(lastUser?.content).split(approved)).toHaveLength(2);
           expect(foregroundMessages.filter(isModelRuntimeContextCarrier)).toHaveLength(1);
+          expect(
+            providerText(foregroundMessages.find(isModelRuntimeContextCarrier)?.content),
+          ).toContain(runtimeContext);
           expect(foregroundMessages.findIndex(isModelRuntimeContextCarrier)).toBeGreaterThan(
             userIndex,
           );
@@ -418,6 +433,16 @@ describe("required maintenance with restart-safe admitted input", () => {
           await waitForSessionMaintenance(sessionKey);
           recorder?.finishPendingInput?.("interrupted");
           admissionOwner.close();
+          const mcpManager = getSessionMcpRuntimeManagerForTesting();
+          for (const runtimeSessionId of mcpManager.listSessionIds()) {
+            if (
+              mcpManager.peekSession({ sessionId: runtimeSessionId })?.workspaceDir ===
+              state.workspaceDir
+            ) {
+              await mcpManager.disposeSession(runtimeSessionId);
+            }
+          }
+          await scheduler.stop();
           clearMemoryPluginState();
           clearRuntimeConfigSnapshot();
           server.closeAllConnections();

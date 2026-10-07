@@ -1,10 +1,8 @@
-// Telegram plugin module implements status reaction variants behavior.
 import type { ReactionTypeCustomEmoji, ReactionTypeEmoji } from "grammy/types";
 import { DEFAULT_EMOJIS, type StatusReactionEmojis } from "openclaw/plugin-sdk/channel-feedback";
 import {
   normalizeOptionalString,
-  normalizeStringEntries,
-  uniqueStrings,
+  normalizeUniqueStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramChatDetails, TelegramGetChat } from "./bot/types.js";
 
@@ -110,25 +108,9 @@ const TELEGRAM_STATUS_REACTION_VARIANTS: Record<StatusReactionEmojiKey, string[]
   compacting: ["✍", "🤔", "🤯"],
 };
 
-const STATUS_REACTION_EMOJI_KEYS: StatusReactionEmojiKey[] = [
-  "queued",
-  "thinking",
-  "tool",
-  "coding",
-  "web",
-  "deploy",
-  "build",
-  "concierge",
-  "done",
-  "error",
-  "stallSoft",
-  "stallHard",
-  "compacting",
-];
-
-function toUniqueNonEmpty(values: string[]): string[] {
-  return uniqueStrings(normalizeStringEntries(values));
-}
+const STATUS_REACTION_EMOJI_KEYS = Object.keys(
+  TELEGRAM_STATUS_REACTION_VARIANTS,
+) as StatusReactionEmojiKey[]; // SAFETY: The private literal has exactly these keys.
 
 export function resolveTelegramStatusReactionEmojis(params: {
   initialEmoji: string;
@@ -136,21 +118,11 @@ export function resolveTelegramStatusReactionEmojis(params: {
 }): Required<StatusReactionEmojis> {
   const { overrides } = params;
   const queuedFallback = normalizeOptionalString(params.initialEmoji) ?? DEFAULT_EMOJIS.queued;
-  return {
-    queued: normalizeOptionalString(overrides?.queued) ?? queuedFallback,
-    thinking: normalizeOptionalString(overrides?.thinking) ?? DEFAULT_EMOJIS.thinking,
-    tool: normalizeOptionalString(overrides?.tool) ?? DEFAULT_EMOJIS.tool,
-    coding: normalizeOptionalString(overrides?.coding) ?? DEFAULT_EMOJIS.coding,
-    web: normalizeOptionalString(overrides?.web) ?? DEFAULT_EMOJIS.web,
-    deploy: normalizeOptionalString(overrides?.deploy) ?? DEFAULT_EMOJIS.deploy,
-    build: normalizeOptionalString(overrides?.build) ?? DEFAULT_EMOJIS.build,
-    concierge: normalizeOptionalString(overrides?.concierge) ?? DEFAULT_EMOJIS.concierge,
-    done: normalizeOptionalString(overrides?.done) ?? DEFAULT_EMOJIS.done,
-    error: normalizeOptionalString(overrides?.error) ?? DEFAULT_EMOJIS.error,
-    stallSoft: normalizeOptionalString(overrides?.stallSoft) ?? DEFAULT_EMOJIS.stallSoft,
-    stallHard: normalizeOptionalString(overrides?.stallHard) ?? DEFAULT_EMOJIS.stallHard,
-    compacting: normalizeOptionalString(overrides?.compacting) ?? DEFAULT_EMOJIS.compacting,
-  };
+  const emojis = { ...DEFAULT_EMOJIS, queued: queuedFallback };
+  for (const key of STATUS_REACTION_EMOJI_KEYS) {
+    emojis[key] = normalizeOptionalString(overrides?.[key]) ?? emojis[key];
+  }
+  return emojis;
 }
 
 export function buildTelegramStatusReactionVariants(
@@ -162,8 +134,10 @@ export function buildTelegramStatusReactionVariants(
     if (!requested) {
       continue;
     }
-    const fallbackVariants = TELEGRAM_STATUS_REACTION_VARIANTS[key] ?? [];
-    const candidates = toUniqueNonEmpty([requested, ...fallbackVariants]);
+    const candidates = normalizeUniqueStringEntries([
+      requested,
+      ...TELEGRAM_STATUS_REACTION_VARIANTS[key],
+    ]);
     variantsByRequested.set(requested, candidates);
   }
   return variantsByRequested;
@@ -185,7 +159,7 @@ function extractTelegramAllowedReactions(
     return undefined;
   }
   if (availableReactions == null) {
-    // Explicitly omitted/null => all emoji reactions are allowed in this chat.
+    // Explicit null means all emoji reactions are allowed in this chat.
     return null;
   }
   if (!Array.isArray(availableReactions)) {
@@ -249,7 +223,7 @@ export function resolveTelegramReactionVariant(params: {
   const configuredVariants = params.variantsByRequestedEmoji.get(requestedEmoji) ?? [
     requestedEmoji,
   ];
-  const variants = toUniqueNonEmpty([
+  const variants = normalizeUniqueStringEntries([
     ...configuredVariants,
     ...TELEGRAM_GENERIC_REACTION_FALLBACKS,
   ]);

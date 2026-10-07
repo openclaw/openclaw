@@ -1,5 +1,4 @@
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
-// Redaction helpers scrub secrets and sensitive identifiers from log output.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   findStructuredAuthParamRanges,
@@ -20,29 +19,32 @@ import {
   redactJsonRecord,
   getPatternRedactionEdits,
   type RedactionMessage,
-  type RedactionTarget,
+  type RedactionCapture,
   type RedactionField,
   type RedactionOrigins,
 } from "./redact-json.js";
+import { LINEAR_MATCHER_SOURCES } from "./redact-linear-matchers.js";
 import {
+  getSecretCaptureStart,
+  selectSecretCapture,
   iterateRedactMatches,
   parseRedactPatternSource,
   readRedactMatch,
   redactPemBlock,
   replaceRedactPattern,
+  rewriteOpenEndedRepeats,
   type RedactMatch,
   type RedactPattern,
   type ResolvedRedactPattern,
 } from "./redact-pattern-runtime.js";
 import {
   AWS_SECRET_ACCESS_KEY_FIELD_KEYS,
+  AMBIGUOUS_ASSIGNMENT_MATCHERS,
   AWS_SECRET_ACCESS_KEY_MATCHER,
-  BASE64_SAFE_TOKEN_BOUNDARY,
   BODY_SECRET_KEYS,
   CHUNK_UNSAFE_PATTERN_SOURCES,
   CREDENTIAL_HEADER_FIELD_RE,
   DEFAULT_REDACT_PATTERNS,
-  DEFAULT_REDACT_STRING_PATTERNS,
   FORM_AWARE_EQUALS_ASSIGNMENT_PATTERN_SOURCES,
   FORM_BODY_KEY_INVISIBLE_CHARS,
   IDENTIFIER_SAFE_TOKEN_BOUNDARY,
@@ -55,6 +57,11 @@ import {
 } from "./redact-patterns.js";
 import { PEM_REDACT_MATCHER, PEM_REDACT_PATTERN_SOURCE } from "./redact-pem.js";
 import { startRedactionMeasurement } from "./redact-performance.js";
+import {
+  couldMatchDefaultFullContextPatterns,
+  couldMatchDefaultRedactPatterns,
+  createRedactPrefilter,
+} from "./redact-prefilter.js";
 import {
   captureSecretRedactionRegistrySnapshot,
   createSecretValueRedactor,
@@ -70,9 +77,19 @@ const DEFAULT_REDACT_MIN_LENGTH = 18;
 const DEFAULT_REDACT_KEEP_START = 6;
 const DEFAULT_REDACT_KEEP_END = 4;
 const shellReferencePreservingPatterns = new WeakSet<ResolvedRedactPattern>();
+// Built-in resolved patterns scan whole text; only operator-configured regexes use the
+// bounded chunked scan, whose cost on operator expressions is the measured safeguard.
+const builtInResolvedPatterns = new WeakSet<ResolvedRedactPattern>();
 // Patterns whose left-context assertions or complete token can cross a chunk boundary must run
 // against the full string; chunking can invent a `^` boundary or split the secret itself.
 const chunkUnsafePatterns = new WeakSet<ResolvedRedactPattern>();
+// Canonical built-in sources are the only expressions the repeat rewriter optimizes; every
+// operator-configured source compiles unmodified so its exact legacy language is preserved.
+const canonicalBuiltInSources = new Set<string>(
+  [...DEFAULT_REDACT_PATTERNS, ...TOOL_PAYLOAD_REDACT_PATTERNS].filter(
+    (entry): entry is string => typeof entry === "string",
+  ),
+);
 const formAwareEqualsAssignmentPatterns = new WeakSet<ResolvedRedactPattern>();
 const sourceAssignmentPatterns = new WeakSet<ResolvedRedactPattern>();
 let defaultResolvedPatterns: ResolvedRedactPattern[] | undefined;
@@ -135,42 +152,6 @@ const STRUCTURED_SECRET_ENV_FIELD_RE = new RegExp(
   "i",
 );
 
-// Fast-path gate: with no user-configured patterns, redactSensitiveText skips the full
-// default-pattern walk unless one of these triggers matches. Every DEFAULT_REDACT_PATTERNS
-// entry and sensitive form/URL key must stay reachable here — a missing trigger silently
-// leaks that secret shape, so each family keeps a default-options fixture in redact.test.ts.
-const DEFAULT_REDACT_PREFILTER_SOURCES: string[] = [
-  // Sensitive key names shared by the env/JSON/query/form/header/assignment families.
-  String.raw`KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|COOKIE|SIGNATURE|CREDENTIAL|CARD|CVC|CVV|PAYMENT|PRIVATE KEY`,
-  String.raw`security[-_]?code|\bpass\s*[=:]|\bpassphrase\s*[=:]|_(?:password|pass|passphrase|passwd)\s*[=:]|jwt\s*[=:]|session=|code=|\bsig\s*=`,
-  String.raw`\bBearer\s+`,
-  // URL userinfo and connection-string password slots (`scheme://user:pass@host`).
-  String.raw`:\/\/[^\/\s:@]*:[^\s@]+@`,
-  // Vendor token prefixes and webhook hosts, ordered like DEFAULT_REDACT_PATTERNS.
-  String.raw`sk-|gh[opsur]_|github_pat_|glpat-|gloas-|gldt-|glcbt-|glptt-|glft-|glimt-|glagent-|glwt-|glsoat-|glffct-|glrt-|glrtr-|GR1348941|_gitlab_session=|xox[baprs]-|xapp-|hooks\.slack\.com|discord|gsk_|AIza|ya29\.|1\/\/0|eyJ|pplx-|fal_|fc-|bb_live_|gAAAA|[sr]k_(?:live|test)_|SG\.|npm_|pypi-|do[opr]_v1_|dp\.(?:ct|pt|sa|st|scim|audit)\.|dckr_|bkua_|CCIPAT_|sbp_|dapi[0-9a-f]|dd[pw]_|glsa_|nfp_|CFPAT-|ATCTT3|ATATT|ATBB|BBDC-|HRKU-|pat-(?:eu|na)1-|apify_api_|FlyV1|fio-u-|tvly-|exa_|syt_|retaindb_|mem0_|brv_|xai-|fw-|fw_|fpk_`,
-  String.raw`(?:^|[^A-Za-z0-9_])(?:am_|sk_)`,
-  String.raw`A[KS]IA[A-Z0-9]|AKID|LTAI|hf_|api_org_|r8_`,
-  String.raw`\bbot\d{6,}:|\b\d{6,}:[A-Za-z0-9_-]{20,}`,
-  // Obfuscated form/URL keys: percent escapes can rewrite any key letter, while plus or
-  // invisible splices break the literal key-name triggers above mid-word. After a splice the
-  // tail may mix further splices with key characters (e.g. an interior plus a trailing
-  // filler). Require a key character before or after a splice so bare `+=` or line-leading
-  // `===` separators do not trip the fast path.
-  String.raw`%[0-9A-Fa-f]{2}[${FORM_BODY_KEY_INVISIBLE_CHARS}+A-Za-z0-9_%.-]*=`,
-  // Search at the required assignment separator, not at every invisible character.
-  // Look behind it to retain the same obfuscated-key language without rescanning blank runs.
-  String.raw`=(?<=(?:\+|[${FORM_BODY_KEY_INVISIBLE_CHARS}])(?:[${FORM_BODY_KEY_INVISIBLE_CHARS}+]*[A-Za-z0-9_%.-])+[${FORM_BODY_KEY_INVISIBLE_CHARS}+]*=)|=(?<=[A-Za-z0-9_%.-][${FORM_BODY_KEY_INVISIBLE_CHARS}+]+=)`,
-];
-const DEFAULT_REDACT_PREFILTER_RE = new RegExp(
-  `(?:${DEFAULT_REDACT_PREFILTER_SOURCES.join("|")})`,
-  "iu",
-);
-
-// Whole-context rules admit prefixes whose boundaries differ under Unicode case folding.
-// Keep the shared text probe unchanged: its chunked matching has separate boundary semantics.
-const FULL_CONTEXT_REDACT_EXTRA_TRIGGERS_RE =
-  /JWT|Bearer\s+|am_|sk_|(?<!\d)\d{6,}:[A-Za-z0-9_-]{20,}/i;
-
 type RedactOptions = {
   mode?: RedactSensitiveMode;
   patterns?: readonly RedactPattern[];
@@ -182,26 +163,36 @@ type ResolvedRedactOptions = {
   patterns: ResolvedRedactPattern[];
 };
 
-function normalizeMode(value?: string): RedactSensitiveMode {
-  return value === "off" ? "off" : DEFAULT_REDACT_MODE;
-}
-
 function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
   if (raw === PEM_REDACT_PATTERN_SOURCE) {
     return PEM_REDACT_MATCHER;
   }
   if (typeof raw !== "string" && !(raw instanceof RegExp)) {
+    if (AMBIGUOUS_ASSIGNMENT_MATCHERS.has(raw)) {
+      sourceAssignmentPatterns.add(raw);
+    }
     return raw;
   }
-  let pattern: RegExp | null = null;
+  // Linear matchers and compiled regexes share the source's masking policies below.
+  let pattern: ResolvedRedactPattern | null =
+    typeof raw === "string" ? (LINEAR_MATCHER_SOURCES.get(raw) ?? null) : null;
   if (raw instanceof RegExp) {
     if (raw.flags.includes("g")) {
       pattern = raw;
     } else {
       pattern = new RegExp(raw.source, `${raw.flags}g`);
     }
-  } else if (raw.trim()) {
-    pattern = compileConfigRegex(...parseRedactPatternSource(raw))?.regex ?? null;
+  } else if (!pattern && raw.trim()) {
+    const [source, flags] = parseRedactPatternSource(raw);
+    // Open-ended repeats on canonical built-in flat single-character atoms compile without
+    // one backtrack stack entry per repetition, so multi-megabyte values no longer overflow
+    // the regex stack. Operator-configured sources compile unmodified: legacy escape and
+    // class boundaries parse their atoms in ways the rewriter does not model, so rewriting
+    // them could silently change the configured pattern's language.
+    const optimized = canonicalBuiltInSources.has(raw)
+      ? rewriteOpenEndedRepeats(source, flags)
+      : source;
+    pattern = compileConfigRegex(optimized, flags)?.regex ?? null;
   }
   if (pattern && typeof raw === "string" && SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES.has(raw)) {
     shellReferencePreservingPatterns.add(pattern);
@@ -215,9 +206,7 @@ function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
   if (
     pattern &&
     typeof raw === "string" &&
-    (raw.startsWith(BASE64_SAFE_TOKEN_BOUNDARY) ||
-      raw.startsWith(IDENTIFIER_SAFE_TOKEN_BOUNDARY) ||
-      CHUNK_UNSAFE_PATTERN_SOURCES.has(raw))
+    (raw.startsWith(IDENTIFIER_SAFE_TOKEN_BOUNDARY) || CHUNK_UNSAFE_PATTERN_SOURCES.has(raw))
   ) {
     chunkUnsafePatterns.add(pattern);
   }
@@ -229,20 +218,48 @@ function resolvePatterns(value?: readonly RedactPattern[]): ResolvedRedactPatter
     toolPayloadResolvedPatterns ??= TOOL_PAYLOAD_REDACT_PATTERNS.map(parsePattern).filter(
       (re): re is ResolvedRedactPattern => Boolean(re),
     );
+    for (const re of toolPayloadResolvedPatterns) {
+      builtInResolvedPatterns.add(re);
+    }
     return toolPayloadResolvedPatterns;
   }
   if (!value?.length || value === DEFAULT_REDACT_PATTERNS) {
     defaultResolvedPatterns ??= DEFAULT_REDACT_PATTERNS.map(parsePattern).filter(
       (re): re is ResolvedRedactPattern => Boolean(re),
     );
+    for (const re of defaultResolvedPatterns) {
+      builtInResolvedPatterns.add(re);
+    }
     return defaultResolvedPatterns;
   }
-  return [
-    ...new Set([
-      ...value.map(parsePattern).filter((re): re is ResolvedRedactPattern => Boolean(re)),
-      AWS_SECRET_ACCESS_KEY_MATCHER,
-    ]),
-  ];
+  // Combined policies: operator patterns composed with the canonical default arrays. Rule
+  // identity decides provenance, not array identity: each raw entry that is itself a canonical
+  // built-in rule keeps whole-text scanning, while actual operator rules keep bounded scanning.
+  // Provenance is marked on the same object instances the combined array holds, so resolve in
+  // one pass and mark at parse time (parsePattern returns a fresh RegExp per call).
+  const builtInRawSet = new Set<RedactPattern>([
+    ...DEFAULT_REDACT_PATTERNS,
+    ...TOOL_PAYLOAD_REDACT_PATTERNS,
+  ]);
+  const seen = new Set<ResolvedRedactPattern>();
+  const combined: ResolvedRedactPattern[] = [];
+  for (const raw of value) {
+    const resolved = parsePattern(raw);
+    if (resolved === null) {
+      continue;
+    }
+    if (builtInRawSet.has(raw)) {
+      builtInResolvedPatterns.add(resolved);
+    }
+    if (!seen.has(resolved)) {
+      seen.add(resolved);
+      combined.push(resolved);
+    }
+  }
+  if (!seen.has(AWS_SECRET_ACCESS_KEY_MATCHER)) {
+    combined.push(AWS_SECRET_ACCESS_KEY_MATCHER);
+  }
+  return combined;
 }
 
 function usesBuiltInRedactPatterns(value?: readonly RedactPattern[]): boolean {
@@ -252,9 +269,6 @@ function usesBuiltInRedactPatterns(value?: readonly RedactPattern[]): boolean {
 }
 
 function maskToken(token: string): string {
-  if (token === "***") {
-    return token;
-  }
   if (token.length < DEFAULT_REDACT_MIN_LENGTH) {
     return "***";
   }
@@ -270,7 +284,8 @@ function splitSecretValueForMask(token: string): {
   maskEnd: number;
 } {
   const openingQuote = token[0] ?? "";
-  if (SECRET_VALUE_QUOTE_CHARS.has(openingQuote)) {
+  const contentStart = SECRET_VALUE_QUOTE_CHARS.has(openingQuote) ? 1 : 0;
+  if (contentStart) {
     const closingQuoteIndex = token.lastIndexOf(openingQuote);
     if (closingQuoteIndex > 0) {
       const suffix = token.slice(closingQuoteIndex + 1);
@@ -283,35 +298,19 @@ function splitSecretValueForMask(token: string): {
         };
       }
     }
-
-    const tokenWithoutLeadingQuote = token.slice(1);
-    const trailingDelimiter =
-      tokenWithoutLeadingQuote.match(SECRET_VALUE_TRAILING_DELIMITER_RE)?.[1] ?? "";
-    const maskable =
-      trailingDelimiter && trailingDelimiter.length < tokenWithoutLeadingQuote.length
-        ? tokenWithoutLeadingQuote.slice(0, -trailingDelimiter.length)
-        : tokenWithoutLeadingQuote;
-    return {
-      maskable,
-      suffix:
-        trailingDelimiter && trailingDelimiter.length < tokenWithoutLeadingQuote.length
-          ? trailingDelimiter
-          : "",
-      maskStart: 0,
-      maskEnd: 1 + maskable.length,
-    };
   }
 
-  const trailingDelimiter = token.match(SECRET_VALUE_TRAILING_DELIMITER_RE)?.[1] ?? "";
+  const content = token.slice(contentStart);
+  const trailingDelimiter = content.match(SECRET_VALUE_TRAILING_DELIMITER_RE)?.[1] ?? "";
   const maskable =
-    trailingDelimiter && trailingDelimiter.length < token.length
-      ? token.slice(0, -trailingDelimiter.length)
-      : token;
+    trailingDelimiter && trailingDelimiter.length < content.length
+      ? content.slice(0, -trailingDelimiter.length)
+      : content;
   return {
     maskable,
-    suffix: maskable === token ? "" : trailingDelimiter,
+    suffix: maskable === content ? "" : trailingDelimiter,
     maskStart: 0,
-    maskEnd: maskable.length,
+    maskEnd: contentStart + maskable.length,
   };
 }
 
@@ -507,7 +506,8 @@ function redactFormBodyLine(text: string, onEdits?: PreparationEditSink): string
 }
 
 function redactFormBody(text: string, onEdits?: PreparationEditSink): string {
-  if (!text) {
+  // Every form grammar requires a literal assignment separator, including encoded keys.
+  if (!text.includes("=")) {
     return text;
   }
   if (FORM_BODY_LINE_BREAK_SPLIT_RE.test(text)) {
@@ -598,12 +598,8 @@ function maskSecretFieldValue(key: string, value: string): string {
   return "***";
 }
 
-function readEnvAssignmentKey(match: string): string | undefined {
-  return match.match(/\b([A-Z_][A-Z0-9_]*)\b\s*[=:]/)?.[1];
-}
-
 function shouldPreserveShellReferenceMatch(match: string, token: string): boolean {
-  const key = readEnvAssignmentKey(match);
+  const key = match.match(/\b([A-Z_][A-Z0-9_]*)\b\s*[=:]/)?.[1];
   return key ? isShellReferenceToKey(key, token) : false;
 }
 
@@ -611,155 +607,83 @@ function isEmptyShellParameterExpansionTail(token: string): boolean {
   return /^[-=?+]\}$/.test(token);
 }
 
-function hasBackreferenceToGroup(pattern: RegExp, groupNumber: number): boolean {
-  return new RegExp(String.raw`\\${groupNumber}(?!\d)`).test(pattern.source);
-}
-
-type SecretCaptureSelection = {
-  captureCount: number;
-  index: number;
-  value: string;
-};
-
-function selectSecretCapture(match: string, groups: string[]): SecretCaptureSelection {
-  const selected = { index: -1, value: match, captureCount: 0 };
-  for (let index = 0; index < groups.length; index++) {
-    const value = groups[index];
-    if (typeof value === "string" && value.length > 0) {
-      selected.index = index;
-      selected.value = value;
-      selected.captureCount++;
-    }
-  }
-  return selected;
-}
-
-function getIndexedCaptureStart(
-  pattern: ResolvedRedactPattern,
-  input: string,
-  match: string,
-  matchOffset: number,
-  captureIndex: number,
-): number | null {
-  if (!(pattern instanceof RegExp) || matchOffset < 0 || !input) {
-    return null;
-  }
-  try {
-    const flags = pattern.flags.includes("d") ? pattern.flags : `${pattern.flags}d`;
-    const indexedPattern = new RegExp(pattern.source, flags);
-    indexedPattern.lastIndex = matchOffset;
-    const indexedMatch = indexedPattern.exec(input) as
-      | (RegExpExecArray & { indices?: Array<[number, number] | undefined> })
-      | null;
-    const captureIndices = indexedMatch?.indices?.[captureIndex + 1];
-    if (!indexedMatch || indexedMatch.index !== matchOffset || indexedMatch[0] !== match) {
-      return null;
-    }
-    if (!captureIndices) {
-      return null;
-    }
-    return captureIndices[0] - matchOffset;
-  } catch {
-    return null;
-  }
-}
-
-function getSecretCaptureStart(
-  pattern: ResolvedRedactPattern,
-  input: string,
-  match: string,
-  matchOffset: number,
-  selected: SecretCaptureSelection,
-): number {
-  const indexedTokenStart = getIndexedCaptureStart(
-    pattern,
-    input,
-    match,
-    matchOffset,
-    selected.index,
-  );
-  if (indexedTokenStart !== null) {
-    return indexedTokenStart;
-  }
-  const preferFirstCapture =
-    pattern instanceof RegExp &&
-    selected.captureCount === 1 &&
-    selected.index >= 0 &&
-    hasBackreferenceToGroup(pattern, selected.index + 1);
-  return preferFirstCapture ? match.indexOf(selected.value) : match.lastIndexOf(selected.value);
-}
-
-function getRedactionEdit(
+function prepareRedactionCapture(
   { match, groups, input, offset, replacement: policyReplacement }: RedactMatch,
   pattern: ResolvedRedactPattern,
   preserveSourceAssignment?: (text: string, offset: number) => boolean,
-  project?: (start: number, end: number) => RedactionTarget | undefined,
-): RedactionEdit | undefined {
+): RedactionCapture | undefined {
   if (match.includes("PRIVATE KEY-----")) {
-    const target = project
-      ? project(offset, offset + match.length)
-      : { start: offset, end: offset + match.length, value: match };
-    return (
-      target && {
-        ...target,
+    return {
+      start: offset,
+      end: offset + match.length,
+      value: match,
+      redact: (target) => ({
+        start: target.start,
+        end: target.end,
+        value: target.value,
         replacement: policyReplacement ?? redactPemBlock(target.value, "…redacted…"),
-      }
-    );
+      }),
+    };
   }
   const selected = selectSecretCapture(match, groups);
+  if (selected.value === "***") {
+    return undefined;
+  }
   const tokenIndex =
     selected.value === match ? 0 : getSecretCaptureStart(pattern, input, match, offset, selected);
   if (tokenIndex < 0) {
     return undefined;
   }
   const start = offset + tokenIndex;
-  const target = project
-    ? project(start, start + selected.value.length)
-    : { start, end: start + selected.value.length, value: selected.value };
-  if (!target) {
-    return undefined;
-  }
-  const token = target.value;
-  if (
-    sourceAssignmentPatterns.has(pattern) &&
-    preserveSourceAssignment?.(
-      input,
-      offset + getSecretCaptureStart(pattern, input, match, offset, selected),
-    )
-  ) {
-    return undefined;
-  }
-  const formAwareValue = formAwareEqualsAssignmentPatterns.has(pattern)
-    ? splitFormAwareCredentialValue(token)
-    : { secret: token, suffix: "" };
-  // An earlier pass (form-body or quoted-assignment masking) may already have replaced this
-  // value with ***; re-masking would strip its quote wrapper around the placeholder.
-  if (splitSecretValueForMask(formAwareValue.secret).maskable === "***") {
-    return undefined;
-  }
-  const isShellReferencePattern = shellReferencePreservingPatterns.has(pattern);
-  // Preserve shell variable references (e.g. `MY_TOKEN=$MY_TOKEN`) for assignment patterns
-  // registered as shell-reference-preserving, so non-secret expansions that merely echo the
-  // assignment key are not masked.
-  if (
-    isShellReferencePattern &&
-    (shouldPreserveShellReferenceMatch(match, token) || isEmptyShellParameterExpansionTail(token))
-  ) {
-    return undefined;
-  }
-  // Assignment values can legitimately include trailing shell/structural characters
-  // (e.g. `${VAR:-default}`); mask the captured token whole so those characters count toward the
-  // retained hint instead of being exposed by delimiter-aware masking.
-  // Source goes through both the guard and SQLite. Full assignment masks keep
-  // those copies identical; diagnostic hints otherwise shrink on the second pass.
-  const masked =
-    policyReplacement ??
-    (preserveSourceAssignment && sourceAssignmentPatterns.has(pattern)
-      ? maskSecretValue(token)
-      : isShellReferencePattern
-        ? maskToken(token)
-        : `${maskSecretValue(formAwareValue.secret, { hinted: true })}${formAwareValue.suffix}`);
-  return { start: target.start, end: target.end, replacement: masked };
+  return {
+    start,
+    end: start + selected.value.length,
+    value: selected.value,
+    redact: (target) => {
+      const token = target.value;
+      if (
+        sourceAssignmentPatterns.has(pattern) &&
+        preserveSourceAssignment?.(
+          input,
+          offset + getSecretCaptureStart(pattern, input, match, offset, selected),
+        )
+      ) {
+        return undefined;
+      }
+      const formAwareValue = formAwareEqualsAssignmentPatterns.has(pattern)
+        ? splitFormAwareCredentialValue(token)
+        : { secret: token, suffix: "" };
+      // An earlier pass (form-body or quoted-assignment masking) may already have replaced this
+      // value with ***; re-masking would strip its quote wrapper around the placeholder.
+      if (splitSecretValueForMask(formAwareValue.secret).maskable === "***") {
+        return undefined;
+      }
+      const isShellReferencePattern = shellReferencePreservingPatterns.has(pattern);
+      // Preserve shell variable references (e.g. `MY_TOKEN=$MY_TOKEN`) for assignment patterns
+      // registered as shell-reference-preserving, so non-secret expansions that merely echo the
+      // assignment key are not masked.
+      if (
+        isShellReferencePattern &&
+        (shouldPreserveShellReferenceMatch(match, token) ||
+          isEmptyShellParameterExpansionTail(token))
+      ) {
+        return undefined;
+      }
+      // Assignment values can legitimately include trailing shell/structural characters
+      // (e.g. `${VAR:-default}`); mask the captured token whole so those characters count toward the
+      // retained hint instead of being exposed by delimiter-aware masking.
+      // Source goes through both the guard and SQLite. Full assignment masks keep
+      // those copies identical; diagnostic hints otherwise shrink on the second pass.
+      const masked =
+        policyReplacement ??
+        (preserveSourceAssignment && sourceAssignmentPatterns.has(pattern)
+          ? maskSecretValue(token)
+          : isShellReferencePattern
+            ? maskToken(token)
+            : `${maskSecretValue(formAwareValue.secret, { hinted: true })}${formAwareValue.suffix}`);
+      return { start: target.start, end: target.end, replacement: masked };
+    },
+  };
 }
 
 function redactMatch(
@@ -767,7 +691,8 @@ function redactMatch(
   pattern: ResolvedRedactPattern,
   preserveSourceAssignment?: (text: string, offset: number) => boolean,
 ): string {
-  const edit = getRedactionEdit(match, pattern, preserveSourceAssignment);
+  const capture = prepareRedactionCapture(match, pattern, preserveSourceAssignment);
+  const edit = capture?.redact(capture);
   return edit
     ? match.match.slice(0, edit.start - match.offset) +
         edit.replacement +
@@ -793,10 +718,15 @@ export function redactText(
     const replace = (match: RedactMatch) =>
       redactMatch(match, pattern, options?.preserveSourceAssignment);
     const replaceRegex = (...args: unknown[]) => replace(readRedactMatch(args));
-    // Each replacement finishes synchronously before this invocation advances its pattern.
+    // Built-in rules (linear matchers and regexes) scan whole text: chunking missed
+    // credentials that straddled a boundary. Operator-configured regexes keep the bounded
+    // chunked scan, whose cost on operator expressions is the measured safeguard.
     for (pattern of patterns) {
       next =
-        pattern instanceof RegExp && !options?.fullContext && !chunkUnsafePatterns.has(pattern)
+        pattern instanceof RegExp &&
+        !options?.fullContext &&
+        !builtInResolvedPatterns.has(pattern) &&
+        !chunkUnsafePatterns.has(pattern)
           ? replacePatternBounded(next, pattern, replaceRegex)
           : replaceRedactPattern(next, pattern, replace, replaceRegex);
     }
@@ -805,14 +735,6 @@ export function redactText(
   } finally {
     finishMeasurement?.(outcome, text.length, patterns.length);
   }
-}
-
-function couldMatchDefaultRedactPatterns(text: string): boolean {
-  return DEFAULT_REDACT_PREFILTER_RE.test(text) || AWS_SECRET_ACCESS_KEY_MATCHER.couldMatch(text);
-}
-
-function couldMatchDefaultFullContextPatterns(text: string): boolean {
-  return couldMatchDefaultRedactPatterns(text) || FULL_CONTEXT_REDACT_EXTRA_TRIGGERS_RE.test(text);
 }
 
 function markPatternMatchRedaction(
@@ -872,7 +794,7 @@ function looksLikeAppSpecificPassword(candidate: string): boolean {
 }
 
 function redactAppSpecificPasswords(text: string): string {
-  return replacePatternBounded(text, APP_SPECIFIC_PASSWORD_RE, (match: string, token: string) =>
+  return text.replace(APP_SPECIFIC_PASSWORD_RE, (match: string, token: string) =>
     looksLikeAppSpecificPassword(token) ? maskToken(token) : match,
   );
 }
@@ -887,14 +809,8 @@ function resolveConfigRedaction(): RedactOptions {
 
 export function resolveRedactOptions(options?: RedactOptions): ResolvedRedactOptions {
   const resolved = options ?? resolveConfigRedaction();
-  const mode = normalizeMode(resolved.mode);
-  if (mode === "off") {
-    return {
-      mode,
-      patterns: [],
-    };
-  }
-  return { mode, patterns: resolvePatterns(resolved.patterns) };
+  const mode = resolved.mode === "off" ? "off" : DEFAULT_REDACT_MODE;
+  return { mode, patterns: mode === "off" ? [] : resolvePatterns(resolved.patterns) };
 }
 
 export function redactSensitiveText(text: string, options?: RedactOptions): string {
@@ -928,7 +844,7 @@ function redactSensitiveTextWithOptions(
   exactRedacted: string,
   resolvedOptions: RedactOptions,
 ): string {
-  if (normalizeMode(resolvedOptions.mode) === "off") {
+  if (resolvedOptions.mode === "off") {
     return exactRedacted;
   }
   if (
@@ -1075,6 +991,7 @@ function redactSensitiveFieldValueWithOptions(
   options: RedactOptions,
   path: readonly string[] = [key],
   objectPath = true,
+  couldMatch = couldMatchDefaultRedactPatterns,
 ): string {
   const exactRedacted = redactRegisteredSecretValues(value, maskToken);
   if (isPublicShareIdPath(path)) {
@@ -1094,8 +1011,7 @@ function redactSensitiveFieldValueWithOptions(
   // in sync with every built-in pattern and sensitive form/URL key. Explicit
   // user patterns still require the full scan because they have no prefilter.
   const redacted =
-    !usesBuiltInRedactPatterns(fieldOptions.patterns) ||
-    couldMatchDefaultRedactPatterns(exactRedacted)
+    !usesBuiltInRedactPatterns(fieldOptions.patterns) || couldMatch(exactRedacted)
       ? redactText(exactRedacted, resolved.patterns)
       : exactRedacted;
   const shouldRedactAppPassword = redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key);
@@ -1164,11 +1080,12 @@ function redactStructuredSecretValue(
   value: unknown,
   seen: WeakSet<object>,
   options: RedactOptions,
+  couldMatch: (text: string) => boolean,
   path: readonly string[] = key ? [key] : [],
   objectPath = true,
 ): unknown {
   if (typeof value === "string") {
-    return redactSensitiveFieldValueWithOptions(key, value, options, path, objectPath);
+    return redactSensitiveFieldValueWithOptions(key, value, options, path, objectPath, couldMatch);
   }
   if (value === null || value === undefined) {
     return value;
@@ -1182,7 +1099,7 @@ function redactStructuredSecretValue(
     }
     seen.add(value);
     const out = value.map((entry) =>
-      redactStructuredSecretValue(key, entry, seen, options, path, false),
+      redactStructuredSecretValue(key, entry, seen, options, couldMatch, path, false),
     );
     seen.delete(value);
     return out;
@@ -1203,6 +1120,7 @@ function redactStructuredSecretValue(
         child,
         seen,
         options,
+        couldMatch,
         [...path, name],
         objectPath,
       );
@@ -1218,13 +1136,16 @@ function redactSecretsWithOptions<T>(value: T, options: RedactOptions): T {
   if (typeof value === "string") {
     return redactSensitiveText(value, options) as T;
   }
-  if (value === null || value === undefined) {
+  if (value === null || typeof value !== "object") {
     return value;
   }
-  if (typeof value !== "object") {
-    return value;
-  }
-  return redactStructuredSecretValue("", value, new WeakSet<object>(), options) as T;
+  return redactStructuredSecretValue(
+    "",
+    value,
+    new WeakSet<object>(),
+    options,
+    createRedactPrefilter(couldMatchDefaultRedactPatterns),
+  ) as T;
 }
 
 export function redactSecrets<T>(value: T): T {
@@ -1363,6 +1284,18 @@ export function resolveFileLogRedactOptions(): ResolvedRedactOptions {
   return resolveRedactOptions(resolveToolPayloadRedaction());
 }
 
+function* redactionEditMatches(input: string, edits: RedactionEdit[]): Iterable<RedactMatch> {
+  for (const edit of edits) {
+    yield {
+      match: input.slice(edit.start, edit.end),
+      groups: [],
+      input,
+      offset: edit.start,
+      replacement: edit.replacement,
+    };
+  }
+}
+
 const preparationPatterns: ResolvedRedactPattern[] = [
   {
     source: "registered secret values",
@@ -1394,15 +1327,7 @@ const preparationPatterns: ResolvedRedactPattern[] = [
     *exec(input) {
       const edits: RedactionEdit[] = [];
       redactAssignmentValues(input, "url", (added) => edits.push(...added));
-      for (const edit of edits) {
-        yield {
-          match: input.slice(edit.start, edit.end),
-          groups: [],
-          input,
-          offset: edit.start,
-          replacement: edit.replacement,
-        };
-      }
+      yield* redactionEditMatches(input, edits);
     },
   },
   {
@@ -1412,15 +1337,7 @@ const preparationPatterns: ResolvedRedactPattern[] = [
       redactFormBody(input, (added) => {
         edits = composeRedactionEdits(input.length, edits, added);
       });
-      for (const edit of edits) {
-        yield {
-          match: input.slice(edit.start, edit.end),
-          groups: [],
-          input,
-          offset: edit.start,
-          replacement: edit.replacement,
-        };
-      }
+      yield* redactionEditMatches(input, edits);
     },
   },
 ];
@@ -1454,9 +1371,7 @@ function prepareFileToJsonReceivers(
         for (const pattern of patterns) {
           current = applyRedactionEdits(
             current,
-            getPatternRedactionEdits(current, pattern, (match, rule, project) =>
-              getRedactionEdit(match, rule, undefined, project),
-            ),
+            getPatternRedactionEdits(current, pattern, prepareRedactionCapture),
           );
         }
       }
@@ -1501,15 +1416,18 @@ function prepareFileToJsonReceivers(
   return { record: visit(record, "", [], true, false), decoded };
 }
 
+type LogRecordRedactionOptions = {
+  format?: "file" | "console";
+  deriveMessage?: (record: Record<string, unknown>) => RedactionMessage | undefined;
+  decodedOptions?: ResolvedRedactOptions;
+};
+
 /** Converts native values once and applies configured and structural protection before output. */
-export function redactLogRecordForTransport(
+function redactLogRecord<Result>(
   record: Record<string, unknown>,
-  options: {
-    format?: "file" | "console";
-    deriveMessage?: (record: Record<string, unknown>) => RedactionMessage | undefined;
-    decodedOptions?: ResolvedRedactOptions;
-  } = {},
-): Record<string, unknown> {
+  options: LogRecordRedactionOptions,
+  finish: (redacted: string, canonical: string | undefined) => Result,
+): Result {
   const finishMeasurement = startRedactionMeasurement("log-record");
   let outcome: "ok" | "error" = "error";
   let inputChars: number | undefined;
@@ -1595,7 +1513,8 @@ export function redactLogRecordForTransport(
     }
     const serialized = message ? JSON.stringify(materialized) : json;
     const decodedPatterns = options.decodedOptions?.patterns ?? resolved.patterns;
-    const result: Record<string, unknown> = JSON.parse(
+    const couldMatch = createRedactPrefilter(couldMatchDefaultFullContextPatterns);
+    const result = finish(
       redactJsonRecord(
         serialized,
         origins,
@@ -1605,13 +1524,11 @@ export function redactLogRecordForTransport(
             { patterns: preparationPatterns },
             {
               patterns: resolved.patterns,
-              ...(resolved.patterns === defaultResolvedPatterns
-                ? { couldMatch: couldMatchDefaultFullContextPatterns }
-                : {}),
+              ...(resolved.patterns === defaultResolvedPatterns ? { couldMatch } : {}),
             },
           ],
         ],
-        (match, pattern, project) => getRedactionEdit(match, pattern, undefined, project),
+        prepareRedactionCapture,
         options.format === "console" ? () => [] : getLegacyFieldRecordEdits,
         (field) => getFieldRecordEdits(field, resolved.mode),
         (field) => getTextRecordEdits(field, resolved.mode, options.format !== "console"),
@@ -1621,10 +1538,11 @@ export function redactLogRecordForTransport(
             : !field.origin.structured ||
               field.origin.primitiveMask ||
               isPublicShareIdPath(field.path)) ||
-          (decodedPatterns === defaultResolvedPatterns &&
-            !couldMatchDefaultFullContextPatterns(currentValue)),
+          (decodedPatterns === defaultResolvedPatterns && !couldMatch(currentValue)),
         message,
       ),
+      // Native conversion can preserve proxy key order; only the materialized tree is canonical.
+      message ? serialized : undefined,
     );
     outcome = "ok";
     return result;
@@ -1633,12 +1551,30 @@ export function redactLogRecordForTransport(
   }
 }
 
+export function redactLogRecordForTransport(
+  record: Record<string, unknown>,
+  options: LogRecordRedactionOptions = {},
+): Record<string, unknown> {
+  return redactLogRecord(record, options, (redacted) => JSON.parse(redacted));
+}
+
+export function serializeRedactedFileLogRecord(
+  record: Record<string, unknown>,
+  options: Omit<LogRecordRedactionOptions, "format"> = {},
+): string {
+  return redactLogRecord(record, options, (redacted, canonical) =>
+    // Key edits can collide or reorder integer keys; edited UTF-16 may need escaping.
+    redacted === canonical ? redacted : JSON.stringify(JSON.parse(redacted)),
+  );
+}
+
 export function redactModelVisibleSecrets<T>(value: T): T {
   return redactSecretsWithOptions(value, resolveModelVisibleToolPayloadRedaction());
 }
 
-export function getDefaultRedactPatterns(): string[] {
-  return [...DEFAULT_REDACT_STRING_PATTERNS];
+/** The full default policy, programmatic matchers included; keep only the strings for `logging.redactPatterns`. */
+export function getDefaultRedactPatterns(): RedactPattern[] {
+  return [...DEFAULT_REDACT_PATTERNS];
 }
 
 // Match the complete batch, preserving JSON syntax through the transport's scalar editor.
@@ -1654,7 +1590,7 @@ export function redactSensitiveLines(
     lines.join("\n"),
     { value: { structured: false, primitiveMask: false }, children: new Map() },
     [[], [{ patterns: [...preparationPatterns, ...resolved.patterns] }]],
-    (match, pattern, project) => getRedactionEdit(match, pattern, undefined, project),
+    prepareRedactionCapture,
     () => [],
     () => [],
     () => [],

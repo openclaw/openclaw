@@ -26,15 +26,11 @@ export type AgentSelectOption = {
 type WebAwesomeSelectEvent = Event & { detail: { item: Element } };
 export function renderAgentSelectAvatar(
   option: AgentSelectOption,
-  identity: AgentIdentityResult | null = null,
-  imageUrl?: string | null,
+  identity: AgentIdentityResult | null,
+  imageUrl: string | null,
   onImageError?: () => void,
 ) {
-  const resolvedImageUrl =
-    imageUrl === undefined && option.agent
-      ? resolveAgentAvatarUrl(option.agent, identity)
-      : (imageUrl ?? null);
-  if (option.icon && !resolvedImageUrl) {
+  if (option.icon && !imageUrl) {
     return html`<span class="agent-select__avatar agent-select__avatar--icon" aria-hidden="true"
       >${option.icon}</span
     >`;
@@ -42,7 +38,7 @@ export function renderAgentSelectAvatar(
   return renderAgentIdentityAvatar(
     {
       id: option.agent?.id ?? option.value,
-      avatar: resolvedImageUrl,
+      avatar: imageUrl,
       textAvatar: option.agent ? resolveAgentTextAvatar(option.agent, identity) : null,
     },
     "agent-select__avatar",
@@ -126,24 +122,6 @@ export class AgentSelect extends OpenClawLightDomElement {
     this.onSelect(value);
   };
 
-  private readonly handleAfterShow = (event: Event) => {
-    const dropdown = event.currentTarget as HTMLElement;
-    const items = Array.from(
-      dropdown.querySelectorAll<HTMLElement & { active: boolean }>(
-        "wa-dropdown-item[data-agent-option]:not([disabled])",
-      ),
-    );
-    const selected = items.find((item) => item.hasAttribute("data-selected")) ?? items[0];
-    if (!selected) {
-      return;
-    }
-    for (const item of items) {
-      item.active = item === selected;
-    }
-    selected.focus({ preventScroll: true });
-    selected.scrollIntoView?.({ block: "nearest" });
-  };
-
   override render() {
     return this.avatarLoader.withActiveRoutes(() => this.renderContent());
   }
@@ -168,7 +146,6 @@ export class AgentSelect extends OpenClawLightDomElement {
         placement="bottom-start"
         aria-label=${this.accessibleLabel || triggerLabel}
         @wa-select=${this.handleSelect}
-        @wa-after-show=${this.handleAfterShow}
         @keydown=${(event: KeyboardEvent) => {
           // SAFETY: This handler is bound to the wa-dropdown host.
           const dropdown = event.currentTarget as HTMLElement & { open: boolean };
@@ -216,6 +193,7 @@ export class AgentSelect extends OpenClawLightDomElement {
               aria-label=${accessibleLabel}
               .value=${option.value}
               ?disabled=${this.disabled || option.disabled}
+              ?autofocus=${selected && !this.disabled && !option.disabled}
               ${ref((element) => syncDropdownItemRadio(element, selected))}
             >
               <span slot="icon">${this.renderAvatar(option)}</span>

@@ -2,24 +2,116 @@ import fs from "node:fs";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { expect, it, vi } from "vitest";
+import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
+import { expect, it, onTestFinished, vi } from "vitest";
+import type { OpenClawPluginApi } from "../api.js";
+import plugin from "../index.js";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import { createTestStorePath, FakeProvider, makePersistedCall } from "./manager.test-harness.js";
-import { CALL_RECORD_EVENTS_NAMESPACE, findCallInStore } from "./manager/store.js";
+import { findCallInStore } from "./manager/store.js";
 import * as callStore from "./manager/store.js";
 import { setVoiceCallStateRuntime } from "./runtime-state.js";
+import type { VoiceCallRuntime } from "./runtime.js";
 import { CallRecordSchema, type InitiateCallInput } from "./types.js";
+import { speakOnRealtimeBridge } from "./webhook/realtime-call-session-control.js";
 import { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "./websocket-test-support.js";
-import type { WebSocket } from "./websocket.js";
+
+let registeredRuntime: VoiceCallRuntime;
+
+// mock-isolation: Keep telephony startup outside these registered-boundary manager tests.
+vi.mock("../runtime-entry.js", () => ({
+  createVoiceCallRuntime: vi.fn(async () => registeredRuntime),
+}));
+
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+const persistCallRecord = callStore.persistCallRecord;
+
+function registerSteeringTool(runtime: VoiceCallRuntime, requesterSessionKey: string) {
+  registeredRuntime = runtime;
+  let toolFactory: ((context: Record<string, unknown>) => unknown) | undefined;
+  let service: Parameters<OpenClawPluginApi["registerService"]>[0] | undefined;
+  const api = createTestPluginApi({
+    id: "voice-call",
+    name: "Voice Call",
+    description: "test",
+    version: "0",
+    source: "test",
+    registrationMode: "full",
+    config: {},
+    pluginConfig: {
+      provider: "mock",
+      inboundPolicy: "allowlist",
+      realtime: { enabled: true },
+    },
+    runtime: { tts: { textToSpeechTelephony: vi.fn() } } as unknown as OpenClawPluginApi["runtime"],
+    logger,
+    registerGatewayMethod: () => {},
+    registerTool: (registration) => {
+      toolFactory =
+        typeof registration === "function"
+          ? (registration as (context: Record<string, unknown>) => unknown)
+          : () => registration;
+    },
+    registerCli: () => {},
+    registerService: (registration) => {
+      service = registration;
+    },
+    resolvePath: (value) => value,
+  });
+  plugin.register(api);
+  if (!service || !toolFactory) {
+    throw new Error("Expected registered Voice Call tool and service");
+  }
+  const serviceContext = {
+    config: {},
+    stateDir: "",
+    logger,
+    scheduler: createTestPluginServiceScheduler(),
+  } satisfies OpenClawPluginServiceContextV2;
+  void service.start(serviceContext);
+  onTestFinished(async () => {
+    await service?.stop?.(serviceContext);
+    delete (globalThis as Record<PropertyKey, unknown>)[
+      Symbol.for("openclaw.voice-call.runtimeCoordinator")
+    ];
+  });
+  return toolFactory({ sessionKey: requesterSessionKey }) as {
+    execute: (id: string, params: unknown, signal?: AbortSignal) => Promise<unknown>;
+  };
+}
+
+function createSteeringRuntime(params: {
+  callId: string;
+  config: VoiceCallConfig;
+  manager: CallManager;
+}) {
+  const triggerGreeting = vi.fn();
+  const bridges = new Map([[params.callId, { triggerGreeting }]]);
+  const runtime = {
+    config: params.config,
+    manager: params.manager,
+    webhookServer: {
+      speakRealtime: (callId: string, instructions: string) =>
+        speakOnRealtimeBridge(bridges, callId, instructions),
+    },
+    stop: vi.fn(async () => {}),
+  } as unknown as VoiceCallRuntime;
+  return { runtime, triggerGreeting };
+}
 
 async function withDelayedStore(
   run: (fixture: {
@@ -37,9 +129,8 @@ async function withDelayedStore(
 ) {
   const storePath = createTestStorePath();
   const writes: Promise<void>[] = [];
-  const persist = callStore.persistCallRecord;
   const persistence = vi.spyOn(callStore, "persistCallRecord").mockImplementation((...args) => {
-    const work = persist(...args);
+    const work = persistCallRecord(...args);
     writes.push(work);
     return work;
   });
@@ -48,12 +139,12 @@ async function withDelayedStore(
   setVoiceCallStateRuntime({
     state: {
       resolveStateDir: () => storePath,
-      openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+      openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
         const store = createPluginStateKeyedStoreForTests<T>("voice-call", options);
         return {
           ...store,
           async register(...args: Parameters<typeof store.register>) {
-            if (options.namespace === CALL_RECORD_EVENTS_NAMESPACE && nextWrite) {
+            if (options.namespace === "call-record-events" && nextWrite) {
               const hold = nextWrite;
               nextWrite = undefined;
               await hold();
@@ -141,6 +232,117 @@ it("reserves pending capacity without publishing or dialing an uncommitted call"
     await expect(manager.initiateCall("+15550000002")).resolves.toMatchObject({ success: true });
     expect(dial).toHaveBeenCalledOnce();
   });
+});
+
+it("rejects a foreign requester through the registered voice_call tool without effects", async () => {
+  await withDelayedStore(
+    async ({ manager, config, provider, storePath }) => {
+      const initiated = await manager.initiateCall("+15550002222", undefined, {
+        message: "Book a table",
+        mode: "conversation",
+        requesterSessionKey: "agent:main:owner",
+      });
+      const { runtime, triggerGreeting } = createSteeringRuntime({
+        callId: initiated.callId,
+        config,
+        manager,
+      });
+      const tool = registerSteeringTool(runtime, "agent:main:stranger");
+
+      const result = await tool.execute("foreign", {
+        action: "steer_call",
+        callId: initiated.callId,
+        message: "Promise a refund",
+      });
+
+      expect(JSON.stringify(result)).toContain("requester");
+      expect(manager.getCall(initiated.callId)?.metadata?.ownerInstructions).toBeUndefined();
+      expect(
+        (await findCallInStore(storePath, initiated.callId))?.metadata?.ownerInstructions,
+      ).toBeUndefined();
+      expect(triggerGreeting).not.toHaveBeenCalled();
+      expect(provider.playTtsCalls).toEqual([]);
+    },
+    { realtime: true },
+  );
+});
+
+it("rejects registered steering when its requester turn ends during durable admission", async () => {
+  await withDelayedStore(
+    async ({ manager, config, provider, storePath, holdNextWrite }) => {
+      const initiated = await manager.initiateCall("+15550002222", undefined, {
+        message: "Book a table",
+        mode: "conversation",
+        requesterSessionKey: "agent:main:owner",
+      });
+      const { runtime, triggerGreeting } = createSteeringRuntime({
+        callId: initiated.callId,
+        config,
+        manager,
+      });
+      const tool = registerSteeringTool(runtime, "agent:main:owner");
+      const requesterTurn = new AbortController();
+      const gate = holdNextWrite();
+      const pending = tool.execute(
+        "revoked",
+        {
+          action: "steer_call",
+          callId: initiated.callId,
+          message: "Promise a refund",
+        },
+        requesterTurn.signal,
+      );
+      await gate.entered;
+      requesterTurn.abort(new Error("Requester turn ended"));
+      gate.release();
+
+      expect(JSON.stringify(await pending)).toContain("Requester turn ended");
+      expect(manager.getCall(initiated.callId)?.metadata?.ownerInstructions).toBeUndefined();
+      resetPluginStateStoreForTests();
+      expect(
+        (await findCallInStore(storePath, initiated.callId))?.metadata?.ownerInstructions,
+      ).toBeUndefined();
+      expect(triggerGreeting).not.toHaveBeenCalled();
+      expect(provider.playTtsCalls).toEqual([]);
+    },
+    { realtime: true },
+  );
+});
+
+it("commits and speaks allowed steering once through the registered voice_call tool", async () => {
+  await withDelayedStore(
+    async ({ manager, config, provider, storePath }) => {
+      const initiated = await manager.initiateCall("+15550002222", undefined, {
+        message: "Book a table",
+        mode: "conversation",
+        requesterSessionKey: "agent:main:owner",
+      });
+      const { runtime, triggerGreeting } = createSteeringRuntime({
+        callId: initiated.callId,
+        config,
+        manager,
+      });
+      const tool = registerSteeringTool(runtime, "agent:main:owner");
+
+      const result = await tool.execute("allowed", {
+        action: "steer_call",
+        callId: initiated.callId,
+        message: "Ask for a written quote",
+      });
+
+      expect(JSON.stringify(result)).toContain('"success":true');
+      expect(manager.getCall(initiated.callId)?.metadata?.ownerInstructions).toEqual([
+        "Ask for a written quote",
+      ]);
+      expect(
+        (await findCallInStore(storePath, initiated.callId))?.metadata?.ownerInstructions,
+      ).toEqual(["Ask for a written quote"]);
+      expect(triggerGreeting).toHaveBeenCalledOnce();
+      expect(triggerGreeting.mock.calls[0]?.[0]).toContain("Ask for a written quote");
+      expect(provider.playTtsCalls).toEqual([]);
+    },
+    { realtime: true },
+  );
 });
 
 it.each(["committed", "failed", "retired"] as const)(

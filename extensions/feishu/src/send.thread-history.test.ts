@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig } from "../runtime-api.js";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listFeishuThreadMessages } from "./send.js";
 
 const { mockClientList, mockCreateFeishuClient, mockResolveFeishuAccount } = vi.hoisted(() => ({
   mockClientList: vi.fn(),
@@ -16,11 +16,19 @@ vi.mock("./accounts.js", () => ({
   resolveFeishuRuntimeAccount: mockResolveFeishuAccount,
 }));
 
-let listFeishuThreadMessages: typeof import("./send.js").listFeishuThreadMessages;
+const thread = { cfg: {}, threadId: "omt_1" };
 
-beforeAll(async () => {
-  ({ listFeishuThreadMessages } = await import("./send.js"));
-});
+function page<T>(items: T[], paging: { has_more?: boolean; page_token?: string } = {}) {
+  return { code: 0, data: { items, ...paging } };
+}
+
+function body(content: unknown) {
+  return { content: JSON.stringify(content) };
+}
+
+function textMessage(message_id: string, text: string) {
+  return { message_id, body: body({ text }) };
+}
 
 afterAll(() => {
   vi.doUnmock("./client.js");
@@ -41,68 +49,50 @@ beforeEach(() => {
 
 describe("listFeishuThreadMessages", () => {
   it("reuses the same content parsing for thread history messages", async () => {
-    const response = {
-      code: 0,
-      data: {
-        items: [
-          {
-            message_id: "om_root",
-            msg_type: "text",
-            body: {
-              content: JSON.stringify({ text: "root starter" }),
-            },
+    const response = page([
+      { ...textMessage("om_root", "root starter"), msg_type: "text" },
+      {
+        message_id: "om_card",
+        msg_type: "interactive",
+        body: body({
+          body: {
+            elements: [{ tag: "markdown", content: "hello from card 2.0" }],
           },
-          {
-            message_id: "om_card",
-            msg_type: "interactive",
-            body: {
-              content: JSON.stringify({
-                body: {
-                  elements: [{ tag: "markdown", content: "hello from card 2.0" }],
-                },
-              }),
-            },
-            sender: {
-              id: "app_1",
-              sender_type: "app",
-            },
-            create_time: "1710000000000",
-          },
-          {
-            message_id: "om_post",
-            msg_type: "post",
-            body: {
-              content: JSON.stringify({
-                zh_cn: {
-                  title: "Summary",
-                  content: [[{ tag: "text", text: "Ready", style: ["bold"] }]],
-                },
-              }),
-            },
-            sender: { id: "ou_post", sender_type: "user" },
-            create_time: "1710000000500",
-          },
-          {
-            message_id: "om_file",
-            msg_type: "file",
-            body: {
-              content: JSON.stringify({ file_key: "file_v3_123" }),
-            },
-            sender: {
-              id: "ou_1",
-              sender_type: "user",
-            },
-            create_time: "1710000001000",
-          },
-        ],
+        }),
+        sender: {
+          id: "app_1",
+          sender_type: "app",
+        },
+        create_time: "1710000000000",
       },
-    };
+      {
+        message_id: "om_post",
+        msg_type: "post",
+        body: body({
+          zh_cn: {
+            title: "Summary",
+            content: [[{ tag: "text", text: "Ready", style: ["bold"] }]],
+          },
+        }),
+        sender: { id: "ou_post", sender_type: "user" },
+        create_time: "1710000000500",
+      },
+      {
+        message_id: "om_file",
+        msg_type: "file",
+        body: body({ file_key: "file_v3_123" }),
+        sender: {
+          id: "ou_1",
+          sender_type: "user",
+        },
+        create_time: "1710000001000",
+      },
+    ]);
     const before = structuredClone(response);
     mockClientList.mockResolvedValueOnce(response);
 
     const result = await listFeishuThreadMessages({
-      cfg: {} as ClawdbotConfig,
-      threadId: "omt_1",
+      ...thread,
       rootMessageId: "om_root",
     });
 
@@ -145,29 +135,22 @@ describe("listFeishuThreadMessages", () => {
   });
 
   it("does not partially parse malformed thread history create_time values", async () => {
-    mockClientList.mockResolvedValueOnce({
-      code: 0,
-      data: {
-        items: [
-          {
-            message_id: "om_text",
-            msg_type: "text",
-            body: {
-              content: JSON.stringify({ text: "partial time" }),
-            },
-            sender: {
-              id: "ou_1",
-              sender_type: "user",
-            },
-            create_time: "1710000000000ms",
+    mockClientList.mockResolvedValueOnce(
+      page([
+        {
+          ...textMessage("om_text", "partial time"),
+          msg_type: "text",
+          sender: {
+            id: "ou_1",
+            sender_type: "user",
           },
-        ],
-      },
-    });
+          create_time: "1710000000000ms",
+        },
+      ]),
+    );
 
     const result = await listFeishuThreadMessages({
-      cfg: {} as ClawdbotConfig,
-      threadId: "omt_1",
+      ...thread,
       rootMessageId: "om_root",
     });
 
@@ -185,29 +168,23 @@ describe("listFeishuThreadMessages", () => {
 
   it("fills thread history from continuation pages after excluding the current and root messages", async () => {
     mockClientList
-      .mockResolvedValueOnce({
-        code: 0,
-        data: {
-          has_more: true,
-          page_token: "older-history",
-          items: [
-            { message_id: "om_current", body: { content: '{"text":"current"}' } },
-            { message_id: "om_root", body: { content: '{"text":"root"}' } },
-            { message_id: "om_newer", body: { content: '{"text":"newer"}' } },
+      .mockResolvedValueOnce(
+        page(
+          [
+            textMessage("om_current", "current"),
+            textMessage("om_root", "root"),
+            textMessage("om_newer", "newer"),
           ],
-        },
-      })
-      .mockResolvedValueOnce({
-        code: 0,
-        data: {
-          has_more: false,
-          items: [{ message_id: "om_older", body: { content: '{"text":"older"}' } }],
-        },
-      });
+          {
+            has_more: true,
+            page_token: "older-history",
+          },
+        ),
+      )
+      .mockResolvedValueOnce(page([textMessage("om_older", "older")], { has_more: false }));
 
     const result = await listFeishuThreadMessages({
-      cfg: {} as ClawdbotConfig,
-      threadId: "omt_1",
+      ...thread,
       currentMessageId: "om_current",
       rootMessageId: "om_root",
       limit: 2,
@@ -227,26 +204,15 @@ describe("listFeishuThreadMessages", () => {
   });
 
   it("reads thread history beyond the SDK's maximum single-page size", async () => {
-    const pageOne = Array.from({ length: 50 }, (_value, index) => ({
-      message_id: `om_${String(51 - index)}`,
-      body: { content: JSON.stringify({ text: String(51 - index) }) },
-    }));
+    const pageOne = Array.from({ length: 50 }, (_value, index) =>
+      textMessage(`om_${String(51 - index)}`, String(51 - index)),
+    );
     mockClientList
-      .mockResolvedValueOnce({
-        code: 0,
-        data: { items: pageOne, has_more: true, page_token: "last-message" },
-      })
-      .mockResolvedValueOnce({
-        code: 0,
-        data: {
-          items: [{ message_id: "om_1", body: { content: '{"text":"1"}' } }],
-          has_more: false,
-        },
-      });
+      .mockResolvedValueOnce(page(pageOne, { has_more: true, page_token: "last-message" }))
+      .mockResolvedValueOnce(page([textMessage("om_1", "1")], { has_more: false }));
 
     const result = await listFeishuThreadMessages({
-      cfg: {} as ClawdbotConfig,
-      threadId: "omt_1",
+      ...thread,
       limit: 51,
     });
 
@@ -257,27 +223,18 @@ describe("listFeishuThreadMessages", () => {
 
   it("deduplicates overlapping continuation pages without consuming the history limit", async () => {
     mockClientList
-      .mockResolvedValueOnce({
-        code: 0,
-        data: {
+      .mockResolvedValueOnce(
+        page([textMessage("om_newer", "newer")], {
           has_more: true,
           page_token: "overlapping-page",
-          items: [{ message_id: "om_newer", body: { content: '{"text":"newer"}' } }],
-        },
-      })
-      .mockResolvedValueOnce({
-        code: 0,
-        data: {
-          items: [
-            { message_id: "om_newer", body: { content: '{"text":"duplicate"}' } },
-            { message_id: "om_older", body: { content: '{"text":"older"}' } },
-          ],
-        },
-      });
+        }),
+      )
+      .mockResolvedValueOnce(
+        page([textMessage("om_newer", "duplicate"), textMessage("om_older", "older")]),
+      );
 
     const result = await listFeishuThreadMessages({
-      cfg: {} as ClawdbotConfig,
-      threadId: "omt_1",
+      ...thread,
       limit: 2,
     });
 
@@ -288,20 +245,22 @@ describe("listFeishuThreadMessages", () => {
     { name: "missing", firstToken: undefined, secondToken: undefined },
     { name: "repeated", firstToken: "same-page", secondToken: "same-page" },
   ])("rejects $name thread history continuation tokens", async ({ firstToken, secondToken }) => {
-    mockClientList.mockResolvedValueOnce({
-      code: 0,
-      data: { items: [], has_more: true, ...(firstToken ? { page_token: firstToken } : {}) },
-    });
+    mockClientList.mockResolvedValueOnce(
+      page([], {
+        has_more: true,
+        ...(firstToken ? { page_token: firstToken } : {}),
+      }),
+    );
     if (firstToken) {
-      mockClientList.mockResolvedValueOnce({
-        code: 0,
-        data: { items: [], has_more: true, ...(secondToken ? { page_token: secondToken } : {}) },
-      });
+      mockClientList.mockResolvedValueOnce(
+        page([], {
+          has_more: true,
+          ...(secondToken ? { page_token: secondToken } : {}),
+        }),
+      );
     }
 
-    await expect(
-      listFeishuThreadMessages({ cfg: {} as ClawdbotConfig, threadId: "omt_1" }),
-    ).rejects.toThrow(
+    await expect(listFeishuThreadMessages(thread)).rejects.toThrow(
       `Feishu thread history pagination returned a ${firstToken ? "repeated" : "missing"} page token`,
     );
   });

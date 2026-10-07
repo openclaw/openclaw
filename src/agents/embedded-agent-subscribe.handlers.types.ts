@@ -10,11 +10,14 @@ import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-respons
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
+import type { AgentItemEventData } from "../infra/agent-activity-events.js";
 import type { AssistantMessage, ThinkingContent } from "../llm/types.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AssistantPhase } from "../shared/chat-message-content.js";
+import type { StreamDirectiveCodePrefix } from "../utils/directive-tags.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
-import type { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import type { BlockChunkMetadata, EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import type { LiveEditDiffProgressState } from "./embedded-agent-live-edit-diff.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -32,6 +35,7 @@ import type {
 } from "./embedded-agent-utils.js";
 import type { McpConnectAction } from "./mcp-connect-action.js";
 import type { McpAppChannelView } from "./mcp-ui-resource.js";
+import type { ReplyDeliveryState } from "./reply-completion.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
@@ -80,8 +84,6 @@ export type AssistantStreamData = {
 export type StreamBlockState = {
   thinking: boolean;
   final: boolean;
-  /** The reply buffer already contains the phase-aware visible projection. */
-  textIsVisible?: true;
   inlineCode?: InlineCodeState;
   fence?: FenceScanState;
   reasoningInlineCode?: InlineCodeState;
@@ -93,6 +95,9 @@ export type StreamBlockState = {
   pendingTagFragment?: string;
 };
 
+/** A response-ending answer and the message index its reply payload belongs to. */
+export type CompletedAssistantAnswer = { assistant: AssistantMessage; messageIndex: number };
+
 /** Mutable subscription state shared by embedded-agent event handlers. */
 export type EmbeddedAgentSubscribeState = {
   assistantTexts: string[];
@@ -101,10 +106,17 @@ export type EmbeddedAgentSubscribeState = {
     messageEnd: number;
     finalMessageStart: number;
     lastAssistant: AssistantMessage;
+    keptAnswer?: CompletedAssistantAnswer;
   }>;
+  /** Latest response-ending answer to the current input. */
+  inputAnswer?: CompletedAssistantAnswer;
+  /** That answer while the latest assistant message added no reply of its own: the turn's reply. */
+  keptAnswer?: CompletedAssistantAnswer;
   toolMetas: Array<{
     toolName?: string;
     toolCallId?: string;
+    parentToolCallId?: string;
+    activity?: AgentItemEventData;
     meta?: string;
     replaySafe?: boolean;
     isError?: boolean;
@@ -121,16 +133,7 @@ export type EmbeddedAgentSubscribeState = {
     string,
     { lastEmittedAtMs: number; itemMetadata: ExecLiveItemMetadata }
   >;
-  liveEditDiffStateById: Map<
-    string,
-    {
-      added: number;
-      removed: number;
-      emittedAdded: number;
-      emittedRemoved: number;
-      lastCheckedAtMs: number;
-    }
-  >;
+  liveEditDiffStateById: Map<string, LiveEditDiffProgressState>;
   itemActiveIds: Set<string>;
   itemStartedCount: number;
   itemCompletedCount: number;
@@ -152,8 +155,9 @@ export type EmbeddedAgentSubscribeState = {
   deltaBuffer: string;
   /** Raw text received for the current native block, independent of snapshot separators. */
   streamBlockText: string;
-  /** Start of this native block in the reply chunker's source, before Markdown rewriting. */
-  streamBlockOffset: number;
+  streamBlockFinal: boolean;
+  /** Native source boundary from which the prepared block chunker's frame begins. */
+  blockReplyScopeStart: { contentIndex: number; itemId?: string; after?: boolean } | undefined;
   /** Scanner state shares deltaBuffer's lifecycle so each provider byte is parsed once. */
   thinkingTagStream: ThinkingTagStreamState;
   /**
@@ -166,14 +170,16 @@ export type EmbeddedAgentSubscribeState = {
   deltaBufferIsCommentary: boolean;
   /** Whether timeout settlement committed visible text for this message. */
   hasFlushedPartialText: boolean;
-  blockState: StreamBlockState & { inlineCode: InlineCodeState };
   partialBlockState: StreamBlockState & { inlineCode: InlineCodeState };
+  /** Accepted audio occurrences in the current partial-directive snapshot. */
+  lastAssistantAudioDirectiveCount: number;
   assistantStream?: {
     raw: string;
     text: string;
     projection?: {
       kind: "raw" | "delivery" | "final";
       projector: ReturnType<typeof createAssistantVisibleStreamText>;
+      directiveCodePrefix?: StreamDirectiveCodePrefix;
     };
   };
   lastStreamedReasoning?: string;
@@ -200,9 +206,6 @@ export type EmbeddedAgentSubscribeState = {
   compactionInFlight: boolean;
   lastCompactionTokensAfter?: number;
   pendingCompactionRetry: number;
-  compactionRetryResolve?: () => void;
-  compactionRetryReject?: (reason?: unknown) => void;
-  compactionRetryPromise: Promise<void> | null;
   unsubscribed: boolean;
   replayState: EmbeddedRunReplayState;
   livenessState?: EmbeddedRunLivenessState;
@@ -224,6 +227,11 @@ export type EmbeddedAgentSubscribeState = {
   messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
   messageToolOnlySourceReplyDelivered: boolean;
   sourceReplyDelivered?: true;
+  sourceReplyDeliveryState?: ReplyDeliveryState;
+  /** Whether the current provider turn's finished tools were only complete source progress. */
+  turnToolsOnlySourceProgress?: boolean;
+  /** The same fact for the latest provider turn that finished any tool. */
+  lastToolTurnOnlySourceProgress?: boolean;
   successfulCronAdds: number;
   pendingToolMediaUrls: string[];
   pendingToolMediaAttachments?: ReplyMediaAttachment[];
@@ -239,7 +247,7 @@ export type EmbeddedAgentSubscribeState = {
   pendingAssistantReplyDirectives?: Pick<
     BlockReplyPayload,
     "audioAsVoice" | "replyToId" | "replyToTag" | "replyToCurrent"
-  >;
+  > & { audioDirectiveStart?: number };
   deterministicApprovalPromptPending: boolean;
   deterministicApprovalPromptSent: boolean;
   lastAssistant?: AssistantMessage;
@@ -268,8 +276,7 @@ export type EmbeddedAgentSubscribeContext = {
   stripBlockTags: (text: string, state: StreamBlockState, options?: { final?: boolean }) => string;
   emitBlockChunk: (
     text: string,
-    options?: {
-      sourceText?: string;
+    options?: Partial<BlockChunkMetadata> & {
       assistantMessageIndex?: number;
       final?: boolean;
       finalReply?: ReplyDirectiveParseResult;
@@ -285,7 +292,6 @@ export type EmbeddedAgentSubscribeContext = {
     text: string,
     options?: { final?: boolean },
   ) => ReplyDirectiveParseResult | null;
-  resetBlockReplyDirectives: () => void;
   resetPartialReplyDirectives: () => void;
   resetAssistantMessageState: (nextAssistantTextBaseline: number) => void;
   resetForCompactionRetry: () => void;
@@ -317,6 +323,7 @@ export type EmbeddedAgentSubscribeContext = {
       assistantMessageIndex?: number;
       consumePendingToolMedia?: boolean;
       blockSourceText?: string;
+      blockSourceRange?: readonly [start: number, end: number];
     },
   ) => void;
   flushAssistantStream: () => void;
@@ -325,97 +332,20 @@ export type EmbeddedAgentSubscribeContext = {
   clearDeferredBlockReplies: () => void;
 };
 
-/**
- * Minimal context type for tool execution handlers. Allows
- * tests provide only the fields they exercise
- * without needing the full `EmbeddedAgentSubscribeContext`.
- */
-type ToolHandlerParams = Pick<
-  SubscribeEmbeddedAgentSessionParams,
-  | "runId"
-  | "onBlockReplyFlush"
-  | "onAgentEvent"
-  | "onToolStreamBoundary"
-  | "onExecutionPhase"
-  | "onHeartbeatToolResponse"
-  | "onAgentToolResult"
-  | "observeToolTerminal"
-  | "onToolResult"
-  | "config"
-  | "messageChannel"
-  | "sessionKey"
-  | "currentChannelId"
-  | "currentMessagingTarget"
-  | "currentAccountId"
-  | "currentThreadId"
-  | "currentMessageId"
-  | "replyToMode"
-  | "hasRepliedRef"
-  | "sessionId"
-  | "agentId"
-  | "coreBuiltinToolNames"
-  | "replaySafeToolNames"
-  | "codeModeExecToolNames"
-  | "sideEffectToolOwners"
-  | "toolResultFormat"
-  | "toolProgressDetail"
-  | "sourceReplyDeliveryMode"
-  | "onDeliveredMessageToolOnlySourceReply"
->;
-
-type ToolHandlerState = Pick<
-  EmbeddedAgentSubscribeState,
-  | "toolMetaById"
-  | "toolMetas"
-  | "acceptedSessionSpawns"
-  | "toolSummaryById"
-  | "execLiveUpdateStateById"
-  | "liveEditDiffStateById"
-  | "itemActiveIds"
-  | "itemStartedCount"
-  | "itemCompletedCount"
-  | "lastToolError"
-  | "latestMcpAppChannelView"
-  | "latestMcpConnectAction"
-  | "pendingToolMediaUrls"
-  | "pendingToolMediaAttachments"
-  | "pendingToolMediaTrustByUrl"
-  | "toolAutoDeliveryMediaUrls"
-  | "pendingToolAudioAsVoice"
-  | "deterministicApprovalPromptPending"
-  | "hadDeterministicSideEffect"
-  | "replayState"
-  | "messagingToolSentTexts"
-  | "messagingToolSentTextsNormalized"
-  | "currentSourceMessagingToolSentTextsNormalized"
-  | "messagingToolSentMediaUrls"
-  | "messagingToolSourceReplyPayloads"
-  | "messageToolOnlySourceReplyDelivered"
-  | "sourceReplyDelivered"
-  | "messagingToolSentTargets"
-  | "heartbeatToolResponse"
-  | "successfulCronAdds"
-  | "deterministicApprovalPromptSent"
-  | "toolExecutionSinceLastBlockReply"
-  | "assistantMessageIndex"
->;
-
-export type ToolHandlerContext = {
-  params: ToolHandlerParams;
-  state: ToolHandlerState;
-  log: EmbeddedSubscribeLogger;
-  hookRunner?: HookRunner;
-  builtinToolNames?: ReadonlySet<string>;
-  trustedLocalMediaToolNames?: ReadonlySet<string>;
-  flushBlockReplyBuffer: () => void | Promise<void>;
-  shouldEmitToolResult: () => boolean;
-  shouldEmitToolOutput: () => boolean;
-  emitToolSummary: (
-    toolName: string | undefined,
-    meta: string | undefined,
-    commandBearing: boolean,
-  ) => void;
-  emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
-  trimMessagingToolSent: () => void;
+export type ToolHandlerContext = Pick<
+  EmbeddedAgentSubscribeContext,
+  | "log"
+  | "hookRunner"
+  | "builtinToolNames"
+  | "trustedLocalMediaToolNames"
+  | "flushBlockReplyBuffer"
+  | "shouldEmitToolResult"
+  | "shouldEmitToolOutput"
+  | "emitToolSummary"
+  | "emitToolOutput"
+  | "trimMessagingToolSent"
+> & {
+  params: Omit<SubscribeEmbeddedAgentSessionParams, "session">;
+  state: EmbeddedAgentSubscribeState;
   consumeToolSendReceipt?: (toolCallId: string) => unknown;
 };

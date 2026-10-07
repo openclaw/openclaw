@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { resolveDeferredPluginMigrationConfigPaths } from "../config/deferred-plugin-migration-config.js";
+import { cloneEnvWithPlatformSemantics } from "../config/env-vars.js";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import { resolveConfigPath } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
@@ -20,17 +21,19 @@ import type {
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
+  withArtifactPreservingStateReads,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
+import {
   inspectPluginMigrationAvailability,
   type PluginMigrationInspection,
 } from "./doctor/shared/plugin-migration-availability.js";
-import { readShippedPluginInstallConfigImportRecords } from "./doctor/shared/plugin-registry-migration.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./doctor/shared/update-phase.js";
 
 /** One preflight retains unavailable owners until their migration reports completion. */
 export function createDoctorPluginMigrationPreparation(params: {
   enabled: boolean;
   env: () => NodeJS.ProcessEnv;
-  beforePersistentEffect: () => void;
   report: (result: MigrationMessages) => void;
   recordReceipt: (receipt: LegacyStateMigrationStepReceipt) => void;
   measure: ConfigSnapshotReadMeasure;
@@ -43,11 +46,19 @@ export function createDoctorPluginMigrationPreparation(params: {
   let expectedPending: readonly DeferredPluginMigration[] = [];
   let refreshSnapshot = false;
   let previousLoaded = false;
-  const loadPrevious = (snapshot?: ConfigFileSnapshot) => {
-    if (previousLoaded || !(snapshot?.exists ?? existsSync(resolveConfigPath(params.env())))) {
+  const loadPrevious = async (snapshot?: ConfigFileSnapshot) => {
+    if (previousLoaded) {
       return;
     }
-    deferred = readDeferredPluginMigrations({ env: params.env() });
+    const env = cloneEnvWithPlatformSemantics(params.env());
+    if (!(snapshot?.exists ?? existsSync(resolveConfigPath(env)))) {
+      return;
+    }
+    deferred = await withArtifactPreservingStateReads(() =>
+      withOpenClawStateDatabaseReadSnapshot(async () => readDeferredPluginMigrations({ env }), {
+        env,
+      }),
+    );
     expectedPending = structuredClone(deferred);
     for (const entry of deferred) {
       previousById.set(entry.pluginId, entry);
@@ -87,7 +98,7 @@ export function createDoctorPluginMigrationPreparation(params: {
     }
   };
   const prepare = async (snapshot: ConfigFileSnapshot) => {
-    loadPrevious(snapshot);
+    await loadPrevious(snapshot);
     if (!snapshot.exists) {
       return [...previousById.values()];
     }
@@ -95,9 +106,6 @@ export function createDoctorPluginMigrationPreparation(params: {
       const availability = await inspectPluginMigrationAvailability({
         cfg: snapshot.sourceConfig,
         env: params.env(),
-        installRecords: readShippedPluginInstallConfigImportRecords(snapshot, {
-          env: params.env(),
-        }),
         retainedPluginIds: [...previousById.keys()],
         deferInstallation: shouldDeferConfiguredPluginInstallRepair(params.env()),
       });
@@ -109,7 +117,7 @@ export function createDoctorPluginMigrationPreparation(params: {
     return [...previousById.values()];
   };
   const reportPending = (plugin: DeferredPluginMigration) => {
-    const warning = formatDeferredPluginMigration(plugin);
+    const warning = formatDeferredPluginMigration(plugin, params.env());
     const previous = reported.get(plugin.pluginId);
     if (previous?.warnings[0] === warning) {
       return;
@@ -138,13 +146,12 @@ export function createDoctorPluginMigrationPreparation(params: {
     reported.set(plugin.pluginId, receipt);
     params.recordReceipt(receipt);
   };
-  const persistPending = (
+  const persistPending = async (
     pending: readonly DeferredPluginMigration[],
     resolvedPluginIds?: readonly string[],
   ) => {
-    params.beforePersistentEffect();
     try {
-      const committed = recordDeferredPluginMigrations({
+      const committed = await recordDeferredPluginMigrations({
         env: params.env(),
         pending,
         ...(resolvedPluginIds ? { resolvedPluginIds } : {}),
@@ -176,11 +183,11 @@ export function createDoctorPluginMigrationPreparation(params: {
 
   return {
     deferred: () => deferred,
-    hasPending: () => previousById.size > 0,
+    retainedPluginIds: () => [...previousById.keys()],
     prepare,
-    snapshotOptions: () => {
+    snapshotOptions: async () => {
       // Existing pending inputs must reach the first config read before backup selection.
-      loadPrevious();
+      await loadPrevious();
       return {
         preparePluginMigrations: !prepared && params.enabled ? prepare : undefined,
         deferredPluginMigrations: [...previousById.values()],
@@ -202,7 +209,7 @@ export function createDoctorPluginMigrationPreparation(params: {
         ),
       );
     },
-    converged(
+    async converged(
       pending: readonly DeferredPluginMigration[],
       snapshot: ConfigFileSnapshot,
       metadata: PluginMetadataSnapshot | undefined,
@@ -224,7 +231,7 @@ export function createDoctorPluginMigrationPreparation(params: {
         ),
       );
       remember();
-      if (!persistPending([...previousById.values()])) {
+      if (!(await persistPending([...previousById.values()]))) {
         return;
       }
       for (const plugin of deferred) {
@@ -245,7 +252,7 @@ export function createDoctorPluginMigrationPreparation(params: {
         completedIds.add(pluginId);
       }
     },
-    complete() {
+    async complete() {
       if (!params.enabled) {
         return false;
       }
@@ -284,13 +291,15 @@ export function createDoctorPluginMigrationPreparation(params: {
           unavailableIds.has(plugin.pluginId)
             ? plugin
             : Object.assign(plugin, {
-                reason: "The plugin has not reported completion of its retained state migration.",
+                reason:
+                  "The installed plugin has not confirmed that its saved data and settings are ready for this version. If Doctor cannot finish the upgrade, report this warning to the plugin maintainer.",
+                command: "openclaw doctor --fix",
               }),
         );
       if (resolvedPluginIds.length === 0 && pending.length === 0) {
         return refreshSnapshot;
       }
-      if (!persistPending(pending, resolvedPluginIds)) {
+      if (!(await persistPending(pending, resolvedPluginIds))) {
         return true;
       }
       for (const pluginId of resolvedPluginIds) {

@@ -27,21 +27,20 @@ export function materializeAuthStorageStore(
                 isDeepStrictEqual(candidate.tokenRef, credential.tokenRef)
               : false,
         );
-      const needsMaterializedRef =
-        (credential.type === "api_key" && Boolean(credential.keyRef)) ||
-        (credential.type === "token" && Boolean(credential.tokenRef));
-      return [
-        profileId,
-        needsMaterializedRef && runtimeCredential ? runtimeCredential : credential,
-      ];
+      return [profileId, runtimeCredential ?? credential];
     }),
   );
   return { ...store, profiles };
 }
 
-function projectAuthStorageData(store: AuthProfileStore | null): AuthStorageData {
+export function projectAuthoritativeAuthStorageData(
+  store: AuthProfileStore,
+  snapshots: readonly AuthProfileStore[],
+): AuthStorageData {
+  const materialized = materializeAuthStorageStore(store, snapshots);
+  assertAuthStorageSecretRefsMaterialized(materialized);
   const projected: AuthStorageData = {};
-  for (const [profileId, credential] of Object.entries(store?.profiles ?? {})) {
+  for (const [profileId, credential] of Object.entries(materialized.profiles)) {
     if (profileId !== `${credential.provider}:default`) {
       continue;
     }
@@ -75,15 +74,6 @@ export function assertAuthStorageSecretRefsMaterialized(store: AuthProfileStore)
       );
     }
   }
-}
-
-export function projectAuthoritativeAuthStorageData(
-  store: AuthProfileStore,
-  snapshots: readonly AuthProfileStore[],
-): AuthStorageData {
-  const materialized = materializeAuthStorageStore(store, snapshots);
-  assertAuthStorageSecretRefsMaterialized(materialized);
-  return projectAuthStorageData(materialized);
 }
 
 export function applyAuthStorageData(

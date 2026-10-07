@@ -228,12 +228,84 @@ Run `docker compose` from the repo root. If you enabled `OPENCLAW_EXTRA_MOUNTS` 
 ### Upgrading container images
 
 When you replace the OpenClaw image but keep the same mounted state/config, the
-new Gateway runs startup-safe upgrade migrations and plugin convergence before
-readiness. Routine image upgrades should not require a separate
-`openclaw doctor --fix` pass.
+image entrypoint runs `openclaw doctor --fix --non-interactive` under exclusive
+maintenance ownership before starting the Gateway. This covers the default image
+command and Compose's foreground Gateway command, including its selected profile.
+Routine image upgrades do not require a separate Doctor pass.
 
-If startup cannot complete those repairs safely, the Gateway exits instead of
-reporting healthy. With a restart policy, Docker, Podman, or Kubernetes may show
+On older Linux hosts such as Synology DSM, an unavailable `openat2` syscall can
+make older images report that another Gateway owns even an empty state volume.
+Current images use the guarded filesystem fallback; keep native filesystem
+checks enabled. Doctor reports the underlying lock failure and recovery action
+instead of treating every acquisition error as an active Gateway. Permission
+errors require a writable state mount for the container user. If the filesystem
+cannot provide exclusive file creation for state ownership, stop OpenClaw, back
+up its state, and move the state volume to a local filesystem that supports it.
+Ordinary database transactions use SQLite locking on that volume. Do not delete
+state or lock files to bypass ownership.
+
+Other CLI commands and help pass through unchanged. If you replace the image's
+entrypoint, run Doctor against the same mounted state/config before launching the
+Gateway; a custom entrypoint bypasses this activation step.
+
+This includes agent database schema upgrades, shared-state audit migrations, and
+legacy workspace setup imports. Before advancing database schemas, Doctor saves
+verified SQLite copies beside the originals as
+`<database>.pre-startup-migration-<id>.bak`. The shared database and affected agent
+databases use the same backup ID. Config backups and retired workspace-file
+archives follow the normal Doctor repair rules. Keep these files with your
+pre-upgrade backup; a rollback must restore the matching state as well as the old
+image. See [rollback](/install/updating#rollback).
+
+Retries with the same candidate build, database files, and target schemas verify and reuse the
+first completed backup group for the full database inventory, including after a
+partially completed migration. A temporary `.bak.capturing` file records an
+unfinished capture and is durably removed before migration starts. An interrupted
+capture is recaptured; a missing or damaged member of a completed group stops
+migration and preserves the surviving snapshots for recovery. Repeated
+failed attempts therefore do not create another full backup group each time.
+Older backup groups remain available for operator-managed rollback.
+Doctor records these originals for `openclaw update cleanup --dry-run`. They stay
+protected until Doctor verifies that the migration completed and a later update
+finishes successfully. Cleanup can then retire the recorded group after your
+confirmation. Older unrecorded `.bak` files are listed as protected. Keep these
+files with your pre-upgrade backups while you still need the matching rollback.
+
+On FUSE filesystems such as Unraid's `shfs`, a missing native no-replace rename
+does not require an operator step in native `auto` mode when same-directory
+hardlinks are supported. fs-safe preserves the source inode and bytes through
+exclusive hardlink publication and unlink. Native `require` mode still refuses
+the unsupported primitive. Doctor recovers interrupted source/claim pairs without
+replacing another file. Its separate missing-addon/native-off compatibility path
+syncs the source and directory before removing the old name; native moves do not
+promise per-move crash durability. Archive hardening and durable recovery
+checkpoints remain owned by Doctor.
+SQLite backup verification rechecks snapshot bytes when FUSE modification or change timestamps drift, while still rejecting changed contents or file identities.
+
+Readiness remains false while the default or system agent database is refused,
+and the readiness response includes the admission reason. A refused optional
+agent remains isolated while healthy agents can serve requests.
+
+Missing or drifted canonical SQLite indexes are rebuilt by the schema migration
+owner before session startup completes. Repair warnings identify the agent,
+database path, rebuilt indexes, and elapsed time. Current-schema shape refusal
+reports list all affected databases in stable path order. Missing required tables,
+incompatible columns, and other changes that cannot be reconstructed safely still require Doctor; startup
+does not recreate a missing data table as an empty one.
+
+On Linux hosts without file creation timestamps, normal SQLite writes and
+permission repairs can change the reported file birth time. These changes do
+not invalidate the open database; actual file replacement still stops admission.
+
+Startup exits with code `78` when required state cannot be migrated safely:
+for example, source identities conflict, data is unreadable, another writer owns
+the state, or the filesystem provides no safe, durable way to publish a claim.
+The retained source, claim, and backups are recovery inputs; do not delete them to
+silence the error. If the filesystem lacks the required primitives, stop the
+Gateway and expose the same data through its native backing filesystem before
+retrying (for example, an Unraid pool path instead of the `shfs` share).
+
+With a restart policy, Docker, Podman, or Kubernetes may show
 the Gateway container restarting. Keep the mounted state volume, then run the
 same image once with `openclaw doctor --fix` as the container command, using the
 same state/config mounts the Gateway uses:
@@ -347,7 +419,7 @@ The route is protected by Gateway authentication; don't expose a separate public
 
 ### Health checks
 
-Container probe endpoints (no auth required):
+Container check endpoints (no auth required):
 
 ```bash
 curl -fsS http://127.0.0.1:18789/healthz   # liveness
@@ -356,7 +428,7 @@ curl -fsS http://127.0.0.1:18789/readyz    # deep, channel-aware readiness
 ```
 
 The image's built-in `HEALTHCHECK` pings `/healthz`; repeated failures mark the container `unhealthy` so orchestrators can restart or replace it.
-Use `/startupz` for an orchestrator startup or readiness probe so a failed channel account does not remove the otherwise healthy Gateway and Control UI from service. Use `/readyz` for monitoring that intentionally treats hard channel failures as not ready. See [Health checks](/gateway/health#http-probes) for response details.
+Use `/startupz` for an orchestrator startup or readiness check so a failed channel account does not remove the otherwise healthy Gateway and Control UI from service. Use `/readyz` for monitoring that intentionally treats hard channel failures as not ready. See [Health checks](/gateway/health#http-probes) for response details.
 
 Authenticated deep health snapshot:
 

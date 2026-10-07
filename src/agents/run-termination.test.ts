@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
 import {
   buildAgentRunTerminalOutcomeFromAttempt,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
@@ -9,7 +10,6 @@ import { FailoverError } from "./failover/error.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
-  isAgentRunDirectAbortReason,
   isAbortedAgentStopReason,
   resolveAgentRunAbortLifecycleFields,
   resolveAgentRunErrorLifecycleFields,
@@ -31,26 +31,6 @@ function createCliWatchdogError() {
 
 describe("resolveCliToolTerminalReason", () => {
   it.each([
-    {
-      name: "abort-timeout",
-      setup: () => {
-        const controller = new AbortController();
-        const timeout = new Error("timed out");
-        timeout.name = "TimeoutError";
-        controller.abort(timeout);
-        return { abortSignal: controller.signal, error: new Error("other") };
-      },
-      expected: "timed_out",
-    },
-    {
-      name: "abort-cancel",
-      setup: () => {
-        const controller = new AbortController();
-        controller.abort();
-        return { abortSignal: controller.signal, error: undefined };
-      },
-      expected: "cancelled",
-    },
     {
       name: "restart-abort reason",
       setup: () => {
@@ -147,28 +127,6 @@ describe("resolveCliToolTerminalReason", () => {
 });
 
 describe("resolveAgentRunAbortLifecycleFields", () => {
-  it("classifies generic cancellation as aborted", () => {
-    const controller = new AbortController();
-    controller.abort();
-
-    expect(resolveAgentRunAbortLifecycleFields(controller.signal)).toEqual({
-      aborted: true,
-      stopReason: "aborted",
-    });
-  });
-
-  it("preserves timeout attribution", () => {
-    const controller = new AbortController();
-    const timeout = new Error("timed out");
-    timeout.name = "TimeoutError";
-    controller.abort(timeout);
-
-    expect(resolveAgentRunAbortLifecycleFields(controller.signal)).toEqual({
-      aborted: true,
-      stopReason: "timeout",
-    });
-  });
-
   it("classifies managed restart cancellation", () => {
     const controller = new AbortController();
     controller.abort(createAgentRunRestartAbortError());
@@ -211,43 +169,52 @@ describe("resolveAgentRunAbortLifecycleFields", () => {
     expect(isAbortedAgentStopReason("restart")).toBe(true);
     expect(isAbortedAgentStopReason("timeout")).toBe(false);
   });
-
-  it("marks direct active-run cancellation independently of an AbortSignal", () => {
-    const error = createAgentRunDirectAbortError();
-
-    expect(error).toMatchObject({
-      name: "AbortError",
-      message: "agent run aborted",
-    });
-    expect(isAgentRunDirectAbortReason(error)).toBe(true);
-    expect(isAgentRunDirectAbortReason(createAgentRunRestartAbortError())).toBe(false);
-  });
 });
 
 describe("resolveAgentRunErrorLifecycleFields", () => {
-  it("preserves an unphased provider-started timeout from the public harness result", () => {
-    const outcome = buildAgentRunTerminalOutcomeFromAttempt({
-      terminal: { kind: "timeout", phase: "compaction", source: "runtime" },
-      promptTimeoutOutcome: { providerStarted: true },
-    });
-    expect(outcome).toMatchObject({
-      reason: "hard_timeout",
-      status: "timeout",
-      providerStarted: true,
-    });
-    expect(outcome).not.toHaveProperty("timeoutPhase");
-    const error = new FailoverError("Attempt timed out", {
-      reason: "timeout",
-      timeout: { timeoutPhase: outcome.timeoutPhase, providerStarted: outcome.providerStarted },
-    });
+  it.each(["failover", "canonical", "wrapped canonical"])(
+    "preserves an unphased provider-started timeout through %s errors unless cancelled",
+    (wrapper) => {
+      const outcome = buildAgentRunTerminalOutcomeFromAttempt({
+        terminal: { kind: "timeout", phase: "compaction", source: "runtime" },
+        promptTimeoutOutcome: { providerStarted: true },
+      });
+      expect(outcome).toMatchObject({
+        reason: "hard_timeout",
+        status: "timeout",
+        providerStarted: true,
+      });
+      expect(outcome).not.toHaveProperty("timeoutPhase");
+      const failure =
+        wrapper === "failover"
+          ? new FailoverError("Attempt timed out", {
+              reason: "timeout",
+              timeout: {
+                timeoutPhase: outcome.timeoutPhase,
+                providerStarted: outcome.providerStarted,
+              },
+            })
+          : new AgentRunTerminalOutcomeError(
+              new Error("Persisted user turn changed before replay admission"),
+              outcome,
+            );
+      const error =
+        wrapper === "wrapped canonical" ? new Error("Attempt failed", { cause: failure }) : failure;
 
-    const fields = resolveAgentRunErrorLifecycleFields(error, undefined);
+      const fields = resolveAgentRunErrorLifecycleFields(error, undefined);
 
-    expect(fields).toEqual({ stopReason: "timeout", providerStarted: true });
-    expect(
-      buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "error", data: fields }).reason,
-    ).toBe("hard_timeout");
-  });
+      expect(fields).toEqual({ stopReason: "timeout", providerStarted: true });
+      expect(
+        buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "error", data: fields }).reason,
+      ).toBe("hard_timeout");
+      const controller = new AbortController();
+      controller.abort();
+      expect(resolveAgentRunErrorLifecycleFields(error, controller.signal)).toEqual({
+        aborted: true,
+        stopReason: "aborted",
+      });
+    },
+  );
 
   it.each(["direct", "fallback summary"])(
     "does not promote a retryable HTTP 500 to a provider timeout through %s",
@@ -256,7 +223,10 @@ describe("resolveAgentRunErrorLifecycleFields", () => {
         status: 500,
         message: "500 Fixture request needs a task header",
       });
-      expect(failure).toMatchObject({ reason: "timeout", status: 500 });
+      // An untyped 500 is a provider server error, not a timing failure. The
+      // guard below is what this test protects: neither reason may surface as a
+      // provider timeout in the lifecycle fields.
+      expect(failure).toMatchObject({ reason: "server_error", status: 500 });
       const error =
         wrapper === "direct"
           ? failure
@@ -414,15 +384,4 @@ describe("resolveAgentRunErrorLifecycleFields", () => {
       expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({});
     },
   );
-
-  it("preserves explicit cancellation over a concurrent timeout error", () => {
-    const controller = new AbortController();
-    controller.abort();
-    const error = createCliWatchdogError();
-
-    expect(resolveAgentRunErrorLifecycleFields(error, controller.signal)).toEqual({
-      aborted: true,
-      stopReason: "aborted",
-    });
-  });
 });

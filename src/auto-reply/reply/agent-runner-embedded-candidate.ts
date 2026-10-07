@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import type {
   CompactionAccountingFact,
   RunEmbeddedAgentInternalParams,
@@ -18,6 +17,7 @@ import {
 import type { PartialReplyPayload } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
+import { resolveTerminalReplyDelivery } from "./agent-runner-core.js";
 import {
   createAgentRunEventHandler,
   type MessageToolDeliveryState,
@@ -25,6 +25,7 @@ import {
 import type { CompletedAgentAuthSelection } from "./agent-runner-execution.types.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
+import type { DirectBlockDelivery } from "./reply-delivery.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
 import {
@@ -34,14 +35,13 @@ import {
 
 export async function runEmbeddedFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
+    candidateAgentRuntime: string;
     effectiveRun: AgentFallbackCandidateCommonParams["candidateRun"];
-    sessionRuntimeOverride?: string;
+    directBlockDeliveries: DirectBlockDelivery[];
     getLifecycleGeneration: () => string;
     onLifecycleGeneration: (generation: string) => void;
-    allowTransientCooldownProbe?: boolean;
     notifyUserAboutCompaction: boolean;
     messageToolDeliveryState: MessageToolDeliveryState;
-    githubPublicationAvailable: boolean;
     onCompactionFacts: (facts: {
       accounting?: CompactionAccountingFact;
       postCompactionModelAttempted: boolean;
@@ -51,7 +51,6 @@ export async function runEmbeddedFallbackCandidate(
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   maintenanceAuthProfile?: CompletedAgentAuthSelection;
   compactionRequestBudget?: CompactionRequestBudget;
-  bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
   let maintenanceAuthProfile: CompletedAgentAuthSelection | undefined;
@@ -72,12 +71,13 @@ export async function runEmbeddedFallbackCandidate(
     promptCacheKey: turn.opts?.promptCacheKey,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     model: params.model,
+    agentRuntime: params.candidateAgentRuntime,
   });
   if (sourceReplyDeliveryRuntime) {
     bindSourceReplyDeliveryRuntime(runBaseParams, sourceReplyDeliveryRuntime);
   }
-  const agentHarnessPolicy = params.sessionRuntimeOverride
-    ? ({ runtime: params.sessionRuntimeOverride, runtimeSource: "model" } as const)
+  const agentHarnessPolicy = params.agentHarnessRuntimeOverride
+    ? ({ runtime: params.agentHarnessRuntimeOverride, runtimeSource: "model" } as const)
     : resolveAgentHarnessPolicy({
         provider: params.provider,
         modelId: params.model,
@@ -94,7 +94,7 @@ export async function runEmbeddedFallbackCandidate(
     workspaceDir: turn.followupRun.run.workspaceDir,
   });
   const embeddedRunHarnessOverride =
-    params.sessionRuntimeOverride ??
+    params.agentHarnessRuntimeOverride ??
     (agentHarnessPolicy.runtime === "openclaw" && embeddedRunProvider !== params.provider
       ? "openclaw"
       : undefined);
@@ -120,8 +120,8 @@ export async function runEmbeddedFallbackCandidate(
     let eventHandler: ReturnType<typeof createAgentRunEventHandler> | undefined;
     const result = await params.timing.measure("embedded_run", () => {
       const embeddedRunParams: RunEmbeddedAgentInternalParams = {
+        preparedTtsPreferences: turn.opts?.preparedTtsPreferences,
         preparedRunAdmission: params.preparedRunAdmission,
-        githubPublicationAvailable: params.githubPublicationAvailable,
         ...embeddedContext,
         messageActionTurnCapability: params.messageActionTurnCapability,
         lifecycleGeneration: params.getLifecycleGeneration(),
@@ -186,6 +186,7 @@ export async function runEmbeddedFallbackCandidate(
         toolAuthorityFingerprint: turn.replyOperation?.toolAuthorityFingerprint,
         enableHeartbeatTool: turn.opts?.enableHeartbeatTool,
         forceHeartbeatTool: turn.opts?.forceHeartbeatTool,
+        continuesConversation: turn.opts?.continuesConversation,
         bootstrapContextMode: turn.opts?.bootstrapContextMode,
         bootstrapContextRunKind: params.bootstrapContextRunKind,
         images: params.currentTurnImages.images,
@@ -203,9 +204,12 @@ export async function runEmbeddedFallbackCandidate(
         onDeferredLifecycleOwner: params.deferredLifecycle.adopt,
         onDeferredLifecycleAbort: params.deferredLifecycle.abort,
         onRetryWait: params.deferredLifecycle.beginRetryWait,
-        onExecutionStarted: (info) => {
+        onExecutionStarted: async (info) => {
           if (info?.lifecycleGeneration) {
             params.onLifecycleGeneration(info.lifecycleGeneration);
+          }
+          if (agentHarnessPolicy.runtime !== "openclaw" || info?.backend === "cloud-worker") {
+            await params.prepareAgentRunStart();
           }
         },
         onExecutionPhase: (info) => {
@@ -281,6 +285,7 @@ export async function runEmbeddedFallbackCandidate(
           eventHandler ??= createAgentRunEventHandler({
             turn,
             lifecycleBackstop,
+            prepareAgentRunStart: params.prepareAgentRunStart,
             notifyAgentRunStart: params.notifyAgentRunStart,
             sourceRepliesAreToolOnly:
               (sourceReplyDeliveryRuntime?.currentMode ??
@@ -288,7 +293,6 @@ export async function runEmbeddedFallbackCandidate(
             messageToolDeliveryState: params.messageToolDeliveryState,
             provider: params.provider,
             model: params.model,
-            runId: params.runId,
             effectiveSessionId: params.effectiveRun.sessionId,
             notifyUserAboutCompaction: params.notifyUserAboutCompaction,
             onCompactionCompleted: () => {
@@ -300,6 +304,13 @@ export async function runEmbeddedFallbackCandidate(
         },
         // Flush-before-tool requires a handler even when regular block streaming is off.
         onBlockReply: params.presentation.blockReplyHandler,
+        resolveReplyDelivery: (minimumAssistantMessageIndex) =>
+          resolveTerminalReplyDelivery({
+            blockReplyPipeline: turn.blockReplyPipeline,
+            directBlockDeliveries: params.directBlockDeliveries,
+            minimumAssistantMessageIndex,
+            resolveReplyDelivery: turn.opts?.resolveReplyDelivery,
+          }),
         onBlockReplyFlush:
           turn.blockStreamingEnabled && turn.blockReplyPipeline
             ? async () => {
@@ -309,10 +320,7 @@ export async function runEmbeddedFallbackCandidate(
         shouldEmitToolResult: turn.shouldEmitToolResult,
         shouldEmitToolOutput: turn.shouldEmitToolOutput,
         bootstrapPromptWarningSignaturesSeen: params.bootstrapPromptWarningSignaturesSeen,
-        bootstrapPromptWarningSignature:
-          params.bootstrapPromptWarningSignaturesSeen[
-            params.bootstrapPromptWarningSignaturesSeen.length - 1
-          ],
+        bootstrapPromptWarningSignature: params.bootstrapPromptWarningSignaturesSeen.at(-1),
         onToolResult: turn.opts?.onToolResult
           ? (() => {
               // Serialized delivery preserves tool result order across detached callbacks.
@@ -360,9 +368,6 @@ export async function runEmbeddedFallbackCandidate(
       result,
       maintenanceAuthProfile,
       compactionRequestBudget,
-      bootstrapPromptWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeen(
-        result.meta?.systemPromptReport,
-      ),
     };
   } finally {
     // Runtime event/result counts are observable, but cannot prove a durable write target.

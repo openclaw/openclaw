@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { configureAiTransportHost } from "../host.js";
+import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { createLlmRuntime } from "../stream.js";
 import { createOpenAIResponsesTransportStreamFn } from "../transports/openai-responses-client.js";
 import {
@@ -33,15 +33,35 @@ function completedResponseEvents() {
 
 it.each(
   (["provider", "transport"] as const).flatMap((entrypoint) =>
-    [true, false, undefined].map((strict) => ({ entrypoint, strict })),
+    [
+      { native: false, supportsStrictMode: true, strict: false },
+      { native: false, supportsStrictMode: false, strict: undefined },
+      { native: false, supportsStrictMode: undefined, strict: undefined },
+      { native: true, supportsStrictMode: undefined, strict: true },
+    ].map(({ native, supportsStrictMode, strict }) => ({
+      entrypoint,
+      native,
+      supportsStrictMode,
+      strict,
+    })),
   ),
-)("serializes $entrypoint Responses tools with strict=$strict", async ({ entrypoint, strict }) => {
+)("serializes $entrypoint Responses tools with strict=$strict", async (scenario) => {
+  const { entrypoint, native, supportsStrictMode, strict } = scenario;
   const server = await createResponsesLoopbackServer(completedResponseEvents);
-  configureAiTransportHost({ resolveOpenAIStrictToolSetting: () => strict });
+  const capabilities = getAiTransportHost().resolveProviderRequestCapabilities({});
+  configureAiTransportHost({
+    resolveProviderRequestCapabilities: () => ({
+      ...capabilities,
+      endpointClass: native ? "openai-public" : "custom",
+    }),
+    resolveOpenAIStrictToolSetting: (_model, options) =>
+      native ? true : options?.supportsStrictMode ? false : undefined,
+  });
+  const model = { ...responsesLoopbackModel, compat: { supportsStrictMode } };
   const parameters = Object.freeze({
     type: "object",
-    properties: Object.freeze({}),
-    required: Object.freeze([]),
+    properties: Object.freeze({ prompt: { type: "string" }, note: { type: "string" } }),
+    required: Object.freeze(native ? ["prompt", "note"] : ["prompt"]),
     additionalProperties: false,
   });
   let descriptionReads = 0;
@@ -88,12 +108,8 @@ it.each(
     for (let request = 0; request < 2; request++) {
       const stream =
         entrypoint === "provider"
-          ? runtime.stream(responsesLoopbackModel, context, options)
-          : await createOpenAIResponsesTransportStreamFn()(
-              responsesLoopbackModel,
-              context,
-              options,
-            );
+          ? runtime.stream(model, context, options)
+          : await createOpenAIResponsesTransportStreamFn()(model, context, options);
       for await (const event of stream) {
         if (event.type === "start" || event.type === "done" || event.type === "error") {
           lifecycle.push(event.type);

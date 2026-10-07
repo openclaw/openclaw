@@ -1,4 +1,3 @@
-/** Commands for viewing and editing per-agent provider auth profile order. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   type AuthProfileStore,
@@ -60,7 +59,6 @@ async function resolveAuthOrderContext(
   return { cfg, agentId, agentDir, provider };
 }
 
-/** Shows the configured auth profile priority order for a provider. */
 export async function modelsAuthOrderGetCommand(
   opts: { provider: string; agent?: string; json?: boolean },
   runtime: RuntimeEnv,
@@ -92,7 +90,6 @@ export async function modelsAuthOrderGetCommand(
   );
 }
 
-/** Clears the configured auth profile priority order for a provider. */
 export async function modelsAuthOrderClearCommand(
   opts: { provider: string; agent?: string },
   runtime: RuntimeEnv,
@@ -116,7 +113,6 @@ export async function modelsAuthOrderClearCommand(
   await refreshRunningGatewayAuthState(agentId, "update", runtime);
 }
 
-/** Sets the provider auth profile priority order after validating each profile id. */
 export async function modelsAuthOrderSetCommand(
   opts: { provider: string; agent?: string; order: string[] },
   runtime: RuntimeEnv,

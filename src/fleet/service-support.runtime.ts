@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
+import { createServer } from "node:net";
 import path from "node:path";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import JSON5 from "json5";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
-import { replaceFileAtomic } from "../infra/replace-file.js";
 import { isRecord } from "../utils.js";
 import {
   buildCellEnvironment,
@@ -25,7 +26,7 @@ import type {
   FleetNetworkInspectResult,
 } from "./containers.runtime.js";
 import {
-  acquireFleetCellOperation,
+  withFleetCellOperationLease,
   getFleetCell,
   type FleetCellOperationName,
   type FleetCellRecord,
@@ -35,8 +36,11 @@ const CELL_CONFIG_FILENAME = "openclaw.json";
 const HEALTH_TIMEOUT_MS = 1_000;
 const CELL_CONFIG_MAX_BYTES = 4 * 1024 * 1024;
 const FLEET_OPERATION_HEARTBEAT_MS = 60_000;
+// Match the compose healthcheck while allowing slow-starting cells a full minute.
+const CELL_VERIFY_TIMEOUT_MS = 60_000;
+const CELL_VERIFY_POLL_MS = 1_000;
 
-type FleetHealthResult =
+export type FleetHealthResult =
   | { status: "ok"; url: string; httpStatus: number }
   | { status: "failed"; url: string; error: string; httpStatus?: number }
   | { status: "skipped"; url: string; reason: string };
@@ -79,15 +83,10 @@ export async function prepareCellDirectories(
   authSecretDir: string,
   owner?: { uid: number; gid: number },
 ): Promise<void> {
-  await Promise.all([
-    ensurePrivateDirectory(record.dataDir),
-    ensurePrivateDirectory(authSecretDir),
-  ]);
+  const directories = [record.dataDir, authSecretDir];
+  await Promise.all(directories.map(ensurePrivateDirectory));
   if (owner) {
-    await Promise.all([
-      fs.chown(record.dataDir, owner.uid, owner.gid),
-      fs.chown(authSecretDir, owner.uid, owner.gid),
-    ]);
+    await Promise.all(directories.map((directory) => fs.chown(directory, owner.uid, owner.gid)));
   }
 }
 
@@ -100,7 +99,6 @@ export async function prepareCellConfig(
   const cellRoot = await fsSafeRoot(record.dataDir, {
     hardlinks: "reject",
     maxBytes: CELL_CONFIG_MAX_BYTES,
-    nonBlockingRead: true,
     symlinks: "reject",
   });
   try {
@@ -122,6 +120,10 @@ export async function prepareCellConfig(
   const nextAuth: Record<string, unknown> = { ...auth, mode: "token" };
   delete nextAuth.token;
   const origins = new Set(readAllowedOrigins(controlUi.allowedOrigins));
+  const inheritsPublicOrigin =
+    controlUi.allowedOrigins === undefined &&
+    typeof gateway.publicOrigin === "string" &&
+    gateway.publicOrigin.trim().length > 0;
   origins.add(`http://localhost:${record.hostPort}`);
   origins.add(`http://127.0.0.1:${record.hostPort}`);
 
@@ -134,7 +136,7 @@ export async function prepareCellConfig(
       auth: nextAuth,
       controlUi: {
         ...controlUi,
-        allowedOrigins: [...origins],
+        ...(inheritsPublicOrigin ? {} : { allowedOrigins: [...origins] }),
       },
     },
   };
@@ -209,19 +211,6 @@ export async function detectHostSelinux(): Promise<boolean> {
   }
 }
 
-export function inspectionState(
-  record: FleetCellRecord,
-  inspection: FleetContainerInspectResult,
-): string {
-  if (inspection.kind !== "ok") {
-    return inspection.state;
-  }
-  return inspection.labels[FLEET_TENANT_LABEL] === record.tenantId &&
-    inspection.labels[FLEET_OWNER_LABEL] === cellOwnerId(record.dataDir)
-    ? inspection.state
-    : "unknown";
-}
-
 export function assertManagedInspection(
   record: FleetCellRecord,
   inspection: FleetContainerInspectResult,
@@ -234,15 +223,27 @@ export function assertManagedInspection(
       `Cannot inspect ${record.runtime} container for tenant ${record.tenantId}: ${inspection.error}`,
     );
   }
-  if (
-    inspection.labels[FLEET_TENANT_LABEL] !== record.tenantId ||
-    inspection.labels[FLEET_OWNER_LABEL] !== cellOwnerId(record.dataDir)
-  ) {
+  if (!inspectionHasFleetOwner(record, inspection)) {
     throw new Error(
       `Refusing to manage ${record.containerName}: fleet ownership labels do not match tenant ${record.tenantId}.`,
     );
   }
   return inspection;
+}
+
+export async function probeLoopbackPort(port: number): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const server = createServer();
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      // The probe exists only to catch the one legible failure early (address in
+      // use). Anything else - e.g. EACCES on a privileged port an unprivileged CLI
+      // cannot bind but a rootful daemon can - defers to the authoritative runtime bind.
+      resolve(error.code !== "EADDRINUSE");
+    });
+    server.listen(port, "127.0.0.1", () => {
+      server.close(() => resolve(true));
+    });
+  });
 }
 
 export async function probeCellHealth(params: {
@@ -277,6 +278,25 @@ export async function probeCellHealth(params: {
   } finally {
     clearTimeout(timeout);
     await response?.body?.cancel().catch(() => undefined);
+  }
+}
+
+export async function canonicalizeForContainment(targetPath: string): Promise<string> {
+  const resolved = path.resolve(targetPath);
+  const suffix: string[] = [];
+  let probe = resolved;
+  for (;;) {
+    try {
+      const real = await fs.realpath(probe);
+      return path.join(real, ...suffix.toReversed());
+    } catch {
+      const parent = path.dirname(probe);
+      if (parent === probe) {
+        return resolved;
+      }
+      suffix.push(path.basename(probe));
+      probe = parent;
+    }
   }
 }
 
@@ -317,17 +337,23 @@ export async function resolvePurgeTarget(
   return target;
 }
 
-export function requireCell(env: NodeJS.ProcessEnv, tenant: string): FleetCellRecord {
+export async function requireCell(
+  env: NodeJS.ProcessEnv,
+  tenant: string,
+): Promise<FleetCellRecord> {
   const tenantId = validateTenantId(tenant);
-  const record = getFleetCell(env, tenantId);
+  const record = await getFleetCell(env, tenantId);
   if (!record) {
     throw new Error(`Fleet cell not found: ${tenantId}`);
   }
   return record;
 }
 
-export function assertCurrentReservation(env: NodeJS.ProcessEnv, expected: FleetCellRecord): void {
-  const current = getFleetCell(env, expected.tenantId);
+export async function assertCurrentReservation(
+  env: NodeJS.ProcessEnv,
+  expected: FleetCellRecord,
+): Promise<void> {
+  const current = await getFleetCell(env, expected.tenantId);
   if (
     !current ||
     current.createdAtMs !== expected.createdAtMs ||
@@ -457,12 +483,10 @@ export async function verifyReplacementHealthy(params: {
   fetchImpl: typeof fetch;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
-  checkpoint: () => void;
-  timeoutMs: number;
-  pollMs: number;
+  checkpoint: () => Promise<void>;
   context: "upgrade" | "restore" | "create";
 }): Promise<void> {
-  const deadline = params.now() + params.timeoutMs;
+  const deadline = params.now() + CELL_VERIFY_TIMEOUT_MS;
   for (;;) {
     const replacement = await params.containers.inspect(
       params.record.runtime,
@@ -489,8 +513,8 @@ export async function verifyReplacementHealthy(params: {
     if (params.now() >= deadline) {
       throw new Error(`Replacement cell container did not become healthy after ${params.context}.`);
     }
-    params.checkpoint();
-    await params.sleep(params.pollMs);
+    await params.checkpoint();
+    await params.sleep(CELL_VERIFY_POLL_MS);
   }
 }
 
@@ -498,7 +522,7 @@ export async function cleanupFailedCreateContainer(
   record: FleetCellRecord,
   containers: FleetContainerRuntime,
   attemptId: string,
-  checkpoint: () => void,
+  checkpoint: () => Promise<void>,
 ): Promise<boolean> {
   const inspection = await containers.inspect(record.runtime, record.containerName);
   if (inspection.kind === "missing") {
@@ -507,18 +531,16 @@ export async function cleanupFailedCreateContainer(
   if (inspection.kind === "unavailable") {
     return false;
   }
-  const tenantLabel = inspection.labels[FLEET_TENANT_LABEL];
-  const ownerLabel = inspection.labels[FLEET_OWNER_LABEL];
   // Fleet always labels what it creates, so a container without fleet labels (or with
   // another owner's labels) is foreign: leave it untouched but release the reservation,
   // otherwise a name collision strands a tenant no fleet command can recover.
-  if (tenantLabel !== record.tenantId || ownerLabel !== cellOwnerId(record.dataDir)) {
+  if (!inspectionHasFleetOwner(record, inspection)) {
     return true;
   }
   if (inspection.labels[FLEET_ATTEMPT_LABEL] !== attemptId) {
     return false;
   }
-  checkpoint();
+  await checkpoint();
   // Pin the generation the attempt label just proved; the name may already
   // point at the next attempt or at a foreign container.
   await containers.remove(record.runtime, inspection.containerId, true);
@@ -532,7 +554,7 @@ export async function cleanupFailedCreateNetwork(
   record: FleetCellRecord,
   containers: FleetContainerRuntime,
   attemptId: string,
-  checkpoint: () => void,
+  checkpoint: () => Promise<void>,
 ): Promise<boolean> {
   const networkName = cellNetworkName(record.tenantId);
   const inspection = await containers.inspectNetwork(record.runtime, networkName);
@@ -542,11 +564,9 @@ export async function cleanupFailedCreateNetwork(
   if (inspection.kind === "unavailable") {
     return false;
   }
-  const tenantLabel = inspection.labels[FLEET_TENANT_LABEL];
-  const ownerLabel = inspection.labels[FLEET_OWNER_LABEL];
   // Same foreign-resource rule as cleanupFailedCreateContainer: unlabeled or
   // other-owner networks are never fleet's to delete, but must not pin the reservation.
-  if (tenantLabel !== record.tenantId || ownerLabel !== cellOwnerId(record.dataDir)) {
+  if (!inspectionHasFleetOwner(record, inspection)) {
     return true;
   }
   if (
@@ -555,14 +575,14 @@ export async function cleanupFailedCreateNetwork(
   ) {
     return false;
   }
-  checkpoint();
+  await checkpoint();
   await containers.removeNetwork(record.runtime, networkName);
   return (await containers.inspectNetwork(record.runtime, networkName)).kind === "missing";
 }
 
-function inspectionHasFleetOwner(
+export function inspectionHasFleetOwner(
   record: FleetCellRecord,
-  inspection: Extract<FleetContainerInspectResult, { kind: "ok" }>,
+  inspection: { labels: Readonly<Record<string, string>> },
 ): boolean {
   return (
     inspection.labels[FLEET_TENANT_LABEL] === record.tenantId &&
@@ -582,10 +602,7 @@ export function assertManagedNetwork(
       `Cannot inspect ${record.runtime} network for tenant ${record.tenantId}: ${inspection.error}`,
     );
   }
-  if (
-    inspection.labels[FLEET_TENANT_LABEL] !== record.tenantId ||
-    inspection.labels[FLEET_OWNER_LABEL] !== cellOwnerId(record.dataDir)
-  ) {
+  if (!inspectionHasFleetOwner(record, inspection)) {
     throw new Error(
       `Refusing to manage ${cellNetworkName(record.tenantId)}: fleet ownership labels do not match tenant ${record.tenantId}.`,
     );
@@ -608,7 +625,7 @@ export async function restorePreviousCell(params: {
   previousAttemptId: string;
   nextAttemptId: string;
   wasRunning: boolean;
-  checkpoint: () => void;
+  checkpoint: () => Promise<void>;
 }): Promise<void> {
   const current = await params.containers.inspect(
     params.record.runtime,
@@ -624,7 +641,7 @@ export async function restorePreviousCell(params: {
     const currentAttemptId = current.labels[FLEET_ATTEMPT_LABEL];
     if (currentAttemptId === params.previousAttemptId) {
       if (current.running !== params.wasRunning) {
-        params.checkpoint();
+        await params.checkpoint();
         await params.containers[current.running ? "stop" : "start"](
           params.record.runtime,
           current.containerId,
@@ -635,12 +652,12 @@ export async function restorePreviousCell(params: {
     if (currentAttemptId !== params.nextAttemptId) {
       throw new Error("container generation changed during upgrade recovery");
     }
-    params.checkpoint();
+    await params.checkpoint();
     // Recovery removes the replacement generation the attempt label identified,
     // never whatever currently answers to the cell name.
     await params.containers.remove(params.record.runtime, current.containerId, true);
   }
-  params.checkpoint();
+  await params.checkpoint();
   await params.containers.run(params.oldProfile, params.wasRunning);
 }
 
@@ -648,50 +665,44 @@ export async function withFleetCellOperation<T>(params: {
   env: NodeJS.ProcessEnv;
   tenantId: string;
   operationName: FleetCellOperationName;
-  operation: (checkpoint: () => void) => Promise<T>;
+  operation: (checkpoint: () => Promise<void>) => Promise<T>;
 }): Promise<T> {
-  const lease = acquireFleetCellOperation({
-    env: params.env,
-    tenantId: params.tenantId,
-    operation: params.operationName,
-  });
-  let heartbeatError: unknown;
-  const checkpoint = () => {
-    try {
-      lease.heartbeat();
-      heartbeatError = undefined;
-    } catch (error) {
-      heartbeatError = error;
-      throw error;
-    }
-  };
-  const heartbeat = setInterval(() => {
-    try {
-      lease.heartbeat();
-      heartbeatError = undefined;
-    } catch (error) {
-      heartbeatError = error;
-    }
-  }, FLEET_OPERATION_HEARTBEAT_MS);
-  heartbeat.unref();
-  let result: T;
-  try {
-    result = await params.operation(checkpoint);
-    if (heartbeatError) {
-      checkpoint();
-    } else {
-      lease.heartbeat();
-    }
-  } catch (error) {
-    clearInterval(heartbeat);
-    try {
-      lease.release();
-    } catch {
-      // Preserve the operation or fencing error; a release failure is secondary.
-    }
-    throw error;
-  }
-  clearInterval(heartbeat);
-  lease.release();
-  return result;
+  return await withFleetCellOperationLease(
+    {
+      env: params.env,
+      tenantId: params.tenantId,
+      operation: params.operationName,
+    },
+    async (lease) => {
+      let pendingHeartbeat: Promise<void> | undefined;
+      const refresh = (): Promise<void> => {
+        if (!pendingHeartbeat) {
+          pendingHeartbeat = Promise.resolve()
+            .then(() => lease.heartbeat())
+            .finally(() => {
+              pendingHeartbeat = undefined;
+            });
+        }
+        return pendingHeartbeat;
+      };
+      const checkpoint = async () => {
+        // A timer result can predate awaited work; renew again at the effect boundary.
+        await pendingHeartbeat?.catch(() => undefined);
+        await refresh();
+      };
+      const heartbeat = setInterval(() => {
+        void refresh().catch(() => undefined);
+      }, FLEET_OPERATION_HEARTBEAT_MS);
+      heartbeat.unref();
+      try {
+        const result = await params.operation(checkpoint);
+        clearInterval(heartbeat);
+        await checkpoint();
+        return result;
+      } finally {
+        clearInterval(heartbeat);
+        await pendingHeartbeat?.catch(() => undefined);
+      }
+    },
+  );
 }

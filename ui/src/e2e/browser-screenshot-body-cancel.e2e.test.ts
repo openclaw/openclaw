@@ -124,6 +124,7 @@ suite.define(() => {
           body: { targetId: "t1", type: "png" },
           method: "POST",
           path: "/screenshot",
+          tabScope: { sessionKey: "agent:main:main" },
         });
       const alert = panel.getByRole("alert");
       await alert.waitFor();
@@ -157,7 +158,11 @@ suite.define(() => {
       const requestParams = requests.map(
         (request) => request.params as { method?: string; path?: string; body?: unknown },
       );
-      expect(requestParams).toContainEqual({ method: "GET", path: "/tabs" });
+      expect(requestParams).toContainEqual({
+        method: "GET",
+        path: "/tabs",
+        tabScope: { sessionKey: "agent:main:main", referencedTabs: [] },
+      });
       expect(
         requestParams.filter((params) => params.method === "POST" && params.path === "/screenshot"),
       ).toEqual([
@@ -165,6 +170,7 @@ suite.define(() => {
           body: { targetId: "t1", type: "png" },
           method: "POST",
           path: "/screenshot",
+          tabScope: { sessionKey: "agent:main:main" },
         },
       ]);
       expect(mediaRequest).toEqual({

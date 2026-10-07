@@ -22,6 +22,10 @@ export type SpawnSubagentParams = {
   /** Canonical request hash checked before reusing a host-reserved collector. */
   swarmLaunchRequestFingerprint?: string;
   cwd?: string;
+  projectId?: string;
+  worktree?: boolean;
+  worktreeName?: string;
+  worktreeBaseRef?: string;
   runTimeoutSeconds?: number;
   thread?: boolean;
   mode?: SpawnSubagentMode;
@@ -43,6 +47,9 @@ export type SpawnSubagentParams = {
 export type SpawnSubagentContext = SpawnedToolContext & {
   onSpawnEffectsStart?: () => void;
   agentSessionKey?: string;
+  /** Trusted parent tool construction facts; never read from model arguments. */
+  senderIsOwner?: boolean;
+  expectedParentSessionId?: string;
   requesterTurnRunId?: string;
   /** Separate key used only for completion routing, not sandbox policy. */
   completionOwnerKey?: string;

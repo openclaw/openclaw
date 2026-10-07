@@ -6,8 +6,11 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { projectPluginMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
+import { isMessageToolSendActionName } from "../../agents/embedded-agent-messaging.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
+import { resolveReactionMessageId } from "../../channels/plugins/actions/reaction-message-id.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { resolveChannelPluginRegistration } from "../../channels/plugins/registry.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
@@ -26,6 +29,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
+import { normalizeTargetForProvider } from "./target-normalization.js";
 
 type SourceReplyTranscriptMirrorParams = {
   action: string;
@@ -75,24 +79,8 @@ type TerminalSourceReplyDeliveryReceipt = RestartRecoveryTerminalDeliveryScope;
 
 type SourceReplyThreadPlacement = "match" | "mismatch" | "unknown";
 
-// Mirror only enough delivered payload detail to preserve transcript context.
-function readStringArray(value: unknown): string[] | undefined {
-  return normalizeOptionalTrimmedStringList(value);
-}
-
-function readFirstString(
-  params: Record<string, unknown>,
-  keys: readonly string[],
-): string | undefined {
-  return readTrimmedStringAlias(params, keys);
-}
-
 function resolveSourceReplyTarget(params: Record<string, unknown>): string | undefined {
-  return readFirstString(params, ["target", "to", "channelId", "chatId"]);
-}
-
-function resolveSourceReplyThreadId(params: SourceReplyTranscriptMirrorParams): string | undefined {
-  return readFirstString(params.actionParams, ["threadId", "messageThreadId"]);
+  return readTrimmedStringAlias(params, ["target", "to", "channelId", "chatId"]);
 }
 
 function resolveDeliveryReceipt(
@@ -158,73 +146,10 @@ function resolveSourceReplyThreadPlacement(
   return currentThreadId ? "unknown" : "match";
 }
 
-function resolveThreadedSourceTarget(
+/** Arms the fail-closed state before a terminal source reply can reach a provider. */
+export async function beginTerminalSourceReplyDelivery(
   params: SourceReplyTranscriptMirrorParams,
-  requestedTarget: string,
-): string {
-  const threadId = resolveSourceReplyThreadId(params);
-  if (!threadId) {
-    return requestedTarget;
-  }
-  return (
-    normalizeOptionalString(
-      getChannelPlugin(params.channel as ChannelId)?.threading?.resolveCurrentChannelId?.({
-        to: requestedTarget,
-        threadId,
-      }),
-    ) ?? requestedTarget
-  );
-}
-
-function hasExplicitDeliveryFailure(payload: unknown, depth = 0): boolean {
-  if (!payload || typeof payload !== "object" || depth > 4) {
-    return false;
-  }
-  if (Array.isArray(payload)) {
-    return payload.some((value) => hasExplicitDeliveryFailure(value, depth + 1));
-  }
-  const record = payload as Record<string, unknown>;
-  if (record.ok === false || record.delivered === false || record.dryRun === true) {
-    return true;
-  }
-  const messageId = normalizeOptionalLowercaseString(record.messageId);
-  if (messageId === "skipped" || messageId === "suppressed") {
-    return true;
-  }
-  const status = normalizeOptionalLowercaseString(record.status);
-  if (
-    status === "failed" ||
-    status === "error" ||
-    status === "skipped" ||
-    status === "suppressed" ||
-    status === "dry_run"
-  ) {
-    return true;
-  }
-  const deliveryStatus = normalizeOptionalLowercaseString(record.deliveryStatus);
-  if (
-    deliveryStatus === "failed" ||
-    deliveryStatus === "error" ||
-    deliveryStatus === "skipped" ||
-    deliveryStatus === "suppressed" ||
-    deliveryStatus === "dry_run"
-  ) {
-    return true;
-  }
-  return ["details", "payload", "result", "results", "sendResult", "toolResult"].some((key) =>
-    hasExplicitDeliveryFailure(record[key], depth + 1),
-  );
-}
-
-function resolveCurrentSourceTurnId(
-  toolContext: InternalChannelThreadingToolContext | undefined,
-): string | undefined {
-  return normalizeOptionalString(toolContext?.currentSourceTurnId);
-}
-
-function resolveTerminalSourceReplyDeliveryReceipt(
-  params: SourceReplyTranscriptMirrorParams,
-): TerminalSourceReplyDeliveryReceipt | undefined {
+): Promise<TerminalSourceReplyDeliveryStart> {
   const toolCallId = normalizeOptionalString(params.toolCallId);
   if (params.sourceReplyFinal !== true) {
     return undefined;
@@ -235,30 +160,20 @@ function resolveTerminalSourceReplyDeliveryReceipt(
   if (!params.sessionId || !isCurrentSourceConversation(params)) {
     return undefined;
   }
-  const sourceTurnId = resolveCurrentSourceTurnId(params.toolContext);
+  const sourceTurnId = normalizeOptionalString(params.toolContext?.currentSourceTurnId);
   if (!sourceTurnId) {
     return undefined;
   }
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   // Agent admission promotes legacy aliases before the run starts. The signed
   // runtime session key therefore owns both the active claim and transcript.
-  return {
+  const receipt: TerminalSourceReplyDeliveryReceipt = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sourceTurnId,
     storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
     toolCallId,
   };
-}
-
-/** Arms the fail-closed state before a terminal source reply can reach a provider. */
-export async function beginTerminalSourceReplyDelivery(
-  params: SourceReplyTranscriptMirrorParams,
-): Promise<TerminalSourceReplyDeliveryStart> {
-  const receipt = resolveTerminalSourceReplyDeliveryReceipt(params);
-  if (!receipt) {
-    return undefined;
-  }
   const result = await beginRestartRecoveryTerminalDelivery(receipt);
   if (result === "not-applicable") {
     return undefined;
@@ -291,7 +206,8 @@ export async function reconcileTerminalSourceReplyDelivery(params: {
   if (!params.receipt) {
     return "not-applicable";
   }
-  if (hasExplicitDeliveryFailure(params.deliveredPayload)) {
+  const deliveryFact = projectPluginMessageDeliveryFact(params.deliveredPayload);
+  if (deliveryFact && deliveryFact.status !== "settled") {
     if (params.preservePendingOnExplicitFailure) {
       return "pending";
     }
@@ -299,6 +215,10 @@ export async function reconcileTerminalSourceReplyDelivery(params: {
     return "not-delivered";
   }
   if (
+    !matchesDeliveredSourceTargets(
+      { ...params.mirror, deliveredPayload: params.deliveredPayload },
+      deliveryFact,
+    ) ||
     !isExactCurrentSourceConversation({
       ...params.mirror,
       deliveredPayload: params.deliveredPayload,
@@ -308,19 +228,6 @@ export async function reconcileTerminalSourceReplyDelivery(params: {
   }
   await completeRestartRecoveryTerminalDelivery(params.receipt);
   return "delivered";
-}
-
-function resolveTranscriptMirrorIdempotencyKey(params: {
-  idempotencyKey?: string;
-  sourceReplyFinal?: boolean;
-  sourceTurnId?: string;
-}): string | undefined {
-  if (params.sourceReplyFinal !== true || !params.idempotencyKey || !params.sourceTurnId) {
-    return params.idempotencyKey;
-  }
-  // Progress and terminal mirrors may share provider idempotency. Transcript
-  // receipts need distinct keys so a progress row cannot mask the terminal marker.
-  return `${params.idempotencyKey}:terminal-receipt:${params.sourceTurnId}`;
 }
 
 function hasCurrentSourceContext(params: SourceReplyTranscriptMirrorParams): boolean {
@@ -370,9 +277,17 @@ function matchesCurrentSourceTarget(
   if (threadPlacement === "mismatch") {
     return false;
   }
-  const threadedTarget = resolveThreadedSourceTarget(params, requestedTarget);
-  const matchesToolContextTarget = getChannelPlugin(params.channel as ChannelId)?.threading
-    ?.matchesToolContextTarget;
+  const threadId = readTrimmedStringAlias(params.actionParams, ["threadId", "messageThreadId"]);
+  const threadedTarget = threadId
+    ? (normalizeOptionalString(
+        getChannelPlugin(params.channel as ChannelId)?.threading?.resolveCurrentChannelId?.({
+          to: requestedTarget,
+          threadId,
+        }),
+      ) ?? requestedTarget)
+    : requestedTarget;
+  const plugin = getChannelPlugin(params.channel as ChannelId);
+  const matchesToolContextTarget = plugin?.threading?.matchesToolContextTarget;
   if (
     threadPlacement === "match" &&
     (matchesToolContextTarget?.({
@@ -387,8 +302,47 @@ function matchesCurrentSourceTarget(
   ) {
     return true;
   }
-  return currentTargets.some(
-    (currentTarget) => requestedTarget === currentTarget || threadedTarget === currentTarget,
+  const normalizedTargets = new Set(
+    [requestedTarget, threadedTarget]
+      .map((target) => normalizeTargetForProvider(params.channel, target, plugin))
+      .filter((target): target is string => Boolean(target)),
+  );
+  return currentTargets.some((target) => {
+    const normalized = normalizeTargetForProvider(params.channel, target, plugin);
+    return normalized !== undefined && normalizedTargets.has(normalized);
+  });
+}
+
+function matchesDeliveredSourceTargets(
+  params: SourceReplyTranscriptMirrorParams,
+  delivery: ReturnType<typeof projectPluginMessageDeliveryFact>,
+): boolean {
+  // Requested routes cannot override contradictory transport facts. Match each
+  // reported recipient independently, without inheriting requested thread aliases.
+  // Aggregate metadata cannot hide a physical message delivered to another topic.
+  const receipt = resolveDeliveryReceipt(params);
+  const deliveredThreadId = normalizeOptionalString(receipt?.threadId);
+  const currentThreadId = normalizeOptionalString(params.toolContext?.currentThreadTs);
+  if (
+    Array.isArray(receipt?.parts) &&
+    receipt.parts.some((part) => {
+      const threadId = normalizeOptionalString(asRecord(part)?.threadId);
+      return threadId !== undefined && threadId !== (deliveredThreadId ?? currentThreadId);
+    })
+  ) {
+    return false;
+  }
+  return (delivery?.deliveredTargets ?? []).every((target) =>
+    matchesCurrentSourceTarget(
+      {
+        ...params,
+        actionParams: {
+          target,
+          ...(deliveredThreadId ? { threadId: deliveredThreadId } : {}),
+        },
+      },
+      "match",
+    ),
   );
 }
 
@@ -489,18 +443,30 @@ function resolveDeliveredCurrentSourceReply(
   params: SourceReplyTranscriptMirrorParams,
   allowAsync: boolean,
 ): SourceReplyMatch {
-  if (hasExplicitDeliveryFailure(params.deliveredPayload)) {
+  const deliveryFact = projectPluginMessageDeliveryFact(params.deliveredPayload);
+  if (
+    (deliveryFact && deliveryFact.status !== "settled") ||
+    !matchesDeliveredSourceTargets(params, deliveryFact)
+  ) {
     return false;
   }
   switch (params.action.trim().toLowerCase()) {
+    case "react":
+      return (
+        params.sourceReplyFinal === true &&
+        params.actionParams.remove !== true &&
+        Boolean(normalizeOptionalString(params.actionParams.emoji)) &&
+        isDeliveredCurrentSourceReplyAction(params)
+      );
     case "reply":
       return isDeliveredCurrentSourceReplyAction(params);
     case "thread-reply":
       return resolveDeliveredThreadPlacementSourceReply(params, allowAsync);
     default:
+      // Send variants share destination proof, not transcript or restart-receipt ownership.
       return (
-        (params.action === "send" || params.action === "poll") &&
-        isExactCurrentSourceConversation(params)
+        (isMessageToolSendActionName(params.action) || params.action === "poll") &&
+        isExactCurrentSourceConversation({ ...params, action: "send" })
       );
   }
 }
@@ -526,8 +492,8 @@ function normalizeMessageIdValue(value: unknown): string | undefined {
 }
 
 /**
- * Confirms a successful reply-type action addressed the message that triggered the
- * current run. Reply actions resolve their conversation from the replied-to message,
+ * Confirms a reply or explicitly terminal reaction addressed the message that triggered
+ * the current run. Reply actions resolve their conversation from the replied-to message,
  * so target matching cannot apply; replying to the run's own inbound message is the
  * one implicit route that provably lands in the current source conversation.
  */
@@ -542,20 +508,31 @@ function isDeliveredCurrentSourceReplyAction(params: SourceReplyTranscriptMirror
   // forms (for example `C123` vs `channel:C123`) are recognized like sends.
   const requestedTarget = resolveSourceReplyTarget(params.actionParams);
   if (requestedTarget) {
-    const matchesToolContextTarget = getChannelPlugin(params.channel as ChannelId)?.threading
-      ?.matchesToolContextTarget;
+    const channelPlugin = getChannelPlugin(params.channel as ChannelId);
+    const matchesToolContextTarget = channelPlugin?.threading?.matchesToolContextTarget;
     if (!matchesToolContextTarget?.({ target: requestedTarget, toolContext })) {
       const currentTargets = [
         normalizeOptionalString(toolContext.currentMessagingTarget),
         normalizeOptionalString(toolContext.currentChannelId),
       ].filter((target): target is string => Boolean(target));
-      if (!currentTargets.some((target) => target === requestedTarget)) {
+      const normalizedTarget =
+        normalizeTargetForProvider(params.channel, requestedTarget, channelPlugin) ??
+        requestedTarget;
+      if (
+        !currentTargets.some(
+          (target) =>
+            (normalizeTargetForProvider(params.channel, target, channelPlugin) ?? target) ===
+            normalizedTarget,
+        )
+      ) {
         return false;
       }
     }
   }
   const repliedToMessageId = normalizeMessageIdValue(
-    params.actionParams.messageId ?? params.actionParams.replyTo,
+    params.action === "react"
+      ? resolveReactionMessageId({ args: params.actionParams, toolContext })
+      : (params.actionParams.messageId ?? params.actionParams.replyTo),
   );
   const currentMessageId = normalizeMessageIdValue(toolContext.currentMessageId);
   return Boolean(repliedToMessageId && currentMessageId && repliedToMessageId === currentMessageId);
@@ -565,7 +542,11 @@ function isDeliveredCurrentSourceReplyAction(params: SourceReplyTranscriptMirror
 export async function mirrorDeliveredSourceReplyToTranscript(
   params: SourceReplyTranscriptMirrorParams,
 ): Promise<boolean> {
-  if (hasExplicitDeliveryFailure(params.deliveredPayload)) {
+  const deliveryFact = projectPluginMessageDeliveryFact(params.deliveredPayload);
+  if (
+    (deliveryFact && (deliveryFact.status !== "settled" || deliveryFact.partialDelivery)) ||
+    !matchesDeliveredSourceTargets(params, deliveryFact)
+  ) {
     return false;
   }
   const threadPlacement = resolveSourceReplyThreadPlacement(
@@ -581,15 +562,17 @@ export async function mirrorDeliveredSourceReplyToTranscript(
 
   const plan = createOutboundPayloadPlan([
     {
-      text: readFirstString(params.actionParams, ["message", "content", "text", "caption"]) ?? "",
-      mediaUrl: readFirstString(params.actionParams, [
+      text:
+        readTrimmedStringAlias(params.actionParams, ["message", "content", "text", "caption"]) ??
+        "",
+      mediaUrl: readTrimmedStringAlias(params.actionParams, [
         "mediaUrl",
         "media",
         "path",
         "filePath",
         "fileUrl",
       ]),
-      mediaUrls: readStringArray(params.actionParams.mediaUrls),
+      mediaUrls: normalizeOptionalTrimmedStringList(params.actionParams.mediaUrls),
       presentation: params.actionParams.presentation as ReplyPayload["presentation"],
       interactive: params.actionParams.interactive as ReplyPayload["interactive"],
       channelData: params.actionParams.channelData as ReplyPayload["channelData"],
@@ -600,7 +583,7 @@ export async function mirrorDeliveredSourceReplyToTranscript(
   if (!mirror.text && mirror.mediaUrls.length === 0) {
     return false;
   }
-  const sourceTurnId = resolveCurrentSourceTurnId(params.toolContext);
+  const sourceTurnId = normalizeOptionalString(params.toolContext?.currentSourceTurnId);
   const writerFence = getOwnedSessionTranscriptWriterFence({ sessionKey: params.sessionKey });
   const result = await appendAssistantMessageToSessionTranscript({
     agentId: params.agentId,
@@ -612,11 +595,12 @@ export async function mirrorDeliveredSourceReplyToTranscript(
     ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
     text: mirror.text,
     mediaUrls: mirror.mediaUrls.length ? mirror.mediaUrls : undefined,
-    idempotencyKey: resolveTranscriptMirrorIdempotencyKey({
-      idempotencyKey: params.idempotencyKey,
-      sourceReplyFinal: params.sourceReplyFinal,
-      sourceTurnId,
-    }),
+    // Progress and terminal mirrors may share provider idempotency. Keep their transcript
+    // receipts distinct so a progress row cannot mask the terminal marker.
+    idempotencyKey:
+      params.sourceReplyFinal === true && params.idempotencyKey && sourceTurnId
+        ? `${params.idempotencyKey}:terminal-receipt:${sourceTurnId}`
+        : params.idempotencyKey,
     ...(params.sourceReplyFinal !== undefined
       ? {
           deliveryMirror: {
@@ -629,8 +613,5 @@ export async function mirrorDeliveredSourceReplyToTranscript(
       : {}),
     config: params.cfg,
   });
-  if (result.ok) {
-    return true;
-  }
-  return false;
+  return result.ok;
 }

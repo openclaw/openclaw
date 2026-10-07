@@ -1,5 +1,5 @@
 import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { readSessionRuntimeOwnership } from "../../agents/harness/session-runtime-ownership.js";
@@ -8,9 +8,19 @@ import { getPreparedModelRuntimeAuthMaterializations } from "../../agents/prepar
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import {
+  settleCurrentReadPreparations,
+  withCurrentReadAuthority,
+  type CurrentReadAuthority,
+} from "../../shared/current-read-authority.js";
 import { resolveGatewaySessionRuntimeSelectionLocked } from "../session-utils-projection.js";
+import {
+  type prepareChatAccountSelection,
+  resolveChatAccountSelection,
+} from "./chat-account-selection.js";
 import type {
   ChatMetadataReadParams,
   ChatMetadataResult,
@@ -26,11 +36,54 @@ export type ChatMetadataProjectionFacts = {
   modelCatalog: ModelCatalogSnapshot;
 };
 
-export type PreparedAgentProjection<T = ChatMetadataResult> = {
-  modelCatalog: ModelCatalogEntry[];
-  read: () => T;
-  isCurrent: () => boolean;
+export type PreparedChatMetadataProjection = Awaited<
+  ReturnType<typeof prepareChatMetadataModelProjection>
+> & {
+  agent: ChatMetadataProjectionFacts & Pick<ChatMetadataResult, "commands" | "swarmEnabled">;
 };
+
+export function readPreparedChatMetadata(
+  projection: Pick<PreparedChatMetadataProjection, "read" | "agent">,
+  readParams: ChatMetadataReadParams,
+  config: OpenClawConfig,
+  acpMeta: SessionAcpMeta | null,
+  readAccountSelection?: Awaited<ReturnType<typeof prepareChatAccountSelection>>,
+): ChatMetadataResult {
+  readParams.draftAccountSelection?.assertCurrent();
+  const { agent } = projection;
+  return projectChatSessionMetadata(
+    readParams,
+    {
+      ...projection.read(),
+      ...(agent.commands !== undefined ? { commands: agent.commands } : {}),
+      swarmEnabled: agent.swarmEnabled,
+      accountSelection:
+        readAccountSelection?.() ??
+        resolveChatAccountSelection({
+          authStore: agent.authStore,
+          sessionEntry: readParams.sessionEntry,
+        }),
+    },
+    config,
+    acpMeta,
+  );
+}
+
+export async function prepareSessionAcpMeta(
+  params: Pick<ChatMetadataReadParams, "agentId" | "sessionKey" | "sessionEntry">,
+  cfg: OpenClawConfig,
+): Promise<SessionAcpMeta | null> {
+  if (!params.sessionKey) {
+    return null;
+  }
+  const [meta] = await readAcpSessionMetaForEntries({
+    cfg,
+    entries: [
+      { agentId: params.agentId, sessionKey: params.sessionKey, entry: params.sessionEntry },
+    ],
+  });
+  return meta ?? null;
+}
 
 export async function prepareChatMetadataModelProjection(params: {
   context: GatewayModelCatalogContext;
@@ -41,20 +94,28 @@ export async function prepareChatMetadataModelProjection(params: {
   profileProvider?: string;
   runtimeOverride?: string;
   assertCurrent?: () => void;
-}): Promise<PreparedAgentProjection<{ models?: ModelChoice[] }>> {
-  const { prepareModelsListResult, createGatewayAgentModelCatalogProjector } =
-    await import("./models-list-result.js");
+  withCurrent?: CurrentReadAuthority["withCurrent"];
+}): Promise<{
+  modelCatalog: ModelCatalogEntry[];
+  read: () => { models?: ModelChoice[] };
+  isCurrent: () => boolean;
+}> {
+  const [{ prepareModelsListResult }, { createModelCatalogDecisions }] = await Promise.all([
+    import("./models-list-result.js"),
+    import("../../agents/model-catalog-decisions.js"),
+  ]);
   // A draft has no persisted session grant: recheck its live human before hydrating private auth.
-  params.assertCurrent?.();
+  await withCurrentReadAuthority(params, () => {});
   // Chat metadata must stay on process-published facts. Live discovery belongs to explicit
   // models.list control-plane reads so a slow provider cannot delay chat startup.
   const snapshot = params.facts.modelCatalog;
-  const projector = createGatewayAgentModelCatalogProjector({
+  const projectorParams: Parameters<typeof createModelCatalogDecisions>[0] = {
     cfg: params.facts.owner.config,
     agentId: params.facts.agentId,
     snapshot,
     metadataSnapshot: params.facts.owner.metadataSnapshot,
     preparedAuthStore: params.facts.authStore,
+    accountCatalog: params.facts.owner.accountCatalog,
     requesterProfileId: params.requesterProfileId,
     // The owner records usable auth at discovery; metadata must share that exact generation fact.
     preparedRuntimeAuthModes: params.facts.authModes,
@@ -68,22 +129,28 @@ export async function prepareChatMetadataModelProjection(params: {
     ...(params.pinnedProfileId ? { pinnedProfileId: params.pinnedProfileId } : {}),
     ...(params.profileProvider ? { profileProvider: params.profileProvider } : {}),
     ...(params.runtimeOverride ? { runtimeOverride: params.runtimeOverride } : {}),
-  });
-  const [modelCatalog, readModels] = await Promise.all([
-    projector.projectCatalog(),
+  };
+  const projector = await withCurrentReadAuthority(params, () =>
+    createModelCatalogDecisions(projectorParams),
+  );
+  const work = [
+    projector.projectCatalog(params),
     prepareModelsListResult({
       source: { kind: "gateway", context: params.context },
       agentId: params.facts.agentId,
-      params: { view: "configured" },
+      params: { view: "configured", includeDefaultModels: false },
       preloadedCatalog: {
         agentId: params.facts.agentId,
         config: params.facts.owner.config,
         snapshot,
       },
       preloadedOnly: true,
+      preparationAuthority: params,
       catalogProjector: projector,
     }),
-  ]);
+  ] as const;
+  const [modelCatalog, readModels] = await settleCurrentReadPreparations(work);
+  await withCurrentReadAuthority(params, () => {});
   return {
     modelCatalog,
     read: () => ({ models: readModels.read().models }),
@@ -156,12 +223,21 @@ export function projectSessionModelCatalog(
   config: OpenClawConfig,
 ): ModelChoice[] {
   const ownership = readSessionRuntimeOwnership({ ...readParams, config });
-  if (ownership?.auth !== "native") {
+  const nativeAuth = ownership?.auth === "native";
+  const entry = readParams.sessionEntry;
+  const authProfileSource = resolveCollapsedSessionAuthPinSource(entry);
+  const workerAuth =
+    readParams.workerInference === "worker" &&
+    !entry?.modelOverride?.trim() &&
+    !entry?.agentRuntimeOverride?.trim() &&
+    !(entry?.authProfileOverride?.trim() && authProfileSource === "user");
+  if (!nativeAuth && !workerAuth) {
     return models;
   }
-  // Pending native branches have no tuple. Omit host readiness without claiming native login.
+  // Pending native branches have no tuple. Worker inference uses the configured ambient model;
+  // explicit model, runtime, and personal-account choices retain Gateway availability checks.
   const renderedModel =
-    ownership.modelRef ??
+    ownership?.modelRef ??
     resolveSessionModelRef(config, readParams.sessionEntry, readParams.agentId, {
       allowPluginNormalization: false,
     });
@@ -169,20 +245,28 @@ export function projectSessionModelCatalog(
     if (model.provider !== renderedModel.provider || model.id !== renderedModel.model) {
       return model;
     }
+    if (
+      workerAuth &&
+      model.unavailableReason !== "missing-auth" &&
+      model.unavailableReason !== "auth-failed"
+    ) {
+      return model;
+    }
     const {
       available: _available,
       unavailableReason: _reason,
       unavailableUntil: _until,
-      ...native
+      ...available
     } = model;
-    return native;
+    return available;
   });
 }
 
-export function projectChatSessionMetadata(
+function projectChatSessionMetadata(
   readParams: ChatMetadataReadParams,
   metadata: ChatMetadataResult,
   config: OpenClawConfig,
+  preparedAcpMeta: SessionAcpMeta | null,
 ): ChatMetadataResult {
   const projected = metadata.models
     ? { ...metadata, models: projectSessionModelCatalog(readParams, metadata.models, config) }
@@ -191,18 +275,11 @@ export function projectChatSessionMetadata(
     return projected;
   }
   const entry = readParams.sessionEntry;
-  const acpMeta =
-    entry?.acp ??
-    (entry
-      ? readAcpSessionMetaForEntry({
-          cfg: config,
-          sessionKey: readParams.sessionKey,
-          agentId: readParams.agentId,
-          entry,
-        })
-      : undefined);
   return {
     ...projected,
-    runtimeSelectionLocked: resolveGatewaySessionRuntimeSelectionLocked(entry, acpMeta),
+    runtimeSelectionLocked: resolveGatewaySessionRuntimeSelectionLocked(
+      entry,
+      preparedAcpMeta ?? undefined,
+    ),
   };
 }

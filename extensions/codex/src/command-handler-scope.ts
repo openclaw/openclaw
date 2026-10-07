@@ -9,22 +9,13 @@ import {
   resolveCodexSessionBinding,
   sessionBindingIdentity,
   type CodexAppServerBindingIdentity,
-  type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
+import { assertCodexHostOwnerCurrent } from "./command-authorization.js";
 import type { CodexCommandDeps } from "./command-handler-deps.js";
 import type { CodexControlRequestOptions } from "./command-rpc.js";
 import { readCodexConversationBindingData } from "./conversation-binding-data.js";
 
-type CodexConversationControlTarget = {
-  identity: CodexAppServerBindingIdentity;
-  agentId: string;
-  agentDir: string;
-  requestedAuthProfileId?: string;
-};
-
-export async function resolveControlTarget(
-  ctx: PluginCommandContext,
-): Promise<CodexConversationControlTarget | undefined> {
+export async function resolveControlTarget(ctx: PluginCommandContext) {
   const binding = await ctx.getCurrentConversationBinding();
   const data = readCodexConversationBindingData(binding);
   const scope = resolveCodexConversationControlScope(ctx);
@@ -55,21 +46,10 @@ type CommandAppServerScope = Pick<
   "assertCurrent" | "authProfileId" | "sessionId" | "sessionKey" | "startOptions" | "storePath"
 > & { agentId: string; agentDir: string };
 
-export type PreparedCodexCommandAuthority = {
-  target: CodexConversationControlTarget | undefined;
-  binding: CodexAppServerThreadBinding | undefined;
-  currentSessionBinding: CodexAppServerThreadBinding | undefined;
-  sessionId: string | undefined;
-  sessionKey: string | undefined;
-  storePath: string | undefined;
-  assertHostCurrent: () => void;
-  assertCurrent: () => void;
-};
-
 export async function resolvePreparedCodexCommandAuthority(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-): Promise<PreparedCodexCommandAuthority> {
+) {
   const target = await resolveControlTarget(ctx);
   const fallback = resolveCodexConversationControlScope(ctx);
   const sessionId = ctx.sessionId;
@@ -97,7 +77,9 @@ export async function resolvePreparedCodexCommandAuthority(
         storePath,
       })
     : undefined;
-  const assertHostCurrent = currentSession?.assertCurrent ?? (() => {});
+  // Manual control commands retain the existing synchronous authority contract.
+  // Native turn execution uses the worker-backed authority separately.
+  const assertHostCurrent = currentSession?.authority.assertLegacyCurrent ?? (() => {});
   const resolvedTarget =
     target && (!sessionIdentity || !isDeepStrictEqual(target.identity, sessionIdentity))
       ? await resolveCodexSessionBinding({
@@ -126,6 +108,14 @@ export async function resolvePreparedCodexCommandAuthority(
     storePath,
     assertHostCurrent,
     assertCurrent,
+    assertMutationCurrent: () => {
+      assertCodexHostOwnerCurrent(ctx);
+      assertCurrent();
+    },
+    assertHostMutationCurrent: () => {
+      assertCodexHostOwnerCurrent(ctx);
+      assertHostCurrent();
+    },
   };
 }
 

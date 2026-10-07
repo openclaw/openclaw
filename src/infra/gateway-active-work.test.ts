@@ -1,6 +1,6 @@
 // Canonical Gateway active-work waiting must report the owners that block shutdown.
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewaySuspendPrepareResultSchema } from "../../packages/gateway-protocol/src/index.js";
 import type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/run-state.js";
 import {
@@ -15,6 +15,7 @@ import {
   createGatewayActiveWorkSnapshot,
   waitForGatewayActiveWork,
 } from "./gateway-active-work.js";
+import { beginLifecycleWriteCustody } from "./lifecycle-write-custody.js";
 
 const activeRuns = new Map<string, EmbeddedAgentQueueHandle>();
 
@@ -24,34 +25,58 @@ afterEach(() => {
   }
   activeRuns.clear();
   resetGatewayWorkAdmission();
+  vi.useRealTimers();
 });
 
 describe("waitForGatewayActiveWork", () => {
+  it.each([60, 600, undefined])(
+    "waits for process-owned work within the %s ms budget",
+    async (timeoutMs) => {
+      vi.useFakeTimers();
+      const admission = tryBeginGatewayRootWorkAdmission("ws:agent");
+      const onSnapshot = vi.fn();
+      let settled = false;
+      const waiting = waitForGatewayActiveWork(timeoutMs, { onSnapshot }).then((result) => {
+        settled = true;
+        return result;
+      });
+      try {
+        if (timeoutMs === undefined) {
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(settled).toBe(false);
+          admission?.release();
+          await vi.advanceTimersByTimeAsync(250);
+        } else {
+          await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+          expect(settled).toBe(false);
+          await vi.advanceTimersByTimeAsync(1);
+        }
+        const result = await waiting;
+        expect(result.drained).toBe(timeoutMs === undefined);
+        expect(result.snapshot.counts.rootRequests).toBe(timeoutMs === undefined ? 0 : 1);
+        expect(onSnapshot).toHaveBeenLastCalledWith(result.snapshot);
+      } finally {
+        admission?.release();
+      }
+    },
+  );
+
   it.each([
-    { runtime: "cli", taskKind: "exec", kind: "background-exec" },
-    { runtime: "cli", taskKind: undefined, kind: "task" },
-    { runtime: "cli", taskKind: "media", kind: "task" },
-    { runtime: "subagent", taskKind: "exec", kind: "task" },
+    { agentRuns: 1, acpRuns: 0, mediaRuns: 0, kind: "agent-run" },
+    { agentRuns: 0, acpRuns: 1, mediaRuns: 0, kind: "acp-run" },
+    { agentRuns: 0, acpRuns: 0, mediaRuns: 1, kind: "media-generation" },
   ] as const)(
-    "reports $runtime/$taskKind task ownership without changing counts",
-    ({ runtime, taskKind, kind }) => {
-      const task = {
-        taskId: "task-owned",
-        runId: "exec:owned-process",
-        status: "running" as const,
-        runtime,
-        taskKind,
-        label: "CLI command",
-        title: "Background CLI command",
-      };
+    "reports native $kind ownership alongside background processes",
+    ({ agentRuns, acpRuns, mediaRuns, kind }) => {
       const snapshot = createGatewayActiveWorkSnapshot({
         getQueueSize: () => 0,
         getPendingReplies: () => 0,
         getEmbeddedRuns: () => 0,
         getBackgroundExecSessions: () => 1,
         getCronRuns: () => 0,
-        getActiveTasks: () => 1,
-        getTaskBlockers: () => [task],
+        getAgentRuns: () => agentRuns,
+        getAcpRuns: () => acpRuns,
+        getMediaRuns: () => mediaRuns,
         getRootRequests: () => 0,
         getSessionAdmissions: () => 0,
         getSessionMutations: () => 0,
@@ -60,22 +85,15 @@ describe("waitForGatewayActiveWork", () => {
         getTerminalPersistence: () => 0,
         getTerminalSessions: () => 0,
       });
-
       expect(snapshot.idle).toBe(false);
       expect(snapshot.counts).toMatchObject({
         backgroundExecSessions: 1,
-        activeTasks: 1,
+        agentRuns,
+        acpRuns,
+        mediaRuns,
         totalActive: 2,
       });
       expect(snapshot.blockers.map((blocker) => blocker.kind)).toEqual(["background-exec", kind]);
-      expect(snapshot.blockers[1]?.task).toEqual({
-        taskId: "task-owned",
-        runId: "exec:owned-process",
-        status: "running",
-        runtime,
-        label: "CLI command",
-        title: "Background CLI command",
-      });
       expect(
         Value.Check(GatewaySuspendPrepareResultSchema, {
           status: "draining",
@@ -88,28 +106,6 @@ describe("waitForGatewayActiveWork", () => {
       ).toBe(true);
     },
   );
-
-  it("keeps omitted process-task details as conservative task blockers", () => {
-    const tasks = Array.from({ length: 9 }, (_, index) => ({
-      taskId: `task-${index}`,
-      runtime: "cli" as const,
-      taskKind: "exec",
-      status: "running" as const,
-    }));
-    const snapshot = createGatewayActiveWorkSnapshot({
-      getActiveTasks: () => 9,
-      getTaskBlockers: () => tasks,
-    });
-
-    expect(snapshot.idle).toBe(false);
-    expect(snapshot.counts.activeTasks).toBe(9);
-    expect(snapshot.blockers.filter((blocker) => blocker.task)).toHaveLength(8);
-    expect(snapshot.blockers.at(-1)).toEqual({
-      kind: "task",
-      count: 1,
-      message: "1 additional active background task run(s)",
-    });
-  });
 
   it("returns the final canonical blockers when its deadline expires", async () => {
     const sessionId = "probe-gateway-active-work-timeout";
@@ -150,6 +146,57 @@ describe("waitForGatewayActiveWork", () => {
       first?.release();
       second?.release();
       third?.release();
+    }
+  });
+
+  it("publishes a separate recorded custody category through the suspension wire shape", () => {
+    const release = beginLifecycleWriteCustody("migration");
+    try {
+      const snapshot = createGatewayActiveWorkSnapshot({
+        getRootRequests: () => 2,
+        getCronRuns: () => 3,
+        getSessionMutations: () => 1,
+        getTerminalPersistence: () => 1,
+      });
+      expect(snapshot.writeCustody).toEqual([
+        { phase: "migration", count: 1 },
+        { phase: "session-mutation", count: 1 },
+        { phase: "terminal-persistence", count: 1 },
+      ]);
+      expect(snapshot.counts).toMatchObject({ rootRequests: 2, cronRuns: 3, lifecycleWrites: 1 });
+      expect(
+        Value.Check(GatewaySuspendPrepareResultSchema, {
+          status: "draining",
+          suspensionId: "owned",
+          expiresAtMs: 120_000,
+          retryAfterMs: 20_000,
+          activeCount: snapshot.counts.totalActive,
+          blockers: snapshot.blockers,
+          writeCustody: snapshot.writeCustody,
+        }),
+      ).toBe(true);
+    } finally {
+      release();
+    }
+    expect(createGatewayActiveWorkSnapshot().writeCustody).toEqual([]);
+  });
+
+  it("bounds holder details without dropping blocker counts", () => {
+    const admissions = Array.from({ length: 10 }, (_, index) =>
+      tryBeginGatewayRootWorkAdmission(`request-${index}`),
+    );
+    try {
+      const snapshot = createGatewayActiveWorkSnapshot();
+      expect(snapshot.blockers).toContainEqual({
+        kind: "root-request",
+        count: 10,
+        message:
+          "10 active gateway request(s): request-0, request-1, request-2, request-3, request-4, request-5, request-6, request-7, +2 more",
+      });
+    } finally {
+      for (const admission of admissions) {
+        admission?.release();
+      }
     }
   });
 

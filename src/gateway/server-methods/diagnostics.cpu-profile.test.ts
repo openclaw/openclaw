@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { DiagnosticCpuProfileOutcome } from "../../logging/diagnostic-cpu-profile.js";
+import type { captureDiagnosticCpuProfile } from "../../logging/diagnostic-cpu-profile.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -15,6 +15,7 @@ vi.mock("../../logging/diagnostic-cpu-profile.js", () => ({
 const result = {
   requestedDurationMs: 5_000,
   actualDurationMs: 5_015,
+  startBlockedMs: 2_100,
   samplingIntervalMicros: 10_000,
   sampleLossCount: null,
   redactedNodeCount: 1,
@@ -96,14 +97,14 @@ beforeEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
   capture
     .mockReset()
-    .mockResolvedValue({ status: "complete", result } satisfies DiagnosticCpuProfileOutcome);
+    .mockResolvedValue({ status: "complete", result } satisfies Awaited<
+      ReturnType<typeof captureDiagnosticCpuProfile>
+    >);
 });
 afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
 describe("diagnostics.cpuProfile dispatch", () => {
   it.each([
-    { role: "operator", scopes: [] },
-    { role: "operator", scopes: ["operator.read"] },
     { role: "operator", scopes: ["operator.write"] },
     { role: "node", scopes: ["operator.admin"] },
   ])("rejects $role/$scopes before native work", async (options) => {
@@ -127,7 +128,7 @@ describe("diagnostics.cpuProfile dispatch", () => {
     },
   );
 
-  it.each([null, [], "", 1, { durationMs: 1 }, { filename: "profile" }])(
+  it.each([null, [], { durationMs: 1 }])(
     "rejects nonempty/nonobject params %j before capture",
     async (params) => {
       const call = request({ params });

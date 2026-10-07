@@ -1,5 +1,10 @@
 // Delivery result types define the normalized channel send contract plus
 // partial-failure metadata for multi-payload outbound sends.
+import type {
+  AuditMessageDeliveryKind,
+  AuditMessageFailureStage,
+  AuditOutboundMessageSuppressedReasonCode,
+} from "../../audit/audit-event-types.js";
 import type { MessageReceipt, MessageReceiptSourceResult } from "../../channels/message/types.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 
@@ -15,16 +20,43 @@ export type OutboundDeliveryResult = {
   outcome?: MessageReceiptSourceResult["outcome"];
   channel: ChannelId;
   messageId: string;
-  target?: {
-    kind: "chat" | "channel" | "room" | "conversation";
-    id: string;
-  };
+  target?: NonNullable<MessageReceiptSourceResult["target"]>;
   timestamp?: number;
   toJid?: string;
   pollId?: string;
   receipt?: MessageReceipt;
   // Channel docking: stash channel-specific fields here to avoid core type churn.
   meta?: Record<string, unknown>;
+};
+
+export type OutboundAuditTerminal =
+  | {
+      outcome: "sent";
+      results: readonly OutboundDeliveryResult[];
+      deliveryKind?: AuditMessageDeliveryKind;
+    }
+  | {
+      outcome: "suppressed";
+      reasonCode: AuditOutboundMessageSuppressedReasonCode;
+      results?: readonly OutboundDeliveryResult[];
+    }
+  | {
+      outcome: "failed";
+      failureStage: AuditMessageFailureStage;
+      results?: readonly OutboundDeliveryResult[];
+      sentBeforeError?: boolean;
+      deliveryKind?: AuditMessageDeliveryKind;
+    }
+  | {
+      outcome: "unknown";
+      failureStage: AuditMessageFailureStage;
+      results?: readonly OutboundDeliveryResult[];
+      sentBeforeError?: boolean;
+    };
+
+export type IndexedOutboundAuditTerminal = {
+  payloadIndex: number;
+  terminal: OutboundAuditTerminal;
 };
 
 /** Count platform sends without double-counting equivalent receipt representations. */
@@ -56,8 +88,8 @@ export type OutboundPayloadDeliverySuppressionReason =
   | "adapter_returned_no_identity";
 
 /** Delivery phase where a failure occurred. */
-export type OutboundDeliveryFailureStage = "platform_send" | "queue" | "unknown";
-export type OutboundPayloadDeliveryKind = "text" | "media" | "other";
+export type OutboundDeliveryFailureStage = AuditMessageFailureStage;
+export type OutboundPayloadDeliveryKind = AuditMessageDeliveryKind;
 
 const PLATFORM_MESSAGE_NOT_DISPATCHED_ERROR_CODE = "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED";
 

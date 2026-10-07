@@ -1,9 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   evaluateRequirementsFromMetadataWithRemote,
-  type RequirementConfigCheck,
   type RequirementRemote,
-  type Requirements,
   type RequirementsMetadata,
 } from "./requirements.js";
 
@@ -20,17 +18,11 @@ export function evaluateEntryRequirementsForCurrentPlatform(params: {
     } | null;
   };
   hasLocalBin: (bin: string) => boolean;
+  platform?: string;
   remote?: RequirementRemote;
   isEnvSatisfied: (envName: string) => boolean;
   isConfigSatisfied: (pathStr: string) => boolean;
-}): {
-  emoji?: string;
-  homepage?: string;
-  required: Requirements;
-  missing: Requirements;
-  requirementsSatisfied: boolean;
-  configChecks: RequirementConfigCheck[];
-} {
+}) {
   const { metadata, frontmatter } = params.entry;
   const emoji = metadata?.emoji ?? frontmatter?.emoji;
   // Explicit blank values suppress lower-priority aliases; normalize only after selection.
@@ -41,7 +33,7 @@ export function evaluateEntryRequirementsForCurrentPlatform(params: {
     always: params.always,
     metadata: metadata ?? undefined,
     hasLocalBin: params.hasLocalBin,
-    localPlatform: process.platform,
+    localPlatform: params.platform ?? process.platform,
     remote: params.remote,
     isEnvSatisfied: params.isEnvSatisfied,
     isConfigSatisfied: params.isConfigSatisfied,

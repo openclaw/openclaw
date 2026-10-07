@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Model Setup saved replacement activation",
@@ -30,7 +30,9 @@ suite.define(() => {
             initialValue: false,
           },
         };
-        const gateway = await installMockGateway(page, {
+        const gateway = await installSetupGateway(page, {
+          agentModel: modelRef,
+          models: [{ id: "gpt-5", name: "GPT-5", provider: "openai", available: true }],
           featureMethods: [
             "openclaw.setup.detect",
             "openclaw.setup.activate.start",
@@ -38,6 +40,14 @@ suite.define(() => {
             "wizard.next",
           ],
           methodResponses: {
+            "config.get": {
+              config: { agents: { defaults: { model: modelRef } } },
+              sourceConfig: { agents: { defaults: { model: modelRef } } },
+              hash: "saved-replacement",
+              raw: JSON.stringify({ agents: { defaults: { model: modelRef } } }),
+              valid: true,
+              issues: [],
+            },
             "openclaw.setup.detect": {
               candidates: [
                 {
@@ -64,14 +74,18 @@ suite.define(() => {
             },
           },
         });
-        await page.goto(`${suite.server.baseUrl}settings/model-setup`);
-        const current = page.locator(".model-setup__current");
+        await openModelSetup(page, suite.server.baseUrl);
+        const current = page
+          .locator(".model-providers__defaults openclaw-select-picker")
+          .first()
+          .locator(".picker-select__trigger");
         await current.waitFor();
+        await expect.poll(() => current.textContent()).toContain("GPT-5");
         const currentConnection = await current.textContent();
         expect(currentConnection).not.toContain("inactive");
         const retry = page
           .locator(`[data-candidate-kind="${kind}"]`)
-          .getByRole("button", { name: "Test & use" });
+          .getByRole("button", { name: "Test & use for this agent", exact: true });
         await retry.click();
         const dialog = page.locator("openclaw-modal-dialog");
         await dialog.getByText("Connection test failed.", { exact: false }).waitFor();

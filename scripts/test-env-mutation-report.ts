@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-// Test Env Mutation Report script supports OpenClaw repository automation.
-
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { isCodeFile, isTestRelatedFile, listRepoFilesSync } from "./check-file-utils.js";
+import { renderFindingGroups } from "./lib/grouped-findings.js";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { parseInventoryReportCliArgs } from "./lib/report-cli-helpers.mts";
+import { getPropertyNameText } from "./lib/ts-guard-utils.mts";
 
 type EnvMutationOperation = "assign" | "delete" | "replace" | "stubEnv";
 
@@ -65,12 +66,6 @@ const DEFAULT_ALLOWED_FILES = new Map([
   ],
 ]);
 
-function listCandidateFiles(repoRoot: string): string[] {
-  return listRepoFilesSync(repoRoot, {
-    includeFile: (file) => isCodeFile(file) && isTestRelatedFile(file),
-  });
-}
-
 function isIdentifier(node: ts.Node, text: string): boolean {
   return ts.isIdentifier(node) && node.text === text;
 }
@@ -100,27 +95,15 @@ function envKeyFromExpression(node: ts.Node): string | null {
   return null;
 }
 
-function propertyNameText(name: ts.PropertyName | undefined): string | null {
-  if (!name) {
-    return null;
-  }
-  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
-    return name.text;
-  }
-  return null;
-}
-
 function envKeysFromObjectLiteral(node: ts.Expression): string[] {
   if (!ts.isObjectLiteralExpression(node)) {
     return [];
   }
   return node.properties
-    .map((property) => (ts.isPropertyAssignment(property) ? propertyNameText(property.name) : null))
+    .map((property) =>
+      ts.isPropertyAssignment(property) ? getPropertyNameText(property.name) : null,
+    )
     .filter((key): key is string => key !== null && TRACKED_ENV_KEYS.has(key));
-}
-
-function isAssignmentOperator(kind: ts.SyntaxKind): boolean {
-  return kind >= ts.SyntaxKind.FirstAssignment && kind <= ts.SyntaxKind.LastAssignment;
 }
 
 function stubEnvKeyFromCall(node: ts.CallExpression): string | null {
@@ -135,60 +118,34 @@ function stubEnvKeyFromCall(node: ts.CallExpression): string | null {
   return stringLiteralText(node.arguments[0]);
 }
 
-function createFinding(params: {
-  allowedFiles: ReadonlyMap<string, string>;
-  file: string;
-  key: string;
-  lines: string[];
-  node: ts.Node;
-  operation: EnvMutationOperation;
-  sourceFile: ts.SourceFile;
-}): TestEnvMutationFinding {
-  const { line } = params.sourceFile.getLineAndCharacterOfPosition(
-    params.node.getStart(params.sourceFile),
-  );
-  const allowReason = params.allowedFiles.get(params.file);
-  return {
-    allowed: allowReason !== undefined,
-    ...(allowReason ? { allowReason } : {}),
-    excerpt: params.lines[line]?.trim() ?? "",
-    file: params.file,
-    key: params.key,
-    line: line + 1,
-    operation: params.operation,
-  };
-}
-
 function scanFile(params: {
   allowedFiles: ReadonlyMap<string, string>;
   file: string;
-  repoRoot: string;
+  sourceFile: ts.SourceFile;
 }): TestEnvMutationFinding[] {
-  const absolutePath = path.join(params.repoRoot, params.file);
-  const source = fs.readFileSync(absolutePath, "utf8");
-  const sourceFile = ts.createSourceFile(params.file, source, ts.ScriptTarget.Latest);
-  const lines = source.split(/\r?\n/u);
+  const { sourceFile } = params;
+  const lines = sourceFile.text.split(/\r?\n/u);
   const findings: TestEnvMutationFinding[] = [];
 
   function addFinding(node: ts.Node, key: string, operation: EnvMutationOperation): void {
     if (key !== DYNAMIC_ENV_KEY && !TRACKED_ENV_KEYS.has(key)) {
       return;
     }
-    findings.push(
-      createFinding({
-        allowedFiles: params.allowedFiles,
-        file: params.file,
-        key,
-        lines,
-        node,
-        operation,
-        sourceFile,
-      }),
-    );
+    const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+    const allowReason = params.allowedFiles.get(params.file);
+    findings.push({
+      allowed: allowReason !== undefined,
+      ...(allowReason ? { allowReason } : {}),
+      excerpt: lines[line]?.trim() ?? "",
+      file: params.file,
+      key,
+      line: line + 1,
+      operation,
+    });
   }
 
   function visit(node: ts.Node): void {
-    if (ts.isBinaryExpression(node) && isAssignmentOperator(node.operatorToken.kind)) {
+    if (ts.isBinaryExpression(node) && ts.isAssignmentOperator(node.operatorToken.kind)) {
       if (
         node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
         isProcessEnvExpression(node.left)
@@ -213,7 +170,7 @@ function scanFile(params: {
         addFinding(node, key, "stubEnv");
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
 
   visit(sourceFile);
@@ -228,8 +185,23 @@ export function collectTestEnvMutationReport(
 ): TestEnvMutationReport {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const allowedFiles = params.allowedFiles ?? DEFAULT_ALLOWED_FILES;
-  const files = listCandidateFiles(repoRoot);
-  const findings = files.flatMap((file) => scanFile({ allowedFiles, file, repoRoot }));
+  const files = listRepoFilesSync(repoRoot, {
+    includeFile: (file) => isCodeFile(file) && isTestRelatedFile(file),
+  });
+  const findings: TestEnvMutationFinding[] = [];
+  const parser = createNativeTypeScriptParser({ cwd: repoRoot });
+  try {
+    const sources = files.map((fileName) => ({
+      fileName,
+      text: fs.readFileSync(path.join(repoRoot, fileName), "utf8"),
+    }));
+    for (const sourceFile of parser.parseSourceFiles(sources)) {
+      const file = path.relative(repoRoot, sourceFile.fileName).split(path.sep).join("/");
+      findings.push(...scanFile({ allowedFiles, file, sourceFile }));
+    }
+  } finally {
+    parser.close();
+  }
   const activeFindings = findings.filter((finding) => !finding.allowed);
   const allowedFindings = findings.filter((finding) => finding.allowed);
   const activeFileCount = new Set(activeFindings.map((finding) => finding.file)).size;
@@ -251,45 +223,10 @@ export function collectTestEnvMutationReport(
   };
 }
 
-function groupFindingsByFile(
-  findings: TestEnvMutationFinding[],
-): Map<string, TestEnvMutationFinding[]> {
-  const grouped = new Map<string, TestEnvMutationFinding[]>();
-  for (const finding of findings) {
-    const fileFindings = grouped.get(finding.file);
-    if (fileFindings) {
-      fileFindings.push(finding);
-    } else {
-      grouped.set(finding.file, [finding]);
-    }
-  }
-  return grouped;
-}
-
-function renderFindingGroups(findings: TestEnvMutationFinding[], limit: number): string[] {
-  const lines: string[] = [];
-  let shown = 0;
-  for (const [file, fileFindings] of groupFindingsByFile(findings)) {
-    if (shown >= limit) {
-      break;
-    }
-    lines.push(`- ${file} (${fileFindings.length})`);
-    for (const finding of fileFindings) {
-      if (shown >= limit) {
-        break;
-      }
-      const action =
-        finding.operation === "stubEnv" ? "vi.stubEnv" : `${finding.operation} process.env`;
-      lines.push(`  L${finding.line} ${finding.key} ${action}: ${finding.excerpt}`);
-      shown += 1;
-    }
-  }
-  if (findings.length > shown) {
-    lines.push(
-      `... ${findings.length - shown} more finding(s) not shown; pass --limit 0 to show all.`,
-    );
-  }
-  return lines;
+function renderEnvMutationFinding(finding: TestEnvMutationFinding): string {
+  const action =
+    finding.operation === "stubEnv" ? "vi.stubEnv" : `${finding.operation} process.env`;
+  return `  L${finding.line} ${finding.key} ${action}: ${finding.excerpt}`;
 }
 
 export function renderTestEnvMutationReport(
@@ -308,12 +245,12 @@ export function renderTestEnvMutationReport(
     lines.push("Active findings: none");
   } else {
     lines.push("Active findings:");
-    lines.push(...renderFindingGroups(report.activeFindings, limit));
+    lines.push(...renderFindingGroups(report.activeFindings, limit, renderEnvMutationFinding));
   }
 
   if (options.includeAllowed && report.allowedFindings.length > 0) {
     lines.push("", "Allowed harness findings:");
-    lines.push(...renderFindingGroups(report.allowedFindings, limit));
+    lines.push(...renderFindingGroups(report.allowedFindings, limit, renderEnvMutationFinding));
   }
 
   return `${lines.join("\n")}\n`;

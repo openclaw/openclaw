@@ -10,10 +10,120 @@ import {
 } from "../lib/sessions/session-capability.test-support.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import { createGatewayHarness, mountSidebar, TWO_AGENTS } from "../test-helpers/app-sidebar.ts";
-import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../test-helpers/gateway-client.ts";
+import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import "./app-sidebar.ts";
 
+async function mountSessionRoster(request: GatewayRequestHandler) {
+  const gateway = createGatewayHarness(createTestGatewayClient(request));
+  const sessions = createTestSessionCapability(gateway.gateway);
+  await sessions.refresh({ agentId: "main", force: true });
+  return {
+    ...(await mountSidebar(gateway.gateway, sessions, "panel", TWO_AGENTS)),
+    sessions,
+  };
+}
+
 describe("AppSidebar automatic list scope replacement", () => {
+  it("discovers current child parents after background work was queued", async () => {
+    const previousParent: GatewaySessionRow = {
+      key: "agent:main:previous-parent",
+      kind: "direct",
+      label: "Previous parent",
+      childSessions: ["agent:main:previous-child"],
+    };
+    const nextParent: GatewaySessionRow = {
+      key: "agent:main:next-parent",
+      kind: "direct",
+      label: "Next parent",
+      childSessions: ["agent:main:next-child"],
+    };
+    const mainParent: GatewaySessionRow = {
+      key: "agent:main:main",
+      kind: "direct",
+      childSessions: ["agent:main:main-child"],
+    };
+    const children: GatewaySessionRow[] = [previousParent, nextParent, mainParent].map(
+      (parent) => ({
+        key: parent.childSessions![0]!,
+        kind: "direct",
+        label: `${parent.key} child`,
+        spawnedBy: parent.key,
+      }),
+    );
+    let roots = [previousParent];
+    const parents: unknown[] = [];
+    const { sidebar, context, provider, sessions } = await mountSessionRoster(
+      async (method, raw) => {
+        const params = asOptionalRecord(raw);
+        if (method === "sessions.subscribe") {
+          return { subscribed: true };
+        }
+        if (method === "sessions.describe") {
+          return {
+            session: [...roots, ...children].find((row) => row.key === params?.key) ?? null,
+          };
+        }
+        if (method !== "sessions.list") {
+          return {};
+        }
+        if (params?.spawnedBy) {
+          parents.push(params.spawnedBy);
+          return sessionsResult(
+            children.filter((row) => row.spawnedBy === params.spawnedBy),
+            2,
+          );
+        }
+        return sessionsResult(roots, 1);
+      },
+    );
+    try {
+      context.connectionBootstrap.setForegroundRoute(undefined);
+      sidebar.activeRouteId = "chat";
+      sidebar.sessionKey = previousParent.key;
+      await settleLitElement(sidebar);
+      expect(parents).toEqual([]);
+
+      roots = [previousParent, nextParent, mainParent];
+      sidebar.sessionKey = nextParent.key;
+      await sessions.refresh({ agentId: "main", force: true });
+      await settleLitElement(sidebar);
+      expect(parents).toEqual([]);
+      expect(
+        sidebar
+          .querySelector(`[data-child-session-toggle="${previousParent.key}"]`)
+          ?.getAttribute("aria-expanded"),
+      ).toBe("false");
+
+      context.connectionBootstrap.setForegroundRoute(null);
+      await waitForFast(() =>
+        expect(parents).toEqual(expect.arrayContaining([nextParent.key, mainParent.key])),
+      );
+      await settleLitElement(sidebar);
+      expect(parents).toHaveLength(2);
+      expect(sidebar.sessionData.childSessionRowsByParent[previousParent.key]).toBeUndefined();
+      expect(sidebar.sessionData.childSessionRowsByParent[mainParent.key]?.[0]?.key).toBe(
+        mainParent.childSessions![0],
+      );
+      const expand = sidebar.querySelector<HTMLButtonElement>(
+        `[data-child-session-toggle="${nextParent.key}"]`,
+      );
+      expect(expand?.getAttribute("aria-expanded")).toBe("false");
+      expand!.click();
+      await settleLitElement(sidebar);
+      expect(sidebar.textContent).toContain(`${nextParent.key} child`);
+      expect(parents).toHaveLength(2);
+    } finally {
+      provider.remove();
+      context.connectionBootstrap.reset();
+      sessions.dispose();
+    }
+  });
+
   it("loads the selected filtered roster after an earlier automatic scope read settles", async () => {
     vi.useFakeTimers();
     const previous = deferred<ReturnType<typeof sessionsResult>>();
@@ -24,8 +134,8 @@ describe("AppSidebar automatic list scope replacement", () => {
         [{ key: `agent:${agentId}:archived`, kind: "direct", archived: true, label }],
         1,
       );
-    const gateway = createGatewayHarness(
-      createTestGatewayClient(async (method, raw) => {
+    const { sidebar, context, provider, sessions } = await mountSessionRoster(
+      async (method, raw) => {
         const params = asOptionalRecord(raw);
         if (method === "sessions.subscribe") {
           return { subscribed: true };
@@ -41,15 +151,7 @@ describe("AppSidebar automatic list scope replacement", () => {
           return previous.promise;
         }
         return archived("main", `Main archived ${++mainReads}`);
-      }),
-    );
-    const sessions = createTestSessionCapability(gateway.gateway);
-    await sessions.refresh({ agentId: "main", force: true });
-    const { sidebar, context, provider } = await mountSidebar(
-      gateway.gateway,
-      sessions,
-      "panel",
-      TWO_AGENTS,
+      },
     );
     try {
       sidebar.connected = true;
@@ -103,8 +205,8 @@ describe("AppSidebar automatic list scope replacement", () => {
       const previous = deferred<ReturnType<typeof sessionsResult>>();
       const parents: unknown[] = [];
       let primaryReads = 0;
-      const gateway = createGatewayHarness(
-        createTestGatewayClient(async (method, raw) => {
+      const { sidebar, context, provider, sessions } = await mountSessionRoster(
+        async (method, raw) => {
           const params = asOptionalRecord(raw);
           if (method === "sessions.subscribe") {
             return { subscribed: true };
@@ -133,15 +235,7 @@ describe("AppSidebar automatic list scope replacement", () => {
             rows.filter((row) => knownParents.includes(row.key)),
             1,
           );
-        }),
-      );
-      const sessions = createTestSessionCapability(gateway.gateway);
-      await sessions.refresh({ agentId: "main", force: true });
-      const { sidebar, context, provider } = await mountSidebar(
-        gateway.gateway,
-        sessions,
-        "panel",
-        TWO_AGENTS,
+        },
       );
       try {
         sidebar.activeRouteId = "chat";

@@ -1,12 +1,6 @@
-import type { unlockWorktree } from "./git-lock.js";
-import type { releaseWorktreeRunLeaseRow } from "./registry.js";
 import "./run-lease.js";
 
 type WorktreeRunLeaseTesting = {
-  setProcessStartTimeResolverForTest(resolver: ((pid: number) => number | null) | null): void;
-  setDeadPidResolverForTest(resolver: ((pid: number) => boolean) | null): void;
-  setReleaseRowImplForTest(impl: typeof releaseWorktreeRunLeaseRow | null): void;
-  setUnlockImplForTest(impl: typeof unlockWorktree | null): void;
   drainPendingCleanupsForTest(): Promise<void>;
   resetForTest(): void;
 };

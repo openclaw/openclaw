@@ -1,6 +1,12 @@
-// QA Lab mock provider output event builders.
-
-import type { MockAssistantMessageSpec, StreamEvent } from "./mock-openai-contracts.js";
+import { stripInboundMetadata } from "openclaw/plugin-sdk/qa-runtime";
+import {
+  type MockAssistantMessageSpec,
+  type StreamEvent,
+  parseJsonObjectBody,
+  QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE,
+  QA_TELEGRAM_LONG_FINAL_PROMPT_RE,
+  QA_WHATSAPP_LONG_FINAL_PROMPT_RE,
+} from "./mock-openai-contracts.js";
 import { MockResponseStream } from "./mock-openai-stream.js";
 import { buildMockFunctionCall } from "./mock-openai-tooling.js";
 
@@ -112,16 +118,21 @@ export function buildReleaseHandoffMarkdown() {
   ].join("\n");
 }
 
-export function extractPlannedToolName(events: StreamEvent[]) {
+function* plannedToolItems(events: StreamEvent[]) {
   for (const event of events) {
     if (event.type !== "response.output_item.done") {
       continue;
     }
-    const item = event.item as { type?: unknown; name?: unknown };
-    if (
-      (item.type === "function_call" || item.type === "custom_tool_call") &&
-      typeof item.name === "string"
-    ) {
+    const item = event.item;
+    if (item.type === "function_call" || item.type === "custom_tool_call") {
+      yield item;
+    }
+  }
+}
+
+export function extractPlannedToolName(events: StreamEvent[]) {
+  for (const item of plannedToolItems(events)) {
+    if (typeof item.name === "string") {
       return item.name;
     }
   }
@@ -132,15 +143,8 @@ export function extractPlannedToolIdentity(events: StreamEvent[]): {
   callId?: string;
   itemId?: string;
 } {
-  for (const event of events) {
-    if (event.type !== "response.output_item.done") {
-      continue;
-    }
-    const item = event.item as { type?: unknown; id?: unknown; call_id?: unknown };
-    if (
-      (item.type === "function_call" || item.type === "custom_tool_call") &&
-      typeof item.call_id === "string"
-    ) {
+  for (const item of plannedToolItems(events)) {
+    if (typeof item.call_id === "string") {
       return {
         callId: item.call_id,
         itemId: typeof item.id === "string" ? item.id : undefined,
@@ -151,15 +155,11 @@ export function extractPlannedToolIdentity(events: StreamEvent[]): {
 }
 
 export function extractPlannedToolArgs(events: StreamEvent[]) {
-  for (const event of events) {
-    if (event.type !== "response.output_item.done") {
-      continue;
-    }
-    const item = event.item as { type?: unknown; arguments?: unknown; input?: unknown };
+  for (const item of plannedToolItems(events)) {
     if (item.type === "custom_tool_call") {
       return typeof item.input === "string" ? { input: item.input } : undefined;
     }
-    if (item.type !== "function_call" || typeof item.arguments !== "string") {
+    if (typeof item.arguments !== "string") {
       continue;
     }
     try {
@@ -184,7 +184,7 @@ export function splitMockStreamingText(text: string, parts = 3) {
   return chunks.length > 1 ? chunks : [text.slice(0, 1), text.slice(1)];
 }
 
-export function buildQaLongFinalText({
+function buildQaLongFinalText({
   endMarker = "TELEGRAM-LONG-FINAL-END",
   segmentPrefix = "telegram-long-final-segment",
   segmentCount = 42,
@@ -200,6 +200,113 @@ export function buildQaLongFinalText({
     (_, index) => `${segmentPrefix}-${String(index + 1).padStart(3, "0")} ${"x".repeat(54)}`,
   ).join("\n");
   return `${startMarker}\n${body}\n${endMarker}`;
+}
+
+const QA_TELEGRAM_PREPARED_DELIVERY_RE = /Telegram prepared delivery QA: (\{[^\n]+\})/u;
+const QA_TELEGRAM_POLICY_HOT_RELOAD_RE =
+  /^Write (40|12) numbered plain-text lines\. Every line must contain (TG-RELOAD-(?:root|account)-[0-9a-f]{8}(?:-NEXT)?) and the words ((?:hot reload|new policy) keeps this conversation connected)\. Finish with a separate final line containing \2-END\. Do not use tools, Markdown, or explicit reply tags\.$/u;
+
+function readTelegramPolicyHotReloadPrompt(prompt: string) {
+  const match = QA_TELEGRAM_POLICY_HOT_RELOAD_RE.exec(stripInboundMetadata(prompt));
+  const lineCount = Number(match?.[1]);
+  const marker = match?.[2];
+  const phrase = match?.[3];
+  if (!Number.isSafeInteger(lineCount) || !marker || !phrase) {
+    return undefined;
+  }
+  const isHeldTurn =
+    lineCount === 40 && !marker.endsWith("-NEXT") && phrase.startsWith("hot reload");
+  const isNextTurn =
+    lineCount === 12 && marker.endsWith("-NEXT") && phrase.startsWith("new policy");
+  return isHeldTurn || isNextTurn ? { lineCount, marker, phrase } : undefined;
+}
+
+function buildTelegramPolicyHotReloadEvents(prompt: string): StreamEvent[] | undefined {
+  const fixture = readTelegramPolicyHotReloadPrompt(prompt);
+  if (!fixture) {
+    return undefined;
+  }
+  const { lineCount, marker, phrase } = fixture;
+  const lines = Array.from(
+    { length: lineCount },
+    (_, index) => `${index + 1}. ${marker} ${phrase}`,
+  );
+  const text = [...lines, `${marker}-END`].join("\n");
+  return buildStreamingFinalAnswerEvents(
+    "msg_mock_telegram_policy_hot_reload",
+    text,
+    lineCount === 40 ? lines[0] : text,
+  );
+}
+
+export function resolveTelegramChannelStreamingPause(
+  prompt: string,
+): { previewPauseMs: number } | undefined {
+  return QA_TELEGRAM_PREPARED_DELIVERY_RE.test(prompt) ||
+    readTelegramPolicyHotReloadPrompt(prompt)?.lineCount === 40
+    ? { previewPauseMs: 3_000 }
+    : undefined;
+}
+
+export function buildChannelStreamingFixtureEvents(params: {
+  currentPrompt: string;
+  allInputText: string;
+  hasCompletedToolOutput: boolean;
+}): StreamEvent[] | undefined {
+  const policyHotReloadEvents = buildTelegramPolicyHotReloadEvents(params.currentPrompt);
+  if (policyHotReloadEvents) {
+    return policyHotReloadEvents;
+  }
+  if (QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE.test(params.allInputText)) {
+    const text = buildQaLongFinalText({
+      endMarker: "TELEGRAM-LONG-FINAL-3CHUNK-END",
+      segmentCount: 96,
+      startMarker: "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
+    });
+    return buildStreamingFinalAnswerEvents("msg_mock_telegram_long_final_three_chunk", text);
+  }
+  if (QA_TELEGRAM_LONG_FINAL_PROMPT_RE.test(params.allInputText)) {
+    const text = buildQaLongFinalText();
+    return buildStreamingFinalAnswerEvents("msg_mock_telegram_long_final", text);
+  }
+  const preparedDeliveryMatch = QA_TELEGRAM_PREPARED_DELIVERY_RE.exec(params.currentPrompt);
+  if (preparedDeliveryMatch?.[1]) {
+    const fixture = parseJsonObjectBody(preparedDeliveryMatch[1]);
+    if (typeof fixture?.text !== "string" || typeof fixture.previewText !== "string") {
+      throw new Error("Telegram prepared delivery fixture requires text and previewText.");
+    }
+    if (typeof fixture.mediaPath === "string" && !params.hasCompletedToolOutput) {
+      if (typeof fixture.blockCaption !== "string") {
+        throw new Error("Telegram prepared media fixture requires a block caption.");
+      }
+      const blockText = `${fixture.blockCaption}\n\nMEDIA:${fixture.mediaPath}`;
+      return buildAssistantThenToolCallEvents(
+        {
+          id: "msg_mock_telegram_prepared_media",
+          phase: "final_answer",
+          streamDeltas: splitMockStreamingText(blockText),
+          text: blockText,
+        },
+        "read",
+        { path: "QA_KICKOFF_TASK.md" },
+      );
+    }
+    return buildStreamingFinalAnswerEvents(
+      "msg_mock_telegram_prepared_delivery",
+      fixture.text,
+      fixture.previewText,
+    );
+  }
+  if (QA_WHATSAPP_LONG_FINAL_PROMPT_RE.test(params.allInputText)) {
+    const text = buildQaLongFinalText({
+      endMarker: "WHATSAPP-LONG-FINAL-END",
+      segmentPrefix: "whatsapp-long-final-segment",
+      segmentCount: 64,
+      startMarker: "WHATSAPP-LONG-FINAL-BEGIN",
+    });
+    return buildStreamingFinalAnswerEvents("msg_mock_whatsapp_long_final", text);
+  }
+  return undefined;
 }
 
 export function buildAssistantThenToolCallEvents(

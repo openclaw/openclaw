@@ -1,5 +1,6 @@
 import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import type { JsonValue } from "./protocol.js";
@@ -137,6 +138,55 @@ describe("CodexAppServerTurnRouter", () => {
     );
   });
 
+  it.each([
+    "Codex couldn't save diagnostic logs to its local database. Use /feedback with logs included before closing Codex, or run `codex doctor` for diagnostics.",
+    "Codex couldn't save diagnostic logs to its local database. Run `codex doctor` for diagnostics.",
+  ])(
+    "records a diagnostic-log failure once instead of replaying it across turns: %s",
+    async (message) => {
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const harness = createHarness();
+      const router = getCodexAppServerTurnRouter(harness.client);
+      const notifications = vi.fn();
+      const routes = ["thread-first", "thread-sibling"].map((threadId) =>
+        router.reserveThread({ threadId, onNotification: notifications }),
+      );
+      for (const route of routes) {
+        route.armTurn();
+        await route.bindTurn("turn-first");
+      }
+
+      harness.send({ method: "warning", params: { threadId: null, message } });
+      await Promise.all(routes.map((route) => route.drain()));
+      expect(notifications).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledExactlyOnceWith(message);
+      for (const route of routes) {
+        route.release();
+      }
+
+      const later = router.reserveThread({
+        threadId: "thread-first",
+        onNotification: notifications,
+      });
+      later.armTurn();
+      await later.bindTurn("turn-later");
+      expect(notifications).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledTimes(1);
+      later.release();
+    },
+  );
+
+  it("records a log failure before observers exist and keeps a new connection's failure visible", () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const message =
+      "Codex couldn't save diagnostic logs to its local database. Run `codex doctor` for diagnostics.";
+    for (const harness of [createHarness(), createHarness()]) {
+      harness.send({ method: "warning", params: { threadId: null, message } });
+      harness.client.addNotificationHandler(vi.fn());
+    }
+    expect(warn.mock.calls).toEqual([[message], [message]]);
+  });
+
   it("does not dispatch a request that times out before route activation", async () => {
     vi.useFakeTimers();
     vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
@@ -261,7 +311,7 @@ describe("CodexAppServerTurnRouter", () => {
     });
     harness.send({
       method: "turn/completed",
-      params: { threadId: "thread-2", turn: { id: "turn-2", items: [] } },
+      params: { threadId: "thread-2", turn: { id: "turn-2", status: "completed", items: [] } },
     });
     harness.send({
       method: "item/agentMessage/delta",
@@ -293,7 +343,7 @@ describe("CodexAppServerTurnRouter", () => {
     expect(secondNotifications).toHaveBeenCalledWith(
       {
         method: "turn/completed",
-        params: { threadId: "thread-2", turn: { id: "turn-2", items: [] } },
+        params: { threadId: "thread-2", turn: { id: "turn-2", status: "completed", items: [] } },
       },
       { threadId: "thread-2", turnId: "turn-2" },
     );
@@ -412,60 +462,115 @@ describe("CodexAppServerTurnRouter", () => {
     ]);
   });
 
-  it("flushes prior notifications before releasing a bound request", async () => {
-    const harness = createHarness();
-    const events: string[] = [];
-    let finishFirst!: () => void;
-    const firstPending = new Promise<void>((resolve) => {
-      finishFirst = resolve;
-    });
-    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
-      threadId: "thread-ordered",
-      onNotification: async (notification) => {
-        events.push(`${notification.method}:start`);
-        if (notification.method === "item/started") {
-          await firstPending;
+  it.each([false, true])(
+    "flushes prior notifications before releasing a bound request (paused: %s)",
+    async (paused) => {
+      const harness = createHarness();
+      const events: string[] = [];
+      const received: string[] = [];
+      const beforeNotifications = createDeferred<void>();
+      const firstPending = createDeferred<void>();
+      const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
+        threadId: "thread-ordered",
+        onNotificationReceived: (notification) => {
+          received.push(notification.method);
+        },
+        onNotification: async (notification) => {
+          events.push(`${notification.method}:start`);
+          if (notification.method === "item/started") {
+            await firstPending.promise;
+          }
+          events.push(`${notification.method}:end`);
+        },
+        onRequest: () => {
+          events.push("request");
+          return { success: true, contentItems: [] };
+        },
+      });
+      route.armTurn();
+      harness.send({
+        method: "item/started",
+        params: { threadId: "thread-ordered", turnId: "turn-ordered" },
+      });
+      harness.send({
+        method: "item/agentMessage/delta",
+        params: { threadId: "thread-ordered", turnId: "turn-ordered", delta: "done" },
+      });
+      harness.send({
+        id: "request-ordered",
+        method: "item/tool/call",
+        params: { threadId: "thread-ordered", turnId: "turn-ordered", tool: "message" },
+      });
+
+      const binding = route.bindTurn(
+        "turn-ordered",
+        paused ? { beforeNotifications: beforeNotifications.promise } : undefined,
+      );
+      const drained = vi.fn();
+      const draining = route.drain().then(drained);
+      try {
+        harness.send({ method: "configWarning", params: { message: "global warning" } });
+        harness.send({
+          method: "turn/completed",
+          params: {
+            threadId: route.threadId,
+            turn: { id: "turn-stale", status: "completed", items: [] },
+          },
+        });
+        harness.send({
+          method: "turn/completed",
+          params: {
+            threadId: route.threadId,
+            turn: { id: "turn-ordered", status: "completed", items: [] },
+          },
+        });
+        await settleInput();
+        const expectedReceipts = [
+          "item/started",
+          "item/agentMessage/delta",
+          "configWarning",
+          "turn/completed",
+        ];
+        expect(received).toEqual(expectedReceipts);
+        expect(route.completed).toBe(true);
+        if (paused) {
+          expect(events).toEqual([]);
         }
-        events.push(`${notification.method}:end`);
-      },
-      onRequest: () => {
-        events.push("request");
-        return { success: true, contentItems: [] };
-      },
-    });
-    route.armTurn();
-    harness.send({
-      method: "item/started",
-      params: { threadId: "thread-ordered", turnId: "turn-ordered" },
-    });
-    harness.send({
-      method: "item/agentMessage/delta",
-      params: { threadId: "thread-ordered", turnId: "turn-ordered", delta: "done" },
-    });
-    harness.send({
-      id: "request-ordered",
-      method: "item/tool/call",
-      params: { threadId: "thread-ordered", turnId: "turn-ordered", tool: "message" },
-    });
+        expect(drained).not.toHaveBeenCalled();
+        expect(harness.writes).toEqual([]);
 
-    const binding = route.bindTurn("turn-ordered");
-    await vi.waitFor(() => expect(events).toEqual(["item/started:start"]));
-    expect(harness.writes).toEqual([]);
-
-    finishFirst();
-    await binding;
-    expect(await waitForResponse(harness, "request-ordered")).toEqual({
-      id: "request-ordered",
-      result: { success: true, contentItems: [] },
-    });
-    expect(events).toEqual([
-      "item/started:start",
-      "item/started:end",
-      "item/agentMessage/delta:start",
-      "item/agentMessage/delta:end",
-      "request",
-    ]);
-  });
+        beforeNotifications.resolve();
+        await vi.waitFor(() => expect(events).toEqual(["item/started:start"]));
+        expect(drained).not.toHaveBeenCalled();
+        expect(harness.writes).toEqual([]);
+        firstPending.resolve();
+        await binding;
+        await draining;
+        expect(await waitForResponse(harness, "request-ordered")).toEqual({
+          id: "request-ordered",
+          result: { success: true, contentItems: [] },
+        });
+        expect(received).toEqual(expectedReceipts);
+        expect(events).toEqual([
+          "item/started:start",
+          "item/started:end",
+          "item/agentMessage/delta:start",
+          "item/agentMessage/delta:end",
+          "configWarning:start",
+          "configWarning:end",
+          "turn/completed:start",
+          "turn/completed:end",
+          "request",
+        ]);
+      } finally {
+        beforeNotifications.resolve();
+        firstPending.resolve();
+        route.release();
+        await binding.catch(() => undefined);
+        await draining;
+      }
+    },
+  );
 
   it("records receipt synchronously and drains accepted work before release", async () => {
     const harness = createHarness();

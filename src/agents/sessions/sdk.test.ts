@@ -1,32 +1,31 @@
-import path from "node:path";
 import { registerSessionResourceCleanup } from "@openclaw/ai/internal/runtime";
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
-// Agent session SDK tests cover default tool wiring, prompt preservation, and
+// Agent session SDK tests cover prepared tool wiring, prompt preservation, and
 // session write-settlement behavior.
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { ImageContent, Model, SimpleStreamOptions } from "../../llm/types.js";
 import { readRuntimePromptImageOrder } from "../../media/media-facts.js";
 import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 
-const thinkingMocks = vi.hoisted(() => ({
-  resolveThinkingDefaultForModel: vi.fn(() => "medium"),
-}));
 const streamMocks = vi.hoisted(() => ({
   streamSimple: vi.fn(),
 }));
-const sdkSessionTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sdkSessionTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const dir of sdkSessionTempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(dir);
+    }
+    cleanup();
+  }),
+);
 
-vi.mock("../../auto-reply/thinking.js", () => ({
-  resolveThinkingDefaultForModel: thinkingMocks.resolveThinkingDefaultForModel,
-}));
 vi.mock("../../llm/stream.js", () => ({
   streamSimple: streamMocks.streamSimple,
 }));
@@ -41,7 +40,7 @@ import type { ToolDefinition } from "./extensions/types.js";
 import * as publicSessionSdk from "./index.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
-import { createAgentSession, createAgentSessionForEmbeddedRunner } from "./sdk.js";
+import { createAgentSession } from "./sdk.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
@@ -60,37 +59,44 @@ const testModel: Model = {
 
 describe("createAgentSession runtime ownership", () => {
   it("keeps embedded recovery construction out of the public sessions barrel", () => {
-    expect(publicSessionSdk).not.toHaveProperty("createAgentSessionForEmbeddedRunner");
+    expect(publicSessionSdk).not.toHaveProperty("createAgentSession");
   });
 
-  it("keeps durable provider resources when an embedded attempt session is disposed", async () => {
-    const cleanup = vi.fn();
-    const unregisterCleanup = registerSessionResourceCleanup(cleanup);
-    try {
-      const sessionManager = SessionManager.inMemory();
-      const { session } = await createAgentSessionForEmbeddedRunner(
-        {
+  it.each([false, true, undefined])(
+    "honors provider resource cleanup ownership (%s)",
+    async (cleanupOnDispose) => {
+      const cleanup = vi.fn();
+      const unregisterCleanup = registerSessionResourceCleanup(cleanup);
+      try {
+        const sessionManager = SessionManager.inMemory();
+        const { session } = await createAgentSession({
+          cleanupProviderSessionResourcesOnDispose: cleanupOnDispose,
+          systemPrompt: "Test session prompt",
+          tools: [],
           model: testModel,
+          thinkingLevel: "medium",
           resourceLoader: createResourceLoader(),
           sessionManager,
           settingsManager: SettingsManager.inMemory(),
           modelRegistry: createTestModelRegistry(),
-        },
-        {},
-      );
+        });
 
-      session.dispose();
+        session.dispose();
 
-      expect(cleanup).not.toHaveBeenCalled();
-    } finally {
-      unregisterCleanup();
-    }
-  });
+        expect(cleanup).toHaveBeenCalledTimes(cleanupOnDispose === false ? 0 : 1);
+      } finally {
+        unregisterCleanup();
+      }
+    },
+  );
 
   it("binds the installed stream wrapper to the model-registry lifecycle", async () => {
     const modelRegistry = createTestModelRegistry();
     const { session } = await createAgentSession({
+      systemPrompt: "Test session prompt",
+      tools: [],
       model: testModel,
+      thinkingLevel: "medium",
       resourceLoader: createResourceLoader(),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),
@@ -100,38 +106,6 @@ describe("createAgentSession runtime ownership", () => {
     expect(getStreamLlmRuntime(session.agent.streamFn)).toBe(
       getModelRegistryRuntime(modelRegistry).llmRuntime,
     );
-  });
-
-  it("keeps the default SQLite session inside an explicit agent directory", async () => {
-    const root = sdkSessionTempDirs.make("openclaw-sdk-session-");
-    const agentDir = path.join(root, "isolated-agent");
-    const cwd = path.join(root, "explicit-sdk-cwd");
-    const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
-    try {
-      const { session } = await createAgentSession({
-        agentDir,
-        cwd,
-        model: testModel,
-        resourceLoader: createResourceLoader(),
-        settingsManager: SettingsManager.inMemory(),
-        modelRegistry: createTestModelRegistry(),
-      });
-
-      const target = session.sessionManager.getSessionTarget();
-      if (!target) {
-        throw new Error("Expected the default SDK session to have a transcript target");
-      }
-      expect(target.storePath).toBe(databasePath);
-      expect(loadSessionEntry(target)).toMatchObject({ sessionId: target.sessionId });
-      await expect(loadTranscriptEvents(target)).resolves.toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ type: "session", id: target.sessionId, cwd }),
-        ]),
-      );
-      session.dispose();
-    } finally {
-      disposeOpenClawAgentDatabaseByPath(databasePath);
-    }
   });
 });
 
@@ -187,13 +161,36 @@ function createTestModelRegistry(authStorage = AuthStorage.inMemory()): ModelReg
   return modelRegistry;
 }
 
+async function createSdkSession({
+  systemPrompt = "Test session prompt",
+  customTools,
+  tools = customTools?.map((tool) => tool.name) ?? [],
+  model = testModel,
+  thinkingLevel = "medium",
+  resourceLoader = createResourceLoader(),
+  sessionManager = SessionManager.inMemory(),
+  settingsManager = SettingsManager.inMemory(),
+  modelRegistry = ModelRegistry.inMemory(AuthStorage.inMemory()),
+  ...options
+}: Partial<Parameters<typeof createAgentSession>[0]> = {}) {
+  return await createAgentSession({
+    ...options,
+    systemPrompt,
+    tools,
+    customTools,
+    model,
+    thinkingLevel,
+    resourceLoader,
+    sessionManager,
+    settingsManager,
+    modelRegistry,
+  });
+}
+
 async function createSessionAndStreamModel(model: Model): Promise<SimpleStreamOptions> {
   streamMocks.streamSimple.mockClear();
-  const { session } = await createAgentSession({
+  const { session } = await createSdkSession({
     model,
-    resourceLoader: createResourceLoader(),
-    sessionManager: SessionManager.inMemory(),
-    settingsManager: SettingsManager.inMemory(),
     modelRegistry: createTestModelRegistry(),
   });
 
@@ -245,13 +242,8 @@ function createSessionManagerWithPersistedAssistantMessages(
 }
 
 async function createSessionFromManager(sessionManager: SessionManager) {
-  const { session } = await createAgentSession({
-    authStorage: AuthStorage.inMemory(),
-    model: testModel,
-    resourceLoader: createResourceLoader(),
+  const { session } = await createSdkSession({
     sessionManager,
-    settingsManager: SettingsManager.inMemory(),
-    modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
   });
   return session;
 }
@@ -279,7 +271,6 @@ describe("AgentSession getLastAssistantText", () => {
       expected: "visible answer",
     },
     { name: "null content", content: null, expected: undefined },
-    { name: "object content", content: { type: "text", text: "malformed" }, expected: undefined },
   ])("reads $name without throwing", async ({ content, expected }) => {
     const session = await createSessionWithPersistedAssistantContent(content);
     expect(session.getLastAssistantText()).toBe(expected);
@@ -328,12 +319,8 @@ describe("AgentSession tree navigation", () => {
         timestamp: 4,
       }),
     );
-    const { session } = await createAgentSession({
-      authStorage,
-      model: testModel,
-      resourceLoader: createResourceLoader(),
+    const { session } = await createSdkSession({
       sessionManager,
-      settingsManager: SettingsManager.inMemory(),
       modelRegistry: createTestModelRegistry(authStorage),
     });
     const entriesBefore = sessionManager.getEntries();
@@ -367,7 +354,9 @@ describe("AgentSession queued user turns", () => {
       },
       target: createTestUserTurnTranscriptTarget(),
     });
-    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    const steer = vi
+      .spyOn(session.agent, "admitSteeringMessage")
+      .mockImplementation(() => () => {});
     let canInject = true;
     const queued = session.steer(
       "runtime prompt",
@@ -394,7 +383,9 @@ describe("AgentSession queued user turns", () => {
       },
       target: createTestUserTurnTranscriptTarget(),
     });
-    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    const steer = vi
+      .spyOn(session.agent, "admitSteeringMessage")
+      .mockImplementation(() => () => {});
 
     await session.steer("runtime group prompt", undefined, recorder);
 
@@ -418,7 +409,9 @@ describe("AgentSession queued user turns", () => {
 
   it("preserves prompt image ownership across steered and follow-up messages", async () => {
     const session = await createSessionFromManager(SessionManager.inMemory());
-    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    const steer = vi
+      .spyOn(session.agent, "admitSteeringMessage")
+      .mockImplementation(() => () => {});
     const followUp = vi.spyOn(session.agent, "followUp").mockImplementation(() => undefined);
     const media = [{ path: "/tmp/a.png", contentType: "image/png" }];
     const imageOrder = ["inline"] as const;
@@ -467,28 +460,29 @@ describe("createAgentSession attribution headers", () => {
     expect(options.headers).toBeUndefined();
   });
 
-  it("keeps OpenRouter attribution headers for provider and endpoint matches", async () => {
-    const providerOptions = await createSessionAndStreamModel({
-      ...testModel,
-      provider: "openrouter",
-      baseUrl: "https://example.test",
-    });
-    const endpointOptions = await createSessionAndStreamModel({
-      ...testModel,
-      provider: "custom-openai",
-      baseUrl: "https://openrouter.ai/api/v1",
-    });
+  it("forwards OpenRouter attribution for openrouter.ai endpoints with telemetry off, but not proxies", async () => {
+    vi.stubEnv("OPENCLAW_TELEMETRY", "0");
+    try {
+      const proxyOptions = await createSessionAndStreamModel({
+        ...testModel,
+        provider: "openrouter",
+        baseUrl: "https://example.test",
+      });
+      const endpointOptions = await createSessionAndStreamModel({
+        ...testModel,
+        provider: "custom-openai",
+        baseUrl: "https://openrouter.ai/api/v1",
+      });
 
-    expect(providerOptions.headers).toMatchObject({
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories": "cli-agent",
-    });
-    expect(endpointOptions.headers).toMatchObject({
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories": "cli-agent",
-    });
+      expect(proxyOptions.headers).toBeUndefined();
+      expect(endpointOptions.headers).toMatchObject({
+        "HTTP-Referer": "https://openclaw.ai",
+        "X-OpenRouter-Title": "OpenClaw",
+        "X-OpenRouter-Categories": "personal-agent,cli-agent",
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("keeps Cloudflare attribution headers for provider and endpoint matches", async () => {
@@ -510,17 +504,13 @@ describe("createAgentSession attribution headers", () => {
 
 describe("createAgentSession tool defaults", () => {
   it("forwards max thinking budgets from settings to the agent", async () => {
-    const { session } = await createAgentSession({
-      model: testModel,
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
+    const { session } = await createSdkSession({
       settingsManager: SettingsManager.inMemory({
         thinkingBudgets: {
           high: 16_384,
           max: 32_768,
         },
       }),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
     });
 
     expect(session.agent.thinkingBudgets).toEqual({
@@ -529,9 +519,7 @@ describe("createAgentSession tool defaults", () => {
     });
   });
 
-  it("keeps custom tools active when only builtin tools are disabled", async () => {
-    // `noTools: "builtin"` removes stock tools only; extension/custom tools are
-    // still explicitly supplied session capabilities.
+  it("keeps tool activation within the prepared allowlist", async () => {
     const customTool: ToolDefinition = {
       name: "custom_lookup",
       label: "Custom Lookup",
@@ -545,20 +533,15 @@ describe("createAgentSession tool defaults", () => {
       }),
     };
 
-    const { session } = await createAgentSession({
-      model: testModel,
-      noTools: "builtin",
-      customTools: [customTool],
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    const { session } = await createSdkSession({
+      tools: ["custom_lookup"],
+      customTools: [customTool, { ...customTool, name: "unlisted_tool" }],
     });
 
     expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
     expect(session.getAllTools().map((tool) => tool.name)).toEqual(["custom_lookup"]);
 
-    session.setActiveToolsByName(["bash", "custom_lookup"]);
+    session.setActiveToolsByName(["bash", "unlisted_tool", "custom_lookup"]);
 
     expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
   });
@@ -576,14 +559,8 @@ describe("createAgentSession tool defaults", () => {
       }),
     };
 
-    const { session } = await createAgentSession({
-      model: testModel,
-      noTools: "builtin",
+    const { session } = await createSdkSession({
       customTools: [hiddenTool],
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
     });
 
     expect(session.agent.state.tools).toEqual([
@@ -599,8 +576,12 @@ describe("createAgentSession tool defaults", () => {
       name: "custom_lookup",
       label: "Custom Lookup",
       description: "Looks up a test value.",
-      promptSnippet: "Lookup test values",
-      promptGuidelines: ["Use custom_lookup for test values."],
+      promptSnippet: "  Lookup\n test  values  ",
+      promptGuidelines: [
+        " Use custom_lookup for test values. ",
+        "",
+        "Use custom_lookup for test values.",
+      ],
       parameters: Type.Object({}),
       execute: async () => ({
         content: [{ type: "text", text: "ok" }],
@@ -608,37 +589,46 @@ describe("createAgentSession tool defaults", () => {
       }),
     };
 
-    const { session } = await createAgentSession({
-      model: testModel,
-      noTools: "builtin",
-      customTools: [customTool],
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-    });
     const systemPrompt = "You are a personal assistant running inside OpenClaw.";
+    const authStorage = AuthStorage.inMemory();
+    authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
+    const observed: unknown[] = [];
+    const handlers = new Map([
+      [
+        "before_agent_start",
+        [
+          async (event: unknown) => {
+            observed.push(event);
+          },
+        ],
+      ],
+    ]);
+    const { session } = await createSdkSession({
+      systemPrompt,
+      modelRegistry: ModelRegistry.inMemory(authStorage),
+      customTools: [customTool],
+      resourceLoader: createResourceLoader(handlers),
+    });
 
-    session.setBaseSystemPrompt(systemPrompt);
+    expect(session.systemPrompt).toBe(systemPrompt);
     session.setActiveToolsByName(["bash", "custom_lookup"]);
 
     expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
     expect(session.systemPrompt).toBe(systemPrompt);
 
-    const exactPromptOptions = (
-      session as unknown as {
-        baseSystemPromptOptions: {
-          selectedTools?: string[];
-          toolSnippets?: Record<string, string>;
-          promptGuidelines?: string[];
-        };
-      }
-    ).baseSystemPromptOptions;
-    expect(exactPromptOptions.selectedTools).toEqual(["custom_lookup"]);
-    expect(exactPromptOptions.toolSnippets).toEqual({
-      custom_lookup: "Lookup test values",
-    });
-    expect(exactPromptOptions.promptGuidelines).toEqual(["Use custom_lookup for test values."]);
+    vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+    await session.prompt("Inspect the active tool context.");
+    expect(observed).toEqual([
+      expect.objectContaining({
+        systemPrompt,
+        systemPromptOptions: expect.objectContaining({
+          customPrompt: systemPrompt,
+          selectedTools: ["custom_lookup"],
+          toolSnippets: { custom_lookup: "Lookup test values" },
+          promptGuidelines: ["Use custom_lookup for test values."],
+        }),
+      }),
+    ]);
   });
 
   it("keeps the public manual compaction result inside its write settlement", async () => {
@@ -652,8 +642,7 @@ describe("createAgentSession tool defaults", () => {
     sessionManager.appendMessage(makeUserMessage("Current question", 2));
     const authStorage = AuthStorage.inMemory();
     authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
-    const { session } = await createAgentSession({
-      model: testModel,
+    const { session } = await createSdkSession({
       sessionManager,
       modelRegistry: createTestModelRegistry(authStorage),
       settingsManager: SettingsManager.inMemory({ compaction: { keepRecentTokens: 1 } }),
@@ -678,12 +667,8 @@ describe("createAgentSession tool defaults", () => {
     // concurrent event handlers cannot interleave persistence.
     const events: string[] = [];
     const sessionManager = SessionManager.inMemory();
-    const { session } = await createAgentSession({
-      model: testModel,
-      resourceLoader: createResourceLoader(),
+    const { session } = await createSdkSession({
       sessionManager,
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
       withSessionWriteSettlement: async (run) => {
         events.push("settlement:start");
         try {
@@ -725,12 +710,8 @@ describe("createAgentSession tool defaults", () => {
       ],
     ]);
 
-    const { session } = await createAgentSession({
-      model: testModel,
+    const { session } = await createSdkSession({
       resourceLoader: createResourceLoader(handlers),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
       withSessionWriteSettlement: async (run) => {
         events.push("settlement:start");
         try {
@@ -760,12 +741,8 @@ describe("createAgentSession tool defaults", () => {
       ],
     ]);
 
-    const { session } = await createAgentSession({
-      model: testModel,
+    const { session } = await createSdkSession({
       resourceLoader: createResourceLoader(handlers),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
       withSessionWriteSettlement: async (run) => {
         events.push("settlement:start");
         try {
@@ -803,12 +780,7 @@ describe("createAgentSession tool defaults", () => {
     // Write-capable tools still enter the settlement boundary even without hooks;
     // it covers shared session state, not just extension execution.
     const events: string[] = [];
-    const { session } = await createAgentSession({
-      model: testModel,
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    const { session } = await createSdkSession({
       withSessionWriteSettlement: async (run) => {
         events.push("settlement:start");
         try {
@@ -843,12 +815,7 @@ describe("createAgentSession tool defaults", () => {
   });
 });
 
-describe("createAgentSession thinking level defaults", () => {
-  beforeEach(() => {
-    thinkingMocks.resolveThinkingDefaultForModel.mockReset();
-    thinkingMocks.resolveThinkingDefaultForModel.mockReturnValue("medium");
-  });
-
+describe("createAgentSession thinking level clamping", () => {
   it.each([
     "openai-completions",
     "openai-responses",
@@ -856,24 +823,24 @@ describe("createAgentSession thinking level defaults", () => {
     "openai-chatgpt-responses",
   ] as const)("records declared max thinking in a new embedded %s session", async (api) => {
     const sessionManager = SessionManager.inMemory();
-    const { session } = await createAgentSessionForEmbeddedRunner(
-      {
-        model: {
-          ...testModel,
-          id: "custom-reasoner",
-          api,
-          reasoning: true,
-          thinkingLevelMap: { off: null, minimal: null },
-          compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
-        },
-        thinkingLevel: "max",
-        resourceLoader: createResourceLoader(),
-        sessionManager,
-        settingsManager: SettingsManager.inMemory(),
-        modelRegistry: createTestModelRegistry(),
+    const { session } = await createAgentSession({
+      cleanupProviderSessionResourcesOnDispose: false,
+      tools: [],
+      systemPrompt: "Test session prompt",
+      model: {
+        ...testModel,
+        id: "custom-reasoner",
+        api,
+        reasoning: true,
+        thinkingLevelMap: { off: null, minimal: null },
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
       },
-      {},
-    );
+      thinkingLevel: "max",
+      resourceLoader: createResourceLoader(),
+      sessionManager,
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: createTestModelRegistry(),
+    });
     try {
       expect({
         level: session.thinkingLevel,
@@ -886,140 +853,15 @@ describe("createAgentSession thinking level defaults", () => {
       session.dispose();
     }
   });
-
-  it("uses the provider-specific thinking default for new sessions", async () => {
-    thinkingMocks.resolveThinkingDefaultForModel.mockReturnValue("off");
-
-    const ollamaModel = {
-      ...testModel,
-      provider: "ollama",
-      reasoning: true,
-      params: { canonicalModelId: "qwen3:8b" },
-      compat: { thinkingFormat: "qwen" },
-    } satisfies Model;
-    const { session } = await createAgentSession({
-      model: ollamaModel,
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-    });
-
-    expect(session.thinkingLevel).toBe("off");
-    expect(thinkingMocks.resolveThinkingDefaultForModel).toHaveBeenCalledWith({
-      provider: "ollama",
-      model: testModel.id,
-      catalog: [
-        {
-          provider: "ollama",
-          id: testModel.id,
-          api: ollamaModel.api,
-          reasoning: true,
-          params: { canonicalModelId: "qwen3:8b" },
-          compat: { thinkingFormat: "qwen" },
-        },
-      ],
-    });
-  });
-
-  it("settings default overrides provider thinking default", async () => {
-    thinkingMocks.resolveThinkingDefaultForModel.mockReturnValue("off");
-
-    const { session } = await createAgentSession({
-      model: { ...testModel, provider: "ollama", reasoning: true },
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory({ defaultThinkingLevel: "low" }),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-    });
-
-    // User-configured settings default beats provider default
-    expect(session.thinkingLevel).toBe("low");
-  });
-
-  it("uses Ollama policy for custom providers backed by the Ollama API", async () => {
-    thinkingMocks.resolveThinkingDefaultForModel.mockReturnValue("off");
-    const customOllamaModel = {
-      ...testModel,
-      provider: "ollama-spark",
-      api: "ollama",
-      reasoning: true,
-    } satisfies Model;
-
-    const { session } = await createAgentSession({
-      model: customOllamaModel,
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-    });
-
-    expect(session.thinkingLevel).toBe("off");
-    expect(thinkingMocks.resolveThinkingDefaultForModel).toHaveBeenCalledWith({
-      provider: "ollama",
-      model: testModel.id,
-      catalog: [
-        {
-          provider: "ollama",
-          id: testModel.id,
-          api: "ollama",
-          reasoning: true,
-        },
-      ],
-    });
-  });
-
-  it("falls back to DEFAULT_THINKING_LEVEL for non-off provider defaults", async () => {
-    // Non-off provider defaults (adaptive, high, low) preserve prior SDK behaviour
-    // to avoid silent cost changes for DeepSeek, OpenRouter, xAI, and Anthropic users.
-    for (const nonOffDefault of ["adaptive", "high", "low"] as const) {
-      thinkingMocks.resolveThinkingDefaultForModel.mockReturnValue(nonOffDefault);
-
-      const { session } = await createAgentSession({
-        model: { ...testModel, reasoning: true },
-        resourceLoader: createResourceLoader(),
-        sessionManager: SessionManager.inMemory(),
-        settingsManager: SettingsManager.inMemory(),
-        modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-      });
-
-      expect(session.thinkingLevel).toBe("medium");
-    }
-  });
-
-  it("uses provider default for legacy sessions that have no thinking entry", async () => {
-    // Sessions created before thinking-level tracking (no thinking_level_change entry)
-    // should inherit the provider default, not the hard-coded global "medium".
-    thinkingMocks.resolveThinkingDefaultForModel.mockReturnValue("off");
-
-    const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage({
-      role: "user",
-      content: "hello",
-      timestamp: Date.now(),
-    });
-
-    const { session } = await createAgentSession({
-      model: { ...testModel, provider: "ollama", reasoning: true },
-      resourceLoader: createResourceLoader(),
-      sessionManager,
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-    });
-
-    expect(session.thinkingLevel).toBe("off");
-  });
 });
 
 describe("AgentSession retry behavior", () => {
   async function createRetrySession(retry?: { baseDelayMs: number; maxRetries: number }) {
     const authStorage = AuthStorage.inMemory();
     authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
-    return await createAgentSession({
-      // Retry-only cases need room for the default SDK prompt and reserve.
+    return await createSdkSession({
+      // Retry-only cases need room for the prompt and compaction reserve.
       model: { ...testModel, contextWindow: 32_768 },
-      resourceLoader: createResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory({
         retry: retry ?? { baseDelayMs: 0, maxRetries: 1 },
       }),

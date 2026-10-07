@@ -27,9 +27,11 @@ recorded in the managed Gateway service, Node on PATH, then nvm, fnm, Volta, and
 Homebrew defaults. Each candidate must pass the same SQLite capability checks as
 normal startup. The first passing runtime retries the original command without
 prompting, including non-interactive Doctor commands launched by older updaters.
-Arguments, working directory, environment, standard streams, and exit status are
-preserved. Commands with an exact process-identity requirement cannot use this
-recovery.
+Arguments, working directory, standard streams, and exit status are preserved.
+The selected Node directory is prepended to the child process's PATH so package
+managers and lifecycle scripts use the compatible runtime too. Other environment
+settings, including `npm_config_node`, are preserved. Commands with an exact
+process-identity requirement cannot use this recovery.
 
 Runtime discovery uses the environment inherited when the CLI starts, before
 OpenClaw loads any `.env` file. Configure version-manager roots in your shell environment;
@@ -50,7 +52,7 @@ byte-order marks. If the current Node build cannot decode a service script safel
 OpenClaw prints the code page and continues searching other sources. Unsupported
 OEM pages such as CP850 are skipped rather than guessed. CP949 is also skipped:
 Node's ICU `euc-kr` decoder silently misdecodes UHC extension characters. Neither
-case probes the service executable; recovery continues with PATH and the other
+case checks the service executable; recovery continues with PATH and the other
 available runtime sources.
 
 If none is available and you are in an interactive terminal, the CLI offers:
@@ -63,7 +65,29 @@ Enter **Y** to download a compatible Node.js for OpenClaw and retry the same com
 
 Later CLI invocations reuse that runtime when the active Node.js is incompatible. A supported active Node.js still takes precedence. Enter **N**, press Enter, or cancel to leave your installation unchanged and see manual upgrade instructions.
 
-Automatic installation supports macOS, Windows, and glibc-based Linux on x64/ARM64. Alpine/musl and other architectures need manual installation. Non-interactive, CI, JSON, and `--yes` invocations never prompt or install Node.js. Commands that require an exact process identity, such as `hooks relay` and `webhooks gmail run`, also require a compatible Node.js on their existing execution path.
+Automatic installation supports macOS, Windows, and glibc-based Linux on x64/ARM64. Alpine/musl and other architectures need manual installation. Startup recovery in non-interactive, CI, JSON, and `--yes` invocations never prompts or installs Node.js. Commands that require an exact process identity, such as `hooks relay` and `webhooks gmail run`, also require a compatible Node.js on their existing execution path.
+
+### Node requirements during an update
+
+Once `openclaw update` starts, it checks the requested release's Node requirements
+before replacing the package. If the current runtime cannot run that release, the
+updater selects a compatible installed Node or quietly provisions a verified
+private runtime on the supported platforms above. This target-aware recovery also
+works with `--yes` and `--json`; it does not change system Node or shell settings.
+The installer starts only after the updater confirms that the original request
+and installation ownership are still current. A request revoked before that check
+does not install a private runtime.
+
+After a version-manager switch, a restarting update keeps the invoking OpenClaw
+installation as its target and rebinds its owned Gateway service to that
+installation. This also applies when the CLI package already matches the requested
+version. On Windows, or when the managed service definition cannot be changed or
+has operator overrides that cannot be restored, the updater keeps the existing
+service installation as its target instead; it does not rebind the
+service to the invoking CLI. A successful update on this fallback path does not
+align different CLI and Gateway installation prefixes. `--no-restart` also does not
+rebind the service.
+External schedulers and pinned crontab paths remain operator-managed.
 
 ## Install Node
 
@@ -135,6 +159,13 @@ fnm use 26
 </Accordion>
 
 ## Troubleshooting
+
+### Homebrew upgrades while the Gateway is running
+
+If Homebrew removes the running Gateway's Node executable, command relays and
+the spawn broker use the formula's available stable Homebrew path for new launches.
+They keep using the original executable while it exists. Restart the Gateway
+after upgrading Node to move the Gateway itself onto the new runtime.
 
 ### `openclaw: command not found`
 

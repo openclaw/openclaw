@@ -10,6 +10,7 @@ import {
   SessionParticipantIdentitySchema,
 } from "./session-participant.js";
 import { SessionActivitySummarySchema } from "./sessions-activity-summary.js";
+import { SessionProviderReviewProjectionSchema } from "./sessions-provider-review.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
 export const SessionPermissionModeSchema = Type.Union([
@@ -29,6 +30,7 @@ export const SessionRunStatusSchema = Type.Union([
   Type.Literal("running"),
   Type.Literal("done"),
   Type.Literal("failed"),
+  Type.Literal("interrupted"),
   Type.Literal("killed"),
   Type.Literal("timeout"),
 ]);
@@ -101,7 +103,11 @@ const SessionSwarmSummarySchema = closedObject({
 export const SessionRowSchema = Type.Object(
   {
     key: Type.String(),
+    /** Detail fields omitted in compact lists must not clear a client's full-row cache. */
+    rowMode: Type.Optional(Type.Literal("compact")),
     sessionId: Type.Optional(Type.String()),
+    /** Incarnation revision for invalidating session-scoped client caches after resets. */
+    lifecycleRevision: Type.Optional(NonEmptyString),
     incognito: Type.Optional(Type.Literal(true)),
     kind: Type.Union([
       Type.Literal("direct"),
@@ -116,6 +122,8 @@ export const SessionRowSchema = Type.Object(
     color: Type.Optional(Type.String()),
     channelAvatarUrl: Type.Optional(NonEmptyString),
     boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
+    /** Prepared dashboard membership fact shared by list and change-event rows. */
+    hasBoard: Type.Optional(Type.Boolean()),
     /** Shared dashboard default; absent means split. */
     boardPresentation: Type.Optional(Type.Union([Type.Literal("split"), Type.Literal("expanded")])),
     displayName: Type.Optional(Type.String()),
@@ -129,6 +137,8 @@ export const SessionRowSchema = Type.Object(
     peerKind: Type.Optional(SessionPeerKindSchema),
     isMain: Type.Optional(Type.Boolean()),
     isBackground: Type.Optional(Type.Boolean()),
+    /** Conversation owned by a plugin dock rather than ordinary session discovery. */
+    isDock: Type.Optional(Type.Boolean()),
     chatType: Type.Optional(
       Type.Union([Type.Literal("direct"), Type.Literal("group"), Type.Literal("channel")]),
     ),
@@ -136,12 +146,18 @@ export const SessionRowSchema = Type.Object(
     updatedAt: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
     /** Gateway sampling time, retained when a read reuses a cached projection. */
     snapshotAt: Type.Optional(Type.Number()),
+    /** Connection-scoped presentation identity on full event ancestor rows. */
+    ancestorRevision: Type.Optional(NonEmptyString),
+    /** Personal list preference for the authenticated viewer; not session visibility. */
+    hiddenFromInvolvingMe: Type.Optional(Type.Boolean()),
     archived: Type.Optional(Type.Boolean()),
     archivedAt: Type.Optional(Type.Number()),
     archivedBy: Type.Optional(SessionCreatedActorSchema),
     archiveReason: Type.Optional(SessionEntryArchiveReasonSchema),
     pinned: Type.Optional(Type.Boolean()),
     pinnedAt: Type.Optional(Type.Number()),
+    snoozedUntil: Type.Optional(Type.Number()),
+    snoozedAt: Type.Optional(Type.Number()),
     unread: Type.Optional(Type.Boolean()),
     lastReadAt: Type.Optional(Type.Number()),
     markedUnreadAt: Type.Optional(Type.Number()),
@@ -149,6 +165,7 @@ export const SessionRowSchema = Type.Object(
     lastInteractionAt: Type.Optional(Type.Number()),
     status: Type.Optional(SessionRunStatusSchema),
     lastRunError: Type.Optional(Type.String()),
+    providerReview: Type.Optional(SessionProviderReviewProjectionSchema),
     /** Exact run that produced the latest terminal lifecycle projection. */
     lastRunId: Type.Optional(NonEmptyString),
     restartRecoveryStatus: Type.Optional(Type.Literal("tombstoned")),
@@ -157,6 +174,8 @@ export const SessionRowSchema = Type.Object(
     parentSessionKey: Type.Optional(Type.String()),
     parentSessionId: Type.Optional(Type.String()),
     controlOwnerSessionKey: Type.Optional(Type.String()),
+    /** Retained owners used by spawnedBy filtering at snapshotAt; empty retires child membership. */
+    childOwnerSessionKeys: Type.Optional(Type.Array(NonEmptyString, { maxItems: 2 })),
     childSessions: Type.Optional(Type.Array(Type.String())),
     forkedFromParent: Type.Optional(Type.Boolean()),
     spawnDepth: Type.Optional(Type.Number()),
@@ -190,6 +209,10 @@ export const SessionRowSchema = Type.Object(
     /** Persisted task cwd or spawned workspace; no filesystem resolution is implied. */
     workspaceDir: Type.Optional(Type.String()),
     permissionMode: Type.Optional(SessionPermissionModeSchema),
+    /** Authorized per-chat containment opt-out; omission follows configured sandbox policy. */
+    sandboxMode: Type.Optional(Type.Literal("off")),
+    /** Administrator consent to the exact external runtime's own permissions for this incarnation. */
+    nativeRuntimeConsent: Type.Optional(NonEmptyString),
     permissionModePending: Type.Optional(Type.Boolean()),
     sessionRoot: Type.Optional(Type.String()),
     createdVia: Type.Optional(
@@ -204,6 +227,8 @@ export const SessionRowSchema = Type.Object(
         Type.Literal("internal"),
       ]),
     ),
+    /** Immutable presentation surface; independent of creation provenance. */
+    createdSurface: Type.Optional(Type.Literal("plugin-dock")),
     createdActor: Type.Optional(SessionCreatedActorSchema),
     owner: Type.Optional(SessionOwnerSchema),
     participants: Type.Optional(
@@ -215,6 +240,8 @@ export const SessionRowSchema = Type.Object(
     participantCount: Type.Optional(Type.Integer({ minimum: 0 })),
     visibility: Type.Optional(SessionVisibilitySchema),
     sharingRole: Type.Optional(SessionSharingRoleSchema),
+    /** Recipient-local send admission; null explicitly clears a previous restriction. */
+    sendDisabledReason: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     createdAt: Type.Optional(Type.Number()),
     forkSource: Type.Optional(
       Type.Object({
@@ -249,10 +276,27 @@ export const SessionRowSchema = Type.Object(
   { additionalProperties: true },
 );
 
+/** Unchanged presentation of an ancestor previously delivered on this connection. */
+export const SessionAncestorRefSchema = closedObject({
+  key: NonEmptyString,
+  sessionId: Type.Optional(Type.String()),
+  agentId: Type.Optional(NonEmptyString),
+  revision: NonEmptyString,
+  snapshotAt: Type.Number(),
+});
+
+/** Complete visible ancestor coverage shared by sessions.changed and session.message. */
+export const SessionEventAncestorsSchema = closedObject({
+  ancestorSessions: Type.Array(SessionRowSchema, { maxItems: 64 }),
+  ancestorSessionRefs: Type.Optional(Type.Array(SessionAncestorRefSchema, { maxItems: 64 })),
+});
+
 export type SessionCreatedActor = Static<typeof SessionCreatedActorSchema>;
 export type SessionPermissionMode = Static<typeof SessionPermissionModeSchema>;
 export type SessionOwner = Static<typeof SessionOwnerSchema>;
 export type SessionRunStatus = Static<typeof SessionRunStatusSchema>;
 export type SessionToolOverrides = Static<typeof SessionToolOverridesSchema>;
 export type SessionRow = Static<typeof SessionRowSchema>;
+export type SessionAncestorRef = Static<typeof SessionAncestorRefSchema>;
+export type SessionEventAncestors = Static<typeof SessionEventAncestorsSchema>;
 export type SessionEntryArchiveReason = Static<typeof SessionEntryArchiveReasonSchema>;

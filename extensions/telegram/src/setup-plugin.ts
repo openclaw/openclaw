@@ -10,18 +10,7 @@ const TELEGRAM_CHANNEL = "telegram" as const;
 export function createTelegramSetupPluginBase(params: {
   setupWizard: NonNullable<ChannelPlugin<ResolvedTelegramAccount>["setupWizard"]>;
   setupContract: NonNullable<ChannelPlugin<ResolvedTelegramAccount>["setupContract"]>;
-}): Pick<
-  ChannelPlugin<ResolvedTelegramAccount>,
-  | "id"
-  | "meta"
-  | "setupWizard"
-  | "capabilities"
-  | "reload"
-  | "configSchema"
-  | "config"
-  | "setupContract"
-  | "secrets"
-> {
+}) {
   return {
     id: TELEGRAM_CHANNEL,
     setupContract: params.setupContract,
@@ -33,6 +22,7 @@ export function createTelegramSetupPluginBase(params: {
     capabilities: {
       chatTypes: ["direct", "group", "channel", "thread"],
       reactions: true,
+      reactionSlots: "single",
       threads: true,
       media: true,
       tts: {
@@ -69,5 +59,5 @@ export function createTelegramSetupPluginBase(params: {
       secretTargetRegistryEntries,
       collectRuntimeConfigAssignments,
     },
-  };
+  } satisfies ChannelPlugin<ResolvedTelegramAccount>;
 }

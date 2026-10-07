@@ -48,7 +48,8 @@ describe("config form collection defaults", () => {
       onPatch,
     });
 
-    expect(container.textContent).toContain('Using default: {"mode":"balanced"}');
+    expect(container.textContent).not.toContain("Using default:");
+    expect(container.querySelector(".settings-row__desc")).toBeNull();
     expect(
       expectElement(container.querySelector<HTMLTextAreaElement>("textarea"), "inherited JSON")
         .value,
@@ -87,7 +88,8 @@ describe("config form collection defaults", () => {
       onPatch,
     });
 
-    expect(container.textContent).toContain('Using default: ["a","b"]');
+    expect(container.textContent).not.toContain("Using default:");
+    expect(container.querySelector(".settings-row__desc")).toBeNull();
     expect(container.textContent).toContain("2 items");
     const inheritedInputs = Array.from(container.querySelectorAll<HTMLInputElement>("input"));
     expect(inheritedInputs.map((input) => input.value)).toEqual(["", ""]);
@@ -322,8 +324,8 @@ describe("config form collection defaults", () => {
       ),
       "inherited mode row",
     );
-    expect(enabledRow.textContent).toContain("Using default: true");
-    expect(modeRow.textContent).toContain("Using default: balanced");
+    expect(enabledRow.textContent).not.toContain("Using default:");
+    expect(modeRow.textContent).not.toContain("Using default:");
     expect(
       expectElement(modeRow.querySelector<HTMLInputElement>("input"), "inherited mode input")
         .placeholder,

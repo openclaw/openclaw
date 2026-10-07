@@ -1,11 +1,16 @@
 import { vi } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
+import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PreparedAgentRunAdmission } from "./admitted-run-context.js";
+import type { RunCliAgentParams } from "./cli-runner/types.js";
+import type {
+  AgentHarnessSelectionDecision,
+  AgentHarnessSelectionDecisionParams,
+} from "./harness/selection-decision.js";
 import type { AgentHarness } from "./harness/types.js";
-import { createEmptyPluginMetadataSnapshot } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
-export type IsolatedCliRunParams = {
+export type IsolatedCliRunParams = RunCliAgentParams & {
   preparedRunAdmission: PreparedAgentRunAdmission;
   prompt: string;
   runId: string;
@@ -16,8 +21,10 @@ export type IsolatedCliRunParams = {
 const isolatedCompletionMocks = vi.hoisted(() => ({
   acquireAgentRunPreparedModelRuntime: vi.fn(),
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => {}),
-  getRegisteredAgentHarness: vi.fn(),
+  resolveAgentHarnessSelectionDecision:
+    vi.fn<(params: AgentHarnessSelectionDecisionParams) => AgentHarnessSelectionDecision>(),
   ensureAuthProfileStore: vi.fn(),
+  hasAvailableAuthForProvider: vi.fn(async () => false),
   isCliRuntimeAliasForProvider: vi.fn<(params: { runtime?: string; provider?: string }) => boolean>(
     () => false,
   ),
@@ -29,17 +36,20 @@ const isolatedCompletionMocks = vi.hoisted(() => ({
     () => { config: { command: string; modelAliases?: Record<string, string> } } | undefined
   >(() => ({ config: { command: "test-cli" } })),
   resolveCliRuntimeExecutionProvider: vi.fn<() => string | undefined>(() => undefined),
-  resolveEmbeddedCliBackendDispatchEligibility: vi.fn(() => undefined),
-  resolveEffectiveAgentRuntime: vi.fn(() => "codex"),
+  resolveEmbeddedCliBackendDispatchEligibility: vi.fn<() => { provider: string } | undefined>(
+    () => undefined,
+  ),
   runCliAgent: vi.fn<(params: IsolatedCliRunParams) => Promise<unknown>>(),
 }));
 
 export { isolatedCompletionMocks };
 
-vi.mock("./agent-scope.js", () => ({
+vi.mock("./agent-scope.js", async () => ({
+  ...(await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js")),
   resolveAgentDir: () => "/tmp/agent",
   resolveAgentWorkspaceDir: () => "/tmp/workspace",
   resolveDefaultAgentId: () => "main",
+  resolveSessionAgentIds: () => ({ defaultAgentId: "main", sessionAgentId: "main" }),
 }));
 vi.mock("./cli-backends.js", () => ({
   resolveCliBackendConfig: isolatedCompletionMocks.resolveCliBackendConfig,
@@ -52,8 +62,9 @@ vi.mock("./embedded-agent-runner/cli-backend-dispatch-eligibility.js", () => ({
 vi.mock("./embedded-agent-runner/model.js", () => ({
   resolveModelAsync: isolatedCompletionMocks.resolveModelAsync,
 }));
-vi.mock("./harness/registry.js", () => ({
-  getRegisteredAgentHarness: isolatedCompletionMocks.getRegisteredAgentHarness,
+vi.mock("./harness/selection-decision.js", () => ({
+  resolveAgentHarnessSelectionDecision:
+    isolatedCompletionMocks.resolveAgentHarnessSelectionDecision,
 }));
 vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: isolatedCompletionMocks.ensureSelectedAgentHarnessPlugin,
@@ -64,11 +75,17 @@ vi.mock("./model-runtime-aliases.js", () => ({
 }));
 vi.mock("./model-auth.js", () => ({
   ensureAuthProfileStore: isolatedCompletionMocks.ensureAuthProfileStore,
+  hasAvailableAuthForProvider: isolatedCompletionMocks.hasAvailableAuthForProvider,
 }));
 vi.mock("./prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: isolatedCompletionMocks.acquireAgentRunPreparedModelRuntime,
 }));
-vi.mock("./simple-completion-runtime.js", () => ({
+vi.mock("./simple-completion-runtime.js", async () => ({
+  // Selection stays real so utility completions can be prepared end to end;
+  // only host credential preparation is owned by the test.
+  ...(await vi.importActual<typeof import("./simple-completion-runtime.js")>(
+    "./simple-completion-runtime.js",
+  )),
   prepareSimpleCompletionModel: isolatedCompletionMocks.prepareSimpleCompletionModel,
 }));
 vi.mock("./runtime-plan/prepare-auth.js", async () => {
@@ -91,11 +108,8 @@ vi.mock("./runtime-plan/resolve-auth.js", () => ({
     ),
   }),
 }));
-vi.mock("./thinking-runtime.js", () => ({
-  resolveEffectiveAgentRuntime: isolatedCompletionMocks.resolveEffectiveAgentRuntime,
-}));
 vi.mock("./cli-runner.runtime.js", () => ({ runCliAgent: isolatedCompletionMocks.runCliAgent }));
-vi.mock("../infra/private-temp-workspace.js", () => ({
+vi.mock("@openclaw/fs-safe/temp", () => ({
   withTempWorkspace: async (_options: unknown, run: (value: { dir: string }) => unknown) =>
     await run({ dir: "/tmp/isolated" }),
 }));
@@ -161,6 +175,7 @@ export const nativeAuthPlan = {
 
 export function resetIsolatedCompletionTestState(): void {
   vi.clearAllMocks();
+  isolatedCompletionMocks.hasAvailableAuthForProvider.mockResolvedValue(false);
   preparedModelRuntime = {
     config: {},
     agentDir: "/tmp/agent",
@@ -179,7 +194,13 @@ export function resetIsolatedCompletionTestState(): void {
     config: { command: "test-cli" },
   });
   isolatedCompletionMocks.resolveCliRuntimeCanonicalProvider.mockReturnValue(undefined);
-  isolatedCompletionMocks.resolveEffectiveAgentRuntime.mockReturnValue("codex");
+  isolatedCompletionMocks.resolveAgentHarnessSelectionDecision.mockReturnValue({
+    policy: { runtime: "openclaw" },
+    selectedHarnessId: "openclaw",
+    selectedReason: "forced_openclaw",
+    candidates: [],
+    builtIn: true,
+  });
   isolatedCompletionMocks.resolveCliRuntimeExecutionProvider.mockReturnValue(undefined);
   isolatedCompletionMocks.resolveEmbeddedCliBackendDispatchEligibility.mockReturnValue(undefined);
   isolatedCompletionMocks.prepareSimpleCompletionModel.mockResolvedValue({
@@ -203,13 +224,20 @@ export function resetIsolatedCompletionTestState(): void {
 }
 
 export function registerIsolatedHarness(overrides: Partial<AgentHarness>): void {
-  isolatedCompletionMocks.getRegisteredAgentHarness.mockReturnValue({
-    harness: {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: vi.fn(),
-      ...overrides,
-    } satisfies AgentHarness,
+  const harness: AgentHarness = {
+    id: "codex",
+    label: "Codex",
+    supports: () => ({ supported: true }),
+    runAttempt: vi.fn(),
+    ...overrides,
+  };
+  isolatedCompletionMocks.resolveAgentHarnessSelectionDecision.mockReturnValue({
+    policy: { runtime: harness.id },
+    selectedHarnessId: harness.id,
+    selectedReason: "forced_plugin",
+    candidates: [],
+    builtIn: false,
+    harness,
+    ownerPluginId: harness.pluginId ?? harness.id,
   });
 }

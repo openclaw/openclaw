@@ -1,3 +1,4 @@
+/* @vitest-environment node */
 // Regression coverage for the non-isolated runner's cross-file cleanup. Keep
 // every producer/observer pair in one child run: the contract is file-to-file
 // cleanup, not five independent Vitest process boots.
@@ -8,10 +9,14 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { JsonTestResults } from "vitest/node";
 import type { VitestReportCapture } from "../scripts/lib/vitest-report-capture.mts";
+import { createVitestWorkerRun } from "../scripts/lib/vitest-worker-run.mts";
 import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.ts";
+import { agentReaderFixtureFiles } from "./non-isolated-runner.agent-reader-fixtures.ts";
 import { gatewayWorkerLifetimeFixtureFiles } from "./non-isolated-runner.gateway-lifecycle-fixtures.ts";
+import { mcpManagerFixtureFiles } from "./non-isolated-runner.mcp-fixtures.ts";
 import { mockResolutionFixtureFiles } from "./non-isolated-runner.mock-resolution-fixtures.ts";
+import { skillsWatcherFixtureFiles } from "./non-isolated-runner.skills-watcher-fixtures.ts";
 import { testApiLifecycleFixtureFiles } from "./non-isolated-runner.test-api-fixtures.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -51,6 +56,12 @@ afterEach(() => {
   if (${detachEarly}) wrapper.remove();
 });
 it("establishes native focus before file cleanup", () => {
+  const previous = document.body.appendChild(document.createElement("input"));
+  // Initialize selector focus tracking before dispatching native focus events.
+  previous.matches(":focus-visible");
+  previous.focus();
+  expect(previous.matches(":focus-visible")).toBe(true);
+  previous.remove();
   wrapper = document.createElement("div");
   document.body.append(wrapper);
   let parent: Element | ShadowRoot = wrapper;
@@ -78,6 +89,12 @@ it("starts with an empty, attribute-free body and native default focus", () => {
   expect(document.body.childNodes).toHaveLength(0);
   expect(document.body.getAttributeNames()).toEqual([]);
   expect(document.activeElement).toBe(document.body);
+  const resetHasFocus = document.hasFocus();
+  const marker = document.body.appendChild(document.createElement("button"));
+  document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+  marker.focus();
+  expect(marker.matches(":focus-visible")).toBe(true);
+  expect(resetHasFocus).toBe(false);
   const style = document.getElementById("${prefix}");
   expect(style).not.toBeNull();
   style?.remove();
@@ -88,14 +105,49 @@ it("starts with an empty, attribute-free body and native default focus", () => {
   return files;
 }
 
-function fixtureFiles(): Record<string, string> {
+function fixtureFiles(fixtureRoot: string): Record<string, string> {
   const sourcePath = (name: string) => JSON.stringify(path.join(repoRoot, "src", name));
   const payloadImports = `import { createRequire } from "node:module";
 import { queryObjects } from "node:v8";
 const { ManualPayload, AutoPayload } = createRequire(import.meta.url)("./mock-payloads.cjs");`;
 
   return {
-    "runner.ts": `export { default } from ${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))};\n`,
+    "runner.ts": `import Runner from ${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))};
+import { expect, vi, type RunnerTestFile } from "vitest";
+const resetModules = vi.resetModules;
+export default class FixtureRunner extends Runner {
+  override async onAfterRunFiles(files: RunnerTestFile[]) {
+    const generation = files.some(file => file.filepath.endsWith("12-a-skills-watcher-leak.test.ts"))
+      ? "?skills-watcher-generation"
+      : files.some(file => file.filepath.endsWith("99-mcp-b-retained-owner.test.ts"))
+        ? "?mcp-retirement-generation"
+        : undefined;
+    const cleanup = generation
+      ? (await import(${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))} + generation)).default.prototype.onAfterRunFiles
+      : Runner.prototype.onAfterRunFiles;
+    await cleanup.call(this, files);
+    expect(vi.resetModules, "file cleanup restores the native module reset").toBe(resetModules);
+  }
+}
+`,
+    "00-cold-mock.test.ts": `import path from "node:path";
+import { expect, it, vi } from "vitest";
+const root = path.join(path.parse(process.cwd()).root, "__openclaw_runner_cold__");
+const readPackage = (file: string) => {
+  if (file === path.join(root, "package.json")) return '{"name":"openclaw"}';
+  throw new Error("ENOENT");
+};
+vi.mock(${sourcePath("infra/openclaw-root.fs.runtime.ts")}, () => ({
+  openClawRootFsSync: { readFileSync: readPackage },
+  openClawRootFs: { readFile: async (file: string) => readPackage(file) },
+}));
+it("applies the first file's mock before loading its production importer", async () => {
+  const { resolveOpenClawPackageRootSync, resolveOpenClawPackageRoot } =
+    await import(${sourcePath("infra/openclaw-root.ts")});
+  expect(resolveOpenClawPackageRootSync({ cwd: root })).toBe(root);
+  await expect(resolveOpenClawPackageRoot({ cwd: root })).resolves.toBe(root);
+});
+`,
     "01-dep.ts": 'export function flavor(): string {\n  return "real";\n}\n',
     "01-mid.ts": `import { flavor } from "./01-dep.js";
 export function describeFlavor(): string {
@@ -106,6 +158,7 @@ export function describeFlavor(): string {
     // file must still apply its mock after onAfterRunFiles cleanup.
     "01-a-crash.test.ts": `import "./01-mid.js";
 import { expect } from "vitest";
+await import(${sourcePath("logging/secret-redaction-registry.ts")});
 expect(Object.hasOwn(globalThis, Symbol.for("openclaw.secretRedactionRegistryTestApi"))).toBe(true);
 await import(${sourcePath("logging/diagnostic-run-activity.ts")});
 throw new Error("synthetic collect failure");
@@ -206,7 +259,7 @@ it("retires gateway admission before the next file", async () => {
   expect(getActiveGatewayRootWorkCount()).toBe(0);
   expect(isGatewayRestartDraining()).toBe(false);
   if (!prior?.continuation) throw new Error("expected prior gateway continuation");
-  await expect(prior.pending).rejects.toThrow("Gateway is draining");
+  await expect(prior.pending).rejects.toMatchObject({ name: "GatewayDrainingError" });
   await expect(prior.continuation.run(async () => true)).rejects.toThrow("no longer active");
   const admission = tryBeginGatewayRootWorkAdmission();
   expect(admission).not.toBeNull();
@@ -389,8 +442,11 @@ it("reloads the redirected mock after a real import", () => {
 });
 `,
     ...mockResolutionFixtureFiles,
+    ...mcpManagerFixtureFiles(repoRoot),
     ...testApiLifecycleFixtureFiles(repoRoot),
     ...documentFocusFixtureFiles(),
+    ...agentReaderFixtureFiles(repoRoot, fixtureRoot),
+    ...skillsWatcherFixtureFiles(repoRoot, fixtureRoot),
   };
 }
 
@@ -413,12 +469,24 @@ async function assertCompletion(
   const capture: VitestReportCapture = JSON.parse(
     await fs.readFile(`${expected.reportPath}.capture.json`, "utf8"),
   );
+  const report: JsonTestResults = JSON.parse(await fs.readFile(expected.reportPath, "utf8"));
+  const childFailures = report.testResults.flatMap((file) =>
+    [file.message, ...file.assertionResults.flatMap((test) => test.failureMessages)]
+      .filter((message): message is string => typeof message === "string" && message.length > 0)
+      .map(
+        (message) =>
+          `${path.basename(file.name)}: ${message.split("\n", 2).join("\n").slice(0, 512)}`,
+      ),
+  );
   expect(expected.pid).toEqual(expect.any(Number));
-  expect(capture).toMatchObject({
+  expect(
+    capture,
+    `Child report: ${expected.reportPath}\n${childFailures.slice(0, 20).join("\n")}`,
+  ).toMatchObject({
     pid: expected.pid,
     root: expected.root,
     processTimedOut: false,
-    ended: { reason: "failed", unhandledErrors: 0, failedModules: 1, suiteErrors: 1 },
+    ended: { reason: "failed", unhandledErrors: 0, failedModules: 6, suiteErrors: 6 },
   });
   const project = {
     name: "non-isolated-runner",
@@ -433,11 +501,10 @@ async function assertCompletion(
     expect(module).toMatchObject(project);
   }
 
-  const report: JsonTestResults = JSON.parse(await fs.readFile(expected.reportPath, "utf8"));
   expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected.files);
   expect(report).toMatchObject({
-    numTotalTests: 48,
-    numPassedTests: 47,
+    numTotalTests: 68,
+    numPassedTests: 67,
     numPendingTests: 1,
     numFailedTests: 0,
     numTodoTests: 0,
@@ -445,13 +512,38 @@ async function assertCompletion(
   for (const file of report.testResults) {
     const name = path.basename(file.name);
     const crashed = name === "01-a-crash.test.ts";
+    const leakedWatchers = name === "12-a-skills-watcher-leak.test.ts";
+    const uncertainMcp =
+      name === "99-mcp-a-uncertain-owner.test.ts" || name === "98-mcp-c-prior-failure.test.ts";
+    const mockedMcpDisposer = name === "98-mcp-a-direct-disposer.test.ts";
+    const failedRunCancellation = name === "97-mcp-a-cancel-failure.test.ts";
     const skipped = name === "09-f-test-api-skipped.test.ts";
     const lifecycle = ["09-d-test-api-producer.test.ts", "09-e-test-api-observer.test.ts"].includes(
       name,
     );
     const count = crashed ? 0 : lifecycle ? 2 : 1;
-    expect(file.status, name).toBe(crashed ? "failed" : "passed");
-    expect(file.message, name).toBe(crashed ? "synthetic collect failure" : "");
+    expect(file.status, name).toBe(
+      crashed || leakedWatchers || uncertainMcp || mockedMcpDisposer || failedRunCancellation
+        ? "failed"
+        : "passed",
+    );
+    if (leakedWatchers) {
+      expect(file.message, name).toMatch(
+        /^12-a-skills-watcher-leak\.test\.ts: skills watchers failed\nError: left skills watchers open /u,
+      );
+    } else if (uncertainMcp || mockedMcpDisposer) {
+      expect(file.message).toContain("MCP runtime custody failed");
+      expect(file.message).toContain(
+        uncertainMcp
+          ? "MCP test teardown could not confirm cleanup"
+          : "MCP test teardown cannot use a mocked disposer",
+      );
+    } else if (failedRunCancellation) {
+      expect(file.message).toContain("run state failed");
+      expect(file.message).toContain("Synthetic run cancellation failed");
+    } else {
+      expect(file.message, name).toBe(crashed ? "synthetic collect failure" : "");
+    }
     expect(file.assertionResults, name).toHaveLength(count);
     expect(new Set(file.assertionResults.map((test) => test.fullName)).size, name).toBe(count);
     for (const test of file.assertionResults) {
@@ -477,7 +569,7 @@ async function verifyRunnerCleanup(signal: AbortSignal) {
   try {
     const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
     await fs.symlink(path.dirname(vitestPackageDir), path.join(root, "node_modules"), "junction");
-    const files = fixtureFiles();
+    const files = fixtureFiles(root);
     for (const [name, content] of Object.entries(files)) {
       await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
       await fs.writeFile(path.join(root, name), content, "utf8");
@@ -495,6 +587,7 @@ class AlphabeticalSequencer extends BaseSequencer {
 }
 export default defineConfig({
   cacheDir: ${JSON.stringify(path.join(root, ".vite"))},
+  plugins: sharedVitestConfig.plugins,
   resolve: sharedVitestConfig.resolve,
   test: {
     name: "non-isolated-runner",
@@ -517,7 +610,9 @@ export default defineConfig({
 
     const reportPath = path.join(root, "report.json");
     let child!: ChildProcess;
-    const result = await runVitestShutdownCommand({
+    const env = childEnv();
+    const workers = createVitestWorkerRun(env);
+    const command = runVitestShutdownCommand({
       bin: resolveTestNodeExecPath(),
       args: [
         path.join(vitestPackageDir, "vitest.mjs"),
@@ -534,13 +629,20 @@ export default defineConfig({
         `--outputFile.json=${reportPath}`,
       ],
       cwd: repoRoot,
-      env: childEnv(),
+      env,
+      workerRun: workers,
       maxBytes: 16 * 1024 * 1024,
       signal,
       onReady(owned) {
         child = owned;
       },
     });
+    let result: Awaited<typeof command>;
+    try {
+      result = await command;
+    } finally {
+      await workers.dispose();
+    }
     const completion: ChildCompletion = {
       exitCode: child.exitCode,
       signalCode: child.signalCode,
@@ -558,7 +660,12 @@ export default defineConfig({
         .toSorted(),
       reportPath,
     };
-    await assertCompletion(completion, expected);
+    try {
+      await assertCompletion(completion, expected);
+    } catch (error) {
+      await fs.writeFile(path.join(root, "child-output.log"), completion.output, "utf8");
+      throw error;
+    }
 
     // Replay faults against this one completed child, not new fixture executions.
     // The same assertion path must reject incomplete proof even with a good summary.
@@ -596,15 +703,41 @@ export default defineConfig({
       ["unexpected file", ({ report }) => Object.assign(report.testResults[0]!, { name: "other" })],
       [
         "extra collection error",
-        ({ report }) => Object.assign(report.testResults[1]!, { message: "other" }),
+        ({ report }) =>
+          Object.assign(
+            report.testResults.find((file) => file.status === "passed")!,
+            {
+              message: "other",
+            },
+          ),
       ],
       [
         "extra failed file",
-        ({ report }) => Object.assign(report.testResults[1]!, { status: "failed" }),
+        ({ report }) =>
+          Object.assign(
+            report.testResults.find((file) => file.status === "passed")!,
+            {
+              status: "failed",
+            },
+          ),
       ],
       [
         "wrong collection error",
-        ({ report }) => Object.assign(report.testResults[0]!, { message: "other" }),
+        ({ report }) =>
+          Object.assign(
+            report.testResults.find((file) => file.name.endsWith("/01-a-crash.test.ts"))!,
+            { message: "other" },
+          ),
+      ],
+      [
+        "unattributed skills watcher leak",
+        ({ report }) =>
+          Object.assign(
+            report.testResults.find((file) =>
+              file.name.endsWith("/12-a-skills-watcher-leak.test.ts"),
+            )!,
+            { status: "passed", message: "" },
+          ),
       ],
       ["inconsistent totals", ({ report }) => Object.assign(report, { numPassedTests: 44 })],
     ];
@@ -623,10 +756,10 @@ export default defineConfig({
       { reason: "interrupted" },
       { reason: "passed" },
       { unhandledErrors: 1 },
-      { failedModules: 0 },
-      { failedModules: 2 },
-      { suiteErrors: 0 },
-      { suiteErrors: 2 },
+      { failedModules: 5 },
+      { failedModules: 7 },
+      { suiteErrors: 5 },
+      { suiteErrors: 7 },
     ]) {
       faults.push([
         `invalid native end: ${JSON.stringify(patch)}`,

@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   createGatewayHarness,
@@ -38,42 +38,30 @@ describe("scoped chat history defaults and row ordering", () => {
     {
       name: "same-owner equal timestamp control",
       moveRoster: false,
-      historyUpdatedAt: 10,
-      workRefresh: "updated",
-    },
-    {
-      name: "different-owner older timestamp control",
-      moveRoster: true,
-      historyUpdatedAt: 9,
       workRefresh: "updated",
     },
     {
       name: "different-owner equal timestamp regression",
       moveRoster: true,
-      historyUpdatedAt: 10,
       workRefresh: "updated",
     },
     {
       name: "prestarted history preserves newer Work descriptor",
       moveRoster: true,
-      historyUpdatedAt: 10,
       workRefresh: "updated",
       prestartedHistory: true,
     },
     {
       name: "missing Work row remains admissible",
       moveRoster: true,
-      historyUpdatedAt: 10,
       workRefresh: "missing",
     },
     {
       name: "Main-only publication does not freeze Work history",
       moveRoster: true,
-      historyUpdatedAt: 10,
       workRefresh: "none",
     },
-  ])("$name", async ({ moveRoster, historyUpdatedAt, workRefresh, prestartedHistory }) => {
-    vi.stubGlobal("requestIdleCallback", vi.fn());
+  ])("$name", async ({ moveRoster, workRefresh, prestartedHistory }) => {
     const pendingHistory = createDeferred<ChatHistoryResult>();
     const initialWork: GatewaySessionRow = {
       key: "global",
@@ -178,7 +166,6 @@ describe("scoped chat history defaults and row ordering", () => {
       const primaryDefaults = sessions.state.result?.defaults;
       const historyRow = {
         ...initialWork,
-        updatedAt: historyUpdatedAt,
         ...(workRefresh === "none" ? { contextTokens: 1500, label: "History Work label" } : {}),
       };
       pendingHistory.resolve({

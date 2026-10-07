@@ -1,11 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
+import { interceptPackageFileHashes } from "./package-update-integrity-hasher.test-support.js";
+import {
+  createPackageIntegrityReader,
+  PackageIntegrityLimitError,
+} from "./package-update-integrity.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
@@ -31,6 +38,210 @@ function captureReaderLogs() {
 }
 
 describe("package verification bounds", () => {
+  it.each(["settled", "racy", "journal"] as const)(
+    "reuses only settled in-process file digests (%s observation)",
+    async (observation) => {
+      await withTestDir({ prefix: "openclaw-integrity-reuse-" }, async (base) => {
+        const clock = Date.now.bind(Date);
+        let now = clock();
+        vi.spyOn(Date, "now").mockImplementation(() => now);
+        const { packageRoot } = await createPackageSwapFixture(base);
+        const empty = path.join(packageRoot, "empty");
+        await fs.writeFile(empty, "");
+        if (observation !== "racy") {
+          now = clock() + 6_000;
+        }
+        const hash = interceptPackageFileHashes();
+        const hashedFiles = () => hash.mock.calls.map(([file]) => file);
+        const open = vi.spyOn(fs, "open");
+        const packageOpens = () =>
+          open.mock.calls
+            .map(([file]) => String(file))
+            .filter((file) => file.startsWith(`${packageRoot}${path.sep}`));
+        const reader = createPackageIntegrityReader();
+        const first = await reader.tree(packageRoot);
+        const files = hashedFiles();
+        expect(files).toContain(empty);
+        expect(new Set(files).size).toBe(files.length);
+        hash.mockClear();
+        open.mockClear();
+        const journal = JSON.stringify(first);
+        const reuse = observation === "journal" ? JSON.parse(journal) : first;
+        expect(await reader.tree(packageRoot, packageRoot, reuse)).toEqual(first);
+        // The version read still opens the manifest once, independently of its digest.
+        expect(hashedFiles()).toEqual(observation === "settled" ? [] : files);
+        expect(packageOpens()).toEqual([path.join(packageRoot, "package.json")]);
+        if (observation === "racy") {
+          // Aging alone cannot turn an earlier racy read into settled evidence.
+          now = clock() + 6_000;
+          hash.mockClear();
+          open.mockClear();
+          expect(await reader.tree(packageRoot, packageRoot, first)).toEqual(first);
+          expect(hashedFiles()).toEqual(files);
+          expect(packageOpens()).toEqual([path.join(packageRoot, "package.json")]);
+        }
+      });
+    },
+  );
+
+  it.for([1, 4])(
+    "rehashes %i changed files in DFS order without charging reused entries a hash slot",
+    async (changedCount, { signal }) => {
+      await withTestDir({ prefix: "openclaw-integrity-mixed-reuse-" }, async (base) => {
+        const { packageRoot } = await createPackageSwapFixture(base);
+        const files = Array.from({ length: 4 }, (_, index) =>
+          path.join(packageRoot, "dist", `reuse-${index}-a.js`),
+        );
+        for (const file of files) {
+          await fs.writeFile(file, "before");
+          await fs.writeFile(file.replace("-a.js", "-b.js"), "");
+        }
+        vi.spyOn(Date, "now").mockReturnValue(Date.now() + 6_000);
+        const reader = createPackageIntegrityReader();
+        const first = await reader.tree(packageRoot);
+        const changed = files.slice(0, changedCount);
+        for (const file of changed) {
+          await fs.writeFile(file, "changed content");
+        }
+        const release = createDeferredCore();
+        const admitted = createDeferredCore();
+        const hashed: string[] = [];
+        const hash = interceptPackageFileHashes(async (file, _stat, next) => {
+          hashed.push(file);
+          // Queue real work before blocking its result so flush owns every job.
+          const hashing = next();
+          if (changed.includes(file)) {
+            if (hashed.length === changed.length) {
+              admitted.resolve();
+            }
+            await release.promise;
+          }
+          return hashing;
+        });
+        const open = vi.spyOn(fs, "open");
+        const walking = reader.tree(packageRoot, packageRoot, first);
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              admitted.promise,
+              walking,
+              "The walk settled before admitting its changed files",
+            ),
+            signal,
+          );
+          release.resolve();
+          const second = await withinTest(walking, signal);
+          expect(hashed).toEqual(changed);
+          expect(open.mock.calls.map(([file]) => String(file))).toEqual([
+            path.join(packageRoot, "package.json"),
+          ]);
+          expect(second.digest).not.toBe(first.digest);
+          open.mockRestore();
+          hash.mockImplementation((_file, _stat, next) => next());
+          expect(second).toEqual(await reader.tree(packageRoot));
+        } finally {
+          release.resolve();
+          await Promise.allSettled([walking]);
+        }
+      });
+    },
+  );
+
+  it("distinguishes entry and byte budget exhaustion from integrity failures", async () => {
+    await withTestDir({ prefix: "openclaw-integrity-budget-type-" }, async (base) => {
+      const { packageRoot, launcher } = await createPackageSwapFixture(base);
+      await expect(createPackageIntegrityReader().entries(packageRoot, 1)).rejects.toBeInstanceOf(
+        PackageIntegrityLimitError,
+      );
+      await fs.truncate(launcher, 1024 * 1024 + 1);
+      await expect(createPackageIntegrityReader().launcher(launcher)).rejects.toMatchObject({
+        resource: "byte",
+      });
+      await expect(createPackageIntegrityReader().launcher(packageRoot)).rejects.not.toBeInstanceOf(
+        PackageIntegrityLimitError,
+      );
+    });
+  });
+
+  it("preserves an earlier filesystem refusal over aggregate byte exhaustion", async ({
+    signal,
+  }) => {
+    await withTestDir({ prefix: "openclaw-integrity-error-order-" }, async (base) => {
+      const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+      const first = path.join(packageRoot, "dist", "a-first.js");
+      const second = path.join(packageRoot, "dist", "b-second.js");
+      for (const file of [first, second]) {
+        await fs.writeFile(file, "");
+        await fs.truncate(file, 5 * 1024 * 1024 * 1024);
+      }
+      const secondStat = await fs.lstat(second, { bigint: true });
+      const lstat = fs.lstat.bind(fs);
+      vi.spyOn(fs, "lstat").mockImplementation((...args) =>
+        String(args[0]) === second && args[1]?.bigint
+          ? Promise.resolve(secondStat)
+          : lstat(...args),
+      );
+      const release = createDeferredCore();
+      const reading = createDeferredCore();
+      const refusal = Object.assign(new Error("earlier package bytes could not be read"), {
+        code: "EIO",
+      });
+      let settled = false;
+      const hash = interceptPackageFileHashes(async (file, _stat, next) => {
+        if (file === second) {
+          throw new Error("The aggregate byte limit admitted another package file");
+        }
+        if (file !== first) {
+          return next();
+        }
+        reading.resolve();
+        try {
+          await release.promise;
+          throw refusal;
+        } finally {
+          settled = true;
+        }
+      });
+      const beforeActivate = vi.fn();
+      const onLiveMutation = vi.fn();
+      const onTransaction = vi.fn();
+      const update = swapStagedPackageInstall({
+        ...params,
+        beforeActivate,
+        onLiveMutation,
+        onTransaction,
+      });
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            reading.promise,
+            update,
+            "The later resource limit replaced a still-owned package read",
+          ),
+          signal,
+        );
+        release.resolve();
+        const result = await withinTest(update, signal);
+        expect(result.status).toBe("failed");
+        expect(result.step.stderrTail).toContain(refusal.message);
+        expect(result.step.stderrTail).not.toContain("byte limit exceeded");
+        expect(result.step.advisory).toBeUndefined();
+        expect(settled).toBe(true);
+        expect(hash.mock.calls.some(([file]) => file === second)).toBe(false);
+        expect(beforeActivate).not.toHaveBeenCalled();
+        expect(onLiveMutation).not.toHaveBeenCalled();
+        expect(onTransaction).not.toHaveBeenCalled();
+        expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
+          '"version":"1.0.0"',
+        );
+        expect(await fs.readFile(launcher, "utf8")).toBe("old launcher\n");
+      } finally {
+        release.resolve();
+        await update;
+      }
+    });
+  });
+
   it.each([
     { timeoutMs: 55_000, elapsedMs: 31_000, incomplete: false },
     { timeoutMs: 55_000, elapsedMs: 55_001, incomplete: true },
@@ -88,7 +299,9 @@ describe("package verification bounds", () => {
         const activated = await swapStagedPackageInstall({
           ...params,
           timeoutMs,
-          onTransaction: (transaction) => transactions.push(transaction),
+          onTransaction: (transaction) => {
+            transactions.push(transaction);
+          },
         });
         expect(activated.status).toBe("committed");
         expect(activated.step.advisory).toBeUndefined();
@@ -104,14 +317,15 @@ describe("package verification bounds", () => {
         }
         const target = phase === "retained" ? retained : runtime;
         const now = Date.now.bind(Date);
-        const open = fs.open.bind(fs);
+        const lstat = fs.lstat.bind(fs);
         let elapsed = 0;
         vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
-        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+          const stat = await lstat(...args);
           if (elapsed === 0 && String(args[0]) === target) {
             elapsed = 31_000;
           }
-          return open(...args);
+          return stat;
         });
         const result = await transaction.rollback(() => {});
         expect(elapsed).toBe(31_000);
@@ -127,41 +341,81 @@ describe("package verification bounds", () => {
     },
   );
 
-  it.each(["activation", "rollback", "changed identity", "changed version"] as const)(
-    "handles %s after the baseline fingerprint times out",
-    async (outcome) => {
+  it.for(
+    (
+      ["activation", "rollback", "changed identity", "changed version", "launcher limit"] as const
+    ).flatMap((outcome) => (["time", "byte"] as const).map((budget) => ({ outcome, budget }))),
+  )(
+    "handles $outcome after the baseline fingerprint exhausts its $budget budget",
+    async ({ outcome, budget }, { signal }) => {
       await withTestDir({ prefix: "openclaw-fingerprint-advisory-" }, async (base) => {
         const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
         const original = await fs.stat(packageRoot);
-        const open = fs.open.bind(fs);
+        if (outcome === "launcher limit") {
+          await fs.truncate(launcher, 1024 * 1024 + 1);
+        }
         const blocked = createDeferredCore();
+        const started = createDeferredCore();
         let entered = false;
-        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          if (!entered && String(args[0]) === path.join(packageRoot, "dist", "index.js")) {
-            entered = true;
-            await blocked.promise;
-          }
-          return open(...args);
-        });
+        if (budget === "byte") {
+          const payload = path.join(packageRoot, "runtime-payload.bin");
+          await fs.writeFile(payload, "");
+          await fs.truncate(payload, 8 * 1024 * 1024 * 1024 + 1);
+        } else {
+          interceptPackageFileHashes(async (file, _stat, next) => {
+            if (!entered && file === path.join(packageRoot, "dist", "index.js")) {
+              entered = true;
+              started.resolve();
+              await blocked.promise;
+              // The deadline has abandoned this intercepted job before it reports.
+              return "late hash result";
+            }
+            return next();
+          });
+        }
         let transaction: PackageUpdateTransaction | undefined;
         const beforeActivate = vi.fn();
+        // Reader budgets run on the wall clock. Freeze it so host load cannot expire the
+        // launcher capture or a later reader; only the stalled baseline spends its budget.
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        const update = swapStagedPackageInstall({
+          ...params,
+          ...(budget === "time" ? { timeoutMs: 200 } : {}),
+          beforeActivate,
+          onTransaction: (value) => {
+            transaction = value;
+          },
+        });
         try {
-          const result = await swapStagedPackageInstall({
-            ...params,
-            timeoutMs: 200,
-            beforeActivate,
-            onTransaction: (value) => {
-              transaction = value;
-            },
-          });
-          expect(entered).toBe(true);
+          if (budget === "time") {
+            await withinTest(
+              awaitGateBeforeSettlement(
+                started.promise,
+                update,
+                "Baseline fingerprint settled before its walk stalled",
+              ),
+              signal,
+            );
+            await vi.advanceTimersByTimeAsync(200);
+          }
+          const result = await withinTest(update, signal);
+          expect(entered).toBe(budget === "time");
+          if (outcome === "launcher limit") {
+            expect(result.status).toBe("failed");
+            expect(result.step.stderrTail).toContain("byte limit exceeded");
+            expect(result.step.stderrTail).not.toContain("Baseline package scan failed");
+            expect(beforeActivate).not.toHaveBeenCalled();
+            expect((await fs.stat(packageRoot)).ino).toBe(original.ino);
+            return;
+          }
           expect(result.status, result.step.stderrTail ?? "").toBe("committed");
           expect(beforeActivate).toHaveBeenCalledOnce();
           expect(result.step.advisory?.message).toContain(
             "baseline package fingerprint incomplete",
           );
+          expect(result.step.advisory?.message).toContain("full package contents are unverified");
           expect(updateRunStepsFromResultStep(result.step)).toContainEqual(
-            expect.objectContaining({ step: "warning:global install swap", status: "completed" }),
+            expect.objectContaining({ step: "warning:package-swap", status: "completed" }),
           );
           expect(await fs.readFile(launcher, "utf8")).toBe("candidate launcher\n");
           if (!transaction) {
@@ -169,10 +423,16 @@ describe("package verification bounds", () => {
           }
           if (outcome === "changed identity" || outcome === "changed version") {
             if (outcome === "changed identity") {
-              await fs.rename(transaction.backupRoot, `${transaction.backupRoot}.original`);
-              await fs.cp(`${transaction.backupRoot}.original`, transaction.backupRoot, {
-                recursive: true,
-              });
+              const originalRoot = `${transaction.backupRoot}.original`;
+              await fs.rename(transaction.backupRoot, originalRoot);
+              await fs.mkdir(transaction.backupRoot);
+              // Replace only the root identity without copying the large sparse payload.
+              for (const name of await fs.readdir(originalRoot)) {
+                await fs.rename(
+                  path.join(originalRoot, name),
+                  path.join(transaction.backupRoot, name),
+                );
+              }
             } else {
               await fs.writeFile(
                 path.join(transaction.backupRoot, "package.json"),
@@ -204,59 +464,53 @@ describe("package verification bounds", () => {
           ).toBeUndefined();
         } finally {
           blocked.resolve();
+          vi.useRealTimers();
         }
       });
     },
   );
 
-  it.each([1024 * 1024 + 1, 1024 * 1024 * 1024 + 1])(
-    "rejects manifest growth to %i bytes without attempting an oversized metadata allocation",
-    async (size) => {
-      await withTestDir({ prefix: "openclaw-rollback-metadata-bound-" }, async (base) => {
-        const { params, packageRoot } = await createPackageSwapFixture(base);
-        const manifest = path.join(packageRoot, "package.json");
-        const open = fs.open.bind(fs);
-        let manifestOpens = 0;
-        let grew = false;
-        let oversizedRead = false;
-        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          const handle = await open(...args);
-          if (String(args[0]) !== manifest) {
-            return handle;
-          }
-          if (++manifestOpens === 1) {
-            const close = handle.close.bind(handle);
-            vi.spyOn(handle, "close").mockImplementation(async () => {
-              await close();
-              await fs.truncate(manifest, size);
-              grew = true;
-            });
-          } else {
-            // Intercept either read path before buffering an oversized sparse file.
-            const rejectOversizedRead = async () => {
-              oversizedRead = true;
-              throw new Error("oversized metadata allocation intercepted");
-            };
-            vi.spyOn(handle, "readFile").mockImplementation(rejectOversizedRead);
-            vi.spyOn(handle, "read").mockImplementation(rejectOversizedRead);
-          }
+  it("rejects manifest growth past the byte limit without an oversized metadata allocation", async () => {
+    const size = 1024 * 1024 + 1;
+    await withTestDir({ prefix: "openclaw-rollback-metadata-bound-" }, async (base) => {
+      const { params, packageRoot } = await createPackageSwapFixture(base);
+      const manifest = path.join(packageRoot, "package.json");
+      const open = fs.open.bind(fs);
+      let manifestOpens = 0;
+      let grew = false;
+      let oversizedRead = false;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (String(args[0]) !== manifest) {
           return handle;
-        });
-        const beforeActivate = vi.fn();
-        const onLiveMutation = vi.fn();
-        const result = await swapStagedPackageInstall({
-          ...params,
-          beforeActivate,
-          onLiveMutation,
-        });
-        expect(grew).toBe(true);
-        expect(result.status).toBe("failed");
-        expect(oversizedRead).toBe(false);
-        expect(beforeActivate).not.toHaveBeenCalled();
-        expect(onLiveMutation).not.toHaveBeenCalled();
+        }
+        if (++manifestOpens === 1) {
+          await fs.truncate(manifest, size);
+          grew = true;
+        }
+        // The first main-thread open is the bounded manifest read, after hashing.
+        const rejectOversizedRead = async () => {
+          oversizedRead = true;
+          throw new Error("oversized metadata allocation intercepted");
+        };
+        vi.spyOn(handle, "readFile").mockImplementation(rejectOversizedRead);
+        vi.spyOn(handle, "read").mockImplementation(rejectOversizedRead);
+        return handle;
       });
-    },
-  );
+      const beforeActivate = vi.fn();
+      const onLiveMutation = vi.fn();
+      const result = await swapStagedPackageInstall({
+        ...params,
+        beforeActivate,
+        onLiveMutation,
+      });
+      expect(grew).toBe(true);
+      expect(result.status).toBe("failed");
+      expect(oversizedRead).toBe(false);
+      expect(beforeActivate).not.toHaveBeenCalled();
+      expect(onLiveMutation).not.toHaveBeenCalled();
+    });
+  });
 
   it("accepts a valid manifest at the metadata byte limit", async () => {
     await withTestDir({ prefix: "openclaw-rollback-metadata-valid-" }, async (base) => {
@@ -268,7 +522,9 @@ describe("package verification bounds", () => {
       const transactions: PackageUpdateTransaction[] = [];
       const result = await swapStagedPackageInstall({
         ...params,
-        onTransaction: (transaction) => transactions.push(transaction),
+        onTransaction: (transaction) => {
+          transactions.push(transaction);
+        },
       });
       expect(result.status).toBe("committed");
       expect(transactions).toHaveLength(1);
@@ -357,50 +613,79 @@ describe("package verification bounds", () => {
     },
   );
 
-  it.each(["open", "read"] as const)(
-    "returns after a stalled %s without continuing the walk",
-    async (operation) => {
+  it.for(["queued hash", "hash report"] as const)(
+    "settles bounded parallel hashes after a stalled %s without continuing the walk",
+    async (operation, { signal }) => {
       await withTestDir({ prefix: "openclaw-rollback-deadline-" }, async (base) => {
         const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
-        const realOpen = fs.open.bind(fs);
-        const late = createDeferredCore<Awaited<ReturnType<typeof fs.open>>>();
-        const handle = await realOpen(path.join(packageRoot, "dist", "index.js"), "r");
-        const close = vi.spyOn(handle, "close");
-        const read = vi.spyOn(handle, "read");
-        const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          if (String(args[0]) !== path.join(packageRoot, "dist", "index.js")) {
-            return realOpen(...args);
+        const window = 64;
+        const full = createDeferredCore();
+        const files = [
+          path.join(packageRoot, "dist", "index.js"),
+          ...Array.from({ length: window }, (_, index) =>
+            path.join(packageRoot, "dist", `peer-${String(index).padStart(3, "0")}.js`),
+          ),
+        ];
+        for (const file of files.slice(1)) {
+          await fs.writeFile(file, "export default 1;\n");
+        }
+        const jobs = new Map(
+          files.map((file) => [
+            file,
+            { release: createDeferredCore(), settled: createDeferredCore() },
+          ]),
+        );
+        const admitted: string[] = [];
+        const started: Promise<string>[] = [];
+        interceptPackageFileHashes(async (file, _stat, next) => {
+          const job = jobs.get(file);
+          if (!job || admitted.includes(file)) {
+            return next();
           }
-          if (operation === "open") {
-            return late.promise;
+          admitted.push(file);
+          // Exercise both work not yet started and a completed real hash whose
+          // report is delayed. The worker test owns mid-syscall descriptor proof.
+          const result = operation === "hash report" ? next() : Promise.resolve("late hash result");
+          started.push(result);
+          if (admitted.length === window) {
+            full.resolve();
           }
-          const actual = await realOpen(...args);
-          vi.spyOn(actual, "read").mockImplementation(() => new Promise(() => {}));
-          return actual;
+          try {
+            const value = await result;
+            await job.release.promise;
+            return value;
+          } finally {
+            job.settled.resolve();
+          }
         });
+        const lstat = vi.spyOn(fs, "lstat");
         const beforeActivate = vi.fn();
         const onLiveMutation = vi.fn();
         const observations = captureReaderLogs();
-        const started = Date.now();
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        const update = swapStagedPackageInstall({
+          ...params,
+          beforeActivate,
+          onLiveMutation,
+          timeoutMs: 40,
+        });
         try {
-          const result = await swapStagedPackageInstall({
-            ...params,
-            beforeActivate,
-            onLiveMutation,
-            timeoutMs: 40,
-          });
+          await withinTest(
+            awaitGateBeforeSettlement(full.promise, update, "the admission window never filled"),
+            signal,
+          );
+          await withinTest(Promise.all(started), signal);
+          expect(admitted).toEqual(files.slice(0, window));
+          expect(lstat.mock.calls.some(([file]) => String(file) === files[window])).toBe(false);
+          await vi.advanceTimersByTimeAsync(40);
+          const result = await withinTest(update, signal);
           expect(result.status).toBe("committed");
           expect(result.step.advisory?.message).toContain(
             "baseline package fingerprint incomplete",
           );
-          expect(Date.now() - started).toBeLessThan(2000);
           expect(beforeActivate).toHaveBeenCalledOnce();
           expect(onLiveMutation).toHaveBeenCalledOnce();
-          expect(
-            open.mock.calls.filter(
-              ([file]) => String(file) === path.join(packageRoot, "dist", "index.js"),
-            ),
-          ).toHaveLength(1);
+          expect(admitted).toEqual(files.slice(0, window));
           const baseline = observations.filter(
             (record) => record.readerId === observations[0]?.readerId,
           );
@@ -414,8 +699,7 @@ describe("package verification bounds", () => {
             budgetMs: 40,
             deadlineClock: "wall",
           });
-          // A pending close may accompany the stalled read. Neither is a joined OS operation.
-          expect(Number(settled!.pendingIo)).toBeGreaterThan(0);
+          expect(Number(settled!.pendingIo)).toBeGreaterThanOrEqual(window);
           expect(settled!.deadlineAtUnixMs).toBe(begin!.deadlineAtUnixMs);
           expect(settled!.elapsedMs).toBe(
             Number(settled!.settledAtMonotonicMs) - Number(begin!.startedAtMonotonicMs),
@@ -423,18 +707,23 @@ describe("package verification bounds", () => {
           expect(Number(settled!.timeoutObservedAtMonotonicMs)).toBeLessThanOrEqual(
             Number(settled!.settledAtMonotonicMs),
           );
-          if (operation === "open") {
-            late.resolve(handle);
-            await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
-            expect(read).not.toHaveBeenCalled();
+          for (const file of admitted) {
+            jobs.get(file)!.release.resolve();
           }
+          await withinTest(
+            Promise.all(admitted.map((file) => jobs.get(file)!.settled.promise)),
+            signal,
+          );
           await expect(
             fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
           ).resolves.toContain('"version":"2.0.0"');
           await expect(fs.readFile(launcher, "utf8")).resolves.toBe("candidate launcher\n");
         } finally {
-          late.resolve(handle);
-          await handle.close();
+          for (const job of jobs.values()) {
+            job.release.resolve();
+          }
+          vi.useRealTimers();
+          await update;
         }
       });
     },
@@ -448,11 +737,14 @@ describe("package verification bounds", () => {
         throw new Error("diagnostics sink failed");
       });
       loggingState.rawConsole = { log: sink, info: sink, warn: sink, error: sink };
-      vi.spyOn(fs, "open").mockRejectedValue(new Error("reader unavailable"));
+      const hash = interceptPackageFileHashes(async () => {
+        throw new Error("reader unavailable");
+      });
       const beforeActivate = vi.fn();
       const onLiveMutation = vi.fn();
       const result = await swapStagedPackageInstall({ ...params, beforeActivate, onLiveMutation });
       expect(sink).toHaveBeenCalled();
+      expect(hash).toHaveBeenCalled();
       expect(result.status).toBe("failed");
       expect(result.step.stderrTail).toContain("reader unavailable");
       expect(result.step.stderrTail).not.toContain("diagnostics sink failed");
@@ -465,12 +757,15 @@ describe("package verification bounds", () => {
     });
   });
 
-  it("records a cleanup-only deadline without claiming successful reader completion", async () => {
+  it("records a cleanup-only deadline without claiming successful reader completion", async ({
+    signal,
+  }) => {
     await withTestDir({ prefix: "openclaw-rollback-close-deadline-" }, async (base) => {
       const { params } = await createPackageSwapFixture(base);
       await fs.unlink(path.join(params.stage.layout.binDir, "openclaw"));
       const observations = captureReaderLogs();
       const release = createDeferredCore();
+      const entered = createDeferredCore();
       let closing: Promise<void> | undefined;
       const opendir = fs.opendir.bind(fs);
       vi.spyOn(fs, "opendir").mockImplementation(async (...args) => {
@@ -480,13 +775,21 @@ describe("package verification bounds", () => {
           const close = resource.close.bind(resource);
           vi.spyOn(resource, "close").mockImplementation(() => {
             closing = release.promise.then(() => close());
+            entered.resolve();
             return closing;
           });
         }
         return directory;
       });
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const update = swapStagedPackageInstall({ ...params, timeoutMs: 40 });
       try {
-        const result = await swapStagedPackageInstall({ ...params, timeoutMs: 40 });
+        await withinTest(
+          awaitGateBeforeSettlement(entered.promise, update, "directory cleanup never started"),
+          signal,
+        );
+        await vi.advanceTimersByTimeAsync(40);
+        const result = await withinTest(update, signal);
         // Preserve the existing best-effort close policy, but report its timeout.
         expect(result.status).toBe("committed");
         expect(observations.findLast((record) => record.event === "reader-settled")).toMatchObject({
@@ -498,14 +801,18 @@ describe("package verification bounds", () => {
       } finally {
         release.resolve();
         await closing;
+        vi.useRealTimers();
+        await update;
       }
     });
   });
 
   it.each([
-    { shape: "single directory", width: 50_000 },
-    { shape: "nested directories", width: 30_000 },
+    { shape: "single directory", width: 500_000 },
+    { shape: "nested directories", width: 300_000 },
   ])("bounds the whole-tree inventory across $shape", async ({ width }) => {
+    // Exercise the entry cap independently of host speed and the elapsed-time budget.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now());
     await withTestDir({ prefix: "openclaw-rollback-entry-bound-" }, async (base) => {
       const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
       const nested = path.join(packageRoot, "dist");
@@ -533,7 +840,7 @@ describe("package verification bounds", () => {
         });
         return directory;
       });
-      const open = vi.spyOn(fs, "open").mockRejectedValue(new Error("unexpected file read"));
+      const hash = interceptPackageFileHashes();
       const beforeActivate = vi.fn();
       const onLiveMutation = vi.fn();
       const result = await swapStagedPackageInstall({
@@ -542,17 +849,17 @@ describe("package verification bounds", () => {
         onLiveMutation,
         timeoutMs: 5000,
       });
-      expect(result.status).toBe("failed");
-      expect(beforeActivate).not.toHaveBeenCalled();
-      expect(onLiveMutation).not.toHaveBeenCalled();
+      expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+      expect(beforeActivate).toHaveBeenCalledOnce();
+      expect(onLiveMutation).toHaveBeenCalledOnce();
       await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
-        '"version":"1.0.0"',
+        '"version":"2.0.0"',
       );
-      await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
+      await expect(fs.readFile(launcher, "utf8")).resolves.toBe("candidate launcher\n");
       // Includes one overflow entry; the root itself consumes the other slot.
-      expect(discovered).toBeLessThanOrEqual(50_000);
-      expect(result.step.stderrTail).toContain("entry limit exceeded");
-      expect(open).not.toHaveBeenCalled();
+      expect(discovered).toBeLessThanOrEqual(500_000);
+      expect(result.step.advisory?.message).toContain("entry limit exceeded");
+      expect(hash.mock.calls.some(([file]) => file === path.join(nested, "index.js"))).toBe(false);
     });
   });
 });

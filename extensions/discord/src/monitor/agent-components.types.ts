@@ -1,4 +1,3 @@
-// Discord type declarations define plugin contracts.
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -56,7 +55,6 @@ export type ComponentInteractionContext = {
   user: DiscordUser;
   username: string;
   userId: string;
-  replyOpts: { ephemeral?: boolean };
   rawGuildId: string | undefined;
   isDirectMessage: boolean;
   isGroupDm: boolean;

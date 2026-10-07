@@ -25,7 +25,8 @@ export function createFixtureSuite(rootPrefix: string) {
         throw new Error("Fixture suite not initialized");
       }
       const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
-      await fs.mkdir(dir, { recursive: true });
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+      await fs.chmod(dir, 0o700);
       return dir;
     },
   };

@@ -1,11 +1,13 @@
 // Owns catalog-row menu state, actions, focus anchor, and rendering for AppSidebar.
-import type { SessionsCatalogArchiveParams } from "@openclaw/gateway-protocol";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { readSessionMethodScopeAccess } from "../lib/session-method-access.ts";
 import { parseCatalogSessionKey, type CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
+import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { showToast } from "../lib/toast.ts";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import type { SidebarCatalogSessionMutationScope } from "./app-sidebar-session-types.ts";
@@ -17,28 +19,33 @@ import type { SidebarMenusControllerHost } from "./sidebar-menus-controller-type
 
 type SidebarCatalogSessionMenuState = CatalogSessionMenuRequest & { x: number; y: number };
 
+type SidebarCatalogMenuHost = Pick<
+  SidebarMenusControllerHost,
+  | "activeRouteId"
+  | "basePath"
+  | "getRouteSessionKey"
+  | "onNavigate"
+  | "requestUpdate"
+  | "sessionDataContext"
+  | "terminalAvailable"
+> & {
+  sessionData: Pick<
+    SidebarMenusControllerHost["sessionData"],
+    | "beginSessionMutation"
+    | "isSessionMutationScopeCurrent"
+    | "archiveSessionCatalog"
+    | "importSessionCatalog"
+    | "sessionScopeGeneration"
+  >;
+};
+
 export class SidebarCatalogMenuController {
   private state: SidebarCatalogSessionMenuState | null = null;
   private trigger: HTMLElement | null = null;
 
   constructor(
-    private readonly hooks: {
-      beforeOpen: () => void;
-      requestUpdate: () => void;
-      terminalAvailable: () => boolean;
-      openTerminal: (key: CatalogSessionKey, agentId: string) => void;
-      beginMutation: () => SidebarCatalogSessionMutationScope | null;
-      isMutationCurrent: (scope: SidebarCatalogSessionMutationScope) => boolean;
-      archive: (
-        scope: SidebarCatalogSessionMutationScope,
-        params: SessionsCatalogArchiveParams,
-      ) => Promise<unknown>;
-      afterDelete: (
-        scope: SidebarCatalogSessionMutationScope,
-        key: CatalogSessionKey,
-      ) => Promise<void>;
-      navigate: (request: Pick<CatalogSessionMenuRequest, "navigation" | "routeId">) => void;
-    },
+    private readonly host: SidebarCatalogMenuHost,
+    private readonly beforeOpen: () => void,
   ) {}
 
   get isOpen(): boolean {
@@ -50,7 +57,8 @@ export class SidebarCatalogMenuController {
     return (
       openKey?.catalogId === key.catalogId &&
       openKey.hostId === key.hostId &&
-      openKey.threadId === key.threadId
+      openKey.threadId === key.threadId &&
+      openKey.sourceHomeId === key.sourceHomeId
     );
   }
 
@@ -63,10 +71,10 @@ export class SidebarCatalogMenuController {
     trigger?.dispatchEvent(
       new CustomEvent(SESSION_MENU_OPEN_EVENT, { bubbles: true, composed: true }),
     );
-    this.hooks.beforeOpen();
+    this.beforeOpen();
     this.trigger = trigger;
     this.state = { ...request, x, y };
-    this.hooks.requestUpdate();
+    this.host.requestUpdate();
   }
 
   close(): void {
@@ -75,7 +83,7 @@ export class SidebarCatalogMenuController {
     }
     this.trigger = null;
     this.state = null;
-    this.hooks.requestUpdate();
+    this.host.requestUpdate();
   }
 
   retargetTrigger(key: CatalogSessionKey, element: Element | undefined): void {
@@ -86,7 +94,7 @@ export class SidebarCatalogMenuController {
     queueMicrotask(() => {
       if (element.isConnected && !this.trigger?.isConnected && this.isOpenFor(key)) {
         this.trigger = element;
-        this.hooks.requestUpdate();
+        this.host.requestUpdate();
       }
     });
   }
@@ -95,9 +103,15 @@ export class SidebarCatalogMenuController {
     menu: SidebarCatalogSessionMenuState,
     action: CatalogSessionMenuAction,
   ): void {
+    if (action === "import") {
+      if (this.canImport()) {
+        void this.importSession(menu);
+      }
+      return;
+    }
     if (action === "terminal") {
-      if (menu.canOpenTerminal && this.hooks.terminalAvailable()) {
-        this.hooks.openTerminal(menu.key, menu.agentId);
+      if (menu.canOpenTerminal && this.host.terminalAvailable) {
+        openCatalogSessionInTerminal(this.host, menu.key, menu.agentId);
       }
       return;
     }
@@ -107,14 +121,80 @@ export class SidebarCatalogMenuController {
       }
       return;
     }
-    this.hooks.navigate(menu);
+    this.host.onNavigate?.(menu.routeId, menu.navigation);
+  }
+
+  private isMutationCurrent(scope: SidebarCatalogSessionMutationScope): boolean {
+    return (
+      this.host.sessionData.isSessionMutationScopeCurrent(scope) &&
+      scope.catalogGeneration === this.host.sessionData.sessionScopeGeneration
+    );
+  }
+
+  private canImport(): boolean {
+    const snapshot = this.host.sessionDataContext?.gateway.snapshot;
+    return (
+      snapshot?.phase === "connected" &&
+      readSessionMethodScopeAccess(snapshot.hello?.auth, {
+        method: "sessions.catalog.import",
+        requiredScope: "operator.write",
+      }).allowed
+    );
+  }
+
+  private async importSession(menu: SidebarCatalogSessionMenuState): Promise<void> {
+    const mutation = this.host.sessionData.beginSessionMutation();
+    if (!mutation) {
+      return;
+    }
+    const scope = { ...mutation, catalogGeneration: this.host.sessionData.sessionScopeGeneration };
+    const displayName = truncateUtf16Safe(menu.displayName?.trim() ?? "", 500);
+    try {
+      const result = await this.host.sessionData.importSessionCatalog(scope, {
+        ...menu.key,
+        agentId: menu.agentId,
+        ...(displayName ? { displayName } : {}),
+      });
+      if (!result || !this.isMutationCurrent(scope)) {
+        return;
+      }
+      showToast({
+        message: t(
+          !result.complete
+            ? "chat.catalog.importIncomplete"
+            : result.importedItems === 0
+              ? "chat.catalog.importUnchanged"
+              : "chat.catalog.importComplete",
+          { count: String(result.importedItems) },
+        ),
+        actionLabel: t("chat.catalog.openImportedSession"),
+        onAction: () => {
+          if (!this.isMutationCurrent(scope)) {
+            return;
+          }
+          const target = sessionNavigationTarget({
+            context: scope.context,
+            face: "chat",
+            sessionKey: result.sessionKey,
+            agentId: menu.agentId,
+            exactKey: true,
+          });
+          this.host.onNavigate?.("chat", { ...target.options, search: "", hash: "" });
+        },
+      });
+    } catch (error) {
+      if (this.isMutationCurrent(scope)) {
+        showToast({ message: formatUiError(error) });
+      }
+    }
   }
 
   private async deleteSession(menu: SidebarCatalogSessionMenuState): Promise<void> {
-    const scope = this.hooks.beginMutation();
-    if (!scope) {
+    const mutation = this.host.sessionData.beginSessionMutation();
+    if (!mutation) {
       return;
     }
+    const scope = { ...mutation, catalogGeneration: this.host.sessionData.sessionScopeGeneration };
     try {
       const confirmed = await showConfirmDialog({
         message: t("chat.catalog.deleteSessionConfirm"),
@@ -123,7 +203,7 @@ export class SidebarCatalogMenuController {
         danger: true,
         signal: scope.signal,
       });
-      if (!this.hooks.isMutationCurrent(scope)) {
+      if (!this.isMutationCurrent(scope)) {
         showToast({
           message: t("sessionsView.deleteSessionStale", { session: menu.name }),
         });
@@ -132,13 +212,26 @@ export class SidebarCatalogMenuController {
       if (!confirmed) {
         return;
       }
-      await this.hooks.archive(scope, {
+      await this.host.sessionData.archiveSessionCatalog(scope, {
         ...menu.key,
         agentId: menu.agentId,
         confirmNoOtherRunner: true,
       });
-      if (this.hooks.isMutationCurrent(scope)) {
-        await this.hooks.afterDelete(scope, menu.key);
+      if (!this.isMutationCurrent(scope)) {
+        return;
+      }
+      const active = parseCatalogSessionKey(this.host.getRouteSessionKey());
+      if (
+        this.host.activeRouteId === "chat" &&
+        active?.catalogId === menu.key.catalogId &&
+        active.hostId === menu.key.hostId &&
+        active.threadId === menu.key.threadId
+      ) {
+        this.host.onNavigate?.("chat", {
+          pathname: pathForRoute("chat", this.host.basePath),
+          search: "",
+          hash: "",
+        });
       }
     } catch (error) {
       showToast({ message: formatUiError(error) });
@@ -157,52 +250,11 @@ export class SidebarCatalogMenuController {
         .trigger=${this.trigger}
         .lastActive=${menu.meta}
         .canDelete=${menu.canDelete}
-        .terminalDisabled=${!menu.canOpenTerminal || !this.hooks.terminalAvailable()}
+        .canImport=${this.canImport()}
+        .terminalDisabled=${!menu.canOpenTerminal || !this.host.terminalAvailable}
         .onAction=${(action: CatalogSessionMenuAction) => this.handleAction(menu, action)}
         .onClose=${() => this.close()}
       ></openclaw-catalog-session-menu>
     `;
   }
-}
-
-export function createSidebarCatalogMenuController(
-  host: SidebarMenusControllerHost,
-  beforeOpen: () => void,
-): SidebarCatalogMenuController {
-  return new SidebarCatalogMenuController({
-    // Closing every transient menu keeps one popover at a time.
-    beforeOpen,
-    requestUpdate: () => host.requestUpdate(),
-    terminalAvailable: () => host.terminalAvailable,
-    openTerminal: (key, agentId) => openCatalogSessionInTerminal(host, key, agentId),
-    beginMutation: () => {
-      const scope = host.sessionData.beginSessionMutation();
-      return scope
-        ? { ...scope, catalogGeneration: host.sessionData.sessionScopeGeneration }
-        : null;
-    },
-    isMutationCurrent: (scope) =>
-      host.sessionData.isSessionMutationScopeCurrent(scope) &&
-      scope.catalogGeneration === host.sessionData.sessionScopeGeneration,
-    archive: (scope, params) => host.sessionData.archiveSessionCatalog(scope, params),
-    afterDelete: async (scope, key) => {
-      if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-        return;
-      }
-      const active = parseCatalogSessionKey(host.getRouteSessionKey());
-      if (
-        host.activeRouteId === "chat" &&
-        active?.catalogId === key.catalogId &&
-        active.hostId === key.hostId &&
-        active.threadId === key.threadId
-      ) {
-        host.onNavigate?.("chat", {
-          pathname: pathForRoute("chat", host.basePath),
-          search: "",
-          hash: "",
-        });
-      }
-    },
-    navigate: ({ routeId, navigation }) => host.onNavigate?.(routeId, navigation),
-  });
 }

@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setMattermostRuntime } from "../runtime.js";
 
 const buildEventPlan = vi.hoisted(() => vi.fn());
 const recordHistory = vi.hoisted(() => vi.fn());
@@ -12,6 +14,10 @@ vi.mock("./runtime-api.js", async (importOriginal) => ({
 const { createMattermostPostHandler } = await import("./monitor-posts.js");
 
 describe("Mattermost pending history limit", () => {
+  beforeEach(() => {
+    setMattermostRuntime(createPluginRuntimeMock());
+  });
+
   it.each([
     { account: 3, expected: 3 },
     { account: undefined, expected: 7 },

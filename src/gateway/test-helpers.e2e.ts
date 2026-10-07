@@ -4,8 +4,12 @@ import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import {
+  collectNestedErrorCandidates,
+  toErrorObject,
+} from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.js";
 import { WebSocket, type RawData } from "../../packages/gateway-client/src/websocket.js";
 import {
   type HelloOk,
@@ -27,7 +31,7 @@ import {
   signDevicePayload,
 } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
-import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
+import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -35,14 +39,10 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
-import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
+import { GatewayStartupCleanupError } from "./server-shutdown.js";
 import { startGatewayServer, type GatewayServerOptions } from "./server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
-
-/** Reserve a deterministic free port block for Gateway E2E tests. */
-export async function getGatewayE2ePortBlock(): Promise<number> {
-  return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
-}
+import { reserveGatewayTestListener, startClaimedGateway } from "./test-helpers.listener.js";
 
 /** Connect a GatewayClient with test defaults and resolve after hello-ok. */
 export async function connectGatewayClient(params: {
@@ -50,6 +50,8 @@ export async function connectGatewayClient(params: {
   token?: string;
   deviceToken?: string;
   origin?: string;
+  edgeAuthHeaders?: Readonly<Record<string, string>>;
+  tlsFingerprint?: string;
   clientName?: GatewayClientName;
   modelCatalog?: ModelCatalogTarget;
   clientDisplayName?: string;
@@ -100,6 +102,8 @@ export async function connectGatewayClient(params: {
       token: params.token,
       deviceToken: params.deviceToken,
       origin: params.origin,
+      edgeAuthHeaders: params.edgeAuthHeaders,
+      tlsFingerprint: params.tlsFingerprint,
       ...(params.connectChallengeTimeoutMs !== undefined
         ? { connectChallengeTimeoutMs: params.connectChallengeTimeoutMs }
         : {}),
@@ -282,25 +286,31 @@ export async function connectDeviceAuthReq(params: { url: string; token?: string
   return await response;
 }
 
-export async function startGatewayWithClient(params: {
-  port?: number;
-  cfg: unknown;
-  configPath: string;
-  token: string;
-  clientName?: GatewayClientName;
-  modelCatalog?: ModelCatalogTarget;
-  mode?: GatewayClientMode;
-  origin?: string;
-  clientDisplayName?: string;
-  scopes?: string[];
-  onEvent?: (evt: { event?: string; payload?: unknown }) => void;
-  hotReloadRecovery?: GatewayServerOptions["hotReloadRecovery"];
-}) {
+export async function startGatewayWithClient(
+  params: {
+    cfg: unknown;
+    configPath: string;
+    token?: string;
+    auth?: GatewayServerOptions["auth"];
+    edgeAuthHeaders?: Readonly<Record<string, string>>;
+    secure?: boolean;
+    tlsFingerprint?: string;
+    clientName?: GatewayClientName;
+    modelCatalog?: ModelCatalogTarget;
+    mode?: GatewayClientMode;
+    origin?: string;
+    clientDisplayName?: string;
+    scopes?: string[];
+    onEvent?: (evt: { event?: string; payload?: unknown }) => void;
+    hotReloadRecovery?: GatewayServerOptions["hotReloadRecovery"];
+  } & ({ port?: number; portClaim?: never } | { port?: never; portClaim: TestPortClaim }),
+) {
   const gatewayStartupEnv = captureEnv([
     ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
     "OPENCLAW_CONFIG_PATH",
   ]);
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+  let listener: Awaited<ReturnType<typeof reserveGatewayTestListener>> | undefined;
   try {
     await writeFile(params.configPath, `${JSON.stringify(params.cfg, null, 2)}\n`);
     process.env.OPENCLAW_CONFIG_PATH = params.configPath;
@@ -308,17 +318,31 @@ export async function startGatewayWithClient(params: {
     clearConfigCache();
     clearSessionStoreCacheForTest();
 
-    const port = params.port ?? (await getGatewayE2ePortBlock());
-    const startedServer = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token: params.token },
-      controlUiEnabled: false,
-      hotReloadRecovery: params.hotReloadRecovery,
-    });
+    // The retained listener is HTTP-only; TLS must create its own secure server.
+    const secureClaim = params.secure
+      ? (params.portClaim ??
+        (await acquireTestPortBlock({ port: params.port, offsets: [0, 1, 2, 3, 4] })))
+      : undefined;
+    listener = secureClaim
+      ? undefined
+      : await reserveGatewayTestListener(params.portClaim ?? params.port);
+    const port = secureClaim?.port ?? listener!.port;
+    const start = () =>
+      startGatewayServer(port, {
+        bind: "loopback",
+        auth: params.auth ?? { mode: "token", token: params.token },
+        controlUiEnabled: false,
+        hotReloadRecovery: params.hotReloadRecovery,
+      });
+    const startedServer = secureClaim
+      ? await startClaimedGateway(secureClaim, start)
+      : await listener!.start(start);
     server = startedServer;
     const client = await connectGatewayClient({
-      url: `ws://127.0.0.1:${port}`,
+      url: `${params.secure ? "wss" : "ws"}://127.0.0.1:${port}`,
       token: params.token,
+      edgeAuthHeaders: params.edgeAuthHeaders,
+      tlsFingerprint: params.tlsFingerprint,
       clientName: params.clientName,
       modelCatalog: params.modelCatalog,
       mode: params.mode,
@@ -336,6 +360,8 @@ export async function startGatewayWithClient(params: {
         close: async (...args: Parameters<typeof startedServer.close>) => {
           // Failed shutdown retains selectors needed by the still-owned server.
           await startedServer.close(...args);
+          await listener?.closeUnadopted();
+          await params.portClaim?.release();
           gatewayStartupEnv.restore();
         },
       },
@@ -346,7 +372,19 @@ export async function startGatewayWithClient(params: {
         throw error;
       },
       async () => {
+        if (
+          !server &&
+          collectNestedErrorCandidates(error).some(
+            (candidate) => candidate instanceof GatewayStartupCleanupError,
+          )
+        ) {
+          await listener?.closeUnadopted();
+          // Failed kernel cleanup retains selectors, but cannot own an unadopted listener.
+          return;
+        }
         await server?.close({ reason: "gateway E2E client setup failed" });
+        await listener?.closeUnadopted();
+        await params.portClaim?.release();
         gatewayStartupEnv.restore();
       },
     );

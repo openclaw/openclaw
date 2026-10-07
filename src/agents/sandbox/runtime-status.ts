@@ -1,25 +1,53 @@
-/**
- * Sandbox runtime status and tool-policy diagnostics.
- *
- * Resolves whether a session is sandboxed and explains policy blocks before tool execution.
- */
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../../config/sessions/main-session.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
+  resolveSessionStorePathCore,
+  resolveSessionStorePathWithContext,
+} from "../../config/sessions/paths.js";
+import { loadSessionEntryReadOnlyResultInScope } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  assertCapturedSessionEntryReadSource,
   loadExactSessionEntryCandidatesReadOnlyBatch,
   resolveSessionEntry,
 } from "../../config/sessions/session-accessor.sqlite-exact-read.js";
+import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import { captureNativeSessionEntryCurrentRead } from "../../config/sessions/session-entry-current-runtime.js";
 import {
   sessionCreatorProfileId,
   type SessionCreatedActor,
 } from "../../config/sessions/session-entry-provenance.js";
+import {
+  captureSessionEntryReadScope,
+  isNativeSessionEntryRead,
+} from "../../config/sessions/session-entry-read-request.js";
+import {
+  withSessionEntryReadOnlyInWorker,
+  withSessionEntriesFromStoreInWorker,
+  withSessionEntriesFromStoresInWorker,
+} from "../../config/sessions/session-entry-read-runtime.js";
+import type {
+  SessionEntryWorkerRead,
+  PreparedSessionEntryWorkerRead,
+} from "../../config/sessions/session-entry-read-runtime.types.js";
+import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
+import {
+  assertSessionStoreReadCandidate,
+  captureSessionStoreCandidateIdentities,
+} from "../../config/sessions/session-store-read-candidates.js";
+import { captureSessionStoreReadCandidates } from "../../config/sessions/session-store-target-inventory.js";
+import {
+  collectSessionEntryLookupKeys,
+  normalizeStoreSessionKey,
+  resolveSessionEntryCandidates,
+} from "../../config/sessions/store-entry.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { auditSandboxToolPolicyBlock, escapeControlCharsVisible } from "../tool-policy-audit.js";
@@ -49,49 +77,6 @@ type SandboxRuntimeIsolation =
       workspaceAccess: SandboxWorkspaceAccess;
     };
 
-function shouldSandboxSession(
-  cfg: SandboxConfig,
-  sessionKey: string,
-  mainSessionKey: string,
-  sandboxRequired: boolean,
-) {
-  if (sandboxRequired) {
-    return true;
-  }
-  if (cfg.mode === "off") {
-    return false;
-  }
-  if (cfg.mode === "all") {
-    return true;
-  }
-  return sessionKey.trim() !== mainSessionKey.trim();
-}
-
-function resolveMainSessionKeyForSandbox(params: {
-  cfg?: OpenClawConfig;
-  agentId: string;
-}): string {
-  if (params.cfg?.session?.scope === "global") {
-    return "global";
-  }
-  return resolveAgentMainSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
-}
-
-function resolveComparableSessionKeyForSandbox(params: {
-  cfg?: OpenClawConfig;
-  agentId: string;
-  sessionKey: string;
-}): string {
-  return canonicalizeMainSessionAlias({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
-}
-
 type SandboxRuntimeStatusParams = {
   cfg?: OpenClawConfig;
   sessionKey?: string;
@@ -99,11 +84,219 @@ type SandboxRuntimeStatusParams = {
   /** Independent execution identity used for sandbox mode and policy classification. */
   classificationSessionKey?: string;
   classificationAgentId?: string;
+  /** Trusted canonical candidate for the classification identity; null means no stored entry. */
+  preparedSessionEntry?: Pick<SessionEntry, "sandbox" | "sandboxMode" | "createdActor"> | null;
 };
 
-/** Resolves sandbox mode, effective session scope, and tool policy for a session. */
 export function resolveSandboxRuntimeStatus(params: SandboxRuntimeStatusParams) {
-  return resolveSandboxRuntimeStatusWithRead(params, resolveSessionEntry);
+  return resolveSandboxRuntimeStatusForClassification(params);
+}
+
+/** Keep the classification read's captured owner alive through one asynchronous policy preparation. */
+export async function withSandboxRuntimeStatusInWorker<T>(
+  params: Omit<SandboxRuntimeStatusParams, "preparedSessionEntry">,
+  source: {
+    env: NodeJS.ProcessEnv;
+    cwd: string;
+    assertCurrent: () => void;
+    readSource?: CapturedSessionEntryReadSource;
+    assertEntryCurrent?: (entry: SessionEntry | undefined) => void;
+  },
+  consume: (runtime: ReturnType<typeof resolveSandboxRuntimeStatus>) => Promise<T>,
+): Promise<T> {
+  source.assertCurrent();
+  const classification = resolveSandboxClassification(params);
+  const prepare = (entry: SessionEntry | undefined) => {
+    source.assertCurrent();
+    source.assertEntryCurrent?.(entry);
+    return consume(
+      resolveSandboxRuntimeStatusForClassification(
+        { ...params, preparedSessionEntry: entry ?? null },
+        classification,
+      ),
+    );
+  };
+  if (!classification.classificationSessionKey) {
+    const result = await prepare(undefined);
+    source.assertCurrent();
+    return result;
+  }
+  const assertCurrent = () => {
+    source.assertCurrent();
+    if (source.readSource && typeof source.readSource.databaseIdentity === "string") {
+      assertCapturedSessionEntryReadSource(source.readSource);
+    }
+  };
+  assertCurrent();
+  const scope = {
+    agentId: classification.classificationAgentId,
+    sessionKey: resolveSqliteSessionKey(
+      classification.comparableSessionKey,
+      classification.classificationAgentId,
+    ),
+    storePath:
+      source.readSource?.path ??
+      resolveSessionStorePathWithContext(
+        params.cfg?.session?.store,
+        {
+          agentId: classification.classificationAgentId,
+          env: source.env,
+        },
+        { cwd: source.cwd },
+      ),
+    env: source.env,
+  };
+  if (isNativeSessionEntryRead(scope, scope.agentId)) {
+    return withSessionEntryReadOnlyInWorker(scope, assertCurrent, async (read) => {
+      if (!read.ok) {
+        throw read.error;
+      }
+      return prepare(read.value);
+    });
+  }
+  const candidates = captureSessionStoreReadCandidates(scope.storePath);
+  const identities = captureSessionStoreCandidateIdentities(candidates);
+  // Exact reads validate selected foreign row bytes without requiring a listing's writer proof.
+  return withSessionEntriesFromStoreInWorker(
+    {
+      ...scope,
+      sessionKeys: [
+        normalizeStoreSessionKey(scope.sessionKey),
+        ...collectSessionEntryLookupKeys(scope.sessionKey),
+      ],
+      projection: "exact",
+    },
+    async (read) => {
+      assertCurrent();
+      const result = await prepare(
+        resolveSessionEntryCandidates({
+          entries: read.result.entries,
+          sessionKey: scope.sessionKey,
+          canonicalKeys: true,
+        }).existing?.entry,
+      );
+      assertCurrent();
+      read.assertCurrent();
+      return result;
+    },
+    false,
+    (database, identity) => {
+      const expected = identities.get(assertSessionStoreReadCandidate(database.path, candidates));
+      if (!expected || expected.key !== identity.key || expected.birthtime !== identity.birthtime) {
+        throw new Error("Sandbox classification source changed during preparation");
+      }
+    },
+  );
+}
+
+/** Compare policies only after every original source has entered the same ordered read. */
+export function withSandboxRuntimeStatusesInWorker<T>(
+  requests: readonly Omit<SandboxRuntimeStatusParams, "preparedSessionEntry">[],
+  source: { env: NodeJS.ProcessEnv; cwd: string; assertCurrent: () => void },
+  consume: (statuses: readonly ReturnType<typeof resolveSandboxRuntimeStatus>[]) => T,
+): Promise<T> {
+  source.assertCurrent();
+  const inputs: Array<SessionEntryWorkerRead & { sessionKeys: string[] }> = [];
+  const projections = requests.map((params) => {
+    const classification = resolveSandboxClassification(params);
+    const project = (entry: SessionEntry | undefined) =>
+      resolveSandboxRuntimeStatusForClassification(
+        { ...params, preparedSessionEntry: entry ?? null },
+        classification,
+      );
+    if (!classification.classificationSessionKey) {
+      return () => project(undefined);
+    }
+    const storePath = resolveSessionStorePathWithContext(
+      params.cfg?.session?.store,
+      {
+        agentId: classification.classificationAgentId,
+        env: source.env,
+      },
+      { cwd: source.cwd },
+    );
+    const { scope } = captureSessionEntryReadScope({
+      agentId: classification.classificationAgentId,
+      sessionKey: resolveSqliteSessionKey(
+        classification.comparableSessionKey,
+        classification.classificationAgentId,
+      ),
+      storePath,
+      env: source.env,
+    });
+    if (isNativeSessionEntryRead(scope, scope.agentId)) {
+      const native = captureNativeSessionEntryCurrentRead(scope);
+      return () => {
+        native.assertSourceCurrent();
+        const read = loadSessionEntryReadOnlyResultInScope(scope);
+        if (!read.ok) {
+          throw read.error;
+        }
+        native.assertSourceCurrent();
+        return project(read.value);
+      };
+    }
+    let input = inputs.find(
+      (read) => read.agentId === scope.agentId && read.storePath === storePath,
+    );
+    if (!input) {
+      input = {
+        agentId: classification.classificationAgentId,
+        storePath,
+        env: scope.env,
+        sessionKeys: [],
+        projection: "exact",
+      };
+      inputs.push(input);
+    }
+    input.sessionKeys.push(
+      normalizeStoreSessionKey(scope.sessionKey),
+      ...collectSessionEntryLookupKeys(scope.sessionKey),
+    );
+    const index = inputs.indexOf(input);
+    return (reads: readonly PreparedSessionEntryWorkerRead[]) =>
+      project(
+        resolveSessionEntryCandidates({
+          entries: reads[index]!.result.entries,
+          sessionKey: scope.sessionKey,
+          canonicalKeys: true,
+        }).existing?.entry,
+      );
+  });
+  const captures = inputs.map((input) => {
+    const candidates = captureSessionStoreReadCandidates(input.storePath);
+    return { input, candidates, identities: captureSessionStoreCandidateIdentities(candidates) };
+  });
+  return withSessionEntriesFromStoresInWorker(
+    inputs,
+    (reads) => {
+      source.assertCurrent();
+      const statuses = projections.map((project) => project(reads));
+      source.assertCurrent();
+      const result = consume(statuses);
+      source.assertCurrent();
+      for (const read of reads) {
+        read.assertCurrent();
+      }
+      return result;
+    },
+    {
+      ordered: true,
+      prepareSource(input, database, identity) {
+        const captured = captures.find((capture) => capture.input === input)!;
+        const expected = captured.identities.get(
+          assertSessionStoreReadCandidate(database.path, captured.candidates),
+        );
+        if (
+          !expected ||
+          expected.key !== identity.key ||
+          expected.birthtime !== identity.birthtime
+        ) {
+          throw new Error("Sandbox classification source changed during batch preparation");
+        }
+      },
+    },
+  );
 }
 
 /** Classifies durable canonical keys without admitting the same store once per session. */
@@ -125,7 +318,7 @@ export function resolveSandboxRuntimeStatusesForPersistedSessions(
       }),
       projection: "list" as const,
       sessionKeys: params.sessionKeys.map((sessionKey) =>
-        resolveComparableSessionKeyForSandbox({ ...params, sessionKey }),
+        canonicalizeMainSessionAlias({ ...params, sessionKey }),
       ),
     })),
   );
@@ -135,31 +328,22 @@ export function resolveSandboxRuntimeStatusesForPersistedSessions(
       throw result.error;
     }
     const byKey = new Map(result.value.map(({ sessionKey, entry }) => [sessionKey, entry]));
-    const readSession: typeof resolveSessionEntry = ({ sessionKey }) => ({
-      existing: byKey.get(sessionKey),
-      normalizedKey: sessionKey,
-      legacyKeys: [],
-    });
     // Retained or removed entries still need the configured mode classification.
-    return params.sessionKeys.map((sessionKey) =>
-      resolveSandboxRuntimeStatusWithRead({ ...params, sessionKey }, readSession),
-    );
+    return params.sessionKeys.map((sessionKey) => {
+      const classification = resolveSandboxClassification({ ...params, sessionKey });
+      return resolveSandboxRuntimeStatusForClassification(
+        {
+          ...params,
+          sessionKey,
+          preparedSessionEntry: byKey.get(classification.comparableSessionKey) ?? null,
+        },
+        classification,
+      );
+    });
   });
 }
 
-function resolveSandboxRuntimeStatusWithRead(
-  params: SandboxRuntimeStatusParams,
-  readSession: typeof resolveSessionEntry,
-): {
-  agentId: string;
-  sessionKey: string;
-  classificationAgentId: string;
-  classificationSessionKey: string;
-  mainSessionKey: string;
-  mode: SandboxConfig["mode"];
-  sandboxed: boolean;
-  toolPolicy: SandboxToolPolicyResolved;
-} & SandboxRuntimeIsolation {
+function resolveSandboxClassification(params: SandboxRuntimeStatusParams) {
   const sessionKey = params.sessionKey?.trim() ?? "";
   const agentId = resolveSessionAgentId({
     sessionKey,
@@ -176,26 +360,67 @@ function resolveSandboxRuntimeStatusWithRead(
   });
   const cfg = params.cfg;
   const sandboxCfg = resolveSandboxConfigForAgent(cfg, classificationAgentId);
-  const mainSessionKey = resolveMainSessionKeyForSandbox({ cfg, agentId: classificationAgentId });
-  const comparableSessionKey = resolveComparableSessionKeyForSandbox({
+  const mainSessionKey =
+    cfg?.session?.scope === "global"
+      ? "global"
+      : resolveAgentMainSessionKey({ cfg, agentId: classificationAgentId });
+  const comparableSessionKey = canonicalizeMainSessionAlias({
     cfg,
     agentId: classificationAgentId,
     sessionKey: classificationSessionKey,
   });
+  return {
+    sessionKey,
+    agentId,
+    classificationSessionKey,
+    classificationAgentId,
+    cfg,
+    sandboxCfg,
+    mainSessionKey,
+    comparableSessionKey,
+  };
+}
+
+function resolveSandboxRuntimeStatusForClassification(
+  params: SandboxRuntimeStatusParams,
+  classification = resolveSandboxClassification(params),
+): {
+  agentId: string;
+  sessionKey: string;
+  classificationAgentId: string;
+  classificationSessionKey: string;
+  mainSessionKey: string;
+  mode: SandboxConfig["mode"];
+  sandboxed: boolean;
+  toolPolicy: SandboxToolPolicyResolved;
+} & SandboxRuntimeIsolation {
+  const {
+    sessionKey,
+    agentId,
+    classificationSessionKey,
+    classificationAgentId,
+    cfg,
+    sandboxCfg,
+    mainSessionKey,
+    comparableSessionKey,
+  } = classification;
   // Creation owns this immutable requirement; current callers and agent mode cannot relax it.
-  const session = classificationSessionKey
-    ? readSession(
-        {
-          agentId: classificationAgentId,
-          clone: false,
-          sessionKey: comparableSessionKey,
-          storePath: resolveSessionStorePathCore(cfg?.session?.store, {
-            agentId: classificationAgentId,
-          }),
-        },
-        { readOnly: true },
-      )
-    : undefined;
+  const session =
+    params.preparedSessionEntry !== undefined
+      ? { existing: params.preparedSessionEntry ?? undefined, normalizedKey: comparableSessionKey }
+      : classificationSessionKey
+        ? resolveSessionEntry(
+            {
+              agentId: classificationAgentId,
+              clone: false,
+              sessionKey: comparableSessionKey,
+              storePath: resolveSessionStorePathCore(cfg?.session?.store, {
+                agentId: classificationAgentId,
+              }),
+            },
+            { readOnly: true },
+          )
+        : undefined;
   const sandboxRequired = session?.existing?.sandbox === "required";
   const profileId = sessionCreatorProfileId(session?.existing?.createdActor)?.trim();
   const isolation: SandboxRuntimeIsolation = sandboxRequired
@@ -208,9 +433,12 @@ function resolveSandboxRuntimeStatusWithRead(
         workspaceAccess: sandboxCfg.workspaceAccess === "rw" ? "ro" : sandboxCfg.workspaceAccess,
       }
     : { sandboxRequired: false };
-  const sandboxed = classificationSessionKey
-    ? shouldSandboxSession(sandboxCfg, comparableSessionKey, mainSessionKey, sandboxRequired)
-    : false;
+  const sandboxed =
+    Boolean(classificationSessionKey) &&
+    (sandboxRequired ||
+      (session?.existing?.sandboxMode !== "off" &&
+        sandboxCfg.mode !== "off" &&
+        (sandboxCfg.mode === "all" || comparableSessionKey.trim() !== mainSessionKey.trim())));
   return {
     agentId,
     sessionKey,
@@ -224,17 +452,6 @@ function resolveSandboxRuntimeStatusWithRead(
   };
 }
 
-function sanitizeForSingleLineDisplay(value: string): string {
-  return escapeControlCharsVisible(value);
-}
-
-function hasUnsafeControlChars(value: string): boolean {
-  return Array.from(value).some((char) => {
-    const codePoint = char.codePointAt(0) ?? 0;
-    return codePoint < 0x20 || codePoint === 0x7f;
-  });
-}
-
 function redactSessionKey(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -243,14 +460,13 @@ function redactSessionKey(value: string): string {
   if (trimmed.length <= 12) {
     return "(redacted)";
   }
-  return `${sanitizeForSingleLineDisplay(truncateUtf16Safe(trimmed, 6))}…${sanitizeForSingleLineDisplay(sliceUtf16Safe(trimmed, -6))}`;
+  return `${escapeControlCharsVisible(truncateUtf16Safe(trimmed, 6))}…${escapeControlCharsVisible(sliceUtf16Safe(trimmed, -6))}`;
 }
 
 function shellEscapeSingleArg(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-/** Formats the user-facing denial message when sandbox tool policy blocks a tool. */
 export function formatSandboxToolPolicyBlockedMessage(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string;
@@ -325,7 +541,7 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
     lines.push("- Use the agent main session instead of a non-main session.");
   }
   const explainCommand =
-    runtime.sessionKey && !hasUnsafeControlChars(runtime.sessionKey)
+    runtime.sessionKey && !containsAsciiControlCharacter(runtime.sessionKey)
       ? `openclaw sandbox explain --session ${shellEscapeSingleArg(runtime.sessionKey)} --agent ${runtime.agentId}`
       : `openclaw sandbox explain --agent ${runtime.agentId}`;
   lines.push(`- See: ${formatCliCommand(explainCommand)}`);

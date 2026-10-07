@@ -1,22 +1,12 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { attachPluginApiFacades, type OpenClawPluginApiWithoutFacades } from "./api-facades.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import type { OpenClawPluginApi, PluginLogger } from "./types.js";
+import type { OpenClawPluginApi } from "./types.js";
 
-type BuildPluginApiParams = {
-  id: string;
-  name: string;
-  version?: string;
-  description?: string;
-  source: string;
+type BuildPluginApiParams = Omit<
+  OpenClawPluginApiWithoutFacades,
+  keyof typeof noops | "registerNodeCliFeature" | "runtimeSource"
+> & {
   runtimeSource?: string;
-  rootDir?: string;
-  registrationMode: OpenClawPluginApi["registrationMode"];
-  config: OpenClawConfig;
-  pluginConfig?: Record<string, unknown>;
-  runtime: PluginRuntime;
-  logger: PluginLogger;
-  resolvePath: (input: string) => string;
   handlers?: Partial<Pick<OpenClawPluginApi, keyof typeof noops>>;
 };
 
@@ -30,6 +20,7 @@ const noops = {
   registerMcpServerConnectionResolver: () => {},
   registerChannel: () => {},
   registerGatewayMethod: () => {},
+  registerGatewayAccessPolicy: () => {},
   registerSessionCatalog: () => {},
   registerReload: () => {},
   registerNodeHostCommand: () => {},
@@ -44,6 +35,7 @@ const noops = {
   registerAutoEnableProbe: () => {},
   registerProvider: () => {},
   registerWorkerProvider: () => {},
+  registerStorageProvider: () => {},
   registerModelCatalogProvider: () => {},
   registerEmbeddingProvider: () => {},
   registerSpeechProvider: () => {},
@@ -61,7 +53,9 @@ const noops = {
   registerCommand: () => {},
   registerContextEngine: () => {},
   registerCompactionProvider: () => {},
+  registerDecisionProvider: () => {},
   registerAgentHarness: () => {},
+  registerAgentExecutorController: () => {},
   registerCodexAppServerExtensionFactory: () => {},
   registerAgentToolResultMiddleware: () => {},
   registerSessionExtension: () => {},
@@ -91,7 +85,6 @@ const noops = {
   }),
   scheduleSessionTurn: async () => undefined,
   unscheduleSessionTurnsByTag: async () => ({ removed: 0, failed: 0 }),
-  registerDetachedTaskRuntime: () => {},
   registerMemoryCapability: () => {},
   registerMemoryPromptSupplement: () => {},
   registerMemoryPromptPreparation: () => {},

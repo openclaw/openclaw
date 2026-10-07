@@ -45,10 +45,14 @@ describe("Doctor derived artifact cleanup", () => {
     const qmdHome = path.join(stateDir, "agents", "main", "qmd");
     const artifactPath =
       fixture.pluginId === "memory-core"
-        ? path.join(qmdHome, "index.sqlite")
+        ? qmdHome
         : path.join(vaultRoot, ".openclaw-wiki", "cache", "agent-digest.json");
-    await fs.mkdir(path.dirname(artifactPath), { recursive: true });
-    await fs.writeFile(artifactPath, "rebuildable artifact\n");
+    if (fixture.pluginId === "memory-core") {
+      await fs.mkdir(qmdHome, { recursive: true });
+    } else {
+      await fs.mkdir(path.dirname(artifactPath), { recursive: true });
+      await fs.writeFile(artifactPath, "rebuildable artifact\n");
+    }
     const config: OpenClawConfig = {
       plugins: { entries: { "memory-wiki": { config: { vault: { path: vaultRoot } } } } },
     };
@@ -66,12 +70,12 @@ describe("Doctor derived artifact cleanup", () => {
     );
     const removalError = new Error("synthetic cleanup permission denied");
     if (fixture.pluginId === "memory-core") {
-      const remove = fs.rm;
-      vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      const remove = fs.rmdir;
+      vi.spyOn(fs, "rmdir").mockImplementation(async (target) => {
         if (target === qmdHome) {
           throw removalError;
         }
-        await remove(target, options);
+        await remove(target);
       });
     } else {
       const openRoot = fsSafe.root;
@@ -97,7 +101,11 @@ describe("Doctor derived artifact cleanup", () => {
       result,
     );
 
-    await expect(fs.readFile(artifactPath, "utf8")).resolves.toBe("rebuildable artifact\n");
+    if (fixture.pluginId === "memory-core") {
+      await expect(fs.readdir(qmdHome)).resolves.toEqual([]);
+    } else {
+      await expect(fs.readFile(artifactPath, "utf8")).resolves.toBe("rebuildable artifact\n");
+    }
     expect(receipt.warnings.join("\n")).toContain(fixture.label);
     expect(receipt.warnings.join("\n")).toContain(removalError.message);
     expect(() => throwIfDoctorStateMigrationRefused([receipt])).not.toThrow();

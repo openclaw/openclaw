@@ -10,6 +10,31 @@ sidebarTitle: "Access control"
 
 Who may reach OpenClaw through Slack, and which Slack actions it may take.
 
+## Linked requester identity
+
+Direct Socket Mode events and HTTP Request URLs that pass Slack signing-secret
+verification carry verified native Slack user IDs, including the
+`team:<team-id>:user:<user-id>` form. Relay events remain asserted because the
+Gateway authenticates the relay peer rather than the Slack sender. Display names
+never establish identity, and sender IDs derived from app-controlled message
+metadata remain asserted.
+
+For ordinary messages and app mentions from a verified Slack sender linked to an
+active user profile, OpenClaw includes that profile's canonical ID and current
+display name in host-generated, per-turn conversation info. A linked profile with `operator.admin` authority can ask
+"Assign this session to me"; the agent uses that profile ID with the `sessions`
+tool's `assign_owner` action for sessions visible to that administrator, including
+sessions the agent spawned. The turn carries the linked administrator's existing
+operator authority and checks the original link, role, and channel lifecycle before
+each privileged action. Unlinking, removing administrator access, or restarting the
+channel invalidates that turn; send a new request after access is restored.
+
+The tool remains owner-only: linking an ordinary member identifies the requester
+without granting assignment access. Unlinked or asserted senders receive no
+requester profile or operator authority. Configured command owners without a linked
+administrator profile keep their existing command access. See
+[Channel identity links](/concepts/user-model#channel-identity-links).
+
 ## Actions and gates
 
 Slack actions are controlled by `channels.slack.actions.*`.
@@ -25,6 +50,8 @@ Available action groups in current Slack tooling:
 | emojiList  | enabled |
 
 Current Slack message actions include `send`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
+
+Interactive message actions retain their caller authority through target and permission lookups and recheck it before each Slack request. If that authority closes, remaining requests stop while an already accepted mutation keeps its result.
 
 In a Slack conversation, delegated `member-info` reads only the current requester
 on the same account; omitting `userId` selects that requester. `emoji-list` uses
@@ -174,6 +201,7 @@ restart the Slack monitor. The Gateway remains running.
     Per-channel controls (`channels.slack.channels.<id>`; names only via startup resolution or `dangerouslyAllowNameMatching`):
 
     - `requireMention`
+    - `requireMentionInBotThreads`
     - `ignoreOtherMentions`
     - `replyToMode` (`off|first|all|batched`; overrides account/chat-type reply mode for this channel)
     - `users` (allowlist)
@@ -182,11 +210,40 @@ restart the Slack monitor. The Gateway remains running.
     - `systemPrompt`
     - `tools`, `toolsBySender`
     - `toolsBySender` key format: `channel:`, `id:`, `e164:`, `username:`, `name:`, or `"*"` wildcard
-      (legacy unprefixed keys still map to `id:` only)
+      (run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries)
+
+    <a id="bot-created-threads" />
+    `requireMentionInBotThreads` overrides mention gating only in threads whose root message was sent by this bot. Set it to `false` to allow unmentioned replies there while keeping `requireMention: true` for the rest of the channel. Set it to `true` to require a mention in those threads even when implicit reply or thread-participation mentions are enabled. Authorized text commands keep their existing bypass.
+
+    Add the setting to an existing allowed channel entry:
+
+    ```json5
+    {
+      channels: {
+        slack: {
+          channels: {
+            C12345678: {
+              enabled: true,
+              requireMention: true,
+              requireMentionInBotThreads: false,
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    The setting resolves from the channel entry, then the `"*"` entry, then the account, then `channels.slack.requireMentionInBotThreads`. Omit it to preserve existing behavior, including `implicitMentions.replyToBot` and `implicitMentions.threadParticipation`. Slack's native parent author identifies the root; when that field is absent, OpenClaw uses accessible thread history. Unknown ownership retains the normal mention policy. Channel and sender access, bot-message restrictions, and `ignoreOtherMentions` still apply.
+
+    Invite the app to the channel and subscribe to `message.channels` for public channels or `message.groups` for private channels, with the matching history scope. Subscribing only to `app_mention` cannot deliver unmentioned follow-ups. Both setup manifests include these subscriptions; see [Manifest and scope checklist](/channels/slack/manifest-and-scopes#manifest-and-scope-checklist). To verify, have the bot post a new top-level message, then reply in that message's thread without mentioning it. Replies to a human-created root keep their existing implicit-mention policy even if the bot participates later.
 
     `ignoreOtherMentions` (default `false`) drops channel messages that mention another user or user group but not this bot. DMs and group DMs (MPIMs) are unaffected. The filter requires a resolved bot user ID from `auth.test`; if that identity is unavailable (for example a user-token-only identity), the gate fails open and messages pass through unchanged.
 
-    `allowBots` is conservative for channels and private channels: bot-authored room messages are accepted only when the sending bot is explicitly listed in that room's `users` allowlist, or when at least one explicit Slack owner ID from `channels.slack.allowFrom` is currently a room member. Wildcards and display-name owner entries do not satisfy owner presence. Owner presence uses Slack `conversations.members`; make sure the app has the matching read scope for the room type (`channels:read` for public channels, `groups:read` for private channels). If the member lookup fails, OpenClaw drops the bot-authored room message.
+    `allowBots` defaults to `true`. Bot-authored messages follow the same channel access and mention rules as other messages; messages from this bot are always ignored. Set `allowBots: false` to prevent other bots from triggering turns, or `allowBots: "mentions"` to require a mention even in rooms with `requireMention: false`. Room settings override account settings, which override `channels.slack.allowBots`. Existing explicit `false` values remain disabled after an update.
+
+    Bot-authored room messages also require either the sending bot to be explicitly listed in that room's `users` allowlist, or at least one explicit Slack owner ID from `channels.slack.allowFrom` to be a current room member. Wildcards and display-name owner entries do not satisfy owner presence. Owner presence uses Slack `conversations.members`; make sure the app has the matching read scope for the room type (`channels:read` for public channels, `groups:read` for private channels). If the member lookup fails, OpenClaw drops the bot-authored room message.
+
+    `allowBots` controls incoming turns, not context visibility. A human request can still include accessible bot-authored room history and thread context when `allowBots: false`; the configured `contextVisibility` and sender allowlist rules still apply.
 
     Accepted bot-authored Slack messages use shared [bot loop protection](/channels/bot-loop-protection). Configure `channels.defaults.botLoopProtection` for the default budget, then override with `channels.slack.botLoopProtection` or `channels.slack.channels.<id>.botLoopProtection` when a workspace or channel needs a different limit.
 

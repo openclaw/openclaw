@@ -99,7 +99,6 @@ flow:
                                   ref: sessionKey
                                 message:
                                   expr: "`${prompt}\nQA parent correlation: ${sessionKey}`"
-                                taskTracking: false
                                 timeoutMs:
                                   expr: liveTurnTimeoutMs(env, 30000)
                           - call: waitForAgentHistoryReply
@@ -113,14 +112,14 @@ flow:
                               - expr: liveTurnTimeoutMs(env, 90000)
                               - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
                           # The synthesized parent reply is the public result boundary.
-                          # Durable task records prove both child results succeeded and were
+                          # Native run and delivery records prove both child results succeeded and were
                           # delivered without depending on private child transcripts.
                           - call: waitForCondition
                             saveAs: fanoutChildren
                             args:
                               - lambda:
                                   async: true
-                                  expr: "(async () => { if (env.mock) { const requests = [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))]; const belongsToFanout = (request) => String(request.allInputText ?? '').includes(sessionKey); const alpha = requests.find((request) => belongsToFanout(request) && request.plannedToolName === 'sessions_spawn' && request.plannedToolArgs?.label === alphaLabel); const beta = requests.find((request) => belongsToFanout(request) && request.plannedToolName === 'sessions_spawn' && request.plannedToolArgs?.label === betaLabel); return alpha && beta ? { alpha, beta } : undefined; } const payload = await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }); const alpha = payload.tasks?.find((task) => task.label === alphaLabel && task.requesterSessionKey === sessionKey); const beta = payload.tasks?.find((task) => task.label === betaLabel && task.requesterSessionKey === sessionKey); const settled = (task) => task?.status === 'succeeded' && task.deliveryStatus === 'delivered'; return settled(alpha) && settled(beta) ? { alpha, beta } : undefined; })().catch(() => undefined)"
+                                  expr: "(async () => { if (env.mock) { const requests = [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))]; const belongsToFanout = (request) => String(request.allInputText ?? '').includes(sessionKey); const alpha = requests.find((request) => belongsToFanout(request) && request.plannedToolName === 'sessions_spawn' && request.plannedToolArgs?.label === alphaLabel); const beta = requests.find((request) => belongsToFanout(request) && request.plannedToolName === 'sessions_spawn' && request.plannedToolArgs?.label === betaLabel); return alpha && beta ? { alpha, beta } : undefined; } const runs = await readNativeQaSubagentRuns(env, sessionKey); const alpha = runs.find((run) => run.label === alphaLabel && run.requesterSessionKey === sessionKey); const beta = runs.find((run) => run.label === betaLabel && run.requesterSessionKey === sessionKey); const settled = (run) => run?.execution.status === 'terminal' && run.execution.outcome?.status === 'ok' && run.delivery?.status === 'delivered'; return settled(alpha) && settled(beta) ? { alpha, beta } : undefined; })().catch(() => undefined)"
                               - expr: liveTurnTimeoutMs(env, 30000)
                               - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
                           - if:

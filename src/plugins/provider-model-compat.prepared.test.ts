@@ -27,6 +27,7 @@ function makeOwners(provider: string): PluginMetadataSnapshotOwnerMaps {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    providerAuthContributions: [],
     modelIdNormalizationPolicies: new Map(),
   };
 }

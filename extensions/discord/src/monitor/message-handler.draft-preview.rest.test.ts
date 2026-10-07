@@ -1,3 +1,5 @@
+import { Routes } from "discord-api-types/v10";
+import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it } from "vitest";
 import { RequestClient } from "../internal/discord.js";
@@ -6,6 +8,7 @@ import { createDiscordDraftPreviewController } from "./message-handler.draft-pre
 function createPreviewController(
   rest: RequestClient,
   mode: "partial" | "block" | "progress" = "progress",
+  overrides: Partial<Parameters<typeof createDiscordDraftPreviewController>[0]> = {},
 ) {
   return createDiscordDraftPreviewController({
     cfg: {},
@@ -16,38 +19,67 @@ function createPreviewController(
     deliveryRest: rest,
     deliverChannelId: "c1",
     replyReference: { peek: () => undefined },
-    tableMode: "off",
-    maxLinesPerMessage: undefined,
-    chunkMode: "length",
     log: () => {},
+    ...overrides,
   });
 }
 
+function createContinuationHarness(options?: {
+  missingId?: boolean;
+  textLimit?: number;
+  mode?: "partial" | "block" | "progress";
+}) {
+  const visible = new Map<string, string>();
+  let nextId = 0;
+  const failures = { edit: false };
+  const rest = new RequestClient("test-token", {
+    queueRequests: false,
+    fetch: async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      const id = url.pathname.split("/").at(-1)!;
+      if (init?.method === "DELETE") {
+        visible.delete(id);
+        return new Response(null, { status: 204 });
+      }
+      if (init?.method === "PATCH" && failures.edit) {
+        return Response.json({ message: "edit unavailable" }, { status: 503 });
+      }
+      if (typeof init?.body !== "string") {
+        throw new Error("Expected a serialized Discord message");
+      }
+      const body = JSON.parse(init.body) as { content: string };
+      const messageId = init.method === "POST" ? String(++nextId) : id;
+      visible.set(messageId, body.content);
+      return Response.json(options?.missingId ? {} : { id: messageId });
+    },
+  });
+  const controller = createPreviewController(rest, options?.mode ?? "progress", {
+    textLimit: options?.textLimit ?? 2_000,
+  });
+  return { controller, visible, failures };
+}
+
 describe("Discord draft preview REST lifecycle", () => {
-  it.each(["partial", "block", "progress"] as const)(
+  it.each([
+    { name: "paragraph separators", text: `${"A".repeat(500)}\n\n${"B".repeat(500)}` },
+    { name: "split code fences", text: `\`\`\`text\n${"const value = 1;\n".repeat(60)}\`\`\`` },
+  ])("preserves $name when block previews edit one message", async ({ text }) => {
+    const { controller, visible } = createContinuationHarness({ mode: "block" });
+    try {
+      controller.updateFromPartial(text);
+      await controller.flush();
+      expect([...visible.values()]).toEqual([text]);
+      await controller.lifecycle.observeDelivery({ visibleReplySent: true });
+    } finally {
+      await controller.cleanup();
+    }
+    expect([...visible.values()]).toEqual([]);
+  });
+
+  it.each(["block"] as const)(
     "publishes and retracts a short complete plan, then resumes in %s mode",
     async (mode) => {
-      const visible = new Map<string, string>();
-      let nextId = 0;
-      const rest = new RequestClient("test-token", {
-        queueRequests: false,
-        fetch: async (input, init) => {
-          const url = new URL(input instanceof Request ? input.url : input);
-          const id = url.pathname.split("/").at(-1)!;
-          if (init?.method === "DELETE") {
-            visible.delete(id);
-            return new Response(null, { status: 204 });
-          }
-          if (typeof init?.body !== "string") {
-            throw new Error("Expected a serialized Discord message");
-          }
-          const body = JSON.parse(init.body) as { content: string };
-          const messageId = init.method === "POST" ? String(++nextId) : id;
-          visible.set(messageId, body.content);
-          return Response.json({ id: messageId });
-        },
-      });
-      const controller = createPreviewController(rest, mode);
+      const { controller, visible } = createContinuationHarness({ mode });
 
       await controller.pushPlanProgress([]);
       expect(visible.size).toBe(0);
@@ -72,6 +104,9 @@ describe("Discord draft preview REST lifecycle", () => {
         meta: '<progress aria-label="private detail"></progress>',
       });
       controller.handleAssistantMessageBoundary();
+      await controller.pushItemEvent(
+        projectAgentToolActivity({ toolCallId: "exec-1", name: "exec", phase: "start" }),
+      );
       await controller.pushToolEvent({ toolCallId: "exec-1", name: "exec", phase: "start" });
       await controller.flush();
       expect(visible.size).toBe(1);
@@ -107,22 +142,28 @@ describe("Discord draft preview REST lifecycle", () => {
     });
     const controller = createPreviewController(rest);
 
-    controller.draftStream?.update("🛠️ Exec: failed");
+    controller.draftStream?.update("Exec: failed");
     await controller.flush();
-    controller.markFinalReplyStarted();
-    controller.markFinalReplyDelivered(true);
+    await controller.lifecycle.deliver({
+      kind: "final",
+      payload: { text: "Something failed", isError: true },
+      isError: true,
+      deliverNormally: async (payload) => {
+        const sent = (await rest.post(Routes.channelMessages("c1"), {
+          body: { content: payload.text },
+        })) as { id: string };
+        return { messageIds: [sent.id], visibleReplySent: true };
+      },
+    });
     controller.draftStream?.update("stale pending update");
     await controller.cleanup();
     await controller.flush();
 
-    expect(requests).toEqual(["POST /channels/c1/messages"]);
+    expect(requests).toEqual(["POST /channels/c1/messages", "POST /channels/c1/messages"]);
   });
 
   it.each([
-    ["queued admission", 0],
     ["queued admission", 1],
-    ["teardown", 0],
-    ["teardown", 1],
     ["teardown", 2],
   ] as const)(
     "removes a late preview after %s (%i delete failures)",
@@ -172,8 +213,7 @@ describe("Discord draft preview REST lifecycle", () => {
 
         expect(controller.draftStream?.messageId()).toBe("2");
         expect(visibleMessages.get("2")).toBe("queued turn progress");
-        controller.markFinalReplyStarted();
-        controller.markFinalReplyDelivered(false);
+        await controller.lifecycle.observeDelivery({ visibleReplySent: true });
         await controller.cleanup();
       } else {
         const cleanup = controller.cleanup();

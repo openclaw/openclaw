@@ -1,8 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Routing binding helpers resolve configured channel and agent route bindings.
 import { tryResolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
-import { listRouteBindings } from "../config/bindings.js";
-import type { AgentRouteBinding } from "../config/types.agents.js";
+import { isRouteBinding, listConfiguredBindings, listRouteBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeRouteBindingChannelId,
@@ -10,19 +8,13 @@ import {
 } from "./binding-scope.js";
 import { normalizeAgentId } from "./session-key.js";
 
-// Public binding helpers used by routing UI/diagnostics. They expose concrete
-// account ids derived from configured agent route bindings.
-export function listBindings(cfg: OpenClawConfig): AgentRouteBinding[] {
-  return listRouteBindings(cfg);
-}
-
 export function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): string[] {
   const normalizedChannel = normalizeRouteBindingChannelId(channelId);
   if (!normalizedChannel) {
     return [];
   }
   const ids = new Set<string>();
-  for (const binding of listBindings(cfg)) {
+  for (const binding of listRouteBindings(cfg)) {
     const resolved = resolveNormalizedRouteBindingMatch(binding, {
       includeImplicitDefaultAccount: true,
     });
@@ -47,7 +39,10 @@ export function resolveDefaultAgentBoundAccountId(
     return null;
   }
   const defaultAgentId = normalizeAgentId(ownerAgentId);
-  for (const binding of listBindings(cfg)) {
+  for (const binding of listConfiguredBindings(cfg)) {
+    if (!isRouteBinding(binding)) {
+      continue;
+    }
     const resolved = resolveNormalizedRouteBindingMatch(binding);
     if (
       !resolved ||
@@ -63,7 +58,7 @@ export function resolveDefaultAgentBoundAccountId(
 
 export function buildChannelAccountBindings(cfg: OpenClawConfig) {
   const map = new Map<string, Map<string, string[]>>();
-  for (const binding of listBindings(cfg)) {
+  for (const binding of listRouteBindings(cfg)) {
     const resolved = resolveNormalizedRouteBindingMatch(binding, {
       includeImplicitDefaultAccount: true,
     });
@@ -84,7 +79,6 @@ export function buildChannelAccountBindings(cfg: OpenClawConfig) {
 }
 
 export function resolvePreferredAccountId(params: {
-  accountIds: string[];
   defaultAccountId: string;
   boundAccounts: string[];
 }): string {

@@ -4,10 +4,16 @@ import type {
   SessionsCatalogHostEvent,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import {
+  isAgentDatabaseInspectionPendingError,
+  isAwaitingGatewayFailure,
+  resolveGatewayReadRetryDelayMs,
+} from "../lib/gateway-availability.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { createSessionEventRefreshCoordinator } from "../lib/sessions/event-refresh-coordinator.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
@@ -19,6 +25,7 @@ import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 
 const SESSION_CATALOG_SAFETY_REFRESH_MS = 10 * 60_000;
 const SESSION_CATALOG_STABLE_REFRESH_MS = 30_000;
+const SESSION_CATALOG_MAX_RETRIES = 3;
 
 export function sessionCatalogListClient(
   snapshot: ApplicationGatewaySnapshot | undefined,
@@ -26,9 +33,8 @@ export function sessionCatalogListClient(
 ): GatewayBrowserClient | null {
   if (
     !connected ||
-    snapshot?.phase !== "connected" ||
-    !snapshot.client ||
-    isGatewayMethodAdvertised(snapshot, "sessions.catalog.list") !== true
+    !snapshot?.client ||
+    !canCallGatewayMethod(snapshot, "sessions.catalog.list", "operator.read")
   ) {
     return null;
   }
@@ -86,6 +92,44 @@ export class SessionCatalogLiveState {
   private readonly requestChangedHostKeys = new Set<string>();
   private readonly warnedRequestErrors = new Set<string>();
   private requestOwner: symbol | null = null;
+  private retryAttempts = 0;
+  private retryAt = 0;
+  startupPending = false;
+
+  get retryDelayMs() {
+    return Math.max(0, this.retryAt - Date.now());
+  }
+
+  resetRetry() {
+    this.retryAttempts = 0;
+    this.retryAt = 0;
+    this.startupPending = false;
+  }
+
+  retryRequest(error: unknown): number | null {
+    this.startupPending = isAgentDatabaseInspectionPendingError(error);
+    if (this.startupPending) {
+      const delay = resolveGatewayReadRetryDelayMs(error, this.retryAttempts++);
+      this.retryAt = Date.now() + delay;
+      return delay;
+    }
+    if (
+      !(error instanceof GatewayRequestError) ||
+      !error.retryable ||
+      isAwaitingGatewayFailure(error, null) ||
+      this.retryAttempts >= SESSION_CATALOG_MAX_RETRIES
+    ) {
+      this.resetRetry();
+      return null;
+    }
+    const serverDelay =
+      typeof error.retryAfterMs === "number" && Number.isFinite(error.retryAfterMs)
+        ? error.retryAfterMs
+        : 0;
+    const delay = Math.max(serverDelay, 1_000 * 2 ** this.retryAttempts++);
+    this.retryAt = Date.now() + delay;
+    return delay;
+  }
 
   cancelTimer() {
     const handle = this.timer;
@@ -98,6 +142,7 @@ export class SessionCatalogLiveState {
   clear() {
     this.refreshScope = {};
     this.cancelScheduledRefreshes();
+    this.resetRetry();
     this.requestGeneration = null;
     this.requestOwner = null;
     this.progressSequence = 0;
@@ -118,7 +163,7 @@ export class SessionCatalogLiveState {
         const key = sessionCatalogHostKey(catalog.id, host.hostId);
         currentKeys.add(key);
         const discovery = this.discoveryPages.get(key);
-        if (!discovery || host.error || catalog.error) {
+        if (!discovery || host.pending || host.error || catalog.error) {
           return host;
         }
         // Recheck the head on each refresh. A changed anchor or newly visible row
@@ -151,6 +196,13 @@ export class SessionCatalogLiveState {
       hosts: catalog.hosts.map((host) => {
         const hostKey = sessionCatalogHostKey(catalog.id, host.hostId);
         const progressiveHost = currentHosts.get(hostKey);
+        if (host.pending) {
+          return this.requestChangedHostKeys.has(hostKey) &&
+            progressiveHost &&
+            !progressiveHost.pending
+            ? progressiveHost
+            : preserveExpandedCatalogHost(host, progressiveHost);
+        }
         return host.error &&
           this.requestChangedHostKeys.has(hostKey) &&
           progressiveHost &&
@@ -198,12 +250,7 @@ export class SessionCatalogLiveState {
     const progressId = generateUUID();
     const progressSequence = ++this.progressSequence;
     this.progressSequences.set(progressId, progressSequence);
-    if (this.progressSequences.size > 8) {
-      const oldest = this.progressSequences.keys().next().value;
-      if (oldest) {
-        this.progressSequences.delete(oldest);
-      }
-    }
+    pruneMapToMaxSize(this.progressSequences, 8);
     return { progressId, progressSequence, requestOwner };
   }
 
@@ -284,13 +331,16 @@ export class SessionCatalogLiveState {
       const discovery = this.discoveryPages.get(hostKey);
       if (
         discovery &&
+        !freshHost.pending &&
         !freshHost.error &&
         (freshHost.sessions.length > 0 || freshHost.nextCursor !== discovery.headCursor)
       ) {
         this.discoveryPages.delete(hostKey);
       }
       const mergedHost =
-        (params.pageDepths.get(hostKey) ?? 0) > 0 || this.discoveryPages.has(hostKey)
+        freshHost.pending ||
+        (params.pageDepths.get(hostKey) ?? 0) > 0 ||
+        this.discoveryPages.has(hostKey)
           ? preserveExpandedCatalogHost(freshHost, currentHost)
           : freshHost;
       const hosts = currentHost
@@ -384,8 +434,14 @@ export async function refreshSessionCatalogsLive(params: {
   if (live.requestGeneration === generation) {
     return;
   }
+  // Events and returning tabs share the same cooldown as the scheduled retry.
+  if (live.retryDelayMs > 0) {
+    live.schedule(live.retryDelayMs, params.connected(), () => void params.refresh());
+    return;
+  }
   const { progressId, progressSequence, requestOwner } = live.beginRequest(generation);
   let refetchOwner: symbol | null = null;
+  let retryDelayMs: number | null = null;
   const requestIsCurrent = () =>
     live.ownsRequest(requestOwner) &&
     generation === params.currentGeneration() &&
@@ -396,6 +452,7 @@ export async function refreshSessionCatalogsLive(params: {
       agentId: params.agentId,
       limitPerHost: 40,
       progressId,
+      allowPartialResults: true,
     });
     if (!requestIsCurrent() || !result?.catalogs) {
       return;
@@ -414,6 +471,7 @@ export async function refreshSessionCatalogsLive(params: {
     if (!revisionIsCurrent()) {
       return;
     }
+    live.resetRetry();
     params.applyFinal(
       catalogs,
       new Set([...params.catalogs(), ...catalogs].map((catalog) => catalog.id)),
@@ -425,8 +483,13 @@ export async function refreshSessionCatalogsLive(params: {
   } catch (error) {
     // A transient refresh failure must not collapse already visible or expanded pages.
     if (revisionIsCurrent()) {
-      live.warnRequestError(error);
-      params.applyError(error);
+      retryDelayMs = live.retryRequest(error);
+      if (live.startupPending) {
+        params.applyError(error);
+      } else if (retryDelayMs === null) {
+        live.warnRequestError(error);
+        params.applyError(error);
+      }
     }
   } finally {
     live.endRefetch(refetchOwner);
@@ -437,13 +500,15 @@ export async function refreshSessionCatalogsLive(params: {
     if (ownsRequest && requestIsCurrent() && params.connected()) {
       const pending = live.refreshPending;
       live.refreshPending = false;
-      const interval = params.catalogChangedEvents
-        ? SESSION_CATALOG_SAFETY_REFRESH_MS
-        : SESSION_CATALOG_STABLE_REFRESH_MS;
+      const interval =
+        retryDelayMs ??
+        (params.catalogChangedEvents
+          ? SESSION_CATALOG_SAFETY_REFRESH_MS
+          : SESSION_CATALOG_STABLE_REFRESH_MS);
       live.schedule(interval, params.connected(), () => {
         void params.refresh();
       });
-      if (pending) {
+      if (pending && retryDelayMs === null) {
         live.scheduleActivation(params.refresh);
       }
     }

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
+import { createTestGatewayScheduler } from "../../../test-utils/gateway-scheduler-clock.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -178,10 +179,13 @@ async function withSettlementFixture(
 describe("MCP run lifetime", () => {
   it("retires a run-owned transient successor without a durable commit", async () => {
     await withSettlementFixture(async (fixture) => {
-      const { getOrCreateSessionMcpRuntime } =
+      const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
         await import("../../agent-bundle-mcp-manager.test-support.js");
-      const { getSessionMcpRuntimeManagerForTesting } =
+      const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
         await import("../../agent-bundle-mcp-manager-api.js");
+      const scheduler = createTestGatewayScheduler();
+      onTestFinished(() => scheduler.stop());
+      await setSessionMcpRuntimeScheduler(scheduler);
       const manager = getSessionMcpRuntimeManagerForTesting();
       const sessionId = randomUUID();
       fixture.input.runInput.runParams.cleanupBundleMcpOnRunEnd = true;
@@ -196,7 +200,7 @@ describe("MCP run lifetime", () => {
           sessionId,
           sessionKey: fixture.target.sessionKey,
           workspaceDir: fixture.input.runInput.runParams.workspaceDir,
-          cfg: { mcp: { servers: {} } },
+          cfg: unopenedMcpConfig,
           manifestRegistry: { plugins: [] },
         });
         await fixture.settle();
@@ -209,10 +213,13 @@ describe("MCP run lifetime", () => {
 
   it.each([false, true])("retires only run-owned IDs when cleanup is %s", async (cleanup) => {
     await withSettlementFixture(async (fixture) => {
-      const { getOrCreateSessionMcpRuntime } =
+      const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
         await import("../../agent-bundle-mcp-manager.test-support.js");
-      const { getSessionMcpRuntimeManagerForTesting } =
+      const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
         await import("../../agent-bundle-mcp-manager-api.js");
+      const scheduler = createTestGatewayScheduler();
+      onTestFinished(() => scheduler.stop());
+      await setSessionMcpRuntimeScheduler(scheduler);
       const manager = getSessionMcpRuntimeManagerForTesting();
       fixture.input.runInput.runParams.cleanupBundleMcpOnRunEnd = cleanup;
       const create = (sessionId: string) =>
@@ -220,7 +227,7 @@ describe("MCP run lifetime", () => {
           sessionId,
           sessionKey: fixture.target.sessionKey,
           workspaceDir: fixture.input.runInput.runParams.workspaceDir,
-          cfg: { mcp: { servers: {} } },
+          cfg: unopenedMcpConfig,
           manifestRegistry: { plugins: [] },
         });
       try {

@@ -8,8 +8,8 @@ import {
   MAX_CONNECT_CHALLENGE_TIMEOUT_MS,
   MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
   resolveConnectChallengeTimeoutMs,
+  resolvePreauthHandshakeTimeoutMs,
 } from "../../packages/gateway-client/src/timeouts.js";
-import { resolvePreauthHandshakeTimeoutMs } from "./handshake-timeouts.js";
 
 describe("gateway handshake timeouts", () => {
   test("defaults connect challenge timeout to the shared pre-auth handshake timeout", () => {

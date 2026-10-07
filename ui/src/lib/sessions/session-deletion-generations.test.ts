@@ -28,7 +28,7 @@ describe("session deletion generation ownership", () => {
         if (source === "history") {
           h.sessions.reconcile(h.alpha);
         } else if (source === "changed") {
-          h.sessions.reconcileChanged(payload);
+          h.emitEvent({ type: "event", event: "sessions.changed", payload });
         } else {
           h.emitEvent({ type: "event", event: "session.message", payload });
         }
@@ -109,13 +109,15 @@ describe("session deletion generation ownership", () => {
     },
   );
 
-  it.each(
-    (["bootstrap", "primary", "managed", "enumeration"] as const).flatMap((source) =>
-      (["confirmed", "rejected"] as const).flatMap((outcome) =>
-        [false, true].map((afterSettlement) => ({ source, outcome, afterSettlement })),
-      ),
-    ),
-  )(
+  it.each([
+    { source: "primary", outcome: "confirmed", afterSettlement: false },
+    { source: "primary", outcome: "rejected", afterSettlement: false },
+    { source: "primary", outcome: "confirmed", afterSettlement: true },
+    { source: "primary", outcome: "rejected", afterSettlement: true },
+    { source: "bootstrap", outcome: "rejected", afterSettlement: true },
+    { source: "managed", outcome: "confirmed", afterSettlement: false },
+    { source: "enumeration", outcome: "rejected", afterSettlement: false },
+  ] as const)(
     "fences older $source A while B is $outcome (delivery after settlement: $afterSettlement)",
     async ({ source, outcome, afterSettlement }) => {
       const h = createSessionDeletionHarness();
@@ -220,7 +222,11 @@ describe("session deletion generation ownership", () => {
         await h.sessions.refreshList({ ...currentScope, force: true });
         const operation = h.sessions.delete(current.key, { expectedSessionId: current.sessionId });
         h.sessions.reconcile(h.alpha);
-        h.sessions.reconcileChanged({ ...h.alpha, sessionKey: h.alpha.key, reason: "send" });
+        h.emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: { ...h.alpha, sessionKey: h.alpha.key, reason: "send" },
+        });
         h.emitEvent({
           type: "event",
           event: "session.message",

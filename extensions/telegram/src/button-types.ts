@@ -1,4 +1,3 @@
-// Telegram plugin module implements button types behavior.
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
   legacyInteractiveReplyToPresentation,
@@ -122,11 +121,16 @@ function toTelegramInlineButton(
       ? { text: button.label, web_app: { url: action.url }, style }
       : recordDroppedControl(button, options, "web_app_unavailable");
   }
+  const callbackButton = (
+    data: string | undefined,
+    reason: "invalid_action" | "question_context_unavailable" = "invalid_action",
+    candidate?: string,
+  ): TelegramInlineButton | undefined =>
+    data
+      ? { text: button.label, callback_data: data, style }
+      : recordDroppedControl(button, options, reason, candidate);
   if (action.type === "approval") {
-    const callbackData = buildTelegramApprovalCallbackData(action);
-    return callbackData
-      ? { text: button.label, callback_data: callbackData, style }
-      : recordDroppedControl(button, options, "invalid_action");
+    return callbackButton(buildTelegramApprovalCallbackData(action));
   }
   if (action.type === "question") {
     const hasQuestionContext = options?.questionOptionIndices?.has(action.questionId) === true;
@@ -134,9 +138,7 @@ function toTelegramInlineButton(
       const callbackData = hasQuestionContext
         ? buildTelegramQuestionCustomInputCallbackData(action.questionId)
         : undefined;
-      return callbackData
-        ? { text: button.label, callback_data: callbackData, style }
-        : recordDroppedControl(button, options, "question_context_unavailable");
+      return callbackButton(callbackData, "question_context_unavailable");
     }
     const optionIndex = resolveAskUserQuestionOptionIndex({
       questionOptionIndices: options?.questionOptionIndices,
@@ -146,15 +148,10 @@ function toTelegramInlineButton(
     if (optionIndex === undefined) {
       return recordDroppedControl(button, options, "question_context_unavailable");
     }
-    const callbackData = buildTelegramQuestionCallbackData({
-      questionId: action.questionId,
-      optionIndex,
-    });
-    if (!callbackData) {
-      return recordDroppedControl(button, options, "invalid_action");
-    }
     // Presentation order is not authoritative; only Gateway-owned option order can choose an index.
-    return { text: button.label, callback_data: callbackData, style };
+    return callbackButton(
+      buildTelegramQuestionCallbackData({ questionId: action.questionId, optionIndex }),
+    );
   }
   if (action.type === "command") {
     const command = rewriteTelegramApprovalDecisionAlias(action.command.trim());
@@ -167,9 +164,7 @@ function toTelegramInlineButton(
     const callbackData =
       nativeCallbackData ??
       (parseExecApprovalCommandText(command) ? sanitizeTelegramCallbackData(command) : undefined);
-    return callbackData
-      ? { text: button.label, callback_data: callbackData, style }
-      : recordDroppedControl(button, options, "invalid_action", nativeCandidate);
+    return callbackButton(callbackData, "invalid_action", nativeCandidate);
   }
   // Reserve the full approval prefix, including malformed values, so legacy
   // plugin callbacks cannot be consumed by the approval handler.
@@ -181,10 +176,11 @@ function toTelegramInlineButton(
   const callbackDataCandidate = needsOpaqueEnvelope
     ? buildTelegramOpaqueCallbackData(action.value)
     : action.value;
-  const callbackData = sanitizeTelegramCallbackData(callbackDataCandidate);
-  return callbackData
-    ? { text: button.label, callback_data: callbackData, style }
-    : recordDroppedControl(button, options, "invalid_action", callbackDataCandidate);
+  return callbackButton(
+    sanitizeTelegramCallbackData(callbackDataCandidate),
+    "invalid_action",
+    callbackDataCandidate,
+  );
 }
 
 function chunkInteractiveButtons(
@@ -217,7 +213,6 @@ function chunkInteractiveButtons(
   flush();
 }
 
-/** Convert portable presentation controls to Telegram inline keyboard rows. */
 export function buildTelegramPresentationButtons(
   presentation?: MessagePresentation,
   options?: TelegramButtonBuildOptions,
@@ -265,4 +260,41 @@ export function resolveTelegramInlineButtons(
     ) ??
     buildTelegramPresentationButtons(normalizeMessagePresentation(params.presentation), options)
   );
+}
+export function resolveTelegramButtonsFromParams(
+  params: Record<string, unknown>,
+  presentation = normalizeMessagePresentation(params.presentation),
+  options?: TelegramButtonBuildOptions,
+) {
+  return resolveTelegramInlineButtons(
+    {
+      presentation,
+      interactive: params.interactive,
+    },
+    options,
+  );
+}
+export function buildTelegramControlDegradation(
+  controls: readonly TelegramDroppedControl[],
+  fallbackDelivered: boolean,
+) {
+  if (controls.length === 0) {
+    return undefined;
+  }
+  const reasons = [...new Set(controls.map((control) => control.reason))];
+  const hasOverflow = reasons.includes("callback_data_too_long");
+  return {
+    warning: fallbackDelivered
+      ? `Telegram delivered ${controls.length} unencodable control${controls.length === 1 ? "" : "s"} as readable text.`
+      : `Telegram could not deliver ${controls.length} control${controls.length === 1 ? "" : "s"}.`,
+    degradedDelivery: {
+      droppedControls: controls.length,
+      fallback: fallbackDelivered ? "text" : "not_delivered",
+      reasons,
+      ...(hasOverflow ? { callbackDataLimitBytes: TELEGRAM_CALLBACK_DATA_MAX_BYTES } : {}),
+      guidance: hasOverflow
+        ? `Shorten callback data to at most ${TELEGRAM_CALLBACK_DATA_MAX_BYTES} UTF-8 bytes and retry if clickable controls are required.`
+        : "Retry with a supported control action if clickable controls are required.",
+    },
+  };
 }

@@ -4,10 +4,12 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-
-let sendMessageTelegram: typeof import("./send.js").sendMessageTelegram;
-let resetTelegramClientOptionsCacheForTests: typeof import("./send.js").resetTelegramClientOptionsCacheForTests;
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  editMessageTelegram,
+  resetTelegramClientOptionsCacheForTests,
+  sendMessageTelegram,
+} from "./send.js";
 
 describe("telegram transport cache eviction over real sockets", () => {
   let server: Server;
@@ -17,6 +19,25 @@ describe("telegram transport cache eviction over real sockets", () => {
   let sendMessageCalls = 0;
   let slowResponse: ReturnType<typeof createDeferred<() => void>> | undefined;
 
+  beforeEach(() => {
+    // This fixture owns its loopback sockets, not the operator's proxy route.
+    for (const key of [
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+      "NO_PROXY",
+      "no_proxy",
+      "OPENCLAW_PROXY_URL",
+      "OPENCLAW_PROXY_ACTIVE",
+      "OPENCLAW_DEBUG_PROXY_ENABLED",
+    ]) {
+      vi.stubEnv(key, undefined);
+    }
+  });
+
   beforeAll(async () => {
     server = createServer((req, res) => {
       req.on("end", () => {
@@ -25,8 +46,8 @@ describe("telegram transport cache eviction over real sockets", () => {
           res.setHeader("content-type", "application/json");
           res.end(JSON.stringify({ ok: true, result }));
         };
-        if (url.includes("/sendMessage")) {
-          requestSockets.set(url, req.socket);
+        if (url.includes("/sendMessage") || url.includes("/editMessageText")) {
+          requestSockets.set(url.slice(0, url.lastIndexOf("/")), req.socket);
           sendMessageCalls += 1;
           if (slowResponse) {
             slowResponse.resolve(() => {
@@ -56,7 +77,6 @@ describe("telegram transport cache eviction over real sockets", () => {
       server.listen(0, "127.0.0.1", resolve);
     });
     apiRoot = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    ({ sendMessageTelegram, resetTelegramClientOptionsCacheForTests } = await import("./send.js"));
   });
 
   afterAll(async () => {
@@ -87,14 +107,19 @@ describe("telegram transport cache eviction over real sockets", () => {
       },
     };
     const socketForAccount = (account: number) => {
-      const socket = requestSockets.get(`/bot10${account}:e2e-token-${account}/sendMessage`);
+      const socket = requestSockets.get(`/bot10${account}:e2e-token-${account}`);
       if (!socket) {
         throw new Error(`Telegram socket for acct-${account} was not captured`);
       }
       return socket;
     };
-    const send = async (account: number, text: string) => {
-      const result = await sendMessageTelegram("123", text, { cfg, accountId: `acct-${account}` });
+    // Edits retain idle pooling; new messages deliberately do not. Exercise both
+    // through the same cached account transport and its active-operation lease.
+    const send = async (account: number, text: string, create = false) => {
+      const opts = { cfg, accountId: `acct-${account}` };
+      const result = create
+        ? await sendMessageTelegram("123", text, opts)
+        : await editMessageTelegram("123", 1, text, opts);
       expect(result.messageId).toBeTruthy();
       return socketForAccount(account);
     };
@@ -115,7 +140,7 @@ describe("telegram transport cache eviction over real sockets", () => {
     // Put acct-0 (the oldest cache entry) mid-flight on its replacement socket.
     const inFlight = createDeferred<() => void>();
     slowResponse = inFlight;
-    const slowSend = send(0, "slow");
+    const slowSend = send(0, "slow", true);
     const releaseResponse = await inFlight.promise;
     slowResponse = undefined;
     const activeSocket = socketForAccount(0);
@@ -149,7 +174,7 @@ describe("telegram transport cache eviction over real sockets", () => {
     const idleBeforeReset = await send(7, "idle before reset");
     const resetInFlight = createDeferred<() => void>();
     slowResponse = resetInFlight;
-    const resetSend = send(6, "active during reset");
+    const resetSend = send(6, "active during reset", true);
     const releaseResetResponse = await resetInFlight.promise;
     slowResponse = undefined;
     const activeBeforeReset = socketForAccount(6);

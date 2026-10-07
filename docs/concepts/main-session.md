@@ -54,6 +54,14 @@ the Home agent additional access to another agent's sessions or files.
 The main session is not just a chat log; it is the place where your agent's
 world converges:
 
+- **New sessions.** By default, creating a session queues a system notice in its
+  agent's Home conversation with the session key and available title, creator,
+  and creation source. Home sees it on its next turn or scheduled heartbeat;
+  creation does not trigger an extra wake-up. Set `session.notifyOnCreate: false`
+  to opt out. Home itself, drafts, incognito sessions, hidden internal sessions,
+  and scheduled cron runs are excluded. Resetting or reopening an existing
+  session does not send another creation notice. These notices use the bounded,
+  in-memory system-event queue and do not subscribe Home to future activity.
 - **Group activity.** Under `session.groupScope: "per-group"` (the default),
   group and room sessions stay isolated while the main session automatically watches them.
   Activity queues up as compact notices — coalesced per conversation, never

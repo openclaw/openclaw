@@ -1,5 +1,10 @@
 import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type {
+  NodeWorkerEnvironmentStopInput,
+  NodeWorkerLaunchInput,
+  NodeWorkerSupervisorIdentity,
+} from "../worker/node-supervisor-protocol.js";
 import type { NodeWorkerContainerEngine } from "./node-worker-container-engine.js";
 import type { NodeWorkerTerminalOutcome } from "./node-worker-launch-observation.js";
 import type {
@@ -9,14 +14,25 @@ import type {
   NodeWorkerTerminalState,
 } from "./node-worker-launch-store.js";
 import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
+import type { NodeWorkerNativeInferenceSnapshot } from "./node-worker-native-inference.js";
 import type { NodeWorkerCredentialScrubber } from "./node-worker-output.js";
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
-import type { NodeWorkerLaunchInput } from "./node-worker-supervisor-contract.js";
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
+
+export const NODE_WORKER_STOP_GRACE_MS = 1_000;
+export const NODE_WORKER_FORCE_STOP_WAIT_MS = 4_000;
 
 export type NodeWorkerStopState = Extract<NodeWorkerTerminalState, "cancelled" | "interrupted">;
 
 export type NodeWorkerEnvironmentBinding = ReturnType<typeof nodeWorkerEnvironmentBinding>;
+
+export type NodeWorkerPendingAdmission = {
+  binding: NodeWorkerEnvironmentBinding;
+  identity: NodeWorkerSupervisorIdentity;
+  abort: AbortController;
+  signal: AbortSignal;
+  done: Promise<NodeWorkerLaunchReceipt>;
+};
 
 /** Only environment facts survive a turn; descriptors contain disposable admission authority. */
 export function nodeWorkerEnvironmentBinding(input: NodeWorkerLaunchInput) {
@@ -32,6 +48,7 @@ export function nodeWorkerEnvironmentBinding(input: NodeWorkerLaunchInput) {
     workspaceDir: assignment.workspaceDir,
     containmentRoot: assignment.workerContainmentRoot,
     permissionMode: assignment.permissionMode,
+    inference: assignment.inference,
   };
 }
 
@@ -42,14 +59,8 @@ export function nodeWorkerEnvironmentKey(
 }
 
 export function nodeWorkerEnvironmentMatches(
-  binding: Pick<
-    NodeWorkerEnvironmentBinding,
-    "gatewayNamespace" | "environmentId" | "sessionId" | "ownerEpoch"
-  >,
-  expected: Pick<
-    NodeWorkerEnvironmentBinding,
-    "gatewayNamespace" | "environmentId" | "sessionId" | "ownerEpoch"
-  >,
+  binding: NodeWorkerEnvironmentStopInput,
+  expected: NodeWorkerEnvironmentStopInput,
 ): boolean {
   return (
     binding.gatewayNamespace === expected.gatewayNamespace &&
@@ -59,12 +70,18 @@ export function nodeWorkerEnvironmentMatches(
   );
 }
 
-export function createNodeWorkerActiveTurn(claim: NodeWorkerLaunchClaim) {
+type NodeWorkerActiveTurn = {
+  claim: NodeWorkerLaunchClaim;
+  done: Promise<void>;
+  settle: () => void;
+  cancelled: boolean;
+  settling?: Promise<void>;
+};
+
+export function createNodeWorkerActiveTurn(claim: NodeWorkerLaunchClaim): NodeWorkerActiveTurn {
   const { promise, resolve } = createDeferredCore();
   return { claim, done: promise, settle: resolve, cancelled: false };
 }
-
-type NodeWorkerActiveTurn = ReturnType<typeof createNodeWorkerActiveTurn>;
 
 type NodeWorkerActiveBase = {
   binding: NodeWorkerEnvironmentBinding;
@@ -85,16 +102,48 @@ export type NodeWorkerRunningChild = NodeWorkerActiveBase & {
   connectionFailure: { errorText?: string };
   turn?: NodeWorkerActiveTurn;
   retiring: boolean;
+  idleGeneration?: number;
+  retention?:
+    | { reason: "background"; turnId: string }
+    | { reason: "idle"; turnId: string; since: number; timer: NodeJS.Timeout };
   stopState?: NodeWorkerStopState;
   containerCleanup?: Promise<void>;
   deferredOutcome?: NodeWorkerTerminalOutcome;
 };
 
+export function clearNodeWorkerRetention(active: NodeWorkerRunningChild): void {
+  if (active.retention?.reason === "idle") {
+    clearTimeout(active.retention.timer);
+  }
+  active.retention = undefined;
+}
+
 export type NodeWorkerObservedTerminal = NodeWorkerActiveBase & {
   state: "observed";
   outcome: NodeWorkerTerminalOutcome;
+  turn?: NodeWorkerActiveTurn;
   cancelledTurn?: NodeWorkerLaunchClaim;
+  reconciliation?: Promise<NodeWorkerLaunchReceipt>;
 };
+
+export function createNodeWorkerObservedTerminal(
+  active: NodeWorkerRunningChild,
+  outcome: NodeWorkerTerminalOutcome,
+): NodeWorkerObservedTerminal {
+  return {
+    state: "observed",
+    binding: active.binding,
+    gatewayNamespace: active.gatewayNamespace,
+    launchId: active.launchId,
+    planHash: active.planHash,
+    supervisor: active.supervisor,
+    worker: active.worker,
+    ...(active.container ? { container: active.container } : {}),
+    outcome,
+    ...(active.turn ? { turn: active.turn } : {}),
+    ...(!active.stopState && active.turn?.cancelled ? { cancelledTurn: active.turn.claim } : {}),
+  };
+}
 
 export type NodeWorkerActiveOwnership = NodeWorkerRunningChild | NodeWorkerObservedTerminal;
 
@@ -107,6 +156,8 @@ export type NodeWorkerSupervisorOptions = {
   workspace?: NodeWorkerWorkspaceRuntime;
   containerEngine?: NodeWorkerContainerEngine;
   containerImage?: string;
+  /** Node-local canonical models captured before the runtime yields. */
+  nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
 };
 
 /** Match both process bookkeeping and exact authoritative container identity. */

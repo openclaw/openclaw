@@ -284,7 +284,11 @@ internal class SystemAgentChatController(
             markRouteChanged(requestGeneration)
             return@launch
           }
-          val result = parseResult(json.parseToJsonElement(response).jsonObject)
+          val result = json.parseToJsonElement(response).jsonObject
+          val reply = result["reply"]?.jsonPrimitive?.contentOrNull ?: ""
+          val action = result["action"]?.jsonPrimitive?.contentOrNull ?: "none"
+          val sensitive = result["sensitive"]?.jsonPrimitive?.booleanOrNull
+          val agentId = result["agentId"]?.jsonPrimitive?.contentOrNull
           if (!isCurrent(requestGeneration)) return@launch
           if (!lease.isCurrent()) {
             markRouteChanged(requestGeneration)
@@ -299,13 +303,13 @@ internal class SystemAgentChatController(
                     it.messages +
                       SystemAgentChatMessage(
                         role = SystemAgentChatMessage.Role.Assistant,
-                        text = result.reply,
-                        question = parseQuestion(result.question),
+                        text = reply,
+                        question = parseQuestion(result["question"]),
                       ),
                   sending = false,
-                  expectsSensitiveReply = result.sensitive == true,
+                  expectsSensitiveReply = sensitive == true,
                   errorText = null,
-                  handoff = if (result.action == "open-agent") SystemAgentChatHandoff(result.agentId) else null,
+                  handoff = if (action == "open-agent") SystemAgentChatHandoff(agentId) else null,
                 )
               }
             }
@@ -349,10 +353,8 @@ internal class SystemAgentChatController(
 
   private fun isCurrent(requestGeneration: Long): Boolean = generation.get() == requestGeneration
 
-  private fun markRouteChanged(requestGeneration: Long? = null) {
-    if (requestGeneration == null) {
-      invalidateRequest()
-    } else if (!generation.compareAndSet(requestGeneration, requestGeneration + 1)) {
+  private fun markRouteChanged(requestGeneration: Long) {
+    if (!generation.compareAndSet(requestGeneration, requestGeneration + 1)) {
       return
     }
     _state.update {
@@ -365,23 +367,6 @@ internal class SystemAgentChatController(
       )
     }
   }
-
-  private data class Result(
-    val reply: String,
-    val action: String,
-    val sensitive: Boolean?,
-    val agentId: String?,
-    val question: JsonElement?,
-  )
-
-  private fun parseResult(root: JsonObject): Result =
-    Result(
-      reply = root["reply"]?.jsonPrimitive?.contentOrNull ?: "",
-      action = root["action"]?.jsonPrimitive?.contentOrNull ?: "none",
-      sensitive = root["sensitive"]?.jsonPrimitive?.booleanOrNull,
-      agentId = root["agentId"]?.jsonPrimitive?.contentOrNull,
-      question = root["question"],
-    )
 
   private fun parseQuestion(value: JsonElement?): SystemAgentChatQuestion? {
     val root = value as? JsonObject ?: return null
@@ -400,7 +385,7 @@ internal class SystemAgentChatController(
     val options = root["options"] as? JsonArray ?: return null
     if (header.isEmpty() || question.isEmpty() || options.size !in 2..4) return null
     val parsed =
-      options.mapNotNull { element ->
+      options.map { element ->
         val option = element as? JsonObject ?: return null
         val label =
           option["label"]
@@ -426,7 +411,7 @@ internal class SystemAgentChatController(
           recommended = option["recommended"]?.jsonPrimitive?.booleanOrNull == true,
         )
       }
-    if (parsed.size != options.size || parsed.map { it.label.lowercase() }.toSet().size != parsed.size) return null
+    if (parsed.map { it.label.lowercase() }.toSet().size != parsed.size) return null
     if (parsed.count { it.recommended } > 1) return null
     return SystemAgentChatQuestion(header = header, question = question, options = parsed)
   }

@@ -14,12 +14,50 @@ function workSession(): SidebarRecentSession {
 }
 
 describe("resolveSidebarSessionSubtitle", () => {
+  it("shows tool progress in previews without displacing critical status", () => {
+    const params = {
+      session: { ...workSession(), hasActiveRun: true, activeRunIds: ["run-1"] },
+      hasDisplay: false,
+      displaySubtitle: undefined,
+      sidebarLiveActivity: true,
+      showPreview: true,
+      narrationLine: "Earlier assistant narration",
+      toolActivity: { name: "exec", text: "Running focused tests" },
+    };
+    expect(resolveSidebarSessionSubtitle(params)).toEqual({
+      subtitle: "Running focused tests",
+      narration: undefined,
+      toolName: "exec",
+    });
+    expect(resolveSidebarSessionSubtitle({ ...params, showPreview: false })).toEqual({
+      subtitle: undefined,
+      narration: undefined,
+    });
+    expect(
+      resolveSidebarSessionSubtitle({
+        ...params,
+        observerDigest: {
+          runId: "run-1",
+          headline: "Needs a credential",
+          health: "stuck",
+          revision: 1,
+          updatedAt: 2000,
+        },
+      }).subtitle,
+    ).toBe("Needs a credential");
+    expect(
+      resolveSidebarSessionSubtitle({
+        ...params,
+        session: { ...params.session, attention: { kind: "question", requests: [] } },
+      }).subtitle,
+    ).toBeUndefined();
+  });
+
   it("does not fall back to a backing work subtitle when catalog display omits one", () => {
     expect(
       resolveSidebarSessionSubtitle({
         session: workSession(),
         hasDisplay: true,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: undefined,
@@ -32,7 +70,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session: { ...workSession(), status: "running" },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: "Still running",
@@ -45,7 +82,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session: { ...workSession(), hasActiveRun: true, status: "queued" },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: undefined,
@@ -56,8 +92,6 @@ describe("resolveSidebarSessionSubtitle", () => {
   it.each(["stuck", "waiting-on-user"] as const)(
     "keeps a %s observer headline when previews are hidden",
     (health) => {
-      // isCriticalObserverHealth owns these two states; the chat pane announces them
-      // too, so a display preference must not silence them in the sidebar.
       expect(
         resolveSidebarSessionSubtitle({
           session: {
@@ -67,7 +101,6 @@ describe("resolveSidebarSessionSubtitle", () => {
             status: "running",
           },
           hasDisplay: false,
-          displaySubtitle: undefined,
           sidebarLiveActivity: true,
           showPreview: false,
           narrationLine: "Using bash",
@@ -93,7 +126,6 @@ describe("resolveSidebarSessionSubtitle", () => {
           status: "running",
         },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: false,
         narrationLine: undefined,
@@ -113,7 +145,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session: { ...workSession(), hasActiveRun: true, status: "queued" },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: false,
         narrationLine: undefined,
@@ -141,7 +172,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session: { ...session, ...overrides },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: "Using test runner",
@@ -162,7 +192,6 @@ describe("resolveSidebarSessionSubtitle", () => {
           observerDigest: undefined,
         },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: "Using test runner",
@@ -182,7 +211,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session,
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: "Using test runner",
@@ -222,7 +250,6 @@ describe("resolveSidebarSessionSubtitle", () => {
           lastReadAt: 1_999,
         },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: undefined,
@@ -246,7 +273,6 @@ describe("resolveSidebarSessionSubtitle", () => {
           lastReadAt: 2_000,
         },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: undefined,
@@ -271,7 +297,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session: { ...session, ...overrides },
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: undefined,
@@ -305,7 +330,6 @@ describe("resolveSidebarSessionSubtitle", () => {
       resolveSidebarSessionSubtitle({
         session,
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: true,
         narrationLine: "Running the focused tests",
@@ -320,12 +344,11 @@ describe("resolveSidebarSessionSubtitle", () => {
     ).toBe("Implementing the repair");
   });
 
-  it("keeps attention visible while hiding every preview candidate", () => {
+  it("hides error details and ambient text when previews are hidden", () => {
     const hidden = (session: SidebarRecentSession, narrationLine?: string) =>
       resolveSidebarSessionSubtitle({
         session,
         hasDisplay: false,
-        displaySubtitle: undefined,
         sidebarLiveActivity: true,
         showPreview: false,
         narrationLine,
@@ -335,11 +358,15 @@ describe("resolveSidebarSessionSubtitle", () => {
     expect(
       hidden({
         ...workSession(),
-        attention: { kind: "error", reason: "⚠️ ✉️ Message failed: deployment unavailable" },
+        attention: {
+          kind: "error",
+          reason: "⚠️ ✉️ Message failed: deployment unavailable",
+          sourceSessionKey: "agent:main:deployment",
+        },
         agentStatusNote: "Waiting for deployment",
         lastMessagePreview: "The final reply is durable.",
       }),
-    ).toBe("Run failed:   Message failed: deployment unavailable");
+    ).toBeUndefined();
 
     expect([
       hidden({ ...workSession(), agentStatusNote: "Waiting for deployment" }),

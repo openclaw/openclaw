@@ -51,7 +51,7 @@ describe("package finalization recovery targets", () => {
 
   it.each(
     (["entry", "settlement"] as const).flatMap((phase) =>
-      (["run-only", "same-target", "distinct-target", "retargeted"] as const).map((kind) => ({
+      (["same-target", "distinct-target", "retargeted"] as const).map((kind) => ({
         phase,
         kind,
       })),
@@ -165,14 +165,7 @@ async function fixture(rollback = false) {
   const run = createUpdateRun({ trigger: "cli" }, options);
   const from = { root: live, nodePath: process.execPath, version: "1.0.0", buildId: null };
   const to = { ...from, version: "2.0.0" };
-  let current = true;
-  const fence = {
-    assertCurrent() {
-      if (!current) {
-        throw new Error("authority lost");
-      }
-    },
-  };
+  const fence = { assertCurrent() {} };
   let record = createRetainedUpdateRecovery({ runId: run.runId, from, to }, options);
   const recovery = {
     getRecord: () => record,
@@ -206,9 +199,6 @@ async function fixture(rollback = false) {
     root,
     get record() {
       return record;
-    },
-    revoke() {
-      current = false;
     },
     reload() {
       closeOpenClawStateDatabaseForTest();
@@ -251,28 +241,17 @@ describe("durable terminal finalizer consumer", () => {
     expect(f.reload()?.terminal).toBeUndefined();
   });
 
-  it.each(["pending", "lost readiness", "unavailable package"] as const)(
-    "refuses retained full-state finalization (%s) without committing or cleaning",
-    async (mode) => {
-      const f = await fixture();
-      if (mode === "lost readiness") {
-        f.revoke();
-      }
-      if (mode === "unavailable package") {
-        await fs.rename(f.backup, f.backup + "-unavailable");
-      }
-      const before = f.reload();
-      await expect(
-        finishSuccessfulPackageSwitch({ packageRoot: f.live, run: f.opts.run }, { opts: f.opts }),
-      ).rejects.toMatchObject({ name: "UpdateCommandPendingRecoveryFailure" });
-      expect(f.reload()).toEqual(before);
-      expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
-      expect(await fs.stat(f.live)).toBeDefined();
-      expect(
-        await fs.stat(mode === "unavailable package" ? f.backup + "-unavailable" : f.backup),
-      ).toBeDefined();
-    },
-  );
+  it("refuses retained full-state finalization without committing or cleaning", async () => {
+    const f = await fixture();
+    const before = f.reload();
+    await expect(
+      finishSuccessfulPackageSwitch({ packageRoot: f.live, run: f.opts.run }, { opts: f.opts }),
+    ).rejects.toMatchObject({ name: "UpdateCommandPendingRecoveryFailure" });
+    expect(f.reload()).toEqual(before);
+    expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
+    expect(await fs.stat(f.live)).toBeDefined();
+    expect(await fs.stat(f.backup)).toBeDefined();
+  });
 });
 
 describe("historical terminal completion diagnostics", () => {

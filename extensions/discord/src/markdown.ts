@@ -16,9 +16,6 @@ function findDiscordUrlRanges(markdown: string): Array<{ start: number; end: num
   const ranges: Array<{ start: number; end: number }> = [];
   for (const match of markdown.matchAll(DISCORD_URL_START_RE)) {
     const start = match.index;
-    if (start === undefined) {
-      continue;
-    }
     const preceding = markdown[start - 1] ?? "";
     if (/[\p{L}\p{N}]/u.test(preceding) || (preceding === "_" && markdown[start - 2] !== "_")) {
       continue;
@@ -50,11 +47,7 @@ function markdownSemanticSignature(root: PositionedMarkdownNode): string {
   const pending: Array<{ node: PositionedMarkdownNode; parentStrong: boolean; exiting?: true }> = [
     { node: root, parentStrong: false },
   ];
-  while (pending.length > 0) {
-    const event = pending.pop();
-    if (!event) {
-      continue;
-    }
+  for (let event = pending.pop(); event; event = pending.pop()) {
     if (event.exiting) {
       parts.push(")");
       continue;
@@ -98,11 +91,7 @@ function normalizeDiscordBold(markdown: string): string {
   const sourceTree = fromMarkdown(markdown) as PositionedMarkdownNode;
   const activeSpanIds: number[] = [];
   const pending: Array<{ node: PositionedMarkdownNode; exiting?: number }> = [{ node: sourceTree }];
-  while (pending.length > 0) {
-    const event = pending.pop();
-    if (!event) {
-      continue;
-    }
+  for (let event = pending.pop(); event; event = pending.pop()) {
     if (event.exiting !== undefined) {
       activeSpanIds.pop();
       continue;
@@ -198,9 +187,10 @@ function normalizeDiscordBold(markdown: string): string {
       Math.min(strongInteriorStartByEnd.get(span.end) ?? interiorStart, interiorStart),
     );
   }
-  const nativeTokenRanges = [...markdown.matchAll(DISCORD_NATIVE_TOKEN_RE)].flatMap((match) =>
-    match.index === undefined ? [] : [{ start: match.index, end: match.index + match[0].length }],
-  );
+  const nativeTokenRanges = [...markdown.matchAll(DISCORD_NATIVE_TOKEN_RE)].map((match) => ({
+    start: match.index,
+    end: match.index + match[0].length,
+  }));
   const protectedRanges = [
     ...findDiscordUrlRanges(markdown),
     ...astLinkRanges,
@@ -247,6 +237,15 @@ function normalizeDiscordBold(markdown: string): string {
       editsBySpan.set(edit.spanId, [edit]);
     }
   }
+  const renderEdits = (selectedEdits: typeof edits, start = 0, end = markdown.length) => {
+    let cursor = start;
+    let rendered = "";
+    for (const edit of selectedEdits) {
+      rendered += `${markdown.slice(cursor, edit.start)}${edit.marker}`;
+      cursor = edit.start + edit.consume;
+    }
+    return rendered + markdown.slice(cursor, end);
+  };
   const protectedSpanIds = new Set<number>();
   const protectedEditKeys = new Set<string>();
   const spansWithProtectedContent = new Set<number>();
@@ -275,19 +274,14 @@ function normalizeDiscordBold(markdown: string): string {
     if (!span) {
       continue;
     }
-    let localCursor = span.start;
-    const localRendered =
-      (editsBySpan.get(spanId) ?? [])
-        .filter((edit) => {
-          const key = `${edit.start}:${edit.consume}:${edit.marker}`;
-          return !protectedEditKeys.has(key);
-        })
-        .map((edit) => {
-          const chunk = `${markdown.slice(localCursor, edit.start)}${edit.marker}`;
-          localCursor = edit.start + edit.consume;
-          return chunk;
-        })
-        .join("") + markdown.slice(localCursor, span.end);
+    const localRendered = renderEdits(
+      (editsBySpan.get(spanId) ?? []).filter((edit) => {
+        const key = `${edit.start}:${edit.consume}:${edit.marker}`;
+        return !protectedEditKeys.has(key);
+      }),
+      span.start,
+      span.end,
+    );
     const localSource = markdown.slice(span.start, span.end);
     if (
       markdownSemanticSignature(fromMarkdown(localRendered) as PositionedMarkdownNode) !==
@@ -296,24 +290,17 @@ function normalizeDiscordBold(markdown: string): string {
       protectedSpanIds.add(spanId);
     }
   }
-  let cursor = 0;
   const seenEdits = new Set<string>();
-  const rendered =
-    edits
-      .filter((edit) => {
-        const key = `${edit.start}:${edit.consume}:${edit.marker}`;
-        if (protectedSpanIds.has(edit.spanId) || protectedEditKeys.has(key) || seenEdits.has(key)) {
-          return false;
-        }
-        seenEdits.add(key);
-        return true;
-      })
-      .map((edit) => {
-        const chunk = `${markdown.slice(cursor, edit.start)}${edit.marker}`;
-        cursor = edit.start + edit.consume;
-        return chunk;
-      })
-      .join("") + markdown.slice(cursor);
+  const rendered = renderEdits(
+    edits.filter((edit) => {
+      const key = `${edit.start}:${edit.consume}:${edit.marker}`;
+      if (protectedSpanIds.has(edit.spanId) || protectedEditKeys.has(key) || seenEdits.has(key)) {
+        return false;
+      }
+      seenEdits.add(key);
+      return true;
+    }),
+  );
   return markdownSemanticSignature(fromMarkdown(rendered) as PositionedMarkdownNode) ===
     markdownSemanticSignature(sourceTree)
     ? rendered

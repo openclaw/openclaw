@@ -25,12 +25,14 @@ import {
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { capturePluginRuntimeRecovery } from "./plugin-runtime-artifact-binding.js";
+import { bindPluginRegistryGatewayOwner } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
   clearActivePluginRegistry,
   disposePluginRegistryInstances,
   setActivePluginRegistry,
 } from "./runtime.js";
+import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 
 afterEach(resetPluginLoaderTestStateForTest);
 
@@ -181,6 +183,7 @@ it.each(["installed", "bundled-cjs", "bundled-mjs"] as const)(
                 restored,
                 metadata,
               );
+              bindPluginRegistryGatewayOwner(restored, { current: () => restored });
               setActivePluginRegistry(restored, undefined, "gateway-bindable", root);
               setGatewayPluginMetadataSnapshot(metadata, { config, workspaceDir: root });
               expect(
@@ -199,9 +202,11 @@ it.each(["installed", "bundled-cjs", "bundled-mjs"] as const)(
 
               const loadInbound = createPreparedInboundRegistryLoader();
               for (let pass = 0; pass < 2; pass++) {
-                const inbound = loadInbound(
-                  { config, workspaceDir: root, allowGatewaySubagentBinding: true },
-                  metadata,
+                const inbound = withPluginRuntimeRegistryScope(restored, () =>
+                  loadInbound(
+                    { config, workspaceDir: root, allowGatewaySubagentBinding: true },
+                    metadata,
+                  ),
                 );
                 expect(inbound).toBe(restored);
                 expect(inbound.tools[0]).toBe(restored.tools[0]);

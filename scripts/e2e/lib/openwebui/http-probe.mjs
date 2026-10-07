@@ -1,4 +1,3 @@
-// HTTP probe for OpenWebUI E2E scenarios.
 import { pathToFileURL } from "node:url";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 

@@ -118,7 +118,13 @@ it.each(["current", "retired", "guard-deadline"] as const)(
     if (mode === "retired") {
       await expect(result).rejects.toThrow("original load owner retired");
     } else {
-      expect((await result).termination).toBe(mode === "current" ? "exit" : "timeout");
+      const outcome = await result;
+      expect(outcome.termination).toBe(mode === "current" ? "exit" : "timeout");
+      if (mode === "guard-deadline") {
+        expect(outcome.inspectionReason).toBe("systemd-inspection-deadline-exceeded");
+        expect(outcome.stderr).toContain("custody/admission guards");
+        expect(outcome.stderr).not.toContain("enable-linger");
+      }
     }
     expect(exec).toHaveBeenCalledTimes(mode === "current" ? 3 : 1);
     expect(exec.mock.calls.filter((call) => call[1].includes("LoadUnit"))).toHaveLength(

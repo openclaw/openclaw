@@ -2,22 +2,29 @@ import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import type { GatewayStoredSessionTargets } from "../../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway-read.js";
+import type {
+  GatewayStoredSessionTarget,
+  GatewayStoredSessionTargets,
+} from "../../config/sessions/combined-store-gateway.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
+import { withSessionHistoryWorkerDatabases } from "../../config/sessions/session-transcript-worker-runtime.js";
+import { captureSessionTranscriptStorageEnvironment } from "../../config/sessions/transcript-target-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveExistingUsageSessionFile } from "../../infra/session-cost-usage.js";
+import { resolveUsageSessionSource } from "../../infra/session-cost-usage.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
-import {
-  loadCombinedSessionStoreForGatewayCore,
-  loadGatewaySessionEntryReadOnly,
-} from "../session-utils.js";
+import { resolveGatewaySessionDisplayName } from "../session-utils-display.js";
+import { findCanonicalStoreMatch } from "../session-utils-store-selection.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import {
   discoverAllSessionsForUsage,
   type UsageSessionSummaryTarget,
@@ -32,40 +39,48 @@ type ResolvedSessionUsageTarget = {
   sessionFile: string;
 };
 
-export function resolveSessionUsageTarget(
+export async function resolveSessionUsageTarget(
   key: string,
   config: OpenClawConfig,
   agentIdHint?: string,
-): ResolvedSessionUsageTarget | undefined {
-  const { canonicalKey, entry, storePath } = loadGatewaySessionEntryReadOnly(
+): Promise<ResolvedSessionUsageTarget | undefined> {
+  const signal = getAsyncWorkSignal();
+  const target = await resolveGatewaySessionStoreTargetInWorker({
+    cfg: config,
     key,
-    agentIdHint ? { agentId: agentIdHint } : undefined,
-  );
+    ...(agentIdHint ? { agentId: agentIdHint } : {}),
+    assertActive: () => signal?.throwIfAborted(),
+  });
+  const { canonicalKey, storePath } = target;
+  const entry = findCanonicalStoreMatch(target.store, target.storeKeys)?.entry;
   const parsed = parseAgentSessionKey(key);
   const agentId =
     parsed?.agentId ?? agentIdHint ?? resolveSessionAgentId({ config, sessionKey: key });
   const sessionId = entry?.sessionId ?? parsed?.rest ?? key;
-  const sessionFile = entry
-    ? resolveExistingUsageSessionFile({
-        agentId,
-        sessionId,
-        sessionTarget: {
-          agentId,
-          sessionId,
-          sessionKey: canonicalKey,
-          storePath,
-        },
-      })
-    : resolveExistingUsageSessionFile({
-        agentId,
-        sessionId,
-        sessionFile: resolveSessionFilePathCore(
-          sessionId,
-          undefined,
-          resolveSessionFilePathOptions({ storePath, agentId }),
-        ),
-      });
-  return sessionFile ? { entry, agentId, sessionId, sessionFile } : undefined;
+  const source = await resolveUsageSessionSource({
+    agentId,
+    sessionId,
+    ...(entry
+      ? {
+          sessionTarget: {
+            agentId,
+            sessionId,
+            sessionKey: canonicalKey,
+            storePath: target.readSource?.path ?? storePath,
+          },
+        }
+      : {
+          sessionFile: resolveSessionFilePathCore(
+            sessionId,
+            undefined,
+            resolveSessionFilePathOptions({ storePath, agentId }),
+          ),
+        }),
+  });
+  signal?.throwIfAborted();
+  return source
+    ? { entry: source.entry, agentId, sessionId, sessionFile: source.sessionFile }
+    : undefined;
 }
 
 export type UsageGroupingMode = "instance" | "family";
@@ -75,10 +90,14 @@ export type UsageSessionSelection = UsageSessionSummaryTarget & {
   label?: string;
   updatedAt: number;
   storeEntry?: SessionEntry;
+  /** Recorded lineage attribution when a retained instance has no current store row. */
+  creatorEntry?: SessionEntry;
   scope?: "instance" | "family";
   sessionFamilyKey?: string;
   currentSessionId?: string;
   includedSessionIds?: string[];
+  contextTarget?: { storeTarget: GatewayStoredSessionTarget["storeTarget"]; storedKey: string };
+  contextWeight?: SessionEntry["systemPromptReport"];
 };
 
 function usageSessionIdentity(agentId: string, sessionId: string): string {
@@ -203,10 +222,9 @@ export async function selectUsageSessions(params: {
   } = params;
   // Load session store for named sessions only on a result-cache miss.
   const sessionStoreOpts = effectiveAgentId ? { agentId: effectiveAgentId } : {};
-  // Usage exposes saved prompt reports as context weight, including its availability flag.
-  const { store, targetsBySessionKey } = loadCombinedSessionStoreForGatewayCore(config, {
+  const { store, targetsBySessionKey } = await loadCombinedSessionStoreForGatewayCoreAsync(config, {
     ...sessionStoreOpts,
-    projection: "full",
+    projection: "list",
   });
   const scopedStore = Object.fromEntries(
     Object.entries(store).filter(
@@ -265,7 +283,7 @@ export async function selectUsageSessions(params: {
         : undefined) ??
       null;
     const resolvedStoreKey = storeMatch?.key ?? storeByIdMatch?.key ?? scopedSpecificKey;
-    const storeEntry = storeMatch?.entry ?? storeByIdMatch?.entry;
+    let storeEntry = storeMatch?.entry ?? storeByIdMatch?.entry;
     if (visibilityFilter && !storeEntry) {
       throw new UsageSessionInvalidRequestError(`Invalid session reference: ${specificKey}`);
     }
@@ -275,14 +293,22 @@ export async function selectUsageSessions(params: {
     // sessions without a store row, so retired locators cannot redirect live state.
     let resolved: ResolvedSessionUsageTarget | undefined;
     try {
-      resolved = resolveSessionUsageTarget(resolvedStoreKey, config, agentIdFromKey);
+      resolved = await resolveSessionUsageTarget(resolvedStoreKey, config, agentIdFromKey);
       if (!resolved || resolved.agentId !== agentIdFromKey || resolved.sessionId !== sessionId) {
         throw new Error("session target mismatch");
       }
+      if (
+        visibilityFilter &&
+        (!resolved.entry || !visibilityFilter(resolvedStoreKey, resolved.entry))
+      ) {
+        throw new Error("session visibility changed");
+      }
     } catch {
+      getAsyncWorkSignal()?.throwIfAborted();
       throw new UsageSessionInvalidRequestError(`Invalid session reference: ${specificKey}`);
     }
     const { sessionFile } = resolved;
+    storeEntry = resolved.entry;
 
     let updatedAt: number | undefined;
     if (parseSqliteSessionFileMarker(sessionFile)) {
@@ -305,7 +331,7 @@ export async function selectUsageSessions(params: {
             agentId: agentIdFromKey,
             sessionId,
             sessionFile,
-            label: storeEntry?.label,
+            label: resolveGatewaySessionDisplayName(resolvedStoreKey, storeEntry),
             updatedAt,
             storeEntry,
           },
@@ -332,11 +358,13 @@ export async function selectUsageSessions(params: {
             instances: [discovered],
             updatedAt: discovered.mtime,
             scope: "instance",
+            creatorEntry: familyOwners.get(identity)?.entry,
           });
         }
         continue;
       }
-      const { key, entry } = owner;
+      const { key } = owner;
+      let entry = owner.entry;
       const familyIdentity = usageSessionIdentity(discovered.agentId, key);
       if (selectedFamilies.has(familyIdentity)) {
         continue;
@@ -347,7 +375,7 @@ export async function selectUsageSessions(params: {
         usageSessionIdentity(discovered.agentId, entry.sessionId),
       )?.sessionFile;
       if (!sessionFile) {
-        const target = resolveSessionUsageTarget(key, config, discovered.agentId);
+        const target = await resolveSessionUsageTarget(key, config, discovered.agentId);
         if (
           !target ||
           target.agentId !== discovered.agentId ||
@@ -355,7 +383,11 @@ export async function selectUsageSessions(params: {
         ) {
           throw new UsageSessionInvalidRequestError(`Invalid session reference: ${key}`);
         }
+        if (visibilityFilter && (!target.entry || !visibilityFilter(key, target.entry))) {
+          continue;
+        }
         sessionFile = target.sessionFile;
+        entry = target.entry ?? entry;
       }
       mergedEntries.push(
         withUsageGrouping(
@@ -364,7 +396,7 @@ export async function selectUsageSessions(params: {
             agentId: discovered.agentId,
             sessionId: entry.sessionId,
             sessionFile,
-            label: entry.label,
+            label: resolveGatewaySessionDisplayName(key, entry),
             updatedAt: entry.updatedAt ?? discovered.mtime,
             storeEntry: entry,
           },
@@ -379,8 +411,72 @@ export async function selectUsageSessions(params: {
     }
   }
 
-  // Sort by most recent first
   mergedEntries.sort((a, b) => b.updatedAt - a.updatedAt);
 
+  // Carry physical targets through filtering; only emitted rows will hydrate context.
+  for (const row of mergedEntries) {
+    const target = targetsBySessionKey.get(row.key);
+    if (!target) {
+      continue;
+    }
+    row.contextTarget = { storeTarget: target.storeTarget, storedKey: target.storeKey ?? row.key };
+  }
+
   return mergedEntries;
+}
+
+export async function loadUsageSessionContext(
+  selected: UsageSessionSelection[],
+  visibilityFilter?: (key: string, entry: SessionEntry) => boolean,
+): Promise<void> {
+  const contextRows = new Map<
+    GatewayStoredSessionTarget["storeTarget"],
+    Array<{ row: UsageSessionSelection; storedKey: string }>
+  >();
+  for (const row of selected) {
+    const target = row.contextTarget;
+    if (target) {
+      const rows = contextRows.get(target.storeTarget) ?? [];
+      rows.push({ row, storedKey: target.storedKey });
+      contextRows.set(target.storeTarget, rows);
+    }
+  }
+  const groups = [...contextRows];
+  const env = captureSessionTranscriptStorageEnvironment(process.env);
+  const identities = groups.map(([target]) => readDatabasePathIdentitySync(target.storePath));
+  await withSessionHistoryWorkerDatabases(
+    groups.map(([target]) => ({ agentId: target.agentId, path: target.storePath, env })),
+    async (owners) => {
+      const reads = [];
+      for (const [index, [, rows]] of groups.entries()) {
+        reads.push(
+          await owners[index]!.readExactEntries({
+            env,
+            expectedIdentity: identities[index],
+            sessionKeys: [...new Set(rows.map(({ storedKey }) => storedKey))],
+            projection: "exact",
+            snapshotFields: ["systemPromptReport"],
+          }),
+        );
+      }
+      for (const owner of owners) {
+        owner.assertCurrent();
+      }
+      for (const [index, [, rows]] of groups.entries()) {
+        const entries = new Map(
+          reads[index]!.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        );
+        for (const { row, storedKey } of rows) {
+          const entry = entries.get(storedKey);
+          // Summary loading can yield across a reset or sharing change; never expose its successor's report.
+          if (
+            entry?.sessionId === row.sessionId &&
+            (!visibilityFilter || visibilityFilter(row.key, entry))
+          ) {
+            row.contextWeight = entry.systemPromptReport;
+          }
+        }
+      }
+    },
+  );
 }

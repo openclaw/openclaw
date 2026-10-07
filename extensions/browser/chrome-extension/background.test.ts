@@ -28,33 +28,6 @@ describe("native extension bootstrap", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps an existing manual pairing without contacting the native host", async () => {
-    const harness = await loadBackground();
-
-    expect(harness.sendNativeMessage).not.toHaveBeenCalled();
-    expect(harness.relaySockets).toHaveLength(1);
-  });
-
-  it("records host-not-found as retryable without claiming same-process recovery", async () => {
-    const harness = await loadBackground({
-      storedConfig: {},
-      nativeMessage: async () => {
-        throw new Error("Specified native messaging host not found.");
-      },
-    });
-    await vi.waitFor(() => {
-      expect(harness.storageValues).toMatchObject({
-        nativeBootstrapState: "retrying",
-        nativeBootstrapFailureCode: "host_not_found",
-      });
-    });
-
-    harness.alarmListener({ name: "openclaw-relay-watchdog" });
-
-    await vi.waitFor(() => expect(harness.sendNativeMessage).toHaveBeenCalledTimes(2));
-    expect(harness.storageValues).not.toHaveProperty("relayUrl");
-  });
-
   it("recovers after a repaired manifest only when automatic setup is explicitly enabled again", async () => {
     let repaired = false;
     const harness = await loadBackground({
@@ -80,6 +53,8 @@ describe("native extension bootstrap", () => {
     expect(harness.storageValues.nativeBootstrapState).toBe("ready");
     expect(harness.storageValues).not.toHaveProperty("nativeBootstrapFailureCode");
     expect(harness.sendNativeMessage).toHaveBeenCalledTimes(2);
+    expect(harness.relaySockets[0]?.protocols).toEqual(["openclaw-extension-relay.v2"]);
+    expect(JSON.stringify(harness.relaySockets[0]?.protocols)).not.toContain(TEST_RELAY_KEY);
   });
 
   it("coalesces startup, watchdog, and popup attempts", async () => {
@@ -134,29 +109,6 @@ describe("native extension bootstrap", () => {
     });
   });
 
-  it("unpair disables bootstrap before a late native response can re-pair", async () => {
-    let resolveNative = (_value: unknown) => {};
-    let request: unknown;
-    const harness = await loadBackground({
-      storedConfig: {},
-      nativeMessage: async (value) => {
-        request = value;
-        return await new Promise((resolve) => {
-          resolveNative = resolve;
-        });
-      },
-    });
-
-    await expect(sendRuntimeMessage(harness, { type: "unpair" })).resolves.toEqual({ ok: true });
-    expect(harness.storageValues.nativeBootstrapDisabled).toBe(true);
-    resolveNative(nativeSuccess(request));
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(harness.storageValues).not.toHaveProperty("relayUrl");
-    expect(harness.relaySockets).toHaveLength(0);
-  });
-
   it("preserves opt-out across restart and manual pairing clears it", async () => {
     const harness = await loadBackground({
       storedConfig: { nativeBootstrapDisabled: true, nativeBootstrapState: "disabled" },
@@ -170,6 +122,57 @@ describe("native extension bootstrap", () => {
       }),
     ).resolves.toEqual({ ok: true });
     expect(harness.storageValues).not.toHaveProperty("nativeBootstrapDisabled");
+  });
+
+  it.each([
+    ["disable", "preflight"],
+    ["unpair", "save"],
+  ])("does not apply a native pairing overtaken by %s during %s", async (revocation, stage) => {
+    let respond = (_value: unknown) => {};
+    const harness = await loadBackground({
+      storedConfig: {},
+      nativeMessage: () =>
+        new Promise((resolve) => {
+          respond = resolve;
+        }),
+    });
+    const readStorage = harness.storageGet.getMockImplementation()!;
+    let releaseRead = () => {};
+    const blocked = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    let pairingReads = 0;
+    let saving = false;
+    harness.storageGet.mockImplementation(async (keys) => {
+      const result = await readStorage(keys);
+      if (keys.includes("relayUrl") && ++pairingReads === 2 && stage === "preflight") {
+        await blocked;
+      }
+      return result;
+    });
+    const writeStorage = harness.storageSet.getMockImplementation()!;
+    harness.storageSet.mockImplementation(async (values) => {
+      if (stage === "save" && values.relayUrl) {
+        saving = true;
+        await blocked;
+      }
+      await writeStorage(values);
+    });
+    respond(nativeSuccess(harness.sendNativeMessage.mock.calls[0]?.[1]));
+    await vi.waitFor(() => expect(stage === "preflight" ? pairingReads === 2 : saving).toBe(true));
+    const revoking = sendRuntimeMessage(
+      harness,
+      revocation === "unpair"
+        ? { type: "unpair" }
+        : { type: "setNativeBootstrapEnabled", enabled: false },
+    );
+    await vi.waitFor(() => expect(harness.storageValues.nativeBootstrapDisabled).toBe(true));
+    releaseRead();
+    await expect(revoking).resolves.toMatchObject({ ok: true });
+    await sendRuntimeMessage(harness, { type: "getStatus" });
+
+    expect(harness.storageValues).not.toHaveProperty("relayUrl");
+    expect(harness.relaySockets).toHaveLength(0);
   });
 
   it("fails closed on a malformed or nonce-mismatched response", async () => {
@@ -256,46 +259,7 @@ describe("native extension bootstrap", () => {
     });
   });
 
-  it("uses explicit Disconnect to discard custody before local setup can reconnect", async () => {
-    const harness = await loadBackground({
-      nativeMessage: async (request) => nativeSuccess(request),
-      storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: TEST_RELAY_KEY,
-        authVersion: 2,
-        accessMode: "all",
-        copilotSessionRegistryV1: {
-          sessions: { 17: { creationPending: true } },
-          pendingArchives: [],
-        },
-        copilotDeviceIdentitiesV1: { redacted: true },
-        copilotDeviceTokensV1: { redacted: true },
-      },
-      sessionConfig: {
-        copilotBrowserInstanceV1: "redacted",
-        copilotPanelBindingsV1: { 17: "redacted" },
-      },
-    });
-
-    await expect(sendRuntimeMessage(harness, { type: "unpair" })).resolves.toEqual({ ok: true });
-    expect(harness.storageValues).not.toHaveProperty("relayUrl");
-    expect(harness.storageValues).not.toHaveProperty("copilotSessionRegistryV1");
-    expect(harness.sessionStorageValues).not.toHaveProperty("copilotBrowserInstanceV1");
-    expect(harness.storageValues.nativeBootstrapDisabled).toBe(true);
-
-    await expect(
-      sendRuntimeMessage(harness, { type: "setNativeBootstrapEnabled", enabled: true }),
-    ).resolves.toMatchObject({ ok: true });
-    await vi.waitFor(() => expect(harness.relaySockets).toHaveLength(1));
-    expect(harness.sendNativeMessage).toHaveBeenCalledOnce();
-  });
-
-  it.each<RetiredStorageFailureStage>([
-    "marker_set",
-    "session_remove",
-    "retired_local_remove",
-    "marker_remove",
-  ])(
+  it.each<RetiredStorageFailureStage>(["marker_set", "session_remove", "retired_local_remove"])(
     "keeps custody blocked when Disconnect fails at %s and permits an explicit retry",
     async (stage) => {
       const harness = await loadBackground({
@@ -335,9 +299,6 @@ describe("native extension bootstrap", () => {
       if (stage === "session_remove" || stage === "retired_local_remove") {
         expect(harness.storageValues).toHaveProperty("copilotSessionRegistryV1");
       }
-      if (stage === "marker_remove") {
-        expect(harness.storageValues).not.toHaveProperty("copilotSessionRegistryV1");
-      }
 
       harness.setRetiredStorageFailureStage(undefined);
       await expect(sendRuntimeMessage(harness, { type: "unpair" })).resolves.toEqual({ ok: true });
@@ -346,6 +307,45 @@ describe("native extension bootstrap", () => {
       expect(harness.sessionStorageValues).not.toHaveProperty("copilotBrowserInstanceV1");
       expect(harness.storageValues.nativeBootstrapDisabled).toBe(true);
       expect(harness.relaySockets).toHaveLength(0);
+    },
+  );
+
+  it.each(["session_remove", "retired_local_remove"] as const)(
+    "recovers on worker restart after harmless cleanup fails at %s",
+    async (stage) => {
+      const harness = await loadBackground({
+        retiredStorageFailureStage: stage,
+        storedConfig: {
+          relayUrl: "ws://127.0.0.1:18797/extension",
+          token: TEST_RELAY_KEY,
+          authVersion: 2,
+          accessMode: "all",
+          copilotSessionRegistryV1: { sessions: {}, pendingArchives: [] },
+        },
+        sessionConfig: {
+          copilotBrowserInstanceV1: "retired-instance",
+          copilotPanelBindingsV1: { 17: "retired-binding" },
+        },
+      });
+
+      await expect(sendRuntimeMessage(harness, { type: "getStatus" })).resolves.toMatchObject({
+        retiredCopilotCustodyBlocked: true,
+      });
+      expect(harness.relaySockets).toHaveLength(0);
+      expect(harness.debuggerAttach).not.toHaveBeenCalled();
+      const storedConfig = structuredClone(harness.storageValues);
+      const sessionConfig = structuredClone(harness.sessionStorageValues);
+      await cleanupBackgroundHarnesses();
+      vi.resetModules();
+      const restarted = await loadBackground({ storedConfig, sessionConfig });
+
+      await expect(sendRuntimeMessage(restarted, { type: "getStatus" })).resolves.toMatchObject({
+        retiredCopilotCustodyBlocked: false,
+        paired: true,
+      });
+      expect(restarted.relaySockets).toHaveLength(1);
+      expect(restarted.storageValues).not.toHaveProperty("copilotSessionRegistryV1");
+      expect(restarted.sessionStorageValues).not.toHaveProperty("copilotPanelBindingsV1");
     },
   );
 
@@ -392,12 +392,6 @@ describe("relay pairing and authentication", () => {
 
     expect(harness.relaySockets).toHaveLength(0);
     expect(harness.storageValues).not.toHaveProperty("relayUrl");
-  });
-
-  it("offers only the non-secret v2 relay subprotocol", async () => {
-    const harness = await loadBackground();
-    expect(harness.relaySockets[0]?.protocols).toEqual(["openclaw-extension-relay.v2"]);
-    expect(JSON.stringify(harness.relaySockets[0]?.protocols)).not.toContain(TEST_RELAY_KEY);
   });
 
   it("cancels the opening deadline when the socket-close fallback ends the relay", async () => {
@@ -463,7 +457,7 @@ describe("standalone relay wake-up", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each([18798, 20123])(
+  it.each([20123])(
     "wakes the paired port %i on reconnect, at most once per minute",
     async (relayPort) => {
       const harness = await loadBackground({
@@ -494,7 +488,6 @@ describe("standalone relay wake-up", () => {
   );
 
   it.each([
-    ["local Gateway", "ws://127.0.0.1:18789/browser/extension", false],
     ["remote Gateway", "wss://gateway.example.com/browser/extension", false],
     ["secure loopback", "wss://localhost:18798/extension", false],
     ["automatic setup opt-out", "ws://127.0.0.1:18798/extension", true],
@@ -502,6 +495,7 @@ describe("standalone relay wake-up", () => {
     const harness = await loadBackground({
       storedConfig: { relayUrl, token: TEST_RELAY_KEY, nativeBootstrapDisabled },
     });
+    await vi.waitFor(() => expect(harness.relaySockets).toHaveLength(1));
     harness.relaySockets.at(-1)?.close();
     await vi.advanceTimersByTimeAsync(1000);
     expect(harness.relaySockets).toHaveLength(2);

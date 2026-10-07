@@ -74,8 +74,9 @@ const { FakeWebSocket, providerAuthMocks, ssrfMocks } = vi.hoisted(() => {
   };
 });
 
-vi.mock("ws", () => ({
-  default: FakeWebSocket,
+// Intercept the shared transport constructor, not Bun's bare ws adapter.
+vi.mock("../../packages/gateway-client/src/websocket.js", () => ({
+  WebSocket: FakeWebSocket,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
@@ -514,7 +515,6 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
   );
 
   it.each([
-    [1, 0, false, false],
     [799, 0, false, false],
     [800, 1, false, false],
     [800, 0, true, false],

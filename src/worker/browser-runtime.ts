@@ -1,11 +1,25 @@
 /** Core-private adapter for the bundled Browser plugin's attached worker runtime. */
 import { execFile } from "node:child_process";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadBundledPluginPublicSurfaceModuleSyncCore } from "../plugin-sdk/facade-loader.js";
 import type { WorkerBrowserLaunchDescriptor } from "./launch-descriptor.js";
 
 const WORKER_BROWSER_LAUNCH_TIMEOUT_MS = 30_000;
 const WORKER_BROWSER_LAUNCH_OUTPUT_LIMIT_BYTES = 64 * 1024;
+
+export function createWorkerBrowserToolDefinition(descriptor: WorkerBrowserLaunchDescriptor) {
+  const runtime = loadBundledPluginPublicSurfaceModuleSyncCore<{
+    createBrowserToolDefinition(
+      options: { sandboxBridgeUrl: string; allowHostControl: boolean },
+      getConfig: () => OpenClawConfig,
+    ): { metadata: Omit<AnyAgentTool, "execute"> };
+  }>({ dirName: "browser", artifactBasename: "runtime-api.js", trackedPluginId: "browser" });
+  return runtime.createBrowserToolDefinition(
+    { sandboxBridgeUrl: descriptor.cdpUrl, allowHostControl: false },
+    () => ({ plugins: { enabled: false } }),
+  ).metadata;
+}
 
 export type WorkerBrowserRuntime = {
   createAttachedBrowserToolRuntime: (params: {
@@ -14,10 +28,7 @@ export type WorkerBrowserRuntime = {
     agentSessionKey?: string;
     agentDir?: string;
     workspaceDir: string;
-  }) => Promise<{
-    tool: AnyAgentTool;
-    dispose: () => Promise<void>;
-  }>;
+  }) => Promise<WorkerBrowserToolRuntime>;
 };
 
 type WorkerBrowserToolRuntime = {
@@ -33,15 +44,16 @@ type CreateWorkerBrowserToolRuntimeParams = {
   runtime?: WorkerBrowserRuntime;
 };
 
-function runWorkerBrowserLauncher(launcherPath: string): Promise<void> {
+function runWorkerBrowserLauncher(descriptor: WorkerBrowserLaunchDescriptor): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     execFile(
-      launcherPath,
-      [],
+      descriptor.launcherPath,
+      descriptor.launcherArgs ?? [],
       {
         timeout: WORKER_BROWSER_LAUNCH_TIMEOUT_MS,
         maxBuffer: WORKER_BROWSER_LAUNCH_OUTPUT_LIMIT_BYTES,
         windowsHide: true,
+        shell: false,
       },
       (error) => {
         if (error) {
@@ -71,7 +83,7 @@ export async function createWorkerBrowserToolRuntime(
     });
   return await browserRuntime.createAttachedBrowserToolRuntime({
     cdpUrl: params.descriptor.cdpUrl,
-    ensureAttachTarget: async () => await runWorkerBrowserLauncher(params.descriptor.launcherPath),
+    ensureAttachTarget: () => runWorkerBrowserLauncher(params.descriptor),
     agentSessionKey: params.sessionKey,
     agentDir: params.stateDir,
     workspaceDir: params.workspaceDir,

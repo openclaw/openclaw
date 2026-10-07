@@ -1,4 +1,3 @@
-// Telegram Mini App init-data validation.
 import crypto from "node:crypto";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 
@@ -49,20 +48,20 @@ export function validateTelegramMiniAppInitData(params: {
     return null;
   }
 
-  const user = parseTelegramMiniAppUser(userRaw);
-  if (!user?.id || !/^\d+$/.test(user.id)) {
+  const userId = parseTelegramMiniAppUserId(userRaw);
+  if (userId === null) {
     return null;
   }
-  return { hash: receivedHash, authDateMs, userId: user.id };
+  return { hash: receivedHash, authDateMs, userId };
 }
 
-function parseTelegramMiniAppUser(raw: string): { id: string } | null {
+function parseTelegramMiniAppUserId(raw: string): string | null {
   try {
     const parsed = JSON.parse(raw) as { id?: unknown };
     if (typeof parsed.id === "number" && Number.isSafeInteger(parsed.id) && parsed.id > 0) {
-      return { id: String(parsed.id) };
+      return String(parsed.id);
     }
-    return typeof parsed.id === "string" && /^\d+$/.test(parsed.id) ? { id: parsed.id } : null;
+    return typeof parsed.id === "string" && /^\d+$/.test(parsed.id) ? parsed.id : null;
   } catch {
     return null;
   }

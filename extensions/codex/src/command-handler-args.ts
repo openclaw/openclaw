@@ -19,7 +19,6 @@ type ParsedBindArgs = {
 type ParsedComputerUseArgs = {
   action: "status" | "install";
   overrides: Partial<CodexComputerUseConfig>;
-  hasOverrides: boolean;
   persistentIdentity: Partial<Pick<CodexComputerUseConfig, "pluginName" | "mcpServerName">>;
   help?: boolean;
 };
@@ -38,7 +37,6 @@ export type ParsedResumeArgs = {
   help?: boolean;
 };
 
-/** No-arg `/codex` picker. */
 export function buildCodexSubcommandPickerReply(): PluginCommandResult {
   const verbs: CodexCommandPickerButton[] = [
     { label: "plugins", command: "/codex plugins menu" },
@@ -71,76 +69,62 @@ export function buildCodexSubcommandPickerReply(): PluginCommandResult {
 }
 
 export function buildCodexFastMenuReply(): PluginCommandResult {
-  const modes = ["on", "off", "status"] as const;
-  const buttons: CodexCommandPickerButton[] = [
-    ...modes.map((mode) => ({ label: mode, command: `/codex fast ${mode}` })),
-    { label: "back", command: "/codex" },
-  ];
-  const fallbackTextLines = [
-    "Codex fast mode. Pick one or type /codex fast <mode>:",
-    "",
-    ...modes.map((m, i) => `  ${i + 1}. /codex fast ${m}`),
-    "",
-    "Type '/codex' to go back to the main menu.",
-  ];
-  return {
-    text: fallbackTextLines.join("\n"),
-    presentation: buildCodexCommandPickerPresentation(
-      "Codex fast mode",
-      "Pick a Codex fast mode:",
-      buttons,
-    ),
-  };
+  return buildCodexChoiceMenuReply({
+    title: "Codex fast mode",
+    prompt: "Pick a Codex fast mode:",
+    introduction: "Codex fast mode. Pick one or type /codex fast <mode>:",
+    command: "/codex fast",
+    choices: ["on", "off", "status"],
+  });
 }
 
 export function buildCodexPermissionsMenuReply(): PluginCommandResult {
-  const modes = ["default", "yolo", "status"] as const;
-  const buttons: CodexCommandPickerButton[] = [
-    ...modes.map((mode) => ({ label: mode, command: `/codex permissions ${mode}` })),
-    { label: "back", command: "/codex" },
-  ];
-  const fallbackTextLines = [
-    "Codex permissions. Pick one or type /codex permissions <mode>:",
-    "",
-    ...modes.map((m, i) => `  ${i + 1}. /codex permissions ${m}`),
-    "",
-    "Type '/codex' to go back to the main menu.",
-  ];
-  return {
-    text: fallbackTextLines.join("\n"),
-    presentation: buildCodexCommandPickerPresentation(
-      "Codex permissions",
-      "Pick a Codex permissions mode:",
-      buttons,
-    ),
-  };
+  return buildCodexChoiceMenuReply({
+    title: "Codex permissions",
+    prompt: "Pick a Codex permissions mode:",
+    introduction: "Codex permissions. Pick one or type /codex permissions <mode>:",
+    command: "/codex permissions",
+    choices: ["default", "yolo", "status"],
+  });
 }
 
 export function buildCodexComputerUseMenuReply(): PluginCommandResult {
-  const actions = ["status", "install"] as const;
+  return buildCodexChoiceMenuReply({
+    title: "Codex computer-use",
+    prompt: "Pick a Codex computer-use action:",
+    introduction: "Codex computer-use. Pick one or type /codex computer-use <action>:",
+    command: "/codex computer-use",
+    choices: ["status", "install"],
+    hint: "Flag-driven invocations (--source, --marketplace-path, --marketplace) are not in the picker. Type '/codex computer-use' or read '/codex help' for the full surface.",
+  });
+}
+
+function buildCodexChoiceMenuReply(params: {
+  title: string;
+  prompt: string;
+  introduction: string;
+  command: string;
+  choices: readonly string[];
+  hint?: string;
+}): PluginCommandResult {
   const buttons: CodexCommandPickerButton[] = [
-    ...actions.map((action) => ({
-      label: action,
-      command: `/codex computer-use ${action}`,
+    ...params.choices.map((choice) => ({
+      label: choice,
+      command: `${params.command} ${choice}`,
     })),
     { label: "back", command: "/codex" },
   ];
   const fallbackTextLines = [
-    "Codex computer-use. Pick one or type /codex computer-use <action>:",
+    params.introduction,
     "",
-    ...actions.map((a, i) => `  ${i + 1}. /codex computer-use ${a}`),
+    ...params.choices.map((choice, index) => `  ${index + 1}. ${params.command} ${choice}`),
     "",
-    "Flag-driven invocations (--source, --marketplace-path, --marketplace) are not in the picker. Type '/codex computer-use' or read '/codex help' for the full surface.",
-    "",
+    ...(params.hint ? [params.hint, ""] : []),
     "Type '/codex' to go back to the main menu.",
   ];
   return {
     text: fallbackTextLines.join("\n"),
-    presentation: buildCodexCommandPickerPresentation(
-      "Codex computer-use",
-      "Pick a Codex computer-use action:",
-      buttons,
-    ),
+    presentation: buildCodexCommandPickerPresentation(params.title, params.prompt, buttons),
   };
 }
 
@@ -202,54 +186,21 @@ export function splitArgs(value: string | undefined): string[] {
 }
 
 export function parseBindArgs(args: string[]): ParsedBindArgs {
-  const parsed: ParsedBindArgs = {};
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = expectDefined(args[index], "current Codex bind argument");
-    if (arg === "--help" || arg === "-h") {
-      parsed.help = true;
-      continue;
-    }
-    if (arg === "--cwd") {
-      const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.cwd !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.cwd = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--model") {
-      const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.model !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.model = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--provider" || arg === "--model-provider") {
-      const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.provider !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.provider = value;
-      index += 1;
-      continue;
-    }
-    if (!arg.startsWith("-") && !parsed.threadId) {
-      parsed.threadId = arg;
-      continue;
-    }
-    parsed.help = true;
-  }
-  parsed.threadId = normalizeOptionalString(parsed.threadId);
-  parsed.cwd = normalizeOptionalString(parsed.cwd);
-  parsed.model = normalizeOptionalString(parsed.model);
-  parsed.provider = normalizeOptionalString(parsed.provider);
-  return parsed;
+  const { parsed, values } = parseThreadArgs(
+    args,
+    new Map([
+      ["--cwd", "cwd"],
+      ["--model", "model"],
+      ["--provider", "provider"],
+      ["--model-provider", "provider"],
+    ]),
+  );
+  return {
+    ...parsed,
+    cwd: normalizeOptionalString(values.get("cwd")),
+    model: normalizeOptionalString(values.get("model")),
+    provider: normalizeOptionalString(values.get("provider")),
+  };
 }
 
 export function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSessionsArgs {
@@ -294,30 +245,41 @@ export function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSession
 }
 
 export function parseResumeArgs(args: string[]): ParsedResumeArgs {
-  const parsed: ParsedResumeArgs = {};
+  const { parsed, values } = parseThreadArgs(
+    args,
+    new Map([
+      ["--host", "host"],
+      ["--node", "host"],
+      ["--bind", "bind"],
+    ]),
+  );
+  return {
+    ...parsed,
+    ...(values.has("bind") ? { bindHere: true } : {}),
+    host: normalizeOptionalString(values.get("host")),
+  };
+}
+
+function parseThreadArgs(
+  args: string[],
+  options: ReadonlyMap<string, "cwd" | "model" | "provider" | "host" | "bind">,
+) {
+  const parsed: Pick<ParsedResumeArgs, "threadId" | "help"> = {};
+  const values = new Map<string, string>();
   for (let index = 0; index < args.length; index += 1) {
-    const arg = expectDefined(args[index], "current Codex resume argument");
+    const arg = expectDefined(args[index], "current Codex thread argument");
     if (arg === "--help" || arg === "-h") {
       parsed.help = true;
       continue;
     }
-    if (arg === "--host" || arg === "--node") {
+    const option = options.get(arg);
+    if (option) {
       const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.host !== undefined) {
+      if (!value || values.has(option) || (option === "bind" && value !== "here")) {
         parsed.help = true;
         continue;
       }
-      parsed.host = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--bind") {
-      const value = readRequiredOptionValue(args, index);
-      if (value !== "here" || parsed.bindHere !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.bindHere = true;
+      values.set(option, value);
       index += 1;
       continue;
     }
@@ -328,15 +290,13 @@ export function parseResumeArgs(args: string[]): ParsedResumeArgs {
     parsed.help = true;
   }
   parsed.threadId = normalizeOptionalString(parsed.threadId);
-  parsed.host = normalizeOptionalString(parsed.host);
-  return parsed;
+  return { parsed, values };
 }
 
 export function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
   const parsed: ParsedComputerUseArgs = {
     action: "status",
     overrides: {},
-    hasOverrides: false,
     persistentIdentity: {},
   };
   let sawAction = false;
@@ -355,33 +315,21 @@ export function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
       parsed.action = arg;
       continue;
     }
-    if (arg === "--source" || arg === "--marketplace-source") {
+    const option =
+      arg === "--source" || arg === "--marketplace-source"
+        ? "marketplaceSource"
+        : arg === "--marketplace-path" || arg === "--path"
+          ? "marketplacePath"
+          : arg === "--marketplace"
+            ? "marketplaceName"
+            : undefined;
+    if (option) {
       const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.overrides.marketplaceSource !== undefined) {
+      if (!value || parsed.overrides[option] !== undefined) {
         parsed.help = true;
         continue;
       }
-      parsed.overrides.marketplaceSource = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--marketplace-path" || arg === "--path") {
-      const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.overrides.marketplacePath !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.overrides.marketplacePath = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--marketplace") {
-      const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.overrides.marketplaceName !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.overrides.marketplaceName = value;
+      parsed.overrides[option] = value.trim();
       index += 1;
       continue;
     }
@@ -398,8 +346,6 @@ export function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
     }
     parsed.help = true;
   }
-  parsed.overrides = normalizeComputerUseStringOverrides(parsed.overrides);
-  parsed.hasOverrides = Object.values(parsed.overrides).some(Boolean);
   return parsed;
 }
 
@@ -440,23 +386,4 @@ function readRequiredOptionValue(args: string[], index: number): string | undefi
     return undefined;
   }
   return value;
-}
-
-function normalizeComputerUseStringOverrides(
-  overrides: Partial<CodexComputerUseConfig>,
-): Partial<CodexComputerUseConfig> {
-  const normalized: Partial<CodexComputerUseConfig> = {};
-  const marketplaceSource = normalizeOptionalString(overrides.marketplaceSource);
-  if (marketplaceSource) {
-    normalized.marketplaceSource = marketplaceSource;
-  }
-  const marketplacePath = normalizeOptionalString(overrides.marketplacePath);
-  if (marketplacePath) {
-    normalized.marketplacePath = marketplacePath;
-  }
-  const marketplaceName = normalizeOptionalString(overrides.marketplaceName);
-  if (marketplaceName) {
-    normalized.marketplaceName = marketplaceName;
-  }
-  return normalized;
 }

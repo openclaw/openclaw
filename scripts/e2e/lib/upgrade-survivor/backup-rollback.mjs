@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { compareReleaseVersions } from "../../../lib/release-version.mjs";
+import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadColumns,
+  transcriptIdentity,
+} from "../../../lib/sqlite-transcript-payload.mjs";
 
+const RESTORED_TRANSCRIPT = "agents/main/sessions/upgrade-restored-index-history.jsonl";
 const MINIMUM_BASELINE = "2026.9.4";
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const writeJson = (file, value) =>
@@ -154,6 +160,65 @@ function inventory(stateDir, specimens, files) {
   };
 }
 
+function canonicalRestoredTranscript(schema, runtime) {
+  const agent = schema.agents.find((item) => item.agentId === "main");
+  const file = agent?.files.find((item) => item.relative === RESTORED_TRANSCRIPT);
+  if (!file) {
+    return null;
+  }
+  assert.equal(runtime.version, "2026.9.4", "unqualified volatile transcript baseline");
+  assert.equal(file.kind, "transcript", "unqualified volatile transcript kind");
+  const events = fs
+    .readFileSync(containedPath(schema.stateDir, file.relative), "utf8")
+    .split(/\r?\n/u)
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line));
+  const sessionId = "upgrade-restored-index-history";
+  assert.equal(events[0]?.type, "session", "volatile transcript header missing");
+  assert.equal(events[0].id, sessionId, "volatile transcript session changed");
+  assert(
+    events.length > 1 &&
+      events
+        .slice(1)
+        .every((event) => event.type === "message" && typeof event.message?.content === "string"),
+    "volatile omission requires the text-only restored-index fixture",
+  );
+  const database = new DatabaseSync(containedPath(schema.stateDir, agent.databaseRelative), {
+    readOnly: true,
+  });
+  try {
+    const canonical = database
+      .prepare(
+        `SELECT ${sqliteTranscriptPayloadColumns(database)} FROM transcript_events WHERE session_id = ? ORDER BY seq`,
+      )
+      .all(sessionId)
+      .map((row) => transcriptIdentity(JSON.parse(readSqliteTranscriptPayload(row))));
+    assert.deepEqual(
+      canonical,
+      events.map(transcriptIdentity),
+      "volatile transcript lacks exact canonical history before backup",
+    );
+    return {
+      relative: file.relative,
+      kind: file.kind,
+      sha256: file.sha256,
+      sessionId,
+      canonicalEventCount: canonical.length,
+    };
+  } finally {
+    database.close();
+  }
+}
+
+function archiveMembers(archive) {
+  return new Set(
+    execFileSync("tar", ["-tzf", archive], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 })
+      .split("\n")
+      .filter(Boolean)
+      .map((member) => member.replace(/^\.\//u, "").replace(/\/$/u, "")),
+  );
+}
+
 function runtimeIdentity(packageRoot, entry) {
   const manifest = readJson(path.join(packageRoot, "package.json"));
   assert.equal(manifest.name, "openclaw", "retained runtime is not OpenClaw");
@@ -259,6 +324,7 @@ function capture(schemaFile, packageRoot, entry, runtimeRoot, resultFile) {
       "baseline agent is not at its published schema",
     );
   }
+  const canonicalTranscript = canonicalRestoredTranscript(schema, runtime);
   const artifacts = path.dirname(resultFile);
   const archivePath = path.join(runtimeRoot, "before-update.tar.gz");
   const created = runBaseline(
@@ -280,6 +346,28 @@ function capture(schemaFile, packageRoot, entry, runtimeRoot, resultFile) {
   );
   assert.equal(assets.length, 1, "backup lacks one unambiguous state asset");
   containedPath(runtimeRoot, assets[0].archivePath);
+  const members = archiveMembers(archivePath);
+  const omittedRawTranscripts = [];
+  for (const file of before.files) {
+    const archiveMember = path.posix.join(assets[0].archivePath, file.relative);
+    if (members.has(archiveMember)) {
+      continue;
+    }
+    assert.equal(
+      file.relative,
+      canonicalTranscript?.relative,
+      "unqualified file missing from backup archive",
+    );
+    assert(
+      Number.isSafeInteger(created.skippedVolatileCount) && created.skippedVolatileCount >= 1,
+      "published backup lacks aggregate volatile omission evidence",
+    );
+    omittedRawTranscripts.push({
+      ...canonicalTranscript,
+      archiveMember,
+      reason: "published-2026.9.4-volatile-transcript",
+    });
+  }
   assert.deepEqual(
     inventory(schema.stateDir, specimens, files),
     before,
@@ -294,6 +382,11 @@ function capture(schemaFile, packageRoot, entry, runtimeRoot, resultFile) {
     candidateSchemaVersions: schema.candidateSchemaVersions,
     sourceStateDir: schema.stateDir,
     before,
+    backupCreate: created,
+    omittedRawTranscripts,
+    rawTranscriptRestoration: omittedRawTranscripts.length
+      ? "unsupported-by-published-backup"
+      : "verified",
     archive: {
       path: archivePath,
       sha256: hashFile(archivePath),
@@ -384,10 +477,31 @@ function verify(resultFile, candidateSchemaFile) {
     relative,
     ...(agentId ? { agentId } : {}),
   }));
-  const files = proof.before.files.map(({ relative, kind }) => ({ relative, kind }));
+  const members = archiveMembers(proof.archive.path);
+  for (const omitted of proof.omittedRawTranscripts) {
+    assert.equal(omitted.relative, RESTORED_TRANSCRIPT, "unqualified restored omission");
+    assert.equal(proof.runtime.version, "2026.9.4", "unqualified restored baseline");
+    assert.equal(
+      members.has(omitted.archiveMember),
+      false,
+      "omitted transcript is present in archive",
+    );
+    assert.equal(
+      fs.existsSync(containedPath(stateDir, omitted.relative)),
+      false,
+      "omitted raw transcript unexpectedly restored",
+    );
+  }
+  const expected = {
+    ...proof.before,
+    files: proof.before.files.filter(
+      (file) => !proof.omittedRawTranscripts.some((omitted) => omitted.relative === file.relative),
+    ),
+  };
+  const files = expected.files.map(({ relative, kind }) => ({ relative, kind }));
   assert.deepEqual(
     inventory(stateDir, specimens, files),
-    proof.before,
+    expected,
     "restored baseline inventory differs",
   );
   const preflights = [];
@@ -443,7 +557,7 @@ function verify(resultFile, candidateSchemaFile) {
   }
   assert.deepEqual(
     inventory(stateDir, specimens, files),
-    proof.before,
+    expected,
     "baseline preflight mutated restored history",
   );
   fs.mkdirSync(env.OPENCLAW_STATE_DIR, { recursive: true, mode: 0o700 });
@@ -511,7 +625,7 @@ function verify(resultFile, candidateSchemaFile) {
   }
   assert.deepEqual(
     inventory(stateDir, specimens, files),
-    proof.before,
+    expected,
     "baseline session consumer mutated restored history",
   );
   writeJson(resultFile, {

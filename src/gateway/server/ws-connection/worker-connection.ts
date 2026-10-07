@@ -15,7 +15,12 @@ import {
   validateWorkerConnectRequestFrame,
   validateWorkerTranscriptCommitParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  WORKER_GATEWAY_TOOL_METHODS,
+  WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
+} from "../../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_INFERENCE_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { GATEWAY_STARTUP_RETRY_AFTER_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../../../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { rawDataByteLength } from "../../../infra/ws.js";
@@ -27,7 +32,6 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import { AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION } from "../../auth-rate-limit.js";
 import type { GatewayConnectionWork } from "../../server-connection-work.js";
-import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "../../worker-environments/placement-session-tool-operations.js";
 import { runWorkerTurnAdmissionContinuation } from "../../worker-environments/placement-turn-claim-events.js";
 import type { PublicWorkerIngressContext } from "../public-worker-ingress-context.js";
 import { raiseGatewayReceiverPayloadLimit } from "../ws-receiver.js";
@@ -36,6 +40,7 @@ import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 import {
   captureGatewayRpcReceivedAt,
   createWorkerRpcDiagnostics,
+  GatewayRpcDiagnostics,
   type GatewayRpcQueueTiming,
 } from "./request-diagnostics.js";
 import { runWorkerAdmissionBoundary } from "./worker-admission-boundary.js";
@@ -54,6 +59,7 @@ export type { WorkerConnectionService } from "./worker-connection-dispatch.js";
 type WorkerLogger = { warn(message: string): void };
 const MAX_QUEUED_WORKER_FRAMES = 16;
 const MAX_QUEUED_WORKER_BYTES = 32 * 1024 * 1024;
+const workerMethods = new Set<string>([...WORKER_PROTOCOL_METHODS, ...WORKER_INFERENCE_METHODS]);
 
 type WorkerWsMessageHandlerParams = {
   socket: WebSocket;
@@ -80,45 +86,37 @@ type WorkerWsMessageHandlerParams = {
 export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParams): () => void {
   let expiryTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
-  const sessionOperations = new Set<string>();
-  const computerLifetime = new AbortController();
+  const toolOperations = new Set<string>();
+  const connectionToolLifetime = new AbortController();
   const cleanup = () => {
     if (disposed) {
       return;
     }
     disposed = true;
-    computerLifetime.abort(new Error("Worker computer connection closed"));
+    connectionToolLifetime.abort(new Error("Worker tool connection closed"));
     clearTimeout(expiryTimer);
-    sessionOperations.clear();
+    toolOperations.clear();
     params.socket.off("message", onMessage);
   };
   const closeWorker = (code: number, reason: WorkerProtocolCloseReason) => {
     cleanup();
     params.close(code, reason);
   };
-  const failHandshake = (code: number, reason: WorkerProtocolCloseReason) => {
-    params.publicAdmission?.rateLimiter?.recordFailure(
-      params.publicAdmission.clientIp,
-      AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION,
+  const failConnection = (code: number, cause?: WorkerProtocolCloseReason) => {
+    const admitting = !params.getClient();
+    const reason = cause ?? (admitting ? "invalid-handshake" : "invalid-frame");
+    if (admitting) {
+      params.publicAdmission?.rateLimiter?.recordFailure(
+        params.publicAdmission.clientIp,
+        AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION,
+      );
+      params.setHandshakeState("failed");
+    }
+    params.setCloseCause(reason);
+    (admitting ? params.logWsControl : params.logGateway).warn(
+      `worker ${admitting ? "admission" : "protocol request"} rejected reason=${reason}`,
     );
-    params.setHandshakeState("failed");
-    params.setCloseCause(reason);
-    params.logWsControl.warn(`worker admission rejected reason=${reason}`);
     closeWorker(code, reason);
-  };
-  const failFrame = (code: number, reason: WorkerProtocolCloseReason) => {
-    params.setCloseCause(reason);
-    params.logGateway.warn(`worker protocol request rejected reason=${reason}`);
-    closeWorker(code, reason);
-  };
-  const sendError = (
-    id: string,
-    reason: WorkerProtocolCloseReason,
-    error = workerProtocolError(reason),
-    code = 1008,
-  ) => {
-    params.send({ type: "res", id, ok: false, error });
-    queueMicrotask(() => closeWorker(code, reason));
   };
   const rejectAdmission = (rejection: {
     id: string;
@@ -138,7 +136,8 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     params.setHandshakeState("failed");
     params.setCloseCause(internalReason);
     params.logWsControl.warn(`worker admission rejected reason=${internalReason}`);
-    sendError(rejection.id, wireReason, wireError, rejection.code ?? 1008);
+    params.send({ type: "res", id: rejection.id, ok: false, error: wireError });
+    queueMicrotask(() => closeWorker(rejection.code ?? 1008, wireReason));
   };
 
   const handleConnect = async (
@@ -222,10 +221,49 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       });
       return;
     }
+    const hello = buildWorkerHello(admission.identity);
+    if (
+      admission.identity.sessionId !== null &&
+      admission.identity.protocolFeatures.includes(WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE)
+    ) {
+      try {
+        const surface = await params.service?.getToolSurface?.(admission.identity);
+        if (!surface?.ok) {
+          rejectAdmission({ id, reason: surface?.closeReason ?? "method-not-allowed" });
+          return;
+        }
+        hello.toolSurface = surface.result;
+      } catch {
+        rejectAdmission({
+          id,
+          reason: "gateway-unavailable",
+          error: workerProtocolError("gateway-unavailable", {
+            message: "Worker tool surface is unavailable during admission",
+          }),
+        });
+        return;
+      }
+    }
+    if (disposed || params.isClosed() || params.getClient()?.invalidated) {
+      return;
+    }
+    const response = { type: "res", id, ok: true, payload: hello };
+    if (
+      Buffer.byteLength(JSON.stringify(response), "utf8") > workerMaxPayload(admission.identity)
+    ) {
+      rejectAdmission({
+        id,
+        reason: "invalid-handshake",
+        error: workerProtocolError("invalid-handshake", {
+          message: "Worker tool surface exceeds the admission frame limit",
+        }),
+      });
+      return;
+    }
     params.setHandshakeState("connected");
     params.advanceHandshakePhase("session_attached");
     params.advanceHandshakePhase("hello_payload_prepared");
-    params.send({ type: "res", id, ok: true, payload: buildWorkerHello(admission.identity) });
+    params.send(response);
     if (disposed || params.isClosed()) {
       return;
     }
@@ -254,11 +292,11 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
   ) => {
     const client = params.getClient();
     if (client?.invalidated) {
-      failFrame(1008, "credential-replaced");
+      failConnection(1008, "credential-replaced");
       return;
     }
     if (client && !admissionOpen) {
-      failFrame(1013, "gateway-unavailable");
+      failConnection(1013, "gateway-unavailable");
       return;
     }
     const frameBytes = rawDataByteLength(data);
@@ -266,27 +304,19 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       ? workerMaxPayload(client.worker)
       : WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
     if (frameBytes > maxFrameBytes) {
-      if (client) {
-        failFrame(1009, "invalid-frame");
-      } else {
-        failHandshake(1009, "invalid-handshake");
-      }
+      failConnection(1009);
       return;
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(rawDataToString(data));
     } catch {
-      if (client) {
-        failFrame(1008, "invalid-frame");
-      } else {
-        failHandshake(1008, "invalid-handshake");
-      }
+      failConnection(1008);
       return;
     }
     if (!client) {
       if (!validateWorkerConnectRequestFrame(parsed)) {
-        failHandshake(1008, "invalid-handshake");
+        failConnection(1008);
         return;
       }
       params.setLastFrameMeta({ type: "req", method: "connect" });
@@ -315,20 +345,10 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       parsed.method !== WORKER_INFERENCE_METHODS[0] &&
       !mediaTranscript
     ) {
-      failFrame(1009, "invalid-frame");
+      failConnection(1009);
       return;
     }
-    if (
-      parsed.method === WORKER_PROTOCOL_METHODS[0] ||
-      parsed.method === WORKER_PROTOCOL_METHODS[1] ||
-      parsed.method === WORKER_PROTOCOL_METHODS[2] ||
-      parsed.method === "worker.sessions.spawn" ||
-      parsed.method === "worker.sessions.send" ||
-      parsed.method === "worker.portal" ||
-      parsed.method === "worker.computer" ||
-      parsed.method === WORKER_INFERENCE_METHODS[0] ||
-      parsed.method === WORKER_INFERENCE_METHODS[1]
-    ) {
+    if (workerMethods.has(parsed.method)) {
       params.setLastFrameMeta({ type: "req", method: parsed.method });
     }
     if (!client.worker) {
@@ -336,12 +356,14 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       return;
     }
     const diagnostics = createWorkerRpcDiagnostics(parsed.method, timing);
+    const canSend = () =>
+      !disposed && !params.isClosed() && params.getClient() === client && !client.invalidated;
     const respond = (
       ok: boolean,
       payload?: unknown,
       error?: Parameters<Parameters<typeof dispatchWorkerRequest>[0]["respond"]>[2],
     ) => {
-      if (disposed || params.isClosed() || params.getClient() !== client || client.invalidated) {
+      if (!canSend()) {
         diagnostics?.response("suppressed");
         return;
       }
@@ -350,7 +372,10 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
           ? { type: "res", id: parsed.id, ok, payload }
           : { type: "res", id: parsed.id, ok, error },
       );
-      diagnostics?.response(result.kind === "sent" ? (ok ? "ok" : "error") : "unavailable");
+      diagnostics?.response(
+        result.kind === "sent" ? (ok ? "ok" : "error") : "unavailable",
+        result.kind === "sent" ? result.bytes : undefined,
+      );
     };
     const dispatch = (signal?: AbortSignal) => {
       const invoke = () =>
@@ -359,37 +384,38 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
           identity: client.worker!,
           connectionId: params.connId,
           service: params.service,
-          send: (frame) => params.send(frame),
+          send: (frame) => {
+            if (canSend()) {
+              params.send(frame);
+            }
+          },
           respond,
           close: closeWorker,
           warn: (message) => params.logGateway.warn(message),
           ...(signal ? { signal } : {}),
         });
-      return diagnostics ? diagnostics.runHandler(invoke) : invoke();
+      return GatewayRpcDiagnostics.runHandler(invoke, diagnostics);
     };
-    const isLongSessionOperation =
-      parsed.method === "worker.sessions.spawn" ||
-      parsed.method === "worker.sessions.send" ||
-      parsed.method === "worker.portal" ||
-      parsed.method === "worker.computer";
-    if (isLongSessionOperation) {
-      if (sessionOperations.has(parsed.id)) {
-        failFrame(1008, "invalid-frame");
+    const isLongToolOperation =
+      parsed.method === "worker.computer" || parsed.method === WORKER_GATEWAY_TOOL_METHODS.invoke;
+    if (isLongToolOperation) {
+      if (toolOperations.has(parsed.id)) {
+        failConnection(1008);
         diagnostics?.finish("rejected");
         return;
       }
-      if (sessionOperations.size >= MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS) {
+      if (toolOperations.size >= WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS) {
         respond(false, undefined, workerProtocolError("gateway-unavailable"));
         diagnostics?.finish("rejected");
         return;
       }
-      sessionOperations.add(parsed.id);
+      toolOperations.add(parsed.id);
       let outcome: "returned" | "threw" = "returned";
-      // Release the frame queue while retaining shutdown admission. Desktop input
-      // belongs to this socket; durable session work survives response-transport loss.
+      // Desktop input and live reads belong to this socket; durable session work
+      // survives response-transport loss. Neither may block the heartbeat queue.
       void params.connectionWork.track(() =>
         runWithGatewayIndependentRootWorkContinuation(
-          () => dispatch(parsed.method === "worker.computer" ? computerLifetime.signal : undefined),
+          () => dispatch(connectionToolLifetime.signal),
           "worker:dispatch",
         )
           .catch(() => {
@@ -397,7 +423,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
             respond(false, undefined, workerProtocolError("gateway-unavailable"));
           })
           .finally(() => {
-            sessionOperations.delete(parsed.id);
+            toolOperations.delete(parsed.id);
             // A socket abort can follow successful execution. Record the actual
             // dispatch settlement separately from suppressed/unavailable delivery.
             diagnostics?.finish(outcome);
@@ -429,11 +455,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       pendingFrames >= MAX_QUEUED_WORKER_FRAMES ||
       pendingBytes + frameBytes > MAX_QUEUED_WORKER_BYTES
     ) {
-      if (params.getClient()) {
-        failFrame(1008, "invalid-frame");
-      } else {
-        failHandshake(1008, "invalid-handshake");
-      }
+      failConnection(1008);
       return;
     }
     pendingFrames += 1;
@@ -483,11 +505,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
           if (disposed) {
             return;
           }
-          if (params.getClient()) {
-            failFrame(1011, "gateway-unavailable");
-          } else {
-            failHandshake(1011, "gateway-unavailable");
-          }
+          failConnection(1011, "gateway-unavailable");
         })
         .finally(() => {
           pendingFrames -= 1;

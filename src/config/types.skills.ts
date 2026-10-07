@@ -15,15 +15,6 @@ export type SkillConfig = Omit<NonNullable<SkillsSchemaInput["entries"]>[string]
   apiKey?: SecretInput;
 };
 
-/** Discovery and watcher settings for skill sources. */
-export type SkillsLoadConfig = NonNullable<SkillsSchemaInput["load"]>;
-
-/** Skill installation preferences and upload policy. */
-export type SkillsInstallConfig = NonNullable<SkillsSchemaInput["install"]>;
-
-/** Limits that bound skill discovery and model-facing prompt expansion. */
-export type SkillsLimitsConfig = NonNullable<SkillsSchemaInput["limits"]>;
-
 /** Autonomous and approval settings for generated skill proposals. */
 export type SkillsWorkshopConfig = NonNullable<SkillsSchemaInput["workshop"]>;
 
@@ -31,7 +22,6 @@ export type SkillsWorkshopAutonomousMode = NonNullable<
   NonNullable<SkillsWorkshopConfig["autonomous"]>["mode"]
 >;
 
-/** Top-level skills config block in openclaw config. */
 export type SkillsConfig = Omit<SkillsSchemaInput, "entries"> & {
   entries?: Record<string, SkillConfig>;
 };

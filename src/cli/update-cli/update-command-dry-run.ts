@@ -3,23 +3,20 @@ import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
-import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
+import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
 import { printResult } from "./progress.js";
 import { formatSchemaRefusalLines, hasSchemaRefusal } from "./schema-preflight.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
-import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
+import type { RefuseUpdate } from "./update-command-result.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
 
 export async function handleDryRunPreflightError(
   error: unknown,
   notes: string[],
-  refuseUpdate: (
-    reason: string,
-    message: string,
-    failureFacts?: readonly UpdateFailureFact[],
-  ) => Promise<void>,
+  refuseUpdate: RefuseUpdate,
 ): Promise<OpenClawDatabaseSchemaPreflight> {
   if (!(error instanceof UpdatePreMutationError)) {
     throw error;
@@ -27,81 +24,25 @@ export async function handleDryRunPreflightError(
   if (
     error.reason === "database-schema-preflight" ||
     error.reason === "target-metadata-preflight" ||
-    error.reason === "invalid-config"
+    error.reason === "invalid-config" ||
+    error.reason === "config-read-failed"
   ) {
     // A best-effort preview reports incomplete admission; it never authorizes mutation.
     notes.push(error.message.replace(/^Update refused:/u, "Would refuse update:"));
     return { incompatible: [], indeterminate: [] };
   }
-  await refuseUpdate(error.reason, error.message, error.failureFacts);
+  await refuseUpdate(error.reason, error.message, error.failureFacts, error.recoverySteps);
   return { incompatible: [], indeterminate: [] };
 }
 
-type UpdateDryRunPreview = {
-  runId: string;
-  run?: UpdateRunRecord;
-  dryRun: true;
-  root: string;
-  installKind: "git" | "package" | "unknown";
-  mode: UpdateRunResult["mode"];
-  updateInstallKind: "git" | "package" | "unknown";
-  switchToGit: boolean;
-  switchToPackage: boolean;
-  restart: boolean;
-  requestedChannel: UpdateChannel | null;
-  storedChannel: UpdateChannel | null;
-  effectiveChannel: UpdateChannel;
-  tag: string;
-  currentVersion: string | null;
-  targetVersion: string | null;
-  targetVersionReason?: string;
-  downgradeRisk: boolean;
-  actions: string[];
-  notes: string[];
+export type UpdateDryRunFailure = {
+  recoverySteps?: readonly UpdateRecoveryStep[];
+  reason: string;
+  message: string;
+  failureFacts?: readonly UpdateFailureFact[];
 };
 
-function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): void {
-  if (jsonMode) {
-    defaultRuntime.writeJson(preview);
-    return;
-  }
-
-  defaultRuntime.log(theme.heading("Update dry-run"));
-  defaultRuntime.log(theme.muted("No changes were applied."));
-  defaultRuntime.log("");
-  defaultRuntime.log(`  Root: ${theme.muted(preview.root)}`);
-  defaultRuntime.log(`  Install kind: ${theme.muted(preview.installKind)}`);
-  defaultRuntime.log(`  Mode: ${theme.muted(preview.mode)}`);
-  defaultRuntime.log(`  Channel: ${theme.muted(preview.effectiveChannel)}`);
-  defaultRuntime.log(`  Tag/spec: ${theme.muted(preview.tag)}`);
-  if (preview.currentVersion) {
-    defaultRuntime.log(`  Current version: ${theme.muted(preview.currentVersion)}`);
-  }
-  if (preview.targetVersion) {
-    defaultRuntime.log(`  Target version: ${theme.muted(preview.targetVersion)}`);
-  } else if (preview.targetVersionReason) {
-    defaultRuntime.log(`  Target version: unresolved (${preview.targetVersionReason})`);
-  }
-  if (preview.downgradeRisk) {
-    defaultRuntime.log(theme.warn("  Downgrade confirmation would be required in a real run."));
-  }
-
-  defaultRuntime.log("");
-  defaultRuntime.log(theme.heading("Planned actions:"));
-  for (const action of preview.actions) {
-    defaultRuntime.log(`  - ${action}`);
-  }
-
-  if (preview.notes.length > 0) {
-    defaultRuntime.log("");
-    defaultRuntime.log(theme.heading("Notes:"));
-    for (const note of preview.notes) {
-      defaultRuntime.log(`  - ${theme.muted(note)}`);
-    }
-  }
-}
-
-export function printUpdateDryRun(params: {
+export async function printUpdateDryRun(params: {
   runId: string;
   root: string;
   installKind: "git" | "package" | "unknown";
@@ -121,11 +62,13 @@ export function printUpdateDryRun(params: {
   packageAlreadyCurrent: boolean;
   fallbackToLatest: boolean;
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
+  managedServiceRoot?: string;
   explicitTag: string | null;
   packageSchemaPreflight: OpenClawDatabaseSchemaPreflight;
   preflightNotes?: readonly string[];
+  preflightFailures?: readonly UpdateDryRunFailure[];
   opts: Pick<UpdateCommandOptions, "tag" | "json" | "run">;
-}): void {
+}): Promise<void> {
   const actions: string[] = [];
   if (params.requestedChannel && params.requestedChannel !== params.storedChannel) {
     actions.push(`Persist update.channel=${params.requestedChannel} in config`);
@@ -160,6 +103,11 @@ export function printUpdateDryRun(params: {
   if (params.fallbackToLatest) {
     notes.push("Beta channel resolves to latest for this run (fallback).");
   }
+  if (params.managedServiceRoot) {
+    actions.push(
+      `Rebind the managed Gateway from ${params.managedServiceRoot} to ${params.root} after verification.`,
+    );
+  }
   if (params.managedServiceRootRedirect) {
     notes.push(
       `Package update targets managed service root ${params.managedServiceRootRedirect.root} instead of invoking root ${params.managedServiceRootRedirect.previousRoot}.`,
@@ -173,7 +121,7 @@ export function printUpdateDryRun(params: {
   }
   if (params.updateInstallKind === "git") {
     notes.push(
-      "Git preview does not execute target scripts or select a build-tested development fallback. The real update repeats database admission before executing each candidate.",
+      "Git preview does not execute target scripts or select a build-tested development fallback. The real update repeats database admission before executing each update.",
     );
   }
 
@@ -185,33 +133,66 @@ export function printUpdateDryRun(params: {
       : canResolveRegistryVersionForPackageTarget(params.packageInstallSpec ?? params.tag)
         ? "The package target version could not be resolved."
         : "The package artifact is not staged during a dry-run.";
-  printDryRunPreview(
-    {
-      runId: params.runId,
-      run,
-      dryRun: true,
-      root: params.root,
-      installKind: params.installKind,
-      mode: params.mode,
-      updateInstallKind: params.updateInstallKind,
-      switchToGit: params.switchToGit,
-      switchToPackage: params.switchToPackage,
-      restart: params.shouldRestart,
-      requestedChannel: params.requestedChannel,
-      storedChannel: params.storedChannel,
-      effectiveChannel: params.channel,
-      tag: params.packageInstallSpec ?? params.tag,
-      currentVersion: run?.before?.version ?? params.currentVersion,
-      targetVersion: params.targetVersion,
-      ...(targetVersionReason ? { targetVersionReason } : {}),
-      downgradeRisk: params.downgradeRisk,
-      actions,
-      notes,
-    },
-    Boolean(params.opts.json),
-  );
-  if (!params.opts.json) {
-    printResult(
+  const preview = {
+    runId: params.runId,
+    run,
+    dryRun: true,
+    root: params.root,
+    installKind: params.installKind,
+    mode: params.mode,
+    updateInstallKind: params.updateInstallKind,
+    switchToGit: params.switchToGit,
+    switchToPackage: params.switchToPackage,
+    restart: params.shouldRestart,
+    requestedChannel: params.requestedChannel,
+    storedChannel: params.storedChannel,
+    effectiveChannel: params.channel,
+    tag: params.packageInstallSpec ?? params.tag,
+    currentVersion: run?.before?.version ?? params.currentVersion,
+    targetVersion: params.targetVersion,
+    ...(targetVersionReason ? { targetVersionReason } : {}),
+    downgradeRisk: params.downgradeRisk,
+    actions,
+    notes,
+    ...(params.preflightFailures?.length ? { failures: params.preflightFailures } : {}),
+  };
+  if (params.opts.json) {
+    defaultRuntime.writeJson(preview);
+  } else {
+    defaultRuntime.log(theme.heading("Update dry-run"));
+    defaultRuntime.log(theme.muted("No changes were applied."));
+    defaultRuntime.log("");
+    defaultRuntime.log(`  Root: ${theme.muted(preview.root)}`);
+    defaultRuntime.log(`  Install kind: ${theme.muted(preview.installKind)}`);
+    defaultRuntime.log(`  Mode: ${theme.muted(preview.mode)}`);
+    defaultRuntime.log(`  Channel: ${theme.muted(preview.effectiveChannel)}`);
+    defaultRuntime.log(`  Tag/spec: ${theme.muted(preview.tag)}`);
+    if (preview.currentVersion) {
+      defaultRuntime.log(`  Current version: ${theme.muted(preview.currentVersion)}`);
+    }
+    if (preview.targetVersion) {
+      defaultRuntime.log(`  Target version: ${theme.muted(preview.targetVersion)}`);
+    } else if (preview.targetVersionReason) {
+      defaultRuntime.log(`  Target version: unresolved (${preview.targetVersionReason})`);
+    }
+    if (preview.downgradeRisk) {
+      defaultRuntime.log(theme.warn("  Downgrade confirmation would be required in a real run."));
+    }
+
+    defaultRuntime.log("");
+    defaultRuntime.log(theme.heading("Planned actions:"));
+    for (const action of preview.actions) {
+      defaultRuntime.log(`  - ${action}`);
+    }
+
+    if (preview.notes.length > 0) {
+      defaultRuntime.log("");
+      defaultRuntime.log(theme.heading("Notes:"));
+      for (const note of preview.notes) {
+        defaultRuntime.log(`  - ${theme.muted(note)}`);
+      }
+    }
+    await printResult(
       {
         runId: params.runId,
         status: "skipped",

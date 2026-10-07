@@ -2,18 +2,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveAgentConfig } from "../../agent-scope-config.js";
 
-type ResolvedSwarmConfig = {
-  enabled: boolean;
-  maxConcurrent: number;
-  maxChildrenPerGroup: number;
-  maxTotalPerGroup: number;
-  waitTimeoutSecondsMax: number;
-  defaultAgentId: string;
-};
-
-const DEFAULT_SWARM_CONFIG: ResolvedSwarmConfig = {
+const DEFAULT_SWARM_CONFIG = {
   enabled: true,
-  maxConcurrent: 8,
+  maxConcurrent: 32,
   maxChildrenPerGroup: 50,
   maxTotalPerGroup: 200,
   waitTimeoutSecondsMax: 600,
@@ -34,7 +25,10 @@ function readBoundedPositiveInteger(value: unknown, fallback: number, max: numbe
 }
 
 /** Resolve global and per-agent Swarm configuration into bounded runtime values. */
-export function resolveSwarmConfig(config?: OpenClawConfig, agentId?: string): ResolvedSwarmConfig {
+export function resolveSwarmConfig(
+  config?: OpenClawConfig,
+  agentId?: string,
+): typeof DEFAULT_SWARM_CONFIG {
   const globalRaw = normalizeRawConfig(config?.tools?.swarm) ?? {};
   const agentRaw =
     config && agentId

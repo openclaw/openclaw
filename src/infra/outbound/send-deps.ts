@@ -8,21 +8,15 @@ export type OutboundSendDeps = { [channelId: string]: unknown };
 /**
  * Builds historical dependency keys for channel send functions.
  */
-export function resolveLegacyOutboundSendDepKeys(channelId: string): string[] {
+function resolveLegacyOutboundSendDepKeys(channelId: string): string[] {
   const compact = channelId.replace(/[^a-z0-9]+/gi, "");
   if (!compact) {
     return [];
   }
   const pascal = compact.charAt(0).toUpperCase() + compact.slice(1);
-  const keys = new Set<string>();
-  keys.add(`send${pascal}`);
-  if (pascal.startsWith("I") && pascal.length > 1) {
-    keys.add(`sendI${pascal.slice(1)}`);
-  }
-  if (pascal.startsWith("Ms") && pascal.length > 2) {
-    keys.add(`sendMS${pascal.slice(2)}`);
-  }
-  return [...keys];
+  return pascal.startsWith("Ms") && pascal.length > 2
+    ? [`send${pascal}`, `sendMS${pascal.slice(2)}`]
+    : [`send${pascal}`];
 }
 
 /**

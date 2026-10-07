@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { renderProviderBrandIcon } from "./provider-icon.ts";
+import { providerDisplayLabel, renderProviderBrandIcon } from "./provider-icon.ts";
 import { renderPicker } from "./select-picker.ts";
 
 export type ModelPickerOption = {
@@ -17,9 +17,10 @@ type ModelPickerParams = {
   options: readonly ModelPickerOption[];
   disabled?: boolean;
   title?: string;
-  className?: string;
   placement?: "top" | "bottom";
   showSelectedDetail?: boolean;
+  groupByProvider?: boolean;
+  searchPlaceholder?: string;
   custom?: {
     label: string;
     placeholder?: string;
@@ -43,6 +44,10 @@ export function renderModelPicker(params: ModelPickerParams) {
     ...params.options.map((option) => ({ ...option, description: option.detail })),
     ...(params.custom ? [{ value: customValue, label: params.custom.label }] : []),
   ];
+  const selectedIndex = options.findIndex((option) => option.value === params.value);
+  if (selectedIndex > 0) {
+    options.unshift(...options.splice(selectedIndex, 1));
+  }
   return html`
     <div class="model-picker">
       ${renderPicker({
@@ -54,9 +59,22 @@ export function renderModelPicker(params: ModelPickerParams) {
         title: params.title,
         placement: params.placement,
         searchable: true,
+        searchPlaceholder: params.searchPlaceholder,
+        groupBy: params.groupByProvider
+          ? (option) =>
+              option.provider
+                ? {
+                    id: option.provider,
+                    label: providerDisplayLabel(option.provider),
+                    leading: renderProviderBrandIcon(option.provider, {
+                      className: "model-picker__provider-icon",
+                    }),
+                  }
+                : undefined
+          : undefined,
         showOptionTooltips: false,
         showSelectedDescription: params.showSelectedDetail,
-        className: `model-picker__select ${params.className ?? ""}`,
+        className: "model-picker__select ",
         onOpen: params.onOpen,
         renderLeading: (option) =>
           option.provider

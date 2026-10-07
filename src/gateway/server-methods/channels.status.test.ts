@@ -18,6 +18,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { CallGatewayOptions } from "../call.js";
 import { createChannelManager } from "../server-channels.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
@@ -25,11 +26,10 @@ import { requireGatewayRecord } from "../test-helpers.assertions.js";
 import {
   channelAccounts,
   createChannelPlugin,
+  createChannelsStatusHarness,
   firstChannelAccount,
   requireFirstCallArg,
-  requireRespondPayload,
 } from "./channels.status.test-helpers.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -84,38 +84,10 @@ vi.mock("../../infra/channel-activity.js", () => ({
 
 import { channelsHandlers } from "./channels.js";
 
-function createOptions(
-  params: Record<string, unknown>,
-  overrides?: Partial<GatewayRequestHandlerOptions>,
-): GatewayRequestHandlerOptions {
-  return {
-    req: { type: "req", id: "req-1", method: "channels.status", params },
-    params,
-    client: null,
-    isWebchatConnect: () => false,
-    respond: vi.fn(),
-    context: {
-      getRuntimeConfig: mocks.getRuntimeConfig,
-      getRuntimeSnapshot: () => ({
-        channels: {},
-        channelAccounts: {},
-      }),
-    },
-    ...overrides,
-  } as unknown as GatewayRequestHandlerOptions;
-}
-
-async function runChannelsStatus(
-  params: Record<string, unknown>,
-  overrides?: Partial<GatewayRequestHandlerOptions>,
-) {
-  const respond = vi.fn();
-  await expectDefined(
-    channelsHandlers["channels.status"],
-    'channelsHandlers["channels.status"] test invariant',
-  )(createOptions(params, { respond, ...overrides }));
-  return requireRespondPayload(respond);
-}
+const { createOptions, runChannelsStatus } = createChannelsStatusHarness({
+  handler: expectDefined(channelsHandlers["channels.status"], "channels.status handler"),
+  getRuntimeConfig: mocks.getRuntimeConfig,
+});
 
 describe("channelsHandlers channels.status", () => {
   afterEach(() => {
@@ -185,6 +157,7 @@ describe("channelsHandlers channels.status", () => {
     ]);
     mocks.listChannelPlugins.mockReturnValue([selected, unrelated]);
     const manager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: mocks.getRuntimeConfig,
       getPluginRegistry: () => registry,
       channelLogs: {},
@@ -664,18 +637,38 @@ describe("channelsHandlers channels.status", () => {
     },
   );
 
-  it("caps probe timeout before passing it to channel plugins", async () => {
-    const runtimeConfig = { channels: { whatsapp: { enabled: true } } };
-    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
-    const probeAccount = vi.fn(async () => ({ ok: true }));
-    mocks.listChannelPlugins.mockReturnValue([createChannelPlugin({ probeAccount })]);
+  it.each(["sync", "async"] as const)(
+    "caps probe timeout and prepares the account with %s hooks",
+    async (hooks) => {
+      const runtimeConfig = { channels: { whatsapp: { enabled: true } } };
+      mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
+      const probeAccount = vi.fn(async () => ({ ok: true }));
+      const account = {};
+      const plugin = createChannelPlugin({ probeAccount });
+      mocks.listChannelPlugins.mockReturnValue([
+        {
+          ...plugin,
+          config: {
+            ...plugin.config,
+            resolveAccount: () => {
+              if (hooks === "async") {
+                throw new Error("legacy account hook used");
+              }
+              return account;
+            },
+            ...(hooks === "async" ? { resolveAccountAsync: async () => account } : {}),
+          },
+        },
+      ]);
 
-    await runChannelsStatus({ probe: true, timeoutMs: 999_999 });
+      await runChannelsStatus({ probe: true, timeoutMs: 999_999 });
 
-    const probeArgs = requireGatewayRecord(requireFirstCallArg(probeAccount), "probe args");
-    expect(probeArgs.timeoutMs).toBe(30_000);
-    expect(probeArgs.cfg).toBe(runtimeConfig);
-  });
+      const probeArgs = requireGatewayRecord(requireFirstCallArg(probeAccount), "probe args");
+      expect(probeArgs.timeoutMs).toBe(30_000);
+      expect(probeArgs.cfg).toBe(runtimeConfig);
+      expect(probeArgs.account).toBe(account);
+    },
+  );
 
   it("runs channel probes concurrently and preserves deterministic status-map order", async () => {
     vi.useFakeTimers();

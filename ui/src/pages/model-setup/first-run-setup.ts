@@ -5,6 +5,7 @@ import type {
   SystemAgentSetupVerifyResult,
 } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateTimeMs } from "../../lib/format.ts";
 import {
@@ -22,6 +23,7 @@ import {
   type ModelSetupPageState,
   type ModelSetupVerifyState,
   type ModelSetupWizardResult,
+  type ModelSetupWizardRecovery,
 } from "./state.ts";
 
 export type ModelSetupConnection = Pick<
@@ -41,10 +43,14 @@ export function captureModelSetupConnection(
   previousRecoveryScope: string | null = null,
 ) {
   const snapshot = context.gateway.snapshot;
+  const selection = modelSetupAgentSelection(context, firstRun);
   return {
     client: snapshot.client,
     hello: snapshot.hello,
-    agentId: modelSetupAgentSelection(context, firstRun).state.selectedId,
+    agentId: selection.state.selectedId,
+    selectionIntentRevision: firstRun ? 0 : selection.intentRevision,
+    selectionPending:
+      !firstRun && selection.state.selectedId === null && context.agents.state.agentsList === null,
     connected: snapshot.phase === "connected",
     firstRun,
     connectionRevision: context.gateway.connectionRevision,
@@ -54,6 +60,60 @@ export function captureModelSetupConnection(
         ? (snapshot.hello?.auth?.recoveryScope ?? null)
         : previousRecoveryScope,
   };
+}
+
+type ConnectionSnapshot = ReturnType<typeof captureModelSetupConnection>;
+
+export function modelSetupOwnerChanges(
+  previous: ConnectionSnapshot | null,
+  connection: ConnectionSnapshot,
+) {
+  const authenticatedOwnerLost =
+    previous && (!connection.recoveryScope || connection.recoveryScope !== previous.recoveryScope);
+  const ownerChanged =
+    previous &&
+    (connection.agentId !== previous.agentId ||
+      connection.selectionIntentRevision !== previous.selectionIntentRevision ||
+      connection.firstRun !== previous.firstRun ||
+      connection.connectionRevision !== previous.connectionRevision ||
+      authenticatedOwnerLost);
+  return { authenticatedOwnerLost, ownerChanged };
+}
+
+export function reconcileModelSetupConnection(
+  previous: ConnectionSnapshot | null,
+  connection: ConnectionSnapshot,
+): { kind: "unchanged" | "pending" | "changed"; connection: ConnectionSnapshot } {
+  // An unloaded roster with unchanged intent is not a different wizard owner.
+  // Keep the admitted owner blocked until selection is validated again.
+  if (
+    previous &&
+    connection.selectionPending &&
+    connection.selectionIntentRevision === previous.selectionIntentRevision &&
+    connection.firstRun === previous.firstRun &&
+    connection.connectionRevision === previous.connectionRevision &&
+    (!connection.connected ||
+      (connection.recoveryScope &&
+        connection.recoveryScope === previous.recoveryScope &&
+        hasOperatorAdminAccess(connection.hello?.auth ?? null)))
+  ) {
+    return {
+      kind: previous.selectionPending ? "unchanged" : "pending",
+      connection: { ...previous, selectionPending: true },
+    };
+  }
+  const unchanged =
+    previous &&
+    connection.client === previous.client &&
+    connection.hello === previous.hello &&
+    connection.agentId === previous.agentId &&
+    connection.connected === previous.connected &&
+    connection.firstRun === previous.firstRun &&
+    connection.connectionRevision === previous.connectionRevision &&
+    connection.recoveryScope === previous.recoveryScope &&
+    connection.selectionIntentRevision === previous.selectionIntentRevision &&
+    connection.selectionPending === previous.selectionPending;
+  return { kind: unchanged ? "unchanged" : "changed", connection };
 }
 
 export type ModelSetupRouteData = { firstRun: boolean };
@@ -75,7 +135,7 @@ type FirstRunActivation = {
   kind: string;
   deadlineMs: number;
   receipt: FirstRunActivationReceipt | null;
-  outcome: "pending" | "verified" | "rejected";
+  outcome: "pending" | "verified" | "rejected" | "missing";
 };
 
 type FirstRunSetupHost = {
@@ -90,6 +150,12 @@ type FirstRunSetupHost = {
   setVerifyState: (state: ModelSetupVerifyState) => void;
   setActivationState: (state: ModelSetupActivationState) => void;
   setRefreshWarning: (warning: string | null) => void;
+  resumeWizard: (
+    wizard: ModelSetupWizardRecovery,
+    observer: (result: ModelSetupWizardResult) => () => boolean,
+  ) => void;
+  closeWizard: () => void;
+  notify: () => void;
 };
 
 export class FirstRunSetup {
@@ -106,6 +172,10 @@ export class FirstRunSetup {
       const activation = this.pending;
       if (activation?.receipt && JSON.stringify(activation.receipt) === receipt) {
         this.pending = null;
+        if (activation.outcome === "pending") {
+          // Another page settled this wizard; retire its local work, not the Gateway session.
+          this.host.closeWizard();
+        }
         if (activation.outcome === "verified") {
           this.host.setActivationState({ phase: "idle" });
         }
@@ -168,6 +238,9 @@ export class FirstRunSetup {
     if (this.host.actionsDisabled()) {
       return false;
     }
+    if (this.pending?.outcome === "missing") {
+      return true;
+    }
     if (this.pending && Date.now() < this.pending.deadlineMs) {
       this.host.setRefreshWarning(
         t("modelSetup.recovery.wait", { time: formatDateTimeMs(this.pending.deadlineMs) }),
@@ -188,6 +261,24 @@ export class FirstRunSetup {
       this.started = Boolean(retryingConfigured);
     }
     return true;
+  }
+
+  wizardMissing(): void {
+    if (this.pending && this.ownsActivation()) {
+      this.pending.outcome = "missing";
+    }
+  }
+
+  reconcileMissingWizard(detection: SystemAgentSetupDetectResult): void {
+    const activation = this.pending;
+    if (activation?.outcome !== "missing" || !this.ownsActivation(activation)) {
+      return;
+    }
+    this.host.setRefreshWarning(null);
+    if (!this.configuredActivationModel(detection)) {
+      this.pending = null;
+      clearFirstRunActivationReceipt(activation.receipt);
+    }
   }
 
   dispose(): void {
@@ -253,12 +344,17 @@ export class FirstRunSetup {
       return;
     }
     const configured = this.configuredActivationModel(pageState.result);
-    if (this.pending && (!configured || !this.pending.modelRef)) {
+    if (!this.pending.modelRef && receipt?.wizard) {
+      this.started = true;
+      this.host.resumeWizard(receipt.wizard, this.observeActivation(this.pending));
+      return;
+    }
+    if (!configured || !this.pending.modelRef) {
       this.started = true;
       this.showUnresolved();
       return;
     }
-    if (configured && !this.host.canVerify(snapshot.client)) {
+    if (!this.host.canVerify(snapshot.client)) {
       this.started = true;
       this.host.setVerifyState({
         phase: "failed",
@@ -275,6 +371,7 @@ export class FirstRunSetup {
     kind: string;
     modelRef?: string;
     modelTarget?: "utility";
+    wizard?: ModelSetupWizardRecovery;
   }): FirstRunActivation | null {
     const routeData = this.host.routeData();
     if (!routeData?.firstRun) {
@@ -330,6 +427,14 @@ export class FirstRunSetup {
     activation.receipt = persistFirstRunActivationReceipt(this.host.context(), activation);
   }
 
+  observeActivation(activation: FirstRunActivation | null) {
+    return (result: ModelSetupWizardResult) => {
+      this.recordActivation(activation, result);
+      this.host.notify();
+      return () => this.ownsActivation(activation);
+    };
+  }
+
   finishActivation(
     result: SystemAgentSetupActivateResult,
     targetId: string,
@@ -362,17 +467,13 @@ export class FirstRunSetup {
   async useCurrentModel(): Promise<void> {
     const page = this.host.pageState();
     const pending = this.pending;
-    if (
-      !pending ||
-      page.phase !== "ready" ||
-      !this.configuredActivationModel(page.result) ||
-      this.host.actionsDisabled()
-    ) {
+    const modelRef =
+      page.phase === "ready" ? this.configuredActivationModel(page.result) : undefined;
+    if (!pending || !modelRef || this.host.actionsDisabled()) {
       return;
     }
     // The operator explicitly selects this exact model; do not turn a failed
     // or late verification into permission to adopt whichever model appears next.
-    const modelRef = this.configuredActivationModel(page.result);
     const owner = this.owner(pending.owner.firstRun);
     const outcome = await this.verify();
     if (!this.owns(owner) || this.pending !== pending || !outcome || "error" in outcome) {
@@ -400,11 +501,6 @@ export class FirstRunSetup {
       recoveryScope: connection.recoveryScope,
       connection,
     };
-  }
-
-  private clearPending(): void {
-    this.pending = null;
-    clearFirstRunActivationReceipt();
   }
 
   ownsActivation(activation: FirstRunActivation | null = this.pending): boolean {
@@ -476,7 +572,8 @@ export class FirstRunSetup {
   }
 
   private completeNavigation(): void {
-    this.clearPending();
+    this.pending = null;
+    clearFirstRunActivationReceipt();
     this.host.setRefreshWarning(null);
     this.host.context().navigate("custodian", { search: "?onboarding=1" });
   }

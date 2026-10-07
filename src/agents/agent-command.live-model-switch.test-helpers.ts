@@ -2,6 +2,18 @@ import type { InternalSessionEntry } from "../config/sessions.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
+export function makeSuccessResult(provider: string, model: string) {
+  return {
+    payloads: [{ text: "ok" }],
+    meta: {
+      durationMs: 100,
+      aborted: false,
+      stopReason: "end_turn",
+      agentMeta: { provider, model },
+    },
+  };
+}
+
 export type CommandSessionEntryFixture = Partial<InternalSessionEntry> & {
   channel?: string;
   deliveryContext?: DeliveryContext;
@@ -52,6 +64,21 @@ export function createChannelModelRuntimeConfig({
       },
     },
     channels: { modelByChannel: { [channel]: { [matchKey]: model } } },
+  };
+}
+
+export function createLegacyAutoFallbackAliasCollisionConfig() {
+  return {
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude" },
+        models: {
+          "anthropic/claude": {},
+          "cloudflare-ai-gateway/gemini-2.5-flash-lite": {},
+          "google/gemini-2.5-flash-lite": { alias: "gemini-2.5-flash-lite" },
+        },
+      },
+    },
   };
 }
 

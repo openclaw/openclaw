@@ -6,6 +6,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import { hasUnresolvedConfigPath, resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -41,9 +42,7 @@ export function collectGatewayConfigFindings(
     env,
   });
   const controlUiEnabled = cfg.gateway?.controlUi?.enabled !== false;
-  const controlUiAllowedOrigins = normalizeStringEntries(
-    cfg.gateway?.controlUi?.allowedOrigins ?? [],
-  );
+  const controlUiAllowedOrigins = normalizeStringEntries(resolveControlUiAllowedOrigins(cfg));
   const dangerouslyAllowHostHeaderOriginFallback =
     cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
   const trustedProxies = Array.isArray(cfg.gateway?.trustedProxies)
@@ -171,12 +170,12 @@ export function collectGatewayConfigFindings(
     findings.push({
       checkId: "gateway.control_ui.allowed_origins_required",
       severity: "critical",
-      title: "Non-loopback Control UI missing explicit allowed origins",
+      title: "Non-loopback Control UI missing allowed origins",
       detail:
-        "Control UI is enabled on a non-loopback bind but gateway.controlUi.allowedOrigins is empty. " +
-        "Strict origin policy requires explicit allowed origins for non-loopback deployments.",
+        "Control UI is enabled on a non-loopback bind without an effective browser-origin allowlist. " +
+        "Set explicit allowed origins, or omit the list to use gateway.publicOrigin.",
       remediation:
-        "Set gateway.controlUi.allowedOrigins to full trusted origins (for example https://control.example.com). " +
+        "Set gateway.publicOrigin with gateway.controlUi.allowedOrigins omitted, or configure a list of full trusted origins (for example https://control.example.com). " +
         "If your deployment intentionally relies on Host-header origin fallback, set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true.",
     });
   }

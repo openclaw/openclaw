@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "allow": ["brave", "discord", "telegram", "matrix"],
+  "allow": ["anthropic", "google", "openai", "brave", "discord", "telegram", "matrix"],
   "entries": {
     "brave": {
       "enabled": true,

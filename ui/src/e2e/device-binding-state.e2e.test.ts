@@ -1,7 +1,7 @@
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect } from "playwright/test";
 import { it } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -24,8 +24,10 @@ const nodes = [
 const makeConfig = (defaultBinding: string, agentBinding: string) => ({
   tools: { exec: { node: defaultBinding } },
   agents: {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId: "main" } },
     entries: {
-      main: { default: true },
+      main: {},
       research: { name: "Research", tools: { exec: { node: agentBinding } } },
     },
   },
@@ -227,8 +229,10 @@ suite.define(() => {
         expect(JSON.parse(String(clearedAgent.raw))).toEqual({
           tools: { exec: {} },
           agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "main" } },
             entries: {
-              main: { default: true },
+              main: {},
               research: { name: "Research", tools: { exec: {} } },
             },
           },

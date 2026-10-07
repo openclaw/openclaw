@@ -3,7 +3,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  ServiceInspectionError,
+  ServiceOwnershipRefusalError,
+} from "./service-inspection-error.js";
+import {
   createServiceRuntimeInspectionFailure,
+  resolveSystemdServiceStartRefusal,
   type GatewayServiceRuntime,
 } from "./service-runtime.js";
 import type {
@@ -51,12 +56,15 @@ export async function readLoadedSystemdServiceRuntime(
         : (inspection?.assertReadCurrent ?? inspection?.assertCurrent);
     assertCurrent?.();
     const remaining = deadline - performance.now();
-    if (remaining <= 0 || remainingQueries <= 0) {
+    if (remaining <= 0) {
+      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+    }
+    if (remainingQueries <= 0) {
       throw unavailable();
     }
     if (binding) {
       if (scope === "system" || binding.unit !== unitName) {
-        throw unavailable();
+        throw new ServiceOwnershipRefusalError("systemd-manager-changed");
       }
       remainingQueries--;
       const values = await binding.query(args, signatures, deadline, inspection);
@@ -65,7 +73,7 @@ export async function readLoadedSystemdServiceRuntime(
       }
       assertCurrent?.();
       if (performance.now() >= deadline) {
-        throw unavailable();
+        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
       }
       return values;
     }
@@ -76,7 +84,10 @@ export async function readLoadedSystemdServiceRuntime(
         ? await execBusctlSystem(queryArgs, callTimeout)
         : await execBusctlUser(env, queryArgs, callTimeout, assertCurrent);
     assertCurrent?.();
-    if (result.code !== 0 || result.termination !== "exit" || performance.now() >= deadline) {
+    if (performance.now() >= deadline) {
+      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+    }
+    if (result.code !== 0 || result.termination !== "exit") {
       throw systemdInspectionError(result, unavailable().message, scope);
     }
     const values = result.stdout
@@ -132,7 +143,7 @@ export async function readLoadedSystemdServiceRuntime(
       (scope === "system" && managerUid !== 0) ||
       (inspection && managerUid !== inspection.managerUid)
     ) {
-      throw unavailable();
+      throw new ServiceOwnershipRefusalError("systemd-manager-changed");
     }
     const [unit] = await query(
       [
@@ -169,28 +180,65 @@ export async function readLoadedSystemdServiceRuntime(
           "StartLimitBurst",
           "ActiveEnterTimestampMonotonic",
           "InactiveEnterTimestampMonotonic",
+          "UnitFileState",
+          "RefuseManualStart",
+          "CanStart",
         ],
-        ["s", "s", "s", "s", "u", "t", "t"],
+        ["s", "s", "s", "s", "u", "t", "t", "s", "b", "b"],
       );
     const before = await readUnit();
-    const [id, load, active, sub, burst, entered, left] = before;
-    const [result, restarts, pid, exitStatus, exitCode, killMode, tasks, memory] = await query(
-      [
-        "get-property",
-        owner,
-        unitPath,
-        `${MANAGER}.Service`,
-        "Result",
-        "NRestarts",
-        "MainPID",
-        "ExecMainStatus",
-        "ExecMainCode",
-        "KillMode",
-        "TasksCurrent",
-        "MemoryCurrent",
-      ],
-      ["s", "u", "u", "i", "i", "s", "t", "t"],
-    );
+    const [
+      id,
+      load,
+      active,
+      sub,
+      burst,
+      entered,
+      left,
+      unitFileState,
+      refuseManualStart,
+      canStart,
+    ] = before;
+    const startRefusal = resolveSystemdServiceStartRefusal({
+      unit: unitName,
+      scope,
+      loadState: typeof load === "string" ? load : undefined,
+      unitFileState: typeof unitFileState === "string" ? unitFileState : undefined,
+      activeState: typeof active === "string" ? active : undefined,
+      refuseManualStart: refuseManualStart === true,
+      canStart: typeof canStart === "boolean" ? canStart : undefined,
+    });
+    if (
+      load === "masked" &&
+      id === unitName &&
+      isDeepStrictEqual(before, await readUnit()) &&
+      owner === (await readOwner())
+    ) {
+      return {
+        status: "unknown",
+        detail: startRefusal?.message,
+        systemd: { scope, unit: unitName, startRefusal },
+      };
+    }
+    const [result, restarts, pid, exitStatus, exitCode, killMode, tasks, memory, controlGroup] =
+      await query(
+        [
+          "get-property",
+          owner,
+          unitPath,
+          `${MANAGER}.Service`,
+          "Result",
+          "NRestarts",
+          "MainPID",
+          "ExecMainStatus",
+          "ExecMainCode",
+          "KillMode",
+          "TasksCurrent",
+          "MemoryCurrent",
+          "ControlGroup",
+        ],
+        ["s", "u", "u", "i", "i", "s", "t", "t", "s"],
+      );
     let drained = optionalCounter(tasks) === 0;
     if (
       (active === "inactive" || active === "failed") &&
@@ -227,6 +275,9 @@ export async function readLoadedSystemdServiceRuntime(
     // Same manager identity alone does not exclude unit restart/state changes.
     // Compare native transition generations as well as state to reject ABA observations.
     const after = await readUnit();
+    if (owner !== (await readOwner())) {
+      throw new ServiceOwnershipRefusalError("systemd-manager-changed");
+    }
     if (
       !isDeepStrictEqual(before, after) ||
       optionalCounter(entered) === undefined ||
@@ -241,8 +292,8 @@ export async function readLoadedSystemdServiceRuntime(
       !isUint32(pid) ||
       !isInt32(exitStatus) ||
       !isInt32(exitCode) ||
-      typeof killMode !== "string" ||
-      owner !== (await readOwner())
+      typeof controlGroup !== "string" ||
+      typeof killMode !== "string"
     ) {
       throw unavailable();
     }
@@ -253,6 +304,7 @@ export async function readLoadedSystemdServiceRuntime(
           : (active === "inactive" || active === "failed") && pid === 0 && drained
             ? "stopped"
             : "unknown",
+      ...(startRefusal ? { detail: startRefusal.message } : {}),
       state: active,
       subState: sub,
       pid: pid > 0 ? pid : undefined,
@@ -264,10 +316,12 @@ export async function readLoadedSystemdServiceRuntime(
         scope,
         ...(scope === "user" ? { transport: await readSystemdUserTransport(env) } : {}),
         unit: id,
+        ...(startRefusal ? { startRefusal } : {}),
         managerUid,
         result,
         nRestarts: restarts,
         startLimitBurst: burst,
+        controlGroup: controlGroup || undefined,
         killMode,
         tasksCurrent: optionalCounter(tasks),
         memoryCurrent: optionalCounter(memory),

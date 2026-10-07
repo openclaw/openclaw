@@ -1,4 +1,3 @@
-// Discord plugin module implements api.reactions behavior.
 import { Routes } from "discord-api-types/v10";
 import { normalizeDiscordMessageId } from "./api.messages.js";
 import type { RequestQuery } from "./rest-scheduler.js";
