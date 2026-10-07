@@ -574,8 +574,8 @@ retain the survivor fallback. CI loads the target's Docker tier planner directly
 
 The scheduler retains one 16-class Blacksmith runner on eligible main pushes.
 Full Release Validation children also use that class when no release runner group
-is configured and admit three lanes concurrently; main and ordinary manual CI
-retain serial admission. Pull requests and their
+is configured; hosted outage overrides and retries retain hosted recovery.
+Main, release, and ordinary manual CI retain serial weighted admission. Pull requests and their
 exact-head fallback dispatches do not select this proof. Installed-driver
 upgrade coverage remains required on every admitted canonical main run and
 ordinary manual/release CI; the existing infrastructure timeout stays unchanged.

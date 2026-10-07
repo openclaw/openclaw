@@ -107,7 +107,8 @@ Runtime topology checks inherit the existing [Go memory defaults](/ci/local-proo
 
 Full Release Validation's Docker seed child uses the 16-class Blacksmith runner
 when no release runner group is configured, prepares the existing smoke package,
-and admits three lanes concurrently. Ordinary manual dispatches retain hosted
+and retains serial weighted lane admission. Hosted outage overrides and retries
+keep their recovery route. Ordinary manual dispatches retain hosted
 serial execution. All six lanes remain selected. The three long, unfitted hosted
 test rows (`core-runtime-config`, `agentic-cli-process`, and
 `agentic-control-plane-agent-chat`) have a 90-minute job cap until complete timing

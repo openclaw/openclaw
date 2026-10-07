@@ -85,8 +85,9 @@ PRs defer the complete survivor to hourly main and Full Release Validation, whil
 the other Docker seed lanes and QA Smoke retain their owner maps.
 Ordinary manual CI builds the full declaration-complete package. Full Release
 Validation's Docker seed child uses the 16-class Blacksmith runner when no release
-runner group is configured, the existing smoke package, and three concurrent
-lanes without removing coverage. Main and
+runner group is configured and the existing smoke package without removing
+coverage. Hosted outage overrides and retries keep their recovery route, and
+weighted lane admission remains serial. Main and
 selected PRs, including exact-head `release_gate` fallbacks, use the
 existing `ciArtifacts` profile and canonical packer with `--skip-build`, retaining
 the runtime, public SDK declarations, and unchanged tarball integrity check.

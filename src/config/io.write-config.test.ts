@@ -559,8 +559,7 @@ describe("config io write", () => {
     "dedupes validation warnings across writes and reloads until config becomes clean",
     async (home) => {
       const warn = vi.fn();
-      const io = createHomeConfigIO(home, {
-        env: { HOME: home, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+      const io = createFastConfigIO(home, {
         logger: { warn, error: vi.fn() },
       });
       const staleConfig = {

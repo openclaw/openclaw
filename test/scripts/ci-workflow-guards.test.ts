@@ -1707,7 +1707,22 @@ AFTER_CD
     expect(evaluateWorkflowExpression(job["runs-on"], releaseChild)).toBe(
       "blacksmith-16vcpu-ubuntu-2404",
     );
-    expect(evaluateWorkflowExpression(parallelism!, releaseChild)).toBe(3);
+    expect(evaluateWorkflowExpression(parallelism!, releaseChild)).toBe(1);
+    for (const recovery of [
+      { ...releaseChild, runnerBackend: "github" as const },
+      { ...releaseChild, runAttempt: 2 },
+      { ...releaseChild, runnerBackend: "hybrid" as const, runAttempt: 2 },
+      { ...releaseChild, runnerBackend: "runson" as const, runAttempt: 2 },
+    ]) {
+      expect(evaluateWorkflowExpression(job["runs-on"], recovery)).toBe("ubuntu-24.04");
+      expect(evaluateWorkflowExpression(parallelism!, recovery)).toBe(1);
+    }
+    expect(
+      evaluateWorkflowExpression(job["runs-on"], {
+        ...releaseChild,
+        releaseRunnerGroup: "release-runners",
+      }),
+    ).toEqual({ group: "release-runners", labels: "ubuntu-24.04" });
     const manualDispatch = { ...releaseChild, dispatchId: "" };
     expect(evaluateWorkflowExpression(job["runs-on"], manualDispatch)).toBe("ubuntu-24.04");
     expect(evaluateWorkflowExpression(parallelism!, manualDispatch)).toBe(1);
