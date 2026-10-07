@@ -1167,6 +1167,35 @@ describe("native hook relay registry", () => {
     },
   );
 
+  it("unions hook and trusted-policy matcher scopes for pre-tool relays", () => {
+    const hookRegistry = createMockPluginRegistry([
+      { hookName: "before_tool_call", handler: vi.fn(), matcher: ["exec"] },
+    ]);
+    const policyRegistry = createMockPluginRegistry([]);
+    policyRegistry.trustedToolPolicies = [
+      {
+        pluginId: "policy-plugin",
+        pluginName: "Policy Plugin",
+        source: "test",
+        policy: {
+          id: "patch-policy",
+          description: "Protect patch tools",
+          matcher: ["apply_patch"],
+          evaluate: vi.fn(),
+        },
+      },
+    ];
+    setActivePluginRegistry(policyRegistry);
+    initializeGlobalHookRunner(hookRegistry);
+
+    const relay = registerRelay({
+      preToolUseLoopDetection: false,
+    });
+
+    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
+    expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(["apply_patch", "exec"]);
+  });
+
   it("rejects a retired direct bridge with an already connected request", async () => {
     const first = registerRelay({ allowedEvents: ["pre_tool_use"] });
     const firstRecord = await waitForNativeHookRelayBridgeRecord(first.relayId);

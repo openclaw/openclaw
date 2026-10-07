@@ -789,32 +789,45 @@ describe("ModelProvidersPage usage convergence", () => {
     expect(requestCount(harness.request, "sessions.usage")).toBe(1);
   });
 
-  it("restarts an exhausted retry cycle on same-client reconnect", async () => {
-    vi.useFakeTimers();
-    focusDocument();
-    const harness = createHarness("main");
-    harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
-    const page = appendPage(harness.context);
-    await page.updateComplete;
-    await advanceUsageRetries();
-    await page.updateComplete;
-    expect(page.textContent).toContain("did not finish loading");
+  it.each(["reconnect", "manual refresh"] as const)(
+    "restarts an exhausted retry cycle on %s",
+    async (trigger) => {
+      vi.useFakeTimers();
+      focusDocument();
+      const harness = createHarness("main");
+      harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
+      const page = appendPage(harness.context);
+      await page.updateComplete;
+      await advanceUsageRetries();
+      await page.updateComplete;
+      expect(page.textContent).toContain("did not finish loading");
 
-    const usageCallsBeforeReconnect = harness.request.mock.calls.filter(
-      ([method]) => method === "usage.status",
-    ).length;
-    expect(usageCallsBeforeReconnect).toBe(4);
+      const usageCallsBeforeRestart = harness.request.mock.calls.filter(
+        ([method]) => method === "usage.status",
+      ).length;
+      expect(usageCallsBeforeRestart).toBe(4);
 
-    harness.publishPhase("offline");
-    await page.updateComplete;
-    harness.publishPhase("connected");
-    await page.updateComplete;
-    await vi.advanceTimersByTimeAsync(0);
+      if (trigger === "manual refresh") {
+        page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.click();
+        await page.updateComplete;
+        await advanceUsageRetries();
+        expect(requestCount(harness.request, "usage.status")).toBeGreaterThan(
+          usageCallsBeforeRestart + 1,
+        );
+        return;
+      }
 
-    expect(harness.request.mock.calls.filter(([method]) => method === "usage.status").length).toBe(
-      5,
-    );
-  });
+      harness.publishPhase("offline");
+      await page.updateComplete;
+      harness.publishPhase("connected");
+      await page.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(
+        harness.request.mock.calls.filter(([method]) => method === "usage.status").length,
+      ).toBe(5);
+    },
+  );
 
   it("retries incomplete usage without restarting pending cost", async () => {
     vi.useFakeTimers();

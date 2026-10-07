@@ -314,6 +314,16 @@ describe("OpenAI completions reasoning", () => {
 });
 
 describe("OpenAI request cache policy", () => {
+  it("preserves native cache metadata in managed completions", () => {
+    const params = request(
+      { id: "gpt-5.6-sol" },
+      { sessionId: "session-123", cacheRetention: "long" },
+    );
+    expect(params.prompt_cache_key).toBe("session-123");
+    expect(params.prompt_cache_options).toEqual({ ttl: "30m" });
+    expect(params).not.toHaveProperty("prompt_cache_retention");
+  });
+
   it("selects native long-retention fields for responses", () => {
     const api = "openai-responses";
     const build = buildOpenAIResponsesParams;
@@ -534,6 +544,17 @@ function requestTools(
 }
 
 describe("OpenAI completions compatibility and tools", () => {
+  it("keeps implicit tool choice limited to proxy endpoints", () => {
+    const proxyParams = requestTools(
+      { provider: "custom-cpa", baseUrl: "https://proxy.example.com/v1" },
+      toolContext(),
+    );
+    expect(proxyParams.tool_choice).toBe("auto");
+    const nativeParams = requestTools(toolsNative, toolContext());
+    expect(nativeParams.tools).toHaveLength(1);
+    expect(nativeParams).not.toHaveProperty("tool_choice");
+  });
+
   it("applies provider and native-host compatibility defaults", () => {
     const cases = [
       [

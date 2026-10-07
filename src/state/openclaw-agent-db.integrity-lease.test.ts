@@ -427,7 +427,7 @@ it("retains the selected sibling inventory when failed-open cleanup must recreat
   expect(fs.readFileSync(siblingPath)).toEqual(before);
 });
 
-it.each(["", "-wal"])(
+it.each(["", "-wal", "-shm", "-journal"])(
   "preserves unknown deletion history from a surviving integrity-store family (%s)",
   (suffix) => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-prior-integrity-state-") };

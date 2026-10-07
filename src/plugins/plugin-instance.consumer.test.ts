@@ -6,6 +6,7 @@ import type {
 } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
 import { streamAgentResponse } from "../../packages/agent-core/src/agent-stream-response.js";
+import { generateBranchSummary } from "../../packages/agent-core/src/harness/compaction/branch-summarization.js";
 import { generateSummary } from "../../packages/agent-core/src/harness/compaction/compaction.js";
 import { wrapAnthropicStreamWithRecovery } from "../agents/embedded-agent-runner/thinking.js";
 import {
@@ -58,7 +59,7 @@ const noTools = async () => ({
   terminateRun: false,
 });
 
-async function consume(kind: "agent" | "summary" | "model-summary", streamFn: StreamFn) {
+async function consume(kind: "agent" | "summary" | "branch" | "model-summary", streamFn: StreamFn) {
   const owner = {};
   if (kind === "model-summary") {
     initializeModelRegistryRuntime(owner);
@@ -82,23 +83,43 @@ async function consume(kind: "agent" | "summary" | "model-summary", streamFn: St
       .map((part) => part.text)
       .join("");
   }
-  const result = await generateSummary(
-    [user],
-    model,
-    1000,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    streamFn,
-    runtime,
-  );
+  const result =
+    kind !== "branch"
+      ? await generateSummary(
+          [user],
+          model,
+          1000,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          streamFn,
+          runtime,
+        )
+      : await generateBranchSummary(
+          [
+            {
+              type: "message",
+              id: "synthetic-entry",
+              parentId: null,
+              timestamp: "2026-09-06T00:00:00Z",
+              message: user,
+            },
+          ],
+          {
+            model,
+            apiKey: "synthetic",
+            signal: new AbortController().signal,
+            streamFn,
+            runtime,
+          },
+        );
   if (!result.ok) {
     throw result.error;
   }
-  return result.value;
+  return typeof result.value === "string" ? result.value : result.value.summary;
 }
 
 describe("plugin stream consumer admission", () => {
@@ -231,7 +252,7 @@ describe("plugin stream consumer admission", () => {
     }
   });
 
-  it.each(["agent", "model-summary"] as const)(
+  it.each(["agent", "branch", "model-summary"] as const)(
     "keeps %s iteration and decorated terminal work in one admission during disposal",
     async (kind) => {
       const instance = new PluginInstance("consumer-fixture");
