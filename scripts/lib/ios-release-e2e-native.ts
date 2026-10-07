@@ -530,36 +530,63 @@ export async function createNativeDependencies(options: {
                   authenticated: false,
                   dispatchEntered: false,
                   responseReceived: false,
+                  attempts: 0,
                 };
                 fixtureEvidence[operation === "setup-status" ? "setupStatusRpc" : "setupRpc"] =
                   rpcEvidence;
+                // Cold Simulator boot can stall the whole runner (Gateway and harness alike)
+                // for tens of seconds at near-zero CPU. setupCode is safe to reissue (an unused
+                // bootstrap token just expires), so retry a transport timeout on a fresh socket.
+                const attemptTimeoutsMs =
+                  operation === "setup-code" ? [30_000, 60_000, 60_000] : [30_000];
                 try {
                   requireLiveFixture();
-                  const result = await phase(operation, () =>
-                    callGateway<T>({
-                      config: {},
-                      configPath: readyInstance.configPath,
-                      url: readyInstance.url,
-                      token: readyInstance.gatewayToken,
-                      ignoreEnvUrlOverride: true,
-                      deviceIdentity: null,
-                      sharedStateMode: "read-only",
-                      method:
-                        operation === "setup-status"
-                          ? "device.pair.setupStatus"
-                          : "device.pair.setupCode",
-                      params,
-                      timeoutMs: 30_000,
-                      signal: fixtureSignal,
-                      onHelloOk: () => {
-                        rpcEvidence.authenticated = true;
-                      },
-                      assertDispatchCurrent: () => {
+                  const result = await phase(operation, async () => {
+                    for (let attempt = 0; ; attempt++) {
+                      rpcEvidence.attempts = attempt + 1;
+                      rpcEvidence.authenticated = false;
+                      rpcEvidence.dispatchEntered = false;
+                      try {
+                        return await callGateway<T>({
+                          config: {},
+                          configPath: readyInstance.configPath,
+                          url: readyInstance.url,
+                          token: readyInstance.gatewayToken,
+                          ignoreEnvUrlOverride: true,
+                          deviceIdentity: null,
+                          sharedStateMode: "read-only",
+                          method:
+                            operation === "setup-status"
+                              ? "device.pair.setupStatus"
+                              : "device.pair.setupCode",
+                          params,
+                          timeoutMs: attemptTimeoutsMs[attempt],
+                          signal: fixtureSignal,
+                          onHelloOk: () => {
+                            rpcEvidence.authenticated = true;
+                          },
+                          assertDispatchCurrent: () => {
+                            requireLiveFixture();
+                            rpcEvidence.dispatchEntered = true;
+                          },
+                        });
+                      } catch (error) {
+                        if (
+                          attempt + 1 >= attemptTimeoutsMs.length ||
+                          fixtureSignal.aborted ||
+                          hasUnjoinedWork(error) ||
+                          !isGatewayTransportError(error) ||
+                          error.kind !== "timeout"
+                        ) {
+                          throw error;
+                        }
                         requireLiveFixture();
-                        rpcEvidence.dispatchEntered = true;
-                      },
-                    }),
-                  );
+                        console.error(
+                          `iOS qualification: ${operation} attempt ${attempt + 1} timed out; retrying`,
+                        );
+                      }
+                    }
+                  });
                   rpcEvidence.responseReceived = true;
                   requireLiveFixture();
                   return result;
@@ -573,6 +600,7 @@ export async function createNativeDependencies(options: {
                   if (isGatewayTransportError(error) && error.kind === "timeout") {
                     const failure = new OperationError(operation, "timeout");
                     failure.diagnostic.context.push(
+                      `rpc-attempts:${rpcEvidence.attempts}`,
                       `rpc-authenticated:${rpcEvidence.authenticated}`,
                       `rpc-dispatch-entered:${rpcEvidence.dispatchEntered}`,
                     );
