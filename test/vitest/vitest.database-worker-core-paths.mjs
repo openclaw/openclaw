@@ -939,7 +939,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/prepared-model-runtime.owner-selection.test.ts",
   "src/agents/prepared-model-runtime.owner-supersession.test.ts",
   "src/agents/prepared-model-runtime.registry-borrow.test.ts",
-  "src/agents/prepared-model-runtime.reload-auth-adoption.test.ts",
   "src/agents/prepared-model-runtime.reload-auth.test.ts",
   "src/agents/prepared-model-runtime.reply-fallback.test.ts",
   "src/agents/prepared-model-runtime.remote-publication.test.ts",
