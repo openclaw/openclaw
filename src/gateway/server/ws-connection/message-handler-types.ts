@@ -173,6 +173,7 @@ export type AuthenticatedGatewayConnect = {
 export type DeviceAuthorizedGatewayConnect = AuthenticatedGatewayConnect & {
   /** Verified against the current signed pairing record, not the claimed client label. */
   nativeMacosAdmin?: true;
+  nativeMacosPairingCreatedAtMs?: number;
   deviceToken: DeviceAuthToken | null;
   bootstrapDeviceTokens: Array<{
     deviceToken: string;

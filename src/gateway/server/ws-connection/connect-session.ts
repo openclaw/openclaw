@@ -8,12 +8,13 @@ import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/s
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../../config/io.js";
 import { captureAuthenticatedNodePairingState } from "../../../infra/device-pairing-node-state.js";
+import { getPairedDevice, hasEffectivePairedDeviceRole } from "../../../infra/device-pairing.js";
 import { compareOpenClawReleaseVersions } from "../../../infra/npm-registry-spec.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { resolveLocalNodeId } from "../../../node-host/local-id.js";
-import { intersectOperatorScopes } from "../../../shared/operator-scope-compat.js";
+import { intersectOperatorScopes, roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
 import { classifyTailscaleLogin } from "../../../state/user-profiles-tailscale-login.js";
 import { adoptTailscaleProfileAvatar } from "../../../state/user-profiles.js";
@@ -52,6 +53,7 @@ import {
   resolveEffectiveConnectionScopes,
   resolveGatewayConnectPolicyFailure,
 } from "./connect-admission.js";
+import { resolvePairedAccessScopes } from "./connect-device-metadata.js";
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
 import {
@@ -509,6 +511,35 @@ export async function attachAuthenticatedGatewayConnect(
     return;
   }
   prepareGatewayRecipientProfile(nextClient, { identity: preparedProfile?.recipient });
+  if (state.nativeMacosAdmin) {
+    // Profile acquisition can await after device authorization. Re-read the
+    // authoritative row before registration, including its incarnation.
+    let current;
+    try {
+      current = device ? await getPairedDevice(device.id) : null;
+    } catch {
+      current = null;
+    }
+    if (
+      !current ||
+      current.createdAtMs !== state.nativeMacosPairingCreatedAtMs ||
+      current.publicKey !== devicePublicKey ||
+      current.clientId !== connectParams.client.id ||
+      !hasEffectivePairedDeviceRole(current, role) ||
+      !roleScopesAllow({
+        role,
+        requestedScopes: [ADMIN_SCOPE, ...scopes],
+        allowedScopes: resolvePairedAccessScopes(current),
+      })
+    ) {
+      const message = "macOS pairing changed during connect";
+      markHandshakeFailure("native-macos-pairing-changed", { deviceId: device?.id });
+      sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, message);
+      await releasePendingNodePairingCleanup();
+      close(1008, truncateCloseReason(message));
+      return;
+    }
+  }
   if (!setClient(nextClient)) {
     await releasePendingNodePairingCleanup();
     setCloseCause("connect-aborted-before-register", {

@@ -76,6 +76,7 @@ import {
   testState,
   testTailscaleWhois,
 } from "../../test-helpers.js";
+import * as connectUserProfile from "./connect-user-profile.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -257,6 +258,52 @@ describe("gateway connect pairing exemptions", () => {
         }
       }
     } finally {
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
+  test("rejects native admin when pairing is revoked during profile acquisition", async () => {
+    const auth = { mode: "token", token: "synthetic-test-token" } as const;
+    testState.gatewayAuth = auth;
+    const started = await startServerWithClient(undefined, { auth });
+    const client = {
+      id: GATEWAY_CLIENT_NAMES.MACOS_APP,
+      version: "1.0.0",
+      platform: "darwin",
+      mode: GATEWAY_CLIENT_MODES.UI,
+    } as const;
+    const paired = await pairDeviceIdentity({
+      name: "native-admin-revocation-race",
+      role: "operator",
+      scopes: ["operator.admin"],
+      clientId: client.id,
+      clientMode: client.mode,
+    });
+    const originalAdmission = connectUserProfile.resolveGatewayConnectProfileAdmission;
+    const profile = vi
+      .spyOn(connectUserProfile, "resolveGatewayConnectProfileAdmission")
+      .mockImplementation(async (params) => {
+        const result = await originalAdmission(params);
+        await devicePairing.removePairedDevice(paired.identity.deviceId);
+        return result;
+      });
+    try {
+      const response = await connectReq(started.ws, {
+        client,
+        token: auth.token,
+        scopes: ["operator.admin"],
+        deviceIdentityPath: paired.identityPath,
+        prePairDevice: false,
+      });
+      expect(profile).toHaveBeenCalled();
+      expect(response).toMatchObject({
+        ok: false,
+        error: { code: "NOT_PAIRED", message: "macOS pairing changed during connect" },
+      });
+    } finally {
+      profile.mockRestore();
       started.ws.close();
       await started.server.close();
       started.envSnapshot.restore();

@@ -603,12 +603,29 @@ export async function authorizeGatewayConnectDevice(
     authMethod,
     scopes,
   });
+  const nativeMacosPairing = nativeMacosAdmin && device ? await getPairedDevice(device.id) : null;
+  const nativeMacosPairingCurrent = Boolean(
+    nativeMacosPairing &&
+    nativeMacosPairing.publicKey === devicePublicKey &&
+    nativeMacosPairing.clientId === pairedClientId &&
+    hasEffectivePairedDeviceRole(nativeMacosPairing, role) &&
+    roleScopesAllow({
+      role,
+      requestedScopes: ["operator.admin", ...scopes],
+      allowedScopes: resolvePairedAccessScopes(nativeMacosPairing),
+    }),
+  );
   return {
     ...state,
     scopes,
     handoffBootstrapProfile,
     deviceToken,
     bootstrapDeviceTokens,
-    ...(nativeMacosAdmin ? { nativeMacosAdmin: true as const } : {}),
+    ...(nativeMacosPairingCurrent && nativeMacosPairing
+      ? {
+          nativeMacosAdmin: true as const,
+          nativeMacosPairingCreatedAtMs: nativeMacosPairing.createdAtMs,
+        }
+      : {}),
   };
 }
