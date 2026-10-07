@@ -308,11 +308,14 @@ export function createWorkerPlacementMoveService(options: {
           await options.prepareGatewayMove?.({ ...identity, assertCurrent });
           assertCurrent();
         }
-        placement = await options.placements.completePlacementMoveSourceToLocal({
-          operationId: intent.operationId,
-          sessionId: intent.sessionId,
-          expectedGeneration: placement.generation,
-        });
+        placement = await options.placements.completePlacementMoveSourceToLocal(
+          {
+            operationId: intent.operationId,
+            sessionId: intent.sessionId,
+            expectedGeneration: placement.generation,
+          },
+          { assertCurrent },
+        );
       } else if (placement.state === "active") {
         const stillSource =
           placement.environmentId === intent.source.environmentId &&

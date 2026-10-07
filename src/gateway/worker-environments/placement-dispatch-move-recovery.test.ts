@@ -292,7 +292,7 @@ describe("worker Gateway move recovery", () => {
       const barriers = createGatewayWorkerPlacementReclaimBarriers({
         placements,
         loadSessionRuntime: async () => ({
-          managedWorktrees: { findLiveByOwner: () => undefined },
+          managedWorktrees: { findLiveByOwner: async () => undefined },
           resolveGatewaySessionStoreTargetWithStore: () => target,
           resolveCanonicalSessionEntryFromStoreKeys: () => entry,
         }),
@@ -334,7 +334,14 @@ describe("worker Gateway move recovery", () => {
     },
   );
 
-  it.each(["current", "replaced", "policy-required", "policy-activated"] as const)(
+  it.each([
+    "current",
+    "replaced",
+    "policy-required",
+    "policy-activated",
+    "policy-at-transaction",
+    "policy-at-commit",
+  ] as const)(
     "materializes a torn-down Gateway move before local recovery while its owner is %s",
     async (owner) => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
@@ -378,6 +385,7 @@ describe("worker Gateway move recovery", () => {
       const release = createDeferredCore();
       const checkout = path.join(support.testState.root, "recovered-checkout");
       const file = path.join(checkout, "result.txt");
+      let restoreAdmission: (() => void) | undefined;
       const prepareGatewayMove = vi.fn<
         NonNullable<
           Parameters<typeof createWorkerPlacementDispatchService>[0]["prepareGatewayMove"]
@@ -395,6 +403,21 @@ describe("worker Gateway move recovery", () => {
         await fs.mkdir(checkout);
         await fs.writeFile(file, "accepted repository result\n");
         expect(restartedStore.get(active.sessionId)?.state).toBe("reconciling");
+        if (owner === "policy-at-transaction" || owner === "policy-at-commit") {
+          const stage = owner === "policy-at-transaction" ? "transaction" : "commit";
+          const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+          const admission = vi
+            .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
+            .mockImplementation((admit, attachment) =>
+              createAdmission((request, grant) => {
+                if (request.stage === stage) {
+                  setRuntimeConfigSnapshot({ cloudWorkers: { requiredProfile: "development" } });
+                }
+                admit(request, grant);
+              }, attachment),
+            );
+          restoreAdmission = () => admission.mockRestore();
+        }
       });
       const restarted = createHarness(support.testState.stateDb, restartedStore, {
         prepareGatewayMove,
@@ -436,7 +459,11 @@ describe("worker Gateway move recovery", () => {
         }
       } finally {
         release.resolve();
-        await recovering;
+        try {
+          await recovering;
+        } finally {
+          restoreAdmission?.();
+        }
       }
       if (owner === "replaced") {
         await expect(prepareGatewayMove.mock.results[0]?.value).rejects.toThrow(
@@ -445,7 +472,12 @@ describe("worker Gateway move recovery", () => {
         expect(restartedStore.get(active.sessionId)).toEqual(replacement);
         expect(restarted.log).not.toContain("placement:local");
         await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
-      } else if (owner === "policy-required" || owner === "policy-activated") {
+      } else if (
+        owner === "policy-required" ||
+        owner === "policy-activated" ||
+        owner === "policy-at-transaction" ||
+        owner === "policy-at-commit"
+      ) {
         if (owner === "policy-activated") {
           await expect(prepareGatewayMove.mock.results[0]?.value).rejects.toThrow(
             "required worker profile policy",
@@ -456,7 +488,11 @@ describe("worker Gateway move recovery", () => {
           operationId: begun.intent.operationId,
           lastError: expect.stringContaining("required worker profile policy"),
         });
-        await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+        if (owner === "policy-at-transaction" || owner === "policy-at-commit") {
+          expect(await fs.readFile(file, "utf8")).toBe("accepted repository result\n");
+        } else {
+          await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+        }
       } else {
         expect(await fs.readFile(file, "utf8")).toBe("accepted repository result\n");
         expect(restartedStore.get(active.sessionId)?.state).toBe("local");

@@ -480,7 +480,7 @@ describe("worker session placement moves", () => {
     "Stop retains a Move belonging to a different source %s",
     async (change) => {
       const active = await seedActiveEnvironment();
-      const begun = store.beginPlacementMove({
+      const begun = await store.beginPlacementMove({
         sessionId: SESSION.sessionId,
         source: sourceFor(active),
         target: { kind: "gateway" },

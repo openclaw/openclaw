@@ -403,7 +403,7 @@ process.stdin.pipe(child.stdin);
                   await fs.readFile(path.join(active.remoteWorkspaceDir, "result.txt"), "utf8"),
                 ).toBe("accepted\n");
                 publishConfig();
-                const begun = placements.beginPlacementMove({
+                const begun = await placements.beginPlacementMove({
                   sessionId: active.sessionId,
                   source: {
                     generation: active.generation,
@@ -521,7 +521,7 @@ process.stdin.pipe(child.stdin);
                       publishConfig("development");
                     }
                     if (mode === "source-reassigned") {
-                      placements.cancelPlacementMove(begun.intent);
+                      await placements.cancelPlacementMove(begun.intent);
                       await placements.fail({
                         sessionId: identity.sessionId,
                         expectedGeneration: reconciling.generation,
@@ -552,7 +552,7 @@ process.stdin.pipe(child.stdin);
                   if (mode === "allowed") {
                     expect(placements.get(identity.sessionId)?.state).toBe("local");
                     const entry = loadSessionEntry(identity);
-                    const worktree = managedWorktrees.findLiveByOwner(
+                    const worktree = await managedWorktrees.findLiveByOwner(
                       "session",
                       identity.sessionKey,
                     );
@@ -568,7 +568,7 @@ process.stdin.pipe(child.stdin);
                       repository.workspaceId,
                     );
                     expect(
-                      managedWorktrees.findLiveByOwner("session", identity.sessionKey),
+                      await managedWorktrees.findLiveByOwner("session", identity.sessionKey),
                     ).toBeUndefined();
                     expect(placements.get(identity.sessionId)?.state).toBe(
                       mode === "policy-activated" ? "reconciling" : "requested",
@@ -588,7 +588,7 @@ process.stdin.pipe(child.stdin);
                     repository.workspaceId,
                   );
                   expect(
-                    managedWorktrees.findLiveByOwner("session", identity.sessionKey),
+                    await managedWorktrees.findLiveByOwner("session", identity.sessionKey),
                   ).toBeUndefined();
                 }
                 expect(environments.get(active.environmentId)?.state).toBe("destroyed");
@@ -605,7 +605,7 @@ process.stdin.pipe(child.stdin);
                   // Retire the synthetic operation after asserting its retained rejection;
                   // later controls must not resume it when their policy is intentionally off.
                   if (mode === "policy-activated") {
-                    placements.cancelPlacementMove(begun.intent);
+                    await placements.cancelPlacementMove(begun.intent);
                   }
                   await placements.fail({
                     sessionId: identity.sessionId,
