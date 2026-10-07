@@ -379,7 +379,7 @@ export class CallManager {
         const maxAgeMs = resolveVoiceCallSecondsTimerDelayMs(
           resolveCallMaxDurationSeconds(call, this.config.maxDurationSeconds),
         );
-        if (now - call.startedAt > maxAgeMs) {
+        if (now - (call.answeredAt ?? call.startedAt) > maxAgeMs) {
           skippedOlderThanMaxDuration += 1;
           markRestoredCallSkipped(call, "timeout");
           await persistCallRecord(this.storePath, call, this.stateRuntime);

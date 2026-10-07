@@ -234,6 +234,27 @@ describe("CallManager verification on restore", () => {
     expect((await loadActiveCallsFromStore(storePath)).activeCalls.size).toBe(0);
   });
 
+  it("restores the remaining brief duration without charging time spent ringing", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const now = Date.now();
+    const { manager, provider, storePath } = await initializeManager({
+      callOverrides: {
+        startedAt: now - 35_000,
+        answeredAt: now - 10_000,
+        metadata: { maxDurationSeconds: 30 },
+      },
+    });
+    requireSingleActiveCall(manager);
+    expect(provider.hangupCalls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(provider.hangupCalls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    await manager.stop();
+    expect(requireSingleHangupCall(provider).reason).toBe("timeout");
+    expect(manager.getActiveCalls()).toEqual([]);
+    expect((await loadActiveCallsFromStore(storePath)).activeCalls.size).toBe(0);
+  });
+
   it("summarizes repeated restored-call verification outcomes", async () => {
     const now = Date.now();
     const storePath = createTestStorePath();
