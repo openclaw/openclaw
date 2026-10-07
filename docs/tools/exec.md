@@ -31,11 +31,11 @@ Key/value environment overrides merged on top of the inherited environment.
 </ParamField>
 
 <ParamField path="yieldMs" type="number" default="10000">
-Auto-background the command after this delay (ms).
+Return a running process handle after this delay (ms). On the Gateway and in its sandbox, an ordinary yielded command remains owned by its request: the browser's Stop button and typed `/stop` cancel it. Normal model completion leaves it running.
 </ParamField>
 
 <ParamField path="background" type="boolean" default="false">
-Background the command immediately instead of waiting for `yieldMs`. The process timeout still applies after the tool returns.
+Start a deliberately independent service immediately. Request Stop leaves it running; stop it separately with its process handle. Use `yieldMs` for ordinary work. The process timeout still applies after the tool returns.
 </ParamField>
 
 <ParamField path="timeoutSeconds" type="number" default="tools.exec.timeoutSeconds">
@@ -278,10 +278,10 @@ Foreground:
 { "tool": "exec", "command": "ls -la" }
 ```
 
-Background + poll:
+Ordinary work that yields a handle, then poll:
 
 ```json
-{"tool":"exec","command":"npm run build","background":true}
+{"tool":"exec","command":"npm run build","yieldMs":1000}
 {"tool":"process","action":"poll","sessionId":"<id>","timeout":30000}
 ```
 

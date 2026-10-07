@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  cancelExecRequestOwners,
+  captureExecRequestOwners,
+  withExecRequestTurn,
+} from "../infra/exec-request-context.js";
 import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import {
@@ -59,12 +64,33 @@ function runTestExecProcess(params: Partial<Parameters<typeof runExecProcess>[0]
 }
 
 it.each([
-  { reason: "manual-cancel" as const, cleanupFails: false, duringFinalize: false },
-  { reason: "overall-timeout" as const, cleanupFails: true, duringFinalize: false },
-  { reason: "manual-cancel" as const, cleanupFails: false, duringFinalize: true },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: false,
+    duringFinalize: false,
+    requestStop: false,
+  },
+  {
+    reason: "overall-timeout" as const,
+    cleanupFails: true,
+    duringFinalize: false,
+    requestStop: false,
+  },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: false,
+    duringFinalize: true,
+    requestStop: false,
+  },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: false,
+    duringFinalize: true,
+    requestStop: true,
+  },
 ])(
-  "starts and joins targeted sandbox cleanup for $reason (duringFinalize=$duringFinalize)",
-  async ({ reason, cleanupFails, duringFinalize }) => {
+  "starts and joins targeted sandbox cleanup for $reason (duringFinalize=$duringFinalize, requestStop=$requestStop)",
+  async ({ reason, cleanupFails, duringFinalize, requestStop }) => {
     const termination = createDeferred();
     const artifactFinalization = createDeferred();
     const artifactsEntered = createDeferred();
@@ -124,6 +150,19 @@ it.each([
         wait: () => otherExit.promise,
       }));
     const originalSource = new AbortController();
+    const requestIdentity = {
+      runId: "sandbox-request-stop",
+      sessionKey: "agent:main:targeted-cleanup",
+    };
+    const requestOwner = requestStop
+      ? await withExecRequestTurn({ identity: requestIdentity }, async () => {
+          const owner = captureExecRequestOwners(requestIdentity)?.[0];
+          if (!owner) {
+            throw new Error("Expected the sandbox command's request owner");
+          }
+          return owner;
+        })
+      : undefined;
     const authority = createAdmittedRunOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
@@ -133,7 +172,12 @@ it.each([
     });
     const guest = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: "agent:main:targeted-cleanup", operatorAuthority: authority },
-      () => runTestExecProcess({ scopeKey: "targeted-cleanup:guest", sandbox }),
+      () =>
+        runTestExecProcess({
+          scopeKey: "targeted-cleanup:guest",
+          sandbox,
+          requestOwners: requestOwner ? [requestOwner] : undefined,
+        }),
     );
     const other = await runTestExecProcess({ sandbox: otherSandbox });
     markBackgrounded(guest.session);
@@ -147,7 +191,15 @@ it.each([
       if (duringFinalize) {
         guestExit.resolve(createRunExit());
         await artifactsEntered.promise;
-        originalSource.abort(new Error("original invitation revoked during artifact finalization"));
+        if (requestOwner) {
+          cancelExecRequestOwners([requestOwner]);
+          expect(originalSource.signal.aborted).toBe(false);
+          expect(guest.session.requestCancelled).toBe(true);
+        } else {
+          originalSource.abort(
+            new Error("original invitation revoked during artifact finalization"),
+          );
+        }
       } else if (reason === "manual-cancel") {
         guest.kill();
       } else {

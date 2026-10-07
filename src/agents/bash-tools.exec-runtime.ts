@@ -14,6 +14,13 @@ import {
   type ExecApprovalDecision,
   type ExecTarget,
 } from "../infra/exec-approvals.js";
+import {
+  execRequestAbortSignal,
+  retainExecRequestProcess,
+  readExecRequestOwners,
+  withExecRequestOwners,
+  type ExecRequestOwner,
+} from "../infra/exec-request-context.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
@@ -49,6 +56,7 @@ import {
   isProcessSessionIdTaken,
   recordNotifyOnExitRemoval,
   resolveProcessCleanupMs,
+  waitForExecSession,
   tail,
 } from "./bash-process-registry.js";
 import { emitExecProcessCompleted } from "./bash-tools.exec-diagnostics.js";
@@ -249,6 +257,8 @@ function maybeNotifyOnExit(
   if (
     !session.backgrounded ||
     !session.notifyOnExit ||
+    session.requestCancelled ||
+    readExecRequestOwners(session)?.some((owner) => owner.signal.aborted) ||
     session.exitNotified ||
     session.terminalPollObserved
   ) {
@@ -539,6 +549,7 @@ export async function runExecProcess({
   /** Start-time subagent identity resolved from the persisted spawn envelope. */
   subagentSession?: boolean;
   notifyOnExitEmptySuccess?: boolean;
+  requestOwners?: readonly ExecRequestOwner[];
   scopeKey?: string;
   sessionKey?: string;
   agentId?: string;
@@ -562,8 +573,13 @@ export async function runExecProcess({
   initiateSpawn?: SpawnInitiation;
   releaseSpawn?: (reason?: "retry") => void;
 }): Promise<ExecProcessHandle> {
+  const requestSignal = execRequestAbortSignal(opts.requestOwners);
+  const startupSignal =
+    requestSignal && initialStartupSignal
+      ? AbortSignal.any([requestSignal, initialStartupSignal])
+      : (requestSignal ?? initialStartupSignal);
   let assertSourceActive: (() => void) | undefined =
-    captureAgentToolSourceExecutionGuard(initialStartupSignal);
+    captureAgentToolSourceExecutionGuard(startupSignal);
   let operatorAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
   const operatorSignal = operatorAuthority?.signal;
   let releaseOperatorAuthority: (() => void) | undefined;
@@ -577,36 +593,42 @@ export async function runExecProcess({
     OPENCLAW_SHELL: "exec",
   };
 
-  const session: ProcessSession = {
-    id: sessionId,
-    command: opts.command,
-    scopeKey: opts.scopeKey,
-    sessionKey: opts.sessionKey,
-    cleanupMs: resolveProcessCleanupMs(opts.cleanupMs),
-    agentId: opts.agentId,
-    eventRouting: opts.eventRouting,
-    notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
-    notifyFromConversationTurn: opts.notifyFromConversationTurn === true,
-    notifyOnExit: opts.notifyOnExit,
-    notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
-    exitNotified: false,
-    startedAt,
-    cwd: opts.workdir,
-    maxOutputChars: opts.maxOutput,
-    pendingMaxOutputChars: opts.pendingMaxOutput,
-    totalOutputChars: 0,
-    pendingOutput: [],
-    pendingStdoutChars: 0,
-    pendingStderrChars: 0,
-    pendingOutputDropped: false,
-    aggregated: "",
-    tail: "",
-    exited: false,
-    truncated: false,
-    backgrounded: false,
-    cursorKeyMode: opts.usePty ? "unknown" : "normal",
-  };
+  const session: ProcessSession = withExecRequestOwners(
+    {
+      id: sessionId,
+      command: opts.command,
+      scopeKey: opts.scopeKey,
+      sessionKey: opts.sessionKey,
+      cleanupMs: resolveProcessCleanupMs(opts.cleanupMs),
+      agentId: opts.agentId,
+      eventRouting: opts.eventRouting,
+      notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
+      notifyFromConversationTurn: opts.notifyFromConversationTurn === true,
+      notifyOnExit: opts.notifyOnExit,
+      notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
+      exitNotified: false,
+      startedAt,
+      cwd: opts.workdir,
+      maxOutputChars: opts.maxOutput,
+      pendingMaxOutputChars: opts.pendingMaxOutput,
+      totalOutputChars: 0,
+      pendingOutput: [],
+      pendingStdoutChars: 0,
+      pendingStderrChars: 0,
+      pendingOutputDropped: false,
+      aggregated: "",
+      tail: "",
+      exited: false,
+      truncated: false,
+      backgrounded: false,
+      cursorKeyMode: opts.usePty ? "unknown" : "normal",
+    },
+    opts.requestOwners,
+  );
   withoutGatewayToolCallerIdentity(() => addSession(session));
+  if (opts.requestOwners?.length) {
+    retainExecRequestProcess(opts.requestOwners, waitForExecSession(session));
+  }
 
   // Foreground delivery keeps its caller context only until yield, abort, or exit.
   // Clearing the callback also releases the completed turn's captured authority.
@@ -699,7 +721,11 @@ export async function runExecProcess({
       if (!opts.sandbox && managedRun?.waitForExtinction) {
         // Root completion does not release descendants that retained the group's lineage fd.
         managedRun.cancel();
-        await managedRun.waitForExtinction();
+        const extinction = await managedRun.waitForExtinction();
+        session.cleanupUncertain = extinction?.status === "uncertain";
+        if (session.requestCancelled && session.cleanupUncertain) {
+          throw new Error("Command descendant cleanup could not be confirmed");
+        }
       }
       if (outcome.exitReason !== "exit") {
         beginSandboxTermination();
@@ -786,6 +812,22 @@ export async function runExecProcess({
   };
 
   let managedRun: ManagedRun | null = null;
+  const onRequestCancelled = () => {
+    session.requestCancelled = true;
+    session.cancellationRequested = true;
+    onUpdate = undefined;
+    if (managedRun) {
+      managedRun.cancel("manual-cancel");
+    } else {
+      // The supervisor reserves the process identity before asynchronous launch completes.
+      supervisor.cancel(sessionId, "manual-cancel");
+    }
+    beginSandboxTermination();
+  };
+  requestSignal?.addEventListener("abort", onRequestCancelled, { once: true });
+  if (requestSignal?.aborted) {
+    onRequestCancelled();
+  }
   const launchLifecycle = createExecLaunchLifecycle(initialInitiateSpawn, initialReleaseSpawn);
   const onOperatorRevoked = () => managedRun?.cancel("manual-cancel");
   let usingPty = opts.usePty && !opts.sandbox;
@@ -895,6 +937,7 @@ export async function runExecProcess({
       operatorSignal?.removeEventListener("abort", onOperatorRevoked);
       releaseOperatorAuthority?.();
       releaseOperatorAuthority = undefined;
+      requestSignal?.removeEventListener("abort", onRequestCancelled);
     });
     emitExecProcessCompleted({
       command: opts.command,
@@ -954,6 +997,7 @@ export async function runExecProcess({
       operatorSignal?.removeEventListener("abort", onOperatorRevoked);
       releaseOperatorAuthority?.();
       releaseOperatorAuthority = undefined;
+      requestSignal?.removeEventListener("abort", onRequestCancelled);
     }
   });
 

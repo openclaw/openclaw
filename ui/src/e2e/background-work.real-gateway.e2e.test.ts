@@ -7,10 +7,7 @@ import type {
   SessionsProcessesListResult,
   SessionsProcessesStopResult,
 } from "../../../packages/gateway-protocol/src/schema/session-processes.js";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "../../../test/helpers/openclaw-test-instance.ts";
+import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import type { ChatHistoryResult } from "../pages/chat/chat-history-snapshot.ts";
@@ -21,6 +18,7 @@ import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import {
   backgroundWorkFixture as fixture,
+  createBackgroundWorkInstance,
   observeBackgroundWorkRpc,
   startBackgroundWorkProvider,
   type BackgroundWorkRpc,
@@ -71,44 +69,7 @@ const suite = createControlUiE2eSuite({
         saveProof,
       );
     try {
-      instance = await createOpenClawTestInstance({
-        name: "background-work",
-        env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
-        config: {
-          gateway: { controlUi: { enabled: true } },
-          cron: { enabled: false },
-          // Exercise ordinary shell exec and native spawn, not Code Mode discovery.
-          tools: {
-            profile: "full",
-            codeMode: false,
-            toolSearch: false,
-            exec: { host: "gateway", mode: "full", notifyOnExit: false },
-          },
-          agents: {
-            ownership: "explicit",
-            defaults: {
-              model: "background-fixture/parent",
-              modelPolicy: { allow: ["background-fixture/*"] },
-            },
-            entries: { main: { identity: { name: "Background work fixture" } } },
-          },
-          models: {
-            catalogRefresh: { enabled: false },
-            providers: {
-              "background-fixture": {
-                api: "openai-responses",
-                apiKey: "synthetic-background-fixture-key",
-                baseUrl: "http://127.0.0.1:" + provider.port + "/v1",
-                models: [
-                  { id: "parent", name: "Fixture parent" },
-                  { id: "child", name: "Fixture child" },
-                ],
-              },
-            },
-          },
-          plugins: { allow: [] },
-        },
-      });
+      instance = await createBackgroundWorkInstance(provider.port);
       await instance.startGateway();
       return { baseUrl: "http://127.0.0.1:" + instance.port + "/", close: cleanup };
     } catch (error) {

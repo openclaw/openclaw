@@ -57,6 +57,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run.prepared-harness-credentials.test.ts",
   "src/agents/embedded-agent-runner/run.recovery-deadline.test.ts",
   "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
+  "src/agents/embedded-agent-runner/run.session-prompt-state.test.ts",
   "src/agents/embedded-agent-runner/run.terminal-timeout-delivery.integration.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-execution-phase.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-native-provider-authority.test.ts",

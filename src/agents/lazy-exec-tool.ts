@@ -1,6 +1,7 @@
 import { resolveExecCommandHighlighting } from "../config/exec-command-highlighting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
+import { captureExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   getInstallationTarget,
@@ -35,6 +36,10 @@ export function createLazyExecTool(
 ): AnyAgentTool {
   // Native tool callbacks can arrive outside the scope that constructed this lazy tool.
   const installationTarget = getInstallationTarget();
+  const requestOwners = captureExecRequestOwners({
+    runId: defaults?.runId,
+    sessionId: defaults?.sessionId,
+  });
   const processToolAvailabilityRef = defaults?.processToolAvailabilityRef ?? {};
   let loadedTool: LoadedExecTool | undefined;
   let loadingTool: Promise<LoadedExecTool> | undefined;
@@ -44,7 +49,9 @@ export function createLazyExecTool(
     }
     loadingTool ??= bashToolsModuleLoader.load().then(({ createExecTool }) => {
       loadedTool = withInstallationTarget(installationTarget, () =>
-        createExecTool({ ...defaults, processToolAvailabilityRef }),
+        createExecTool(
+          withExecRequestOwners({ ...defaults, processToolAvailabilityRef }, requestOwners),
+        ),
       );
       return loadedTool;
     });
