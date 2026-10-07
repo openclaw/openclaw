@@ -715,7 +715,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/user-profile-writes.role.test.ts",
   "src/state/user-profile-email.test.ts",
   "src/state/user-profiles.avatar-admission.test.ts",
-  "src/state/user-profiles.avatar-lifetime.test.ts",
   "src/state/user-profiles.test.ts",
   "src/state/user-profiles-multi-account.test.ts",
   "src/commands/agents.commands.list.worker.test.ts",
