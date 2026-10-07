@@ -159,6 +159,8 @@ Enable only the Microsoft Graph application permissions needed for the Teams sco
    - `ChannelMessage.Read.All` for channel attachments and channel history.
    - `Chat.Read.All` for group-chat attachments and group-chat history.
    - `Files.Read.All` when attachment bytes must be downloaded from SharePoint/OneDrive storage; history-only setups do not need it.
+   - `Sites.ReadWrite.All` for outbound file sends to SharePoint. Standard channels can omit `sharePointSiteId` and resolve the team's own site; `Sites.Read.All` is enough for that lookup.
+   - `Channel.ReadBasic.All` so automatic discovery can reject private/shared channels before uploading to the parent team site. See [Sending files in group chats](/channels/msteams/messaging#sending-files-in-group-chats).
 2. **Grant admin consent** for the tenant.
 3. Bump the Teams app **manifest version**, re-upload, and **reinstall the app in Teams**.
 4. **Fully quit and relaunch Teams** to clear cached app metadata.

@@ -1224,8 +1224,6 @@
 ["extensions/msteams/src/send.test.ts","./graph-chat.js","904eeed6d79d0ae731a1e254e17b3ee71a84c51771585fecfe09a02331297b43",1]
 ["extensions/msteams/src/send.test.ts","./messenger.js","99b6eb89844ad3315fde8cfc7faca5395d94fa7588bc551f4a23101cfadde7be",1]
 ["extensions/msteams/src/send.test.ts","./pending-uploads-fs.js","fd907d7076809c347a6c14c152bd042bfd525554b5692bacc207c37289466283",1]
-["extensions/msteams/src/send.test.ts","./runtime.js","04923df2df31099864233667a0466dca50d7579ed4f8aac76eb0c8cbfc83b716",1]
-["extensions/msteams/src/send.test.ts","./sdk-proactive.js","4be6b24d5c6b13dd75b529f8def9f1e1012be565c505b0048ab84f2730ad9ca8",1]
 ["extensions/msteams/src/send.test.ts","./sdk.js","4cfd1b102f783f02f2ed7120f44af7b21e84f2c56b014ca29ee35813d7e5adb3",1]
 ["extensions/msteams/src/send.test.ts","./send-context.js","471036ebbe110165720f583695503819bcd2ef060a01af9bb0cb2f7761c37954",1]
 ["extensions/msteams/src/send.test.ts","openclaw/plugin-sdk/outbound-media","91d58aa978a1d14b74bb7139099abdcd6079fa245139a7b089644614e80e88b2",1]

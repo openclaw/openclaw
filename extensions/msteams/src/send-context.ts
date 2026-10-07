@@ -244,6 +244,7 @@ export async function resolveMSTeamsSendContext(params: { cfg: OpenClawConfig; t
     sdkCloudOptions,
     tokenProvider,
     sharePointSiteId: msteamsCfg.sharePointSiteId,
+    sharePointFolder: msteamsCfg.sharePointFolder,
     mediaMaxBytes,
   };
 }

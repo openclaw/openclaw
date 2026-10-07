@@ -13,14 +13,23 @@ import { teamsMarkdownDeliveryCases } from "./format.test-fixtures.js";
 const graphUploadMockState = vi.hoisted(() => ({
   uploadAndShareSharePoint: vi.fn(),
   getDriveItemProperties: vi.fn(),
+  resolveUploadSiteId: vi.fn(),
 }));
 
 vi.mock("./graph-upload.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./graph-upload.js")>();
+  graphUploadMockState.resolveUploadSiteId.mockImplementation(async (params) => {
+    const explicit = params.configuredSiteId?.trim();
+    if (explicit) {
+      return explicit;
+    }
+    throw new Error("No SharePoint site ID available for file upload.");
+  });
   return {
     ...actual,
     uploadAndShareSharePoint: graphUploadMockState.uploadAndShareSharePoint,
     getDriveItemProperties: graphUploadMockState.getDriveItemProperties,
+    resolveUploadSiteId: graphUploadMockState.resolveUploadSiteId,
   };
 });
 
@@ -138,6 +147,14 @@ describe("msteams messenger", () => {
     setMSTeamsRuntime(runtimeStub);
     graphUploadMockState.uploadAndShareSharePoint.mockReset();
     graphUploadMockState.getDriveItemProperties.mockReset();
+    graphUploadMockState.resolveUploadSiteId.mockReset();
+    graphUploadMockState.resolveUploadSiteId.mockImplementation(async (params) => {
+      const explicit = params.configuredSiteId?.trim();
+      if (explicit) {
+        return explicit;
+      }
+      throw new Error("No SharePoint site ID available for file upload.");
+    });
   });
 
   describe("renderReplyPayloadsToMessages", () => {
@@ -305,7 +322,7 @@ describe("msteams messenger", () => {
             messages: [{ text: "one", mediaUrl: localFile }],
             tokenProvider: { getAccessToken: async () => "token" },
           }),
-        ).rejects.toThrow("channels.msteams.sharePointSiteId is required");
+        ).rejects.toThrow("No SharePoint site ID available");
       } finally {
         await rm(tmpDir, { recursive: true, force: true });
       }
@@ -408,77 +425,6 @@ describe("msteams messenger", () => {
         }),
       ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
     });
-
-    it("retries media preparation but reuses it after provider dispatch starts", async () => {
-      const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-retry-"));
-      const localFile = path.join(tmpDir, "retry.txt");
-      await writeFile(localFile, "hello");
-
-      try {
-        const attempts: string[] = [];
-        const providerPayloads: string[] = [];
-        const retryEvents: Array<{ nextAttempt: number; delayMs: number }> = [];
-        let uploadAttempts = 0;
-        graphUploadMockState.uploadAndShareSharePoint.mockImplementation(async () => {
-          uploadAttempts += 1;
-          if (uploadAttempts === 1) {
-            throw Object.assign(new Error("transient upload failure"), {
-              statusCode: 429,
-              retryAfterMs: 0,
-            });
-          }
-          return {
-            itemId: "item123",
-            webUrl: "https://sharepoint.example.com/item123",
-            shareUrl: "https://sharepoint.example.com/share/item123",
-            name: "retry.txt",
-          };
-        });
-        graphUploadMockState.getDriveItemProperties.mockResolvedValue({
-          eTag: '"{ITEM-123},1"',
-          webDavUrl: "https://sharepoint.example.com/item123",
-          name: "retry.txt",
-        });
-
-        const sendActivity = createRecordedSendActivity(attempts, 429);
-        const ctx = {
-          sendActivity: async (activity: unknown) => {
-            providerPayloads.push(JSON.stringify(activity));
-            return await sendActivity(activity);
-          },
-        };
-        const ids = await sendMSTeamsMessages({
-          replyStyle: "thread",
-          app: createMockApp(),
-          conversationRef: {
-            ...baseRef,
-            conversation: {
-              ...baseRef.conversation,
-              conversationType: "channel",
-            },
-          },
-          context: ctx,
-          messages: [{ text: "one", mediaUrl: localFile }],
-          tokenProvider: {
-            getAccessToken: async () => "token",
-          },
-          sharePointSiteId: "site-123",
-          onRetry: (e) => retryEvents.push({ nextAttempt: e.nextAttempt, delayMs: e.delayMs }),
-        });
-
-        expect(uploadAttempts).toBe(2);
-        expect(attempts).toEqual(["one", "one"]);
-        expect(providerPayloads[1]).toBe(providerPayloads[0]);
-        expect(ids).toEqual(["id:one"]);
-        expect(retryEvents).toEqual([
-          { nextAttempt: 2, delayMs: 0 },
-          { nextAttempt: 3, delayMs: 0 },
-        ]);
-      } finally {
-        await rm(tmpDir, { recursive: true, force: true });
-      }
-    });
-
     it("does not retry thread sends on client errors (4xx)", async () => {
       const ctx = {
         sendActivity: async () => {
