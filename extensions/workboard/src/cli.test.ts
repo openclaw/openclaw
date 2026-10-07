@@ -1,6 +1,9 @@
 // Workboard tests cover cli plugin behavior.
+import fs from "node:fs";
+import path from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWorkboardCli } from "./cli.js";
 import type { WorkboardStore } from "./store.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
@@ -23,6 +26,8 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", async () => {
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
   getRuntimeConfig: gatewayRuntime.getRuntimeConfig,
 }));
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createProgram(store: WorkboardStore): Command {
   const program = new Command();
@@ -302,5 +307,35 @@ describe("registerWorkboardCli", () => {
       }),
     ).rejects.toThrow("--status must be one of");
     await expect(store.get(card.id)).resolves.toMatchObject({ status: "todo" });
+  });
+
+  it("attaches a local file with detected type, note, and identical bytes", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const card = await store.create({ title: "Attach target" });
+    const dir = tempDirs.make("openclaw-workboard-cli-attach-");
+    const bytes = Buffer.concat([
+      Buffer.from("89504e470d0a1a0a0000000d49484452", "hex"),
+      Buffer.alloc(512 * 1024, 3),
+    ]);
+    const filePath = path.join(dir, "shot.png");
+    fs.writeFileSync(filePath, bytes);
+    const program = createProgram(store);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(
+        ["workboard", "attach", card.id.slice(0, 8), filePath, "--note", "screen", "--json"],
+        { from: "user" },
+      );
+    });
+
+    const { attachment } = JSON.parse(output);
+    expect(attachment).toMatchObject({
+      fileName: "shot.png",
+      mimeType: "image/png",
+      byteSize: bytes.length,
+      note: "screen",
+    });
+    const stored = await store.getAttachment(attachment.id);
+    expect(Buffer.from(stored?.contentBase64 ?? "", "base64").equals(bytes)).toBe(true);
   });
 });

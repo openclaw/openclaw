@@ -22,7 +22,8 @@ export const MAX_CARD_ATTACHMENTS = 20;
 export const MAX_CARD_WORKER_LOGS = 40;
 export const MAX_WORKER_CONTEXT_PARENTS = 6;
 export const MAX_WORKER_CONTEXT_RECENT_CARDS = 5;
-export const MAX_ATTACHMENT_BYTES = 256 * 1024;
+// Base64 of the largest attachment must still fit one 25 MiB Gateway frame.
+export const MAX_ATTACHMENT_BYTES = 16 * 1024 * 1024;
 export const MAX_CARD_DIAGNOSTICS = 12;
 export const MAX_CARD_NOTIFICATIONS = 20;
 export const MAX_CARD_METADATA_BYTES = 24 * 1024;

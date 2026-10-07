@@ -5,6 +5,7 @@ import { addGatewayClientOptions, callGatewayFromCli } from "openclaw/plugin-sdk
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readLocalAttachmentFile } from "./attachment-file.js";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
 import { redactClaimToken, redactDispatchResult } from "./card-redaction.js";
 import type { WorkboardStore } from "./store.js";
@@ -209,6 +210,46 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       const updated = await params.store.move(card.id, options.status, undefined);
       writeCard(updated, options);
     });
+
+  workboard
+    .command("attach")
+    .argument("<id>", "Card id or prefix")
+    .argument("<file>", "File to attach")
+    .description("Attach a file to a Workboard card")
+    .option("--name <fileName>", "Attachment file name (default: file basename)")
+    .option("--mime-type <type>", "Attachment MIME type (default: detected)")
+    .option("--note <text>", "Attachment note")
+    .option("--json", "Print JSON", false)
+    .action(
+      async (
+        id: string,
+        file: string,
+        options: JsonOptions & { name?: string; mimeType?: string; note?: string },
+      ) => {
+        const cards = await params.store.list();
+        const { card, error } = resolveWorkboardCardByIdOrPrefix(cards, id);
+        if (!card) {
+          throw new Error(error);
+        }
+        const input = await readLocalAttachmentFile({
+          filePath: file,
+          fileName: options.name,
+          mimeType: options.mimeType,
+        });
+        const updated = await params.store.addAttachment(card.id, {
+          ...input,
+          note: options.note,
+        });
+        const attachment = updated.metadata?.attachments?.at(-1);
+        if (options.json) {
+          writeJson({ card: redactClaimToken(updated), attachment });
+        } else if (attachment) {
+          writeLine(
+            `${attachment.id}  ${attachment.byteSize} bytes  ${attachment.fileName}  -> ${card.id.slice(0, 8)}`,
+          );
+        }
+      },
+    );
 
   addGatewayClientOptions(
     workboard
