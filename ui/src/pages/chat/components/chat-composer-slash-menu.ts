@@ -478,13 +478,12 @@ export function handleSlashMenuKeydown(
 }
 
 export function isSlashMenuVisible(state: SlashMenuState): boolean {
-  if (!state.slashMenuOpen) {
-    return false;
-  }
-  if (state.slashMenuMode === "args") {
-    return Boolean(state.slashMenuCommand && state.slashMenuArgItems.length > 0);
-  }
-  return state.slashMenuItems.length > 0;
+  return (
+    state.slashMenuOpen &&
+    (state.slashMenuMode === "args"
+      ? Boolean(state.slashMenuCommand && state.slashMenuArgItems.length > 0)
+      : state.slashMenuItems.length > 0)
+  );
 }
 
 export function getActiveSlashMenuOptionId(state: SlashMenuState, paneId: string): string | null {

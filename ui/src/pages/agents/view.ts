@@ -183,33 +183,36 @@ export function renderAgents(props: AgentsProps) {
   };
 
   const renderSelectedPanel = (agent: AgentsListResult["agents"][number]) => {
+    const configActions = {
+      configForm: config,
+      configLoading: props.config.configLoading,
+      configSaving: props.config.configSaving,
+      configDirty: props.config.configFormDirty,
+      canUpdateConfig: props.access.canUpdateConfig,
+      onConfigReload: props.onConfigReload,
+      onConfigSave: props.onConfigSave,
+    };
     switch (props.activePanel) {
       case "overview":
         return keyed(
           agent.id,
           renderAgentOverview({
+            ...configActions,
             applicationConfig: props.applicationConfig,
             agent,
             defaultId,
-            configForm: config,
             agentFilesList: props.agentFiles.agentFilesList,
             agentIdentity: props.agentIdentityById[agent.id] ?? null,
             identityDraft: props.identityDraft,
             identityAvatarLoader: props.identityAvatarLoader,
             identitySaving: props.identitySaving,
             identityError: props.identityError,
-            canUpdateConfig: props.access.canUpdateConfig,
             canUpdateIdentity: props.access.canUpdateIdentity,
-            configLoading: props.config.configLoading,
-            configSaving: props.config.configSaving,
-            configDirty: props.config.configFormDirty,
             modelCatalog: props.modelCatalog.models,
             decisionModels: props.modelCatalog.decisionModels ?? [],
             modelSelectionPolicy: props.modelCatalog.modelSelectionPolicy,
             modelCatalogRetired: props.modelCatalog.retired,
             modelCatalogStatus: props.modelCatalogStatus,
-            onConfigReload: props.onConfigReload,
-            onConfigSave: props.onConfigSave,
             onIdentityFieldChange: props.onIdentityFieldChange,
             onIdentityAvatarSelect: props.onIdentityAvatarSelect,
             onIdentitySave: props.onIdentitySave,
@@ -242,11 +245,8 @@ export function renderAgents(props: AgentsProps) {
         });
       case "tools":
         return renderAgentTools({
+          ...configActions,
           agentId: agent.id,
-          configForm: config,
-          configLoading: props.config.configLoading,
-          configSaving: props.config.configSaving,
-          configDirty: props.config.configFormDirty,
           toolsCatalogLoading: props.tools.toolsCatalogLoading,
           toolsCatalogError: props.tools.toolsCatalogError,
           toolsCatalogResult: props.tools.toolsCatalogResult,
@@ -255,35 +255,26 @@ export function renderAgents(props: AgentsProps) {
           toolsEffectiveResult: props.tools.toolsEffectiveResult,
           runtimeSessionKey: props.runtimeSessionKey,
           runtimeSessionMatchesSelectedAgent: props.runtimeSessionMatchesSelectedAgent,
-          canUpdateConfig: props.access.canUpdateConfig,
           githubIdentity: props.githubIdentity,
           onOpenGitHubConnections: props.onOpenGitHubConnections,
           onProfileChange: props.onToolsProfileChange,
           onOverridesChange: props.onToolsOverridesChange,
-          onConfigReload: props.onConfigReload,
-          onConfigSave: props.onConfigSave,
         });
       case "skills":
         return renderAgentSkills({
+          ...configActions,
           agentId: agent.id,
           report: props.agentSkills.agentSkillsReport,
           loading: props.agentSkills.agentSkillsLoading,
           error: props.agentSkills.agentSkillsError,
           activeAgentId: props.agentSkills.agentSkillsAgentId,
-          configForm: config,
-          configLoading: props.config.configLoading,
-          configSaving: props.config.configSaving,
-          configDirty: props.config.configFormDirty,
           filter: props.agentSkills.skillsFilter,
           canPatchConfig: props.access.canPatchConfig,
-          canUpdateConfig: props.access.canUpdateConfig,
           onFilterChange: props.onSkillsFilterChange,
           onRefresh: props.onSkillsRefresh,
           onToggle: props.onAgentSkillToggle,
           onClear: props.onAgentSkillsClear,
           onDisableAll: props.onAgentSkillsDisableAll,
-          onConfigReload: props.onConfigReload,
-          onConfigSave: props.onConfigSave,
         });
       case "channels":
         return renderAgentChannels({

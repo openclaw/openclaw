@@ -83,30 +83,24 @@ function resolveExecApprovalsAgents(
   config: Record<string, unknown> | null,
   form: ExecApprovalsFile | null,
 ): ExecApprovalsAgentOption[] {
-  const configAgents = resolveConfigAgents(config);
-  const approvalsAgents = Object.keys(form?.agents ?? {});
-  const merged = new Map<string, ExecApprovalsAgentOption>();
-  configAgents.forEach((agent) => merged.set(agent.id, agent));
-  approvalsAgents.forEach((id) => {
-    if (merged.has(id)) {
-      return;
+  const merged = new Map<string, ExecApprovalsAgentOption>(
+    resolveConfigAgents(config).map((agent) => [agent.id, agent]),
+  );
+  for (const id of Object.keys(form?.agents ?? {})) {
+    if (!merged.has(id)) {
+      merged.set(id, { id });
     }
-    merged.set(id, { id });
-  });
+  }
   const agents = Array.from(merged.values());
   if (agents.length === 0) {
     agents.push({ id: "main", isDefault: true });
   }
   agents.sort((a, b) => {
-    if (a.isDefault && !b.isDefault) {
-      return -1;
-    }
-    if (!a.isDefault && b.isDefault) {
-      return 1;
-    }
     const aLabel = a.name?.trim() ? a.name : a.id;
     const bLabel = b.name?.trim() ? b.name : b.id;
-    return aLabel.localeCompare(bLabel);
+    return (
+      Number(Boolean(b.isDefault)) - Number(Boolean(a.isDefault)) || aLabel.localeCompare(bLabel)
+    );
   });
   return agents;
 }
@@ -464,10 +458,7 @@ function renderExecApprovalsAllowlist(state: ExecApprovalsState) {
         <button
           class="btn btn--sm"
           ?disabled=${state.disabled}
-          @click=${() => {
-            const next = [...entries, { pattern: "" }];
-            state.onPatch(allowlistPath, next);
-          }}
+          @click=${() => state.onPatch(allowlistPath, [...entries, { pattern: "" }])}
         >
           ${t("devices.execApprovals.addPattern")}
         </button>
@@ -503,13 +494,10 @@ function renderExecApprovalsAllowlist(state: ExecApprovalsState) {
               <button
                 class="btn btn--sm danger"
                 ?disabled=${state.disabled}
-                @click=${() => {
-                  if (state.allowlist.length <= 1) {
-                    state.onRemove(allowlistPath);
-                    return;
-                  }
-                  state.onRemove([...allowlistPath, index]);
-                }}
+                @click=${() =>
+                  state.onRemove(
+                    state.allowlist.length <= 1 ? allowlistPath : [...allowlistPath, index],
+                  )}
               >
                 ${t("devices.execApprovals.remove")}
               </button>

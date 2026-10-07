@@ -234,13 +234,9 @@ export function setSidebarOpen(layout: SidebarLayout, open: boolean): SidebarLay
   const next = structuredClone(layout);
   if (open) {
     next.columns[0] ??= createSidebarColumn();
-    if (next.expanded) {
-      next.expanded = false;
-      delete next.expandedSide;
-    }
   }
   next.open = open;
-  if (!open && next.expandedSide) {
+  if (open ? next.expanded : next.expandedSide) {
     next.expanded = false;
     delete next.expandedSide;
   }

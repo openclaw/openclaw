@@ -209,13 +209,7 @@ export function projectTranscriptChain(
       const transcriptItems = cached.value.transcriptItems.slice();
       collapsedItems[live.owner.collapsedIndex] = owner;
       transcriptItems[live.owner.transcriptIndex] = owner;
-      const value = {
-        collapsedItems,
-        transcriptItems,
-        workGroups: cached.value.workGroups,
-        continuations: cached.value.continuations,
-        searchActive: cached.value.searchActive,
-      };
+      const value = { ...cached.value, collapsedItems, transcriptItems };
       const updatedOwner = { ...live.owner, item: owner };
       const updatedLive = { ...live, item: next, owner: updatedOwner };
       liveChains.set(value, {

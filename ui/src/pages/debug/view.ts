@@ -47,13 +47,9 @@ type DebugProps = {
   onCall: () => void;
 };
 
-function renderJsonRow(title: string, value: unknown) {
-  return renderSettingsRow({
-    title,
-    stacked: true,
-    control: html`<pre class="code-block" role="group" aria-label=${title} tabindex="0">
-${guard([value], () => unsafeHTML(highlightJsonHtml(JSON.stringify(value ?? {}, null, 2))))}</pre>`,
-  });
+function renderCodeBlock(title: string, value: unknown, format: () => string) {
+  return html`<pre class="code-block" role="group" aria-label=${title} tabindex="0">
+${guard([value], () => unsafeHTML(highlightJsonHtml(format())))}</pre>`;
 }
 
 function renderSecurityRow(props: DebugProps) {
@@ -118,8 +114,7 @@ function renderEventRow(evt: EventLogEntry) {
     title: evt.event,
     description: formatTimeMs(evt.ts, undefined, ""),
     stacked: true,
-    control: html`<pre class="code-block" role="group" aria-label=${evt.event} tabindex="0">
-${guard([evt.payload], () => unsafeHTML(highlightJsonHtml(formatEventPayload(evt.payload))))}</pre>`,
+    control: renderCodeBlock(evt.event, evt.payload, () => formatEventPayload(evt.payload)),
   });
 }
 
@@ -141,9 +136,16 @@ export function renderDebug(props: DebugProps) {
     },
     html`
       ${renderSnapshotOffline(props)} ${renderDiagnosticsError(props.diagnosticsError)}
-      ${renderSecurityRow(props)} ${renderJsonRow(t("debug.status"), props.status)}
-      ${renderJsonRow(t("debug.health"), props.health)}
-      ${renderJsonRow(t("debug.lastHeartbeat"), props.heartbeat)}
+      ${renderSecurityRow(props)}
+      ${(["status", "health", "heartbeat"] as const).map((key) => {
+        const title = t(key === "heartbeat" ? "debug.lastHeartbeat" : `debug.${key}`);
+        const value = props[key];
+        return renderSettingsRow({
+          title,
+          stacked: true,
+          control: renderCodeBlock(title, value, () => JSON.stringify(value ?? {}, null, 2)),
+        });
+      })}
     `,
   );
 
@@ -248,13 +250,7 @@ ${props.callError}</pre>
           ? html`
               <div class="settings-row settings-row--stacked">
                 ${renderSettingsStatus({ kind: "ok", label: t("common.ok") })}
-                <pre
-                  class="code-block"
-                  role="group"
-                  aria-label=${`${props.callMethod}: ${t("common.ok")}`}
-                  tabindex="0"
-                >
-${guard([props.callResult], () => unsafeHTML(highlightJsonHtml(props.callResult!)))}</pre>
+                ${renderCodeBlock(`${props.callMethod}: ${t("common.ok")}`, props.callResult, () => props.callResult!)}
               </div>
             `
           : nothing
@@ -266,8 +262,7 @@ ${guard([props.callResult], () => unsafeHTML(highlightJsonHtml(props.callResult!
     { title: t("debug.modelsTitle"), description: t("debug.modelsSubtitle") },
     html`
       <div class="settings-row settings-row--stacked">
-        <pre class="code-block" role="group" aria-label=${t("debug.modelsTitle")} tabindex="0">
-${guard([props.models], () => unsafeHTML(highlightJsonHtml(JSON.stringify(props.models ?? [], null, 2))))}</pre>
+        ${renderCodeBlock(t("debug.modelsTitle"), props.models, () => JSON.stringify(props.models ?? [], null, 2))}
       </div>
     `,
   );
