@@ -14,7 +14,20 @@ import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
 
 const storeSpy = vi.hoisted(() => ({
   onMove: null as ((from: string, to: string, rootDir: string) => void) | null,
+  onRemove: null as ((relativePath: string) => void) | null,
 }));
+const deliverLogs = vi.hoisted(() => ({ warn: vi.fn() }));
+
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      ...(subsystem === "outbound/deliver" ? deliverLogs : {}),
+    }),
+  };
+});
 
 vi.mock("@openclaw/fs-safe/store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/fs-safe/store")>();
@@ -24,6 +37,10 @@ vi.mock("@openclaw/fs-safe/store", async (importOriginal) => {
       const store = actual.fileStore(options);
       return {
         ...store,
+        remove: async (relativePath: string) => {
+          storeSpy.onRemove?.(relativePath);
+          return await store.remove(relativePath);
+        },
         root: async () => {
           const root = await store.root();
           return {
@@ -92,6 +109,8 @@ beforeEach(async () => {
   sourceDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "spool-src-")));
   spoolRoot = path.join(stateDir, "delivery-queue-media");
   storeSpy.onMove = null;
+  storeSpy.onRemove = null;
+  deliverLogs.warn.mockClear();
 });
 
 afterEach(async () => {
@@ -280,6 +299,31 @@ describe("ownership helpers", () => {
     expect(await exists(generationFinal)).toBe(false);
     expect(await exists(generationPartial)).toBe(false);
     expect(await exists(outside)).toBe(true);
+  });
+
+  it("warns when a spool artifact cannot be removed and keeps releasing the rest", async () => {
+    const stuck = await seedArtifact(ARTIFACT_A, 0);
+    const removable = await seedArtifact(ARTIFACT_B, 0);
+    storeSpy.onRemove = (relativePath) => {
+      if (relativePath === ARTIFACT_A) {
+        throw new Error("EACCES: permission denied");
+      }
+    };
+
+    await expect(releaseSpoolArtifacts([stuck, removable], stateDir)).resolves.toBeUndefined();
+
+    expect(await exists(stuck)).toBe(true);
+    expect(await exists(removable)).toBe(false);
+    expect(deliverLogs.warn).toHaveBeenCalledOnce();
+    expect(deliverLogs.warn.mock.calls[0]?.[0]).toContain(
+      `failed to remove delivery queue media artifact ${ARTIFACT_A}: Error: EACCES`,
+    );
+  });
+
+  it("stays quiet when a released artifact is already gone", async () => {
+    await releaseSpoolArtifacts([path.join(spoolRoot, ARTIFACT_A)], stateDir);
+
+    expect(deliverLogs.warn).not.toHaveBeenCalled();
   });
 });
 
