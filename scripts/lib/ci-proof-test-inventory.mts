@@ -2604,7 +2604,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server-kernel.test.ts",
   "src/gateway/server-lifetime-sidecars.test.ts",
   "src/gateway/server-maintenance.delivery-queue.test.ts",
-  "src/gateway/server-maintenance.recipients.test.ts",
   "src/gateway/server-maintenance.telemetry.test.ts",
   "src/gateway/server-maintenance.test.ts",
   "src/gateway/server-methods-list.test.ts",
