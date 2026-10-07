@@ -1,6 +1,7 @@
 import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage, WASocket } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
@@ -510,12 +511,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       let resolvePrepared: ((inbound: PreparedInbound | null | undefined) => void) | undefined;
       // A redelivery must not replace the first accepted delivery's preparation.
       if (durableId && !preparedInboundByDurableId.has(durableId)) {
-        if (preparedInboundByDurableId.size >= 1000) {
-          const oldest = preparedInboundByDurableId.keys().next().value;
-          if (oldest !== undefined) {
-            preparedInboundByDurableId.delete(oldest);
-          }
-        }
+        pruneMapToMaxSize(preparedInboundByDurableId, 999);
         const prepared = createDeferred<PreparedInbound | null | undefined>();
         resolvePrepared = prepared.resolve;
         preparedInboundByDurableId.set(durableId, prepared.promise);

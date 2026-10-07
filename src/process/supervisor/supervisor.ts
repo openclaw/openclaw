@@ -86,7 +86,6 @@ export function createProcessSupervisor(): ProcessSupervisor & {
   const ownedRuns = new Set<OwnedRun>();
   const scopeCleanupOwners = new Map<string, Set<ScopeCleanupOwner>>();
   const startingScopes = new Map<string, StartingScope>();
-  let shuttingDown = false;
   let shutdownPromise: Promise<void> | null = null;
   let cleanupFailure: { error: unknown } | undefined;
 
@@ -645,7 +644,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
   };
 
   const spawn = (input: SpawnInput): Promise<ManagedRun> => {
-    if (shuttingDown) {
+    if (shutdownPromise) {
       return Promise.reject(new Error("process supervisor is shut down"));
     }
     const scopeKey = normalizeOptionalString(input.scopeKey);
@@ -708,7 +707,6 @@ export function createProcessSupervisor(): ProcessSupervisor & {
 
   const shutdown = (): Promise<void> => {
     // Publish the admission fence before cancellation can invoke owner callbacks.
-    shuttingDown = true;
     return (shutdownPromise ??= Promise.resolve().then(async () => {
       while (ownedRuns.size) {
         for (const owner of ownedRuns) {

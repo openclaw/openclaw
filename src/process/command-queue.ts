@@ -184,10 +184,10 @@ function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]):
 }
 
 async function runQueueEntryTask(
-  lane: string,
   entry: QueueEntry,
   marker: CommandLaneTaskMarker,
 ): Promise<unknown> {
+  const { lane } = marker;
   const taskPromise = Promise.resolve().then(() => entry.task(marker));
   const taskTimeoutMs = entry.taskTimeoutMs;
   if (taskTimeoutMs === undefined) {
@@ -383,7 +383,7 @@ function drainLane(
       void (async () => {
         const startTime = Date.now();
         try {
-          const result = await runQueueEntryTask(lane, entry, {
+          const result = await runQueueEntryTask(entry, {
             lane,
             taskId,
             generation: taskGeneration,

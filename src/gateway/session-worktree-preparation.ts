@@ -185,9 +185,7 @@ async function resolveSpawnParentWorktreeSource(
     return {
       workspace: project.repoRoot,
       source: { kind: "project", id: projectId },
-      withCurrent: async (run) => {
-        return await run({ assertCurrent, signal: options.signal });
-      },
+      withCurrent: async (run) => await run({ assertCurrent, signal: options.signal }),
     };
   }
   const worktree = managedWorktrees.findLiveByOwner("session", parent.canonicalKey);
@@ -231,8 +229,8 @@ async function resolveSpawnParentWorktreeSource(
   return {
     workspace: worktree.repoRoot,
     source: { kind: "worktree", id: worktree.id },
-    withCurrent: async (run) => {
-      return await run({
+    withCurrent: async (run) =>
+      await run({
         assertCurrent,
         signal: options.signal,
         workerAuthority: {
@@ -247,8 +245,7 @@ async function resolveSpawnParentWorktreeSource(
             },
           ],
         },
-      });
-    },
+      }),
   };
 }
 

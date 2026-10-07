@@ -362,7 +362,6 @@ async function handleInternalSourceReplySendAction(
     }),
   });
   const sourceReply = await buildMessagePayload({
-    cfg: input.cfg,
     actionParams: params,
     input,
     agentId,
