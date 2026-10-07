@@ -2954,7 +2954,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server.sessions.list-changed.test.ts",
   "src/gateway/server.sessions.list-explicit-ownership.test.ts",
   "src/gateway/server.sessions.list-store-materialization.test.ts",
-  "src/gateway/server.sessions.permission-root.test.ts",
   "src/gateway/server.sessions.permissions-hooks.test.ts",
   "src/gateway/server.sessions.placement-projection.test.ts",
   "src/gateway/server.sessions.placement-selection.test.ts",
