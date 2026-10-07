@@ -48,14 +48,26 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("worker chat.abort settlement", () => {
   let harness: ComposedGatewayHarness;
+  let previousConfig: ReturnType<typeof getRuntimeConfigSnapshot>;
+  let previousSourceConfig: ReturnType<typeof getRuntimeConfigSourceSnapshot>;
 
   beforeEach(async () => {
+    // Harness storage work pins the ambient config as the runtime snapshot. Capture
+    // first: a later case's executors would watch that inherited store locator and
+    // retire when the case publishes harness.cfg.
+    previousConfig = getRuntimeConfigSnapshot();
+    previousSourceConfig = getRuntimeConfigSourceSnapshot();
     harness = await ComposedGatewayHarness.create(tempDirs.make("oc-wa-"));
     await harness.start();
   });
 
   afterEach(async () => {
     await harness.close();
+    if (previousConfig) {
+      setRuntimeConfigSnapshot(previousConfig, previousSourceConfig ?? undefined);
+    } else {
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it.each([
@@ -181,8 +193,6 @@ describe("worker chat.abort settlement", () => {
         );
       };
       owner.signal.addEventListener("abort", cancelWorker, { once: true });
-      const previousConfig = getRuntimeConfigSnapshot();
-      const previousSourceConfig = getRuntimeConfigSourceSnapshot();
       setRuntimeConfigSnapshot(harness.cfg);
       const startedAt = performance.now();
       let phase = "command-start";
@@ -408,11 +418,6 @@ describe("worker chat.abort settlement", () => {
         replacement?.dispose();
         registration.cleanup();
         unsubscribe();
-        if (previousConfig) {
-          setRuntimeConfigSnapshot(previousConfig, previousSourceConfig ?? undefined);
-        } else {
-          clearRuntimeConfigSnapshot();
-        }
       }
     },
   );
