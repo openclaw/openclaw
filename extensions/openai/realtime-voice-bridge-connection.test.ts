@@ -705,23 +705,27 @@ describe("OpenAI realtime voice bridge connection", () => {
 
     const session = requireSession(socket);
     expectRecordFields(session, "session", {
-      modalities: ["text", "audio"],
+      type: "realtime",
       instructions: "Be helpful.",
-      voice: "verse",
-      input_audio_format: "pcm16",
-      output_audio_format: "pcm16",
-      input_audio_transcription: { model: "whisper-1" },
-      temperature: 0.8,
-    });
-    expectRecordFields(
-      requireRecord(session.turn_detection, "session turn detection"),
-      "turn detection",
-      {
-        create_response: true,
+      output_modalities: ["audio"],
+      audio: {
+        input: {
+          format: { type: "audio/pcm", rate: 24000 },
+          noise_reduction: null,
+          transcription: { model: "whisper-1" },
+          turn_detection: {
+            type: "server_vad",
+            threshold: 0.5,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 500,
+            create_response: true,
+          },
+        },
+        output: { format: { type: "audio/pcm", rate: 24000 }, voice: "verse" },
       },
-    );
-    expect(session).not.toHaveProperty("type");
-    expect(session).not.toHaveProperty("audio");
+    });
+    expect(session).not.toHaveProperty("modalities");
+    expect(session).not.toHaveProperty("input_audio_format");
     const tools = session.tools as Array<{ name?: string }>;
     expect(tools.map((tool) => tool.name)).toEqual(["1_lookup"]);
 
@@ -733,12 +737,17 @@ describe("OpenAI realtime voice bridge connection", () => {
       {
         type: "session.update",
         session: {
-          turn_detection: {
-            type: "server_vad",
-            threshold: 0.5,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 500,
-            create_response: false,
+          type: "realtime",
+          audio: {
+            input: {
+              turn_detection: {
+                type: "server_vad",
+                threshold: 0.5,
+                prefix_padding_ms: 300,
+                silence_duration_ms: 500,
+                create_response: false,
+              },
+            },
           },
         },
       },
@@ -749,12 +758,17 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(parseSent(socket).at(-1)).toEqual({
       type: "session.update",
       session: {
-        turn_detection: {
-          type: "server_vad",
-          threshold: 0.5,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 500,
-          create_response: true,
+        type: "realtime",
+        audio: {
+          input: {
+            turn_detection: {
+              type: "server_vad",
+              threshold: 0.5,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 500,
+              create_response: true,
+            },
+          },
         },
       },
     });
@@ -774,9 +788,11 @@ describe("OpenAI realtime voice bridge connection", () => {
     openSocket(socket);
     await Promise.resolve();
 
-    expectRecordFields(requireSession(socket), "session", {
-      input_audio_transcription: { model: "transcribe-prod" },
-    });
+    expectRecordFields(
+      requireNestedRecord(requireSession(socket), ["audio", "input", "transcription"]),
+      "Azure session transcription",
+      { model: "transcribe-prod" },
+    );
     emitSessionUpdated(socket);
     await connecting;
   });

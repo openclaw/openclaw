@@ -8,6 +8,7 @@ import type {
 import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   realtimeVoiceAudioDurationMs,
+  toOpenAICompatibleRealtimeAudioFormat,
 } from "openclaw/plugin-sdk/realtime-voice-provider";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
@@ -151,7 +152,7 @@ export abstract class OpenAIRealtimeProtocol {
 
   protected buildAzureDeploymentSessionUpdate() {
     const cfg = this.config;
-    const format = this.audioFormat.encoding === "pcm16" ? "pcm16" : "g711_ulaw";
+    const format = toOpenAICompatibleRealtimeAudioFormat(this.audioFormat);
     const tools = normalizeOpenAIRealtimeTools(
       cfg.tools,
       this.runtime.warn,
@@ -160,23 +161,25 @@ export abstract class OpenAIRealtimeProtocol {
     return {
       type: "session.update" as const,
       session: {
-        modalities: ["text", "audio"],
-        instructions: cfg.instructions,
-        voice: cfg.voice ?? "alloy",
-        input_audio_format: format,
-        output_audio_format: format,
-        input_audio_transcription: {
-          model: cfg.inputTranscriptionModel ?? "whisper-1",
-          ...(cfg.language ? { language: cfg.language } : {}),
+        type: "realtime" as const,
+        ...(cfg.instructions !== undefined ? { instructions: cfg.instructions } : {}),
+        output_modalities: ["audio"],
+        audio: {
+          input: {
+            format,
+            noise_reduction: null,
+            transcription: {
+              model: cfg.inputTranscriptionModel ?? "whisper-1",
+              ...(cfg.language ? { language: cfg.language } : {}),
+            },
+            turn_detection: buildOpenAIRealtimeTurnDetectionConfig({
+              ...cfg,
+              includeInterruptResponse: false,
+            }),
+          },
+          output: { format, voice: cfg.voice ?? "alloy" },
         },
-        turn_detection: buildOpenAIRealtimeTurnDetectionConfig(cfg),
-        temperature: cfg.temperature ?? 0.8,
-        ...(tools
-          ? {
-              tools,
-              tool_choice: "auto",
-            }
-          : {}),
+        ...(tools ? { tools, tool_choice: "auto" } : {}),
       },
     };
   }
@@ -189,7 +192,10 @@ export abstract class OpenAIRealtimeProtocol {
       includeInterruptResponse: !azureDeployment,
     });
     if (azureDeployment) {
-      this.sendEvent({ type: "session.update", session: { turn_detection: turnDetection } });
+      this.sendEvent({
+        type: "session.update",
+        session: { type: "realtime", audio: { input: { turn_detection: turnDetection } } },
+      });
       return;
     }
     this.sendEvent({
