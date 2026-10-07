@@ -3152,7 +3152,6 @@
 ["src/agents/sandbox.resolveSandboxContext.test.ts","../skills/runtime/remote.js","54ec318d5e80fe681b6b35b23f889dea7026b30d8eafd1816bdbe2b35ed31c82",1]
 ["src/agents/sandbox.resolveSandboxContext.test.ts","./exec-defaults.js","a16fbeaef713c5b461d69d4988cd7eb7e9c9b5c03b7319f1adc6508a32f4143c",1]
 ["src/agents/sandbox.resolveSandboxContext.test.ts","./sandbox/browser.js","564ec69f73de6b3450a6e211930c998364ca965ceed0712e633828fb0f51187f",1]
-["src/agents/sandbox.resolveSandboxContext.test.ts","./sandbox/registry.js","0ab2db6e9f245fe97315062cc339dbdb5de17199d650b9c925332fac41918d99",1]
 ["src/agents/sandbox/browser.create.test-helpers.ts","../../plugin-sdk/browser-bridge.js","e7aea20b5ecf52cdf8d94f8a9e681895888d196ae7f8937019e2d17ac339f71e",1]
 ["src/agents/sandbox/browser.create.test-helpers.ts","../../plugin-sdk/browser-bridge.js","e7aea20b5ecf52cdf8d94f8a9e681895888d196ae7f8937019e2d17ac339f71e",2]
 ["src/agents/sandbox/browser.create.test-helpers.ts","../../runtime.js","b02d0acf7322a3db8be9baa3f5f8b21510527734721bc6af2dab4e7129f1a20a",1]
