@@ -130,7 +130,7 @@ export function validateSessionTranscriptContextVersion(
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
       runSqliteDeferredTransactionSync(database.db, () =>
-        validateContextPrefix(database, resolved.sessionId, version),
+        validateContextVersion(database, resolved.sessionId, version, "prefix"),
       ),
     toDatabaseOptions(resolved),
   );
@@ -139,10 +139,11 @@ export function validateSessionTranscriptContextVersion(
   }
 }
 
-function validateContextPrefix(
+function validateContextVersion(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
   version: SessionTranscriptContextVersion | undefined,
+  consistency: "exact" | "prefix",
 ): void {
   const current = readTranscriptContextVersionInTransaction(database, sessionId);
   if (
@@ -155,6 +156,7 @@ function validateContextPrefix(
   const changed = () =>
     new SessionTranscriptReadFenceError("Session transcript changed during context read");
   if (
+    consistency === "exact" ||
     !version?.generation ||
     current.generation !== version.generation ||
     version.rawSeq === null ||
@@ -227,6 +229,7 @@ export function validateSessionTranscriptContextInDatabase(
     admission?: UserTurnTranscriptAdmissionReceipt;
     through?: TranscriptEntryAnchor;
   },
+  consistency: "exact" | "prefix" = "exact",
 ): void {
   const { version, admission, through } = validation;
   if (admission) {
@@ -240,7 +243,7 @@ export function validateSessionTranscriptContextInDatabase(
       );
     }
   } else if (!through) {
-    validateContextPrefix(database, resolved.sessionId, version);
+    validateContextVersion(database, resolved.sessionId, version, consistency);
   }
   if (through) {
     assertContextAnchor(database, resolved, through);
@@ -436,6 +439,7 @@ export function readSessionTranscriptModelContext(
         ? selectBoundedModelRequests(requests, readModelEntrySizes, limits)
         : requests;
       const payloads = readModelEntries(selected);
+      let contextEntries: SessionTreeEntry[];
       if (limits) {
         const model = entries.findLast(
           (entry) =>
@@ -480,22 +484,15 @@ export function readSessionTranscriptModelContext(
                   entry.type === "branch_summary",
               )?.id ?? boundary.id;
         }
-        return {
-          events: [
-            ...(header ? [header] : []),
-            ...detached.map((entry, index) => {
-              entry.parentId = detached[index - 1]?.id ?? null;
-              return entry;
-            }),
-          ],
-          version,
-        };
+        contextEntries = detached.map((entry, index) => {
+          entry.parentId = detached[index - 1]?.id ?? null;
+          return entry;
+        });
+      } else {
+        contextEntries = entries.map((entry) => payloads.get(entry) ?? entry);
       }
       return {
-        events: [
-          ...(header ? [header] : []),
-          ...entries.map((entry) => payloads.get(entry) ?? entry),
-        ],
+        events: [...(header ? [header] : []), ...contextEntries],
         version,
       };
     },
