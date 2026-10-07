@@ -1,7 +1,11 @@
 // Gateway request scope tests cover request-local plugin runtime context propagation.
+import { AsyncResource } from "node:async_hooks";
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshotFixture } from "../plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
+import { markPluginRegistryRetired } from "../registry-lifecycle.js";
 import {
   requireActivePluginRegistry,
   resetPluginRuntimeStateForTest,
@@ -192,6 +196,128 @@ describe("gateway request scope", () => {
       );
     });
   });
+
+  it("keeps caller identity and independent mutable registry fields in copied scopes", async () => {
+    const runtimeScope = await importGatewayRequestScopeModule();
+    const first = createEmptyPluginRegistry();
+    const second = createEmptyPluginRegistry();
+    const declaredProviderOwners = new Map([["fixture", new Set(["fixture-owner"])]]);
+    const caller = { ...TEST_SCOPE, pluginRegistry: first, declaredProviderOwners };
+    runtimeScope.withPluginRuntimeGatewayRequestScope(caller, () => {
+      expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toBe(caller);
+      runtimeScope.withPluginRuntimePluginScope({ pluginId: "fixture" }, () => {
+        const child = runtimeScope.getPluginRuntimeGatewayRequestScope()!;
+        expect(child).not.toBe(caller);
+        const copied = { ...child };
+        child.pluginRegistry = second;
+        expect(requireActivePluginRegistry()).toBe(second);
+        expect(caller.pluginRegistry).toBe(first);
+        expect(copied.pluginRegistry).toBe(first);
+        runtimeScope.withPluginRuntimeGatewayRequestScope(copied, () => {
+          expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toBe(copied);
+          runtimeScope.withPluginRuntimeRegistryScope(first, () => {
+            expect(runtimeScope.getPluginRuntimeGatewayRequestScope()?.declaredProviderOwners).toBe(
+              declaredProviderOwners,
+            );
+          });
+        });
+        delete child.pluginRegistry;
+        expect(Object.hasOwn(child, "pluginRegistry")).toBe(false);
+      });
+      expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toBe(caller);
+    });
+  });
+
+  it("keeps an empty prepared selection through collection instead of selecting active plugins", async () => {
+    const generation = await import("./generation-scope.js");
+    class ActiveService {
+      id = "active-service";
+      start() {}
+    }
+    const active = createEmptyPluginRegistry();
+    active.services.push({
+      id: "active-service",
+      pluginId: "active-plugin",
+      source: "prepared-selection-test",
+      origin: "config",
+      service: new ActiveService(),
+    });
+    setActivePluginRegistry(active);
+    await generation.withPluginRuntimeGenerationScope(
+      { metadataSnapshot: createPluginMetadataSnapshotFixture() },
+      async () => {
+        await setImmediate();
+        expect(queryObjects(ActiveService)).toBe(1);
+        const selected = generation.getPluginRuntimeGenerationRegistry();
+        expect(selected).toBeDefined();
+        expect(requireActivePluginRegistry()).toBe(selected);
+        expect(selected?.services).toEqual([]);
+      },
+    );
+  });
+
+  it.each(["registry", "resolver-copy", "plugin-copy"] as const)(
+    "releases retired registries inherited by native async resources through %s",
+    async (copy) => {
+      const runtimeScope = await importGatewayRequestScopeModule();
+      class RetainedService {
+        id = "runtime-scope-retention";
+        start() {}
+      }
+      const resources = Array.from({ length: 4 }, () => {
+        const registry = createEmptyPluginRegistry();
+        registry.services.push({
+          id: "runtime-scope-retention",
+          pluginId: "runtime-scope-retention",
+          source: "runtime-scope-retention",
+          origin: "config",
+          service: new RetainedService(),
+        });
+        const capture = () => new AsyncResource("plugin-runtime-retention");
+        const resource = runtimeScope.withPluginRuntimeRegistryScope(registry, () =>
+          copy === "resolver-copy"
+            ? runtimeScope.withPluginRuntimeGatewayContextResolver(undefined, capture)
+            : copy === "plugin-copy"
+              ? runtimeScope.withPluginRuntimePluginScope({ pluginId: "fixture" }, capture)
+              : capture(),
+        );
+        markPluginRegistryRetired(registry);
+        return resource;
+      });
+      const active = createEmptyPluginRegistry();
+      const replacement = createEmptyPluginRegistry();
+      setActivePluginRegistry(active);
+      try {
+        await setImmediate();
+        expect(queryObjects(RetainedService)).toBe(0);
+        for (const resource of resources) {
+          resource.runInAsyncScope(() => {
+            expect(() => requireActivePluginRegistry()).toThrow(
+              "Plugin registry scope is no longer available",
+            );
+            runtimeScope.withPluginRuntimeGatewayContextResolver(undefined, () => {
+              expect(() => requireActivePluginRegistry()).toThrow(
+                "Plugin registry scope is no longer available",
+              );
+            });
+            runtimeScope.withPluginRuntimeRegistryScope(replacement, () => {
+              expect(requireActivePluginRegistry()).toBe(replacement);
+              expect(
+                runtimeScope.getPluginRuntimeGatewayRequestScope()?.declaredProviderOwners,
+              ).toBeUndefined();
+            });
+            runtimeScope.runOutsidePluginRuntimeRegistryScope(() => {
+              expect(requireActivePluginRegistry()).toBe(active);
+            });
+          });
+        }
+      } finally {
+        for (const resource of resources) {
+          resource.emitDestroy();
+        }
+      }
+    },
+  );
 
   it("isolates combined plugin identities across concurrent registry scopes", async () => {
     const runtimeScope = await importGatewayRequestScopeModule();
