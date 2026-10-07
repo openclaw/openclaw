@@ -8,10 +8,8 @@ import {
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveConcreteSessionStorePath } from "./paths.js";
 import { resolveSessionEntrySelection } from "./session-accessor.entry.js";
-import {
-  readSessionKeyBySessionIdInDatabase,
-  resolveSessionKeyBySessionId,
-} from "./session-accessor.sqlite-entry.js";
+import { readSessionKeyBySessionIdInDatabase } from "./session-accessor.sqlite-entry-read.js";
+import { resolveSessionKeyBySessionId } from "./session-accessor.sqlite-entry.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
