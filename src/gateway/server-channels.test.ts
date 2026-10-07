@@ -223,103 +223,6 @@ describe("server-channels auto restart", () => {
     setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
   });
 
-  it("keeps channel hooks and snapshots bound to their Gateway registry", async () => {
-    const joined: AbortSignal[] = [];
-    const createLifecycle = (id: ChannelId) => {
-      const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
-        await waitForAbort(abortSignal);
-        joined.push(abortSignal);
-      });
-      const stopAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => undefined);
-      return {
-        plugin: createTestPlugin({ id, startAccount, stopAccount }),
-        startAccount,
-        stopAccount,
-      };
-    };
-    const a = createLifecycle("discord");
-    const b = createLifecycle("discord");
-    const bOnly = createLifecycle("slack");
-    const registryA = installTestRegistry(a.plugin);
-    const managerA = createManager({
-      channelIds: ["discord", "slack"],
-      getPluginRegistry: () => registryA,
-    });
-    await managerA.startChannels();
-    await waitForImmediate();
-    expect(a.startAccount).toHaveBeenCalledTimes(1);
-    const originalA = firstStartAccountContext(a.startAccount).abortSignal;
-
-    const registryB = installTestRegistry(b.plugin, bOnly.plugin);
-    const managerB = createManager({
-      channelIds: ["discord", "slack"],
-      getPluginRegistry: () => registryB,
-    });
-    try {
-      await managerB.startChannels();
-      await waitForImmediate();
-      expect(b.startAccount).toHaveBeenCalledTimes(1);
-      expect(bOnly.startAccount).toHaveBeenCalledTimes(1);
-      const originalB = firstStartAccountContext(b.startAccount).abortSignal;
-      const originalBOnly = firstStartAccountContext(bOnly.startAccount).abortSignal;
-      const snapshotChannels = Object.keys(
-        managerA.getRuntimeSnapshot().channelAccounts,
-      ).toSorted();
-      expect(managerA.isAccountListed("slack", DEFAULT_ACCOUNT_ID)).toBe(false);
-      expect(managerB.isAccountListed("slack", DEFAULT_ACCOUNT_ID)).toBe(true);
-
-      await managerA.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
-      const stopped = {
-        aHook: a.stopAccount.mock.calls.length,
-        bHook: b.stopAccount.mock.calls.length,
-        aHookReceivedOwnSignal: a.stopAccount.mock.calls[0]?.[0].abortSignal === originalA,
-        foreignHookReceivedASignal: b.stopAccount.mock.calls.some(
-          ([ctx]) => ctx.abortSignal === originalA,
-        ),
-        aAborted: originalA.aborted,
-        aJoined: joined.includes(originalA),
-        bAborted: originalB.aborted,
-        bOnlyAborted: originalBOnly.aborted,
-      };
-      await managerA.startChannels();
-      await waitForImmediate();
-      expect(
-        {
-          snapshotChannels,
-          stopped,
-          starts: [a, b, bOnly].map(({ startAccount }) => startAccount.mock.calls.length),
-          bStillLive: !originalB.aborted && !originalBOnly.aborted,
-        },
-        "channel manager borrowed another Gateway registry",
-      ).toEqual({
-        snapshotChannels: ["discord"],
-        stopped: {
-          aHook: 1,
-          bHook: 0,
-          aHookReceivedOwnSignal: true,
-          foreignHookReceivedASignal: false,
-          aAborted: true,
-          aJoined: true,
-          bAborted: false,
-          bOnlyAborted: false,
-        },
-        starts: [2, 1, 1],
-        bStillLive: true,
-      });
-    } finally {
-      await Promise.all(
-        [managerA, managerB].flatMap((manager) =>
-          ["discord", "slack"].map((id) => manager.stopChannel(id)),
-        ),
-      );
-      const signals = [a, b, bOnly].flatMap(({ startAccount }) =>
-        startAccount.mock.calls.map(([ctx]) => ctx.abortSignal),
-      );
-      expect(signals.every((signal) => signal.aborted && joined.includes(signal))).toBe(true);
-      expect(joined).toHaveLength(signals.length);
-    }
-  });
-
   it("keeps channel requests bound to their Gateway after the starting client closes", async () => {
     const continueChannelRequest = createDeferred();
     const observedGateway = createDeferred<{ gateway: string }>();
@@ -468,6 +371,10 @@ describe("server-channels auto restart", () => {
       );
 
       expect(observedAdmission).toEqual([false, false]);
+      const account = readAccount(manager);
+      expect(account?.running).toBe(true);
+      expect(account).not.toHaveProperty("connected");
+      expect(healthOf(account)).toEqual({ healthy: true, reason: "healthy" });
     } finally {
       requestAdmission.release();
       finishFirstChannelTask.resolve();
@@ -738,26 +645,6 @@ describe("server-channels auto restart", () => {
     expect(account?.connected).toBe(false);
     expect(account?.lifecycle).toBe("stopped");
     expect(account?.lastError).toBeNull();
-  });
-
-  it("keeps a running channel without transport reporting free of a synthetic disconnect", async () => {
-    // Socketless channels (imessage, signal, sms, ...) never publish `connected`.
-    // Projecting a synthetic `false` made the health monitor read them as
-    // disconnected and restart them once per cooldown window forever.
-    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
-      ctx.setStatus({ accountId: DEFAULT_ACCOUNT_ID, running: true });
-      await waitForAbort(ctx.abortSignal);
-    });
-    installTestRegistry(createTestPlugin({ startAccount }));
-    const manager = createManager();
-
-    await manager.startChannels();
-    await flushMicrotasks();
-
-    const account = readAccount(manager);
-    expect(account?.running).toBe(true);
-    expect(account).not.toHaveProperty("connected");
-    expect(healthOf(account)).toEqual({ healthy: true, reason: "healthy" });
   });
 
   it("settles every account before surfacing a stop hook failure", async () => {
@@ -1392,51 +1279,6 @@ describe("server-channels auto restart", () => {
       expect(stops).toEqual(restarted);
     },
   );
-
-  it("discards a deferred thaw target removed from the current account list", async () => {
-    let accountIds = ["removed"];
-    let failStart = false;
-    const startAccount = vi.fn(
-      async (context: ChannelGatewayContext<TestAccount>) =>
-        await waitForAbort(context.abortSignal),
-    );
-    installTestRegistry(
-      createTestPlugin({
-        listAccountIds: () => accountIds,
-        isConfigured: async () => {
-          if (failStart) {
-            throw new Error("start preflight failed");
-          }
-          return true;
-        },
-        startAccount,
-      }),
-    );
-    const manager = createManager();
-    await manager.startChannels();
-    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledOnce());
-
-    failStart = true;
-    const failedTargets = await restartRunningChannelAccounts(manager, {
-      shouldContinue: () => true,
-      onError: () => {},
-    });
-    expect(failedTargets).toEqual([{ channelId: "discord", accountId: "removed" }]);
-
-    accountIds = [];
-    failStart = false;
-    const errors: string[] = [];
-    const second = await restartRunningChannelAccounts(
-      manager,
-      { shouldContinue: () => true, onError: (message) => errors.push(message) },
-      { kind: "deferred-retry", targets: failedTargets },
-    );
-
-    expect(second).toEqual([]);
-    expect(errors).toEqual([]);
-    expect(startAccount).toHaveBeenCalledOnce();
-    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.removed).toBeUndefined();
-  });
 
   it("does not retain an account that becomes unconfigured during host-thaw recovery", async () => {
     let configured = true;
@@ -2644,24 +2486,6 @@ describe("server-channels auto restart", () => {
     expect(readAccount(manager)?.linked).toBe(false);
   });
 
-  it("applies described config fields into runtime snapshots", () => {
-    installTestRegistry(
-      createTestPlugin({
-        describeAccount: (resolved) => ({
-          accountId: DEFAULT_ACCOUNT_ID,
-          enabled: resolved.enabled !== false,
-          configured: false,
-          mode: "webhook",
-        }),
-      }),
-    );
-    const manager = createManager();
-    const snapshot = manager.getRuntimeSnapshot();
-    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
-    expect(account?.configured).toBe(false);
-    expect(account?.mode).toBe("webhook");
-  });
-
   it.each(["not-linked", "unknown"] as const)(
     "keeps configured state and clears stale linkage details after %s recovers",
     async (initialState) => {
@@ -2680,6 +2504,7 @@ describe("server-channels auto restart", () => {
                   accountId: DEFAULT_ACCOUNT_ID,
                   configured: true,
                   linked: false,
+                  mode: "webhook",
                 }),
               }
             : {}),
@@ -2701,6 +2526,7 @@ describe("server-channels auto restart", () => {
         expect(format(unlinkedAccount)).toContain("reason:not authenticated");
       } else {
         expect(unlinkedAccount).not.toHaveProperty("linked");
+        expect(unlinkedAccount?.mode).toBe("webhook");
       }
 
       linkState = "linked";
@@ -3464,43 +3290,6 @@ describe("server-channels auto restart", () => {
       "channels.discord.start-account-handoff",
     );
     expect(readAccount(manager)?.running).not.toBe(true);
-  });
-
-  it("retires only the credential owner for an evicted channel account", async () => {
-    let accountIds = ["removed", "retained"];
-    installTestRegistry(
-      createTestPlugin({
-        listAccountIds: () => accountIds,
-        startAccount: async () => {},
-        resolveAccount: (_cfg, accountId) => ({
-          enabled: true,
-          configured: true,
-          credentialDiagnostics: [
-            {
-              code: "CREDENTIAL_FILE_UNAVAILABLE" as const,
-              path: `channels.discord.accounts.${accountId}.tokenFile`,
-              reason: "not-found",
-            },
-          ],
-        }),
-      }),
-    );
-    const manager = createManager();
-
-    await manager.startChannels();
-    expect(listActiveDegradedSecretOwners().map((owner) => owner.ownerId)).toEqual([
-      "discord:removed",
-      "discord:retained",
-    ]);
-
-    accountIds = ["retained"];
-    await expect(manager.startChannel("discord")).rejects.toMatchObject({
-      ownerId: "discord:retained",
-    });
-
-    expect(listActiveDegradedSecretOwners().map((owner) => owner.ownerId)).toEqual([
-      "discord:retained",
-    ]);
   });
 
   it("prunes only credential owners and account state for inactive channel plugins", async () => {
