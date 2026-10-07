@@ -236,6 +236,16 @@ person without private access can still read the public version. Private,
 missing, and ambiguous anonymous targets show the same unavailable page without
 revealing names or candidate sessions.
 
+Token/password operators with a saved credential for this Gateway automatically
+continue into the Control UI when reopening, reloading, or following a chat link.
+The browser uses its session token or paired-device credential; passwords remain
+in memory only. This also works on loopback HTTP, which permits public readers.
+The anonymous private-thread document initially returns `404`, then the browser
+opens the app through the session-entry handoff with a `200` response. No extra
+**Log in** click is needed. Without a saved credential, **Log in** opens the normal
+login gate. On non-secure ingress where public transcripts are unavailable,
+token/password deployments serve the app shell directly.
+
 Assigning another owner does not transfer public-sharing authority. If the
 controls are unavailable, confirm that the session is saved, is not incognito,
 and you are its creator or a Gateway admin. See
