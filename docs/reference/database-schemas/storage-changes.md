@@ -1770,13 +1770,14 @@ no-op commits do not reopen a disposed handle. Native deletion and archive
 preparation still run outside the writer; the subsequent commit rechecks its
 native owner's authority after any awaited admission.
 
-Session-bound plugin-state operations reprepare session facts once in a short
-read snapshot if a concurrent commit interrupts their revision check. Unrelated
-session writes do not invalidate the operation. The snapshot ends before the
-host grant, and admission still rejects changed ownership facts, a replaced
-database source, or revoked authority. Mutation guards and plugin-state
-comparisons retain their existing conflicts; no write is replayed. Schemas,
-stored data, public SDK contracts, and update behavior are unchanged.
+Session-bound plugin-state operations and worker workspace recovery reprepare
+session facts once in a short read snapshot if a concurrent commit interrupts
+their revision check. Unrelated session writes do not invalidate the operation.
+The snapshot ends before the host grant or recovery callback; both paths still
+reject changed ownership facts, a replaced database source, or revoked authority.
+Mutation guards and plugin-state comparisons retain their existing conflicts;
+no write is replayed. Schemas, stored data, public SDK contracts, and update
+behavior are unchanged.
 
 Subagent cancellation preparation can reuse a borrowed native database generation
 after its initialization and registration publication finish. It retains the exact
