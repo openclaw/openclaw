@@ -13,10 +13,7 @@ import type { AttachmentItem } from "./chat-message-media.ts";
 
 registerChatMessageMetadataEnglish();
 
-type AttachmentCardKind = Extract<
-  AttachmentItem["attachment"]["kind"],
-  "audio" | "document" | "image" | "video"
->;
+type AttachmentCardKind = AttachmentItem["attachment"]["kind"];
 
 export type AttachmentCardHeaderOptions = {
   kind: AttachmentCardKind;

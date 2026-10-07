@@ -409,7 +409,7 @@ describe("checkGatewayHealth", () => {
 
     expect(note).toHaveBeenCalledWith(
       [
-        "Channel status probe failed: channel probe timed out",
+        "Channel status check failed: channel probe timed out",
         "Retry: openclaw channels status --probe",
       ].join("\n"),
       "Channel warnings",
@@ -949,7 +949,7 @@ describe("probeGatewayMemoryStatus", () => {
     const result = await probeGatewayMemoryStatus({ cfg });
     expect(result.checked).toBe(false);
     expect(result.ready).toBe(false);
-    expect(result.error).toContain("gateway memory probe timed out");
+    expect(result.error).toContain("gateway memory check timed out");
     expect(result.skipped).toBe(false);
   });
 
@@ -963,7 +963,7 @@ describe("probeGatewayMemoryStatus", () => {
         ok: false,
         checked: false,
         error:
-          "memory embedding readiness not checked; run `openclaw memory status --deep` to probe",
+          "memory embedding readiness not checked; run `openclaw memory status --deep` to check",
       },
     });
 
@@ -980,7 +980,7 @@ describe("probeGatewayMemoryStatus", () => {
     await expect(probeGatewayMemoryStatus({ cfg })).resolves.toEqual({
       checked: true,
       ready: false,
-      error: "gateway memory probe unavailable: gateway request timeout for doctor.memory.status",
+      error: "gateway memory check unavailable: gateway request timeout for doctor.memory.status",
       skipped: false,
     });
   });

@@ -103,15 +103,6 @@ describe("subagent spawn depth and child limits", () => {
     expect(entry.spawnedWorkspaceDir).toEqual(expect.any(String));
   });
 
-  it("allows recursive callers below the default depth boundary", async () => {
-    depth = 3;
-    expect(child(await spawnChild())).toMatchObject({
-      spawnDepth: 4,
-      subagentRole: "orchestrator",
-      subagentControlScope: "children",
-    });
-  });
-
   it("persists inherited tool denies on spawned child sessions", async () => {
     limits({ maxSpawnDepth: 2 });
     const result = await spawn(

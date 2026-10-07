@@ -28,26 +28,42 @@ In practice:
 - Animated PNG (APNG) icons are accepted as PNG images. Workspace icons and managed channel avatars retain their animation; remote plugin, catalog, and link icons use a resized PNG preview.
 - Remote avatar URLs emitted by channel metadata are stripped at the Control UI's avatar helpers and replaced with the built-in logo/badge, so a compromised or malicious channel cannot force arbitrary remote image fetches from an operator browser.
 
+Page metadata reads stop at the end of the HTML head or after 64 KiB, whichever
+comes first; metadata beyond that limit is omitted. The Gateway streams the head
+without building a page DOM. Anonymous previews use a bounded cache per requesting
+principal and runtime config revision for one hour when available, or five minutes
+when unavailable; URL fragments share the same entry. Repeated links share pending
+requests, and a page that declares the same social image and favicon downloads it
+once. The 15-second preview deadline includes queue wait, fetching, and image work.
+Disabling automatic favicons or retiring the request's authority suppresses cached
+previews too.
+
 The browser-side CSP restriction itself is always on and not configurable.
 
 ## Public transcript boundary
 
-The authenticated Control UI does not become public when a session is published.
-Public transcript links use the dedicated `/share/session?token=<opaque>` route;
-the encrypted token is the read capability and does not reveal the agent, session
-key, session ID, or publication ID. Anonymous visitors cannot use it to connect
-to the Gateway, send messages, invoke tools, or open other Control UI routes.
+Public threads use the same `/chat/...` URL as the authenticated Control UI.
+Anonymous readers receive a separate, read-only document, never an operator
+connection. **Log in** goes through a protected same-origin handoff and returns
+to that thread with the person's existing permissions. Identity headers on the
+anonymous thread path do not authorize private access. Private and missing
+threads have the same anonymous unavailable response.
 
-The public renderer reads only user messages and assistant final-answer text.
+The public renderer includes only user messages and assistant final-answer text.
 It omits tools, reasoning, files, images, widgets, hidden messages, and internal
-metadata, and applies credential-pattern redaction. Responses use a restrictive
-content security policy, `Cache-Control: no-store`, and `Referrer-Policy: no-referrer`.
-Treat the complete URL as public: anyone who receives it can read existing and
-future published text until the creator or a Gateway admin disables access.
+metadata, and applies best-effort credential-pattern redaction. A restrictive
+content security policy permits only the fixed reader script; transcript HTML
+cannot execute. Responses retain `Cache-Control: no-store` and
+`Referrer-Policy: no-referrer`. Server-side representation reuse never substitutes
+for a current publication check, including before a `304` response.
 
-When a login proxy protects the host, bypass authentication only for the Control
-UI's `/share/*` namespace. Keep the WebSocket, bootstrap, API, dashboard, and all
-other routes protected. The detailed deployment, token, revocation, and restore
+Anyone who knows a public thread URL can read its existing and future published
+text until the creator or a Gateway admin disables access. Re-enabling access
+revives the normal thread URL, but not previously revoked token links.
+
+A login proxy must expose only the public thread documents and share namespace.
+Keep the session-entry login handoff, WebSocket, bootstrap, API, media, dashboard,
+and other application routes protected. The detailed deployment and revocation
 contract is in [Public session transcripts](/web/urls#public-session-transcripts).
 
 ## Avatar route auth

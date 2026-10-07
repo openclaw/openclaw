@@ -132,7 +132,6 @@ export async function mutateSessionHistoryInWorker(
       candidateKind: "session-message-cut" as const,
       onAcknowledged(candidate: SessionMessageCutCandidate) {
         if (candidate.result.status === "created") {
-          captured?.committed();
           if (candidate.projectionNeedsReconcile) {
             startSessionTranscriptIndexReconcile({
               ...database,

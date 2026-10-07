@@ -537,7 +537,6 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             profileId: params.profileId,
             updater: (authoritative) => {
               const existing = authoritative.profiles[params.profileId];
-              params.signal?.throwIfAborted();
               if (!isExactOAuthCredential(existing, cred)) {
                 return false;
               }

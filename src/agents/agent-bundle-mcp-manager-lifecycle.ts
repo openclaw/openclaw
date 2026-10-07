@@ -1,8 +1,8 @@
-/** Session MCP runtime manager lifecycle: maps, idle sweep, dispose, advertised catalog. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { logWarn } from "../logger.js";
+import { compareMcpCatalogTools } from "./agent-bundle-mcp-names.js";
 import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
 import {
   SESSION_MCP_MAX_LIVE_RUNTIMES,
@@ -508,13 +508,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
       servers[serverName] = entry.servers.get(serverName)!;
       tools.push(...(entry.toolsByServer.get(serverName) ?? []));
     }
-    tools.sort((a, b) => {
-      const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
-      if (serverOrder !== 0) {
-        return serverOrder;
-      }
-      return a.toolName.localeCompare(b.toolName);
-    });
+    tools.sort(compareMcpCatalogTools);
     return {
       version: 1,
       generatedAt: store.scheduler.now(),

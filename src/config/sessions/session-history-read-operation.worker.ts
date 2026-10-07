@@ -11,6 +11,8 @@ type DurableHistoryReadOperationRequest = Extract<
   SessionTranscriptWorkerInput,
   {
     kind:
+      | "board-snapshot"
+      | "board-widget-document"
       | "transcript-match"
       | "transcript-search"
       | "transcript-search-current"
@@ -33,6 +35,7 @@ export type SessionHistoryReadOperationRequest =
   | Exclude<DurableHistoryReadOperationRequest, BranchReadRequest>
   | {
       kind: "branch-summaries";
+      database: BranchReadRequest["database"];
       request: Omit<BranchReadRequest["request"], "databaseIdentity"> & {
         databaseIdentity?: string;
       };
@@ -42,6 +45,8 @@ export function isSessionHistoryReadOperation(
   request: SessionTranscriptWorkerInput,
 ): request is DurableHistoryReadOperationRequest {
   switch (request.kind) {
+    case "board-snapshot":
+    case "board-widget-document":
     case "transcript-match":
     case "transcript-search":
     case "transcript-search-current":
@@ -96,6 +101,41 @@ async function prepareHistoryRead(
   retainedDatabase?: OpenClawAgentReadOnlyDatabase,
 ): Promise<() => SessionTranscriptWorkerValues[SessionHistoryReadOperationRequest["kind"]]> {
   switch (request.kind) {
+    case "board-snapshot":
+    case "board-widget-document": {
+      const [
+        { withOpenClawAgentDatabaseReadOnly },
+        { runSqliteDeferredTransactionSync },
+        { readBoardSnapshotWithHtmlViewMetadata, readBoardWidgetDocument },
+      ] = await Promise.all([
+        import("../../state/openclaw-agent-db-readonly.js"),
+        import("../../infra/sqlite-transaction.js"),
+        import("../../boards/sqlite-board-store.kernel.js"),
+      ]);
+      return () => {
+        const read = withOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            runSqliteDeferredTransactionSync(database.db, () =>
+              request.kind === "board-snapshot"
+                ? {
+                    kind: request.kind,
+                    value: readBoardSnapshotWithHtmlViewMetadata(database, request.sessionKey),
+                  }
+                : {
+                    kind: request.kind,
+                    value: readBoardWidgetDocument(
+                      database,
+                      request.sessionKey,
+                      request.name,
+                      request.contentKind,
+                    ),
+                  },
+            ),
+          { ...request.database, env: request.env },
+        );
+        return read.found ? read.value : { kind: request.kind, value: undefined };
+      };
+    }
     case "transcript-anchors": {
       const [
         { withOpenClawAgentDatabaseReadOnly },
@@ -221,18 +261,28 @@ async function prepareHistoryRead(
       const { readSessionBranchSnapshot, readSessionBranchSummariesInWorker } =
         await import("./session-accessor.sqlite-branches.js");
       if (retainedDatabase) {
-        return () =>
-          readSessionBranchSnapshot(retainedDatabase, {
+        return () => ({
+          kind: request.kind,
+          result: readSessionBranchSnapshot(retainedDatabase, {
             sessionKey: request.request.sessionKey,
             sessionId: request.request.sessionId,
             lifecycleRevision: request.request.lifecycleRevision,
-          });
+            previous: request.request.previous,
+          }),
+        });
       }
       const databaseIdentity = request.request.databaseIdentity;
       if (databaseIdentity === undefined) {
         throw new Error("Durable branch reads require their captured database identity");
       }
-      return () => readSessionBranchSummariesInWorker({ ...request.request, databaseIdentity });
+      return () => ({
+        kind: request.kind,
+        result: readSessionBranchSummariesInWorker({
+          ...request.request,
+          database: request.database,
+          databaseIdentity,
+        }),
+      });
     }
     case "session-title-fields": {
       const { readSessionTitleFieldsFromTranscript } =

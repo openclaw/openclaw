@@ -9,7 +9,10 @@ import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-man
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as durability from "./directory-durability.js";
 import * as diskSpace from "./disk-space.js";
+import * as fileDescriptor from "./file-descriptor.js";
+import { FsSafeError } from "./fs-safe.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import * as inspection from "./update-candidate-state.inspection.js";
@@ -291,6 +294,7 @@ async function originalCaptureFixture(externalAgents = false) {
     configPath,
     authoredConfig,
     include,
+    applicationFile,
     skillLink,
     pluginDatabase,
     missingFile,
@@ -308,7 +312,7 @@ async function originalCaptureFixture(externalAgents = false) {
   };
 }
 
-it("seals equivalent original bytes under isolated steps and one maintenance-owned database child", async () => {
+it("seals equivalent original bytes with native rename and unsupported RENAME_NOREPLACE under maintenance", async () => {
   const f = await originalCaptureFixture(true);
   const externalBytes = await Promise.all(f.external.map((source) => fs.readFile(source)));
   const result = await f.captureOriginal("original");
@@ -379,6 +383,15 @@ it("seals equivalent original bytes under isolated steps and one maintenance-own
     assertOwnerCurrent: () => {},
     assertDatabaseAccess: () => {},
   });
+  const publish = durability.publishFileExclusive;
+  vi.spyOn(durability, "publishFileExclusive").mockImplementation(async (params) => {
+    if (params.strategy === "rename-noreplace") {
+      throw new FsSafeError("helper-unavailable", "renameat2 RENAME_NOREPLACE: EINVAL", {
+        details: { capability: "rename-noreplace" },
+      });
+    }
+    return publish(params);
+  });
   try {
     const maintained = await scope.run(() =>
       f.captureOriginal("maintenance-owned", { mode: "maintenance-owner" }),
@@ -386,6 +399,22 @@ it("seals equivalent original bytes under isolated steps and one maintenance-own
     const maintainedManifest = parseUpdateRecoveryBackupManifest(
       await fs.readFile(maintained.ref.manifestPath, "utf8"),
     );
+    expect((await fs.lstat(maintained.ref.manifestPath)).nlink).toBe(1);
+    await expect(fs.lstat(`${maintained.ref.manifestPath}.partial`)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    for (const entry of maintainedManifest.entries) {
+      if (entry.kind !== "file") {
+        continue;
+      }
+      const payloadPath = path.join(maintained.ref.directory, entry.archivePath);
+      expect((await fs.lstat(payloadPath)).nlink).toBe(1);
+      expect(
+        createHash("sha256")
+          .update(await fs.readFile(payloadPath))
+          .digest("hex"),
+      ).toBe(entry.sha256);
+    }
     for (const field of [
       "entries",
       "databases",
@@ -550,6 +579,78 @@ it("retires only expired sealed standalone Doctor captures and preserves incompl
     expect((await fs.lstat(linked)).isSymbolicLink()).toBe(true);
     expect(await fs.readlink(linked)).toBe(linkedTarget);
   });
+});
+
+it.each([
+  { change: "link", phase: "during" },
+  { change: "unlink", phase: "after" },
+  { change: "content", phase: "during" },
+  { change: "content", phase: "after" },
+] as const)("validates $change changes $phase original file capture", async ({ change, phase }) => {
+  const f = await originalCaptureFixture();
+  const source = f.applicationFile;
+  const timestamp = new Date("2000-01-01T00:00:00.000Z");
+  await fs.utimes(source, timestamp, timestamp);
+  const before = await fs.stat(source, { bigint: true });
+  const alias = path.join(f.root, "outside-native-capture");
+  if (change === "unlink") {
+    await fs.link(source, alias);
+  }
+  let changed = false;
+  const mutate = async () => {
+    changed = true;
+    if (change === "link") {
+      await fs.link(source, alias);
+    } else if (change === "unlink") {
+      await fs.unlink(alias);
+    } else {
+      await fs.writeFile(source, Buffer.alloc(Number(before.size), 7));
+      await fs.utimes(source, timestamp, timestamp);
+    }
+  };
+  if (phase === "during") {
+    const copy = fileDescriptor.copyFileHandle;
+    vi.spyOn(fileDescriptor, "copyFileHandle").mockImplementation(async (...args) => {
+      const stat = await args[0].stat({ bigint: true });
+      if (stat.dev === before.dev && stat.ino === before.ino) {
+        await mutate();
+      }
+      return copy(...args);
+    });
+  } else {
+    const readGenerations = candidateState.readUpdateDatabaseGenerationsIsolated;
+    vi.spyOn(candidateState, "readUpdateDatabaseGenerationsIsolated").mockImplementationOnce(
+      async (...args) => {
+        await mutate();
+        return readGenerations(...args);
+      },
+    );
+  }
+  const capture = f.captureOriginal(`${change}-${phase}`);
+  if (change === "content") {
+    await expect(capture).rejects.toMatchObject({
+      cause: expect.objectContaining({
+        message: expect.stringMatching(/Original update (file|resource) changed/),
+      }),
+    });
+  } else {
+    const { ref } = await capture;
+    const manifest = parseUpdateRecoveryBackupManifest(await fs.readFile(ref.manifestPath, "utf8"));
+    const entry = manifest.entries.find((candidate) => candidate.sourcePath === source);
+    assert(entry?.kind === "file");
+    expect(await fs.readFile(path.join(ref.directory, entry.archivePath))).toEqual(
+      f.bytes.get(source),
+    );
+  }
+  expect(changed).toBe(true);
+  const after = await fs.stat(source, { bigint: true });
+  expect(after).toMatchObject({
+    dev: before.dev,
+    ino: before.ino,
+    size: before.size,
+    mtimeNs: before.mtimeNs,
+  });
+  expect(after.ctimeNs).not.toBe(before.ctimeNs);
 });
 
 it("retains an unsealed capture when the database changes after its snapshot", async () => {

@@ -34,6 +34,10 @@ import {
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
 import {
+  bindChatSendDiagnostics,
+  startChatSendDiagnostics,
+} from "./server-methods/chat-send-diagnostics.js";
+import {
   coreGatewayHandlers,
   gatewayRouterUploadPolicyError,
 } from "./server-methods/core-handlers.js";
@@ -74,7 +78,6 @@ import { classifyGatewayStaleInstall } from "./stale-install.js";
 
 export { coreGatewayHandlers };
 
-/** Builds the per-request method registry from core, plugin, and explicit extra handlers. */
 export function createRequestGatewayMethodRegistry(
   extraHandlers?: GatewayRequestHandlers,
 ): GatewayMethodRegistry {
@@ -274,6 +277,9 @@ export async function handleGatewayRequest(
   let respondCancelled = opts.respond;
   const dispatch = async (retainRoot?: () => void) => {
     const observationSignal = observation ? getAsyncWorkSignal() : undefined;
+    using chatSendDiagnostics =
+      req.method === "chat.send" ? startChatSendDiagnostics(context.logGateway) : undefined;
+    const chatSendPhase = chatSendDiagnostics?.scope("authority");
     using subscribeDiagnostics =
       req.method === "sessions.messages.subscribe"
         ? startSlowRequestDiagnostics<SessionSubscribePhase>(
@@ -445,6 +451,7 @@ export async function handleGatewayRequest(
       const invokeHandler = async () => {
         retainRoot?.();
         subscribeDiagnostics?.mark("handlerPreparation");
+        chatSendPhase?.mark("preparation");
         const preparedHandler = await prepareGatewayRequestHandler(handler, entry, opts);
         // Lazy preparation may yield across a hot config change. Keep the router fence
         // unless the canonical owner reconciles accepted input before new admission.
@@ -476,6 +483,7 @@ export async function handleGatewayRequest(
           profileBinding,
           authorization.sessionScope,
         );
+        bindChatSendDiagnostics(handlerOptions, chatSendDiagnostics);
         sessionMutationCommitGuard?.();
         assertOperatorCurrent();
         authorization.sessionAccessAuthority?.assertCurrent();
@@ -491,6 +499,7 @@ export async function handleGatewayRequest(
         const sharing = opts.acceptsSerializedJson
           ? methodRegistry.getReadSharing?.(req.method)
           : undefined;
+        chatSendPhase?.finish();
         return GatewayRpcDiagnostics.runHandler(
           () =>
             sharing

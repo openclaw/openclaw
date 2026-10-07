@@ -29,11 +29,7 @@ import {
   SubagentRegistryCommitReceiptError,
   SubagentRegistryVersionConflictError,
 } from "../registry/subagent-registry-persistence.js";
-import { rowToSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
-import {
-  subagentRunRowVersion,
-  type SubagentRunSqliteRow,
-} from "../registry/subagent-registry.store.row.js";
+import { isCanonicalSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   captureRequesterSettleRunIdentity,
@@ -51,6 +47,7 @@ import type {
   SubagentCompletionMutation,
   SubagentCompletionMutationResult,
   SubagentCompletionQueueReceipt,
+  SubagentCompletionRecord,
 } from "./subagent-completion-mutation.types.js";
 
 const log = createSubsystemLogger("subagents/completion");
@@ -68,29 +65,26 @@ type CompletionCommand = {
   };
 }["sessionDelivery.admitSubagentCompletion" | "sessionDelivery.mutateSubagentCompletion"];
 
-function parseNativeRow(row: unknown): SubagentRunSqliteRow {
+function parseAcknowledgedRecord(value: unknown): SubagentCompletionRecord {
   if (
-    !isRecord(row) ||
-    typeof row.run_id !== "string" ||
-    typeof row.child_session_key !== "string" ||
-    typeof row.requester_session_key !== "string" ||
-    typeof row.created_at !== "number" ||
-    typeof row.payload_json !== "string" ||
-    (row.controller_session_key !== null && typeof row.controller_session_key !== "string") ||
-    (row.requester_store_path !== null && typeof row.requester_store_path !== "string") ||
-    (row.controller_store_path !== null && typeof row.controller_store_path !== "string")
+    !isRecord(value) ||
+    !isCanonicalSubagentRunRecord(value.subagent) ||
+    typeof value.subagent.runId !== "string" ||
+    !value.subagent.runId ||
+    typeof value.subagent.childSessionKey !== "string" ||
+    !value.subagent.childSessionKey ||
+    typeof value.subagent.requesterSessionKey !== "string" ||
+    !value.subagent.requesterSessionKey ||
+    typeof value.version !== "string" ||
+    !value.version ||
+    (value.cleanupHandled !== undefined && typeof value.cleanupHandled !== "boolean")
   ) {
     throw new Error("Subagent completion acknowledgment has an invalid native record");
   }
   return {
-    run_id: row.run_id,
-    child_session_key: row.child_session_key,
-    requester_session_key: row.requester_session_key,
-    controller_session_key: row.controller_session_key,
-    requester_store_path: row.requester_store_path,
-    controller_store_path: row.controller_store_path,
-    created_at: row.created_at,
-    payload_json: row.payload_json,
+    subagent: value.subagent,
+    version: value.version,
+    cleanupHandled: value.cleanupHandled,
   };
 }
 
@@ -115,11 +109,11 @@ function parseAdmissionReceipt(value: unknown, writeId: string, runId: string): 
   ) {
     throw new Error("Subagent completion acknowledgment does not identify its write");
   }
-  const row = parseNativeRow(value.row);
-  if (row.run_id !== runId) {
+  const record = parseAcknowledgedRecord(value.record);
+  if (record.subagent.runId !== runId) {
     throw new Error("Subagent completion acknowledged another native owner");
   }
-  return { writeId, claimed: value.claimed, status: value.status, row };
+  return { writeId, claimed: value.claimed, status: value.status, record };
 }
 
 function parseMutationReceipt(
@@ -174,17 +168,11 @@ function parseMutationReceipt(
     throw new Error("Subagent completion acknowledged incomplete queue intents");
   }
   const records = value.records.map((record) => {
-    if (
-      !isRecord(record) ||
-      (record.cleanupHandled !== undefined && typeof record.cleanupHandled !== "boolean")
-    ) {
-      throw new Error("Subagent completion acknowledgment has invalid publication facts");
-    }
-    const row = parseNativeRow(record.row);
-    if (!runIds.includes(row.run_id)) {
+    const acknowledged = parseAcknowledgedRecord(record);
+    if (!runIds.includes(acknowledged.subagent.runId)) {
       throw new Error("Subagent completion acknowledged another native owner");
     }
-    return { row, cleanupHandled: record.cleanupHandled };
+    return acknowledged;
   });
   return {
     writeId,
@@ -200,16 +188,6 @@ function hasNewerGeneration(current: SubagentRunRecord): boolean {
   return [...getSubagentRunsForChildSession(current.childSessionKey, current.childAgentId)].some(
     (candidate) => compareSubagentRunGeneration(candidate, current) > 0,
   );
-}
-
-function decodeAcknowledgedRow(row: SubagentRunSqliteRow): SubagentRunRecord {
-  const record = rowToSubagentRunRecord(row);
-  if (!record) {
-    throw new SubagentRegistryCommitReceiptError(
-      new Error("Subagent completion acknowledged an undecodable native record"),
-    );
-  }
-  return record;
 }
 
 async function executeCompletionCommand<T>(
@@ -339,8 +317,10 @@ export async function admitSubagentCompletionDelivery(params: {
           authority.assertCurrent,
           (value) => parseAdmissionReceipt(value, input.writeId, params.runId),
         );
-        const subagent = decodeAcknowledgedRow(receipt.row);
-        subagent.cleanupHandled = planned.expected.cleanupHandled;
+        const subagent = {
+          ...receipt.record.subagent,
+          cleanupHandled: planned.expected.cleanupHandled,
+        };
         return {
           value: {
             id: planned.queueEntry.id,
@@ -349,7 +329,7 @@ export async function admitSubagentCompletionDelivery(params: {
             subagent,
           },
           postimages: new Map([[params.runId, subagent]]),
-          versions: new Map([[params.runId, subagentRunRowVersion(receipt.row)]]),
+          versions: new Map([[params.runId, receipt.record.version]]),
         };
       },
     },
@@ -463,10 +443,8 @@ async function mutateCompletion(
         for (const runId of receipt.retiredRunIds) {
           postimages.set(runId, null);
         }
-        for (const native of receipt.records) {
-          const record = decodeAcknowledgedRow(native.row);
-          record.cleanupHandled = native.cleanupHandled;
-          postimages.set(record.runId, record);
+        for (const { subagent, cleanupHandled } of receipt.records) {
+          postimages.set(subagent.runId, { ...subagent, cleanupHandled });
         }
         if (receipt.applied === true && postimages.size !== runIds.length) {
           throw new SubagentRegistryCommitReceiptError(
@@ -489,7 +467,7 @@ async function mutateCompletion(
           },
           postimages,
           versions: new Map([
-            ...receipt.records.map(({ row }) => [row.run_id, subagentRunRowVersion(row)] as const),
+            ...receipt.records.map(({ subagent, version }) => [subagent.runId, version] as const),
             ...receipt.retiredRunIds.map((runId) => [runId, null] as const),
           ]),
         };

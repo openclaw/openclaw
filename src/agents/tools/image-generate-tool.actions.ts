@@ -16,16 +16,6 @@ import {
   type MediaGenerateActionResult,
 } from "./media-generate-tool-actions-shared.js";
 
-function formatImageGenerationAuthHint(provider: { id: string }): string | undefined {
-  return provider.id === "openai"
-    ? "set OPENAI_API_KEY or configure an OpenClaw Codex login OAuth profile (not SIWC) for openai/gpt-image-2"
-    : undefined;
-}
-
-function listSupportedImageGenerationModes(provider: ImageGenerationProvider): string[] {
-  return ["generate", ...(provider.capabilities.edit.enabled ? ["edit"] : [])];
-}
-
 function summarizeImageGenerationCapabilities(provider: ImageGenerationProvider): string {
   const caps: string[] = [];
   if (provider.capabilities.edit.enabled) {
@@ -78,9 +68,12 @@ export function createImageGenerateListActionResult(params: {
     agentDir: params.agentDir,
     authStore: params.authStore,
     authProfileStoreSource: params.authProfileStoreSource,
-    listModes: listSupportedImageGenerationModes,
+    listModes: (provider) => ["generate", ...(provider.capabilities.edit.enabled ? ["edit"] : [])],
     summarizeCapabilities: summarizeImageGenerationCapabilities,
-    formatAuthHint: formatImageGenerationAuthHint,
+    formatAuthHint: (provider) =>
+      provider.id === "openai"
+        ? "set OPENAI_API_KEY or configure an OpenClaw Codex login OAuth profile (not SIWC) for openai/gpt-image-2"
+        : undefined,
   });
 }
 

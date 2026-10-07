@@ -1,4 +1,8 @@
 // One-time QQBot migrations for the Tencent 2.0 external plugin boundary.
+import {
+  normalizeUniqueStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 import {
   listQQBotConfigEntries,
@@ -8,6 +12,10 @@ import {
 } from "./legacy-config-migrations.qqbot-account.js";
 
 const APPROVALS_DISABLED_SENTINEL = "openclaw:approval-disabled";
+
+type QQBotConfigMigrationParams = ReturnType<typeof listQQBotConfigEntries>[number] & {
+  changes: string[];
+};
 
 function hasQQBotEntryMatching(
   value: unknown,
@@ -23,33 +31,25 @@ function hasQQBotEntryMatching(
 }
 
 function normalizeIds(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return [
-    ...new Set(
-      value
-        .filter((item): item is string | number => ["string", "number"].includes(typeof item))
-        .map((item) => String(item).trim())
-        .filter(Boolean),
-    ),
-  ];
+  return normalizeUniqueStringEntries(
+    Array.isArray(value)
+      ? value.filter((item) => typeof item === "string" || typeof item === "number")
+      : [],
+  );
 }
 
 function normalizeLegacyAllowFrom(value: unknown): string[] {
-  return [
-    ...new Set(
-      normalizeIds(value).map((id) => {
-        const unprefixed = id.replace(/^qqbot:/i, "");
-        if (unprefixed === "*" || unprefixed === APPROVALS_DISABLED_SENTINEL) {
-          return unprefixed;
-        }
-        // The bundled plugin compared QQ OpenIDs case-insensitively, while Tencent
-        // 2.0 expects its canonical uppercase form for runtime allowlist checks.
-        return unprefixed.toUpperCase();
-      }),
-    ),
-  ];
+  return uniqueStrings(
+    normalizeIds(value).map((id) => {
+      const unprefixed = id.replace(/^qqbot:/i, "");
+      if (unprefixed === "*" || unprefixed === APPROVALS_DISABLED_SENTINEL) {
+        return unprefixed;
+      }
+      // The bundled plugin compared QQ OpenIDs case-insensitively, while Tencent
+      // 2.0 expects its canonical uppercase form for runtime allowlist checks.
+      return unprefixed.toUpperCase();
+    }),
+  );
 }
 
 function resolveLegacyQQBotCommandsAllowFrom(raw: Record<string, unknown>): string[] | undefined {
@@ -68,13 +68,9 @@ function hasConfiguredFilter(value: unknown): boolean {
   return Array.isArray(value) ? value.length > 0 : value !== undefined;
 }
 
-function migrateExecApprovals(params: {
-  entry: Record<string, unknown>;
-  path: string;
-  changes: string[];
-  inheritedEntry?: Record<string, unknown>;
-  commandsAllowFrom?: string[];
-}): void {
+function migrateExecApprovals(
+  params: QQBotConfigMigrationParams & { commandsAllowFrom?: string[] },
+): void {
   const hasOwnLegacyConfig = Object.hasOwn(params.entry, "execApprovals");
   const hasLegacyConfig = hasOwnLegacyConfig || params.inheritedEntry?.execApprovals !== undefined;
   const hasOwnPolicyOverride =
@@ -190,11 +186,7 @@ function migrateExecApprovals(params: {
   );
 }
 
-function migrateAllowFrom(params: {
-  entry: Record<string, unknown>;
-  path: string;
-  changes: string[];
-}): void {
+function migrateAllowFrom(params: QQBotConfigMigrationParams): void {
   const current = normalizeIds(params.entry.allowFrom);
   const normalized = normalizeLegacyAllowFrom(params.entry.allowFrom);
   if (current.every((id, index) => id === normalized[index])) {
@@ -214,11 +206,7 @@ function hasLegacyStreamingTransport(entry: Record<string, unknown>): boolean {
   );
 }
 
-function migrateStreamingTransport(params: {
-  entry: Record<string, unknown>;
-  path: string;
-  changes: string[];
-}): void {
+function migrateStreamingTransport(params: QQBotConfigMigrationParams): void {
   const streaming = getRecord(params.entry.streaming);
   if (!streaming || !hasLegacyStreamingTransport(params.entry)) {
     return;
@@ -274,11 +262,7 @@ function mostRestrictiveTencentToolPolicy(
   return rank[normalizedFirst] <= rank[second] ? normalizedFirst : second;
 }
 
-function migrateGroupTools(params: {
-  entry: Record<string, unknown>;
-  path: string;
-  changes: string[];
-}): void {
+function migrateGroupTools(params: QQBotConfigMigrationParams): void {
   const groups = getRecord(params.entry.groups);
   if (!groups) {
     return;
@@ -320,12 +304,7 @@ function hasLegacyGroupCommandLevel(entry: Record<string, unknown>): boolean {
   );
 }
 
-function migrateGroupCommandLevels(params: {
-  entry: Record<string, unknown>;
-  path: string;
-  changes: string[];
-  inheritedEntry?: Record<string, unknown>;
-}): void {
+function migrateGroupCommandLevels(params: QQBotConfigMigrationParams): void {
   const groups = getRecord(params.entry.groups);
   if (!groups) {
     const inheritedGroups = getRecord(params.inheritedEntry?.groups);

@@ -5,6 +5,7 @@ import type {
   SessionFileEntry,
   readSessionEntryResetRecallCutoff,
 } from "../../../packages/memory-host-sdk/src/host/session-files.js";
+import type { BoardReadOperations } from "../../boards/sqlite-board-operations.js";
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
 import type {
   SessionRowTranscriptFields,
@@ -12,6 +13,7 @@ import type {
 } from "../../gateway/session-row-transcript-backfill.types.js";
 import type { SessionPreviewItem, SessionTitleFields } from "../../gateway/session-utils.types.js";
 import type { SessionCostUsageCacheReadResult } from "../../infra/session-cost-usage-cache-read.js";
+import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
@@ -302,9 +304,10 @@ type SessionIdentityEvidenceWorkerInput = {
   continuation?: CanonicalSessionReaderContinuation;
 };
 
-export type SessionBranchSummaryWorkerInput = {
+type SessionBranchSummaryWorkerInput = {
   kind: "branch-summaries";
-  request: SessionBranchSummaryReadRequest;
+  database: SessionBranchSummaryReadRequest["database"];
+  request: Omit<SessionBranchSummaryReadRequest, "database">;
 };
 
 type SessionHistoricalEvictionCandidatesWorkerInput = {
@@ -320,8 +323,23 @@ type SessionArchivedEvictionCandidatesWorkerInput = Omit<
   "admissionIdentities" | "preserveRecentMs"
 > & { archived: ArchivedSessionEvictionQuery };
 
+type BoardReadWorkerInput<Kind extends string, Operation extends keyof BoardReadOperations> = {
+  kind: Kind;
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
+  expectedIdentity: DatabaseFileIdentity;
+} & BoardReadOperations[Operation]["input"];
+type BoardSnapshotWorkerInput = BoardReadWorkerInput<"board-snapshot", "boards.readSnapshot">;
+type BoardWidgetDocumentWorkerInput = BoardReadWorkerInput<
+  "board-widget-document",
+  "boards.readWidgetDocument"
+>;
+
 export type SessionHistoryWorkerInput =
+  | BoardSnapshotWorkerInput
+  | BoardWidgetDocumentWorkerInput
   | SessionStoreProjectionWorkerInput
+  | SessionBranchSummaryWorkerInput
   | { kind: "cli-process-history"; request: ChatHistoryDisplayRequest }
   | LifecycleArtifactCleanupRequest
   | { kind: "prewarm"; database: { agentId: string; path: string }; env: NodeJS.ProcessEnv }
@@ -381,8 +399,7 @@ export type SessionTranscriptWorkerInput =
   | SessionModelContextWorkerInput
   | SessionContextMessagesWorkerInput
   | SessionEntryWorkerInput
-  | SessionResetRecallWorkerInput
-  | SessionBranchSummaryWorkerInput;
+  | SessionResetRecallWorkerInput;
 
 type SessionHistoryDatabaseWorkerInput = Extract<SessionHistoryWorkerInput, { database: unknown }>;
 
@@ -391,6 +408,14 @@ export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues & {
+  "board-snapshot": {
+    kind: "board-snapshot";
+    value: BoardReadOperations["boards.readSnapshot"]["output"];
+  };
+  "board-widget-document": {
+    kind: "board-widget-document";
+    value: BoardReadOperations["boards.readWidgetDocument"]["output"];
+  };
   "cli-process-history": ChatHistoryDisplayResult;
   "conversation-rows": { kind: "conversation-rows"; rows: ConversationRecord[] };
   "conversation-delivery": { kind: "conversation-delivery"; record?: ConversationDeliveryRecord };
@@ -424,7 +449,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     message: SessionTranscriptMessageEvent | undefined;
   };
   "sqlite-target": { target: ResolvedSqliteStoreTarget };
-  "branch-summaries": SessionBranchSummaryReadResult;
+  "branch-summaries": { kind: "branch-summaries"; result: SessionBranchSummaryReadResult };
   "history-page": SessionHistoryWorkerResult;
   "session-preview": { kind: "session-preview"; items: SessionPreviewItem[] };
   "session-title-fields": { kind: "session-title-fields"; fields: SessionTitleFields };
@@ -526,6 +551,18 @@ type CancellableSessionHistoryReader<
 > = (input: Omit<Input, "kind" | "database">, signal?: AbortSignal) => Promise<Value>;
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
+  readBoardSnapshot: SessionHistoryReader<
+    BoardSnapshotWorkerInput,
+    BoardReadOperations["boards.readSnapshot"]["output"]
+  >;
+  readBoardWidgetDocument: SessionHistoryReader<
+    BoardWidgetDocumentWorkerInput,
+    BoardReadOperations["boards.readWidgetDocument"]["output"]
+  >;
+  readBranchSummaries: CancellableSessionHistoryReader<
+    SessionBranchSummaryWorkerInput,
+    SessionBranchSummaryReadResult
+  >;
   readMessagePresence: CancellableSessionHistoryReader<
     SessionTranscriptMessagePresenceWorkerInput,
     boolean

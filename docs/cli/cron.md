@@ -59,7 +59,7 @@ Use `--command` for deterministic shell-style jobs that run inside the OpenClaw 
 
 ```bash
 openclaw automations create "*/15 * * * *" \
-  --name "Queue depth probe" \
+  --name "Queue depth check" \
   --command "scripts/check-queue.sh" \
   --command-cwd "/srv/app" \
   --announce \
@@ -211,7 +211,7 @@ Recurring jobs use exponential retry backoff after consecutive errors: 30s, 1m, 
 
 Skipped runs are tracked separately from execution errors. They do not affect retry backoff, but `openclaw automations edit <job-id> --failure-alert-include-skipped` can opt failure alerts into repeated skipped-run notifications.
 
-A local configured model provider has a base URL on loopback, on a private network, or on `.local`. For isolated jobs that target such a provider, the scheduler runs a lightweight provider preflight before it starts the agent turn. The scheduler probes `api: "ollama"` providers at `/api/tags`. It probes other local OpenAI-compatible providers (`api: "openai-completions"`, for example vLLM, SGLang, and LM Studio) at `/models`. If the endpoint is unreachable, the scheduler records the run as `skipped` and retries it on a later schedule. It caches the reachability result per endpoint for 5 minutes, so many jobs against the same local server do not send repeated probes.
+A local configured model provider has a base URL on loopback, on a private network, or on `.local`. For isolated jobs that target such a provider, the scheduler runs a lightweight provider preflight before it starts the agent turn. The scheduler checks `api: "ollama"` providers at `/api/tags`. It checks other local OpenAI-compatible providers (`api: "openai-completions"`, for example vLLM, SGLang, and LM Studio) at `/models`. If the endpoint is unreachable, the scheduler records the run as `skipped` and retries it on a later schedule. It caches the reachability result per endpoint for 5 minutes, so many jobs against the same local server do not send repeated checks.
 
 Automation jobs, pending runtime state, and run history live in the shared SQLite state database. The file store it replaced in 2026.6.1 is retired. If `jobs.json`, `<name>-state.json`, or `runs/*.jsonl` files remain, install OpenClaw `2026.9.7` and run `openclaw doctor --fix` before upgrading to the latest version. Current Doctor preserves these files and reports the intermediate upgrade requirement. Supported `jobs-quarantine.json` sidecars are still imported and archived with a `.migrated` suffix. Edit schedules with `openclaw automations add|edit|remove` instead of editing JSON files.
 
@@ -283,7 +283,17 @@ Isolated automation turns suppress stale acknowledgement-only replies. If the fi
 
 ### Silent token suppression
 
-If an isolated automation run returns only the silent token (`NO_REPLY` or `no_reply`), the scheduler suppresses direct outbound delivery and the fallback queued summary path. Nothing is posted back to chat.
+For text-only isolated automation announcements, a reply that contains only the silent token (`NO_REPLY` or `no_reply`), or ends with a trailing silent token, suppresses direct outbound delivery and the fallback queued summary path. The preceding text is not delivered.
+
+For example, this final reply sends no chat message:
+
+```text
+Nothing actionable found today.
+
+NO_REPLY
+```
+
+Do not append `NO_REPLY` to a report that should reach the user. Mentioning the token within a sentence, such as `Use NO_REPLY when nothing actionable changed.`, does not trigger this rule. For media payloads, a silent caption can be removed while the media is still delivered.
 
 Human-readable `automations list` and `automations show` label successful intentional suppression as `ok (suppressed)`, not a delivery warning. `automations show` includes `last delivery suppression` with the recorded reason (`empty`, `silent`, `heartbeat`, or `channel_transform`). JSON keeps `deliveryStatus: "not-delivered"` and the separate `deliverySuppressionReason`. Genuine delivery failures without an intentional reason still show `ok (not delivered)` when execution succeeded.
 

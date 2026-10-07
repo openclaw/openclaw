@@ -84,8 +84,8 @@ describe("followup prompt metadata carrier", () => {
       sessionId: run.run.sessionId,
       resetTriggered: false,
     });
-    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
-    const toolAuthorityFingerprint = operation.bindToolAuthorityRoute({
+    await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
+    const toolAuthorityFingerprint = await operation.bindToolAuthorityRouteAsync({
       provider: run.run.provider,
       model: run.run.model,
     });

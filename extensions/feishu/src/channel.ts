@@ -234,7 +234,7 @@ function hasLegacyFeishuCardCommandValue(actionValue: unknown): boolean {
 
 function containsLegacyFeishuCardCommandValue(node: unknown): boolean {
   if (Array.isArray(node)) {
-    return node.some((item) => containsLegacyFeishuCardCommandValue(item));
+    return node.some(containsLegacyFeishuCardCommandValue);
   }
   if (!isRecord(node)) {
     return false;
@@ -253,7 +253,7 @@ function containsLegacyFeishuCardCommandValue(node: unknown): boolean {
     return true;
   }
 
-  return Object.values(node).some((value) => containsLegacyFeishuCardCommandValue(value));
+  return Object.values(node).some(containsLegacyFeishuCardCommandValue);
 }
 
 const meta: ChannelMeta = {
@@ -532,13 +532,12 @@ function buildFeishuSendReplyAnchor(
 
 function isSupportedFeishuDirectConversationId(conversationId: string): boolean {
   const trimmed = conversationId.trim();
-  if (!trimmed || trimmed.includes(":")) {
-    return false;
-  }
-  if (trimmed.startsWith("oc_") || trimmed.startsWith("on_")) {
-    return false;
-  }
-  return true;
+  return (
+    Boolean(trimmed) &&
+    !trimmed.includes(":") &&
+    !trimmed.startsWith("oc_") &&
+    !trimmed.startsWith("on_")
+  );
 }
 
 function normalizeFeishuAcpConversationId(conversationId: string) {
@@ -996,7 +995,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       id: "feishu",
       meta,
       capabilities: {
-        chatTypes: ["direct", "channel"],
+        chatTypes: ["direct", "group"],
         polls: false,
         threads: true,
         media: true,

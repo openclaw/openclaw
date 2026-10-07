@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { write } from "../fixtures/common.mjs";
+import { readJson, write } from "../fixtures/common.mjs";
 
 const root = process.env.OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT;
 const artifacts = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
@@ -83,7 +83,7 @@ function processIdentity(pid) {
 }
 
 function survivingRefusalProcesses() {
-  const record = JSON.parse(fs.readFileSync(refusalChild, "utf8"));
+  const record = readJson(refusalChild);
   assert.equal(record.child.group, record.worker.pid, "Output child escaped its worker group");
   assert.equal(record.worker.group, record.worker.pid, "Worker is not its group leader");
   return [record.worker, record.child].flatMap((expected) => {
@@ -115,7 +115,7 @@ function installationDigest(packageRoot) {
 
 function armRefusal(packageRoot) {
   assert.equal(process.platform, "linux", "Refusal process identity proof requires Linux");
-  const installed = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+  const installed = readJson(path.join(packageRoot, "package.json"));
   assert.equal(installed.version, "2026.9.6", "Refusal proof requires the published 9.6 updater");
   const operatorFile = path.join(root, "workspace", "MEMORY.md");
   write(operatorFile, "# Existing operator memory\nPreserve this through the refused update.\n");
@@ -134,8 +134,7 @@ function armRefusal(packageRoot) {
 
 function assertRefusal(packageRoot, exitCode) {
   assert.equal(Number(exitCode), 1, "Published updater did not report a failed update");
-  const raw = fs.readFileSync(path.join(artifacts, "sibling-refusal-update.json"), "utf8");
-  const result = JSON.parse(raw);
+  const result = readJson(path.join(artifacts, "sibling-refusal-update.json"));
   assert.equal(result.status, "error");
   assert.equal(result.before?.version, "2026.9.6");
   const failed = result.steps.find((step) => step.name === "candidate-doctor-lint");
@@ -177,7 +176,7 @@ function assertRefusal(packageRoot, exitCode) {
     ),
     "Saved failed run lost the authentic supervisor refusal",
   );
-  const before = JSON.parse(fs.readFileSync(refusalBaseline, "utf8"));
+  const before = readJson(refusalBaseline);
   assert.equal(fs.realpathSync(packageRoot), before.packageRoot);
   assert.equal(
     installationDigest(packageRoot),
@@ -186,9 +185,7 @@ function assertRefusal(packageRoot, exitCode) {
   );
   assert.equal(digest(configPath), before.config, "Refusal changed operator config");
   assert.equal(digest(before.operatorFile), before.operator, "Refusal changed operator memory");
-  for (const [file, expected] of Object.entries(
-    JSON.parse(fs.readFileSync(evidencePath, "utf8")),
-  )) {
+  for (const [file, expected] of Object.entries(readJson(evidencePath))) {
     assert.equal(digest(file), expected, `Refusal changed original plugin source: ${file}`);
   }
   assert.deepEqual(
@@ -411,7 +408,7 @@ function assertCanary() {
       );
     }
   }
-  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const config = readJson(configPath);
   assert.equal(
     config.plugins.entries[pluginId].enabled,
     true,
@@ -419,9 +416,7 @@ function assertCanary() {
   );
   assert.equal(config.plugins.slots.memory, pluginId, "Updater replaced the memory plugin");
   assert.equal(config.plugins.slots.contextEngine, pluginId, "Updater replaced the context engine");
-  for (const [file, expected] of Object.entries(
-    JSON.parse(fs.readFileSync(evidencePath, "utf8")),
-  )) {
+  for (const [file, expected] of Object.entries(readJson(evidencePath))) {
     assert.equal(digest(file), expected, `Updater changed original plugin source: ${file}`);
   }
   write(
@@ -434,11 +429,11 @@ function assertCanary() {
 }
 
 function assertActivation() {
-  const activation = JSON.parse(fs.readFileSync(activationSeed, "utf8"));
+  const activation = readJson(activationSeed);
   assert.equal(activation.databasePath, path.join(stateDir, "state", "openclaw.sqlite"));
   assert.equal(activation.entries.length, 3, "Activation did not author all fixture records");
   process.kill(activation.processId, 0);
-  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const config = readJson(configPath);
   assert.equal(config.plugins.slots.contextEngine, pluginId);
   const database = new DatabaseSync(activation.databasePath, { readOnly: true });
   try {

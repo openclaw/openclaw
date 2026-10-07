@@ -43,20 +43,12 @@ function assertDebugProxyDirectUpstreamAllowed(env: NodeJS.ProcessEnv = process.
   );
 }
 
-type DebugProxyServerHandle = {
-  proxyUrl: string;
-  stop: () => Promise<void>;
-};
-
 type ProxyCaptureEventInput = Omit<
   CaptureEventRecord,
   "sessionId" | "ts" | "sourceScope" | "sourceProcess"
 >;
 
-function parseConnectTarget(rawTarget: string | undefined): {
-  hostname: string;
-  port: number;
-} {
+function parseConnectTarget(rawTarget: string | undefined) {
   const trimmed = rawTarget?.trim() ?? "";
   if (!trimmed) {
     return { hostname: "127.0.0.1", port: 443 };
@@ -158,7 +150,7 @@ export async function startDebugProxyServer(params: {
   port?: number;
   settings: DebugProxySettings;
   env?: NodeJS.ProcessEnv;
-}): Promise<DebugProxyServerHandle> {
+}) {
   const settings = { ...params.settings };
   const env = { ...(params.env ?? process.env) };
   await ensureDebugProxyCa(settings.certDir);

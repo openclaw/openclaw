@@ -22,6 +22,7 @@ const MANAGED_UPDATE_SELECTOR_ENV_KEYS = [
   "OPENCLAW_HOME",
   ...GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 ] as const;
+const OPERATOR_SCRATCH_ENV_KEYS = ["TMPDIR", "TMP", "TEMP"] as const;
 
 /** Recovery can be printed inside an owned-env scope that the operator's shell never had. */
 export function resolveServiceRecoveryContext(
@@ -215,18 +216,22 @@ export function resolveUpdatedInstallCommandEnv(params?: {
     : undefined;
   // SecretRefs may resolve from the updater's runtime env even when the
   // managed service intentionally omits resolved secrets from its definition.
-  return disableUpdatedPackageCompileCacheEnv({
-    ...processEnv,
-    ...serviceEnv,
-  });
+  const resolved = { ...processEnv, ...serviceEnv };
+  // The service owns installation selectors; the invoking operator owns scratch placement.
+  for (const key of OPERATOR_SCRATCH_ENV_KEYS) {
+    if (processEnv[key] !== undefined) {
+      resolved[key] = processEnv[key];
+    }
+  }
+  return disableUpdatedPackageCompileCacheEnv(resolved);
 }
 
-export function resolveOwnedManagedUpdateEnv(params: {
-  processEnv?: NodeJS.ProcessEnv;
-  serviceEnv: NodeJS.ProcessEnv;
-  serviceDefinitionEnv?: NodeJS.ProcessEnv;
-  invocationCwd?: string;
-}): NodeJS.ProcessEnv {
+export function resolveOwnedManagedUpdateEnv(
+  params: NonNullable<Parameters<typeof resolveUpdatedInstallCommandEnv>[0]> & {
+    serviceEnv: NodeJS.ProcessEnv;
+    serviceDefinitionEnv?: NodeJS.ProcessEnv;
+  },
+): NodeJS.ProcessEnv {
   const resolved = resolveUpdatedInstallCommandEnv(params);
   return applyManagedServiceSelectorEnv(
     resolved,

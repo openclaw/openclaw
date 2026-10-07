@@ -242,6 +242,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "workerPlacements.changeSnapshot") {
     return bytes + stringBytes(command.profileIds ?? []);
   }
+  if (command.type === "workers.placementEnvironmentOwner") {
+    return bytes + Buffer.byteLength(command.environmentId, "utf8");
+  }
   if (command.type === "tui.lastSession.read") {
     return bytes + Buffer.byteLength(command.stateKey, "utf8");
   }
@@ -478,7 +481,12 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     );
   }
   if (command.type === "userProfiles.githubIdentity.cached") {
-    return bytes + Buffer.byteLength(command.email, "utf8") + 8;
+    return (
+      bytes +
+      ("login" in command
+        ? Buffer.byteLength(command.login, "utf8")
+        : Buffer.byteLength(command.email, "utf8") + 8)
+    );
   }
   if (
     command.type === "userProfiles.githubAttribution.resolve" ||

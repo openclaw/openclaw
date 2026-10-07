@@ -353,15 +353,15 @@ function aliasPlugin(
   id: string,
   aliases: Record<string, ModelCatalogAlias>,
   overrides: Partial<PluginManifestRecord> = {},
-) {
-  return {
+): PluginManifestRecord {
+  return createManifestRecord(id, {
     id,
     origin: "bundled",
     enabledByDefault: true,
     providers: [id],
     modelCatalog: { aliases },
     ...overrides,
-  };
+  });
 }
 function configuredAlias(provider: string, baseUrl: string, api?: ModelCatalogAlias["api"]) {
   return { models: { providers: { [provider]: { baseUrl, api, models: [] } } } };

@@ -557,14 +557,19 @@ const recoveryCases: RecoveryCase[] = [
     {
       healthy: false,
       code: "private-probe-identifier",
-      expected: "recovery probe failed (gateway-probe-failed)",
+      expected: "recovery check failed (gateway-probe-failed)",
     },
   ].map(({ healthy, code, expected }): RecoveryCase => ({
     name: `observed ${expected}`,
     recordedRun: {
       runId: attemptId,
       steps: [],
-      verification: { runningVersion: "2026.9.4", versionMatch: true, readyz: true, settled: true },
+      verification: {
+        runningVersion: "2026.9.4",
+        versionMatch: true,
+        readyz: true,
+        settled: true,
+      },
     },
     result: {
       reason: "post-update-plugins",

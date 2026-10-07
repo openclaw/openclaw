@@ -92,17 +92,13 @@ pub(crate) fn native_auth_initialization_script(
         return gateway_control_auth::initialization_script(dashboard, gateway);
     }
     let path = dashboard.path().trim_end_matches('/');
-    let origin = serde_json::to_string(&dashboard.origin().ascii_serialization())
-        .map_err(|_| "Could not prepare secure Gateway authentication.".to_string())?;
-    let path = serde_json::to_string(if path.is_empty() { "/" } else { path })
-        .map_err(|_| "Could not prepare secure Gateway authentication.".to_string())?;
+    let origin = serde_json::json!(dashboard.origin().ascii_serialization());
+    let path = serde_json::json!(if path.is_empty() { "/" } else { path });
     let auth = serde_json::json!({
         "gatewayUrl": gateway.as_str(),
         "token": request.token,
         "password": request.password,
     });
-    let auth = serde_json::to_string(&auth)
-        .map_err(|_| "Could not prepare secure Gateway authentication.".to_string())?;
     Ok(format!(
         r#"(() => {{
   try {{
@@ -773,10 +769,7 @@ impl DesktopState {
                     None,
                 )
             });
-        match result {
-            Ok(snapshot) => Ok(snapshot),
-            Err(error) => self.remote_failure(app, error, selection, None),
-        }
+        result.or_else(|error| self.remote_failure(app, error, selection, None))
     }
 
     fn connect_selected(
@@ -1476,12 +1469,7 @@ impl DesktopState {
         }
         let monitor = navigation.finish_settings_return();
         drop(navigation);
-        if let Some(generation) = monitor {
-            // Reuse the connected CLI without discovery or a connection operation.
-            if let Some(cli) = self.inner.cli.lock().expect("CLI mutex poisoned").clone() {
-                self.watch_local(app.clone(), cli, generation);
-            }
-        }
+        self.resume_local_watchdog(app, monitor);
         Ok(true)
     }
 
@@ -1575,11 +1563,7 @@ impl DesktopState {
                 })?
         };
         tray::show_window(app);
-        if let Some(generation) = monitor {
-            if let Some(cli) = self.inner.cli.lock().expect("CLI mutex poisoned").clone() {
-                self.watch_local(app.clone(), cli, generation);
-            }
-        }
+        self.resume_local_watchdog(app, monitor);
         Ok(())
     }
 
@@ -1677,10 +1661,7 @@ impl DesktopState {
                 });
                 let retired = pending.lock().expect("pending SSH").take();
                 drop(retired);
-                match result {
-                    Ok(snapshot) => Ok(snapshot),
-                    Err(error) => self.remote_failure(app, error, selection, Some(child_id)),
-                }
+                result.or_else(|error| self.remote_failure(app, error, selection, Some(child_id)))
             }
         }
     }
@@ -2006,6 +1987,15 @@ impl DesktopState {
             // The transport is already owned; initialize only its dashboard document.
             state.navigate_local_document(&app, &mut navigation, &ready.dashboard_url, false, true)
         })
+    }
+
+    fn resume_local_watchdog(&self, app: &AppHandle, generation: Option<u64>) {
+        if let Some(generation) = generation {
+            // Reuse the connected CLI without discovery or a connection operation.
+            if let Some(cli) = self.inner.cli.lock().expect("CLI mutex poisoned").clone() {
+                self.watch_local(app.clone(), cli, generation);
+            }
+        }
     }
 
     fn watch_local(&self, app: AppHandle, mut cli: OpenClawCli, generation: u64) {
@@ -3175,12 +3165,7 @@ fn dashboard_document_ready(
     if let Some(snapshot) = snapshot {
         state.update_tray(&snapshot);
     }
-    if let Some(generation) = monitor {
-        let cli = state.inner.cli.lock().expect("CLI mutex poisoned").clone();
-        if let Some(cli) = cli {
-            state.watch_local(app.clone(), cli, generation);
-        }
-    }
+    state.resume_local_watchdog(app, monitor);
 }
 
 #[tauri::command]

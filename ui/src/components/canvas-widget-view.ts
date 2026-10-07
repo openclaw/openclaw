@@ -358,7 +358,10 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         this.postHostState();
       },
       onRendered: () => this.postHostState(),
-      onError: (error) => this.fail(error),
+      onError: (error) => {
+        this.clearSandbox();
+        this.error = formatUiError(error);
+      },
       onReadyTimeout: () => {
         this.pending = true;
       },
@@ -366,11 +369,6 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         this.pending = true;
       },
     });
-  }
-
-  private fail(error: unknown): void {
-    this.clearSandbox();
-    this.error = formatUiError(error);
   }
 
   private postHostState(): void {

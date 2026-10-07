@@ -111,11 +111,7 @@ export function startBuzzDirectoryRelay(params: {
   onError?: (error: Error) => void;
   onFatalError?: (error: Error) => void;
   onRoomChanged?: () => void;
-}): {
-  replaceProfilePublicKeys: (publicKeys: string[]) => void;
-  refreshRooms: (channelIds: string[]) => Promise<void>;
-  close: () => void;
-} {
+}) {
   let closed = false;
   let profileGeneration: ProfileSubscriptionGeneration | undefined;
   let queuedProfilePublicKeys: string[] | undefined;

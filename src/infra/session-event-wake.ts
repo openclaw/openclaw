@@ -9,6 +9,7 @@ import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-adm
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { heartbeatLog } from "./heartbeat-log.js";
 import { normalizeHeartbeatWakeReason } from "./heartbeat-reason.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "./heartbeat-wake-contracts.js";
 import {
@@ -325,6 +326,16 @@ function createSessionEventWakeRuntime() {
   }
 
   function settle(wake: PendingWake, result: SessionEventWakeResult): void {
+    if (result.status === "failed") {
+      heartbeatLog.error("session event wake failed; no wake retry scheduled", {
+        source: wake.source,
+        intent: wake.intent,
+        agentId: wake.agentId,
+        sessionKey: wake.sessionKey,
+        wakeReason: wake.reason,
+        error: result.reason,
+      });
+    }
     for (const entry of wake.settlements) {
       entry.settle(result);
     }

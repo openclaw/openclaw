@@ -72,7 +72,6 @@ export function prepareChatMessageRender(message: unknown) {
 
 export type ChatMessageRenderPreparation = ReturnType<typeof prepareChatMessageRender>;
 
-// An explicit Markdown value is the displayed expansion, even when it is empty.
 export function resolveMessageReplyText(
   message: unknown,
   normalizedMessage: NormalizedMessage,
@@ -133,7 +132,6 @@ export function resolveMessageActionDetails(
   };
 }
 
-/** Whether `renderMessageActionButtons` renders at least one control for these options. */
 export function hasMessageActionButtons(
   details: MessageActionDetails | null | undefined,
   opts: { onReply?: (target: MessageReplyTarget) => void; onReact?: MessageReactionAction },

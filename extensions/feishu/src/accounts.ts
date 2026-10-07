@@ -221,17 +221,10 @@ function buildResolvedFeishuAccount(params: {
   baseMode: FeishuCredentialResolutionMode;
   eventSecretMode: FeishuCredentialResolutionMode;
 }): ResolvedFeishuAccount {
-  const hasExplicitAccountId =
-    typeof params.accountId === "string" && params.accountId.trim() !== "";
-  const defaultSelection = hasExplicitAccountId
-    ? null
-    : resolveDefaultFeishuAccountSelection(params.cfg);
-  const accountId = hasExplicitAccountId
-    ? normalizeAccountId(params.accountId)
-    : (defaultSelection?.accountId ?? DEFAULT_ACCOUNT_ID);
-  const selectionSource = hasExplicitAccountId
-    ? "explicit"
-    : (defaultSelection?.source ?? "fallback");
+  const { accountId, source: selectionSource } =
+    typeof params.accountId === "string" && params.accountId.trim() !== ""
+      ? { accountId: normalizeAccountId(params.accountId), source: "explicit" as const }
+      : resolveDefaultFeishuAccountSelection(params.cfg);
   const feishuCfg = params.cfg.channels?.feishu as FeishuConfig | undefined;
 
   const merged = mergeFeishuAccountConfig(params.cfg, accountId);

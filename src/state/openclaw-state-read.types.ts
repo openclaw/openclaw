@@ -146,6 +146,7 @@ import type {
   UserChannelIdentityAuthorityFacts,
   UserChannelIdentityResult,
   CachedGitHubIdentity,
+  CachedGitHubIdentityBinding,
   UserProfileGitHubAttributionRead,
   ProfileDisplayRow,
   UserProfileEmailBinding,
@@ -169,6 +170,7 @@ export type OpenClawStateReadAuthority = {
 
 export type OpenClawStateReadCommand =
   | RegisteredStateReadCommand
+  | { type: "admit" }
   | { type: "backup.runs" }
   | TuiLastSessionReadCommand
   | ChannelIngressReadCommand
@@ -190,10 +192,10 @@ export type OpenClawStateReadCommand =
   | { type: "operatorApprovals.validateCronGrant"; input: CronStandingGrantLookupInput }
   | PluginBlobReadCommand
   | { type: "subagents.sessionList" }
+  | { type: "subagents.restore" }
   | {
       type: "subagents.runs";
       scope:
-        | { kind: "all" }
         | { kind: "maintenance" }
         | { kind: "session"; sessionKey: string }
         | { kind: "ids"; runIds: readonly string[] }
@@ -226,7 +228,7 @@ export type OpenClawStateReadCommand =
   | { type: "userProfiles.channelIdentity.list"; profileId: string }
   | { type: "userProfiles.channelIdentity.resolve"; identity: UserChannelIdentitySelector }
   | { type: "userProfiles.authority.resolve"; profileId: string }
-  | { type: "userProfiles.githubIdentity.cached"; accountId: number; email: string }
+  | ({ type: "userProfiles.githubIdentity.cached" } & CachedGitHubIdentityBinding)
   | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[] }
   | { type: "userProfiles.email.resolve"; email: string }
   | { type: "userProfiles.catalog" }
@@ -273,6 +275,7 @@ export type OpenClawStateReadCommand =
   | WorkspaceJournalReadCommand
   | { type: "workers.placementRecoveryCandidates" }
   | { type: "workers.placementPreservation" }
+  | { type: "workers.placementEnvironmentOwner"; environmentId: string }
   | { type: "workers.placementPendingResults"; sessionId?: string }
   | {
       type: "workers.placementProjection";
@@ -286,7 +289,7 @@ export type OpenClawStateReadRequest = {
   checkFreshAdmission: boolean;
   expectedIdentity?: string;
   snapshotRoot?: string;
-  command: OpenClawStateReadCommand | { type: "admit" };
+  command: OpenClawStateReadCommand;
 };
 type ReadResult<Reply> = Reply extends { ok: true } ? Omit<Reply, "ok" | "sourceAdmitted"> : never;
 
@@ -430,6 +433,7 @@ export type OpenClawStateReadResult =
       runs: Map<string, SubagentRunMaintenanceRecord>;
       maintenanceDigest: string;
     }
+  | { type: "subagents.restore"; count: number }
   | {
       type: "agentDatabaseDeletion.snapshot";
       snapshot: AgentDatabaseDeletionWorkerSnapshot;
@@ -549,6 +553,10 @@ export type OpenClawStateReadResult =
   | { type: "workers.placementRecoveryCandidates"; candidates: WorkerPlacementRecoveryCandidate[] }
   | { type: "workers.placementPreservation"; placements: WorkerSessionPlacementRecord[] }
   | {
+      type: "workers.placementEnvironmentOwner";
+      placement: WorkerSessionPlacementRecord | undefined;
+    }
+  | {
       type: "workers.placementPendingResults";
       pendingResults: import("../gateway/worker-environments/placement-workspace-result.types.js").WorkerWorkspacePendingResult[];
     }
@@ -584,6 +592,8 @@ export type OpenClawStateReadOutcome =
 type OpenClawStateReadPhase = "before-read" | "read" | "unobserved";
 export type OpenClawStateReadReceipt = { phase: OpenClawStateReadPhase };
 export type OpenClawStateReadOptions = {
+  /** Consume private streamed facts synchronously; final settlement owns publication. */
+  onChunk?: (value: unknown) => void;
   /** Cancellation abandons delivery only after the accepted read and cleanup settle. */
   signal?: AbortSignal;
   /** Reuse the caller's captured authority instead of admitting a newer lifecycle. */

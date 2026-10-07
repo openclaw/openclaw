@@ -369,11 +369,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 assertRuntimeCurrent();
                 return result;
               }),
-            withSessionReadScope: (run) =>
+            withSessionFacts: (select, run) =>
               runWithPluginScope(async () => {
-                const result = await gateway.withSessionReadScope((scope) => {
+                const result = await gateway.withSessionFacts(select, (snapshot) => {
                   assertRuntimeCurrent();
-                  return run(scope);
+                  return run(snapshot);
                 });
                 assertRuntimeCurrent();
                 return result;

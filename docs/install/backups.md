@@ -28,6 +28,13 @@ The databases are written while the Gateway runs, and raw file copies of a
 live database can be torn or corrupt. Every supported path below captures
 committed state safely.
 
+SQLite snapshots, including Doctor's pre-migration backups and backup reuse on
+retry, preserve vector memory tables without loading the native `sqlite-vec`
+extension. Backup creation therefore works on older Intel CPUs without AVX.
+Vector search still needs a compatible extension; on those hosts, build
+`sqlite-vec` without AVX and set `memory.search.store.vector.extensionPath`
+to that build's loadable extension.
+
 <Warning>
   Backups contain auth profiles, channel and provider credentials, session
   history, and other sensitive records. Store them encrypted, restrict the
@@ -230,7 +237,7 @@ outcome with `openclaw backup record`; see
 `openclaw status` shows the newest backup attempt and offsite result. The
 Control UI's Backups section on the Systems landing and Gateway host views shows each target's last success, size, destination,
 latest failure, and next scheduled run. Its storage location **Check** action
-probes access without writing a backup. `openclaw doctor` keeps the 14-day
+checks access without writing a backup. `openclaw doctor` keeps the 14-day
 freshness hint and also flags an offsite schedule after a failed attempt or
 when its last success is older than three schedule intervals. Diagnose that
 destination with `openclaw storage test <name>`.

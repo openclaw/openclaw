@@ -70,7 +70,7 @@ function markdownPreAffixes(
   entity: Extract<MessageEntity, { type: "pre" }>,
   content: string,
 ): [string, string] {
-  const language = entity.language?.replace(/[\s`]+/g, "").trim();
+  const language = entity.language?.replace(/[\s`]+/g, "");
   const fence = "`".repeat(Math.max(3, longestBacktickRun(content) + 1));
   const opener = language ? `${fence}${language}\n` : `${fence}\n`;
   const closer = content.endsWith("\n") ? fence : `\n${fence}`;

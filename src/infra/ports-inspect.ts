@@ -8,7 +8,6 @@ import { buildPortHints } from "./ports-format.js";
 import {
   parseLsofListenerRecordsByPort,
   readLsofListenersForPort,
-  type LsofListenerRecord,
 } from "./ports-lsof-listeners.js";
 import { resolveLsofCommand } from "./ports-lsof.js";
 import {
@@ -32,29 +31,16 @@ import {
   getWindowsWmicExePath,
 } from "./windows-install-roots.js";
 
-type CommandResult = {
-  stdout: string;
-  stderr: string;
-  code: number;
-  error?: string;
-};
-
 type SocketReadResult<T extends PortListener> = {
   entries: T[];
   detail?: string;
   errors: string[];
 };
 
-type UnixListenerSnapshot = {
-  recordsByPort: Map<number, LsofListenerRecord[]>;
-  errors: string[];
-  lsofUnavailable: boolean;
-};
-
 // Each enrichment batch bounds its native process-metadata subprocesses.
 const PORT_PROCESS_ENRICHMENT_CONCURRENCY = 20;
 
-async function runCommandSafe(argv: string[], signal?: AbortSignal): Promise<CommandResult> {
+async function runCommandSafe(argv: string[], signal?: AbortSignal) {
   signal?.throwIfAborted();
   try {
     // env overrides alone would merge the ambient application environment back in.
@@ -295,10 +281,7 @@ function parseSsListeners(output: string, port: number): PortListener[] {
   return listeners;
 }
 
-async function readUnixListenerSnapshot(
-  port?: number,
-  signal?: AbortSignal,
-): Promise<UnixListenerSnapshot> {
+async function readUnixListenerSnapshot(port?: number, signal?: AbortSignal) {
   const lsof = await resolveLsofCommand(signal);
   // Keep single-port lifecycle checks targeted; batches share one all-port scan.
   const tcpSelector = port === undefined ? "-iTCP" : `-iTCP:${port}`;
@@ -307,8 +290,7 @@ async function readUnixListenerSnapshot(
     signal,
   );
   return {
-    recordsByPort:
-      result.stdout === undefined ? new Map() : parseLsofListenerRecordsByPort(result.stdout),
+    recordsByPort: parseLsofListenerRecordsByPort(result.stdout ?? ""),
     errors: result.errors,
     lsofUnavailable: result.unavailable,
   };
@@ -316,7 +298,7 @@ async function readUnixListenerSnapshot(
 
 async function readUnixListeners(
   port: number,
-  snapshot?: UnixListenerSnapshot,
+  snapshot?: Awaited<ReturnType<typeof readUnixListenerSnapshot>>,
   signal?: AbortSignal,
 ): Promise<SocketReadResult<PortListener>> {
   const listenerSnapshot = snapshot ?? (await readUnixListenerSnapshot(port, signal));

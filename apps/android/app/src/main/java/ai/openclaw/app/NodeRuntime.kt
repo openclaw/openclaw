@@ -9,7 +9,6 @@ import ai.openclaw.app.chat.ChatReactionAccess
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatTranscriptCache
 import ai.openclaw.app.chat.ChatWidgetResource
-import ai.openclaw.app.chat.ChatWidgetSurface
 import ai.openclaw.app.chat.ChatWidgetSurfaceUrls
 import ai.openclaw.app.chat.ChatWidgetUrlResolver
 import ai.openclaw.app.chat.MainSessionBinding
@@ -112,7 +111,6 @@ import ai.openclaw.app.voice.VoiceWakeManager
 import ai.openclaw.app.voice.VoiceWakeMatch
 import ai.openclaw.app.voice.VoiceWakePreferences
 import ai.openclaw.app.voice.VoiceWakeSuppressionReason
-import ai.openclaw.app.wear.WearProxyAgent
 import ai.openclaw.app.wear.WearProxyBridge
 import ai.openclaw.app.wear.WearProxyController
 import ai.openclaw.app.wear.WearProxyGatewayException
@@ -1629,15 +1627,7 @@ class NodeRuntime internal constructor(
       activeAgentId = ::currentWearAgentId,
       activeSessionKey = { chat.sessionKey.value },
       selectedModelRef = { chat.selectedModelRef.value },
-      agents = {
-        gatewayAgents.value.selectableAgents().map { agent ->
-          WearProxyAgent(
-            id = agent.id,
-            name = agent.name,
-            emoji = agent.emoji,
-          )
-        }
-      },
+      agents = { gatewayAgents.value.selectableAgents() },
       selectGatewayAgent = { agentId ->
         if (gatewayAgents.value.selectableAgents().none { agent -> agent.id == agentId }) {
           false
@@ -5447,18 +5437,10 @@ class NodeRuntime internal constructor(
     path: String,
     failedResource: ChatWidgetResource?,
   ): ChatWidgetResource? {
-    fun GatewaySession.currentWidgetSurface(): ChatWidgetSurface? =
-      currentCanvasHostRoute()?.let { route ->
-        ChatWidgetSurface(
-          url = route.url,
-          tlsFingerprintSha256 = route.tlsFingerprintSha256,
-        )
-      }
-
     fun currentSurfaceUrls(): ChatWidgetSurfaceUrls =
       ChatWidgetSurfaceUrls(
-        node = nodeSession.currentWidgetSurface(),
-        operator = operatorSession.currentWidgetSurface(),
+        node = nodeSession.currentCanvasHostRoute(),
+        operator = operatorSession.currentCanvasHostRoute(),
       )
 
     // Initial loads may use the operator fallback; failures rotate the preferred live route.
@@ -5469,22 +5451,8 @@ class NodeRuntime internal constructor(
         target = path,
         failedResource = failedResource,
         currentSurfaceUrls = ::currentSurfaceUrls,
-        refreshNodeSurface = { observedUrl ->
-          nodeSession.refreshCanvasHostRouteIfCurrent(observedUrl)?.let { route ->
-            ChatWidgetSurface(
-              url = route.url,
-              tlsFingerprintSha256 = route.tlsFingerprintSha256,
-            )
-          }
-        },
-        refreshOperatorSurface = { observedUrl ->
-          operatorSession.refreshCanvasHostRouteIfCurrent(observedUrl)?.let { route ->
-            ChatWidgetSurface(
-              url = route.url,
-              tlsFingerprintSha256 = route.tlsFingerprintSha256,
-            )
-          }
-        },
+        refreshNodeSurface = nodeSession::refreshCanvasHostRouteIfCurrent,
+        refreshOperatorSurface = operatorSession::refreshCanvasHostRouteIfCurrent,
       )
     }
   }

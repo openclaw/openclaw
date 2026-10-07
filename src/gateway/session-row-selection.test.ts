@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
 import {
   persistRegistryFixture,
   saveSubagentRegistryToSqlite,
@@ -293,6 +294,25 @@ it.each([false, true])(
       const cfg = { agents: { entries: { main: {}, ops: {} } } };
       const projection = createSessionRowProjectionFixture({ cfg, store: {} });
       const parent = "agent:main:parent";
+      const now = Date.now();
+      projection.state.rowContext.subagentRuns = buildSubagentRunReadIndexFromRuns({
+        now,
+        runs: new Map<string, SubagentRunRecord>([
+          [
+            "ordinary-run",
+            {
+              runId: "ordinary-run",
+              childSessionKey: "agent:main:ordinary",
+              requesterSessionKey: parent,
+              requesterDisplayKey: parent,
+              task: "Synthetic child selection",
+              cleanup: "keep",
+              createdAt: now,
+              execution: { status: "running", startedAt: now },
+            },
+          ],
+        ]),
+      });
       const samples = [
         ["shadow-global", "global", "main", "fallback"],
         ["ordinary", "agent:main:ordinary", "main", "primary"],
@@ -309,7 +329,7 @@ it.each([false, true])(
           sessionId,
           updatedAt: 1,
           ...(["ordinary", "shadow-global", "unknown-shadow"].includes(sessionId)
-            ? { spawnedBy: parent, status: "running" as const }
+            ? { spawnedBy: parent }
             : {}),
         };
         return {

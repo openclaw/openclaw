@@ -74,6 +74,7 @@ export type IncognitoAgentExecutionOwner = {
   readonly kind: "ephemeral";
   readonly agentId: string;
   readonly identity: AgentDatabaseIncognitoIdentity;
+  readonly facts: ReturnType<ReturnType<typeof createIncognitoSessionFacts>["captureRead"]>;
   assertCurrent(this: void): void;
   readonly state: "opening" | "live" | "closing" | "lost" | "closed";
   borrow(
@@ -247,6 +248,7 @@ function createIncognitoAgentExecutionOwner(
     kind: "ephemeral",
     agentId: options.agentId,
     identity,
+    facts: sessionFacts.captureRead(assertCurrent),
     assertCurrent,
     get state() {
       return state;
@@ -304,6 +306,7 @@ function createIncognitoAgentExecutionOwner(
       const borrow = {};
       const assertReferenceCurrent = () => {
         assertCurrent();
+        source.assertCurrent();
         if (released) {
           throw new Error("Incognito execution reference is released");
         }
@@ -312,6 +315,7 @@ function createIncognitoAgentExecutionOwner(
         const current = continuations.getStore();
         if (current?.borrow === borrow && current.active) {
           assertRetainedCurrent();
+          source.assertCurrent();
         } else {
           assertReferenceCurrent();
         }
@@ -361,6 +365,9 @@ function createIncognitoAgentExecutionOwner(
           assertBorrowed();
         }
         const assertOperation = () => {
+          if (!cleanup) {
+            source.assertCurrent();
+          }
           currentAuthority.assertCurrent();
           assertRetainedCurrent();
           operationSignal?.throwIfAborted();
@@ -376,7 +383,7 @@ function createIncognitoAgentExecutionOwner(
                     operation,
                     undefined,
                     assertOperation,
-                    createAdmission ?? admission(currentAuthority),
+                    createAdmission ?? admission({ assertCurrent: assertOperation }),
                   );
                   assertOperation();
                   return result;
@@ -399,7 +406,7 @@ function createIncognitoAgentExecutionOwner(
         agentId: options.agentId,
         path: options.path,
         identity,
-        sessions: sessionFacts.bind(run, assertBorrowed, retain),
+        sessions: sessionFacts.bind(run, assertBorrowed, retain, () => source.assertCurrent()),
         acp: {
           prepareEntryRead(params) {
             const readAuthority = params.authority;
@@ -665,6 +672,7 @@ export function createAgentDatabaseExecutionCapture<FileExecution, FileConstrain
             agentId: owner.agentId,
             storePath: pathname,
             identity: owner.identity,
+            facts: owner.facts,
             assertCurrent: owner.assertCurrent,
           },
         ];

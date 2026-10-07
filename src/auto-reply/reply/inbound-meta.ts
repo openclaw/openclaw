@@ -1,4 +1,3 @@
-// Normalizes inbound message metadata before it is exposed to reply prompts.
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -426,7 +425,6 @@ function formatTelegramCurrentMessageContext(ctx: TemplateContext): string | und
     .join("\n");
 }
 
-/** Resolves whether inbound context should join directly with the user body. */
 export function resolveInboundUserContextPromptJoiner(ctx: TemplateContext): " " | undefined {
   return formatTelegramCurrentMessageContext(ctx) ? " " : undefined;
 }
@@ -473,7 +471,6 @@ function resolveInboundSourceModality(ctx: TemplateContext): string | undefined 
   return ctx.media?.map((media) => resolveMediaType(media.contentType ?? media.kind)).find(Boolean);
 }
 
-/** Builds trusted system metadata for the inbound channel and formatting hints. */
 export function buildInboundMetaSystemPrompt(
   ctx: TemplateContext,
   cfg: OpenClawConfig,

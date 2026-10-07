@@ -5,6 +5,10 @@ import type {
   PreparedSessionPlacementSandbox,
   SessionPlacementAdmissionProvider,
 } from "../../agents/session-placement-admission.js";
+import {
+  composeSessionSourceAssertion,
+  createDynamicSessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
@@ -233,11 +237,19 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       let routablePlacement: WorkerSessionPlacementRecord = current;
       let assertInitialSetupCurrent: (() => void) | undefined;
       // Every admission wait retains the caller's authority, not only initial setup.
-      const assertAdmissionCurrent = () => {
-        inputTurn.abortSignal?.throwIfAborted();
-        assertRunCurrent?.();
-        assertInitialSetupCurrent?.();
-      };
+      const initialSetupSource = createDynamicSessionSourceAssertion(
+        () => assertInitialSetupCurrent,
+        () => {
+          throw new Error("Worker setup authority changed during turn admission");
+        },
+      );
+      const assertAdmissionCurrent = composeSessionSourceAssertion(
+        [assertRunCurrent, initialSetupSource],
+        (assertSources) => {
+          inputTurn.abortSignal?.throwIfAborted();
+          assertSources();
+        },
+      );
       // An admission wait ends without authority; retry from the durable placement.
       const readRoutablePlacement = (message: string, cause?: unknown) => {
         assertAdmissionCurrent();
@@ -409,9 +421,9 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             };
             activeWorkerTurns.set(turnClaim.sessionId, activeWorkerTurn);
           }
-          const assertPreparationCurrent = () => {
+          const readPreparedPlacement = (assertAdmission: () => void) => {
             turn.abortSignal?.throwIfAborted();
-            assertAdmissionCurrent();
+            assertAdmission();
             const preparedPlacement = options.placements.get(turnClaim.sessionId);
             if (
               preparedPlacement?.state !== "active" ||
@@ -423,6 +435,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             }
             return preparedPlacement;
           };
+          const assertPreparationCurrent = Object.assign(
+            () => readPreparedPlacement(assertAdmissionCurrent),
+            composeSessionSourceAssertion([assertAdmissionCurrent], readPreparedPlacement),
+          );
           assertPreparationCurrent();
           // Worker-turn has a cancellation owner as soon as its durable run owner exists.
           // Remote-exec keeps the queued owner until the tunnel accepts process custody.
@@ -450,8 +466,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 .executeRemoteExecTurn
             : (await raceNodeWorkerOperation(loadWorkerTurnExecution(), turn.abortSignal))
                 .executeWorkerTurn;
+          const { withWorkerTurnTranscriptDatabase } =
+            await import("./worker-turn-transcript-target.js");
           assertPreparationCurrent();
-          return await execute({
+          const executionOptions = {
             environments: options.environments,
             onHandoff: (custody?: { requiresTerminalReceipt: true }) => {
               if (!admissionReported) {
@@ -474,7 +492,16 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             turnClaim,
             runLocal,
             assertRunCurrent: remoteExec ? assertRunCurrent : assertPreparationCurrent,
-          });
+          };
+          return await withWorkerTurnTranscriptDatabase(
+            turn,
+            {
+              assertCurrent: assertPreparationCurrent,
+              prepareAuthority: () => options.placements.prepareTurnClaimAuthority(turnClaim),
+              signal: turn.abortSignal,
+            },
+            () => execute(executionOptions),
+          );
         } catch (error) {
           if (
             workspaceResolutionFailed ||

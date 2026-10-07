@@ -25,7 +25,7 @@ import {
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { runSecretsApply, type SecretsApplyResult } from "./apply.js";
+import { runSecretsApply } from "./apply.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import {
@@ -36,7 +36,6 @@ import {
   type ConfigureCandidate,
 } from "./configure-plan.js";
 import { getSkippedExecRefStaticError } from "./exec-resolution-policy.js";
-import type { SecretsApplyPlan } from "./plan.js";
 import { getProviderEnvVarsCore } from "./provider-env-vars.js";
 import { listSecretProviderIntegrationPresets } from "./provider-integrations.js";
 import {
@@ -48,12 +47,6 @@ import {
 import { resolveSecretRefValue } from "./resolve.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isNonEmptyString, isRecord } from "./shared.js";
-
-/** Result returned after interactive secrets configure builds and preflights an apply plan. */
-type SecretsConfigureResult = {
-  plan: SecretsApplyPlan;
-  preflight: SecretsApplyResult;
-};
 
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
@@ -230,11 +223,9 @@ async function promptOptionalPositiveInt(params: {
   return parseOptionalPositiveInt(raw, params.max);
 }
 
-function configureCandidateKey(candidate: {
-  configFile: "openclaw.json" | "auth-profile-store";
-  path: string;
-  agentId?: string;
-}): string {
+function configureCandidateKey(
+  candidate: Pick<ConfigureCandidate, "configFile" | "path" | "agentId">,
+): string {
   if (candidate.configFile === "auth-profile-store") {
     return `auth-profiles:${normalizeOptionalString(candidate.agentId) ?? ""}:${candidate.path}`;
   }
@@ -680,7 +671,7 @@ export async function runSecretsConfigureInteractive(
     agentId?: string;
     allowExecInPreflight?: boolean;
   } = {},
-): Promise<SecretsConfigureResult> {
+) {
   if (!process.stdin.isTTY) {
     throw new Error("secrets configure requires an interactive TTY.");
   }

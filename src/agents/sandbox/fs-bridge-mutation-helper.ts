@@ -10,7 +10,16 @@ import type {
   PinnedSandboxDirectoryEntry,
   PinnedSandboxEntry,
 } from "./fs-bridge-path-safety.js";
-import type { SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
+
+// Plans carry path-safety checks alongside the command so rechecks and execution stay coupled.
+export type SandboxFsCommandPlan = {
+  checks: PathSafetyCheck[];
+  script: string;
+  args?: string[];
+  stdin?: Buffer | string;
+  recheckBeforeCommand?: boolean;
+  allowFailure?: boolean;
+};
 
 const SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES = [
   "/usr/bin/python3",

@@ -54,14 +54,6 @@ export function parseDiagnosticsArgs(args: string): ParsedDiagnosticsArgs {
   return { action: "request", note: args };
 }
 
-export function formatDiagnosticsUsage(commandPrefix: string): string {
-  return [
-    `Usage: ${commandPrefix} [note]`,
-    `Usage: ${commandPrefix} confirm <token>`,
-    `Usage: ${commandPrefix} cancel <token>`,
-  ].join("\n");
-}
-
 export function createCodexDiagnosticsConfirmation(
   params: Omit<PendingCodexDiagnosticsConfirmation, "token" | "createdAt"> & { now: number },
 ): string {

@@ -9,10 +9,8 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js"
 import { enforceSqliteSessionHistoryDiskBudget } from "../config/sessions/session-history-eviction.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  closeOpenClawAgentDatabases,
-  closeOpenClawAgentDatabasesAsync,
-} from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db-lifecycle.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,

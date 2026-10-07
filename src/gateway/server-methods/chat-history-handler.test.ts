@@ -472,7 +472,6 @@ describe("chat history exact-entry snapshots", () => {
           updatedAt: now,
           parentSessionKey: scope.sessionKey,
           spawnedBy: scope.sessionKey,
-          status: "running",
           skillsSnapshot,
         });
         const context = await createHistoryReadContext();

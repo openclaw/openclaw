@@ -1526,9 +1526,9 @@ extension OnboardingAISetupModel {
         }
         self.authConfirmation = anyCodableBool(step?.initialvalue)
         let options = parseWizardOptions(step?.options)
-        self.authSelection = max(0, options.firstIndex {
+        self.authSelection = options.firstIndex {
             anyCodableEqual($0.value, step?.initialvalue)
-        } ?? 0)
+        } ?? 0
         // Gateway-executed steps render progress and expose no input control, so
         // no user action would ever ask for the next frame. Keep polling; the
         // session long-polls until the next update or the terminal result, so a
@@ -1658,8 +1658,8 @@ extension OnboardingAISetupModel {
         // Keep the destination in the completion itself, including after receipt cleanup.
         self.phase = .connected(handoff)
         self.pendingActivationOwner = activationOwner
-        self.completedHandoff = completedReceipt ? routeIdentity.flatMap { routeIdentity in
-            routeIdentity.isEmpty ? nil : CompletedHandoff(
+        self.completedHandoff = completedReceipt ? routeIdentity.map { routeIdentity in
+            CompletedHandoff(
                 routeIdentity: routeIdentity,
                 activationOwner: activationOwner)
         } : nil

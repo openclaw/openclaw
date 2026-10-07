@@ -30,9 +30,7 @@ import {
 import { extractOriginalFilename } from "../media/store.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { resolveAvatarMime } from "../shared/avatar-policy.js";
-import { escapeHtml } from "../shared/html-escape.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { escapeRegExp } from "../shared/regexp.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
 import {
@@ -57,32 +55,21 @@ import {
 import { isControlUiPrecompressedAssetExtension } from "./control-ui-asset-manifest.js";
 import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
 import {
-  buildControlUiRootAssetPath,
-  CONTROL_UI_BASE_PATH_ATTRIBUTE,
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
-  CONTROL_UI_BUILD_ID_ATTRIBUTE,
-  CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
-  CONTROL_UI_ROOT_PUBLIC_ASSETS,
-  CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   isControlUiRootPublicAsset,
   isControlUiVersionedPublicAsset,
   parseControlUiResourcePath,
   type ControlUiBootstrapConfig,
-  type ControlUiEnvironment,
   type ControlUiPluginFrameGrantAck,
 } from "./control-ui-contract.js";
-import {
-  applyControlUiSecurityHeaders,
-  buildControlUiCspHeader,
-  computeInlineScriptHashes,
-} from "./control-ui-csp.js";
+import { applyControlUiSecurityHeaders } from "./control-ui-csp.js";
 import {
   isReadHttpMethod,
   respondNotFound as respondControlUiNotFound,
   respondPlainText,
 } from "./control-ui-http-utils.js";
+import { serveControlUiIndexHtml } from "./control-ui-index.js";
 import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
-import { selectControlUiRoutePreloads } from "./control-ui-route-preloads.js";
 import { classifyControlUiRequest, isControlUiApprovalDocumentPath } from "./control-ui-routing.js";
 import { isControlUiSharePath, serveControlUiShareDocument } from "./control-ui-share.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
@@ -94,7 +81,6 @@ import {
   respondControlUiNotAcceptable,
   respondControlUiNotModified,
   respondHeadForControlUiFile,
-  sendControlUiHtmlBody,
   serveControlUiAsset,
 } from "./control-ui-static.js";
 import {
@@ -127,35 +113,12 @@ type ControlUiRequestOptions = Partial<GatewayHttpRequestAuthOptions> & {
   terminalEnabled?: boolean;
   agentId?: string;
   root?: ControlUiRootState;
+  /** Protected session-entry restores the canonical route before any app script runs. */
+  sessionEntryPath?: string;
+  isSessionEntryCurrent?: () => boolean;
 };
 
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
-/** Anchors bundled assets before deep-linked documents begin preloading. */
-function rewriteControlUiIndexHtmlAssetHrefs(
-  html: string,
-  basePath: string,
-  buildId?: string,
-): string {
-  const normalized = normalizeControlUiBasePath(basePath);
-  const replacements = new Map<string, string>([
-    ['src="./assets/', `src="${normalized}/assets/`],
-    ['href="./assets/', `href="${normalized}/assets/`],
-  ]);
-  for (const asset of CONTROL_UI_ROOT_PUBLIC_ASSETS) {
-    const version =
-      buildId && isControlUiVersionedPublicAsset(asset) ? `?v=${encodeURIComponent(buildId)}` : "";
-    const assetHref = `href="${buildControlUiRootAssetPath(normalized, asset)}${version}"`;
-    // Vite's portable ./ base emits relative hrefs, which the browser starts
-    // resolving against a nested route before the UI can correct them.
-    replacements.set(`href="./${asset}"`, assetHref);
-    replacements.set(`href="/${asset}"`, assetHref);
-    replacements.set(`href="${buildControlUiRootAssetPath(normalized, asset)}"`, assetHref);
-  }
-  // Copy the document once instead of once per matching asset.
-  const pattern = new RegExp([...replacements.keys()].map(escapeRegExp).join("|"), "g");
-  return html.replace(pattern, (match) => replacements.get(match) ?? match);
-}
-
 type ControlUiAvatarMeta = {
   avatarUrl: string | null;
   avatarSource: string | null;
@@ -746,65 +709,6 @@ export async function handleControlUiAvatarRequest(
   }
 }
 
-async function serveResolvedIndexHtml(
-  req: IncomingMessage,
-  res: ServerResponse,
-  body: string,
-  uiPath: string,
-  basePath?: string,
-  allowWasm?: boolean,
-  environment?: ControlUiEnvironment,
-  buildId?: string,
-) {
-  const normalizedBasePath = normalizeControlUiBasePath(basePath);
-  const preloadRoute =
-    uiPath === "/chat" || uiPath.startsWith("/chat/")
-      ? "chat"
-      : uiPath === "/new" || uiPath === "/new/"
-        ? "new"
-        : null;
-  const withBasePath = rewriteControlUiIndexHtmlAssetHrefs(
-    selectControlUiRoutePreloads(body, preloadRoute),
-    normalizedBasePath,
-    buildId,
-  );
-  // An empty base path is authoritative for Gateway resources even when the
-  // router infers a namespace. Always emit it so resources stay root-mounted.
-  const basePathAttribute = ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtml(normalizedBasePath)}"`;
-  const environmentAttributes = environment
-    ? ` ${CONTROL_UI_ENVIRONMENT_ATTRIBUTE}="${escapeHtml(JSON.stringify(environment))}"`
-    : "";
-  // Let the app initialize fail-closed without guessing whether this document
-  // was served with the terminal's WASM CSP allowance.
-  // The lifecycle owns bundled identity. Strip the build stamp for custom roots,
-  // whose files may change independently and must keep revalidating.
-  const buildAttribute = buildId
-    ? ` ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${escapeHtml(buildId)}"`
-    : "";
-  const prepared = withBasePath.replace(/<html\b[^>]*>/i, (tag) =>
-    tag
-      .replace(new RegExp(`\\s${CONTROL_UI_BUILD_ID_ATTRIBUTE}="[^"]*"`, "g"), "")
-      .replace(
-        /<html\b/i,
-        `<html${basePathAttribute} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}`,
-      ),
-  );
-  const hashes = computeInlineScriptHashes(prepared);
-  // Always set the document CSP here (the index carries inline scripts) so the
-  // terminal's WASM relaxation is applied to the page that loads ghostty-web.
-  res.setHeader(
-    "Content-Security-Policy",
-    buildControlUiCspHeader({
-      inlineScriptHashes: hashes,
-      allowWasm,
-      portalHost: req.headers.host,
-    }),
-  );
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader("Cache-Control", "no-cache");
-  await sendControlUiHtmlBody(req, res, prepared);
-}
-
 function isExpectedSafePathError(error: unknown): boolean {
   const code =
     typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
@@ -1080,7 +984,7 @@ export async function handleControlUiHttpRequest(
         asset = await readControlUiRootAsset(rootState, fileRel, true);
         continue;
       }
-      await serveResolvedIndexHtml(
+      await serveControlUiIndexHtml(
         req,
         res,
         asset.file.body.toString("utf8"),
@@ -1089,6 +993,8 @@ export async function handleControlUiHttpRequest(
         terminalEnabled,
         opts?.config?.gateway?.controlUi?.environment,
         publicAssetBuildId,
+        opts?.sessionEntryPath,
+        opts?.isSessionEntryCurrent,
       );
       return true;
     }

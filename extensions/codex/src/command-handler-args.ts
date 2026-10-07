@@ -37,7 +37,6 @@ export type ParsedResumeArgs = {
   help?: boolean;
 };
 
-/** No-arg `/codex` picker. */
 export function buildCodexSubcommandPickerReply(): PluginCommandResult {
   const verbs: CodexCommandPickerButton[] = [
     { label: "plugins", command: "/codex plugins menu" },

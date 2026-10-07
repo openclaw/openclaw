@@ -557,10 +557,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
 
   let workspaceRuntimePromise: Promise<void> | undefined;
   const installSlackWorkspaceRuntime = async () => {
-    if (workspaceRuntimePromise) {
-      return await workspaceRuntimePromise;
-    }
-    workspaceRuntimePromise = (async () => {
+    workspaceRuntimePromise ??= (async () => {
       registerSlackWorkspaceEvents({
         ctx,
         appHomeSlashCommandName,
@@ -828,8 +825,7 @@ function createSlackWorkspaceClientResolver(params: {
     return () => params.appClient;
   }
   const clients = new Map<string, WebClient>();
-  return (rawTeamId?: string) => {
-    const teamId = rawTeamId;
+  return (teamId?: string) => {
     if (!teamId || !/^T[A-Z0-9]+$/.test(teamId)) {
       throw new Error("Slack Enterprise Grid workspace client requires a valid teamId");
     }

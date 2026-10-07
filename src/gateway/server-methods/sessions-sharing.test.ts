@@ -415,6 +415,8 @@ describe("session sharing handlers", () => {
           visibility: "shared",
         },
       );
+      const broadcast = vi.fn();
+      const requestContext = context(broadcast);
       const run = sharingLifecycle.runExclusiveSessionLifecycleMutation;
       vi.spyOn(sharingLifecycle, "runExclusiveSessionLifecycleMutation").mockImplementationOnce(
         async (operation, params) => {
@@ -429,13 +431,13 @@ describe("session sharing handlers", () => {
           expect(loadSessionEntry({ agentId: "main", sessionKey })?.sessionId).toBe(
             "session-replaced",
           );
+          await getSessionRowProjection(requestContext)!.prepareMembership();
           return run(operation, params);
         },
       );
-      const broadcast = vi.fn();
 
       await expect(
-        call("session.visibility.set", { sessionKey, visibility: "draft" }, context(broadcast)),
+        call("session.visibility.set", { sessionKey, visibility: "draft" }, requestContext),
       ).rejects.toThrow("session changed before sharing mutation");
 
       const replacement = loadSessionEntry({ agentId: "main", sessionKey });

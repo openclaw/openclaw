@@ -78,7 +78,7 @@ inside every shard.
 - `pnpm test:plugins:kitchen-sink-live`
   - Runs the live OpenAI Kitchen Sink plugin gauntlet through QA Lab.
     Installs the external Kitchen Sink package, verifies the plugin SDK
-    surface inventory, probes `/healthz` and `/readyz`, records gateway
+    surface inventory, checks `/healthz` and `/readyz`, records gateway
     CPU/RSS evidence, runs a live OpenAI turn, and checks adversarial
     diagnostics. Requires live OpenAI auth such as `OPENAI_API_KEY`. In
     hydrated Testbox sessions it automatically sources the Testbox live-auth
@@ -140,13 +140,13 @@ inside every shard.
     `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune the run.
     `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` accepts zero or exactly one canonical
     Telegram QA scenario id. When omitted, the normal lane samples
-    `channel-canary`; focused non-RTT scenario runs stay probe-free. An explicit
+    `channel-canary`; focused non-RTT scenario runs stay check-free. An explicit
     RTT scenario is included in scenario selection automatically, so callers do
     not need to repeat it in `OPENCLAW_NPM_TELEGRAM_SCENARIOS`. Multiple ids
     fail immediately, while unknown or inapplicable ids fail canonical scenario
     validation. The package runner promotes the selected RTT scenario once to
     the first position before the remaining taxonomy-backed fail-fast release
-    scenarios. Probes continue in its most recently observed conversation and
+    scenarios. Checks continue in its most recently observed conversation and
     thread, using the leased primary participant. The first sample starts a
     new message; later samples chain their own replies rather than a reply
     observed by another scenario participant. Delivery-only scenarios use their
@@ -311,7 +311,7 @@ gh workflow run package-acceptance.yml --ref main \
     bot-to-bot mentioned replies, and core native command replies.
     `mock-openai` defaults also cover deterministic reply-chain and
     Telegram final-message streaming regressions. Use `--list-scenarios`
-    for optional probes such as `session_status`.
+    for optional checks such as `session_status`.
   - Exits non-zero when any scenario fails. Use `--allow-failures` for
     artifacts without a failing exit code.
   - The leased user drives and observes the shared Test Server group. No

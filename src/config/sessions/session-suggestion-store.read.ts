@@ -4,6 +4,7 @@ import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-d
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import { listSessionSuggestionsInDatabase } from "./session-suggestion-store.kernel.js";
 import { projectionLane } from "./session-transcript-worker-resources.js";
@@ -21,8 +22,9 @@ export async function listSessionSuggestions(
   const filters = { ...params };
   const agentId =
     parseAgentSessionKey(scope.sessionKey)?.agentId ?? scope.agentId ?? scope.defaultAgentId;
-  if (scope.incognito) {
-    const { actor, authority } = scope.incognito;
+  const incognito = scope.incognito ?? captureIncognitoSessionOperation(scope);
+  if (incognito) {
+    const { actor, authority } = incognito;
     if (actor.agentId !== agentId || actor.path !== storePath) {
       throw new Error("Suggestion target differs from its captured incognito actor");
     }

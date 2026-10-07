@@ -153,9 +153,9 @@ route exits or is replaced, the Gateway closes connections that received its
 identity URL with code `1012`; reconnect to discover the current route.
 
 `openclaw.setup.verify` additionally checks the Gateway's current application and
-restart state before and after its live inference probe. It returns
+restart state before and after its live inference check. It returns
 `{ ok: false, status: "unavailable", error }` while saved settings are not active,
-restart work remains, or the verified runtime changes during the probe. Clients
+restart work remains, or the verified runtime changes during the check. Clients
 should preserve the selected model and retry after application or restart finishes.
 Standalone CLI verification still tests saved configuration without requiring a
 running Gateway.

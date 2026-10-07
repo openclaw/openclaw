@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   mergeSessionEntry,
   resolveSessionResetPolicy,
@@ -9,6 +9,7 @@ import {
   replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
 import { prepareAgentSession } from "../server-methods/agent-session-prepare.js";
@@ -222,6 +223,50 @@ describe("agent session reuse at mutation", () => {
         lifecycleRunId: "concurrent-run",
         cliSessionIds: { "claude-cli": "native-concurrent" },
       });
+    });
+  });
+
+  it("refuses a replaced expected session after database admission yields", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg = {};
+      await state.writeConfig(cfg);
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:admission-replacement",
+        storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+      };
+      await upsertSessionEntryCore(scope, { ...freshEntry, sessionId: "original" });
+      const open = agentDatabase.withOpenClawAgentDatabaseRuntime;
+      const admission = vi
+        .spyOn(agentDatabase, "withOpenClawAgentDatabaseRuntime")
+        .mockImplementationOnce(async (...args) => {
+          await upsertSessionEntryCore(scope, { ...freshEntry, sessionId: "successor" });
+          return open(...args);
+        });
+      const respond = vi.fn();
+      try {
+        const prepared = await prepareAgentSession({
+          cfg,
+          requestedSessionKey: scope.sessionKey,
+          expectedExistingSessionId: "original",
+          request: { message: "continue", idempotencyKey: "admission-replacement" },
+          canUseCronRunContinuation: false,
+          lifecycleGeneration: "admission-replacement",
+          respond,
+        });
+        expect(prepared).toBeUndefined();
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "UNAVAILABLE",
+            message: expect.stringContaining("changed before expected work could start"),
+          }),
+        );
+        expect(loadSessionEntry(scope)?.sessionId).toBe("successor");
+      } finally {
+        admission.mockRestore();
+      }
     });
   });
 });

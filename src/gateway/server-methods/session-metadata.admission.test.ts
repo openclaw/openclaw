@@ -15,10 +15,8 @@ import { addSessionSuggestion } from "../../config/sessions/session-suggestion-s
 import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  disposeOpenClawAgentDatabaseByPath,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
@@ -165,7 +163,9 @@ describe("session metadata writer admission", () => {
           entered.resolve();
           await release.promise;
           cfg = { session: { store: replacement.storePath } };
-          expect(disposeOpenClawAgentDatabaseByPath(options.path, { env: state.env })).toBe(true);
+          expect(await disposeOpenClawAgentDatabaseByPath(options.path, { env: state.env })).toBe(
+            true,
+          );
           renameSync(options.path, retired.storePath);
         });
         await entered.promise;

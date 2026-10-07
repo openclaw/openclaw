@@ -269,7 +269,6 @@ export function htmlNodesToRichText(
       continue;
     }
     if (node.name === "p" || node.name === "span" || node.name === "div") {
-      // Transparent containers: content only.
       parts.push(emit(children));
       continue;
     }

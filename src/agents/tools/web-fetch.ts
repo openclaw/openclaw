@@ -210,18 +210,6 @@ function resolveFetchHeaders(fetch?: WebFetchConfig): Record<string, string> | u
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
-function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
-  return resolveIntegerOption(fetch?.maxCharsCap, DEFAULT_FETCH_MAX_CHARS, { min: 100 });
-}
-
-function resolveFetchMaxResponseBytes(fetch?: WebFetchConfig): number {
-  return resolveIntegerOption(
-    asPositiveFiniteNumber(fetch?.maxResponseBytes),
-    DEFAULT_FETCH_MAX_RESPONSE_BYTES,
-    { min: FETCH_MAX_RESPONSE_BYTES_MIN, max: FETCH_MAX_RESPONSE_BYTES_MAX },
-  );
-}
-
 function looksLikeHtml(value: string): boolean {
   const head = normalizeLowercaseStringOrEmpty(value.trimStart().slice(0, 256));
   return head.startsWith("<!doctype html") || head.startsWith("<html");
@@ -401,10 +389,7 @@ type WebFetchRuntimeParams = {
 
 function normalizeProviderFinalUrl(value: unknown): string | undefined {
   const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  if (containsAsciiControlCharacter(trimmed) || trimmed.includes(" ")) {
+  if (!trimmed || containsAsciiControlCharacter(trimmed) || trimmed.includes(" ")) {
     return undefined;
   }
   const url = URL.parse(trimmed);
@@ -827,7 +812,11 @@ export function createWebFetchTool(options?: {
       const userAgent =
         (typeof executionFetch?.userAgent === "string" && executionFetch.userAgent) ||
         DEFAULT_FETCH_USER_AGENT;
-      const maxResponseBytes = resolveFetchMaxResponseBytes(executionFetch);
+      const maxResponseBytes = resolveIntegerOption(
+        asPositiveFiniteNumber(executionFetch?.maxResponseBytes),
+        DEFAULT_FETCH_MAX_RESPONSE_BYTES,
+        { min: FETCH_MAX_RESPONSE_BYTES_MIN, max: FETCH_MAX_RESPONSE_BYTES_MAX },
+      );
       const resolveProviderFallback = createLazyPromise(async () => {
         const { resolveWebFetchDefinition } = await loadWebFetchRuntime();
         return resolveWebFetchDefinition({
@@ -844,7 +833,11 @@ export function createWebFetchTool(options?: {
       const extractMode =
         readToolStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readPositiveIntegerParam(params, "maxChars");
-      const maxCharsCap = resolveFetchMaxCharsCap(executionFetch);
+      const maxCharsCap = resolveIntegerOption(
+        executionFetch?.maxCharsCap,
+        DEFAULT_FETCH_MAX_CHARS,
+        { min: 100 },
+      );
       const hostnameAllowlist = options?.hostnameAllowlistRef?.value;
       // The progress line is emitted only if the fetch is still pending after
       // the threshold; fast cache/network hits clear the timer before it fires.

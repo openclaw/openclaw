@@ -79,11 +79,10 @@ function writeSenderNameCache(key: string, entry: SenderNameCacheEntry): void {
 }
 
 function resolveSenderLookupIdType(senderId: string): "open_id" | "user_id" | "union_id" {
-  const trimmed = senderId.trim();
-  if (trimmed.startsWith("ou_")) {
+  if (senderId.startsWith("ou_")) {
     return "open_id";
   }
-  if (trimmed.startsWith("on_")) {
+  if (senderId.startsWith("on_")) {
     return "union_id";
   }
   return "user_id";

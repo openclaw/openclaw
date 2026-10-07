@@ -7,7 +7,7 @@ import {
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-state-lease-worker-owner.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
-import type { WorktreeWorkerOperations } from "./dispatch.worker.js";
+import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
 import type {
   WorktreeRemovalRowInput,
   WorktreeRemovalFinalization,
@@ -20,13 +20,16 @@ import {
 import type { WorktreeWorkerAuthority } from "./types.js";
 
 type RunEndCommands = Pick<
-  WorktreeWorkerOperations,
+  OpenClawStateWorkerOperations,
   | "worktrees.writeProvisionedSnapshot"
   | "worktrees.claimRemoval"
   | "worktrees.finalizeRemoval"
   | "worktrees.abortRemoval"
   | "worktrees.insert"
   | "worktrees.update"
+  | "worktrees.reservePending"
+  | "worktrees.releasePending"
+  | "worktrees.recoverPending"
 >;
 type LeaseSetAdmission = Parameters<
   Parameters<typeof withOpenClawStateLeasesWorkerAdmission>[2]

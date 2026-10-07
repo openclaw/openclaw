@@ -190,7 +190,7 @@ fn ensure_directory(path: &Path) -> Result<(), String> {
         ensure_directory(parent)?;
     }
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(()),
+        Ok(metadata) if metadata.is_dir() => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             fs::create_dir(path).map_err(|error| error.to_string())
         }
@@ -208,7 +208,7 @@ fn verify_payload(
     bundled: bool,
 ) -> Result<(), String> {
     let metadata = fs::symlink_metadata(root).map_err(|error| error.to_string())?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+    if !metadata.is_dir() {
         return Err("Embedded runtime directory is redirected.".into());
     }
     let mut expected: Vec<PathBuf> = manifest.files.keys().map(PathBuf::from).collect();

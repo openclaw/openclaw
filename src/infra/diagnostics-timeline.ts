@@ -51,14 +51,10 @@ type DiagnosticsTimelineEvent = {
   signal?: string | null;
 };
 
-type DiagnosticsTimelineSpanOptions = {
-  phase?: string;
-  parentSpanId?: string;
-  attributes?: DiagnosticsTimelineAttributes;
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  omitErrorMessage?: boolean;
-};
+type DiagnosticsTimelineSpanOptions = DiagnosticsTimelineOptions &
+  Pick<DiagnosticsTimelineEvent, "phase" | "parentSpanId" | "attributes"> & {
+    omitErrorMessage?: boolean;
+  };
 
 type DiagnosticsTimelineOptions = {
   config?: OpenClawConfig;
@@ -66,13 +62,10 @@ type DiagnosticsTimelineOptions = {
 };
 
 /** Active timeline span carried through async-local scope for nested diagnostics. */
-type ActiveDiagnosticsTimelineSpan = {
-  name: string;
-  phase?: string;
-  spanId: string;
-  parentSpanId?: string;
-  attributes?: DiagnosticsTimelineAttributes;
-};
+type ActiveDiagnosticsTimelineSpan = Pick<
+  DiagnosticsTimelineEvent,
+  "name" | "phase" | "parentSpanId" | "attributes"
+> & { spanId: string };
 
 type StartedDiagnosticsTimelineSpan = ActiveDiagnosticsTimelineSpan & {
   config?: OpenClawConfig;

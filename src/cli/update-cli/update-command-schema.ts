@@ -134,7 +134,7 @@ export async function preflightUpdateCommandSchemas(params: {
   packageTargetSchemaVersions?: OpenClawSchemaVersions;
   packageTargetVersion?: string;
   packageInstallSpec?: string | null;
-  packageRuntimeTarget?: { version: string; nodeEngine: string | null };
+  packageRuntimeTarget?: Parameters<typeof resolvePackageRuntimePreflight>[0]["target"];
   packageAlreadyCurrent?: boolean;
   managedServiceNodeRunner?: string;
   expectedForeground?: true;

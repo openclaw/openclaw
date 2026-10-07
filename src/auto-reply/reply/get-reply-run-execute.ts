@@ -20,6 +20,7 @@ import {
   readToolAllowlistIntersection,
 } from "../../agents/tool-policy.js";
 import { readChannelContextAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
+import { copyChildSessionPublication } from "../../channels/message-access/child-session-publication.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -168,7 +169,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   // Abort-signal attachment for queued followups:
   // - room_event: always inherit (source admission fence / ambient cancel).
   // - Gateway-owned lifecycle (chat.send / turnAdoptionLifecycle): always inherit
-  //   so Esc can cancel a turn after chat.send terminalizes while still queued.
+  //   so Esc can cancel an input while it waits for its followup execution.
   // - plain user_request without lifecycle: deliberately detach from the
   //   source/active-lane signal so a superseded parent abort does not cancel a
   //   still-valid queued user turn.
@@ -587,6 +588,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     },
   };
   const sourceReplyDeliveryRuntimeOptions = opts as SourceReplyDeliveryRuntimeOptions | undefined;
+  copyChildSessionPublication(sessionCtx, followupRun.run);
   const channelOwnerAuthority = getCommandOwnerAuthority(sessionCtx);
   if (command.senderIsOwner && channelOwnerAuthority) {
     bindCommandOwnerAuthority(followupRun.run, channelOwnerAuthority);

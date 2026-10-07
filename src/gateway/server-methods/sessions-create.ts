@@ -9,6 +9,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
+import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
@@ -56,7 +57,11 @@ import {
   prepareSessionCreateFilesystemRoot,
   resolveSessionCreateRootParameters,
 } from "./session-create-root.js";
-import { resolveSessionCreateSpawnContext } from "./session-create-spawn.js";
+import {
+  resolveSessionCreateSpawnContext,
+  validateSessionCreateSpawnRequest,
+} from "./session-create-spawn.js";
+import { createSessionModelCatalogWait } from "./session-model-catalog-wait.js";
 import {
   bindGatewayRequestHandlerMutationAuthority,
   readGatewayRequestMutationAuthority,
@@ -124,12 +129,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       sessionCreation.via === "spawn"
         ? normalizeOptionalString(sessionCreation.requesterSessionKey)
         : undefined;
-    if (sessionCreation.inheritedToolPolicy && parentSessionKey !== spawnRequesterSessionKey) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "spawn parent must match the trusted agent caller"),
-      );
+    const spawnError = validateSessionCreateSpawnRequest(sessionCreation, p);
+    if (spawnError) {
+      respond(false, undefined, spawnError);
       return;
     }
     const requestedModel = normalizeOptionalString(p.model);
@@ -470,6 +472,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         return prepared;
       };
     }
+    let publicRead = false;
     let runPayload: Record<string, unknown> | undefined;
     let initialTurnSourceAccepted = false;
     let runError: unknown;
@@ -481,6 +484,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (!authority.ensureActive()) {
       return;
     }
+    const catalogWait = createSessionModelCatalogWait([signal, client?.connectionSignal]);
     const createParams: Parameters<typeof createGatewaySession>[0] = {
       cfg,
       getCurrentConfig,
@@ -540,10 +544,16 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       resetMainWhenUnspecified: !hasInitialTurn,
       commandSource: "webchat",
       creation: sessionCreation,
+      childSessionPublication: sessionCreation.childSessionPublication,
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       armSessionDiffBaselineCapture: !repository,
-      loadGatewayModelCatalogSnapshot: () =>
-        context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId }),
+      loadGatewayModelCatalogSnapshot: async () => {
+        const captured = await operatorCapture.preparation;
+        return catalogWait.run(
+          () => context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId }),
+          captured?.authority.signal,
+        );
+      },
       commitGuard,
       afterSessionCommitted: (entry, source) =>
         registerCommittedSessionCategory(
@@ -552,6 +562,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           source,
         ),
       onCreatedSessionCommitted: (committed) => {
+        publicRead = Boolean(resolveSessionPublicShare(committed.entry));
         sessionMutationAuthorization?.recordCreatedSession?.({
           agentId: committed.agentId,
           sessionKey: committed.key,
@@ -600,6 +611,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       },
     };
     const created = await createGatewaySession(createParams).catch((error: unknown) => {
+      if (error === catalogWait.unavailable) {
+        respond(false, undefined, catalogWait.unavailable.error);
+        return undefined;
+      }
       if (error instanceof ModelAccountConnectAuthorityError) {
         respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
         return undefined;
@@ -640,6 +655,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       sessionId: created.entry.sessionId,
       entry: responseEntry,
       runStarted,
+      publicRead,
       ...(!created.resetExisting && runPayload ? runPayload : {}),
       ...(!created.resetExisting && runError ? { runError } : {}),
       resolved: created.resolved,

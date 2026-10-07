@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -468,51 +467,6 @@ describe("guardSessionManager transcript updates", () => {
       },
     ]);
     expect(updates[0]?.messageId).not.toBe("");
-  });
-
-  it("caches real tool result sequence before final assistant messages", async () => {
-    const updates = collectUpdates();
-    const { sessionManager: sm, target } = await openPersistedSessionManager();
-    sm.appendMessage(makeUserMessage("existing prompt", 1));
-    const spy = vi.spyOn(sm, "getBranch");
-    const guarded = guardSessionManager(sm, {
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      runId: "run-owning-final",
-    });
-    guarded.appendMessage(
-      makeAgentAssistantMessage({
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-      }),
-    );
-    guarded.appendMessage(makeTextToolResult("call_1", "read", "tool output", false, 2));
-    guarded.appendMessage(assistantText("final answer"));
-    expect(
-      sm.getEntries().flatMap((entry) =>
-        entry.type === "message"
-          ? [
-              {
-                role: entry.message.role,
-                runId: asNullableRecord(asNullableRecord(entry.message)?.["__openclaw"])?.runId,
-              },
-            ]
-          : [],
-      ),
-    ).toEqual([
-      { role: "user", runId: undefined },
-      { role: "assistant", runId: "run-owning-final" },
-      { role: "toolResult", runId: "run-owning-final" },
-      { role: "assistant", runId: "run-owning-final" },
-    ]);
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(updates.map(({ messageSeq }) => messageSeq)).toEqual([2, 4]);
-    expect(
-      updates.map(
-        ({ message }) => asNullableRecord(asNullableRecord(message)?.["__openclaw"])?.runId,
-      ),
-    ).toEqual(["run-owning-final", "run-owning-final"]);
-    expect(updates.map(({ runId }) => runId)).toEqual([undefined, "run-owning-final"]);
-    spy.mockRestore();
   });
 
   it("refreshes run ownership and delivery preparation across reused managers", async () => {

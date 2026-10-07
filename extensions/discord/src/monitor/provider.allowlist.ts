@@ -253,7 +253,7 @@ async function resolveAllowFromByUserAllowlist(params: {
   fetcher: typeof fetch;
   runtime: RuntimeEnv;
 }): Promise<string[] | undefined> {
-  const allowEntries = normalizeStringEntries(params.allowFrom).filter((entry) => entry !== "*");
+  const allowEntries = (params.allowFrom ?? []).filter((entry) => entry !== "*");
   if (allowEntries.length === 0) {
     return params.allowFrom;
   }

@@ -4,6 +4,10 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createFallbackSessionEntry } from "../../config/sessions/session-accessor.sqlite-normalize.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -42,6 +46,7 @@ function writeSessionFixture(
   scope: Parameters<typeof patchSessionEntryCore>[0],
   patch: Partial<SessionEntry>,
 ) {
+  openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
   return patchSessionEntryCore(scope, () => patch, {
     skipMaintenance: true,
     fallbackEntry: createFallbackSessionEntry(patch),

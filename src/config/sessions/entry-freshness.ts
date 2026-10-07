@@ -15,10 +15,8 @@ import {
 } from "./reset.js";
 import { loadSessionEntryReadOnly, type SessionAccessScope } from "./session-accessor.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
-import {
-  isNativeSessionEntryRead,
-  withSessionEntriesFromStoresInWorker,
-} from "./session-entry-read-runtime.js";
+import { isNativeSessionEntryRead } from "./session-entry-read-request.js";
+import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
 import type { SessionEntry } from "./types.js";
 
 type ResolveSessionEntryResetFreshnessParams = SessionAccessScope & {

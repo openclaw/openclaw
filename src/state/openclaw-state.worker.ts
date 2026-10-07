@@ -44,20 +44,24 @@ import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 // PR provisioning retains allocation and template owners without the application runtime.
 const provisionRegistry = createWorkerOperationRegistry<
   WorktreeTemplateWorkerOperations &
-    Pick<OpenClawStateWorkerOperations, "worktrees.reserveCapacity">
+    Pick<OpenClawStateWorkerOperations, "worktrees.reserveCapacity" | "worktrees.recoverPending">
 >({
   worktrees: async () => {
-    const [templates, reserveCapacity] = await Promise.all([
+    const [templates, reserveCapacity, recoverPending] = await Promise.all([
       import("../agents/worktrees/template-registry.worker.js").then(
         (loaded) => loaded.worktreeTemplateOperations,
       ),
       import("../agents/worktrees/capacity.worker.js").then(
         (loaded) => loaded.reserveWorktreeCapacityInWorker,
       ),
+      import("../agents/worktrees/registry-run-end.worker.js").then(
+        (loaded) => loaded.recoverPendingWorktreesInWorker,
+      ),
     ]);
     return {
       ...templates,
       "worktrees.reserveCapacity": reserveCapacity,
+      "worktrees.recoverPending": recoverPending,
     };
   },
 });
@@ -145,7 +149,8 @@ function createSharedStateWorkerBackend(
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
       if (
         commandType.startsWith("worktrees.templates.") ||
-        commandType === "worktrees.reserveCapacity"
+        commandType === "worktrees.reserveCapacity" ||
+        commandType === "worktrees.recoverPending"
       ) {
         return provisionRegistry.prepare(commandType);
       }

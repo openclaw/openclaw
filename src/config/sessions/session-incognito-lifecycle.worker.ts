@@ -114,7 +114,7 @@ export function createIncognitoLifecycleWorker(
             keys,
           };
         case "session.lifecycle.delete": {
-          const { target, reason, admissionIdentities } = command.input;
+          const { target, reason, admissionIdentities, expectedPluginOwnerId } = command.input;
           assertEntry(target);
           const deleteParams = {
             storePath: database.path,
@@ -130,7 +130,8 @@ export function createIncognitoLifecycleWorker(
               deleteParams,
               archiveDirectory: "",
               admissionIdentities,
-              allowLockedEntryRemoval: false,
+              allowLockedEntryRemoval: Boolean(expectedPluginOwnerId),
+              expectedPluginOwnerId,
             },
           });
           if (planned.operation !== "entry" || planned.value.kind !== "ready") {

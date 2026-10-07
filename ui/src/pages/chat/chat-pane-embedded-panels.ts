@@ -57,6 +57,7 @@ type SidebarPanelDefinitionParams = {
   processesPresented?: PresentationValue;
   onRefreshProcesses?: () => void;
   subagentsAvailable: boolean;
+  subagentsShowRequest?: () => string | null | undefined;
   onRefreshSubagents: () => void;
   onSubagentSessionSelect: (
     sessionKey: string,
@@ -71,6 +72,7 @@ type SidebarPanelDefinitionParams = {
   linkReaderTabsInHeader?: boolean;
   onCloseLinkReader?: () => void;
   terminalTabsInHeader: boolean;
+  onCloseTerminal?: () => void;
   browserRefreshOnPresentation: boolean;
   preferredBrowserTab?: BrowserTabSelection;
   sessionBrowserTabs?: BrowserTabTarget[];
@@ -182,6 +184,7 @@ export function sidebarPanelDefinitions(
     ? html`<openclaw-terminal-panel
         embedded
         .tabsInHeader=${params?.terminalTabsInHeader ?? false}
+        .onClose=${params?.onCloseTerminal}
         .client=${state.connected ? state.client : null}
         .available=${state.terminalAvailable}
         .agentId=${params?.agentId ?? null}
@@ -309,6 +312,7 @@ export function sidebarPanelDefinitions(
             .presentationId=${params.panePresentationId}
             .inputRegion=${params.subagentsInputRegion}
             .presented=${livePresentation(params.subagentsPresented)}
+            .showRequest=${params.subagentsShowRequest}
             .onSessionSelect=${params.onSubagentSessionSelect}
           ></openclaw-chat-subagents-panel>`
         : null,

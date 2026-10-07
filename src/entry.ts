@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 // Boots the OpenClaw CLI entry point under Node.
-// CLI process entrypoint for OpenClaw command execution.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { format } from "node:util";
@@ -33,6 +32,7 @@ import { normalizeEnv } from "./infra/env.js";
 import { fsSafeEnvInput } from "./infra/fs-safe-env.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
+import "./shared/detached-async-context.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
 import {
   getManagedNodeHostStatePath,

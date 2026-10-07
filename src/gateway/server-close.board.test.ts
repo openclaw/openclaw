@@ -5,8 +5,8 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import * as historyReaders from "../config/sessions/session-transcript-worker-readers.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import * as agentWorker from "../state/openclaw-agent-worker-store.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -40,31 +40,21 @@ it("joins an accepted Board read across the close prelude before closing its wor
       dispatchOptions,
     );
     const database = openOpenClawAgentDatabase({ agentId: "main", env: fixture.state.env }).db;
-    const open = agentWorker.openOpenClawAgentSqliteWorkerStore;
+    const create = historyReaders.createSessionHistoryWorkerReaders;
     let readSettled = false;
     const interception = vi
-      .spyOn(agentWorker, "openOpenClawAgentSqliteWorkerStore")
-      .mockImplementation(async (...args) => {
-        const publication = await open(...args);
+      .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+      .mockImplementation((run) => {
+        const readers = create(run);
         return {
-          ...publication,
-          run: (operation, assertCurrent) =>
-            publication.run(
-              (scope) =>
-                operation({
-                  execute: async (command, options) => {
-                    if (command.type !== "boards.readSnapshot") {
-                      return scope.execute(command, options);
-                    }
-                    readEntered.resolve();
-                    await releaseRead.promise;
-                    const value = await scope.execute(command, options);
-                    readSettled = true;
-                    return value;
-                  },
-                }),
-              assertCurrent,
-            ),
+          ...readers,
+          async readBoardSnapshot(input) {
+            readEntered.resolve();
+            await releaseRead.promise;
+            const value = await readers.readBoardSnapshot(input);
+            readSettled = true;
+            return value;
+          },
         };
       });
     restoreRead = () => interception.mockRestore();

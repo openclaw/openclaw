@@ -1,4 +1,3 @@
-// Stages inbound media into sandbox workspaces before agent execution.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -37,7 +36,6 @@ import type { SkillSnapshot } from "../../skills/types.js";
 import { CONFIG_DIR } from "../../utils.js";
 import type { RuntimeMsgContext as MsgContext, TemplateContext } from "../templating.js";
 
-/** Maximum size of one file copied into an agent sandbox or staging workspace. */
 export const SANDBOX_MEDIA_MAX_BYTES = STAGED_INPUT_MAX_BYTES;
 const SCP_STDERR_TAIL_CHARS = 16_384;
 
@@ -246,7 +244,6 @@ export async function stageSandboxMedia(params: {
       continue;
     }
 
-    // For sandbox use relative path, for remote cache use absolute path
     const stagedPath = sandbox ? relativeDest : dest;
     staged.set(entry.index, stagedPath);
     const originalUrl = media[entry.index]?.url;

@@ -242,6 +242,21 @@ export function createWorkerSessionPlacementStore(
       };
     },
 
+    async readEnvironmentOwner(environmentId: string) {
+      const result = await executeExistingOpenClawStateRead(
+        { path },
+        {
+          type: "workers.placementEnvironmentOwner",
+          environmentId: required(environmentId, "environment id"),
+        },
+        { current: true },
+      );
+      if (!result || !result.ok || result.type !== "workers.placementEnvironmentOwner") {
+        throw new Error("Worker placement environment owner source is unavailable");
+      }
+      return result.placement;
+    },
+
     async readRecoveryCandidates() {
       const result = await executeExistingOpenClawStateRead(
         { path },
@@ -298,7 +313,7 @@ export function createWorkerSessionPlacementStore(
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Worker session placement ${sessionId} changed before retirement`);
         }
-        publishPlacementTurnClaimCleared(db, sessionId);
+        publishPlacementTurnClaimCleared(db, sessionId, input.expectedState);
       });
       workspaceResultConflicts.delete(sessionId);
     },

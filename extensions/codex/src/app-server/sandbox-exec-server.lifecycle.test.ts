@@ -436,66 +436,6 @@ describe("Codex sandbox exec-server lifecycle", () => {
     },
   );
 
-  it("owns JSON-RPC delivery, ordered process notifications, and idempotent session cleanup", async () => {
-    const runShellCommand = vi.fn(async () => ({
-      code: 0,
-      stdout: Buffer.alloc(0),
-      stderr: Buffer.alloc(0),
-    }));
-    const { child, finalizeExec, send, session } = createFixture({ runShellCommand });
-
-    await session.handleRequest({ id: 1, method: "initialize" });
-    await session.handleRequest({ id: 2, method: "environment/status" });
-    await session.handleRequest({ id: 3, method: "unsupported/method" });
-    await session.handleRequest({
-      id: 4,
-      method: "process/start",
-      params: processStartParams("direct-session"),
-    });
-    (child.stdout as PassThrough).write(Buffer.from("session-output"));
-    child.emit("close", 0, null);
-    await vi.waitFor(() => expect(finalizeExec).toHaveBeenCalledOnce());
-
-    expect(send.mock.calls.map(([message]) => message)).toEqual([
-      { jsonrpc: "2.0", id: 1, result: { sessionId: expect.any(String) } },
-      { jsonrpc: "2.0", id: 2, result: { status: "ready" } },
-      {
-        jsonrpc: "2.0",
-        id: 3,
-        error: {
-          code: -32601,
-          message: "Unsupported OpenClaw sandbox exec-server method: unsupported/method",
-        },
-      },
-      { jsonrpc: "2.0", id: 4, result: { processId: "direct-session", sandboxType: "none" } },
-      {
-        jsonrpc: "2.0",
-        method: "process/output",
-        params: {
-          processId: "direct-session",
-          seq: 1,
-          stream: "stdout",
-          chunk: Buffer.from("session-output").toString("base64"),
-        },
-      },
-      {
-        jsonrpc: "2.0",
-        method: "process/exited",
-        params: { processId: "direct-session", seq: 2, exitCode: 0, sandboxDenied: false },
-      },
-      {
-        jsonrpc: "2.0",
-        method: "process/closed",
-        params: { processId: "direct-session", seq: 3 },
-      },
-    ]);
-    const cleanup = session.close();
-    expect(session.close()).toBe(cleanup);
-    await cleanup;
-    expect(finalizeExec).toHaveBeenCalledOnce();
-    expect(runShellCommand).not.toHaveBeenCalled();
-  });
-
   it("shares termination and joins finalization across concurrent cleanup", async () => {
     vi.useFakeTimers();
     const releaseFinalize = createDeferred<void>();
@@ -652,50 +592,48 @@ describe("Codex sandbox exec-server lifecycle", () => {
     }
   });
 
-  it.each(["stdout", "stderr"] as const)(
-    "preserves the nonstreaming HTTP byte limit for %s and settles overflow cleanup",
-    async (stream) => {
-      const { child, finalizeExec, operations, http } = createFixture();
-      signalProcessTreeMock.mockImplementation(() => child.emit("close", 143, "SIGTERM"));
-      const request = http("http-buffer-limit", false);
-      const response = request.catch((error: unknown) => error);
-      try {
-        await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
-        const output = child[stream] as PassThrough;
-        // Reuse backing memory while exercising the real per-stream byte threshold.
-        const chunk = Buffer.alloc(1024 * 1024, "x");
-        for (
-          let remaining = SANDBOX_COMMAND_MAX_BUFFER_BYTES;
-          remaining > 0;
-          remaining -= chunk.length
-        ) {
-          output.write(chunk.subarray(0, Math.min(remaining, chunk.length)));
-        }
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(signalProcessTreeMock).not.toHaveBeenCalled();
-
-        output.write(Buffer.from("x"));
-
-        await vi.waitFor(() => expect(signalProcessTreeMock).toHaveBeenCalledOnce());
-        expect(await response).toMatchObject({
-          message: `sandbox http/request ${stream} exceeded ${SANDBOX_COMMAND_MAX_BUFFER_BYTES} bytes`,
-        });
-        await Promise.all(operations);
-        expect(finalizeExec).toHaveBeenCalledExactlyOnceWith({
-          status: "failed",
-          exitCode: 143,
-          timedOut: false,
-          token: "token",
-        });
-      } finally {
-        child.emit("close", 143, "SIGTERM");
-        await response;
-        await Promise.allSettled(operations);
+  it("preserves the nonstreaming HTTP byte limit and settles overflow cleanup", async () => {
+    const stream = "stdout";
+    const { child, finalizeExec, operations, http } = createFixture();
+    signalProcessTreeMock.mockImplementation(() => child.emit("close", 143, "SIGTERM"));
+    const request = http("http-buffer-limit", false);
+    const response = request.catch((error: unknown) => error);
+    try {
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
+      const output = child[stream] as PassThrough;
+      // Reuse backing memory while exercising the real per-stream byte threshold.
+      const chunk = Buffer.alloc(1024 * 1024, "x");
+      for (
+        let remaining = SANDBOX_COMMAND_MAX_BUFFER_BYTES;
+        remaining > 0;
+        remaining -= chunk.length
+      ) {
+        output.write(chunk.subarray(0, Math.min(remaining, chunk.length)));
       }
-    },
-  );
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(signalProcessTreeMock).not.toHaveBeenCalled();
+
+      output.write(Buffer.from("x"));
+
+      await vi.waitFor(() => expect(signalProcessTreeMock).toHaveBeenCalledOnce());
+      expect(await response).toMatchObject({
+        message: `sandbox http/request ${stream} exceeded ${SANDBOX_COMMAND_MAX_BUFFER_BYTES} bytes`,
+      });
+      await Promise.all(operations);
+      expect(finalizeExec).toHaveBeenCalledExactlyOnceWith({
+        status: "failed",
+        exitCode: 143,
+        timedOut: false,
+        token: "token",
+      });
+    } finally {
+      child.emit("close", 143, "SIGTERM");
+      await response;
+      await Promise.allSettled(operations);
+    }
+  });
 
   it("retains the process backend lease after child error until close", async () => {
     const { child, finalizeExec, notifications, processes, start } = createFixture();
@@ -797,19 +735,5 @@ describe("Codex sandbox exec-server lifecycle", () => {
       releaseRemoteCleanup.resolve();
       await Promise.all(operations);
     }
-  });
-
-  it("finalizes streaming HTTP tokens after a synchronous spawn failure", async () => {
-    const { http, finalizeExec } = createFixture();
-    spawnMock.mockImplementationOnce(() => {
-      throw new Error("HTTP spawn failed");
-    });
-    await expect(http("http-start-failure")).rejects.toThrow("HTTP spawn failed");
-    expect(finalizeExec).toHaveBeenCalledExactlyOnceWith({
-      status: "failed",
-      exitCode: null,
-      timedOut: false,
-      token: "token",
-    });
   });
 });

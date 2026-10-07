@@ -18,6 +18,7 @@ import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import {
   backgroundWorkFixture as fixture,
   observeBackgroundWorkRpc,
@@ -201,6 +202,7 @@ suite.define(() => {
         ]);
         await pairControlUiPage(page, runCli);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, fixture.key));
+        await enterControlUiSession(page);
         await waitForControlUiGatewayReady(page);
         const parent = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
         const composer = parent.getByRole("textbox", { name: "Chat composer", exact: true });
@@ -240,7 +242,13 @@ suite.define(() => {
         );
         const assertParent = async () => {
           expect(page.url()).toBe(parentUrl);
-          expect(await composer.inputValue()).toBe(fixture.draft);
+          // Narrow background panels hide the conversation but retain its draft.
+          const retainedComposer = parent.getByRole("textbox", {
+            name: "Chat composer",
+            exact: true,
+            includeHidden: true,
+          });
+          expect(await retainedComposer.inputValue()).toBe(fixture.draft);
           expect(provider.parentIsPending()).toBe(true);
         };
 
@@ -459,6 +467,7 @@ suite.define(() => {
         proof.stage = "reload parent with independent panels and durable draft";
         await page.setViewportSize({ width: 1440, height: 1000 });
         await page.reload();
+        await enterControlUiSession(page);
         await waitForControlUiGatewayReady(page);
         await composer.waitFor();
         await assertParent();

@@ -8,11 +8,12 @@ import {
   normalizeEmbeddingModelWithPrefixes,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
+  type RemoteEmbeddingClient,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { findNormalizedProviderKey } from "openclaw/plugin-sdk/provider-model-metadata";
-import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { LMSTUDIO_DEFAULT_EMBEDDING_MODEL, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import {
   fetchLmstudioModels,
@@ -36,12 +37,7 @@ import {
 
 const log = createSubsystemLogger("memory/embeddings");
 
-type LmstudioEmbeddingClient = {
-  baseUrl: string;
-  headers: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
-  model: string;
-};
+type LmstudioEmbeddingClient = Omit<RemoteEmbeddingClient, "fetchImpl">;
 type MemoryCoreAcquireLocalService = OpenClawPluginApi["runtime"]["llm"]["acquireLocalService"];
 type LocalServiceAwareEmbeddingOptions = MemoryEmbeddingProviderCreateOptions & {
   acquireLocalService?: MemoryCoreAcquireLocalService;
@@ -125,13 +121,9 @@ function resolveLmstudioEmbeddingBaseUrl(configuredBaseUrl?: string): string {
   return `${resolveLmstudioInferenceBase(configuredBaseUrl)}${query}`;
 }
 
-async function resolveLmstudioEmbeddingModelKey(params: {
-  baseUrl: string;
-  apiKey?: string;
-  headers: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
-  model: string;
-}): Promise<string> {
+async function resolveLmstudioEmbeddingModelKey(
+  params: LmstudioEmbeddingClient & { apiKey?: string },
+): Promise<string> {
   const discovered = await fetchLmstudioModels({
     baseUrl: params.baseUrl,
     apiKey: params.apiKey,

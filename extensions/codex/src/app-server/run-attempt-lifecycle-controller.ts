@@ -117,7 +117,6 @@ export function createCodexAttemptLifecycleController(
     state.pendingTerminalDynamicToolRelease = value;
     scheduleTerminalDynamicToolReleaseCheck();
   };
-  /** Classifies one settled dynamic tool result into the current batch's release state. */
   const recordDynamicToolResult = (value: TerminalToolRelease) => {
     if (value.response.success && value.response.toolAuthoredFinalReply === true) {
       state.currentTurnHadToolAuthoredFinalReply = true;

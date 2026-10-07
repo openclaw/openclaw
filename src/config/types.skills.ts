@@ -22,7 +22,6 @@ export type SkillsWorkshopAutonomousMode = NonNullable<
   NonNullable<SkillsWorkshopConfig["autonomous"]>["mode"]
 >;
 
-/** Top-level skills config block in openclaw config. */
 export type SkillsConfig = Omit<SkillsSchemaInput, "entries"> & {
   entries?: Record<string, SkillConfig>;
 };

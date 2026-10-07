@@ -1,5 +1,3 @@
-// Outbound policy enforces message-tool allowlists and cross-context delivery
-// markers/decorations before channel dispatch.
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -81,7 +79,6 @@ function isCrossContextTarget(params: {
   );
 }
 
-/** Resolves message-tool policy after applying agent-specific overrides. */
 export function resolveEffectiveMessageToolsConfig(params: {
   cfg: OpenClawConfig;
   agentId?: string | null;
@@ -131,9 +128,6 @@ export function resolveEffectiveMessageToolsConfig(params: {
   };
 }
 
-/**
- * Returns the normalized allowed message actions for an agent or the global policy.
- */
 export function resolveAllowedMessageActions(params: {
   cfg: OpenClawConfig;
   agentId?: string | null;
@@ -239,9 +233,6 @@ export function enforceCrossContextPolicy(params: {
   );
 }
 
-/**
- * Builds cross-context marker text or a channel-native presentation for forwarded sends.
- */
 export async function buildCrossContextDecoration(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -304,16 +295,10 @@ export async function buildCrossContextDecoration(params: {
   return { prefix, suffix, presentationBuilder };
 }
 
-/**
- * Reports whether an action can carry a cross-context marker in outbound payloads.
- */
 export function shouldApplyCrossContextMarker(action: ChannelMessageActionName): boolean {
   return CONTEXT_MARKER_ACTIONS.has(action);
 }
 
-/**
- * Applies text markers or a preferred rich presentation to a cross-context message.
- */
 export function applyCrossContextDecoration(params: {
   message: string;
   decoration: CrossContextDecoration;

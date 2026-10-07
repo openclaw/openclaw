@@ -359,12 +359,7 @@ internal data class WearReachablePhoneNode(
 internal fun selectReachablePhoneNodeId(nodes: Collection<WearReachablePhoneNode>): String? {
   val distinctNodes = nodes.distinctBy(WearReachablePhoneNode::id)
   val nearbyNodes = distinctNodes.filter(WearReachablePhoneNode::isNearby)
-  return when {
-    nearbyNodes.size == 1 -> nearbyNodes.single().id
-    nearbyNodes.isNotEmpty() -> null
-    distinctNodes.size == 1 -> distinctNodes.single().id
-    else -> null
-  }
+  return nearbyNodes.ifEmpty { distinctNodes }.singleOrNull()?.id
 }
 
 private fun WearRpcMethod.requiresPreferredSnapshotSource(): Boolean = this == WearRpcMethod.ProxyStatus || this == WearRpcMethod.SessionsList || this == WearRpcMethod.ChatHistory
@@ -397,16 +392,11 @@ internal class WearEventSequenceTracker {
     sequence: Long?,
   ) {
     eventGeneration += 1
-    if (sequence == null) {
-      this.streamId = streamId
-      lastSequence = null
-      awaitingSnapshot = false
-      return
-    }
     val previous = lastSequence
-    val streamChanged = this.streamId != streamId
+    if (sequence == null || awaitingSnapshot || previous == null || this.streamId != streamId || sequence > previous) {
+      lastSequence = sequence
+    }
     this.streamId = streamId
-    if (awaitingSnapshot || previous == null || streamChanged || sequence > previous) lastSequence = sequence
     awaitingSnapshot = false
   }
 
@@ -417,13 +407,8 @@ internal class WearEventSequenceTracker {
   ): WearSequenceDecision {
     if (awaitingSnapshot) return WearSequenceDecision.AwaitingSnapshot
     val previous = lastSequence
-    if (previous == null) {
+    if (previous == null || (this.streamId == streamId && sequence == previous + 1)) {
       this.streamId = streamId
-      lastSequence = sequence
-      eventGeneration += 1
-      return WearSequenceDecision.Accepted
-    }
-    if (this.streamId == streamId && sequence == previous + 1) {
       lastSequence = sequence
       eventGeneration += 1
       return WearSequenceDecision.Accepted

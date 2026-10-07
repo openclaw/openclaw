@@ -47,11 +47,7 @@ function includeStickerDescription(params: {
   body: string | undefined;
   formattedDescription: string;
 }): string {
-  if (!params.body) {
-    return params.formattedDescription;
-  }
-  const current = params.body.trim();
-  if (!current) {
+  if (!params.body?.trim()) {
     return params.formattedDescription;
   }
   if (params.body.includes(params.formattedDescription)) {
@@ -328,65 +324,60 @@ export const dispatchTelegramMessage = async (
   };
 
   let isFirstTurnInSession = false;
-  let dispatchWasSuperseded: boolean;
   let turnDispatched: boolean | undefined;
   const isDmTopic =
     !dispatchContext.isGroup &&
     dispatchContext.threadSpec.scope === "dm" &&
     dispatchContext.threadSpec.id != null;
-  try {
-    await prepareTelegramSticker({ cfg, context: dispatchContext });
-    if (isDmTopic) {
-      try {
-        const sessionKey = dispatchContext.ctxPayload.SessionKey;
-        if (sessionKey) {
-          isFirstTurnInSession = !loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey)
-            .entry?.systemSent;
-        } else {
-          logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
-        }
-      } catch (err) {
-        logVerbose(`auto-topic-label: session store error: ${String(err)}`);
-      }
-    }
-    loadFreshSessionEntry.clear();
-    // Media hydration and other pre-dispatch work can outlive the durable
-    // ingress watchdog. Never enter the reply pipeline after that owner has
-    // already fenced this attempt; the canonical spool row will retry it.
-    if (isDispatchSuperseded()) {
-      status.finalizeInBackground({ outcome: "cancelled" }, "cancelled finalize");
-      return { kind: "completed" };
-    }
-    if (status.controller && !isRoomEvent) {
-      void status.controller.setThinking();
-    }
+  await prepareTelegramSticker({ cfg, context: dispatchContext });
+  if (isDmTopic) {
     try {
-      turnDispatched = await runTelegramDispatchTurn(turn);
+      const sessionKey = dispatchContext.ctxPayload.SessionKey;
+      if (sessionKey) {
+        isFirstTurnInSession = !loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey)
+          .entry?.systemSent;
+      } else {
+        logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
+      }
     } catch (err) {
-      turn.dispatchError = err;
+      logVerbose(`auto-topic-label: session store error: ${String(err)}`);
+    }
+  }
+  loadFreshSessionEntry.clear();
+  // Media hydration and other pre-dispatch work can outlive the durable
+  // ingress watchdog. Never enter the reply pipeline after that owner has
+  // already fenced this attempt; the canonical spool row will retry it.
+  if (isDispatchSuperseded()) {
+    status.finalizeInBackground({ outcome: "cancelled" }, "cancelled finalize");
+    return { kind: "completed" };
+  }
+  if (status.controller && !isRoomEvent) {
+    void status.controller.setThinking();
+  }
+  try {
+    turnDispatched = await runTelegramDispatchTurn(turn);
+  } catch (err) {
+    turn.dispatchError = err;
+    turn.previewLifecycle.observeFailure(
+      isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
+    );
+    runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
+  } finally {
+    // Stop producers before draining drafts, finalizing accepted text, and cleaning previews.
+    turn.progressCompositor.cancel();
+    await turn.draftEventQueue;
+    try {
+      await finalizePendingAnswerBlockDraft(turn);
+    } catch (err) {
+      turn.dispatchError ??= err;
       turn.previewLifecycle.observeFailure(
         isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
       );
-      runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
-    } finally {
-      // Stop producers before draining drafts, finalizing accepted text, and cleaning previews.
-      turn.progressCompositor.cancel();
-      await turn.draftEventQueue;
-      try {
-        await finalizePendingAnswerBlockDraft(turn);
-      } catch (err) {
-        turn.dispatchError ??= err;
-        turn.previewLifecycle.observeFailure(
-          isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
-        );
-        runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
-      }
-      await cleanupDrafts(turn, isDispatchSuperseded());
+      runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
     }
-  } finally {
-    dispatchWasSuperseded = isDispatchSuperseded();
+    await cleanupDrafts(turn, isDispatchSuperseded());
   }
-
+  const dispatchWasSuperseded = isDispatchSuperseded();
   if (turnDispatched === false) {
     return { kind: "completed" };
   }

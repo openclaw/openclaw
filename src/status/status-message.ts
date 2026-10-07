@@ -131,16 +131,7 @@ type StatusArgs = {
   now?: number;
 };
 
-type NormalizedAuthMode =
-  | "api-key"
-  | "oauth"
-  | "token"
-  | "aws-sdk"
-  | "native"
-  | "mixed"
-  | "unknown";
-
-function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
+function normalizeAuthMode(value?: string) {
   const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
     return undefined;
@@ -506,13 +497,9 @@ function resolveChannelModelNote(params: {
   return "channel override";
 }
 
-export type StatusMessageParts = {
-  text: string;
-  /** Structured mirror of the text body for channels with native table rendering. */
-  presentation: MessagePresentation;
-};
+export type StatusMessageParts = ReturnType<typeof buildStatusMessageParts>;
 
-export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
+export function buildStatusMessageParts(args: StatusArgs) {
   const now = args.now ?? Date.now();
   // Derive the live wall clock here so both /status and session_status expose
   // the same configured timezone without duplicating formatting at each caller.

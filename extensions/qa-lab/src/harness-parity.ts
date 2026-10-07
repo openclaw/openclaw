@@ -25,15 +25,7 @@ export type HarnessParityDrift =
   | "tool-description"
   | "tool-schema";
 
-type HarnessParityPromptStats = {
-  systemPromptChars: number;
-  projectContextChars: number;
-  nonProjectContextChars: number;
-  skillPromptChars: number;
-  toolSummaryChars: number;
-  toolSchemaChars: number;
-  toolCount: number;
-};
+type HarnessParityPromptStats = ReturnType<typeof buildPromptStats>;
 
 export type RuntimeParitySystemPromptReport = {
   systemPrompt?: {
@@ -70,15 +62,7 @@ export type HarnessRuntimeParityCell = RuntimeParityCell & {
   systemPromptReport?: RuntimeParitySystemPromptReport;
 };
 
-type HarnessParityCell = HarnessRuntimeParityCell & {
-  variant: HarnessVariant;
-  promptStats: HarnessParityPromptStats;
-  systemPromptHash: string;
-  toolDescriptionHash: string;
-  toolSchemaHash: string;
-  tokenUsage: RuntimeParityUsage;
-  tokenUsageSource: "live-usage" | "mock-estimate";
-};
+type HarnessParityCell = ReturnType<typeof buildHarnessParityCell>;
 
 type HarnessParityResult = {
   scenarioId: string;
@@ -171,8 +155,8 @@ function firstDriftTurn(leftTranscript: string, rightTranscript: string): number
 export function buildHarnessParityCell(params: {
   variant: HarnessVariant;
   cell: HarnessRuntimeParityCell;
-  tokenUsageSource: HarnessParityCell["tokenUsageSource"];
-}): HarnessParityCell {
+  tokenUsageSource: "live-usage" | "mock-estimate";
+}) {
   const report = params.cell.systemPromptReport;
   const promptStats = buildPromptStats(report);
   const toolEntries = report?.tools?.entries ?? [];

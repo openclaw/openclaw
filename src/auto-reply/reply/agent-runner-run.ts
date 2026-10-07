@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
@@ -13,6 +14,7 @@ import {
   getAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { hasOutboundReplyContent } from "../../plugin-sdk/reply-payload.js";
 import {
   getGatewayContextResolver,
@@ -128,18 +130,23 @@ export async function runReplyAgent(
     }));
   let didDeliverVisiblePartialReply = false;
   const onPartialReply = opts?.onPartialReply;
-  const runOpts = onPartialReply
-    ? {
-        ...opts,
-        onPartialReply: async (payload: Parameters<NonNullable<typeof opts.onPartialReply>>[0]) => {
-          const observed = await settleProgressVisibilityCallbackResult(onPartialReply(payload));
-          if (observed.visible && hasOutboundReplyContent(payload, { trimText: true })) {
-            didDeliverVisiblePartialReply = true;
-          }
-          return observed.result;
-        },
-      }
-    : opts;
+  const runOpts = {
+    ...opts,
+    runId: opts?.runId ?? randomUUID(),
+    ...(onPartialReply
+      ? {
+          onPartialReply: async (
+            payload: Parameters<NonNullable<typeof opts.onPartialReply>>[0],
+          ) => {
+            const observed = await settleProgressVisibilityCallbackResult(onPartialReply(payload));
+            if (observed.visible && hasOutboundReplyContent(payload, { trimText: true })) {
+              didDeliverVisiblePartialReply = true;
+            }
+            return observed.result;
+          },
+        }
+      : {}),
+  };
   const replyOperationRunState = replyRunState.resolveReplyOperationRunState(opts);
   if (replyOperationRunState) {
     replyOperationRunState.replyCompletion = resolveReplyCompletion(
@@ -192,7 +199,6 @@ export async function runReplyAgent(
     // Durable source ownership identifies provider redelivery even if the run
     // became terminal before its claim cleanup committed.
     if (
-      restartRecoveryEntry?.status !== "running" &&
       sessionKey &&
       storePath &&
       hasRestartRecoverySourceClaim(restartRecoveryEntry, restartRecoverySourceTurnId)
@@ -251,11 +257,6 @@ export async function runReplyAgent(
     isActive &&
     messageInjectionDisposition === "none" &&
     terminalDeliveryBlockReason !== undefined;
-  if (shouldQueueTerminalReceiptSteer) {
-    logVerbose(
-      `queue: active session ${activeReplyOperation?.sessionId ?? followupRun.run.sessionId} cannot accept steering (${terminalDeliveryBlockReason}); queuing instead`,
-    );
-  }
 
   const questionInput = await runReplyQuestionInput(input);
   if (questionInput.handled) {
@@ -390,6 +391,23 @@ export async function runReplyAgent(
       queuedRunFollowupTurn,
       false,
     );
+    if (shouldQueueTerminalReceiptSteer || shouldQueueProvidedSteer) {
+      diagnosticLogger.warn("steering rejected; applying follow-up policy", {
+        reason: shouldQueueTerminalReceiptSteer
+          ? terminalDeliveryBlockReason
+          : "source-operation-pending",
+        disposition: enqueued
+          ? "followup-queued"
+          : replyOperationRunState?.admission?.status === "skipped" &&
+              replyOperationRunState.admission.reason === "queue-cap"
+            ? "skipped-queue-cap"
+            : "followup-not-enqueued",
+        channel:
+          followupRun.originatingChannel ?? followupRun.run.messageProvider ?? sessionCtx.Provider,
+        sessionId: activeReplyOperation?.sessionId ?? followupRun.run.sessionId,
+        runId: opts?.runId,
+      });
+    }
     if (!enqueued) {
       releaseAdmissionTicket();
       typing.cleanup();
@@ -576,7 +594,6 @@ export async function runReplyAgent(
       }
     }
   }
-  replyOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
   bindReplyOperationTyping(replyOperation, typing);
   let runFollowupTurn = queuedRunFollowupTurn;
   let shouldDrainQueuedFollowupsAfterClear = false;
@@ -608,7 +625,7 @@ export async function runReplyAgent(
     cfg,
     followupRun,
     getActiveSessionEntry: () => activeSessionEntry,
-    opts,
+    opts: runOpts,
     replyOperation,
     restartRecoverySourceTurnId,
     runtimePolicySessionKey,
@@ -620,6 +637,7 @@ export async function runReplyAgent(
     storePath,
   });
   try {
+    await replyOperation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
     return await executePreparedReplyAgentRun({
       ...params,
       activeSessionStore,

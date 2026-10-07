@@ -26,18 +26,6 @@ const MEDIA_SEND_METHODS = {
 
 type TelegramOutboundMediaKind = keyof typeof MEDIA_SEND_METHODS;
 
-type TelegramOutboundMediaPlan = {
-  kind: MediaKind | undefined;
-  deliveryKind: MediaKind | undefined;
-  isGif: boolean;
-  isVideoNote: boolean;
-  fileName: string;
-  file: InputFile;
-  htmlCaption?: string;
-  plainCaption?: string;
-  followUpText?: string;
-};
-
 export type TelegramOutboundMediaSender = {
   label: TelegramOutboundMediaKind;
   operation: string;
@@ -82,7 +70,7 @@ export function prepareTelegramOutboundMedia(params: {
   forceDocument?: boolean;
   asVideoNote?: boolean;
   preparedHtml?: boolean;
-}): TelegramOutboundMediaPlan {
+}) {
   const kind = kindFromMime(params.media.contentType ?? undefined);
   const isGif = isGifMedia({
     contentType: params.media.contentType,
@@ -136,7 +124,7 @@ export function resolveTelegramOutboundMediaSenders(params: {
   api: TelegramApi;
   chatId: string;
   media: TelegramLoadedMedia;
-  plan: TelegramOutboundMediaPlan;
+  plan: ReturnType<typeof prepareTelegramOutboundMedia>;
   forceDocument?: boolean;
   asVoice?: boolean;
   sendImageAsPhoto?: boolean;

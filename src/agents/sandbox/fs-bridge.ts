@@ -14,9 +14,9 @@ import { SANDBOX_FILE_IDENTITY } from "./file-mutation-identity.js";
 import {
   buildPinnedMutationPlan,
   PINNED_MUTATION_ACTION_LABELS,
+  type SandboxFsCommandPlan,
 } from "./fs-bridge-mutation-helper.js";
 import { SandboxFsPathGuard, type PinnedSandboxEntry } from "./fs-bridge-path-safety.js";
-import { buildStatPlan, type SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
 import { parseSandboxStatMtimeMs, parseSandboxStatSize } from "./fs-bridge-stat-parse.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 import {
@@ -342,7 +342,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const result = await this.runCheckedCommand({
       // Keep stat's original parent/basename metadata semantics, while its
       // boundary check validates the container-visible backing rather than a hidden host alias.
-      ...buildStatPlan(resolved.target, anchoredTarget),
+      checks: [{ target: resolved.target, options: { action: "stat files" } }],
+      script: 'set -eu\ncd -- "$1"\nLC_ALL=C stat -c "%F|%s|%y" -- "$2"',
+      args: [anchoredTarget.canonicalParentPath, anchoredTarget.basename],
+      allowFailure: true,
       signal: params.signal,
     });
     if (result.code !== 0) {
@@ -415,7 +418,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }
 
   private async runCheckedCommand(
-    plan: SandboxFsCommandPlan & { stdin?: Buffer | string; signal?: AbortSignal },
+    plan: SandboxFsCommandPlan & { signal?: AbortSignal },
   ): Promise<SandboxBackendCommandResult> {
     await this.pathGuard.assertPathChecks(plan.checks);
     if (plan.recheckBeforeCommand) {

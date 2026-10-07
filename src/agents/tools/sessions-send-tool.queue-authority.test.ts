@@ -73,7 +73,7 @@ describe("sessions_send direct queue source authority", () => {
         const manager = await SessionManager.openAsync(target, state.workspaceDir);
         guardSessionManager(manager);
         const { session } = await createTestSession({ sessionManager: manager });
-        const queued = vi.spyOn(session.agent, "steer");
+        const queued = vi.spyOn(session.agent, "admitSteeringMessage");
         const preparation = createDeferredCore();
         const resumePreparation = createDeferredCore();
         const queueMessage = async (

@@ -770,13 +770,12 @@ export function resolveProviderSyntheticAuthWithPlugin(params: ProviderSynthetic
   return undefined;
 }
 
-type ProviderSyntheticAuthPreparationParams = ProviderSyntheticAuthParams & {
-  signal?: AbortSignal;
-};
+type ProviderSyntheticAuthPreparationParams = ProviderSyntheticAuthParams &
+  Parameters<typeof prepareSyntheticAuthWithProvider>[2];
 
 async function prepareSyntheticAuthProviders(
   providers: Iterable<ProviderPlugin>,
-  params: ProviderSyntheticAuthPreparationParams & { preparationOwner?: object },
+  params: ProviderSyntheticAuthPreparationParams,
 ) {
   params.signal?.throwIfAborted();
   for (const provider of providers) {
