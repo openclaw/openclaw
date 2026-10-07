@@ -4,7 +4,6 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import {
   redactPublicSupportDiagnosticLine,
@@ -22,11 +21,11 @@ import {
 } from "./errors.js";
 import { npmFailurePackageName } from "./npm-error.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
-import { formatUpdateFailureFact } from "./update-failure-facts-format.js";
+import { formatUpdateFailureFact, type UpdateFailureFact } from "./update-failure-facts-format.js";
 import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
 import { UpdateDestinationFailureSchema, UpdateFailureFactSchema } from "./update-run-schema.js";
 
-export type UpdateFailureFact = z.infer<typeof UpdateFailureFactSchema>;
+export type { UpdateFailureFact } from "./update-failure-facts-format.js";
 
 type UpdatePreflightDiagnostic = {
   check: string;
