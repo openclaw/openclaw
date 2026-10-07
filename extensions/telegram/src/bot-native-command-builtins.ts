@@ -1,8 +1,10 @@
 import {
+  buildModelAliasIndex,
   loadPreparedModelCatalog,
   resolveAgentConfig,
   resolveAgentDir,
   resolveDefaultModelForAgent,
+  resolveModelRefFromString,
   resolveThinkingDefaultWithRuntimeCatalog,
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
@@ -18,6 +20,7 @@ import {
   resolveStoredModelOverrideAsync,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveChannelModelOverride } from "openclaw/plugin-sdk/model-session-runtime";
 import {
   getSessionEntryAsync,
   resolveStorePath,
@@ -41,13 +44,42 @@ type TelegramCommandMenuModelContext = {
   sessionEntry?: SessionEntry;
 };
 
+type TelegramMenuModelParams = {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  modelParentSessionKey?: null;
+  chatId?: string;
+};
+
+/** What the next reply in an unpinned DM topic runs on: the channel's model, else the agent default. */
+function resolveTelegramUnpinnedTopicModel(
+  params: TelegramMenuModelParams,
+  defaultModel: { provider: string; model: string },
+): { provider: string; model: string } {
+  const channelModel = resolveChannelModelOverride({
+    cfg: params.cfg,
+    channel: "telegram",
+    groupChatType: "direct",
+    directUserIds: [params.chatId],
+  });
+  const selectionContext = {
+    cfg: params.cfg,
+    agentId: params.agentId,
+    defaultProvider: defaultModel.provider,
+  };
+  const channelRef = channelModel
+    ? resolveModelRefFromString({
+        ...selectionContext,
+        raw: channelModel.model,
+        aliasIndex: buildModelAliasIndex(selectionContext),
+      })?.ref
+    : undefined;
+  return channelRef ?? { provider: defaultModel.provider, model: defaultModel.model };
+}
+
 async function resolveTelegramCommandMenuModelContext(
-  params: {
-    cfg: OpenClawConfig;
-    agentId: string;
-    sessionKey: string;
-    modelParentSessionKey?: null;
-  },
+  params: TelegramMenuModelParams,
   mode: "menu" | "fast" = "menu",
 ): Promise<TelegramCommandMenuModelContext> {
   // Fast menus retain configured defaults even if session lookup fails.
@@ -76,14 +108,16 @@ async function resolveTelegramCommandMenuModelContext(
         parentSessionKey: entry?.parentSessionKey ?? params.modelParentSessionKey,
         defaultProvider: defaultModel.provider,
       });
-      if (mode === "fast") {
+      if (!override?.model && params.modelParentSessionKey === null) {
+        // The row's last-run model may still be the DM pin this topic used to inherit.
+        context = resolveTelegramUnpinnedTopicModel(params, defaultModel);
+      } else if (mode === "fast") {
         return {
           provider: override?.provider ?? defaultModel.provider,
           model: override?.model ?? defaultModel.model,
           sessionEntry: entry,
         };
-      }
-      if (override?.model) {
+      } else if (override?.model) {
         context = {
           provider: override.provider || defaultModel.provider,
           model: override.model,
@@ -206,6 +240,7 @@ export async function executeTelegramBuiltinCommand(
           agentId: dispatch.route.agentId,
           sessionKey: dispatch.targetSessionKey,
           modelParentSessionKey: dispatch.modelParentSessionKey,
+          chatId: String(dispatch.msg.chat.id),
         })
       ).provider ??
       resolveDefaultModelForAgent({
@@ -231,6 +266,7 @@ export async function executeTelegramBuiltinCommand(
     agentId: dispatch.route.agentId,
     sessionKey: menuNeedsModelContext ? dispatch.targetSessionKey : "",
     modelParentSessionKey: dispatch.modelParentSessionKey,
+    chatId: String(dispatch.msg.chat.id),
   };
   const menuModelContext = menuNeedsModelContext
     ? await resolveTelegramCommandMenuModelContext(
