@@ -314,11 +314,12 @@ describe("versioned plugin tool authority", () => {
       context: { assertMemoryAudienceCurrent },
       assertInvocationCurrent: () => {},
     });
+    expect(context.assertInvocationCurrent).toBeTypeOf("function");
 
     if (guarded) {
-      expect(() => context.assertInvocationCurrent()).toThrow("no longer current");
+      expect(() => context.assertInvocationCurrent?.()).toThrow("no longer current");
     } else {
-      expect(() => context.assertInvocationCurrent()).not.toThrow();
+      expect(() => context.assertInvocationCurrent?.()).not.toThrow();
       expect(assertMemoryAudienceCurrent).not.toHaveBeenCalled();
     }
   });

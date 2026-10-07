@@ -31,6 +31,12 @@ type AgentsHomeProps = {
   error: string | null;
   canCreate: boolean;
   showExplore: boolean;
+  installedClaws: ClawStatusRecord[];
+  installedStatusReady: boolean;
+  installedStatusError: string | null;
+  canRetryInstalledStatus: boolean;
+  onRetryInstalledStatus: () => void;
+  onManageClaw: (record: ClawStatusRecord) => void;
   onOpenCatalog: () => void;
   onSelectClaw: (entry: ClawCatalogEntry) => void;
   onRetry: () => void;
@@ -261,7 +267,15 @@ export function renderAgentsHome(props: AgentsHomeProps) {
       }
       ${
         props.showExplore
-          ? html`<openclaw-claws-explore .onSelect=${props.onSelectClaw}></openclaw-claws-explore>`
+          ? html`<openclaw-claws-explore
+              .installedClaws=${props.installedClaws}
+              .installedStatusReady=${props.installedStatusReady}
+              .installedStatusError=${props.installedStatusError}
+              .canRetryInstalledStatus=${props.canRetryInstalledStatus}
+              .onRetryInstalledStatus=${props.onRetryInstalledStatus}
+              .onSelect=${props.onSelectClaw}
+              .onManage=${props.onManageClaw}
+            ></openclaw-claws-explore>`
           : nothing
       }
     </section>`;

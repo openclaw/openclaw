@@ -500,6 +500,42 @@ describe("request-shaped in-process Gateway dispatch", () => {
     );
   });
 
+  it("marks only an owner-bound plugin approval request for host admission", async () => {
+    const identity = {
+      kind: "agentRuntime",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+      delegatedAuthority: {
+        kind: "local",
+        lifecycleGeneration: "generation-1",
+        claimId: "claim-1",
+        operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+      },
+      approvalOwnerPluginId: "registered-hook",
+    } as const;
+    const request = withAgentToolGatewayRuntimeIdentity(
+      { method: "plugin.approval.request", params: { title: "Review action" } },
+      identity,
+    );
+    await callAgentToolGatewayRequest(request);
+
+    const requestOptions = mocks.dispatch.mock.calls[0]?.[2];
+    expect(requestOptions).toMatchObject({ allowHostPluginApprovalRequest: true });
+    expect(readInProcessAgentRuntimeIdentity(requestOptions)).toBe(identity);
+
+    await callAgentToolGatewayRequest(
+      withAgentToolGatewayRuntimeIdentity(
+        {
+          method: "plugin.approval.resolve",
+          params: { id: "plugin:test", decision: "allow-once" },
+        },
+        identity,
+      ),
+    );
+    expect(mocks.dispatch.mock.calls[1]?.[2]).not.toHaveProperty("allowHostPluginApprovalRequest");
+  });
+
   it.each([
     [null, undefined],
     [0, 0],

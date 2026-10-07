@@ -2,15 +2,23 @@ import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
+import { pathForAgentPanel, pathForRoute } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { searchOfficialClaws, type ClawCatalogEntry } from "./claws-catalog-client.ts";
+import {
+  hasInstalledClawAgent,
+  installedClawForPackage,
+  searchOfficialClaws,
+  type ClawCatalogEntry,
+  type ClawStatusRecord,
+} from "./claws-catalog-client.ts";
 import "../../styles/agents-home.css";
 
 registerAgentsHomeEnglish();
@@ -20,6 +28,12 @@ export class ClawsExplore extends OpenClawLightDomElement {
   private context!: ApplicationContext;
 
   @property({ attribute: false }) onSelect?: (entry: ClawCatalogEntry) => void;
+  @property({ attribute: false }) onManage?: (record: ClawStatusRecord) => void;
+  @property({ attribute: false }) installedClaws: ClawStatusRecord[] = [];
+  @property({ attribute: false }) installedStatusReady = false;
+  @property({ attribute: false }) installedStatusError: string | null = null;
+  @property({ attribute: false }) canRetryInstalledStatus = false;
+  @property({ attribute: false }) onRetryInstalledStatus?: () => void;
 
   @state() private entries: ClawCatalogEntry[] = [];
   @state() private query = "";
@@ -147,6 +161,28 @@ export class ClawsExplore extends OpenClawLightDomElement {
           : nothing
       }
       ${
+        !this.installedStatusReady
+          ? html`<div
+              class="callout ${this.installedStatusError ? "danger" : "warn"}"
+              role=${this.installedStatusError ? "alert" : "status"}
+            >
+              ${this.installedStatusError ?? t("clawsCatalog.checkingInstalled")}
+              ${t("clawsCatalog.addPaused")}
+              ${
+                this.installedStatusError && this.canRetryInstalledStatus
+                  ? html`<button
+                      type="button"
+                      class="btn btn--sm"
+                      @click=${this.onRetryInstalledStatus}
+                    >
+                      ${t("clawsCatalog.retry")}
+                    </button>`
+                  : nothing
+              }
+            </div>`
+          : nothing
+      }
+      ${
         this.loading
           ? html`<div
               class="agents-home__claw-grid"
@@ -172,41 +208,68 @@ export class ClawsExplore extends OpenClawLightDomElement {
         ${repeat(
           this.entries,
           (entry) => entry.packageName,
-          (entry) => html`<article
-            class="agents-home__claw-card oc-card oc-card-interactive"
-            data-claws-entry
-          >
-            <div class="agents-home__claw-head">
-              <span class="agents-home__claw-art" aria-hidden="true">${icons.box}</span>
-              <div class="agents-home__claw-identity">
-                <h3>${entry.displayName}</h3>
-                <span>${t("clawsCatalog.official")}</span>
+          (entry) => {
+            const installed = installedClawForPackage(this.installedClaws, entry.packageName);
+            const manageHref = installed
+              ? hasInstalledClawAgent(installed)
+                ? pathForAgentPanel(installed.agentId, null, this.context.basePath)
+                : pathForRoute("agents-home", this.context.basePath)
+              : "";
+            return html`<article
+              class="agents-home__claw-card oc-card oc-card-interactive"
+              data-claws-entry
+            >
+              <div class="agents-home__claw-head">
+                <span class="agents-home__claw-art" aria-hidden="true">${icons.box}</span>
+                <div class="agents-home__claw-identity">
+                  <h3>${entry.displayName}</h3>
+                  <span>${t("clawsCatalog.official")}</span>
+                </div>
+                ${
+                  installed
+                    ? html`<a
+                        class="btn btn--sm oc-action oc-action-secondary"
+                        href=${manageHref}
+                        @click=${(event: MouseEvent) => {
+                          if (shouldHandleNavigationClick(event)) {
+                            event.preventDefault();
+                            this.onManage?.(installed);
+                          }
+                        }}
+                        >${t("clawsCatalog.manage")}</a
+                      >`
+                    : html`<button
+                        type="button"
+                        class="btn btn--sm oc-action oc-action-secondary"
+                        ?disabled=${!this.installedStatusReady || !entry.latestVersion}
+                        title=${!this.installedStatusReady ? t("clawsCatalog.addPaused") : entry.latestVersion ? t("clawsCatalog.review") : t("clawsCatalog.noVersion")}
+                        @click=${() => {
+                          if (this.installedStatusReady) {
+                            this.onSelect?.(entry);
+                          }
+                        }}
+                      >
+                        ${t("clawsCatalog.add")}
+                      </button>`
+                }
               </div>
-              <button
-                type="button"
-                class="btn btn--sm oc-action oc-action-secondary"
-                ?disabled=${!entry.latestVersion}
-                title=${entry.latestVersion ? t("clawsCatalog.review") : t("clawsCatalog.noVersion")}
-                @click=${() => this.onSelect?.(entry)}
-              >
-                ${t("clawsCatalog.add")}
-              </button>
-            </div>
-            ${entry.summary ? html`<p class="agents-home__claw-summary">${entry.summary}</p>` : nothing}
-            <div class="agents-home__claw-meta">
-              <span title=${entry.packageName}>${entry.packageName}</span>
-              ${
-                entry.latestVersion
-                  ? html`<span
-                      >${t("clawsCatalog.version", { version: entry.latestVersion })}</span
-                    >`
-                  : nothing
-              }
-              <span
-                >${t("clawsCatalog.downloads", { count: new Intl.NumberFormat().format(entry.downloads) })}</span
-              >
-            </div>
-          </article>`,
+              ${entry.summary ? html`<p class="agents-home__claw-summary">${entry.summary}</p>` : nothing}
+              <div class="agents-home__claw-meta">
+                <span title=${entry.packageName}>${entry.packageName}</span>
+                ${installed ? html`<span class="agents-home__claw-installed">${t("clawsCatalog.installed")}</span>` : nothing}
+                ${
+                  entry.latestVersion
+                    ? html`<span
+                        >${t("clawsCatalog.version", { version: entry.latestVersion })}</span
+                      >`
+                    : nothing
+                }
+                <span
+                  >${t("clawsCatalog.downloads", { count: new Intl.NumberFormat().format(entry.downloads) })}</span
+                >
+              </div>
+            </article>`;
+          },
         )}
       </div>
     </section>`;

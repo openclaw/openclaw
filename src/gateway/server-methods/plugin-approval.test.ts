@@ -39,6 +39,7 @@ function createClient(
     deviceId?: string;
     scopes?: string[];
     approvalRuntime?: boolean;
+    pluginApprovalRequestOwnerId?: string;
   } = {},
 ): GatewayRequestHandlerOptions["client"] {
   const connect: Record<string, unknown> = {
@@ -56,7 +57,16 @@ function createClient(
   return {
     connId: params.connId ?? "conn-test-client",
     connect,
-    ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
+    ...(params.approvalRuntime || params.pluginApprovalRequestOwnerId
+      ? {
+          internal: {
+            ...(params.approvalRuntime ? { approvalRuntime: true } : {}),
+            ...(params.pluginApprovalRequestOwnerId
+              ? { pluginApprovalRequestOwnerId: params.pluginApprovalRequestOwnerId }
+              : {}),
+          },
+        }
+      : {}),
   } as unknown as GatewayRequestHandlerOptions["client"];
 }
 
@@ -271,6 +281,40 @@ describe("createPluginApprovalHandlers", () => {
   });
 
   describe("plugin.approval.request", () => {
+    it("binds a host-authorized request to its real plugin owner and reviewer devices", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const { respond, accepted } = createApprovalRequestResponder();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "Review workflow",
+          description: "Approve one action",
+          approvalReviewerDeviceIds: ["reviewer-device"],
+          twoPhase: true,
+        },
+        { client: createClient({ pluginApprovalRequestOwnerId: "lobster" }), respond },
+      );
+      const pending = invokeHandler(handlers, opts);
+      const id = await accepted;
+      const record = expectDefined(await manager.getSnapshot(id), "host-bound approval");
+      expect(record.request.pluginId).toBe("lobster");
+      expect(record.approvalReviewerDeviceIds).toEqual(["reviewer-device"]);
+      await manager.resolve(id, "allow-once");
+      await pending;
+    });
+
+    it("rejects a host-authorized request claiming a different plugin", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        { pluginId: "different", title: "Review workflow", description: "Approve one action" },
+        { client: createClient({ pluginApprovalRequestOwnerId: "lobster" }) },
+      );
+      await invokeHandler(handlers, opts);
+      expect(expectResponseRejected(opts.respond).message).toMatch(/owner does not match host/);
+      expect(await manager.listPendingRecords()).toHaveLength(0);
+    });
+
     it("creates and registers approval with twoPhase", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const { respond, accepted } = createApprovalRequestResponder();

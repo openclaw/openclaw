@@ -94,6 +94,8 @@ export type GatewayClient = {
     agentToolCaller?: TrustedAgentToolCaller;
     allowModelOverride?: boolean;
     approvalRuntime?: boolean;
+    /** Host-bound owner for one plugin approval request, without reviewer authority. */
+    pluginApprovalRequestOwnerId?: string;
     cronRunContinuation?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
     pluginRuntimeOwnerId?: string;

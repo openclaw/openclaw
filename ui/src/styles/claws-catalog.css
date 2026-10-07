@@ -137,6 +137,12 @@
   overflow-wrap: anywhere;
 }
 
+.claws-catalog__installed {
+  margin-inline-start: 8px;
+  color: var(--ok);
+  font-size: 12px;
+}
+
 .claws-catalog__empty {
   margin: 20px 0 0;
   color: var(--muted);

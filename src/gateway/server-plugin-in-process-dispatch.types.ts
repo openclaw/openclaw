@@ -31,6 +31,8 @@ export type DispatchGatewayMethodInProcessOptions = {
   disableSyntheticClient?: boolean;
   expectFinal?: boolean;
   forceSyntheticClient?: boolean;
+  /** Host-only, request-scoped bridge for a plugin approval prompt. */
+  allowHostPluginApprovalRequest?: boolean;
   internalDeliveryMediaUrls?: string[];
   internalDeliverySuppressText?: boolean;
   nodeInvokeStream?: GatewayNodeInvokeStream;

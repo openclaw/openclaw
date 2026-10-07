@@ -44,6 +44,20 @@ export type ClawStatusRecord = {
   resources: ClawResourceStatus[];
 };
 
+export function hasInstalledClawAgent(record: ClawStatusRecord): boolean {
+  return record.agentState === "present" || record.agentState === "modified";
+}
+
+export function installedClawForPackage(
+  records: readonly ClawStatusRecord[],
+  packageName: string,
+): ClawStatusRecord | null {
+  const matches = records.filter(
+    (record) => record.sourceKind === "package" && record.name === packageName,
+  );
+  return matches.find(hasInstalledClawAgent) ?? matches[0] ?? null;
+}
+
 export async function listClawStatus(client: GatewayBrowserClient): Promise<ClawStatusRecord[]> {
   const result = await client.request<{ records: ClawStatusRecord[] }>("claws.status", {});
   return result.records;

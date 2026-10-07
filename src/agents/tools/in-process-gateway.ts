@@ -295,6 +295,9 @@ async function callAgentToolGatewayRequestBound<T>(
   const dispatchOptions = {
     forceSyntheticClient: true,
     operatorRoleActor: { kind: "system" as const },
+    ...(method === "plugin.approval.request" && runtimeIdentity?.approvalOwnerPluginId
+      ? { allowHostPluginApprovalRequest: true }
+      : {}),
     ...(request.agentRunTracking ? { agentRunTracking: request.agentRunTracking } : {}),
     ...(request.agentToolCaller ? { agentToolCaller: request.agentToolCaller } : {}),
     ...(positional?.sessionCreation ? { sessionCreation: positional.sessionCreation } : {}),

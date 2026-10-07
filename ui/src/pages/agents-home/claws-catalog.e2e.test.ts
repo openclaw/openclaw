@@ -51,6 +51,19 @@ const starterClaws = [
     summary: `A focused starter for task ${index + 1}.`,
   })),
 ];
+const installedWorkflow = {
+  agentId: "workflow-operator",
+  name: workflowOperator.packageName,
+  version: workflowOperator.latestVersion,
+  sourceKind: "package",
+  status: "complete",
+  agentState: "present",
+  bootstrapState: "complete",
+  orphaned: false,
+  addedAtMs: 1_000,
+  updatedAtMs: 2_000,
+  resources: [],
+};
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -76,6 +89,7 @@ describe.skipIf(!browserAvailable)("Claws catalog in Agents", () => {
     const gateway = await installMockGateway(page, {
       featureMethods: [
         "openclaw.chat",
+        "claws.status",
         "claws.catalog.search",
         "claws.catalog.detail",
         "claws.add.plan",
@@ -92,6 +106,7 @@ describe.skipIf(!browserAvailable)("Claws catalog in Agents", () => {
           valid: true,
           issues: [],
         },
+        "claws.status": { records: [] },
         "claws.catalog.search": {
           cases: [
             { match: { query: "Workflow" }, response: { entries: [workflowOperator] } },
@@ -360,6 +375,24 @@ describe.skipIf(!browserAvailable)("Claws catalog in Agents", () => {
         const dir = createControlUiE2eArtifactDir(`claws-review-${viewport.name}`);
         await page.screenshot({ path: `${dir}/review.png`, animations: "disabled" });
       }
+      if (viewport.name === "desktop") {
+        const statusRequests = (await gateway.getRequests("claws.status")).length;
+        await gateway.deferNext("claws.status", {});
+        await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+        for (let attempt = 0; attempt < 50; attempt++) {
+          if ((await gateway.getRequests("claws.status")).length > statusRequests) {
+            break;
+          }
+          await page.waitForTimeout(20);
+        }
+        expect((await gateway.getRequests("claws.status")).length).toBeGreaterThan(statusRequests);
+        await page.waitForFunction(
+          () => (document.querySelector("[data-claws-confirm]") as HTMLButtonElement)?.disabled,
+        );
+        await gateway.resolveDeferred("claws.status", { records: [installedWorkflow] });
+        await page.waitForURL(/\/settings\/agents\/workflow-operator$/u);
+        expect(await gateway.getRequests("claws.add.apply")).toHaveLength(0);
+      }
     } finally {
       await context.close();
     }
@@ -405,12 +438,159 @@ describe.skipIf(!browserAvailable)("Claws catalog in Agents", () => {
       await gateway.rejectDeferred("claws.catalog.search", {
         message: "Catalog temporarily unavailable",
       });
-      await catalog.getByRole("alert").waitFor();
+      await catalog.getByRole("alert").getByText("Catalog temporarily unavailable").waitFor();
       expect(await entries.count()).toBe(0);
     } finally {
       await context.close();
     }
   });
+
+  it("pauses Add until installed status loads and recovers after a status failure", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 390, height: 844 },
+    });
+    const page = await context.newPage();
+    const config = { gateway: { controlUi: { experimental: { claws: true } } } };
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["claws.status"],
+      featureMethods: ["claws.status", "claws.catalog.search", "claws.add.plan"],
+      methodResponses: {
+        "config.get": {
+          config,
+          sourceConfig: config,
+          resolved: config,
+          raw: JSON.stringify(config),
+          hash: "claws-status-gate-config",
+          path: "/tmp/openclaw-claws-status-gate.json",
+          valid: true,
+          issues: [],
+        },
+        "claws.status": { records: [] },
+        "claws.catalog.search": { entries: [workflowOperator] },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}agents`);
+      const card = page.locator("[data-claws-explore] [data-claws-entry]").first();
+      await card.waitFor();
+      expect(await card.getByRole("button", { name: "Add" }).isDisabled()).toBe(true);
+      await page.locator("[data-claws-open-catalog]").click();
+      const catalog = page.locator(".claws-catalog");
+      const row = catalog.locator("[data-claws-entry]").first();
+      await row.waitFor();
+      expect(await row.getByRole("button", { name: "Add" }).isDisabled()).toBe(true);
+      await catalog.getByText("Checking installed Claws before Add.").waitFor();
+      expect(await gateway.getRequests("claws.add.plan")).toHaveLength(0);
+
+      await gateway.waitForRequest("claws.status");
+      await gateway.rejectDeferred("claws.status", { message: "temporary status outage" });
+      await catalog.getByRole("alert").getByText("temporary status outage").waitFor();
+      expect(await row.getByRole("button", { name: "Add" }).isDisabled()).toBe(true);
+      await catalog.getByRole("alert").getByRole("button", { name: "Retry" }).click();
+      await page.waitForFunction(
+        () =>
+          !(document.querySelector(".claws-catalog [data-claws-entry] button") as HTMLButtonElement)
+            ?.disabled,
+      );
+      expect(await row.getByRole("button", { name: "Add" }).isEnabled()).toBe(true);
+
+      const statusRequests = (await gateway.getRequests("claws.status")).length;
+      await gateway.deferNext("claws.status", {});
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      for (let attempt = 0; attempt < 50; attempt++) {
+        if ((await gateway.getRequests("claws.status")).length > statusRequests) {
+          break;
+        }
+        await page.waitForTimeout(20);
+      }
+      expect((await gateway.getRequests("claws.status")).length).toBeGreaterThan(statusRequests);
+      expect(await row.getByRole("button", { name: "Add" }).isDisabled()).toBe(true);
+      await gateway.resolveDeferred("claws.status", { records: [installedWorkflow] });
+      await row.getByRole("link", { name: "Manage" }).waitFor();
+      expect(await row.getByRole("button", { name: "Add" }).count()).toBe(0);
+      expect(await gateway.getRequests("claws.add.plan")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it.each([
+    { name: "mobile", width: 390, height: 844, agentState: "present" },
+    { name: "desktop", width: 1440, height: 900, agentState: "present" },
+    { name: "modified mobile", width: 390, height: 844, agentState: "modified" },
+    { name: "modified desktop", width: 1440, height: 900, agentState: "modified" },
+  ])(
+    "manages an installed official Claw from Explore and catalog at $name width",
+    async (viewport) => {
+      const context = await browser.newContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { width: viewport.width, height: viewport.height },
+      });
+      const page = await context.newPage();
+      const config = { gateway: { controlUi: { experimental: { claws: true } } } };
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["openclaw.chat", "claws.status", "claws.catalog.search", "claws.add.plan"],
+        methodResponses: {
+          "config.get": {
+            config,
+            sourceConfig: config,
+            resolved: config,
+            raw: JSON.stringify(config),
+            hash: "claws-installed-manage-config",
+            path: "/tmp/openclaw-claws-installed-manage.json",
+            valid: true,
+            issues: [],
+          },
+          "agents.list": {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [
+              { id: "main", name: "Main" },
+              { id: "workflow-operator", name: "Workflow Operator" },
+            ],
+          },
+          "claws.status": {
+            records: [{ ...installedWorkflow, agentState: viewport.agentState }],
+          },
+          "claws.catalog.search": { entries: starterClaws },
+        },
+      });
+      try {
+        await page.goto(`${server.baseUrl}agents`);
+        const explore = page.locator("[data-claws-explore]");
+        const card = explore.locator("[data-claws-entry]").first();
+        await card.getByText("Installed").waitFor();
+        expect(await card.getByRole("button", { name: "Add" }).count()).toBe(0);
+        expect(await card.getByRole("link", { name: "Manage" }).count()).toBe(1);
+
+        await page.locator("[data-claws-open-catalog]").click();
+        const catalogRow = page.locator(".claws-catalog [data-claws-entry]").first();
+        await catalogRow.getByText("Installed").waitFor();
+        expect(await catalogRow.getByRole("button", { name: "Add" }).count()).toBe(0);
+        await catalogRow.getByRole("link", { name: "Manage" }).click();
+        await page.waitForURL(/\/settings\/agents\/workflow-operator$/u);
+        await page
+          .locator("openclaw-agent-claw-panel")
+          .getByText("@openclaw/workflow-operator")
+          .waitFor();
+
+        await page.goto(`${server.baseUrl}agents`);
+        await explore
+          .locator("[data-claws-entry]")
+          .first()
+          .getByRole("link", { name: "Manage" })
+          .click();
+        await page.waitForURL(/\/settings\/agents\/workflow-operator$/u);
+        expect(await gateway.getRequests("claws.add.plan")).toHaveLength(0);
+      } finally {
+        await context.close();
+      }
+    },
+  );
 
   it("keeps installed agents while Labs hides Explore and Add", async () => {
     const context = await browser.newContext({

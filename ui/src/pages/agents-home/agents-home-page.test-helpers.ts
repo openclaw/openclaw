@@ -448,23 +448,23 @@ export function createPage(
       if (addedAgent && options.statusErrorAfterAdd) {
         throw new Error("Status unavailable");
       }
-      const addedRecord = options.statusRecord
-        ? {
-            name: "@openclaw/workflow-operator",
-            sourceKind: "package",
-            agentState: "present",
-            ...options.statusRecord,
-          }
-        : addedAgent
+      const addedRecord = !addedAgent
+        ? null
+        : options.statusRecord
           ? {
+              name: "@openclaw/workflow-operator",
+              sourceKind: "package",
+              agentState: "present",
+              ...options.statusRecord,
+            }
+          : {
               agentId: "workflow-operator",
               name: "@openclaw/workflow-operator",
               version: "1.2.0",
               sourceKind: "package",
               status: options.applyResult?.status ?? "complete",
               agentState: "present",
-            }
-          : null;
+            };
       const records = addedRecord ? [...statusRecords, addedRecord] : statusRecords;
       const target =
         params && typeof params === "object" && "target" in params ? String(params.target) : null;

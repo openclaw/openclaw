@@ -17,6 +17,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { hasCompleteClawDisclosures } from "./claws-access-review.ts";
 import {
   applyOfficialClawAdd,
+  installedClawForPackage,
   planOfficialClawAdd,
   readClawStatus,
   readOfficialClawDetail,
@@ -26,6 +27,7 @@ import {
   type ClawCatalogDetail,
   type ClawCatalogEntry,
   type ClawCatalogSource,
+  type ClawStatusRecord,
 } from "./claws-catalog-client.ts";
 import { renderClawsCatalogDialog } from "./claws-catalog-view.ts";
 import { hasCompleteClawManifestDisclosure } from "./claws-manifest-review.ts";
@@ -41,7 +43,13 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
 
   @property({ attribute: false }) onClose?: () => void;
   @property({ attribute: false }) onAdded?: () => void;
+  @property({ attribute: false }) onManage?: (record: ClawStatusRecord) => void;
   @property({ attribute: false }) initialEntry: ClawCatalogEntry | null = null;
+  @property({ attribute: false }) installedClaws: ClawStatusRecord[] = [];
+  @property({ attribute: false }) installedStatusReady = false;
+  @property({ attribute: false }) installedStatusError: string | null = null;
+  @property({ attribute: false }) canRetryInstalledStatus = false;
+  @property({ attribute: false }) onRetryInstalledStatus?: () => void;
 
   @state() private entries: ClawCatalogEntry[] = [];
   @state() private query = "";
@@ -116,7 +124,27 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
 
   override updated(changedProperties: PropertyValues<this>) {
     if (
-      changedProperties.has("initialEntry") &&
+      (changedProperties.has("installedClaws") || changedProperties.has("installedStatusReady")) &&
+      this.selected &&
+      !this.pendingApply &&
+      !this.applying &&
+      !this.applyUnknown &&
+      !this.applyResult
+    ) {
+      const installed = installedClawForPackage(this.installedClaws, this.selected.packageName);
+      if (installed) {
+        this.reviewRevision += 1;
+        this.selected = null;
+        this.detail = null;
+        this.plan = null;
+        this.reviewLoading = false;
+        this.onManage?.(installed);
+        return;
+      }
+    }
+    if (
+      (changedProperties.has("initialEntry") || changedProperties.has("installedStatusReady")) &&
+      this.installedStatusReady &&
       this.initialEntry &&
       !this.pendingApply &&
       !this.applyResult &&
@@ -221,6 +249,14 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
   }
 
   private select(entry: ClawCatalogEntry) {
+    const installed = installedClawForPackage(this.installedClaws, entry.packageName);
+    if (installed) {
+      this.onManage?.(installed);
+      return;
+    }
+    if (!this.installedStatusReady) {
+      return;
+    }
     this.selected = entry;
     this.applyResult = null;
     this.applyResultGatewayUrl = null;
@@ -402,6 +438,8 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
       : null;
     if (
       !source ||
+      !this.installedStatusReady ||
+      installedClawForPackage(this.installedClaws, source.packageName) !== null ||
       !plan ||
       !scope ||
       !this.canAdd() ||
@@ -506,6 +544,11 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
   override render() {
     return renderClawsCatalogDialog({
       entries: this.entries,
+      installedClaws: this.installedClaws,
+      installedStatusReady: this.installedStatusReady,
+      installedStatusError: this.installedStatusError,
+      canRetryInstalledStatus: this.canRetryInstalledStatus,
+      basePath: this.context.basePath,
       query: this.query,
       loading: this.loading,
       error: this.error,
@@ -525,6 +568,8 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
       canAdd: this.canAdd(),
       onSearch: (query) => this.search(query),
       onSelect: (entry) => this.select(entry),
+      onManage: (record) => this.onManage?.(record),
+      onRetryInstalledStatus: () => this.onRetryInstalledStatus?.(),
       onBack: () => this.back(),
       onClose: () => this.close(),
       onRetryCatalog: () => void this.loadCatalog(),

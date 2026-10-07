@@ -1,3 +1,4 @@
+import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
@@ -12,7 +13,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
+import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
 import {
   bindInProcessSubagentResume,
@@ -20,6 +21,7 @@ import {
 } from "./in-process-subagent-resume.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { WRITE_SCOPE } from "./operator-scopes.js";
 import {
   readOperatorToolGatewayAuthority,
   runWithOperatorToolGatewayAuthority,
@@ -243,6 +245,7 @@ export function resolveInProcessGatewayDispatch(
 ): ResolvedInProcessGatewayDispatch {
   const inheritedOperatorAuthority = readOperatorToolGatewayAuthority();
   const scope = getPluginRuntimeGatewayRequestScope();
+  const agentRuntimeIdentity = readInProcessAgentRuntimeIdentity(options);
   const caller = getGatewayToolCallerIdentity();
   const selection = caller?.personalToolIdentityScoped
     ? resolveGatewayToolOperatorSelection()
@@ -258,8 +261,7 @@ export function resolveInProcessGatewayDispatch(
   const runtimeParticipant = resolveRuntimeSessionParticipant({
     method,
     requestParams: params,
-    runtimeIdentity:
-      readInProcessAgentRuntimeIdentity(options) ?? scope?.client?.internal?.agentRuntimeIdentity,
+    runtimeIdentity: agentRuntimeIdentity ?? scope?.client?.internal?.agentRuntimeIdentity,
     context,
     connId: scope?.client?.connId,
   });
@@ -410,6 +412,55 @@ export function resolveInProcessGatewayDispatch(
     allowOwnSessionScope: context.getGatewayMethodRegistry?.().getSessionAccess?.(method)
       ?.allowOwnSessionScope,
   });
+  const hostApprovalRequestEligible =
+    options?.allowHostPluginApprovalRequest === true &&
+    method === "plugin.approval.request" &&
+    options.forceSyntheticClient === true;
+  const trustedPluginApprovalOwnerId =
+    hostApprovalRequestEligible &&
+    pluginRuntimeOwnerId &&
+    pluginRuntimeOwnerId === scope?.pluginId?.trim() &&
+    (scope.pluginOrigin === "bundled" ||
+      scope.pluginTrustedOfficialInstall === true ||
+      pluginRecord?.origin === "bundled" ||
+      pluginRecord?.trustedOfficialInstall === true)
+      ? pluginRuntimeOwnerId
+      : undefined;
+  const signedAgentApprovalOwnerId =
+    hostApprovalRequestEligible &&
+    agentRuntimeIdentity?.approvalOwnerPluginId?.trim() &&
+    context.validateAgentRuntimeApprovalAuthority?.(agentRuntimeIdentity) === true
+      ? agentRuntimeIdentity.approvalOwnerPluginId.trim()
+      : undefined;
+  const scopedOperatorCanRequest =
+    scope?.client?.connect.role === "operator" &&
+    roleScopesAllow({
+      role: "operator",
+      requestedScopes: [WRITE_SCOPE],
+      allowedScopes: scope.client.connect.scopes ?? [],
+    });
+  const retainedOperatorCanRequest =
+    !scope?.client &&
+    signedAgentApprovalOwnerId !== undefined &&
+    operatorRunAuthority !== undefined &&
+    operatorRoleActor?.kind === "operator";
+  if (retainedOperatorCanRequest) {
+    assertAdmittedRunOperatorAuthority(operatorRunAuthority);
+  }
+  const hostApprovalRequestOwnerId =
+    hostApprovalRequestEligible &&
+    roleScopesAllow({
+      role: "operator",
+      requestedScopes: [WRITE_SCOPE],
+      allowedScopes: operatorScopes ?? [],
+    }) &&
+    (scopedOperatorCanRequest || retainedOperatorCanRequest)
+      ? scopedOperatorCanRequest
+        ? (trustedPluginApprovalOwnerId ?? signedAgentApprovalOwnerId)
+        : signedAgentApprovalOwnerId
+      : undefined;
+  // The host grants only request admission; it never gives the plugin reviewer scopes.
+  const requestScopes = hostApprovalRequestOwnerId ? [WRITE_SCOPE] : syntheticScopes;
   const baseSyntheticClient = createSyntheticPluginRuntimeClient({
     ...(operatorAuthority
       ? { authenticatedUserProfile: operatorAuthority.authenticatedUserProfile }
@@ -423,19 +474,22 @@ export function resolveInProcessGatewayDispatch(
     internalDeliveryMediaUrls: options?.internalDeliveryMediaUrls,
     internalDeliverySuppressText: options?.internalDeliverySuppressText,
     ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
+    ...(hostApprovalRequestOwnerId
+      ? { pluginApprovalRequestOwnerId: hostApprovalRequestOwnerId }
+      : {}),
     ...(nodeInvokeApprovalSessionKey ? { nodeInvokeApprovalSessionKey } : {}),
     pluginSubagentRequester: options?.pluginSubagentRequester,
     runtimePluginToolGrant: options?.runtimePluginToolGrant,
     pluginSubagentToolsAllow: options?.pluginSubagentToolsAllow,
     delegatedToolPolicyHandoffId,
     ...(options?.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
-    scopes: syntheticScopes,
+    scopes: requestScopes,
   });
   const scopedStreamClient = options?.nodeInvokeStream ? scope?.client : undefined;
   const syntheticClient = projectPluginRuntimeClientExecution({
     client: baseSyntheticClient,
     streamClient: scopedStreamClient,
-    identity: readInProcessAgentRuntimeIdentity(options),
+    identity: agentRuntimeIdentity,
     nodeInvokeStream: options?.nodeInvokeStream,
   });
   const scopedClient = mergePluginRuntimeClientInternal(

@@ -298,6 +298,10 @@
   white-space: nowrap;
 }
 
+.agents-home__claw-meta .agents-home__claw-installed {
+  color: var(--ok);
+}
+
 .agents-home__claw-skeleton {
   background: var(--bg-accent);
 }

@@ -239,6 +239,12 @@ export function getGatewayToolCallerIdentity(): GatewayToolCallerIdentity | unde
   return gatewayToolCallerStorage.getStore();
 }
 
+/** A retired hosted binding still owns routing and must not fall back to transport. */
+export function hasInProcessGatewayToolCaller(): boolean {
+  const resolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
+  return Boolean(resolver) && resolver?.()?.localEmbedded !== true;
+}
+
 /** Selection is model input; only the turn's host-owned participants grant a target. */
 export async function withGatewayPersonalToolUser<T>(
   user: string | undefined,

@@ -1,5 +1,6 @@
 import { html, type PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
+import { pathForAgentPanel } from "../../app-route-paths.ts";
 import { t } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
 import { AgentRosterElement } from "../../lib/agents/roster-element.ts";
@@ -10,6 +11,8 @@ import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { LAB_FEATURES, resolveLabFeatureState } from "../labs/labs-registry.ts";
 import {
+  hasInstalledClawAgent,
+  installedClawForPackage,
   listClawStatus,
   type ClawCatalogEntry,
   type ClawStatusRecord,
@@ -123,6 +126,25 @@ export class AgentsHomePage extends AgentRosterElement {
     }
   }
 
+  private manageInstalledClaw(record: ClawStatusRecord) {
+    if (this.removePendingAgentId) {
+      return;
+    }
+    this.catalogOpen = false;
+    this.selectedClaw = null;
+    if (hasInstalledClawAgent(record)) {
+      this.context.navigate("agents", {
+        pathname: pathForAgentPanel(record.agentId, null, this.context.basePath),
+      });
+      return;
+    }
+    this.inspectedClawId = record.agentId;
+    this.inspectedGatewayUrl = this.context.gateway.connection.gatewayUrl;
+    void this.updateComplete.then(() => {
+      this.querySelector("#agents-home-claw-inspector")?.scrollIntoView({ block: "start" });
+    });
+  }
+
   protected override willUpdate(changed: PropertyValues<this>) {
     super.willUpdate(changed);
     if (
@@ -136,6 +158,20 @@ export class AgentsHomePage extends AgentRosterElement {
 
   override render() {
     const clawsEnabled = this.clawsEnabled();
+    const canReadInstalledStatus = this.canReadClawStatus();
+    const installedStatusReady =
+      this.gateway.connected &&
+      canReadInstalledStatus &&
+      this.loadedStatusForConnection &&
+      !this.statusLoading &&
+      !this.statusError;
+    const installedStatusError =
+      this.statusError ??
+      (this.gateway.connected && !canReadInstalledStatus
+        ? t("clawsCatalog.installedStatusUnavailable")
+        : null);
+    const canRetryInstalledStatus =
+      this.gateway.connected && canReadInstalledStatus && !this.statusLoading;
     return this.avatars.withActiveRoutes(() => {
       const cards = this.cards().toSorted(
         (a, b) =>
@@ -190,11 +226,25 @@ export class AgentsHomePage extends AgentRosterElement {
           "operator.admin",
         ),
         showExplore: clawsEnabled,
+        installedClaws: this.installedClaws,
+        installedStatusReady,
+        installedStatusError,
+        canRetryInstalledStatus,
+        onRetryInstalledStatus: () => void this.loadInstalledStatus(),
+        onManageClaw: (record) => this.manageInstalledClaw(record),
         onOpenCatalog: () => {
           this.selectedClaw = null;
           this.catalogOpen = true;
         },
         onSelectClaw: (entry) => {
+          if (!installedStatusReady) {
+            return;
+          }
+          const installed = installedClawForPackage(this.installedClaws, entry.packageName);
+          if (installed) {
+            this.manageInstalledClaw(installed);
+            return;
+          }
           this.selectedClaw = entry;
           this.catalogOpen = true;
         },
@@ -203,6 +253,12 @@ export class AgentsHomePage extends AgentRosterElement {
         clawsEnabled && this.catalogOpen
           ? html`<openclaw-claws-catalog-dialog
               .initialEntry=${this.selectedClaw}
+              .installedClaws=${this.installedClaws}
+              .installedStatusReady=${installedStatusReady}
+              .installedStatusError=${installedStatusError}
+              .canRetryInstalledStatus=${canRetryInstalledStatus}
+              .onRetryInstalledStatus=${() => void this.loadInstalledStatus()}
+              .onManage=${(record: ClawStatusRecord) => this.manageInstalledClaw(record)}
               .onClose=${() => {
                 this.catalogOpen = false;
                 this.selectedClaw = null;

@@ -517,8 +517,7 @@ serveOwnedWorkerTasks(
                   database: { db, path: input.databasePath },
                 }),
               };
-            }
-            if (command.type === "claws.inventory" || command.type === "claws.removeFacts") {
+            } else if (command.type === "claws.inventory" || command.type === "claws.removeFacts") {
               return readClawStateCommandInDatabase(db, command);
             }
             if (command.type === "githubPublication.lifecycle") {

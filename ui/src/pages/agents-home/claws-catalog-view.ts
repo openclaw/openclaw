@@ -1,15 +1,19 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { pathForAgentPanel, pathForRoute } from "../../app-route-paths.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { hasCompleteClawDisclosures, renderClawAccessReview } from "./claws-access-review.ts";
 import type {
   ClawAddApplyResult,
   ClawAddPlan,
   ClawCatalogDetail,
   ClawCatalogEntry,
+  ClawStatusRecord,
 } from "./claws-catalog-client.ts";
+import { hasInstalledClawAgent, installedClawForPackage } from "./claws-catalog-client.ts";
 import { hasCompleteClawActionEffects, renderClawActionEffect } from "./claws-effect-review.ts";
 import {
   hasCompleteClawManifestDisclosure,
@@ -22,6 +26,11 @@ import "../../styles/claws-catalog.css";
 
 export type ClawsCatalogViewProps = {
   entries: ClawCatalogEntry[];
+  installedClaws: ClawStatusRecord[];
+  installedStatusReady: boolean;
+  installedStatusError: string | null;
+  canRetryInstalledStatus: boolean;
+  basePath: string;
   query: string;
   loading: boolean;
   error: string | null;
@@ -41,6 +50,8 @@ export type ClawsCatalogViewProps = {
   canAdd: boolean;
   onSearch: (query: string) => void;
   onSelect: (entry: ClawCatalogEntry) => void;
+  onManage: (record: ClawStatusRecord) => void;
+  onRetryInstalledStatus: () => void;
   onBack: () => void;
   onClose: () => void;
   onRetryCatalog: () => void;
@@ -92,22 +103,45 @@ function renderCatalogList(props: ClawsCatalogViewProps) {
       ${repeat(
         props.entries,
         (entry) => entry.packageName,
-        (entry) => html`<li data-claws-entry>
-          <div class="claws-catalog__entry-copy">
-            <h3>${entry.displayName}</h3>
-            ${entry.summary ? html`<p>${entry.summary}</p>` : nothing}
-            <span class="claws-catalog__meta">${entry.packageName}</span>
-          </div>
-          <button
-            type="button"
-            class="btn btn--sm"
-            ?disabled=${!entry.latestVersion}
-            title=${entry.latestVersion ? t("clawsCatalog.review") : t("clawsCatalog.noVersion")}
-            @click=${() => props.onSelect(entry)}
-          >
-            ${t("clawsCatalog.add")}
-          </button>
-        </li>`,
+        (entry) => {
+          const installed = installedClawForPackage(props.installedClaws, entry.packageName);
+          const manageHref = installed
+            ? hasInstalledClawAgent(installed)
+              ? pathForAgentPanel(installed.agentId, null, props.basePath)
+              : pathForRoute("agents-home", props.basePath)
+            : "";
+          return html`<li data-claws-entry>
+            <div class="claws-catalog__entry-copy">
+              <h3>${entry.displayName}</h3>
+              ${entry.summary ? html`<p>${entry.summary}</p>` : nothing}
+              <span class="claws-catalog__meta">${entry.packageName}</span>
+              ${installed ? html`<span class="claws-catalog__installed">${t("clawsCatalog.installed")}</span>` : nothing}
+            </div>
+            ${
+              installed
+                ? html`<a
+                    class="btn btn--sm"
+                    href=${manageHref}
+                    @click=${(event: MouseEvent) => {
+                      if (shouldHandleNavigationClick(event)) {
+                        event.preventDefault();
+                        props.onManage(installed);
+                      }
+                    }}
+                    >${t("clawsCatalog.manage")}</a
+                  >`
+                : html`<button
+                    type="button"
+                    class="btn btn--sm"
+                    ?disabled=${!props.installedStatusReady || !entry.latestVersion}
+                    title=${!props.installedStatusReady ? t("clawsCatalog.addPaused") : entry.latestVersion ? t("clawsCatalog.review") : t("clawsCatalog.noVersion")}
+                    @click=${() => props.onSelect(entry)}
+                  >
+                    ${t("clawsCatalog.add")}
+                  </button>`
+            }
+          </li>`;
+        },
       )}
     </ul>
   `;
@@ -143,6 +177,7 @@ function renderReview(props: ClawsCatalogViewProps) {
   const blocked = Boolean(plan?.blockers.length || plan?.actions.some((action) => action.blocked));
   const effectsComplete = hasCompleteClawActionEffects(plan);
   const canConfirm =
+    props.installedStatusReady &&
     props.canAdd &&
     !props.applying &&
     !props.reviewLoading &&
@@ -380,7 +415,7 @@ function renderReview(props: ClawsCatalogViewProps) {
                 class="btn primary"
                 data-claws-confirm
                 ?disabled=${!canConfirm}
-                title=${!props.canAdd ? t("clawsCatalog.adminRequired") : ""}
+                title=${!props.installedStatusReady ? t("clawsCatalog.addPaused") : !props.canAdd ? t("clawsCatalog.adminRequired") : ""}
                 @click=${props.onConfirm}
               >
                 ${props.applying ? t("clawsCatalog.adding") : t("clawsCatalog.confirm")}
@@ -418,6 +453,28 @@ export function renderClawsCatalogDialog(props: ClawsCatalogViewProps) {
         </button>
       </header>
       <div class="claws-catalog__body">
+        ${
+          !props.installedStatusReady && !props.applyResult && !props.applyUnknown
+            ? html`<div
+                class="callout ${props.installedStatusError ? "danger" : "warn"}"
+                role=${props.installedStatusError ? "alert" : "status"}
+              >
+                ${props.installedStatusError ?? t("clawsCatalog.checkingInstalled")}
+                ${t("clawsCatalog.addPaused")}
+                ${
+                  props.installedStatusError && props.canRetryInstalledStatus
+                    ? html`<button
+                        type="button"
+                        class="btn btn--sm"
+                        @click=${props.onRetryInstalledStatus}
+                      >
+                        ${t("clawsCatalog.retry")}
+                      </button>`
+                    : nothing
+                }
+              </div>`
+            : nothing
+        }
         ${props.selected ? renderReview(props) : renderCatalogList(props)}
       </div>
     </section>

@@ -1,12 +1,14 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentClawPanel } from "../agents/claw-lifecycle-panel.ts";
 import {
   auditUrl,
   auditWarning,
   cleanupAgentsHomePageTest,
   createPage,
   elementName,
+  orphanedClaw,
   setupAgentsHomePageTest,
   workflowOperator,
   workflowPluginReview,
@@ -101,6 +103,75 @@ describe("AgentsHomePage", () => {
     page.querySelector<HTMLElement>(".claws-catalog__close")?.click();
     await vi.waitFor(() => expect(page.querySelector("openclaw-claws-catalog-dialog")).toBeNull());
     expect(page.querySelectorAll("[data-claws-entry]")).toHaveLength(1);
+  });
+
+  it("keeps pending Remove recovery visible when Manage is selected", async () => {
+    const installedWorkflow = {
+      ...orphanedClaw,
+      agentId: "workflow-operator",
+      name: workflowOperator.packageName,
+      version: workflowOperator.latestVersion,
+      status: "complete" as const,
+      agentState: "present" as const,
+      bootstrapState: "present" as const,
+      orphaned: false,
+      resources: [],
+    };
+    const { page, navigate } = createPage({
+      clawsEnabled: true,
+      statusRecords: [orphanedClaw, installedWorkflow],
+    });
+    await vi.waitFor(() =>
+      expect(
+        page.querySelector('[data-claw-unrepresented="orphan-worker"] [data-claw-inspect]'),
+      ).not.toBeNull(),
+    );
+    page
+      .querySelector<HTMLButtonElement>(
+        '[data-claw-unrepresented="orphan-worker"] [data-claw-inspect]',
+      )
+      ?.click();
+    const panel = await vi.waitFor(() => {
+      const result = page.querySelector<AgentClawPanel>("openclaw-agent-claw-panel");
+      expect(result).not.toBeNull();
+      return result!;
+    });
+    panel.onRemovePendingChange?.("orphan-worker", true);
+    await vi.waitFor(() =>
+      expect(
+        page.querySelector<HTMLButtonElement>(
+          '[data-claw-unrepresented="orphan-worker"] [data-claw-inspect]',
+        )?.disabled,
+      ).toBe(true),
+    );
+    page.querySelector<HTMLButtonElement>("[data-claws-open-catalog]")?.click();
+    await vi.waitFor(() =>
+      expect(
+        page.querySelector("openclaw-claws-catalog-dialog [data-claws-entry] a"),
+      ).not.toBeNull(),
+    );
+    page
+      .querySelector<HTMLAnchorElement>("openclaw-claws-catalog-dialog [data-claws-entry] a")
+      ?.click();
+
+    expect(navigate).not.toHaveBeenCalled();
+    expect(page.querySelector("openclaw-claws-catalog-dialog")).not.toBeNull();
+    expect(page.querySelector("openclaw-agent-claw-panel")).toBe(panel);
+    expect(
+      page.querySelector<HTMLButtonElement>(
+        '[data-claw-unrepresented="orphan-worker"] [data-claw-inspect]',
+      )?.disabled,
+    ).toBe(true);
+
+    panel.onRemovePendingChange?.("orphan-worker", false);
+    page
+      .querySelector<HTMLAnchorElement>("openclaw-claws-catalog-dialog [data-claws-entry] a")
+      ?.click();
+    await vi.waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith("agents", {
+        pathname: "/settings/agents/workflow-operator",
+      }),
+    );
   });
 
   it("returns from a selected review to the inline Explore cards", async () => {

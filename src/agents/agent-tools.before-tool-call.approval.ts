@@ -34,7 +34,10 @@ import type {
   HookContext,
   HookOutcome,
 } from "./agent-tools.before-tool-call.types.js";
-import { withGatewayToolApprovalOwner } from "./tools/gateway-caller-context.js";
+import {
+  hasInProcessGatewayToolCaller,
+  withGatewayToolApprovalOwner,
+} from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
@@ -280,6 +283,8 @@ async function requestPluginToolApproval(params: {
       };
     }
 
+    // A hosted in-process request can await its own decision without a second approval-scoped RPC.
+    const singlePhase = hasInProcessGatewayToolCaller();
     gatewayApprovalPhase = "request";
     const requestResult: {
       id?: string;
@@ -313,9 +318,9 @@ async function requestPluginToolApproval(params: {
             turnSourceAccountId: params.ctx?.turnSourceAccountId,
             turnSourceThreadId: params.ctx?.turnSourceThreadId,
             timeoutMs,
-            twoPhase: true,
+            twoPhase: !singlePhase,
           },
-          { expectFinal: false, signal: params.signal },
+          { expectFinal: singlePhase, signal: params.signal },
         ),
     );
     gatewayApprovalPhase = "none";

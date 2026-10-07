@@ -42,10 +42,12 @@ const TEST_ENV_KEYS = [
 describe("plugin.approval.request delivery routing (real gateway)", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   let tempHome: string;
+  let hookExecutionPath: string;
   let url: string;
   let token: string;
   let server: Awaited<ReturnType<typeof startGatewayServer>>;
   let requester: Awaited<ReturnType<typeof connectGatewayClient>>;
+  let toolCaller: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
   let approvalClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
   let connectApprovalClient: () => Promise<Awaited<ReturnType<typeof connectGatewayClient>>>;
 
@@ -59,6 +61,8 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
     tempHome = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-plugin-approval-turn-source-e2e-"),
     );
+    hookExecutionPath = path.join(tempHome, "approval-hook-executions.log");
+    await fs.writeFile(hookExecutionPath, "");
     const stateDir = path.join(tempHome, ".openclaw");
     await fs.mkdir(stateDir, { recursive: true });
     setTestEnvValue("HOME", tempHome);
@@ -95,12 +99,23 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
       JSON.stringify({
         id: "approval-route-probe",
         configSchema: { type: "object", additionalProperties: false },
-        contracts: { tools: ["approval_route_probe"] },
+        contracts: { tools: ["approval_route_probe", "approval_hook_probe"] },
       }),
     );
     await fs.writeFile(
       path.join(pluginDir, "index.cjs"),
       `module.exports = { id: "approval-route-probe", register(api) {
+        api.on("before_tool_call", (event) => {
+          if (event.toolName !== "approval_hook_probe") return;
+          return {
+            requireApproval: {
+              title: "Review hook-gated tool",
+              description: "No effect; generic plugin approval test only",
+              allowedDecisions: ["allow-once", "deny"],
+              timeoutMs: 3_000,
+            },
+          };
+        });
         api.registerTool((ctx) => ({
           name: "approval_route_probe",
           description: "Request a plugin approval from the current tool context",
@@ -124,6 +139,15 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
             return { content: [{ type: "text", text: result.decision ?? "cancelled" }] };
           },
         }), { name: "approval_route_probe" });
+        api.registerTool({
+          name: "approval_hook_probe",
+          description: "Run only after the before_tool_call approval",
+          parameters: { type: "object", properties: {} },
+          execute: async () => {
+            require("node:fs").appendFileSync(${JSON.stringify(hookExecutionPath)}, "executed\\n");
+            return { content: [{ type: "text", text: "HOOK_EXECUTED" }] };
+          },
+        });
       } };`,
     );
     setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "0");
@@ -169,6 +193,9 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
   afterAll(async () => {
     if (approvalClient) {
       await disconnectGatewayClient(approvalClient).catch(() => undefined);
+    }
+    if (toolCaller) {
+      await disconnectGatewayClient(toolCaller).catch(() => undefined);
     }
     await disconnectGatewayClient(requester).catch(() => undefined);
     await server?.close();
@@ -219,7 +246,15 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
       await disconnectGatewayClient(approvalClient);
       approvalClient = undefined;
     }
+    toolCaller = await connectGatewayClient({
+      url,
+      token,
+      clientDisplayName: "write-only plugin tool caller",
+      scopes: [WRITE_SCOPE],
+      timeoutMs: 60_000,
+    });
     const decided = createDeferredCore();
+    // The reviewer shares the helper's default test device identity with the tool caller.
     const reviewer = await connectGatewayClient({
       url,
       token,
@@ -240,7 +275,7 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
       timeoutMs: 60_000,
     });
     try {
-      const result = await requester.request("tools.invoke", {
+      const result = await toolCaller.request("tools.invoke", {
         name: "approval_route_probe",
         agentId: "main",
         sessionKey: "main",
@@ -274,7 +309,7 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
         timeoutMs: 60_000,
       });
       try {
-        const result = await requester.request("tools.invoke", {
+        const result = await toolCaller.request("tools.invoke", {
           name: "approval_route_probe",
           agentId: "main",
           sessionKey: "main",
@@ -288,6 +323,69 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
       } finally {
         await disconnectGatewayClient(untrusted);
       }
+    }
+  });
+
+  it("honors a generic plugin hook approval from a write-only caller", async () => {
+    const caller = await connectGatewayClient({
+      url,
+      token,
+      clientDisplayName: "write-only hook caller",
+      scopes: [WRITE_SCOPE],
+      requestTimeoutMs: 15_000,
+      timeoutMs: 60_000,
+    });
+    let decision: "allow-once" | "deny" = "allow-once";
+    let decided = createDeferredCore();
+    const reviewer = await connectGatewayClient({
+      url,
+      token,
+      clientDisplayName: "same-device hook reviewer",
+      scopes: [APPROVALS_SCOPE],
+      caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
+      onEvent: (event) => {
+        const payload = event.payload as
+          | { id?: unknown; request?: { toolName?: unknown } }
+          | undefined;
+        if (
+          event.event !== "plugin.approval.requested" ||
+          payload?.request?.toolName !== "approval_hook_probe" ||
+          typeof payload.id !== "string"
+        ) {
+          return;
+        }
+        void reviewer
+          .request("plugin.approval.resolve", { id: payload.id, decision })
+          .then(() => decided.resolve(), decided.reject);
+      },
+      timeoutMs: 60_000,
+    });
+    const invoke = () =>
+      caller.request("tools.invoke", {
+        name: "approval_hook_probe",
+        agentId: "main",
+        sessionKey: "main",
+        args: {},
+        confirm: true,
+      });
+    try {
+      const allowed = await invoke();
+      expect(allowed).toMatchObject({
+        ok: true,
+        output: { content: [{ type: "text", text: "HOOK_EXECUTED" }] },
+      });
+      await decided.promise;
+      expect(await fs.readFile(hookExecutionPath, "utf8")).toBe("executed\n");
+
+      decision = "deny";
+      decided = createDeferredCore();
+      const denied = await invoke();
+      expect(denied).toMatchObject({ ok: false, requiresApproval: true });
+      await decided.promise;
+      expect(await fs.readFile(hookExecutionPath, "utf8")).toBe("executed\n");
+    } finally {
+      await disconnectGatewayClient(reviewer);
+      await disconnectGatewayClient(caller);
     }
   });
 });

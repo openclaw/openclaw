@@ -40,7 +40,10 @@ import {
 import type { DeviceIdentity } from "../../infra/device-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
-import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  hasInProcessGatewayToolCaller,
+} from "./gateway-caller-context.js";
 import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { getGatewaySessionSpawnParentExecutionIdentityToken } from "./gateway-session-spawn-execution-identity.js";
 import {
@@ -610,12 +613,10 @@ export async function resolveMessageActionAgentRuntimeIdentity(
 
 /** Explicit destinations remain transport calls; retired hosted bindings must reject locally. */
 export function shouldUseInProcessGatewayTool(opts: GatewayCallOptions): boolean {
-  const resolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
   return (
-    Boolean(resolver) &&
     !trimToUndefined(opts.gatewayUrl) &&
     !trimToUndefined(opts.gatewayToken) &&
-    resolver?.()?.localEmbedded !== true
+    hasInProcessGatewayToolCaller()
   );
 }
 
