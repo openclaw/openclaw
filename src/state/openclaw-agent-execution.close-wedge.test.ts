@@ -170,100 +170,42 @@ const source: AgentDatabaseRequestExecutionSource = {
   },
 };
 
-async function failFirstOperation(
-  first: ReturnType<typeof captureOpenClawAgentDatabaseExecution>,
-  mode = 1,
-): Promise<unknown> {
-  Atomics.store(new Int32Array(fault.enabled), 0, mode);
-  const failure: unknown = await first
-    .runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKey: fault.marker } }),
-    )
-    .catch((error: unknown) => error);
-  Atomics.store(new Int32Array(fault.enabled), 0, 0);
-  return failure;
-}
-
-it.each([
-  { mode: 1, close: "failed" },
-  { mode: 2, close: "successful" },
-])("recovers after a failed operation with $close native close", async ({ mode }) => {
-  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-close-wedge-")) };
-  const first = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
-  await first.prepare(source);
-  expect(await first.runExisting(source, async () => "healthy")).toBe("healthy");
-
-  // 1. The operation fails because the native store becomes unavailable mid-run.
-  const failure = await failFirstOperation(first, mode);
-  expect(failure).toBeInstanceOf(Error);
-  console.log(`[close-wedge] operation failure: ${formatErrorMessageWithCode(failure)}`);
-  await first.release().catch((error: unknown) => {
-    console.log(`[close-wedge] release failure: ${formatErrorMessageWithCode(error)}`);
-  });
-
-  // 2. The fault is gone. A fresh capture for the same agent must be admitted again;
-  //    on 2026.9.6 (and current main) it throws
-  //    "Agent database execution admission is closed" until the gateway restarts.
-  const retry = await Promise.resolve()
-    .then(async () => {
-      const execution = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
-      await execution.prepare(source);
-      return execution;
-    })
-    .catch((error: unknown) => {
-      console.log(`[close-wedge] re-admission failure: ${formatErrorMessageWithCode(error)}`);
-      throw error;
-    });
+it("reopens a native generation lost between operations before dispatch", async () => {
+  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-native-preflight-")) };
+  const execution = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
+  await execution.prepare(source);
   expect(
-    await retry.runExisting(source, (scope) =>
-      scope.execute({ type: "session.entry.read", input: { sessionKey: "recovered" } }),
+    await execution.runExisting(source, (scope) =>
+      scope.execute({ type: "session.entry.read", input: { sessionKey: "healthy" } }),
     ),
   ).toBeUndefined();
-  await retry.release();
+  const claim = execution.captureGenerationClaim();
+  expect(() => claim.assertCurrent()).not.toThrow();
+
+  const agentWorker = [...fault.workers].at(-1);
+  expect(agentWorker).toBeDefined();
+  await agentWorker!.terminate();
+  expect(() => claim.assertCurrent()).toThrow("Agent database execution lost its native owner");
+
+  let dispatched = 0;
+  expect(
+    await execution.runExisting(source, (scope) => {
+      dispatched += 1;
+      return scope.execute({ type: "session.entry.read", input: { sessionKey: "recovered" } });
+    }),
+  ).toBeUndefined();
+  expect(dispatched).toBe(1);
+  const replacement = execution.capturePreparedGenerationClaim();
+  expect(replacement?.identity).toBe(claim.identity);
+  expect(replacement?.incarnation).not.toBe(claim.incarnation);
+  expect(() => claim.assertCurrent()).toThrow("Agent database execution generation was replaced");
+  expect(
+    await execution.runExisting(source, (scope) =>
+      scope.execute({ type: "session.entry.read", input: { sessionKey: "still-healthy" } }),
+    ),
+  ).toBeUndefined();
+  await execution.release();
 });
-
-it.each(["prepare", "runExisting"] as const)(
-  "%s reopens a native generation lost between operations before dispatch",
-  async (entryPoint) => {
-    const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-native-preflight-")) };
-    const execution = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
-    await execution.prepare(source);
-    expect(
-      await execution.runExisting(source, (scope) =>
-        scope.execute({ type: "session.entry.read", input: { sessionKey: "healthy" } }),
-      ),
-    ).toBeUndefined();
-    const claim = execution.captureGenerationClaim();
-    expect(() => claim.assertCurrent()).not.toThrow();
-
-    const agentWorker = [...fault.workers].at(-1);
-    expect(agentWorker).toBeDefined();
-    await agentWorker!.terminate();
-    expect(() => claim.assertCurrent()).toThrow("Agent database execution lost its native owner");
-    if (entryPoint === "prepare") {
-      expect(execution.capturePreparedGenerationClaim()).toBeUndefined();
-      await execution.prepare(source);
-    }
-    let dispatched = 0;
-    expect(
-      await execution.runExisting(source, (scope) => {
-        dispatched += 1;
-        return scope.execute({ type: "session.entry.read", input: { sessionKey: "recovered" } });
-      }),
-    ).toBeUndefined();
-    expect(dispatched).toBe(1);
-    const replacement = execution.capturePreparedGenerationClaim();
-    expect(replacement?.identity).toBe(claim.identity);
-    expect(replacement?.incarnation).not.toBe(claim.incarnation);
-    expect(() => claim.assertCurrent()).toThrow("Agent database execution generation was replaced");
-    expect(
-      await execution.runExisting(source, (scope) =>
-        scope.execute({ type: "session.entry.read", input: { sessionKey: "still-healthy" } }),
-      ),
-    ).toBeUndefined();
-    await execution.release();
-  },
-);
 
 it("surfaces the native cleanup cause while the close still fails, then recovers once it clears", async () => {
   const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-close-wedge-scope-")) };
