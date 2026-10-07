@@ -48,10 +48,14 @@ export function createStateDatabaseCacheAdmission(owner: CacheAdmissionOwner) {
       }
       throwSqliteLifecycleErrors(errors, "Terminal shared-state failure cleanup failed");
     },
-    refresh<T>(
-      database: CachedOpenClawStateDatabase,
-      operation: () => T,
-    ): { value: T } | undefined {
+    read<T>(pathname: string, operation: (database: OpenClawStateDatabase) => T): T | undefined {
+      const database = owner.cachedDatabases.get(pathname);
+      if (!database) {
+        return undefined;
+      }
+      if (!database.db.isOpen) {
+        return operation(database);
+      }
       let admitted = false;
       try {
         return runSqliteReadOperationSync(database.db, () => {
@@ -61,7 +65,7 @@ export function createStateDatabaseCacheAdmission(owner: CacheAdmissionOwner) {
             database.schemaFacts = facts;
           }
           admitted = true;
-          return { value: operation() };
+          return operation(database);
         });
       } catch (error) {
         // Only freshness failures belong to admission; the consuming owner handles its read.

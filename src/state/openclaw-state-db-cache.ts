@@ -350,10 +350,7 @@ function publishOpenClawStateDatabase(
   return database;
 }
 
-function getCachedOpenClawStateDatabase(
-  pathname: string,
-  options?: { readOnly: true },
-): OpenClawStateDatabase | undefined {
+function getCachedOpenClawStateDatabase(pathname: string, options?: { readOnly: true }) {
   return withCachedOpenClawStateDatabase(pathname, options, (database) => database);
 }
 
@@ -374,18 +371,13 @@ function withCachedOpenClawStateDatabase<T>(
   if (runtimeFailure) {
     throw runtimeFailure;
   }
-  const database = cachedDatabases.get(path.resolve(pathname));
-  if (!database) {
-    return undefined;
-  }
-  const consume = () => {
+  return cacheAdmission.read(path.resolve(pathname), (database) => {
     if (borrowers.get(database.db)?.retiring) {
       throw new Error(`OpenClaw state database native borrower cleanup is pending: ${pathname}`);
     }
     touchStateDatabase(database);
     return operation(database);
-  };
-  return database.db.isOpen ? cacheAdmission.refresh(database, consume)?.value : consume();
+  });
 }
 
 function getOpenClawStateDatabaseIfOpenAtPath(pathname: string): OpenClawStateDatabase | undefined {

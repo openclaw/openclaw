@@ -162,7 +162,7 @@ it("reuses unchanged binding rows while local updates, expiry, and returned obje
       clock.mockReturnValue(150);
       expect(inspect()).toEqual([null, added]);
       expect(executions.counts.selection).toBe(readsBeforeExpiry);
-      expect(inspectCurrentConversationBindingRecords([...refs].reverse())).toEqual([added, null]);
+      expect(inspectCurrentConversationBindingRecords(refs.toReversed())).toEqual([added, null]);
 
       deleteCurrentConversationBindingRecordsBySession(added.targetSessionKey, undefined, false);
       expect(inspect()).toEqual([null, null]);
