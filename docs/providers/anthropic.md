@@ -141,7 +141,9 @@ OpenClaw release:
         native login tokens. Claude owns the login and token refresh lifecycle.
         Gateway startup shares the native login availability check across agent
         workspaces using the same config and environment. Explicit catalog/auth
-        captures recheck availability for their own generation.
+        captures recheck availability for their own generation. Model lists also
+        recheck it in the background at most once a minute, so `claude auth login`
+        or logout after Gateway startup reaches the model picker without a restart.
         New sessions select saved subscription credentials by account order and
         use protected file-descriptor forwarding, including tokens saved with
         `openclaw models auth paste-token --provider anthropic`. API keys saved for

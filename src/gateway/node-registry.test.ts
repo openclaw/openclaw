@@ -686,6 +686,7 @@ describe("gateway/node-registry", () => {
         capacity: { total: 2, available: 0 },
         environmentSession: 1,
         capturedExecPolicy: true,
+        promptContext: 1,
       });
       expect(transport.isCurrent(proof, true)).toBe(false);
       for (const command of [
@@ -779,6 +780,51 @@ describe("gateway/node-registry", () => {
         expect(registry.listConnected()).toHaveLength(1);
         expect(isDispatchAuthorized).not.toHaveBeenCalled();
       }
+    },
+  );
+
+  it.each(["prompt-context", "authority"] as const)(
+    "rechecks %s after the private launch pairing await",
+    async (closed) => {
+      const pairing = createDeferred<{ identity: string; generation: string }>();
+      const currentPairing = { identity: "identity-a", generation: "generation-a" };
+      const resolveCurrentPairingState = vi.fn().mockResolvedValue(currentPairing);
+      const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
+        createPrivateRegistry({ resolveCurrentPairingState });
+      const frames: string[] = [];
+      registerNodeSession(
+        registry,
+        makeClient("conn-1", "node-1", frames, { clientId: GATEWAY_CLIENT_IDS.NODE_HOST }),
+        pairingA,
+      );
+      const workerHost = {
+        enabled: true as const,
+        capacity: { total: 1, available: 1 },
+        environmentSession: 1 as const,
+        capturedExecPolicy: true as const,
+        promptContext: 1 as const,
+      };
+      publishRunner(registry, workerHost);
+      const proof = expectDefined((await transport.listCurrentNodes())[0], "runner proof");
+      resolveCurrentPairingState.mockImplementationOnce(() => pairing.promise);
+      let authorized = true;
+      const dispatched = vi.fn();
+      const outcome = transport.invoke({
+        node: proof,
+        command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+        params: {},
+        isDispatchAuthorized: () => authorized,
+        onDispatchReady: dispatched,
+      });
+      if (closed === "prompt-context") {
+        publishRunner(registry, { ...workerHost, promptContext: undefined });
+      } else {
+        authorized = false;
+      }
+      pairing.resolve(currentPairing);
+      await expect(outcome).resolves.toMatchObject({ ok: false });
+      expect(frames).toEqual([]);
+      expect(dispatched).not.toHaveBeenCalled();
     },
   );
 

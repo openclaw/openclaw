@@ -1,5 +1,3 @@
-// Plugin host hook methods expose plugin UI descriptors and validate plugin
-// session action payload/result JSON against declared schemas.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -33,19 +31,6 @@ import { defineValidatedGatewayHandler } from "./validation.js";
 
 const log = createSubsystemLogger("gateway/plugin-host-hooks");
 
-/** Ensures plugin action result extension fields stay JSON-compatible on the wire. */
-function validatePluginSessionActionJsonFields(
-  result: Record<string, unknown>,
-): string | undefined {
-  for (const field of ["result", "reply", "details"] as const) {
-    if (result[field] !== undefined && !isPluginJsonValue(result[field])) {
-      return `plugin session action ${field} must be JSON-compatible`;
-    }
-  }
-  return undefined;
-}
-
-/** Gateway handlers for plugin-declared Control UI descriptors and session actions. */
 export const pluginHostHookHandlers: GatewayRequestHandlers = {
   "plugins.uiDescriptors": defineValidatedGatewayHandler(
     "plugins.uiDescriptors",
@@ -242,9 +227,21 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        const jsonFieldError = result ? validatePluginSessionActionJsonFields(result) : undefined;
-        if (jsonFieldError) {
-          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, jsonFieldError));
+        const jsonResult: Record<string, unknown> | undefined = result || undefined;
+        const invalidJsonField =
+          jsonResult &&
+          ["result", "reply", "details"].find(
+            (field) => jsonResult[field] !== undefined && !isPluginJsonValue(jsonResult[field]),
+          );
+        if (invalidJsonField) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `plugin session action ${invalidJsonField} must be JSON-compatible`,
+            ),
+          );
           return;
         }
         if (!wireResult.ok) {

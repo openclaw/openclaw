@@ -566,7 +566,8 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         )
       : resolveCatalogTriggerStatus(catalogState, modelOptions.length, selectionKnown);
   const hasResolvableModel =
-    catalogState.status === "ready" &&
+    catalogState.hasSnapshot &&
+    (catalogState.status === "ready" || catalogState.status === "error") &&
     activeModelOption?.disabled !== true &&
     modelOptions.some((option) => !option.disabled);
   const busy = props.sending || Boolean(props.activeRunId) || props.stream !== null;

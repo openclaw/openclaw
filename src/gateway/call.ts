@@ -1,5 +1,3 @@
-// Gateway RPC call helper.
-// Builds a GatewayClient, resolves auth/scopes, and performs one request.
 import { randomUUID } from "node:crypto";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -27,7 +25,6 @@ import { resolveConfigPath, resolveGatewayPort, resolveStateDir } from "../confi
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
-import type { DeviceIdentity } from "../infra/device-identity.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { extractErrorCodeOrErrno } from "../infra/error-graph-internal.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
@@ -423,43 +420,6 @@ function resolveGatewayCallAuth(config: OpenClawConfig) {
   });
 }
 
-async function ensureGatewayCallCanAuthenticate(params: {
-  opts: CallGatewayBaseOptions;
-  context: ResolvedGatewayCallContext;
-  token?: string;
-  password?: string;
-  deviceIdentity: DeviceIdentity | null;
-  deviceAuthScope?: string;
-  storedAuth?: DeviceAuthEntry | null;
-}): Promise<void> {
-  const resolvedAuth = resolveGatewayCallAuth(params.context.config);
-  const authMode = resolvedAuth.mode;
-  if (authMode !== "token" && authMode !== "password") {
-    return;
-  }
-  if (params.token || params.password || params.opts.approvalRuntimeToken) {
-    return;
-  }
-  if (resolvedAuth.allowTailscale) {
-    return;
-  }
-  const storedAuth =
-    params.storedAuth === undefined
-      ? await loadStoredOperatorDeviceAuthToken(
-          params.deviceIdentity,
-          params.deviceAuthScope,
-          params.opts.sharedStateMode,
-        )
-      : params.storedAuth;
-  if (storedAuth?.token) {
-    return;
-  }
-  throw new GatewayCredentialsRequiredError({
-    method: params.opts.method,
-    configPath: params.context.configPath,
-  });
-}
-
 export type { ExplicitGatewayAuth } from "./credentials.js";
 
 export { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth };
@@ -726,15 +686,29 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       );
     }
   }
-  await ensureGatewayCallCanAuthenticate({
-    opts,
-    context,
-    token,
-    password,
-    deviceIdentity,
-    deviceAuthScope,
-    storedAuth,
-  });
+  const resolvedAuth = resolveGatewayCallAuth(context.config);
+  if (
+    (resolvedAuth.mode === "token" || resolvedAuth.mode === "password") &&
+    !token &&
+    !password &&
+    !opts.approvalRuntimeToken &&
+    !resolvedAuth.allowTailscale
+  ) {
+    const availableAuth =
+      storedAuth === undefined
+        ? await loadStoredOperatorDeviceAuthToken(
+            deviceIdentity,
+            deviceAuthScope,
+            opts.sharedStateMode,
+          )
+        : storedAuth;
+    if (!availableAuth?.token) {
+      throw new GatewayCredentialsRequiredError({
+        method: opts.method,
+        configPath: context.configPath,
+      });
+    }
+  }
   try {
     await prepareGatewayClientDeviceAuth(
       {

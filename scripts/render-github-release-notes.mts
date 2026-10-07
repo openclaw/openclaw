@@ -338,11 +338,9 @@ export function dedicatedSectionVersionForTag(tag: unknown) {
   return /-(?:alpha\.)?[1-9][0-9]*$/u.test(taggedVersion) ? taggedVersion : undefined;
 }
 
-function releaseNotesSectionForTag(changelog: unknown, version: unknown, tag: unknown) {
+function releaseNotesSectionForTag(changelog: string, version: string, tag: string) {
   // Alpha and correction tags prefer their own exact heading when the
   // changelog carries one; otherwise they fall back to the base version.
-  assertString(tag, "tag");
-  assertString(version, "version");
   const dedicatedVersion = dedicatedSectionVersionForTag(tag);
   if (dedicatedVersion && dedicatedVersion !== version) {
     try {
@@ -408,7 +406,6 @@ export function renderGithubReleaseNotes({
   assertString(tag, "tag");
   assertString(version, "version");
   validateRepository(repository);
-  validateTag(tag);
   const tagVersion = releaseNotesVersionForTag(tag);
   if (tagVersion !== version) {
     fail(`release tag ${tag} requires CHANGELOG.md version ${tagVersion}, got ${version}`);

@@ -24,7 +24,9 @@
   gap: 6px;
   min-width: 0;
 }
-.agent-chat__composer-notices:not(:has(> *)) {
+.agent-chat__composer-notices:not(
+  :has(> :not(openclaw-chat-child-attention), > openclaw-chat-child-attention > *)
+) {
   display: none;
 }
 
@@ -59,7 +61,8 @@
       openclaw-plugin-contributions,
       openclaw-chat-outbox-recovery
     ),
-    > .agent-chat__composer-notices > *,
+    > .agent-chat__composer-notices > :not(openclaw-chat-child-attention),
+    > .agent-chat__composer-notices > openclaw-chat-child-attention > *,
     > openclaw-plugin-contributions > *,
     > openclaw-chat-outbox-recovery > *
   )
@@ -125,7 +128,7 @@
 .agent-chat__input,
 .agent-chat__disabled-banner.callout,
 .agent-chat__composer-notices
-  > :is(
+  :is(
     .chat-composer-neighbor-card,
     .agent-chat__composer-errors--standalone,
     .agent-chat__talk-status.callout
@@ -136,10 +139,6 @@
 
 .agent-chat__input {
   --chat-box-inset: 8px;
-  /* Height of every control on the composer's input row. The row bottom-aligns
-     so it can follow a growing textarea, which only reads as one axis while all
-     its children share this box. */
-  --chat-composer-control-height: 36px;
   --chat-composer-surface: var(--popover);
   --chat-composer-secondary: color-mix(
     in srgb,
@@ -884,13 +883,10 @@
   height: 12px;
 }
 
-.chat-send-btn--voice-live:hover:not(:disabled) .chat-send-btn__voice-stop-glyph,
-.chat-send-btn--voice-live:focus-visible .chat-send-btn__voice-stop-glyph {
-  opacity: 1;
-}
-
 /* Errored Talk session: the meter is gone, so the stop glyph stays visible;
    the alert row above owns the error message. */
+.chat-send-btn--voice-live:hover:not(:disabled) .chat-send-btn__voice-stop-glyph,
+.chat-send-btn--voice-live:focus-visible .chat-send-btn__voice-stop-glyph,
 .chat-send-btn.chat-send-btn--voice-error .chat-send-btn__voice-stop-glyph {
   opacity: 1;
 }
@@ -898,7 +894,6 @@
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .agent-chat__input {
     --chat-box-inset: 4px;
-    --chat-composer-control-height: 44px;
     /* Touch targets, not chrome: the composer's own control rules all read this
        token, so raising it here resizes every button on the surface at once. */
     --chat-composer-control-size: 44px;

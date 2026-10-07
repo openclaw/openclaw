@@ -1,4 +1,3 @@
-// Gateway payload helpers for E2E CLI and WebSocket assertions.
 function hasOwnEnvelopeField(frame, field) {
   return (
     ((typeof frame === "object" && frame !== null) || typeof frame === "function") &&

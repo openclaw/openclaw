@@ -1,4 +1,3 @@
-// Gateway RPC handler for the tool catalog shown by clients and Control UI.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
