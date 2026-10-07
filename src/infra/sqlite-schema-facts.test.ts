@@ -94,10 +94,10 @@ describe("admitted SQLite schema facts", () => {
     const database = openDatabase("CREATE TABLE session_nodes (id INTEGER)");
     const schemaMutation = vi.fn();
     registerSqliteSchemaMutationListener(database, schemaMutation);
-    const nativeExec = DatabaseSync.prototype.exec;
+    const nativeExec = DatabaseSync.prototype.exec.bind(database);
     const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementationOnce((sql) => {
       database.exec("CREATE TEMP TABLE unexpected (id INTEGER)");
-      return nativeExec.call(database, sql);
+      return nativeExec(sql);
     });
     try {
       readSessionNodesGeneration(database);
