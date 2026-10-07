@@ -207,6 +207,8 @@ export function createPage(
     missingPluginReview?: boolean;
     missingDisclosure?: boolean;
     malformedDisclosure?: boolean;
+    missingManifestDisclosure?: boolean;
+    manifestJson?: string;
     catalogPluginCount?: number;
     rosterErrorAfterAdd?: boolean;
     statusErrorAfterAdd?: boolean;
@@ -329,7 +331,40 @@ export function createPage(
         schemaVersion: "openclaw.clawsGatewayPlan.v1",
         operation: "add",
         planIntegrity: "sha256:reviewed-plan",
-        target: { agentId: "workflow-operator", name: "Workflow Operator", targetVersion: "1.2.0" },
+        target: {
+          agentId: "workflow-operator",
+          name: "@openclaw/workflow-operator",
+          targetVersion: "1.2.0",
+        },
+        ...(options.missingManifestDisclosure
+          ? {}
+          : {
+              manifestDisclosure: {
+                source: {
+                  packageName: "@openclaw/workflow-operator",
+                  version: "1.2.0",
+                  integrity: `sha256:${"a".repeat(64)}`,
+                  byteLength: 123,
+                },
+                manifestJson:
+                  options.manifestJson ??
+                  JSON.stringify({
+                    schemaVersion: 1,
+                    agent: { id: "workflow-operator", name: "Workflow Operator" },
+                    workspace: { bootstrapFiles: {}, files: [] },
+                    packages: [
+                      {
+                        kind: "plugin",
+                        source: "clawhub",
+                        ref: "@openclaw/workflow-tools",
+                        version: "1.2.0",
+                      },
+                    ],
+                    mcpServers: {},
+                    cronJobs: [],
+                  }),
+              },
+            }),
         actions: [
           {
             kind: "agent",

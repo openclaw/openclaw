@@ -98,6 +98,29 @@ export const updatePlan: ClawUpdatePlan = {
     currentVersion: installed.version,
     targetVersion: "1.3.0",
   },
+  manifestDisclosure: {
+    source: {
+      packageName: installed.name,
+      version: "1.3.0",
+      integrity: `sha256:${"a".repeat(64)}`,
+      byteLength: 123,
+    },
+    manifestJson: JSON.stringify({
+      schemaVersion: 1,
+      agent: { id: "workflow", name: "Workflow Operator" },
+      workspace: { bootstrapFiles: {}, files: [] },
+      packages: [
+        {
+          kind: "plugin",
+          source: "clawhub",
+          ref: "@openclaw/workflow-tools",
+          version: "1.3.0",
+        },
+      ],
+      mcpServers: {},
+      cronJobs: [],
+    }),
+  },
   actions: [
     {
       kind: "plugin",
@@ -209,6 +232,12 @@ export function mount(
     ({
       ...updatePlan,
       target: { ...updatePlan.target, targetVersion: latestVersion },
+      manifestDisclosure: updatePlan.manifestDisclosure
+        ? {
+            ...updatePlan.manifestDisclosure,
+            source: { ...updatePlan.manifestDisclosure.source, version: latestVersion },
+          }
+        : undefined,
     } satisfies ClawUpdatePlan);
   const request = createGatewayRequestMock(async (method) => {
     if (method === "claws.status") {

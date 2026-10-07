@@ -1,7 +1,8 @@
-import { realpathSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildGatewayClawAddPlan, projectGatewayClawAddPlan } from "./gateway-add-plan.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { readClawManifestFile } from "./reader.js";
@@ -9,6 +10,7 @@ import { readClawManifestFile } from "./reader.js";
 const preflightClawPackage = vi.hoisted(() => vi.fn(async () => ({ ok: false, code: "fixture" })));
 vi.mock("./packages.js", () => ({ preflightClawPackage }));
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
 
 describe("Gateway Claw Add plan", () => {
@@ -132,6 +134,167 @@ describe("Gateway Claw Add plan", () => {
     expect(plan.agent.workspace).toBe(
       path.join(stateDir, "workspace-claw-gateway-state-root-fixture"),
     );
+  });
+
+  it("reviews a fresh sibling when Remove retained the previous workspace", async () => {
+    const stateDir = tempDirs.make("openclaw-claws-gateway-readd-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const retained = path.join(stateDir, "workspace-workflow-operator");
+    mkdirSync(retained);
+    writeFileSync(path.join(retained, "USER.md"), "retained operator note");
+    const source = await readClawManifestFile(
+      path.resolve("src/claws/fixtures/workspace-agent.claw.json"),
+    );
+    expect(source.ok).toBe(true);
+    if (!source.ok) {
+      return;
+    }
+    const config = { agents: { list: [] } };
+
+    const plan = await buildGatewayClawAddPlan(source, {
+      config,
+      agentId: "workflow-operator",
+      sourceMcpServers: {},
+    });
+    const projected = projectGatewayClawAddPlan(
+      plan,
+      source.source.packageRoot,
+      {
+        riskAcknowledgementRequired: false,
+        trustRecord: {
+          clawhubTrustDisposition: "clean",
+          clawhubTrustCheckedAt: "2026-09-30T00:00:00.000Z",
+        },
+      },
+      config,
+    );
+
+    expect(plan.agent.workspace).toBe(`${retained}-2`);
+    expect(plan.blockers.map((blocker) => blocker.code)).not.toContain("workspace_collision");
+    expect(projected.target.workspace).toBe(`${retained}-2`);
+    expect(readFileSync(path.join(retained, "USER.md"), "utf8")).toBe("retained operator note");
+  });
+
+  it("skips an occupied sibling without merging into either workspace", async () => {
+    const stateDir = tempDirs.make("openclaw-claws-gateway-occupied-sibling-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const base = path.join(stateDir, "workspace-workflow-operator");
+    mkdirSync(base);
+    mkdirSync(`${base}-2`);
+    const source = await readClawManifestFile(
+      path.resolve("src/claws/fixtures/workspace-agent.claw.json"),
+    );
+    expect(source.ok).toBe(true);
+    if (!source.ok) {
+      return;
+    }
+
+    const plan = await buildGatewayClawAddPlan(source, {
+      config: { agents: { list: [] } },
+      agentId: "workflow-operator",
+      sourceMcpServers: {},
+    });
+
+    expect(plan.agent.workspace).toBe(`${base}-3`);
+    expect(plan.blockers.map((blocker) => blocker.code)).not.toContain("workspace_collision");
+  });
+
+  it("keeps looking past many retained siblings", async () => {
+    const stateDir = tempDirs.make("openclaw-claws-gateway-many-siblings-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const base = path.join(stateDir, "workspace-workflow-operator");
+    for (let index = 1; index <= 1024; index += 1) {
+      mkdirSync(index === 1 ? base : `${base}-${index}`);
+    }
+    const source = await readClawManifestFile(
+      path.resolve("src/claws/fixtures/workspace-agent.claw.json"),
+    );
+    expect(source.ok).toBe(true);
+    if (!source.ok) {
+      return;
+    }
+
+    const plan = await buildGatewayClawAddPlan(source, {
+      config: { agents: { list: [] } },
+      agentId: "workflow-operator",
+      sourceMcpServers: {},
+    });
+
+    expect(plan.agent.workspace).toBe(`${base}-1025`);
+    expect(plan.blockers.map((blocker) => blocker.code)).not.toContain("workspace_collision");
+  });
+
+  it("skips a sibling claimed by another configured agent even when absent on disk", async () => {
+    const stateDir = tempDirs.make("openclaw-claws-gateway-agent-sibling-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const base = path.join(stateDir, "workspace-workflow-operator");
+    mkdirSync(base);
+    const source = await readClawManifestFile(
+      path.resolve("src/claws/fixtures/workspace-agent.claw.json"),
+    );
+    expect(source.ok).toBe(true);
+    if (!source.ok) {
+      return;
+    }
+
+    const plan = await buildGatewayClawAddPlan(source, {
+      config: { agents: { entries: { researcher: { workspace: `${base}-2` } } } },
+      agentId: "workflow-operator",
+      sourceMcpServers: {},
+    });
+
+    expect(plan.agent.workspace).toBe(`${base}-3`);
+    expect(plan.blockers.map((blocker) => blocker.code)).not.toContain("workspace_collision");
+  });
+
+  it("changes plan integrity when the reviewed sibling becomes occupied", async () => {
+    const stateDir = tempDirs.make("openclaw-claws-gateway-sibling-drift-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const base = path.join(stateDir, "workspace-workflow-operator");
+    mkdirSync(base);
+    const source = await readClawManifestFile(
+      path.resolve("src/claws/fixtures/workspace-agent.claw.json"),
+    );
+    expect(source.ok).toBe(true);
+    if (!source.ok) {
+      return;
+    }
+    const config = { agents: { list: [] } };
+    const trust = {
+      riskAcknowledgementRequired: false,
+      trustRecord: {
+        clawhubTrustDisposition: "clean" as const,
+        clawhubTrustCheckedAt: "2026-09-30T00:00:00.000Z",
+      },
+    };
+    const reviewed = await buildGatewayClawAddPlan(source, {
+      config,
+      agentId: "workflow-operator",
+      sourceMcpServers: {},
+    });
+    const reviewedProjection = projectGatewayClawAddPlan(
+      reviewed,
+      source.source.packageRoot,
+      trust,
+      config,
+    );
+
+    mkdirSync(`${base}-2`);
+    const current = await buildGatewayClawAddPlan(source, {
+      config,
+      agentId: "workflow-operator",
+      sourceMcpServers: {},
+    });
+    const currentProjection = projectGatewayClawAddPlan(
+      current,
+      source.source.packageRoot,
+      trust,
+      config,
+    );
+
+    expect(reviewedProjection.target.workspace).toBe(`${base}-2`);
+    expect(currentProjection.target.workspace).toBe(`${base}-3`);
+    expect(currentProjection.planIntegrity).not.toBe(reviewedProjection.planIntegrity);
   });
 
   it("keeps a new Claw workspace outside the default agent workspace", async () => {

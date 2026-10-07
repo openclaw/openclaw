@@ -155,6 +155,30 @@ describe("preflightClawPackage isolated plugin inspection", () => {
     });
   });
 
+  it("rejects a disabled installed plugin before treating a version conflict as upgradable", async () => {
+    await expect(
+      preflightClawPackage(pluginPackage, "/tmp/workspace", {
+        config: { plugins: { entries: { audit: { enabled: false } } } },
+        deps: {
+          preflightPlugin: vi.fn(async () => ({
+            ok: false as const,
+            code: "plugin_version_conflict" as const,
+            error: "Installed plugin has a different version.",
+            installedVersion: "1.0.0",
+            expectedVersion: pluginPackage.version,
+            request: {} as never,
+          })),
+          probePlugin: withStagedInspection(async () =>
+            pluginProbe({
+              artifactInspection: { format: "openclaw", mapped: ["plugin"], unavailable: [] },
+            }),
+          ),
+          inspectPluginCapabilities,
+        },
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "plugin_disabled" });
+  });
+
   it("keeps canonical inspection when isolated probe cleanup reports failure", async () => {
     let cleanupFailureInjected = false;
     vi.mocked(tempWorkspace).mockImplementationOnce(async (options) => {

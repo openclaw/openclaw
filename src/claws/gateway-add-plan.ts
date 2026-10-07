@@ -1,3 +1,4 @@
+import { lstat } from "node:fs/promises";
 import path from "node:path";
 import type { ClawLifecyclePlanResult } from "../../packages/gateway-protocol/src/schema/claws.js";
 import {
@@ -9,6 +10,7 @@ import { resolveCanonicalWorkspacePath } from "../agents/workspace-state-identit
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ClawHubFetchOptions } from "../infra/clawhub-client.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -23,6 +25,36 @@ import { projectClawPluginCapabilityReviews } from "./plugin-capability-review.j
 import type { ClawAddPlan, ClawPackagePreflight, ClawReadResult } from "./types.js";
 
 type VerifiedClawSource = Extract<ClawReadResult, { ok: true }>;
+
+function workspacesOverlap(left: string, right: string): boolean {
+  return isPathInside(left, right) || isPathInside(right, left);
+}
+
+async function selectNewWorkspace(
+  base: string,
+  claimedWorkspaces: readonly string[],
+): Promise<string> {
+  const canonicalParent = resolveCanonicalWorkspacePath(path.dirname(base));
+  if (claimedWorkspaces.some((workspace) => isPathInside(workspace, canonicalParent))) {
+    return base;
+  }
+  for (let index = 1; Number.isSafeInteger(index); index += 1) {
+    const candidate = index === 1 ? base : `${base}-${index}`;
+    const canonicalCandidate = resolveCanonicalWorkspacePath(candidate);
+    if (claimedWorkspaces.some((workspace) => workspacesOverlap(workspace, canonicalCandidate))) {
+      continue;
+    }
+    try {
+      await lstat(candidate);
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT")) {
+        return candidate;
+      }
+      throw error;
+    }
+  }
+  throw new Error("No available Claw workspace suffix");
+}
 
 export type GatewayClawAddPlanningContext = {
   config: OpenClawConfig;
@@ -42,21 +74,19 @@ export async function buildGatewayClawAddPlan(
     agentId: normalizeAgentId(existingAgentId),
     workspace: resolveAgentWorkspaceDir(context.config, existingAgentId),
   }));
-  const canonicalConfiguredWorkspace = resolveCanonicalWorkspacePath(configuredWorkspace);
-  const overlapsExistingWorkspace = existingWorkspaces.some((existing) => {
-    if (existing.agentId === agentId) {
-      return false;
-    }
-    const canonicalExistingWorkspace = resolveCanonicalWorkspacePath(existing.workspace);
-    return (
-      isPathInside(canonicalExistingWorkspace, canonicalConfiguredWorkspace) ||
-      isPathInside(canonicalConfiguredWorkspace, canonicalExistingWorkspace)
-    );
-  });
-  const workspace =
-    !resolveAgentConfig(context.config, agentId)?.workspace && overlapsExistingWorkspace
+  const claimedWorkspaces = existingWorkspaces
+    .filter((existing) => existing.agentId !== agentId)
+    .map((existing) => resolveCanonicalWorkspacePath(existing.workspace));
+  const overlapsConfiguredWorkspace = claimedWorkspaces.some((workspace) =>
+    workspacesOverlap(workspace, resolveCanonicalWorkspacePath(configuredWorkspace)),
+  );
+  const baseWorkspace =
+    !resolveAgentConfig(context.config, agentId)?.workspace && overlapsConfiguredWorkspace
       ? path.join(resolveStateDir(), `workspace-${agentId}`)
       : configuredWorkspace;
+  const workspace = existingWorkspaces.some((existing) => existing.agentId === agentId)
+    ? baseWorkspace
+    : await selectNewWorkspace(baseWorkspace, claimedWorkspaces);
   return await buildClawAddPlan({
     manifest: source.manifest,
     clawMarkdownBody: source.clawMarkdownBody,
@@ -81,12 +111,20 @@ export async function buildGatewayClawAddPlan(
 
 export function projectGatewayClawAddPlan(
   plan: ClawAddPlan,
-  sourceRoot: string,
+  sourceRootOrSource: string | VerifiedClawSource,
   trust: ClawHubClawTrust,
   config: OpenClawConfig,
 ): ClawLifecyclePlanResult {
+  const source = typeof sourceRootOrSource === "string" ? undefined : sourceRootOrSource;
+  const sourceRoot =
+    typeof sourceRootOrSource === "string"
+      ? sourceRootOrSource
+      : sourceRootOrSource.source.packageRoot;
   const pluginReviews = projectClawPluginCapabilityReviews(plan);
-  return bindClawLifecycleTrust(projectClawAddPlan(plan, sourceRoot, pluginReviews, config), trust);
+  return bindClawLifecycleTrust(
+    projectClawAddPlan(plan, sourceRoot, pluginReviews, config, source),
+    trust,
+  );
 }
 
 export async function planClawAddForGateway(
@@ -104,7 +142,7 @@ export async function planClawAddForGateway(
     ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
     run: async (source, trust) => {
       const plan = await buildGatewayClawAddPlan(source, input);
-      return projectGatewayClawAddPlan(plan, source.source.packageRoot, trust, input.config);
+      return projectGatewayClawAddPlan(plan, source, trust, input.config);
     },
   });
   return resolved.value;

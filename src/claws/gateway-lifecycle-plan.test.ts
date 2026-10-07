@@ -56,10 +56,17 @@ const source = {
     packageRoot: "/tmp/claw-source",
     manifestPath: "/tmp/claw-source/CLAW.md",
     integrityKind: "artifact" as const,
-    integrity: "sha256:source",
+    integrity: `sha256:${"a".repeat(64)}`,
     byteLength: 123,
   },
-  manifest: { mcpServers: {} },
+  manifest: {
+    schemaVersion: 1,
+    agent: { id: "workflow-operator" },
+    workspace: { bootstrapFiles: {}, files: [] },
+    packages: [],
+    mcpServers: {},
+    cronJobs: [],
+  },
   diagnostics: [],
 };
 const installed = {

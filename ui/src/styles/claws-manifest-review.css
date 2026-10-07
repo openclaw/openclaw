@@ -1,0 +1,52 @@
+.claws-manifest-review {
+  min-width: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.claws-manifest-review summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  cursor: pointer;
+}
+
+.claws-manifest-review summary span,
+.claws-manifest-review__source span {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.claws-manifest-review__body {
+  min-width: 0;
+  padding-top: 12px;
+}
+
+.claws-manifest-review__source {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 12px;
+}
+
+.claws-manifest-review__source code {
+  overflow-wrap: anywhere;
+}
+
+.claws-manifest-review h4 {
+  margin: 14px 0 6px;
+  font-size: 12px;
+}
+
+.claws-manifest-review pre {
+  max-height: 240px;
+  padding: 10px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

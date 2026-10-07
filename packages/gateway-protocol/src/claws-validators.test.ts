@@ -114,7 +114,23 @@ describe("Claws Gateway contract", () => {
       schemaVersion: "openclaw.clawsGatewayPlan.v1",
       operation: "add",
       planIntegrity: "sha256:reviewed-plan",
-      target: { agentId: "workflow-operator", name: "Workflow Operator" },
+      target: { agentId: "workflow-operator", name: "@openclaw/workflow-operator" },
+      manifestDisclosure: {
+        source: {
+          packageName: "@openclaw/workflow-operator",
+          version: "1.0.0",
+          integrity: `sha256:${"a".repeat(64)}`,
+          byteLength: 123,
+        },
+        manifestJson: JSON.stringify({
+          schemaVersion: 1,
+          agent: { id: "workflow-operator" },
+          workspace: { bootstrapFiles: {}, files: [] },
+          packages: [],
+          mcpServers: {},
+          cronJobs: [],
+        }),
+      },
       actions: [],
       capabilities: [],
       pluginReviews: [],
@@ -125,6 +141,15 @@ describe("Claws Gateway contract", () => {
     expect(validateClawLifecyclePlanResult(plan)).toBe(true);
     expect(validateClawLifecyclePlanResult({ ...plan, sourceRoot: "/private/claw" })).toBe(false);
     expect(validateClawLifecyclePlanResult({ ...plan, answers: { token: "secret" } })).toBe(false);
+    expect(
+      validateClawLifecyclePlanResult({
+        ...plan,
+        manifestDisclosure: {
+          ...plan.manifestDisclosure,
+          source: { ...plan.manifestDisclosure.source, packageRoot: "/private/claw" },
+        },
+      }),
+    ).toBe(false);
   });
 
   it("requires exact plugin artifact integrity in an install review", () => {
@@ -151,6 +176,14 @@ describe("Claws Gateway contract", () => {
         hooks: {
           allowPromptInjection: { effective: false },
           allowConversationAccess: { effective: false },
+        },
+      },
+      capabilityGrantsByPluginId: {
+        lobster: {
+          hooks: {
+            allowPromptInjection: { effective: false },
+            allowConversationAccess: { effective: false },
+          },
         },
       },
       reviewToken: "sha256:reviewed-surface",

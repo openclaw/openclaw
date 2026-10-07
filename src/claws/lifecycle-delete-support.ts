@@ -12,6 +12,7 @@ import {
   resolveSurvivingDatabaseFilePaths,
 } from "../agents/agent-delete-databases.js";
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
+import { unregisterResolvedAgentDir } from "../agents/agent-dir-registry.js";
 import { listAgentEntries, resolveAgentDir } from "../agents/agent-scope.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import {
@@ -320,6 +321,32 @@ export async function cleanupClawAgentFilesystem(params: {
   return errors;
 }
 
+export function isClawWorkspaceSharedForCleanup(params: {
+  agentId: string;
+  workspaceDir: string;
+  config: OpenClawConfig;
+  stateDatabase?: OpenClawStateDatabaseOptions;
+}): boolean {
+  if (listAgentEntries(params.config).some((agent) => agent.id === params.agentId)) {
+    throw new ClawRemoveError("agent_modified", "The Claw agent was reconfigured before cleanup.");
+  }
+  const survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
+    readAgentDeleteDatabaseRegistry(params.stateDatabase),
+    params.agentId,
+    params.stateDatabase?.env,
+  );
+  return (
+    Boolean(params.workspaceDir) &&
+    isPathOwnedBySurvivingAgent(
+      params.config,
+      params.agentId,
+      params.workspaceDir,
+      survivingDatabaseFilePaths,
+      params.stateDatabase?.env,
+    )
+  );
+}
+
 export const clawRemoveQuietRuntime: RuntimeEnv = {
   log: (..._args: unknown[]) => undefined,
   error: (..._args: unknown[]) => undefined,
@@ -342,7 +369,7 @@ type ClawRemovableWorkspaceFile = DigestOwnedWorkspaceFile & DigestOwnedWorkspac
 
 export type RemovedWorkspaceFile = {
   path: string;
-  action: "deleted" | "missing" | "retainedModified" | "error";
+  action: "deleted" | "missing" | "retainedModified" | "retainedShared" | "error";
   message?: string;
 };
 
@@ -516,6 +543,7 @@ export async function removeClawWorkspaceFile(
 
 export function releaseClawRemoveRows(
   agentId: string,
+  agentDir: string,
   files: RemovedWorkspaceFile[],
   cleanupErrors: string[],
   assertCurrent: (database: OpenClawStateDatabase) => void,
@@ -564,6 +592,7 @@ export function releaseClawRemoveRows(
     }, options);
     if (complete) {
       deleteCachedClawInstallSchemaVersion(agentId, options);
+      unregisterResolvedAgentDir({ agentId, agentDir, env: options.env });
     }
   } catch (error) {
     if (complete) {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -46,7 +47,8 @@ import type { ClawManifest } from "./types.js";
 
 const packageName = "@openclaw/research-briefing";
 const version = "1.0.0";
-const digest = "a".repeat(64);
+const archiveBytes = Buffer.alloc(321);
+const digest = createHash("sha256").update(archiveBytes).digest("hex");
 const tempDirs = createTrackedTempDirs();
 
 function officialPackage(name = packageName) {
@@ -81,7 +83,7 @@ async function prepareResolverFixture(packages: ClawManifest["packages"] = []) {
   const stateDir = path.join(temp, "state");
   await fs.mkdir(extractedRoot);
   await fs.writeFile(path.join(extractedRoot, "package.json"), "{}\n");
-  await fs.writeFile(archivePath, Buffer.alloc(321));
+  await fs.writeFile(archivePath, archiveBytes);
   mocks.download.mockResolvedValue({
     archivePath,
     artifact: "clawpack",
@@ -362,6 +364,7 @@ describe("verified ClawHub Claw source", () => {
     await expect(
       fs.readFile(path.join(apply.value.packageRoot, "package.json"), "utf8"),
     ).resolves.toBe("{}\n");
+    await expect(fs.readFile(`${apply.value.packageRoot}.tgz`)).resolves.toEqual(archiveBytes);
   });
 
   it("reuses an identical source when two applies promote the same digest concurrently", async () => {

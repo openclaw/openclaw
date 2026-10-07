@@ -130,6 +130,24 @@ export function readCommandProcessFailure(error: unknown): CommandProcessOutcome
 }
 
 export const TIMEOUT_EXIT_CODE = 124;
+const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
+const WINDOWS_CLOSE_STATE_POLL_MS = 10;
+
+/** Give a patched Windows shim's exit state a bounded chance to arrive after close. */
+export async function waitForWindowsShimExitState(hasExitState: () => boolean): Promise<void> {
+  for (
+    let elapsedMs = 0;
+    elapsedMs < WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS;
+    elapsedMs += WINDOWS_CLOSE_STATE_POLL_MS
+  ) {
+    if (hasExitState()) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, WINDOWS_CLOSE_STATE_POLL_MS);
+    });
+  }
+}
 
 export function createSanitizedCommandError(result: {
   code?: unknown;

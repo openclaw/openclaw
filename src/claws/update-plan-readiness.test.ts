@@ -176,31 +176,36 @@ describe("buildClawUpdatePlan readiness", () => {
           }),
         },
       },
-      packagePreflight: async (pkg) => ({
-        ok: false,
-        code: "plugin_version_conflict",
-        installedVersion: "1.0.0",
-        integrity: `sha256:${"a".repeat(64)}`,
-        installId: pkg.ref,
-        declaredCapabilities: emptyPluginCapabilityEvidence.declared,
-        capabilityGrants: emptyPluginCapabilityEvidence.grants,
-        detectedFormat: "claude",
-        mapped: ["skills"],
-        unavailable: ["agents"],
-        adapterIdentity: "openclaw/test",
-        message: "The Claw owns the installed previous version.",
-      }),
+      packagePreflight: async (pkg) =>
+        pkg.kind === "plugin"
+          ? {
+              ok: false,
+              code: "plugin_version_conflict",
+              installedVersion: "1.0.0",
+              integrity: `sha256:${"a".repeat(64)}`,
+              installId: pkg.ref,
+              declaredCapabilities: emptyPluginCapabilityEvidence.declared,
+              capabilityGrants: emptyPluginCapabilityEvidence.grants,
+              capabilityGrantsByPluginId: {
+                [pkg.ref]: emptyPluginCapabilityEvidence.grants,
+              },
+              detectedFormat: "claude",
+              mapped: ["skills"],
+              unavailable: ["agents"],
+              adapterIdentity: "openclaw/test",
+              message: "The Claw owns the installed previous version.",
+            }
+          : {
+              ok: true,
+              action: "reuse",
+              integrity: `sha256:${"a".repeat(64)}`,
+            },
     });
 
     expect(plan.actions).toContainEqual(
       expect.objectContaining({ id: "plugin:obsolete", action: "change", blocked: false }),
     );
-    expect(plan.blockers).not.toContainEqual(
-      expect.objectContaining({
-        code: "plugin_version_conflict",
-        path: "$.profiles.openclaw.extensions[0]",
-      }),
-    );
+    expect(plan.blockers).toEqual([]);
     expect(
       plan.capabilityChanges.find(
         (change) => change.kind === "package" && change.id === "plugin:obsolete",

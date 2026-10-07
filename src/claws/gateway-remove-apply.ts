@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { unregisterResolvedAgentDir } from "../agents/agent-dir-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { ClawGatewayPlanChangedError } from "./gateway-add-apply.js";
@@ -206,6 +207,20 @@ export async function applyClawRemoveForGateway(input: {
       applied.code !== (result.data.status === "complete" ? 0 : 1)
     ) {
       throw new Error("The Claw removal command returned an invalid result.");
+    }
+    if (
+      result.data.status === "complete" &&
+      canonicalPlan.actions.some(
+        (action) =>
+          action.kind === "agent" && action.id === input.agentId && action.action === "remove",
+      )
+    ) {
+      const agentDir = canonicalPlan.actions.find(
+        (action) => action.kind === "agentState" && action.id === input.agentId,
+      )?.target;
+      if (agentDir) {
+        unregisterResolvedAgentDir({ agentId: input.agentId, agentDir });
+      }
     }
     return {
       agentId: input.agentId,

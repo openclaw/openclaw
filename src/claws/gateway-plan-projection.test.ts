@@ -16,7 +16,7 @@ import {
 } from "./gateway-plan-projection.js";
 import type { ClawRemovePlan } from "./lifecycle-remove-contract.js";
 import { digestClawMcpServer } from "./mcp.js";
-import type { ClawAddPlan } from "./types.js";
+import type { ClawAddPlan, ClawManifest, ClawReadResult } from "./types.js";
 import { makeEmptyClawUpdatePlan } from "./update-plan-empty.js";
 
 const config = { agents: { list: [] } };
@@ -73,7 +73,95 @@ function addPlan(sourceRoot: string, integrity = "sha256:artifact-a"): ClawAddPl
   };
 }
 
+function verifiedSource(plan: ClawAddPlan): Extract<ClawReadResult, { ok: true }> {
+  const manifest: ClawManifest = {
+    schemaVersion: 1,
+    agent: { id: "workflow-operator", name: "Workflow Operator" },
+    workspace: { bootstrapFiles: {}, files: [] },
+    packages: [{ kind: "plugin", source: "clawhub", ref: "@openclaw/lobster", version: "1.0.0" }],
+    mcpServers: {},
+    cronJobs: [],
+  };
+  return {
+    ok: true,
+    manifest,
+    openClawProfile: {
+      schemaVersion: 1,
+      agent: { tools: { allow: ["read", "sessions_spawn"] } },
+      extensions: [],
+    },
+    source: plan.claw,
+    snapshot: {
+      manifest: { byteLength: 120, digest: "sha256:manifest" },
+      workspaceSources: [],
+    },
+    diagnostics: [],
+  };
+}
+
 describe("Claw Gateway plan consent", () => {
+  it("makes the exact validated grouped manifest available and binds it to Add consent", () => {
+    const root = "/tmp/private-claw-source";
+    const plan = addPlan(root, `sha256:${"a".repeat(64)}`);
+    const source = verifiedSource(plan);
+
+    const projected = projectClawAddPlan(plan, root, [], config, source);
+    expect(projected.manifestDisclosure?.source).toEqual({
+      packageName: "@openclaw/workflow-operator",
+      version: "1.0.0",
+      integrity: `sha256:${"a".repeat(64)}`,
+      byteLength: 123,
+    });
+    expect(JSON.parse(projected.manifestDisclosure?.manifestJson ?? "")).toMatchObject({
+      schemaVersion: 1,
+      agent: { id: "workflow-operator", name: "Workflow Operator" },
+      packages: [{ kind: "plugin", ref: "@openclaw/lobster", version: "1.0.0" }],
+    });
+    expect(JSON.parse(projected.manifestDisclosure?.openClawProfileJson ?? "")).toMatchObject({
+      agent: { tools: { allow: ["read", "sessions_spawn"] } },
+    });
+    expect(JSON.stringify(projected)).not.toContain(root);
+
+    const changed = structuredClone(source);
+    changed.manifest.agent.name = "Changed without changing the action list";
+    const changedProjection = projectClawAddPlan(plan, root, [], config, changed);
+    expect(changedProjection.planIntegrity).not.toBe(projected.planIntegrity);
+    expect(() =>
+      projectClawAddPlan(plan, root, [], config, {
+        ...source,
+        source: { ...source.source, integrity: `sha256:${"b".repeat(64)}` },
+      }),
+    ).toThrow(/source identity/u);
+  });
+
+  it("makes the target manifest available and binds it to Update consent", () => {
+    const root = "/tmp/private-update-source";
+    const source = verifiedSource(addPlan(root, `sha256:${"a".repeat(64)}`));
+    const plan = makeEmptyClawUpdatePlan({
+      agentId: "workflow-operator",
+      source: source.source,
+      found: true,
+      blockers: [],
+    });
+    const review = {
+      config: { agents: { list: [{ id: "workflow-operator" }] } },
+      desiredAgent: { id: "workflow-operator" },
+      currentJobs: [],
+      targetJobs: [],
+      source,
+    };
+
+    const projected = projectClawUpdatePlan(plan, root, review);
+    expect(JSON.parse(projected.manifestDisclosure?.manifestJson ?? "")).toMatchObject({
+      agent: { id: "workflow-operator" },
+    });
+    const changed = structuredClone(source);
+    changed.manifest.agent.name = "A different Update package";
+    expect(
+      projectClawUpdatePlan(plan, root, { ...review, source: changed }).planIntegrity,
+    ).not.toBe(projected.planIntegrity);
+  });
+
   it("accepts the same archive across extraction roots but refuses changed artifact bytes", () => {
     const previewRoot = "/tmp/claw-preview";
     const applyRoot = "/tmp/claw-apply";

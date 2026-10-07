@@ -98,7 +98,7 @@ describe("Claw Remove one-shot CLI", () => {
         cwd: "/app",
         env: {
           TSX_TSCONFIG_PATH: "/app/tsconfig.json",
-          OPENCLAW_CLAW_REMOVE_GATEWAY_BRIDGE: "1",
+          CLAW_REMOVE_GATEWAY_BRIDGE: "1",
           OPENCLAW_NO_RESPAWN: "1",
           NODE_DISABLE_COMPILE_CACHE: "1",
         },
@@ -134,7 +134,7 @@ describe("Claw Remove one-shot CLI", () => {
       "The Claw removal command did not complete.",
     );
     expect(runCommandBuffered.mock.calls[0]?.[1]?.env).toMatchObject({
-      OPENCLAW_CLAW_REMOVE_GATEWAY_BRIDGE: "0",
+      CLAW_REMOVE_GATEWAY_BRIDGE: "0",
     });
     expect(runCommandBuffered.mock.calls[0]?.[1]?.onPrivateControlChild).toBeUndefined();
     await expect(runClawRemoveCli({ agentId: "worker" })).rejects.toThrow(

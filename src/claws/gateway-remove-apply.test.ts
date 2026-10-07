@@ -1,4 +1,11 @@
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  registerResolvedAgentDir,
+  resolveRegisteredAgentIdForDir,
+  unregisterResolvedAgentDir,
+} from "../agents/agent-dir-registry.js";
 import { ClawGatewayPlanChangedError } from "./gateway-add-apply.js";
 import { projectClawRemovePlan } from "./gateway-plan-projection.js";
 import { applyClawRemoveForGateway } from "./gateway-remove-apply.js";
@@ -76,6 +83,44 @@ afterEach(() => {
 });
 
 describe("Gateway Claw Remove Apply", () => {
+  it.each(["complete", "partial"] as const)(
+    "releases the serving process directory owner only after %s removal",
+    async (status) => {
+      const agentDir = path.join(tmpdir(), `openclaw-claw-remove-gateway-${status}`);
+      const withAgentState: ClawRemovePlan = {
+        ...canonical,
+        actions: [
+          ...canonical.actions,
+          { kind: "agentState", id: "worker", action: "trash", target: agentDir, blocked: false },
+        ],
+      };
+      withAgentState.planIntegrity = digestClawRemovePlanIdentity(withAgentState);
+      const reviewed = projectClawRemovePlan(withAgentState, {
+        name: "@openclaw/workflow-operator",
+        version: "1.0.0",
+      });
+      registerResolvedAgentDir({ agentId: "worker", agentDir });
+      try {
+        planClawRemoveForGateway.mockResolvedValue(reviewed);
+        runClawRemoveCli.mockResolvedValueOnce({ code: 0, payload: withAgentState });
+        runClawRemoveCli.mockResolvedValueOnce({
+          code: status === "complete" ? 0 : 1,
+          payload: { ...complete, status },
+        });
+
+        expect(
+          (await applyClawRemoveForGateway(input({ planIntegrity: reviewed.planIntegrity })))
+            .status,
+        ).toBe(status);
+        expect(resolveRegisteredAgentIdForDir(agentDir)).toBe(
+          status === "complete" ? undefined : "worker",
+        );
+      } finally {
+        unregisterResolvedAgentDir({ agentId: "worker", agentDir });
+      }
+    },
+  );
+
   it("uses the exact CLI plan under Gateway authority and strips private result fields", async () => {
     planClawRemoveForGateway.mockResolvedValue(preview);
     runClawRemoveCli.mockResolvedValueOnce({ code: 0, payload: canonical });

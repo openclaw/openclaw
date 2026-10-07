@@ -15,6 +15,10 @@ import {
   renderClawActionEffect,
 } from "../agents-home/claws-effect-review.ts";
 import {
+  hasCompleteClawManifestDisclosure,
+  renderClawManifestReview,
+} from "../agents-home/claws-manifest-review.ts";
+import {
   pluginAcknowledgements,
   renderClawPluginReviews,
 } from "../agents-home/claws-plugin-review.ts";
@@ -167,6 +171,7 @@ function renderUpdateReview(props: AgentClawPanelProps) {
   const plan = props.updatePlan;
   const detail = props.updateDetail;
   const record = props.record;
+  const source = detail ? { packageName: detail.packageName, version: detail.version } : undefined;
   const blocked = Boolean(plan?.blockers.length || plan?.actions.some((action) => action.blocked));
   const effectsComplete = hasCompleteClawActionEffects(plan);
   const canConfirm =
@@ -182,6 +187,7 @@ function renderUpdateReview(props: AgentClawPanelProps) {
     plan?.target.currentVersion === record?.version &&
     plan?.target.targetVersion === detail?.version &&
     hasCompleteClawDisclosures(plan) &&
+    hasCompleteClawManifestDisclosure(plan, source) &&
     effectsComplete &&
     (!plan?.riskAcknowledgementRequired || props.updateClawHubRiskAccepted) &&
     pluginAcknowledgements(plan?.pluginReviews, props.acceptedPluginRisks) !== null &&
@@ -272,6 +278,7 @@ function renderUpdateReview(props: AgentClawPanelProps) {
                     </li>`,
                   )}
                 </ul>
+                ${renderClawManifestReview(plan, source)}
                 ${!effectsComplete ? html`<div class="callout danger" role="alert">${t("clawsEffectReview.unavailable")}</div>` : nothing}
                 <h3>${t("clawsLifecycle.updateCapabilities")}</h3>
                 ${

@@ -10,7 +10,11 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { inspectPluginCapabilityArtifact } from "../plugins/capability-artifact.js";
 import { buildPluginCapabilitySummary } from "../plugins/capability-summary.js";
 import { installPluginFromClawHub } from "../plugins/clawhub.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
+import {
+  normalizePluginId,
+  normalizePluginsConfig,
+  resolveEffectiveEnableState,
+} from "../plugins/config-state.js";
 import { isBundledPluginInsideDevSourceRoot } from "../plugins/dev-source-root.js";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
 import {
@@ -249,6 +253,31 @@ export async function preflightClawPluginPackage(
       message: sourceHostConflict,
     };
   }
+  if (options.config) {
+    const pluginsConfig = normalizePluginsConfig(options.config.plugins);
+    const explicitlyDisabled =
+      pluginsConfig.entries[normalizePluginId(probe.pluginId)]?.enabled === false;
+    const activation = resolveEffectiveEnableState({
+      id: probe.pluginId,
+      origin: "global",
+      config: pluginsConfig,
+      rootConfig: options.config,
+    });
+    if (!activation.enabled) {
+      return {
+        ok: false,
+        code: "plugin_disabled",
+        message:
+          !result.ok || result.action === "install"
+            ? explicitlyDisabled
+              ? `Plugin ${pkg.ref}@${pkg.version} was explicitly disabled or uninstalled. Install and enable it in Plugins before adding this Claw.`
+              : !pluginsConfig.enabled
+                ? `Plugin ${pkg.ref}@${pkg.version} cannot be enabled because plugins are disabled. Enable plugins in Plugins before adding this Claw.`
+                : `Plugin ${pkg.ref}@${pkg.version} is blocked by host policy (${activation.reason ?? "unknown"}). Change its policy in Plugins before adding this Claw.`
+            : `Plugin ${pkg.ref}@${pkg.version} is installed but disabled (${activation.reason ?? "host policy"}). Enable it in Plugins before continuing.`,
+      };
+    }
+  }
   if (!result.ok) {
     return {
       ok: false,
@@ -269,21 +298,6 @@ export async function preflightClawPluginPackage(
       code: "plugin_integrity_conflict",
       message: `Plugin ${pkg.ref}@${pkg.version} is installed as ${result.installedId} with integrity ${result.installedIntegrity ?? "unknown"}, expected ${probe.pluginId} with ${integrity}.`,
     };
-  }
-  if (result.action === "reuse" && options.config) {
-    const activation = resolveEffectiveEnableState({
-      id: probe.pluginId,
-      origin: "global",
-      config: normalizePluginsConfig(options.config.plugins),
-      rootConfig: options.config,
-    });
-    if (!activation.enabled) {
-      return {
-        ok: false,
-        code: "plugin_disabled",
-        message: `Plugin ${pkg.ref}@${pkg.version} is installed but disabled (${activation.reason ?? "host policy"}). Enable it in Plugins before continuing.`,
-      };
-    }
   }
   return {
     ok: true,

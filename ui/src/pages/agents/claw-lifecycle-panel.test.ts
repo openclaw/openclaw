@@ -112,6 +112,56 @@ describe("Agent Claw lifecycle", () => {
     );
   });
 
+  it("offers the target manifest before Update without interpreting package text as HTML", async () => {
+    const untrusted = '</pre><img src="x" onerror="alert(1)">';
+    const { panel } = mount({
+      clawsEnabled: true,
+      updatePlan: {
+        ...updatePlan,
+        manifestDisclosure: {
+          ...updatePlan.manifestDisclosure!,
+          manifestJson: JSON.stringify({
+            schemaVersion: 1,
+            agent: { id: "workflow", description: untrusted },
+            workspace: { bootstrapFiles: {}, files: [] },
+            packages: [],
+            mcpServers: {},
+            cronJobs: [],
+          }),
+        },
+      },
+    });
+    await vi.waitFor(() => expect(panel.querySelector("[data-claw-update]")).not.toBeNull());
+    panel.querySelector<HTMLElement>("[data-claw-update]")?.click();
+    await vi.waitFor(() => expect(panel.querySelector("[data-claws-manifest]")).not.toBeNull());
+    const disclosure = panel.querySelector<HTMLDetailsElement>("[data-claws-manifest]");
+    expect(disclosure?.open).toBe(false);
+    disclosure?.querySelector("summary")?.click();
+    expect(JSON.parse(disclosure?.querySelector("pre")?.textContent ?? "").agent.description).toBe(
+      untrusted,
+    );
+    expect(disclosure?.querySelector("img")).toBeNull();
+    expect(panel.querySelector<HTMLButtonElement>("[data-claw-update-confirm]")?.disabled).toBe(
+      false,
+    );
+  });
+
+  it("does not consent to Update without the target manifest", async () => {
+    const { panel, request } = mount({
+      clawsEnabled: true,
+      updatePlan: { ...updatePlan, manifestDisclosure: undefined },
+    });
+    await vi.waitFor(() => expect(panel.querySelector("[data-claw-update]")).not.toBeNull());
+    panel.querySelector<HTMLElement>("[data-claw-update]")?.click();
+    await vi.waitFor(() =>
+      expect(panel.querySelector<HTMLButtonElement>("[data-claw-update-confirm]")?.disabled).toBe(
+        true,
+      ),
+    );
+    panel.querySelector<HTMLElement>("[data-claw-update-confirm]")?.click();
+    expect(request).not.toHaveBeenCalledWith("claws.update.apply", expect.anything());
+  });
+
   it("refuses an Update whose configured access cannot be disclosed", async () => {
     const { panel, request } = mount({
       clawsEnabled: true,

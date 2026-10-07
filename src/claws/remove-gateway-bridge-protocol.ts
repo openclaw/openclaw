@@ -2,7 +2,7 @@ import { z } from "zod";
 import { clawMonitorSnapshotSchema } from "./monitor-cleanup-contract.js";
 import { clawPackageRemovalGatewayRequestSchema } from "./package-remove-contract.js";
 
-export const CLAW_REMOVE_GATEWAY_BRIDGE_ENV = "OPENCLAW_CLAW_REMOVE_GATEWAY_BRIDGE";
+export const CLAW_REMOVE_GATEWAY_BRIDGE_ENV = "CLAW_REMOVE_GATEWAY_BRIDGE";
 export const CLAW_REMOVE_AUTHORITY_REQUEST = 0x3f;
 export const CLAW_REMOVE_AUTHORITY_GRANTED = 0x47;
 export const CLAW_REMOVE_AUTHORITY_DENIED = 0x44;

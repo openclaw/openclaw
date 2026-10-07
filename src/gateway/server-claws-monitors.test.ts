@@ -5,7 +5,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { listAgentEntries } from "../agents/agent-scope.js";
+import {
+  isPathOwnedByAnotherRegisteredAgent,
+  resolveRegisteredAgentIdForDir,
+} from "../agents/agent-dir-registry.js";
+import { listAgentEntries, resolveAgentDir } from "../agents/agent-scope.js";
+import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
 import { buildClawRemovePlan, readClawStatus } from "../claws/lifecycle-state.js";
 import { resolveClawMonitorCleanupBinding } from "../claws/monitor-cleanup-binding.js";
 import type { ClawMonitorCleanupGateway } from "../claws/monitor-cleanup-contract.js";
@@ -23,6 +28,7 @@ import {
   releaseLocalCronRunReceiptOwnership,
 } from "../cron/store/run-receipt-store.js";
 import { claimCronRunReceiptInDatabaseForTest } from "../cron/store/run-receipt-store.test-support.js";
+import * as memoryRuntime from "../plugins/memory-runtime.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   beginAgentDeletionJournal,
@@ -45,6 +51,91 @@ import {
 const fixture = useClawMonitorFixture();
 
 describe("Claw serving monitor cleanup", () => {
+  it("releases the deleted agent's reverse directory owner after complete removal", async () => {
+    const current = await fixture(false);
+    const agentDir = resolveAgentDir(current.getConfig(), "worker");
+    expect(resolveRegisteredAgentIdForDir(agentDir)).toBe("worker");
+
+    const plan = await current.plan();
+    expect(await current.apply(plan)).toMatchObject({ status: "complete" });
+    expect(resolveRegisteredAgentIdForDir(agentDir)).toBeUndefined();
+    expect(
+      isPathOwnedByAnotherRegisteredAgent({ agentId: "replacement", pathname: agentDir }),
+    ).toBe(false);
+  });
+
+  it("retains the reverse directory owner while removal is partial", async () => {
+    const current = await fixture(false);
+    const agentDir = resolveAgentDir(current.getConfig(), "worker");
+    const plan = await current.plan();
+
+    expect(await current.apply(plan, { purgeSessions: async () => true })).toMatchObject({
+      status: "partial",
+      agentRemoved: true,
+    });
+    expect(resolveRegisteredAgentIdForDir(agentDir)).toBe("worker");
+  });
+
+  it("retains a workspace claimed by another agent after Claw config removal", async () => {
+    const current = await fixture(false);
+    const soulPath = path.join(current.workspaceDir, "SOUL.md");
+    const originalSoul = await fs.readFile(soulPath, "utf8");
+    const plan = await current.plan();
+
+    const result = await current.apply(plan, {
+      purgeSessions: async () => {
+        const config = current.getConfig();
+        expect(config.agents?.entries?.worker).toBeUndefined();
+        await current.writeConfig({
+          ...config,
+          agents: {
+            ...config.agents,
+            entries: {
+              ...config.agents?.entries,
+              survivor: { workspace: current.workspaceDir },
+            },
+          },
+        });
+        return false;
+      },
+    });
+    expect(result).toMatchObject({ status: "complete", agentRemoved: true });
+    expect(result.workspaceFiles).toContainEqual({ path: "SOUL.md", action: "retainedShared" });
+    expect(current.getConfig().agents?.entries?.survivor?.workspace).toBe(current.workspaceDir);
+    await expect(fs.stat(current.workspaceDir)).resolves.toBeDefined();
+    await expect(fs.readFile(soulPath, "utf8")).resolves.toBe(originalSoul);
+  });
+
+  it("retires the deleted agent runtime after its config is removed", async () => {
+    const current = await fixture(false);
+    const agentDir = resolveAgentDir(current.getConfig(), "worker");
+    const relocatedDatabasePath = current.state.path("relocated.sqlite");
+    openOpenClawAgentDatabase({ agentId: "worker", path: relocatedDatabasePath });
+    const retireModels = vi
+      .spyOn(preparedModelRuntime, "retirePreparedModelRuntimeAgent")
+      .mockImplementation(async () => {
+        expect(current.getConfig().agents?.entries?.worker).toBeUndefined();
+      });
+    const closeMemory = vi
+      .spyOn(memoryRuntime, "closeActiveMemorySearchManagerCore")
+      .mockImplementation(async ({ cfg, agentId }) => {
+        expect(cfg.agents?.entries?.worker).toBeUndefined();
+        expect(agentId).toBe("worker");
+      });
+    try {
+      const plan = await current.plan();
+      expect(await current.apply(plan)).toMatchObject({ status: "complete", agentRemoved: true });
+      expect(retireModels).toHaveBeenCalledWith({
+        agentId: "worker",
+        agentDirs: expect.arrayContaining([agentDir, path.dirname(relocatedDatabasePath)]),
+      });
+      expect(closeMemory).toHaveBeenCalledOnce();
+    } finally {
+      retireModels.mockRestore();
+      closeMemory.mockRestore();
+    }
+  });
+
   it("removes a Claw after operator model and subagent settings change", async () => {
     const current = await fixture(false);
     const config = current.getConfig();

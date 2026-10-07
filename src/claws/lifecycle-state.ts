@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { isPathOwnedBySurvivingAgent } from "../agents/agent-delete-databases.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, withConfigMutationExclusive } from "../config/config.js";
 import {
   clawCronGatewayJobConfigRevision,
   clawCronGatewayJobMatchesRef,
@@ -27,6 +27,7 @@ import {
   ClawRemoveError,
   cleanupClawAgentFilesystem,
   deletionEffects,
+  isClawWorkspaceSharedForCleanup,
   readClawRemoveCronInventory,
   releaseClawRemoveRows,
   removeClawWorkspaceFile,
@@ -615,42 +616,62 @@ export async function applyClawRemovePlan(
         return partial("package_cleanup_failed", packageErrors.map((pkg) => pkg.reason).join("; "));
       }
       const workspaceFiles = result.workspaceFiles;
-      for (const file of record.workspaceFiles) {
-        assertCurrent();
-        workspaceFiles.push(await removeClawWorkspaceFile(file, assertCurrent));
-      }
-      assertCurrent();
-      const bootstrap = await removeClawBootstrap(record, assertCurrent);
-      const cleanupErrors = workspaceFiles
-        .filter((file) => file.action === "error")
-        .map((file) => file.message ?? `Could not remove ${file.path}.`);
-      if (bootstrap?.action === "error") {
-        cleanupErrors.push(bootstrap.message ?? `Could not remove ${bootstrap.path}.`);
-      }
-      if (cleanupErrors.length === 0) {
-        const workspaceHasRemainingEntries = await workspaceContainsUntrackedEntries(
-          cleanupTargets.workspaceDir,
-          record.workspaceFiles.map((file) => file.path),
-        );
+      let bootstrap: Awaited<ReturnType<typeof removeClawBootstrap>>;
+      const cleanupErrors = await withConfigMutationExclusive(async (currentConfig) => {
         configRemoval.assertCurrent();
-        cleanupErrors.push(
-          ...(await cleanupClawAgentFilesystem({
-            agentId,
-            nextConfig: configRemoval.nextConfig,
-            targets: cleanupTargets,
-            runtime: clawRemoveQuietRuntime,
-            trashPath: options.trashPath,
-            stateDatabase: options,
-            assertCurrent,
-            retainWorkspace:
-              workspaceHasRemainingEntries ||
-              bootstrap?.action === "retainedModified" ||
-              workspaceFiles.some((file) => file.action === "retainedModified"),
-          })),
-        );
-      }
+        const sharedWorkspace = isClawWorkspaceSharedForCleanup({
+          agentId,
+          workspaceDir: cleanupTargets.workspaceDir,
+          config: currentConfig,
+          stateDatabase: options,
+        });
+        for (const file of record.workspaceFiles) {
+          assertCurrent();
+          workspaceFiles.push(
+            sharedWorkspace
+              ? { path: file.path, action: "retainedShared" }
+              : await removeClawWorkspaceFile(file, assertCurrent),
+          );
+        }
+        assertCurrent();
+        bootstrap =
+          sharedWorkspace && record.install.bootstrap && record.bootstrap.state === "pending"
+            ? { path: record.bootstrap.path, action: "retainedShared" }
+            : await removeClawBootstrap(record, assertCurrent);
+        const errors = workspaceFiles
+          .filter((file) => file.action === "error")
+          .map((file) => file.message ?? `Could not remove ${file.path}.`);
+        if (bootstrap?.action === "error") {
+          errors.push(bootstrap.message ?? `Could not remove ${bootstrap.path}.`);
+        }
+        if (errors.length === 0) {
+          const workspaceHasRemainingEntries = await workspaceContainsUntrackedEntries(
+            cleanupTargets.workspaceDir,
+            record.workspaceFiles.map((file) => file.path),
+          );
+          configRemoval.assertCurrent();
+          errors.push(
+            ...(await cleanupClawAgentFilesystem({
+              agentId,
+              nextConfig: currentConfig,
+              targets: cleanupTargets,
+              runtime: clawRemoveQuietRuntime,
+              trashPath: options.trashPath,
+              stateDatabase: options,
+              assertCurrent,
+              retainWorkspace:
+                sharedWorkspace ||
+                workspaceHasRemainingEntries ||
+                bootstrap?.action === "retainedModified" ||
+                workspaceFiles.some((file) => file.action === "retainedModified"),
+            })),
+          );
+        }
+        return errors;
+      });
       const complete = releaseClawRemoveRows(
         agentId,
+        cleanupTargets.agentDir,
         workspaceFiles,
         cleanupErrors,
         configRemoval.assertCurrent,

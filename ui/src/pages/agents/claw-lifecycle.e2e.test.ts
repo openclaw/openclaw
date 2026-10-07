@@ -261,6 +261,29 @@ describe.skipIf(!browserAvailable)("Claw lifecycle on agent Overview", () => {
             currentVersion: "1.2.0",
             targetVersion: "1.3.0",
           },
+          manifestDisclosure: {
+            source: {
+              packageName: "@openclaw/workflow-operator",
+              version: "1.3.0",
+              integrity: `sha256:${"a".repeat(64)}`,
+              byteLength: 123,
+            },
+            manifestJson: JSON.stringify({
+              schemaVersion: 1,
+              agent: { id: "workflow", name: "Workflow Operator" },
+              workspace: { bootstrapFiles: {}, files: [] },
+              packages: [
+                {
+                  kind: "plugin",
+                  source: "clawhub",
+                  ref: "@openclaw/workflow-tools",
+                  version: "1.3.0",
+                },
+              ],
+              mcpServers: {},
+              cronJobs: [],
+            }),
+          },
           actions: [
             {
               kind: "plugin",
@@ -392,6 +415,13 @@ describe.skipIf(!browserAvailable)("Claw lifecycle on agent Overview", () => {
         agentId: "workflow",
         source: { packageName: "@openclaw/workflow-operator", version: "1.3.0" },
       });
+      const manifest = dialog.locator("[data-claws-manifest]");
+      await manifest.waitFor();
+      expect(await manifest.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(
+        false,
+      );
+      await manifest.locator("summary").click();
+      expect(await manifest.locator("pre").textContent()).toContain("workflow-tools");
       const bounds = await dialog.boundingBox();
       expect(bounds).not.toBeNull();
       expect(bounds!.x).toBeGreaterThanOrEqual(0);

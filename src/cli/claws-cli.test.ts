@@ -331,81 +331,17 @@ describe("claws cli", () => {
     mocks.applyClawRemovePlan.mockReset();
     mocks.applyClawRemovePlan.mockResolvedValue(removal.result);
     mocks.buildClawUpdatePlan.mockReset();
-    mocks.buildClawUpdatePlan.mockResolvedValue({
-      schemaVersion: "openclaw.clawUpdatePlan.v1",
-      stability: "experimental",
-      dryRun: true,
-      mutationAllowed: false,
-      planIntegrity: "sha256:update-plan",
-      found: true,
-      agentId: "demo-agent",
-      currentClaw: { name: "@acme/demo-agent", version: "1.0.0", integrity: "sha256:old" },
-      targetClaw: { name: "@acme/demo-agent", version: "1.2.3", integrity: "sha256:new" },
-      summary: {
-        totalActions: 1,
-        added: 0,
-        changed: 1,
-        removed: 0,
-        released: 0,
-        unchanged: 0,
-        manual: 0,
-        blocked: 0,
-        capabilityChanges: 1,
-        capabilityEscalations: 1,
-      },
-      actions: [],
-      capabilityChanges: [
-        {
-          kind: "agent",
-          id: "demo-agent",
-          path: "agent.sandbox.mode",
-          action: "change",
-          classification: "escalation",
-          requiresDistinctConsent: true,
-          reason: "Agent capability field sandbox.mode changes in the target manifest.",
-          effect: { path: "sandbox.mode", current: "non-main", desired: "all" },
-          current: { summary: "non-main", digest: "sha256:current" },
-          desired: { summary: "all", digest: "sha256:desired" },
-        },
-      ],
-      readiness: cliTestHelpers.pluginSetupReadiness,
-      blockers: [],
-      diagnostics: [],
-    });
+    const update = cliTestHelpers.createClawUpdateFixtures();
+    mocks.buildClawUpdatePlan.mockResolvedValue(update.plan);
     mocks.applyClawUpdatePlan.mockReset();
-    mocks.applyClawUpdatePlan.mockResolvedValue({
-      schemaVersion: "openclaw.clawUpdateResult.v1",
-      stability: "experimental",
-      dryRun: false,
-      mutationAllowed: true,
-      status: "complete",
-      agentId: "demo-agent",
-      previousClaw: { name: "@acme/demo-agent", version: "1.0.0", integrity: "sha256:old" },
-      targetClaw: { name: "@acme/demo-agent", version: "1.2.3", integrity: "sha256:new" },
-      appliedActions: [],
-      installRecord: { agentId: "demo-agent" },
-    });
+    mocks.applyClawUpdatePlan.mockResolvedValue(update.result);
     mocks.leaseAssertOwned.mockReset();
     mocks.withOpenClawStateLease.mockReset();
     mocks.withOpenClawStateLease.mockImplementation(
       async (_options, run) => await run({ assertOwned: mocks.leaseAssertOwned }),
     );
     mocks.exportClawAgent.mockReset();
-    mocks.exportClawAgent.mockResolvedValue({
-      schemaVersion: "openclaw.clawExportResult.v1",
-      stability: "experimental",
-      agentId: "demo-agent",
-      outputDirectory: "/tmp/exported",
-      manifest: {
-        schemaVersion: 1,
-        agent: { id: "demo-agent" },
-        workspace: { bootstrapFiles: {}, files: [] },
-        packages: [],
-        mcpServers: {},
-        cronJobs: [],
-      },
-      filesWritten: ["package.json", "openclaw.claw.json"],
-    });
+    mocks.exportClawAgent.mockResolvedValue(cliTestHelpers.createClawExportFixture());
   });
 
   afterEach(() => {

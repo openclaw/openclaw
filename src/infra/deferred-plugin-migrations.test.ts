@@ -105,7 +105,7 @@ describe("deferred configured-plugin migrations", () => {
 
   it("excludes a detached migration writer while the plugin lease pins policy rows", async () => {
     const { env } = fixture();
-    const pending = {
+    const leasedMigration = {
       pluginId: "fixture",
       reason: "Waiting for repair",
       command: "openclaw doctor --fix",
@@ -115,7 +115,7 @@ describe("deferred configured-plugin migrations", () => {
 
     await withPluginLifecycleLease({ env }, async () => {
       writer = runOutsidePluginLifecycleLease(() =>
-        recordDeferredPluginMigrations({ env, pending: [pending] }).finally(() => {
+        recordDeferredPluginMigrations({ env, pending: [leasedMigration] }).finally(() => {
           writerSettled = true;
         }),
       );
@@ -126,7 +126,7 @@ describe("deferred configured-plugin migrations", () => {
 
     await writer;
     expect(writerSettled).toBe(true);
-    expect(readDeferredPluginMigrations({ env })).toEqual([pending]);
+    expect(readDeferredPluginMigrations({ env })).toEqual([leasedMigration]);
   });
 
   it.each(["transaction", "commit"] as const)(

@@ -19,12 +19,20 @@ import {
 } from "../infra/clawhub-packages.js";
 import { withExtractedArchiveRoot } from "../infra/install-flow.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
-import { readClawManifestFile } from "./reader.js";
+import {
+  CLAW_SOURCE_CACHE_DIR,
+  CLAWHUB_TIMEOUT_MS,
+  ClawHubSourceError,
+  persistExtractedSource,
+  readVerifiedArtifactSource,
+  sourceDirectoriesMatch,
+  type ResolvedClawHubSource,
+} from "./clawhub-source-artifact.js";
 import { isExactSemVer } from "./schema-portability.js";
-import type { ClawReadResult, ClawSourceIdentity } from "./types.js";
+import type { ClawSourceIdentity } from "./types.js";
 
-const CLAW_SOURCE_CACHE_DIR = "claws/sources";
-const CLAWHUB_TIMEOUT_MS = 30_000;
+export { ClawHubSourceError };
+
 const CATALOG_PAGE_SIZE = 100;
 const MAX_CATALOG_PAGES = 20;
 
@@ -56,17 +64,6 @@ export type ClawHubClawTrust = {
   riskAcknowledgementRequired: boolean;
   trustRecord: AcceptedTrust["trustInstallRecordFields"];
 };
-
-export class ClawHubSourceError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-    readonly warning?: string,
-  ) {
-    super(message);
-    this.name = "ClawHubSourceError";
-  }
-}
 
 function isOfficialClawName(name: string): boolean {
   const spec = parseRegistryNpmSpec(name);
@@ -333,116 +330,7 @@ export async function readClawHubClawDetail(
   };
 }
 
-async function sourceDirectoriesMatch(left: string, right: string): Promise<boolean> {
-  const [leftStat, rightStat] = await Promise.all([fs.lstat(left), fs.lstat(right)]);
-  if (!leftStat.isDirectory() || !rightStat.isDirectory()) {
-    return false;
-  }
-  const [leftEntries, rightEntries] = await Promise.all([
-    fs.readdir(left, { withFileTypes: true }),
-    fs.readdir(right, { withFileTypes: true }),
-  ]);
-  if (leftEntries.length !== rightEntries.length) {
-    return false;
-  }
-  const rightByName = new Map(rightEntries.map((entry) => [entry.name, entry]));
-  for (const leftEntry of leftEntries) {
-    const rightEntry = rightByName.get(leftEntry.name);
-    if (!rightEntry) {
-      return false;
-    }
-    const leftPath = path.join(left, leftEntry.name);
-    const rightPath = path.join(right, leftEntry.name);
-    if (leftEntry.isDirectory() && rightEntry.isDirectory()) {
-      if (!(await sourceDirectoriesMatch(leftPath, rightPath))) {
-        return false;
-      }
-    } else if (leftEntry.isFile() && rightEntry.isFile()) {
-      if (!(await fs.readFile(leftPath)).equals(await fs.readFile(rightPath))) {
-        return false;
-      }
-    } else {
-      return false;
-    }
-  }
-  return true;
-}
-
-async function persistExtractedSource(params: {
-  rootDir: string;
-  artifactSha256: string;
-  stateDir?: string;
-}): Promise<string> {
-  const cacheRoot = path.join(params.stateDir ?? resolveStateDir(), CLAW_SOURCE_CACHE_DIR);
-  const destination = path.join(cacheRoot, params.artifactSha256);
-  await fs.mkdir(cacheRoot, { recursive: true, mode: 0o700 });
-  const staging = await fs.mkdtemp(path.join(cacheRoot, ".staging-"));
-  const stagedPackage = path.join(staging, "package");
-  try {
-    await fs.cp(params.rootDir, stagedPackage, {
-      recursive: true,
-      force: false,
-      errorOnExist: true,
-      preserveTimestamps: false,
-      verbatimSymlinks: true,
-    });
-    try {
-      await fs.rename(stagedPackage, destination);
-    } catch (error) {
-      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-      if (code !== "EEXIST" && code !== "ENOTEMPTY") {
-        throw error;
-      }
-      if (!(await sourceDirectoriesMatch(stagedPackage, destination))) {
-        throw new ClawHubSourceError(
-          "clawhub_cached_source_mismatch",
-          "A cached Claw source differs from the verified release artifact.",
-        );
-      }
-    }
-    return destination;
-  } finally {
-    await fs.rm(staging, { recursive: true, force: true });
-  }
-}
-
-type ResolvedClawHubSource = Extract<ClawReadResult, { ok: true }>;
 type PersistClawHubSource = () => Promise<ResolvedClawHubSource>;
-
-async function readVerifiedArtifactSource(params: {
-  sourceRoot: string;
-  packageName: string;
-  version: string;
-  artifactSha256: string;
-  artifactByteLength: number;
-}): Promise<ResolvedClawHubSource> {
-  const loaded = await readClawManifestFile(params.sourceRoot);
-  if (!loaded.ok) {
-    throw new ClawHubSourceError(
-      "clawhub_manifest_invalid",
-      "Downloaded Claw package manifest is invalid.",
-    );
-  }
-  if (
-    loaded.source.kind !== "package" ||
-    loaded.source.name !== params.packageName ||
-    loaded.source.version !== params.version
-  ) {
-    throw new ClawHubSourceError(
-      "clawhub_identity_mismatch",
-      "Downloaded Claw package identity does not match the selected release.",
-    );
-  }
-  return {
-    ...loaded,
-    source: {
-      ...loaded.source,
-      integrityKind: "artifact",
-      integrity: `sha256:${params.artifactSha256}`,
-      byteLength: params.artifactByteLength,
-    },
-  };
-}
 
 export async function readMatchingCachedClawHubSource(params: {
   recorded: ClawSourceIdentity;
@@ -637,7 +525,9 @@ export async function withResolvedClawHubSource<T>(
           persistedSource ??= (async () => {
             const sourceRoot = await persistExtractedSource({
               rootDir,
+              archivePath: download.archivePath,
               artifactSha256: expectedSha256,
+              artifactByteLength,
               stateDir: params.stateDir,
             });
             return await readVerifiedArtifactSource({

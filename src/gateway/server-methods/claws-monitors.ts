@@ -1,7 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { prepareAgentDeleteDatabases } from "../../agents/agent-delete-databases.js";
+import {
+  prepareAgentDeleteDatabases,
+  resolveAgentDeleteRuntimeDirs,
+  retireAgentDeleteRuntime,
+} from "../../agents/agent-delete-databases.js";
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import { matchesClawAgentConfigDigest } from "../../claws/agent-config-ownership.js";
 import { clawCronGatewayJobMatchesRef } from "../../claws/cron.js";
@@ -369,6 +373,41 @@ export const clawsMonitorHandlers = {
         throw new Error(
           "Gateway cleanup state changed before database preparation; retry Claw removal.",
         );
+      }
+      if (input.phase === "drain") {
+        const stateContext = captureOpenClawStateReadWorkerContext();
+        const stateOptions = {
+          path: stateContext.admission.databasePath,
+          env: stateContext.environment,
+        };
+        invalidateRegisteredAgentDatabasesMemo(stateOptions);
+        const registry = await prepareOpenClawAgentDatabaseRegistrySnapshotRead({
+          ...stateOptions,
+          includeIncompatibleSchemaVersions: true,
+        }).read();
+        stateContext.admission.assertCurrent();
+        registry.assertCurrent();
+        if (registry.result.status !== "available") {
+          throw new Error("Agent database registry is unavailable for Claw runtime retirement.");
+        }
+        await retireAgentDeleteRuntime(
+          context.getRuntimeConfig(),
+          {
+            entry: { agentId: input.agentId },
+            assertCurrentAsync: async () => {
+              stateContext.admission.assertCurrent();
+              registry.assertCurrent();
+              const current = await assertCurrent();
+              if (!isLocallyDrained(context, input.agentId, true, current)) {
+                throw new Error("Gateway cleanup state changed during runtime retirement.");
+              }
+              stateContext.admission.assertCurrent();
+              registry.assertCurrent();
+            },
+          },
+          resolveAgentDeleteRuntimeDirs(input.agentId, journal.agentDir, registry.result.entries),
+        );
+        await assertCurrent();
       }
       if (input.phase === "quiesce") {
         await prepareMonitorAgentDatabases(

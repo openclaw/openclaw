@@ -530,6 +530,11 @@ The agent's settings show its installed resources and offer **Update** and
 **Remove** with a review before either change. See [Claws](/cli/claws) for
 the package contract and local-source CLI commands.
 
+If a previous removal retained files in the old workspace, catalog Add reviews
+an unused sibling workspace such as `workspace-my-agent-2`. It never adopts or
+overwrites the retained files. If that destination becomes occupied before Add,
+review the new plan before trying again.
+
 Turning the Labs switch off hides discovery, Add, and Update. Agents already
 installed from Claws keep running; their status and safe removal remain
 available.

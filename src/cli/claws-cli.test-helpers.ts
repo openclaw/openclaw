@@ -1,6 +1,7 @@
 import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { ClawRemovePlan, ClawRemoveResult } from "../claws/lifecycle-remove-contract.js";
+import type { ClawUpdatePlan } from "../claws/update-plan-types.js";
 
 export const minimalManifest = {
   schemaVersion: 1,
@@ -105,5 +106,82 @@ export function createClawRemoveFixtures(): { plan: ClawRemovePlan; result: Claw
       cronJobs: [],
       packageRefsReleased: 1,
     },
+  };
+}
+
+export function createClawUpdateFixtures() {
+  const plan: ClawUpdatePlan = {
+    schemaVersion: "openclaw.clawUpdatePlan.v1",
+    stability: "experimental",
+    dryRun: true,
+    mutationAllowed: false,
+    planIntegrity: "sha256:update-plan",
+    found: true,
+    agentId: "demo-agent",
+    currentClaw: { name: "@acme/demo-agent", version: "1.0.0", integrity: "sha256:old" },
+    targetClaw: { name: "@acme/demo-agent", version: "1.2.3", integrity: "sha256:new" },
+    summary: {
+      totalActions: 1,
+      added: 0,
+      changed: 1,
+      removed: 0,
+      released: 0,
+      unchanged: 0,
+      manual: 0,
+      blocked: 0,
+      capabilityChanges: 1,
+      capabilityEscalations: 1,
+    },
+    actions: [],
+    capabilityChanges: [
+      {
+        kind: "agent",
+        id: "demo-agent",
+        path: "agent.sandbox.mode",
+        action: "change",
+        classification: "escalation",
+        requiresDistinctConsent: true,
+        reason: "Agent capability field sandbox.mode changes in the target manifest.",
+        effect: { path: "sandbox.mode", current: "non-main", desired: "all" },
+        current: { summary: "non-main", digest: "sha256:current" },
+        desired: { summary: "all", digest: "sha256:desired" },
+      },
+    ],
+    readiness: pluginSetupReadiness,
+    blockers: [],
+    diagnostics: [],
+  };
+  return {
+    plan,
+    result: {
+      schemaVersion: "openclaw.clawUpdateResult.v1",
+      stability: "experimental",
+      dryRun: false,
+      mutationAllowed: true,
+      status: "complete",
+      agentId: "demo-agent",
+      previousClaw: { name: "@acme/demo-agent", version: "1.0.0", integrity: "sha256:old" },
+      targetClaw: { name: "@acme/demo-agent", version: "1.2.3", integrity: "sha256:new" },
+      appliedActions: [],
+      installRecord: { agentId: "demo-agent" },
+    },
+  };
+}
+
+export function createClawExportFixture() {
+  return {
+    schemaVersion: "openclaw.clawExportResult.v1",
+    stability: "experimental",
+    agentId: "demo-agent",
+    outputDirectory: "/tmp/exported",
+    manifest: {
+      schemaVersion: 1,
+      agent: { id: "demo-agent" },
+      workspace: { bootstrapFiles: {}, files: [] },
+      packages: [],
+      mcpServers: {},
+      cronJobs: [],
+    },
+    filesWritten: ["package.json", "openclaw.claw.json"],
   };
 }

@@ -390,14 +390,17 @@ export async function validateClawProject(
   }
   let license: { byteLength: number; digest: string } | undefined;
   try {
-    const licenseEntry = await lstat(resolve(root, "LICENSE")).catch(
-      (error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") {
-          return undefined;
-        }
-        throw error;
-      },
-    );
+    const licenseEntry = await lstat(resolve(root, "LICENSE")).catch((error: unknown) => {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
+        return undefined;
+      }
+      throw error;
+    });
     if (licenseEntry) {
       const sourceRoot = await fsSafeRoot(root);
       const read = await sourceRoot.read("LICENSE", {

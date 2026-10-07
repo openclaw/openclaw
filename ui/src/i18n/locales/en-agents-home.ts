@@ -75,6 +75,14 @@ const enAgentsHome = {
     done: "Done",
     adminRequired: "An admin connection is required to add Claws.",
   },
+  clawsManifestReview: {
+    title: "Package manifest",
+    integrity: "Package SHA-256",
+    bytes: "Archive bytes",
+    manifest: "Grouped manifest",
+    profile: "OpenClaw profile",
+    unavailable: "Package manifest review is unavailable. Refresh the plan before continuing.",
+  },
   clawsPluginReview: {
     title: "Plugin capability review",
     install: "Will install",

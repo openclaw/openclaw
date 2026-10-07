@@ -200,6 +200,50 @@ describe("AgentsHomePage", () => {
     expect(gateway.setSessionKey).toHaveBeenCalledWith("agent:workflow-operator:team-room");
   });
 
+  it("offers the grouped manifest before Add without interpreting package text as HTML", async () => {
+    const untrusted = '</pre><img src="x" onerror="alert(1)">';
+    const { page } = createPage({
+      clawsEnabled: true,
+      manifestJson: JSON.stringify({
+        schemaVersion: 1,
+        agent: { id: "workflow-operator", description: untrusted },
+        workspace: { bootstrapFiles: {}, files: [] },
+        packages: [],
+        mcpServers: {},
+        cronJobs: [],
+      }),
+    });
+    await vi.waitFor(() => expect(page.querySelector("[data-claws-entry] button")).not.toBeNull());
+    page.querySelector<HTMLElement>("[data-claws-entry] button")?.click();
+    await vi.waitFor(() => expect(page.querySelector("[data-claws-manifest]")).not.toBeNull());
+    const disclosure = page.querySelector<HTMLDetailsElement>("[data-claws-manifest]");
+    expect(disclosure?.open).toBe(false);
+    expect(disclosure?.textContent).toContain("@openclaw/workflow-operator");
+    disclosure?.querySelector("summary")?.click();
+    expect(disclosure?.open).toBe(true);
+    expect(JSON.parse(disclosure?.querySelector("pre")?.textContent ?? "").agent.description).toBe(
+      untrusted,
+    );
+    expect(disclosure?.querySelector("img")).toBeNull();
+    expect(page.querySelector<HTMLButtonElement>("[data-claws-confirm]")?.disabled).toBe(false);
+  });
+
+  it("does not consent to Add without a valid grouped manifest disclosure", async () => {
+    for (const options of [{ missingManifestDisclosure: true }, { manifestJson: "not-json" }]) {
+      const { page, request } = createPage({ clawsEnabled: true, ...options });
+      await vi.waitFor(() =>
+        expect(page.querySelector("[data-claws-entry] button")).not.toBeNull(),
+      );
+      page.querySelector<HTMLElement>("[data-claws-entry] button")?.click();
+      await vi.waitFor(() =>
+        expect(page.querySelector<HTMLButtonElement>("[data-claws-confirm]")?.disabled).toBe(true),
+      );
+      page.querySelector<HTMLElement>("[data-claws-confirm]")?.click();
+      expect(request).not.toHaveBeenCalledWith("claws.add.apply", expect.anything());
+      page.remove();
+    }
+  });
+
   it("counts a reviewed profile plugin omitted from the catalog manifest summary", async () => {
     const { page } = createPage({ clawsEnabled: true, catalogPluginCount: 0 });
     await vi.waitFor(() => expect(page.querySelector("[data-claws-entry] button")).not.toBeNull());

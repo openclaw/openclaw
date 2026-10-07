@@ -28,6 +28,7 @@ import {
   type ClawCatalogSource,
 } from "./claws-catalog-client.ts";
 import { renderClawsCatalogDialog } from "./claws-catalog-view.ts";
+import { hasCompleteClawManifestDisclosure } from "./claws-manifest-review.ts";
 import { isRejectedClawMutation } from "./claws-mutation-error.ts";
 import { pluginAcknowledgements } from "./claws-plugin-review.ts";
 import { skillAcknowledgements } from "./claws-skill-review.ts";
@@ -410,6 +411,7 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
       plan.blockers.length > 0 ||
       plan.actions.some((action) => action.blocked) ||
       !hasCompleteClawDisclosures(plan) ||
+      !hasCompleteClawManifestDisclosure(plan, source) ||
       (plan.riskAcknowledgementRequired && !this.riskAcknowledged) ||
       !acknowledgeCapabilities ||
       !acknowledgeSkillWarnings

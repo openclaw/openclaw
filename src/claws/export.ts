@@ -2,17 +2,20 @@ import { createHash } from "node:crypto";
 import { mkdir, realpath, rm } from "node:fs/promises";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stringify as stringifyYaml } from "yaml";
 import { listAgentEntries, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { prepareLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isAvatarDataUrl, isAvatarHttpUrl } from "../shared/avatar-policy.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
+import { withVerifiedCachedClawHubSource } from "./clawhub-source-artifact.js";
 import { digestClawBytes } from "./digest.js";
 import { readClawStatus } from "./lifecycle-state.js";
 import type { PackageRemovalDeps } from "./package-remove.js";
@@ -30,6 +33,7 @@ import {
   type ClawOpenClawExtension,
   type ClawOpenClawProfile,
   type ClawPackagePreflight,
+  type ClawSourceIdentity,
 } from "./types.js";
 
 export const CLAW_EXPORT_RESULT_SCHEMA_VERSION = "openclaw.clawExportResult.v1" as const;
@@ -226,6 +230,47 @@ function derivativePackageVersion(manifest: ClawManifest, contents: ExportConten
 }
 
 type ExportContent = { path: string; content: Buffer };
+type ExportSourceLicense = { metadata?: string; notice?: Buffer };
+
+async function readVerifiedOfficialArtifactLicense(
+  source: ClawSourceIdentity,
+  env: NodeJS.ProcessEnv | undefined,
+): Promise<ExportSourceLicense | undefined> {
+  if (
+    source.kind !== "package" ||
+    source.integrityKind !== "artifact" ||
+    !source.name.startsWith("@openclaw/")
+  ) {
+    return undefined;
+  }
+  try {
+    return await withVerifiedCachedClawHubSource({
+      recorded: source,
+      stateDir: resolveStateDir(env),
+      run: async (packageRoot) => {
+        const verifiedRoot = await fsSafeRoot(packageRoot);
+        const packageJson = JSON.parse(
+          (
+            await verifiedRoot.readBytes("package.json", { maxBytes: MAX_EXPORT_FILE_BYTES })
+          ).toString("utf8"),
+        ) as unknown;
+        const metadata =
+          isRecord(packageJson) && typeof packageJson.license === "string"
+            ? packageJson.license
+            : undefined;
+        const notice = (await verifiedRoot.exists("LICENSE"))
+          ? await verifiedRoot.readBytes("LICENSE", { maxBytes: MAX_EXPORT_FILE_BYTES })
+          : undefined;
+        return { ...(metadata ? { metadata } : {}), ...(notice ? { notice } : {}) };
+      },
+    });
+  } catch (error) {
+    throw new ClawExportError(
+      "source_artifact_unverifiable",
+      `Cannot preserve the installed Claw's license because its retained archive or cached source could not be verified: ${coerceErrorMessage(error)}`,
+    );
+  }
+}
 
 async function readAuthorBootstrap(path: string): Promise<Buffer> {
   const resolvedPath = resolve(resolveUserPath(path));
@@ -394,6 +439,7 @@ export async function exportClawAgent(
   const authorBootstrap = options.bootstrapPath
     ? await readAuthorBootstrap(options.bootstrapPath)
     : undefined;
+  const sourceLicense = await readVerifiedOfficialArtifactLicense(record.install.claw, options.env);
 
   const workspace = await fsSafeRoot(record.install.workspace, {
     hardlinks: "reject",
@@ -565,8 +611,13 @@ export async function exportClawAgent(
         ...(clawMarkdownBody ? [{ path: "CLAW.md#body", content: clawMarkdownBody }] : []),
         ...(openClawProfileRaw ? [{ path: openClawProfilePath, content: openClawProfileRaw }] : []),
         ...(exportedBootstrap ? [{ path: "BOOTSTRAP.md", content: exportedBootstrap }] : []),
+        ...(sourceLicense?.metadata
+          ? [{ path: "package.json#license", content: Buffer.from(sourceLicense.metadata) }]
+          : []),
+        ...(sourceLicense?.notice ? [{ path: "LICENSE", content: sourceLicense.notice }] : []),
       ]),
       type: "module",
+      ...(sourceLicense?.metadata ? { license: sourceLicense.metadata } : {}),
       openclaw: { claw: "CLAW.md" },
     };
     await output.write("package.json", Buffer.from(`${JSON.stringify(packageJson, null, 2)}\n`), {
@@ -575,6 +626,10 @@ export async function exportClawAgent(
     filesWritten.push("package.json");
     await output.write("CLAW.md", clawMarkdownRaw, { overwrite: false });
     filesWritten.push("CLAW.md");
+    if (sourceLicense?.notice) {
+      await output.write("LICENSE", sourceLicense.notice, { overwrite: false });
+      filesWritten.push("LICENSE");
+    }
     if (exportedBootstrap) {
       await output.write("BOOTSTRAP.md", exportedBootstrap, { overwrite: false });
       filesWritten.push("BOOTSTRAP.md");

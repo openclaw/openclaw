@@ -192,6 +192,7 @@ export async function buildGatewayClawUpdatePlan(input: {
       })
     : [];
   const projection = projectClawUpdatePlan(plan, source.source.packageRoot, {
+    source,
     config: input.config,
     desiredAgent,
     currentJobs: prepared.inventory.cronJobs

@@ -91,7 +91,7 @@ export async function applyClawAddForGateway(
         });
         const initialProjection = projectGatewayClawAddPlan(
           initialPlan,
-          source.source.packageRoot,
+          source,
           trust,
           initialContext.config,
         );
@@ -186,7 +186,7 @@ export async function applyClawAddForGateway(
                     });
                     const currentProjection = projectGatewayClawAddPlan(
                       currentPlan,
-                      source.source.packageRoot,
+                      source,
                       trust,
                       currentContext.config,
                     );
@@ -238,7 +238,7 @@ export async function applyClawAddForGateway(
                     });
                     const persistedProjection = projectGatewayClawAddPlan(
                       persistedPlan,
-                      persisted.source.packageRoot,
+                      persisted,
                       trust,
                       persistedContext.config,
                     );

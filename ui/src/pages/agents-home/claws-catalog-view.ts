@@ -11,6 +11,10 @@ import type {
   ClawCatalogEntry,
 } from "./claws-catalog-client.ts";
 import { hasCompleteClawActionEffects, renderClawActionEffect } from "./claws-effect-review.ts";
+import {
+  hasCompleteClawManifestDisclosure,
+  renderClawManifestReview,
+} from "./claws-manifest-review.ts";
 import { pluginAcknowledgements, renderClawPluginReviews } from "./claws-plugin-review.ts";
 import { skillAcknowledgements, renderClawSkillReviews } from "./claws-skill-review.ts";
 import { renderClawTrustWarning } from "./claws-trust-warning.ts";
@@ -132,6 +136,10 @@ function renderReview(props: ClawsCatalogViewProps) {
   }
   const detail = props.detail;
   const plan = props.plan;
+  const source = {
+    packageName: selected.packageName,
+    version: detail?.version ?? selected.latestVersion ?? "",
+  };
   const blocked = Boolean(plan?.blockers.length || plan?.actions.some((action) => action.blocked));
   const effectsComplete = hasCompleteClawActionEffects(plan);
   const canConfirm =
@@ -144,6 +152,7 @@ function renderReview(props: ClawsCatalogViewProps) {
     !blocked &&
     Boolean(detail && plan) &&
     hasCompleteClawDisclosures(plan) &&
+    hasCompleteClawManifestDisclosure(plan, source) &&
     effectsComplete &&
     (!plan?.riskAcknowledgementRequired || props.riskAcknowledged) &&
     pluginAcknowledgements(plan?.pluginReviews, props.acceptedPluginRisks) !== null &&
@@ -188,13 +197,18 @@ function renderReview(props: ClawsCatalogViewProps) {
                 <h4>${t("clawsCatalog.contents")}</h4>
                 ${renderResourceCounts(detail, plan)}
               </section>
+              ${renderClawManifestReview(plan, source)}
               <section class="claws-catalog__section">
                 <h4>${t("clawsCatalog.changes")}</h4>
                 <ul class="claws-catalog__facts">
                   ${plan.actions.map(
                     (action) => html`<li>
                       <strong>${action.action} ${action.kind}</strong>
-                      <span>${action.id}${action.reason ? ` · ${action.reason}` : ""}</span>
+                      <span
+                        >${action.kind === "workspace" ? (plan.target.workspace ?? action.id) : action.id}${
+                          action.reason ? ` · ${action.reason}` : ""
+                        }</span
+                      >
                       ${renderClawActionEffect(action.effect)}
                     </li>`,
                   )}

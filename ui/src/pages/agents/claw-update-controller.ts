@@ -9,6 +9,7 @@ import {
   type ClawCatalogSource,
   type ClawStatusRecord,
 } from "../agents-home/claws-catalog-client.ts";
+import { hasCompleteClawManifestDisclosure } from "../agents-home/claws-manifest-review.ts";
 import { isRejectedClawMutation } from "../agents-home/claws-mutation-error.ts";
 import { pluginAcknowledgements } from "../agents-home/claws-plugin-review.ts";
 import { skillAcknowledgements } from "../agents-home/claws-skill-review.ts";
@@ -258,6 +259,10 @@ export class ClawUpdateController {
       plan.blockers.length > 0 ||
       plan.actions.some((action) => action.blocked) ||
       !hasCompleteClawDisclosures(plan) ||
+      !hasCompleteClawManifestDisclosure(plan, {
+        packageName: detail.packageName,
+        version: detail.version,
+      }) ||
       plan.target.agentId !== record.agentId ||
       plan.target.currentVersion !== record.version ||
       plan.target.targetVersion !== detail.version ||

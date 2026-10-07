@@ -376,6 +376,181 @@ describe("Claw plugin capability consent through the managed installer", () => {
     });
   });
 
+  it("blocks Add before reinstalling a plugin left disabled by uninstall", async () => {
+    const fixture = await createPluginClawFixture(dirs.make("openclaw-claw-uninstalled-plugin-"));
+    const { configPath, env, manifestPath } = fixture;
+    const config: OpenClawConfig = {
+      agents: { entries: {} },
+      plugins: { entries: { diffs: { enabled: false } } },
+    };
+    await fs.writeFile(configPath, JSON.stringify(config));
+
+    await withEnvAsync(env, async () => {
+      const source = await readClawManifestFile(manifestPath);
+      expect(source.ok).toBe(true);
+      if (!source.ok) {
+        return;
+      }
+      const plan = await buildGatewayClawAddPlan(source, { config, sourceMcpServers: {} });
+      const projected = projectGatewayClawAddPlan(
+        plan,
+        source.source.packageRoot,
+        {
+          riskAcknowledgementRequired: false,
+          trustRecord: {
+            clawhubTrustDisposition: "clean",
+            clawhubTrustCheckedAt: "2026-09-30T00:00:00.000Z",
+          },
+        },
+        config,
+      );
+
+      expect(projected.blockers).toContainEqual(
+        expect.objectContaining({
+          code: "plugin_disabled",
+          message: expect.stringContaining("reinstall it there first if needed"),
+        }),
+      );
+      expect(
+        projected.actions.find((action) => action.id === `plugin:${fixture.packageName}`),
+      ).toMatchObject({ blocked: true });
+      await expect(
+        applyClawAddPlan(plan, { env, config, consentPlanIntegrity: plan.planIntegrity }),
+      ).rejects.toMatchObject({ code: "plan_blocked" });
+      expect(readPersistedInstalledPluginIndexInstallRecords({ env })?.diffs).toBeFalsy();
+      await expect(
+        fs.stat(path.join(resolveDefaultPluginExtensionsDir(env), "diffs")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("blocks Add before installing a plugin while host plugins are disabled", async () => {
+    const fixture = await createPluginClawFixture(dirs.make("openclaw-claw-plugins-off-"));
+    const { configPath, env, manifestPath } = fixture;
+    const config: OpenClawConfig = {
+      agents: { entries: {} },
+      plugins: { enabled: false },
+    };
+    await fs.writeFile(configPath, JSON.stringify(config));
+
+    await withEnvAsync(env, async () => {
+      const source = await readClawManifestFile(manifestPath);
+      expect(source.ok).toBe(true);
+      if (!source.ok) {
+        return;
+      }
+      const plan = await buildGatewayClawAddPlan(source, { config, sourceMcpServers: {} });
+      const projected = projectGatewayClawAddPlan(
+        plan,
+        source.source.packageRoot,
+        {
+          riskAcknowledgementRequired: false,
+          trustRecord: {
+            clawhubTrustDisposition: "clean",
+            clawhubTrustCheckedAt: "2026-09-30T00:00:00.000Z",
+          },
+        },
+        config,
+      );
+
+      expect(projected.blockers).toContainEqual(
+        expect.objectContaining({
+          code: "plugin_disabled",
+          message: expect.stringContaining("Enable it in Plugins"),
+        }),
+      );
+      expect(
+        projected.actions.find((action) => action.id === `plugin:${fixture.packageName}`),
+      ).toMatchObject({ blocked: true });
+      await expect(
+        applyClawAddPlan(plan, { env, config, consentPlanIntegrity: plan.planIntegrity }),
+      ).rejects.toMatchObject({ code: "plan_blocked" });
+      expect(readPersistedInstalledPluginIndexInstallRecords({ env })?.diffs).toBeFalsy();
+      await expect(
+        fs.stat(path.join(resolveDefaultPluginExtensionsDir(env), "diffs")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it.each([
+    { name: "denylist", policy: { deny: ["diffs", "other"] } },
+    { name: "allowlist", policy: { allow: ["other"] } },
+  ])("blocks a fresh plugin install excluded by the host $name", async ({ name, policy }) => {
+    const fixture = await createPluginClawFixture(dirs.make(`openclaw-claw-plugin-${name}-`));
+    const { configPath, env, manifestPath } = fixture;
+    const config: OpenClawConfig = {
+      ...fixture.config,
+      plugins: {
+        ...fixture.config.plugins,
+        ...policy,
+      },
+    };
+    const originalConfig = JSON.stringify(config);
+    await fs.writeFile(configPath, originalConfig);
+
+    await withEnvAsync(env, async () => {
+      const source = await readClawManifestFile(manifestPath);
+      expect(source.ok).toBe(true);
+      if (!source.ok) {
+        return;
+      }
+      const plan = await buildGatewayClawAddPlan(source, { config, sourceMcpServers: {} });
+      const projected = projectGatewayClawAddPlan(
+        plan,
+        source.source.packageRoot,
+        {
+          riskAcknowledgementRequired: false,
+          trustRecord: {
+            clawhubTrustDisposition: "clean",
+            clawhubTrustCheckedAt: "2026-09-30T00:00:00.000Z",
+          },
+        },
+        config,
+      );
+      expect(projected.blockers).toContainEqual(
+        expect.objectContaining({ code: "plugin_disabled" }),
+      );
+      expect(projected.actions).toContainEqual(
+        expect.objectContaining({ id: `plugin:${fixture.packageName}`, blocked: true }),
+      );
+      await expect(
+        applyClawAddPlan(plan, { env, config, consentPlanIntegrity: plan.planIntegrity }),
+      ).rejects.toMatchObject({ code: "plan_blocked" });
+      expect(await fs.readFile(configPath, "utf8")).toBe(originalConfig);
+      expect(readPersistedInstalledPluginIndexInstallRecords({ env })?.diffs).toBeFalsy();
+      await expect(
+        fs.stat(path.join(resolveDefaultPluginExtensionsDir(env), "diffs")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("installs and enables a plugin under the default host policy", async () => {
+    const fixture = await createPluginClawFixture(dirs.make("openclaw-claw-plugin-default-"));
+    const { config, configPath, env, manifestPath } = fixture;
+
+    await withEnvAsync(env, async () => {
+      const source = await readClawManifestFile(manifestPath);
+      expect(source.ok).toBe(true);
+      if (!source.ok) {
+        return;
+      }
+      const plan = await buildGatewayClawAddPlan(source, { config, sourceMcpServers: {} });
+      expect(plan.blockers).toEqual([]);
+      const result = await applyClawAddPlan(plan, {
+        env,
+        config,
+        consentPlanIntegrity: plan.planIntegrity,
+        pluginConsent: consentForPluginPlan(plan),
+      });
+
+      expect(result.status).toBe("complete");
+      const installedConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+      expect(installedConfig.plugins?.allow).toBeUndefined();
+      expect(installedConfig.plugins?.deny).toBeUndefined();
+      expect(installedConfig.plugins?.entries?.diffs?.enabled).toBe(true);
+    });
+  });
+
   it("rejects a newly review-required community plugin before an Add install commits", async () => {
     const fixture = await createPluginClawFixture(
       dirs.make("openclaw-claw-plugin-trust-add-"),

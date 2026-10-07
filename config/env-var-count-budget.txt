@@ -7,6 +7,6 @@
 # fs-safe 0.23 moves five existing native/Python environment names into OpenClaw's compatibility owner.
 # OPENCLAW_PROMPT_CACHE_ASSERT (#163379) is the owner-approved prompt-cache assertion switch; the operator system-update
 # custom-type constant no longer counts as an OPENCLAW_* name.
-# Claws no longer requires an OPENCLAW_EXPERIMENTAL_CLAWS process opt-in;
-# its internal Remove CLI bridge marker keeps the total unchanged.
-477
+# Claws no longer requires an OPENCLAW_EXPERIMENTAL_CLAWS process opt-in.
+# Its Remove CLI bridge marker is private process IPC, not an OPENCLAW_* setting.
+476

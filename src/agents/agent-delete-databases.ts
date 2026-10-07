@@ -42,9 +42,26 @@ export type AgentDeleteDatabasePlan = {
   relocatedFileGroups: string[][];
 };
 
+export function resolveAgentDeleteRuntimeDirs(
+  agentId: string,
+  agentDir: string,
+  registeredDatabases: readonly OpenClawRegisteredAgentDatabase[],
+): string[] {
+  const normalizedId = normalizeAgentId(agentId);
+  return [
+    agentDir,
+    ...registeredDatabases
+      .filter((entry) => normalizeAgentId(entry.agentId) === normalizedId)
+      .map((entry) => path.dirname(entry.path)),
+  ];
+}
+
 export async function retireAgentDeleteRuntime(
   cfg: OpenClawConfig,
-  deletion: AgentDeletionOperation,
+  deletion: {
+    entry: Pick<AgentDeletionOperation["entry"], "agentId">;
+    assertCurrentAsync: AgentDeletionOperation["assertCurrentAsync"];
+  },
   agentDirs: readonly string[],
 ): Promise<void> {
   const agentId = deletion.entry.agentId;
@@ -280,10 +297,7 @@ export async function prepareAgentDeleteDatabases(
     return relative.startsWith("..") || path.isAbsolute(relative);
   });
   return {
-    agentDirs: [
-      agentDir,
-      ...Array.from(registeredDatabasePaths, (databasePath) => path.dirname(databasePath)),
-    ],
+    agentDirs: resolveAgentDeleteRuntimeDirs(agentId, agentDir, registeredDatabases),
     registrationPaths: [...registeredDatabasePaths],
     readerPaths: databasePaths,
     fileGroups,
