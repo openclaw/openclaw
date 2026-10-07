@@ -181,6 +181,9 @@ export function createWorkerPlacementMoveService(options: {
       if (request.abandonSource) {
         reportPlacementTransition(onTransition, local);
       }
+      if (local.state === "reclaimed") {
+        assertRequiredWorkerMove(getRuntimeConfig(), intent.target);
+      }
       if (local.state !== "local") {
         throw new Error(`Session ${request.sessionKey} move did not return to local placement`);
       }
@@ -280,6 +283,9 @@ export function createWorkerPlacementMoveService(options: {
       } else if (placement.state === "draining") {
         assertDestination();
         const local = await options.reclaimSource(identity, intent, assertDestination);
+        if (local.state === "reclaimed") {
+          return;
+        }
         if (local.state !== "local") {
           throw new Error(`Session ${identity.sessionKey} move recovery did not return local`);
         }

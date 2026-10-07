@@ -23,6 +23,7 @@ import {
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
 } from "../../infra/node-commands.js";
+import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import * as projectClones from "../../projects/project-clone.js";
@@ -232,6 +233,7 @@ process.stdin.pipe(child.stdin);
               };
               await state.writeConfig(config);
               publishConfig("development");
+              let activateDuringDestroy = false;
               const provider: WorkerProvider = {
                 id: "synthetic",
                 requiresNodeEnrollment: true,
@@ -245,6 +247,10 @@ process.stdin.pipe(child.stdin);
                 inspect: async () => ({ status: "active" }),
                 destroy: async ({ leaseId }) => {
                   await fs.rm(leaseId, { recursive: true, force: true });
+                  if (activateDuringDestroy) {
+                    publishConfig("development");
+                    activateDuringDestroy = false;
+                  }
                 },
               };
               const environments = createWorkerEnvironmentService({
@@ -285,12 +291,17 @@ process.stdin.pipe(child.stdin);
               });
               runtime.bindNodeWorkerSupervisorTransport(adapter);
               await fs.mkdir(state.statePath("projects"), { recursive: true });
+              const lateSettlements: string[] = [];
               for (const mode of [
                 "allowed",
                 "policy-activated",
                 "source-reassigned",
                 "accepted-stop",
                 "accepted-attached-stop",
+                "accepted-allowed",
+                "accepted-policy-destroy",
+                "accepted-policy-transaction",
+                "accepted-policy-commit",
               ] as const) {
                 publishConfig("development");
                 const url = `https://github.com/openclaw/destination-${mode}.git`;
@@ -416,7 +427,8 @@ process.stdin.pipe(child.stdin);
                   recursive: true,
                 });
                 expect(cloneFilesBefore).not.toContain(sha256HexPrefixCore(url, 16));
-                if (mode === "accepted-stop" || mode === "accepted-attached-stop") {
+                const latePolicy = mode.startsWith("accepted-policy-");
+                if (mode.startsWith("accepted-")) {
                   const claim = await placements.claimReclaimWorkspaceResult({
                     ...identity,
                     claimId: "reclaim-accepted-stop",
@@ -455,17 +467,71 @@ process.stdin.pipe(child.stdin);
                   if (mode === "accepted-stop") {
                     await environments.destroy(active.environmentId);
                   }
-                  publishConfig("development");
-                  await runtime.dispatchService.reconcileActive(active.environmentId);
+                  const originalComplete = placements.completePlacementMoveSourceToLocal;
+                  const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+                  let policyActivated = false;
+                  const admission = vi.spyOn(
+                    operationAdmission,
+                    "createSqliteWorkerOperationAdmission",
+                  );
+                  const completion = vi
+                    .spyOn(placements, "completePlacementMoveSourceToLocal")
+                    .mockImplementation((...args) => {
+                      if (
+                        mode === "accepted-policy-transaction" ||
+                        mode === "accepted-policy-commit"
+                      ) {
+                        const stage =
+                          mode === "accepted-policy-transaction" ? "transaction" : "commit";
+                        admission.mockImplementationOnce((admit, attachment) =>
+                          createAdmission((request, grant) => {
+                            if (request.stage === stage) {
+                              publishConfig("development");
+                              policyActivated = true;
+                            }
+                            admit(request, grant);
+                          }, attachment),
+                        );
+                      }
+                      return originalComplete(...args);
+                    });
+                  activateDuringDestroy = mode === "accepted-policy-destroy";
+                  if (!latePolicy && mode !== "accepted-allowed") {
+                    publishConfig("development");
+                  }
+                  try {
+                    await runtime.dispatchService.reconcileActive(active.environmentId);
+                  } finally {
+                    completion.mockRestore();
+                    admission.mockRestore();
+                  }
+                  if (mode === "accepted-policy-transaction" || mode === "accepted-policy-commit") {
+                    expect(policyActivated).toBe(true);
+                  }
+                  if (mode === "accepted-policy-destroy") {
+                    expect(activateDuringDestroy).toBe(false);
+                    expect(config.cloudWorkers?.requiredProfile).toBe("development");
+                  }
+                  if (latePolicy) {
+                    lateSettlements.push(`${mode}:${placements.get(identity.sessionId)?.state}`);
+                    expect(placements.get(identity.sessionId)?.turnClaim).toBeNull();
+                  } else if (mode === "accepted-allowed") {
+                    expect(placements.get(identity.sessionId)).toMatchObject({
+                      state: "local",
+                      turnClaim: null,
+                    });
+                  }
                   expect(await loadTranscriptEvents(identity)).not.toEqual(
                     expect.arrayContaining([
                       expect.objectContaining({ customType: "cloud-workspace-recovery-failed" }),
                     ]),
                   );
-                  await expect(runtime.dispatchService.reclaim(identity)).resolves.toMatchObject({
-                    state: "reclaimed",
-                    turnClaim: null,
-                  });
+                  if (!latePolicy && mode !== "accepted-allowed") {
+                    await expect(runtime.dispatchService.reclaim(identity)).resolves.toMatchObject({
+                      state: "reclaimed",
+                      turnClaim: null,
+                    });
+                  }
                   expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
                   expect(placements.getPlacementMove(identity.sessionId)).toBeUndefined();
                 } else {
@@ -580,7 +646,7 @@ process.stdin.pipe(child.stdin);
                     }
                   }
                 }
-                if (mode !== "allowed") {
+                if (mode !== "allowed" && !latePolicy && mode !== "accepted-allowed") {
                   expect(
                     await fs.readdir(state.statePath("projects"), { recursive: true }),
                   ).toEqual(cloneFilesBefore);
@@ -591,6 +657,18 @@ process.stdin.pipe(child.stdin);
                     await managedWorktrees.findLiveByOwner("session", identity.sessionKey),
                   ).toBeUndefined();
                 }
+                if (latePolicy || mode === "accepted-allowed") {
+                  const entry = loadSessionEntry(identity);
+                  const worktree = await managedWorktrees.findLiveByOwner(
+                    "session",
+                    identity.sessionKey,
+                  );
+                  expect(entry?.worktree?.id).toBe(worktree?.id);
+                  expect(worktree).toBeDefined();
+                  expect(await fs.readFile(path.join(worktree!.path, "result.txt"), "utf8")).toBe(
+                    "accepted\n",
+                  );
+                }
                 expect(environments.get(active.environmentId)?.state).toBe("destroyed");
                 await expect(fs.stat(leaseId)).rejects.toMatchObject({ code: "ENOENT" });
                 expect(await repositories.get(repository.workspaceId)).toMatchObject({
@@ -599,7 +677,7 @@ process.stdin.pipe(child.stdin);
                   manifestHash: current.manifestRef,
                 });
                 console.info(
-                  `destination-boundary ${mode}: required-placement=active gateway-binding=${Boolean(loadSessionEntry(identity)?.worktree)} source=destroyed checkpoint=retained placement=${placements.get(identity.sessionId)?.state}`,
+                  `destination-boundary ${mode}: required-placement=${Boolean(config.cloudWorkers?.requiredProfile)} gateway-binding=${Boolean(loadSessionEntry(identity)?.worktree)} source=destroyed checkpoint=retained placement=${placements.get(identity.sessionId)?.state}`,
                 );
                 if (mode === "policy-activated" || mode === "source-reassigned") {
                   // Retire the synthetic operation after asserting its retained rejection;
@@ -614,6 +692,11 @@ process.stdin.pipe(child.stdin);
                   });
                 }
               }
+              expect(lateSettlements).toEqual([
+                "accepted-policy-destroy:reclaimed",
+                "accepted-policy-transaction:reclaimed",
+                "accepted-policy-commit:reclaimed",
+              ]);
             },
             () => vi.restoreAllMocks(),
             () => ownedEnvironments?.stop(),

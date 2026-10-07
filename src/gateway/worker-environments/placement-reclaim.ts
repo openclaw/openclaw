@@ -347,19 +347,11 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                           turnClaim: reclaimClaim,
                           environmentId: current.environmentId,
                           ownerEpoch: current.activeOwnerEpoch,
-                          operationId: moveIntent?.operationId,
+                          move: moveIntent,
                         });
                         // Publish the committed owner before cleanup refs and the tunnel can yield.
                         reportPlacementTransition(onTransition, completed);
                         return completed;
-                      },
-                      validateCompleted: (completed) => {
-                        const expectedState = moveIntent ? "local" : "reclaimed";
-                        if (completed.state !== expectedState) {
-                          throw new Error(
-                            `Cloud worker teardown did not produce ${expectedState} placement`,
-                          );
-                        }
                       },
                     });
                   } finally {

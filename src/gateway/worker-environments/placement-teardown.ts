@@ -1,3 +1,9 @@
+import { getRuntimeConfig } from "../../config/config.js";
+import {
+  assertRequiredWorkerMove,
+  RequiredWorkerProfileError,
+} from "../../config/required-worker-profile.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -26,7 +32,7 @@ export async function completeRecoveredWorkspaceTeardown(params: {
     turnClaim: params.turnClaim,
     environmentId: params.placement.environmentId,
     ownerEpoch: params.placement.activeOwnerEpoch,
-    operationId: params.destination === "reclaimed" ? undefined : move?.operationId,
+    move: params.destination === "reclaimed" ? undefined : move,
     currentCheck: params.currentCheck,
   });
 }
@@ -37,7 +43,7 @@ export async function completeWorkerWorkspaceTeardown(params: {
   turnClaim: WorkerSessionTurnClaim;
   environmentId: string;
   ownerEpoch: number;
-  operationId?: string;
+  move?: Pick<WorkerPlacementMoveIntent, "operationId" | "target">;
   currentCheck?: PlacementTurnClaimCurrentCheck;
 }): Promise<Extract<WorkerSessionPlacementRecord, { state: "local" | "reclaimed" }>> {
   const drained = await params.placements.completeWorkspaceResultAndReleaseTurn(
@@ -61,16 +67,28 @@ export async function completeWorkerWorkspaceTeardown(params: {
   if (reconciling.state !== "reconciling") {
     throw new Error(`Session ${params.turnClaim.sessionId} did not enter reconciliation`);
   }
-  if (params.operationId !== undefined) {
-    const completed = await params.placements.completePlacementMoveSourceToLocal({
-      operationId: params.operationId,
-      sessionId: reconciling.sessionId,
-      expectedGeneration: reconciling.generation,
-    });
-    if (completed.state !== "local") {
-      throw new Error(`Session ${params.turnClaim.sessionId} move did not finish local`);
+  const move = params.move;
+  if (move) {
+    try {
+      const completed = await params.placements.completePlacementMoveSourceToLocal(
+        {
+          operationId: move.operationId,
+          sessionId: reconciling.sessionId,
+          expectedGeneration: reconciling.generation,
+        },
+        { assertCurrent: () => assertRequiredWorkerMove(getRuntimeConfig(), move.target) },
+      );
+      if (completed.state !== "local") {
+        throw new Error(`Session ${params.turnClaim.sessionId} move did not finish local`);
+      }
+      return completed;
+    } catch (error) {
+      if (!(error instanceof RequiredWorkerProfileError)) {
+        throw error;
+      }
+      // Destruction is committed, but destination admission was refused and rolled back.
+      // The existing reclaimed transition settles only this source and retires its Move.
     }
-    return completed;
   }
   const completed = await params.placements.transition({
     sessionId: reconciling.sessionId,
