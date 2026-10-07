@@ -224,7 +224,9 @@ vi.mock("./delivery-queue-platform-lease.js", () => ({
 vi.mock("./delivery-queue-recovery.js", () => ({
   withActiveDeliveryClaim: queueMocks.withActiveDeliveryClaim,
 }));
-vi.mock("./delivery-completion.js", () => ({
+vi.mock("./delivery-completion.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./delivery-completion.js")>()),
+  completeDurableDelivery: completionMocks.completeDurableDelivery,
   markDurableDeliveryQueued: completionMocks.markDurableDeliveryQueued,
   settleDurableDelivery: (
     completion: unknown,

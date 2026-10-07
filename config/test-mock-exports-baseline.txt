@@ -8799,7 +8799,6 @@
 ["src/infra/outbound/deliver.test.ts","../../hooks/internal-hooks.js","0a345e52af024f718cf44b28433e02bff48a2aee0d27aa45417231252af8181c",1]
 ["src/infra/outbound/deliver.test.ts","../../logging/subsystem.js","308a08ea68a74bd0bb1df00599ebd2c3b9559f05fa2b1e77e18bde17a5301285",1]
 ["src/infra/outbound/deliver.test.ts","../../plugins/hook-runner-global.js","6d9823e1f3c0ba539024acbfa6778307c43992be6b2b53cdf5aa0f585d74d084",1]
-["src/infra/outbound/deliver.test.ts","./delivery-completion.js","c2d0a7939585fe7dec9c85c95d8e51163d276e9b2575080a83c0171c5de43976",1]
 ["src/infra/outbound/deliver.test.ts","./delivery-queue-platform-lease.js","7889957fcfb03754528cc354005e071cfbb6de7ade5646d07367a8957f3988f7",1]
 ["src/infra/outbound/deliver.test.ts","./delivery-queue-preparation.js","208a8e75f64ba68bdab8863b096c773f0cf7d2d772597b28470eadc58e95e140",1]
 ["src/infra/outbound/deliver.test.ts","./delivery-queue-recovery.js","773f2389b8aeb3767faab9e9853787f47605101f341e33147374dcdbc2aac690",1]
