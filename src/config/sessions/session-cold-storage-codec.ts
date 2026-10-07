@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { resolveSessionArtifactDirectory } from "./paths.js";
+import type { SessionColdArchive } from "./session-cold-storage-state.js";
 
 export function resolveSessionColdArchivePath(storePath: string, archiveName: string): string {
   if (!/^[a-f0-9]{64}\.jsonl\.zst$/.test(archiveName)) {
@@ -99,3 +101,16 @@ export const sessionColdRecordSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 export type SessionColdRecord = z.infer<typeof sessionColdRecordSchema>;
+
+export function verifyPublishedSessionColdArchive(
+  storePath: string,
+  archive: Omit<SessionColdArchive, "archive_blob">,
+): void {
+  const published = readFileSync(resolveSessionColdArchivePath(storePath, archive.archive_name));
+  if (
+    published.length !== archive.archive_bytes ||
+    createHash("sha256").update(published).digest("hex") !== archive.archive_sha256
+  ) {
+    throw new Error("Cold archive changed before publication; its SQLite copy was retained");
+  }
+}

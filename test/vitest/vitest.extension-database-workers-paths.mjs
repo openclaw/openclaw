@@ -6,11 +6,11 @@ export const databaseWorkerExtensionTestRoots = [
 ];
 
 export const databaseWorkerExtensionTestFiles = [
+  "extensions/codex/src/app-server/transcript-mirror.user-idempotency.test.ts",
   "extensions/slack/src/conversation-bindings.test.ts",
   "extensions/a2a/src/inbound.test.ts",
   "extensions/buzz/src/inbound.test.ts",
   "extensions/clickclack/src/inbound.mention-gating.test.ts",
-  "extensions/clickclack/src/inbound.model-loop.test.ts",
   "extensions/clickclack/src/inbound.test.ts",
   "extensions/discord/src/monitor/message-handler.context-history.test.ts",
   "extensions/irc/src/inbound.behavior.test.ts",

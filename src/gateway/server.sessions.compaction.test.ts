@@ -333,40 +333,7 @@ test("sessions.compact accounts against the host-accepted successor before retur
   }
 });
 
-test("sessions.compact keeps prior usage stale when the compactor returns a negative estimate", async () => {
-  const scope = await createCompactionSession("sess-invalid-compaction-usage", {
-    entry: {
-      compactionCount: 2,
-      totalTokens: 54_321,
-      totalTokensFresh: true,
-      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-    },
-  });
-  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
-    ok: true,
-    compacted: true,
-    compactionKind: "context-engine",
-    result: { summary: "summary", firstKeptEntryId: "entry-1", tokensAfter: -1 },
-  });
-
-  const { ws } = await openClient();
-  try {
-    const compacted = await rpcReq(ws, "sessions.compact", { key: "main" });
-
-    expectMainCompactionResult(compacted, true);
-    const entry = loadSessionEntry(scope);
-    expect(entry).toMatchObject({
-      compactionCount: 3,
-      totalTokens: 54_321,
-      totalTokensFresh: false,
-    });
-    expect(entry?.totalTokensVersion).toBeUndefined();
-  } finally {
-    ws.close();
-  }
-});
-
-test("sessions.compact records terminal Codex native compaction", async () => {
+test("sessions.compact records terminal Codex native compaction with a stale negative estimate", async () => {
   const scope = await createCompactionSession("sess-codex", {
     totalLines: 2,
     entry: {
@@ -395,6 +362,7 @@ test("sessions.compact records terminal Codex native compaction", async () => {
       summary: "",
       firstKeptEntryId: "",
       tokensBefore: 54_321,
+      tokensAfter: -1,
       details,
     },
   });

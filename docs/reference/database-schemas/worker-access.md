@@ -1750,6 +1750,18 @@ released synchronous SDK reader and pairing request/approval mutations retain
 their native paths, so their shared SQL sites remain T1. No schema, retention,
 durability, or update migration changes.
 
+Durable transcript write locks retain the canonical agent writer for reads and
+callback settlement. Reads carry exact stored bytes and row sequences;
+the writer rechecks those snapshots, pending-input custody, and prepared source
+predicates in its synchronous transaction. Each append has its own acknowledged
+receipt, and successful callback notifications publish before writer release.
+Opaque synchronous SDK preparation and authority callbacks, process-held incognito,
+and admitted maintenance retain the native adapter. Unknown writes never replay.
+Custom JSON values stay on the host through message preparation; workers receive
+identity fields and accepted canonical JSON. Prepared replay, pending-input
+promotion, and suppression do not serialize discarded input. Ordinary replay
+continues comparing candidate payloads.
+
 Native transcript locks serialize accepted reads and writes through callback
 completion and join their settlement before releasing the reservation. Awaited
 message preparation captures the physical store and transcript version outside

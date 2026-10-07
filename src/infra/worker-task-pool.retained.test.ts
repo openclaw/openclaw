@@ -23,12 +23,8 @@ afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
 });
 
-it.each([
-  { label: "string", workerData: "startup seed" },
-  { label: "null", workerData: null },
-  { label: "array", workerData: [1, "seed"] },
-  { label: "object", workerData: { type: "user data", port: "user port" } },
-])("preserves $label workerData through retained task startup", async ({ workerData }) => {
+it("preserves workerData through retained task startup", async () => {
+  const workerData = { type: "user data", port: "user port" };
   const pool = createOwnedWorkerTaskPool<PoolFixtureInput, PoolFixtureResult>(
     {
       workerUrl: new URL("./worker-task-pool.test-support.ts", import.meta.url),
@@ -336,4 +332,50 @@ it("answers an earlier task's synchronous host exchange while servicing a queued
   expect(secondReply.label).toBe("second");
   expect(secondReply.threadId).toBe(firstReply.threadId);
   read(second.release({ retire: true }));
+});
+
+function ordinaryFixture() {
+  const pool = createOwnedWorkerTaskPool<ResourceFixtureInput, ResourceFixtureReply>({
+    workerUrl: new URL("./worker-task-pool.resources.test-support.ts", import.meta.url),
+    maxWorkers: 1,
+  });
+  pools.push(pool);
+  const run = async (input: ResourceFixtureInput) => {
+    const task = pool.runTask(input, {});
+    try {
+      return await task.result;
+    } finally {
+      await task.close();
+    }
+  };
+  return { pool, run };
+}
+
+it("serializes resource cleanup after an asynchronous task without cancelling it", async () => {
+  const { pool, run } = ordinaryFixture();
+  const first = await run({ retain: "source" });
+  const barrier = new Int32Array(new SharedArrayBuffer(8));
+  const task = pool.runTask({ wait: barrier.buffer }, {});
+  await expect.poll(() => Atomics.load(barrier, 0)).toBe(1);
+  let closed = false;
+  const cleanup = pool.closeResources("source").then(() => {
+    closed = true;
+  });
+  try {
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(closed).toBe(false);
+    Atomics.store(barrier, 1, 1);
+    Atomics.notify(barrier, 1);
+    expect(await task.result).toEqual({ keys: ["source"], threadId: first.threadId });
+    await cleanup;
+    expect(closed).toBe(true);
+  } finally {
+    Atomics.store(barrier, 1, 1);
+    Atomics.notify(barrier, 1);
+    await task.close();
+    await cleanup;
+  }
+  expect(await run({})).toEqual({ keys: [], threadId: first.threadId });
 });

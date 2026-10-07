@@ -17,6 +17,8 @@ import {
 } from "./plugin-instance-scope.js";
 import type { PluginInstanceCallLease } from "./plugin-instance.types.js";
 import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-return-value.js";
+import type { PluginRegistry } from "./registry-types.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 
 const { values: valueInstances } = pluginInstanceState;
 /** An iterator keeps the admission that owns its pending protocol operations. */
@@ -152,8 +154,12 @@ function createPluginBindings(
     const consumer = bindings.isConsumerToken(token);
     // Iterator creation runs inside its admitting call; renewals keep that original parent.
     const origin = parent ?? pluginInstanceInvocation.getStore()!;
+    const held: { registry?: PluginRegistry } = {};
     // Capture once: replaying AsyncLocalStorage.run copies Node's context map per event.
-    const resource = bindings.enter(token, () => new AsyncResource("OpenClawPluginStream"));
+    const resource = bindings.enter(token, () => {
+      held.registry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+      return new AsyncResource("OpenClawPluginStream");
+    });
     return {
       origin,
       reenter: <T>(run: () => T): T => {
@@ -170,7 +176,10 @@ function createPluginBindings(
         }
       },
       run: <T>(run: () => T): T => resource.runInAsyncScope(run),
-      close: () => resource.emitDestroy(),
+      close: () => {
+        held.registry = undefined;
+        resource.emitDestroy();
+      },
     };
   };
   const isFactory = (value: object) => {
