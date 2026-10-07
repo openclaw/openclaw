@@ -5,7 +5,8 @@ import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
 import * as commandExec from "../../process/exec.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
-import { getRegistryWorktree, updateRegistryWorktree } from "./registry.js";
+import { updateRegistryWorktree } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import { resolveRepository } from "./service-preparation.js";
 import { ManagedWorktreeService } from "./service.js";
 import {

@@ -375,6 +375,7 @@ export async function defaultPersistDigest(params: {
           agentId: params.agentId,
           storePath: params.storePath,
           scope: "runtime",
+          facts: { kind: "unchanged" },
         }),
     },
   );

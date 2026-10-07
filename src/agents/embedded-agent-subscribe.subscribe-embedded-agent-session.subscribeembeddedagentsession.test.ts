@@ -68,6 +68,56 @@ function emitOrphanedVoice(emit: (event: unknown) => void) {
 }
 
 describe("subscribeEmbeddedAgentSession", () => {
+  it.each([1, 17, 1210])(
+    "delivers intact graphemes from %i-character provider deltas",
+    async (deltaSize) => {
+      const cluster = "👨‍👩‍👧‍👦";
+      const source = `${"x".repeat(1195)}${cluster}done`;
+      const codePoints = Array.from(source);
+      const onBlockReply = vi.fn<BlockReply>();
+      const { emit, subscription } = createSubscribedSessionHarness({
+        runId: "grapheme-boundary",
+        onBlockReply,
+        blockReplyBreak: "text_end",
+        blockReplyChunking: { minChars: 800, maxChars: 1200, breakPreference: "paragraph" },
+      });
+      try {
+        let text = "";
+        for (let offset = 0; offset < codePoints.length; offset += deltaSize) {
+          const delta = codePoints.slice(offset, offset + deltaSize).join("");
+          text += delta;
+          emit(
+            createOpenAiResponsesTextEvent({
+              type: "text_delta",
+              text,
+              delta,
+              id: "grapheme-answer",
+              signaturePhase: "final_answer",
+            }),
+          );
+        }
+        emit(
+          createOpenAiResponsesTextEvent({
+            type: "text_end",
+            text: source,
+            id: "grapheme-answer",
+            signaturePhase: "final_answer",
+          }),
+        );
+        emit({ type: "agent_end", messages: [], willRetry: false });
+        await subscription.waitForPendingEvents();
+
+        const chunks = onBlockReply.mock.calls.map(([reply]) => reply.text ?? "");
+        expect(chunks.length).toBeGreaterThan(1);
+        expect(chunks.join("")).toBe(source);
+        expect(chunks.filter((chunk) => chunk.includes(cluster))).toHaveLength(1);
+        expect(chunks.every((chunk) => chunk.length <= 1200)).toBe(true);
+      } finally {
+        subscription.unsubscribe();
+      }
+    },
+  );
+
   function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
     const onAgentEvent = vi.fn();
     const { emit } = createSubscribedSessionHarness({

@@ -518,7 +518,7 @@ describe("worker turn launcher terminal results", () => {
     const barriers = createGatewayWorkerPlacementReclaimBarriers({
       placements,
       loadSessionRuntime: async () => ({
-        managedWorktrees: { findLiveByOwner: () => undefined },
+        managedWorktrees: { findLiveByOwner: async () => undefined },
         resolveGatewaySessionStoreTargetWithStore: () => ({
           storePath: sessionTarget.storePath,
           canonicalKey: SESSION_KEY,

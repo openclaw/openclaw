@@ -492,9 +492,9 @@ test.each(["foreign admin", "unidentified admin", "synthetic owner"] as const)(
         expect(context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
         expect(dashboardTitleGenerationMocks.generate).not.toHaveBeenCalled();
         expect(loadSessionEntry({ sessionKey: key, storePath })).toEqual(before);
-        expect(managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
+        expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
       } finally {
-        const worktree = managedWorktrees.findLiveByOwner("session", key);
+        const worktree = await managedWorktrees.findLiveByOwner("session", key);
         if (worktree) {
           await managedWorktrees.remove({
             id: worktree.id,

@@ -19,7 +19,10 @@ import type {
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
-import { assertLifecycleTargetSnapshotUnchanged } from "./session-accessor.sqlite-entry-equality.js";
+import {
+  assertLifecycleTargetSnapshotUnchanged,
+  type SqliteLifecycleTargetSnapshot,
+} from "./session-accessor.sqlite-entry-equality.js";
 import {
   readSessionEntryRow,
   readSessionEntrySelectionSnapshot,
@@ -284,21 +287,38 @@ export { replaceTranscriptSuffixEventsSync } from "./session-accessor.sqlite-tra
 export async function trimTranscriptForManualCompact(
   scope: SessionTranscriptAccessScope,
   selectRetainedLines: (lines: readonly string[]) => readonly string[] | null,
-  options: { nowMs?: number } = {},
+  options: {
+    nowMs?: number;
+    preparation?: {
+      snapshot?: SqliteLifecycleTargetSnapshot;
+      assertEntryCurrent: (
+        entry: SqliteLifecycleTargetSnapshot[number]["entry"] | undefined,
+      ) => void;
+      restore: () => Promise<void>;
+      assertCurrent: () => void;
+      assertCommitCurrent: () => void;
+    };
+  } = {},
 ): Promise<{ trimmed: false } | { kept: number; trimmed: true }> {
   const resolved = resolveSqliteTranscriptScope(scope);
-  const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
-  await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
+  if (options.preparation) {
+    options.preparation.assertCurrent();
+    await options.preparation.restore();
+    options.preparation.assertCurrent();
+  } else {
+    const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+    await restoreSessionColdTranscript({ ...scope, sessionId: resolved.sessionId });
+  }
   return await runExclusiveSqliteSessionWrite(
     resolved,
     async () => {
+      options.preparation?.assertCurrent();
       const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
       const snapshotRows = readTranscriptEventRows(database, resolved.sessionId);
-      const sessionSnapshot = readSessionEntrySelectionSnapshot(
-        database,
-        resolved.sessionKey,
-        true,
-      );
+      const sessionSnapshot =
+        options.preparation?.snapshot ??
+        readSessionEntrySelectionSnapshot(database, resolved.sessionKey, true);
+      options.preparation?.assertEntryCurrent(sessionSnapshot[0]?.entry);
       const lines = snapshotRows.map((row) => row.eventJson);
       const retainedLines = selectRetainedLines(lines);
       if (!retainedLines) {
@@ -312,6 +332,7 @@ export async function trimTranscriptForManualCompact(
       const retainedEvents = retainedLines.map((line) => JSON.parse(line) as TranscriptEvent);
       const publish = runOpenClawAgentWriteTransaction(
         (writeDatabase) => {
+          options.preparation?.assertCommitCurrent();
           assertSqliteTranscriptSnapshotUnchanged(writeDatabase, resolved.sessionId, snapshotRows);
           const freshSessionSnapshot = readSessionEntrySelectionSnapshot(
             writeDatabase,
@@ -344,6 +365,7 @@ export async function trimTranscriptForManualCompact(
             previousEntry: freshEntry,
           });
           const currentIdentity = readSessionIdentitySnapshot(writeDatabase, identityKeys);
+          options.preparation?.assertCommitCurrent();
           return prepareSessionIdentityPublication(
             writeDatabase,
             resolved.agentId,

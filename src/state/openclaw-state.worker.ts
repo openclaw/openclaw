@@ -41,11 +41,18 @@ import type {
 } from "./openclaw-state-worker-contract.js";
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
-// PR provisioning retains allocation and template owners without the application runtime.
-const provisionRegistry = createWorkerOperationRegistry<
+// Device auth and PR provisioning prepare without loading the application runtime.
+const commandRegistry = createWorkerOperationRegistry<
   WorktreeTemplateWorkerOperations &
-    Pick<OpenClawStateWorkerOperations, "worktrees.reserveCapacity" | "worktrees.recoverPending">
+    Pick<
+      OpenClawStateWorkerOperations,
+      | "worktrees.reserveCapacity"
+      | "worktrees.recoverPending"
+      | Extract<keyof OpenClawStateWorkerOperations, `deviceAuth.${string}`>
+    >
 >({
+  deviceAuth: async () =>
+    (await import("../infra/device-auth-store.worker.js")).deviceAuthWorkerOperations,
   worktrees: async () => {
     const [templates, reserveCapacity, recoverPending] = await Promise.all([
       import("../agents/worktrees/template-registry.worker.js").then(
@@ -153,11 +160,12 @@ function createSharedStateWorkerBackend(
   return {
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
       if (
+        commandType.startsWith("deviceAuth.") ||
         commandType.startsWith("worktrees.templates.") ||
         commandType === "worktrees.reserveCapacity" ||
         commandType === "worktrees.recoverPending"
       ) {
-        return provisionRegistry.prepare(commandType);
+        return commandRegistry.prepare(commandType);
       }
       if (commandType.startsWith("capture.")) {
         if (capture) {
@@ -208,8 +216,8 @@ function createSharedStateWorkerBackend(
       if (closed) {
         throw new Error("Shared-state worker is closed");
       }
-      if (provisionRegistry.has(command)) {
-        return provisionRegistry.execute(command, {
+      if (commandRegistry.has(command)) {
+        return commandRegistry.execute(command, {
           open,
           stateOptions: () => ({
             path: context.databasePath,

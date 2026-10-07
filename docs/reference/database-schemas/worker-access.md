@@ -2323,6 +2323,18 @@ Schemas, stored values, permissions, retention, and update behavior are unchange
 
 ## Migrate a caller
 
+Manual `sessions.compact` requests with `maxLines` retain their selected physical
+store and prepared caller and sharing authority through cold restoration. The
+existing entry worker reads the target, source predicates, and cold metadata in
+one preflight; restoration checks typed source and lifecycle predicates in its
+transaction and live host authority at admission and commit. Foreign durable
+sources open read-only before write admission and get a fresh final check after
+the host grant; refusal rolls back restoration. Native trimming keeps its FIFO
+and synchronous final fences. Prepared checks survive composition with opaque
+SDK callbacks, which remain on the native boundary and never run inside
+restoration worker grants. Schemas, retained bytes, transport ownership,
+accepted-work settlement, and update behavior are unchanged.
+
 Rescue-message approval consumption, revocation, and replacement use the existing
 plugin-state worker. Replacement preserves the committed revocation before a new
 plan is registered, including when its preparation fails; each transaction checks
@@ -2933,18 +2945,35 @@ independently of scheduler cancellation. Registry creation, activity, and lifecy
 publication use the same transaction and receipt owner. Command lookup retains
 its physical store and selected binding through run-lease admission; replacement
 refuses the run. Source preparation, listing, and ordinary service lookups await
-the existing registry reader. Native Git-effect assertions, lock primitives, and
-retired-snapshot cleanup retain their current owners. This changes no schema,
-stored bytes, retention, durability, SDK, or update behavior.
+the existing registry reader. Git and filesystem effects retain SQL-free registry
+generation guards from the worktree lifecycle owner. Rebinding holds the same
+mutation lease as checkout effects. Registry, snapshot, and lease writers revoke
+affected generations at transaction admission, retain their own commit authority,
+and join native settlement before releasing the write barrier. Unknown outcomes
+refuse new guards until the physical store closes; they never authorize replay.
+Exact snapshot retirement validates the row, provisioned data, and consumers in
+the existing worker before Git effects, then deletes through the receipt-owning
+writer. The five native lock primitives remain: removal-claim verification,
+process-exit release, live lease reading, stale lease deletion, and exact-token
+release. Schemas, stored bytes, retention, durability, SDK, and update behavior
+are unchanged.
 
 GitHub publication preparation and per-turn tool availability read the selected
 live worktree through the existing worktree reader and shared-state worker. They
 capture the physical store before yielding, recheck session identity after the
 read, and refresh worktree facts after identity or repository preparation. Those
-facts select inputs; existing synchronous transaction and Git-effect guards still
-check current publication authority. Creation, placement, and those live guards
-remain separate host-read migration debt. Schemas, branch identity, stored bytes,
-retention, public coordinator signatures, and update behavior are unchanged.
+facts select inputs and retain the worktree owner's mutation generation through
+publication effects. Synchronous guards still check current session, credential,
+and placement authority; worktree identity checks use the prepared generation.
+Registry generations observe writes through the owning Gateway. Other processes
+must route mutations to that Gateway; direct SQLite writes while it owns state
+are unsupported. Offline CLI reconciliation holds exclusive state ownership and
+the worktree mutation lease. While another Gateway owns state, CLI listing uses
+the read-only worker and reports retirement candidates without changing rows.
+Native Doctor and startup worktree migrations retain the existing schema-maintenance
+owner through their synchronous transactions, even when earlier schema preparation
+has released its scope. Schemas, branch identity, stored bytes, retention,
+public coordinator signatures, and update behavior are unchanged.
 
 Scheduled message guards consume exact receipt, job, and deletion facts prepared
 by the existing read worker. After asynchronous preparation, the Gateway owner

@@ -224,10 +224,14 @@ export function captureGatewayToolReceiptAssertion(
           async prepareSessionSource() {
             const prepared = await prepare();
             const release = prepared.release?.bind(prepared);
+            const assertPrepared = prepared.assertPreparedCurrent?.bind(prepared);
             return {
               nativeSource: prepared.nativeSource,
               checks: prepared.checks,
               assertCurrent: () => assertAllowed(prepared.assertCurrent()),
+              ...(assertPrepared
+                ? { assertPreparedCurrent: () => assertAllowed(assertPrepared()) }
+                : {}),
               ...(release ? { release } : {}),
             };
           },

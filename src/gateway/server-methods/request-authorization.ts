@@ -15,7 +15,7 @@ import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-re
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
-import type { GatewayMethodRegistry } from "../methods/registry.js";
+import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import {
   prepareGatewaySessionAccessAuthority,
   type GatewaySessionAccessAuthority,
@@ -52,7 +52,7 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   requestParams: unknown;
   client: GatewayRequestOptions["client"];
   context: GatewayRequestContext;
-  methodRegistry: GatewayMethodRegistry;
+  methodRegistry: GatewayMethodRegistryView;
   expectedProfileBinding?: ExpectedProfileBinding;
   hasCurrentClientAuthority?: () => boolean;
   assertInvocationCurrent?: () => void;

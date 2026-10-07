@@ -19,8 +19,13 @@ import {
   resolveConfiguredGitHubHost,
 } from "../../agents/github-host.js";
 import { readCachedNativeGitHubToken } from "../../agents/github-read-identity.js";
-import { listRegistryWorktrees } from "../../agents/worktrees/registry.js";
+import { readRegistryWorktrees } from "../../agents/worktrees/registry-read.js";
+import {
+  captureWorktreeRegistryAuthority,
+  captureWorktreeRunEndContext,
+} from "../../agents/worktrees/run-end-lifecycle.js";
 import { managedWorktrees, type ManagedWorktreeService } from "../../agents/worktrees/service.js";
+import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway-read.js";
 import {
   mergeCombinedSessionStore,
@@ -351,13 +356,14 @@ async function listObservedProjects(
 function findProjectCheckoutReference(
   cfg: Parameters<typeof listProjectRegistry>[0],
   repoRoot: string,
+  worktrees: readonly ManagedWorktreeRecord[],
   incognitoStores?: IncognitoStores,
 ): string | undefined {
   const normalizedRoot = path.resolve(repoRoot);
   const workspaceReference = listWorkspaceProjects(cfg).find(
     (candidate) => path.resolve(candidate.repoRoot) === normalizedRoot,
   );
-  const worktreeReference = listRegistryWorktrees(process.env).find(
+  const worktreeReference = worktrees.find(
     (worktree) => !worktree.removedAt && path.resolve(worktree.repoRoot) === normalizedRoot,
   );
   const sessionReference = [
@@ -643,6 +649,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
       if (!assertValidParams(params, validateProjectsRemoveParams, "projects.remove", respond)) {
         return;
       }
+      const worktreeContext = captureWorktreeRunEndContext(process.env);
       const respondUnknownProject = () => {
         respond(
           false,
@@ -669,14 +676,29 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           return;
         }
         try {
-          const remove = (incognitoStores?: IncognitoStores, assertIncognitoCurrent?: () => void) =>
-            removeClonedProjectCheckout(
+          const assertWorktreesCurrent = captureWorktreeRegistryAuthority(worktreeContext, [
+            { id: "*", fields: ["identity", "removal"] },
+          ]);
+          const worktrees = await readRegistryWorktrees(process.env, {}, worktreeContext);
+          worktreeContext.admission.assertCurrent();
+          assertWorktreesCurrent();
+          const remove = (
+            incognitoStores?: IncognitoStores,
+            assertIncognitoCurrent?: () => void,
+          ) => {
+            const assertCurrent = () => {
+              worktreeContext.admission.assertCurrent();
+              assertWorktreesCurrent();
+              assertIncognitoCurrent?.();
+            };
+            return removeClonedProjectCheckout(
               project,
               () => {
-                assertIncognitoCurrent?.();
+                assertCurrent();
                 const reference = findProjectCheckoutReference(
                   context.getRuntimeConfig(),
                   project.repoRoot,
+                  worktrees,
                   incognitoStores,
                 );
                 if (reference) {
@@ -685,8 +707,9 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
                   );
                 }
               },
-              { assertCurrent: assertIncognitoCurrent },
+              { assertCurrent },
             );
+          };
           removed = captureIncognitoSessionBinding()
             ? await withIncognitoSessionStoreEntries(remove)
             : await remove();

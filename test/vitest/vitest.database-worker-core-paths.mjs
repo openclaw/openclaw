@@ -380,6 +380,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/worktrees/empty-source.test.ts",
   "src/agents/worktrees/pending-slots.worker.test.ts",
   "src/agents/worktrees/registry-read.test.ts",
+  "src/agents/worktrees/registry-migration.test.ts",
   "src/agents/worktrees/registry.test.ts",
   "src/agents/worktrees/service-branches.test.ts",
   "src/agents/worktrees/service.acceleration.test.ts",

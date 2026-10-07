@@ -12,9 +12,14 @@ import type {
   SessionTranscriptRuntimeScope,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
 import type { SessionMember } from "./session-sharing-store.kernel.js";
+import type {
+  SessionSourcePredicate,
+  SessionSourcePredicateFacts,
+} from "./session-source-authority.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -73,6 +78,7 @@ export type SessionExactEntriesWorkerSelection =
     };
 
 export type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {
+  manualCompact?: { sessionId: string; sources: SessionSourcePredicate[] };
   expectedIdentity?: SessionEntryListWorkerInput["expectedIdentity"];
   /** Omitted retains the complete entry; an empty selection reads metadata only. */
   snapshotFields?: readonly SessionEntrySnapshotField[];
@@ -93,6 +99,10 @@ export type SessionExactEntriesWorkerResult = {
   source?: SessionEntryListWorkerResult["source"];
   entries: SessionEntrySummary[];
   lifecycleTimestamps: SessionLifecycleTimestamps;
+  manualCompact?: {
+    archive?: Omit<SessionColdArchive, "archive_blob">;
+    refusedSource?: { index: number; facts: SessionSourcePredicateFacts };
+  };
   pendingArchives?: boolean;
   databaseIdentity?: {
     identity: string;

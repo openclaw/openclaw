@@ -183,6 +183,12 @@ retain the existing Vitest path.
 A changed shared setup fingerprint invalidates the entire native cohort.
 Refreshing those fingerprints requires fresh qualification of the retained
 entries; tests without matching proof keep their Vitest coverage.
+CI preflight inspects the recorded fingerprints once per workflow attempt. When
+shared setup, test, or fixture-helper inputs change or become unreadable, it adds
+one notice and a job-summary section listing the stale entries and affected
+inputs. This report does not change runtime selection or fail CI. Shards do not
+repeat the notice; local planning and historical targets without the inspector
+remain silent.
 
 Native Bun receives explicit file paths, the existing hermetic environment setup,
 the repository tsconfig, and the shared test deadline. It disables automatic env

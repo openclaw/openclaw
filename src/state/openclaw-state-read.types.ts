@@ -258,6 +258,7 @@ export type OpenClawStateReadCommand =
   | { type: "updateRuns.status" }
   | { type: "updateRuns.historyStatus" }
   | { type: "worktrees.cleanupState" }
+  | { type: "worktrees.list" }
   | { type: "fleet.list" }
   | { type: "workerPlacements.changeSnapshot"; profileIds?: string[] }
   | { type: "fleet.get"; tenantId: string }
@@ -530,6 +531,7 @@ export type OpenClawStateReadResult =
       records: ManagedWorktreeRecord[];
       leases: ReturnType<typeof readWorktreeRunLeaseStateInDatabase>;
     }
+  | { type: "worktrees.list"; records: ManagedWorktreeRecord[] }
   | { type: "fleet.list"; cells: FleetCellRecord[] }
   | {
       type: "workerPlacements.changeSnapshot";

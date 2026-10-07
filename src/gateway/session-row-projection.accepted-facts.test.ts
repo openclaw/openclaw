@@ -3,7 +3,7 @@ import { performance } from "node:perf_hooks";
 import { StatementSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
@@ -14,7 +14,7 @@ import {
   withSubagentRunReadSnapshot,
 } from "../agents/subagents/registry/subagent-registry-state.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
-import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import {
   deleteSessionEntryLifecycle,
@@ -50,6 +50,7 @@ import * as databaseFactsRead from "./session-row-projection-read.js";
 import { ready } from "./session-row-projection-record.js";
 import { withAcceptedSuffix } from "./session-row-projection.accepted-facts.test-support.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 import * as rowInputs from "./session-utils-row.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -74,6 +75,13 @@ it.each([
   };
   await withAcceptedSuffix(
     async ({ projection, suffix, scope, query, entry, reads, resume }) => {
+      const sharing =
+        change === "lifecycle adapter" || change === "observer adapter"
+          ? await prepareSessionMutationFacts({ cfg: getRuntimeConfig(), ...scope })
+          : undefined;
+      if (sharing) {
+        onTestFinished(sharing.release);
+      }
       const pending = suffix.pendingDatabaseFacts;
       const metadataReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
       let expected = change === "absent" ? null : initial;
@@ -144,6 +152,13 @@ it.each([
         if (change === "worker legacy reset") {
           expected = null;
         }
+      }
+      if (sharing) {
+        expect(sharing.readCurrent(getRuntimeConfig()).target?.entry).toMatchObject({
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+        });
+        sharing.release();
       }
       expect(suffix.pendingDatabaseFacts).toBe(changed ? undefined : pending);
       const hostReads = observeSqliteReadSql(StatementSync.prototype);

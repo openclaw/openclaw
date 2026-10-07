@@ -7,7 +7,8 @@ import {
   validateSessionsMoveParams,
   validateSessionsReclaimParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { readLiveRegistryWorktreeByOwner } from "../../agents/worktrees/registry-read.js";
+import { captureWorktreeRunEndContext } from "../../agents/worktrees/run-end-lifecycle.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
@@ -118,7 +119,9 @@ async function resolveSessionWorkspace(params: {
   agentId: string;
   method: "sessions.dispatch" | "sessions.move" | "sessions.reclaim";
   respond: RespondFn;
+  assertCurrent?: () => void;
 }): Promise<WorkerSessionWorkspace | undefined> {
+  const worktreeContext = captureWorktreeRunEndContext(process.env);
   if (params.entry.repositoryWorkspaceId) {
     const repository = await getSessionRepositoryWorkspaceStore().get(
       params.entry.repositoryWorkspaceId,
@@ -142,7 +145,12 @@ async function resolveSessionWorkspace(params: {
     respondInvalidWorkerSession(params.respond, "The session repository workspace owner changed.");
     return undefined;
   }
-  const worktree = managedWorktrees.findLiveByOwner("session", params.sessionKey);
+  const worktree = await readLiveRegistryWorktreeByOwner(
+    worktreeContext,
+    "session",
+    params.sessionKey,
+  );
+  params.assertCurrent?.();
   if (
     params.entry.worktree?.id &&
     worktree &&
@@ -360,6 +368,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       ...session,
       method: "sessions.dispatch",
       respond,
+      assertCurrent: sessionMutationAuthorization?.assertCurrent,
     });
     if (!workspace) {
       return;
@@ -514,6 +523,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
         ...session,
         method: "sessions.move",
         respond,
+        assertCurrent: sessionMutationAuthorization?.assertCurrent,
       }))
     ) {
       return;
@@ -589,6 +599,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
         ...session,
         method: "sessions.reclaim",
         respond,
+        assertCurrent: sessionMutationAuthorization?.assertCurrent,
       }))
     ) {
       return;

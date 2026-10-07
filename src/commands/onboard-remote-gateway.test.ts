@@ -908,10 +908,10 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
     expect(runTui).not.toHaveBeenCalled();
   });
 
-  it.each(["device", "profile"])(
-    "keeps remote chat ownership across replies and cancellation: %s",
+  it.each(["device", "unavailable"])(
+    "preserves remote chat identity selection: %s",
     async (identity) => {
-      if (identity === "profile") {
+      if (identity === "unavailable") {
         vi.mocked(loadOrCreateDeviceIdentity).mockImplementationOnce(() => {
           throw new Error("read-only client state");
         });
@@ -942,12 +942,8 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
           return { ok: true, modelRef: "claude-cli/opus", latencyMs: 100 };
         }
         if (options.method === "openclaw.chat") {
-          // The Gateway falls back to connection ownership when there is no
-          // authenticated profile or device; one-shot calls use new connections.
-          const owner =
-            identity === "profile"
-              ? "authenticated-profile"
-              : (options.deviceIdentity?.deviceId ?? `connection:${++connections}`);
+          // One-shot requests need the same signed device across connections.
+          const owner = options.deviceIdentity?.deviceId ?? `connection:${++connections}`;
           if (chatOwner && chatOwner !== owner) {
             throw new Error("OpenClaw session belongs to another caller.");
           }
@@ -969,7 +965,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       });
       const runTui = vi.fn();
 
-      await runWithGatewayMocks(
+      const onboarding = runWithGatewayMocks(
         makeTarget(makeLocalConfig(), { token: "selected-token" }),
         makeRuntime(),
         {
@@ -979,6 +975,14 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
           runTui,
         },
       );
+
+      if (identity === "unavailable") {
+        await expect(onboarding).rejects.toThrow(/Cannot load device identity.*doctor --fix/);
+        expect(methods).not.toContain("openclaw.chat");
+        expect(runTui).not.toHaveBeenCalled();
+        return;
+      }
+      await onboarding;
 
       expect(methods).toEqual([
         "openclaw.setup.detect",

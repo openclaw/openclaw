@@ -276,11 +276,13 @@ test("sessions.recover settles its active placement before archiving a real sess
     archivedAt: expect.any(Number),
     worktree: { id: worktree.id },
   });
-  expect(managedWorktrees.findLiveByOwner("session", sourceKey)).toMatchObject({
+  expect(await managedWorktrees.findLiveByOwner("session", sourceKey)).toMatchObject({
     id: worktree.id,
     ownerId: sourceKey,
   });
-  expect(managedWorktrees.findLiveByOwner("session", recovered.payload?.key ?? "")).toBeUndefined();
+  expect(
+    await managedWorktrees.findLiveByOwner("session", recovered.payload?.key ?? ""),
+  ).toBeUndefined();
   expect(
     loadSessionEntry({
       agentId: "main",

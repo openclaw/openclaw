@@ -90,7 +90,7 @@ describe("worker placement move destination owner", () => {
         loadSessionRuntime: async () =>
           ({
             managedWorktrees: {
-              findLiveByOwner: () => ({
+              findLiveByOwner: async () => ({
                 id: "worktree-recovery",
                 ownerId: SESSION_KEY,
                 path: "/gateway/workspace",
