@@ -153,9 +153,8 @@ export async function prepareArtifactSessionResolution(
         projection,
       });
       access.retain(facts.release);
-      const initial = facts.readCurrent(cfg);
-      const original = initial.target && structuredClone(initial.target.entry);
-      const initialTarget = initial.target;
+      const { target: initialTarget } = facts.readCurrent(cfg);
+      const original = initialTarget && structuredClone(initialTarget.entry);
       const source = initialTarget?.readSource;
       // Resident facts select the physical store; its admitted reader still refreshes foreign writes.
       const fresh =
