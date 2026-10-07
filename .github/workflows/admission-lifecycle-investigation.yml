@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
         with:
           persist-credentials: false
           fetch-depth: 1
@@ -16,6 +16,7 @@ jobs:
         with:
           node-version: "26.10.0"
           install-bun: "false"
+          cache-mode: off
       - name: Before-change diagnostic evidence
         shell: bash
         run: |
@@ -36,3 +37,5 @@ jobs:
         run: |
           git rev-parse HEAD
           /usr/bin/time -p pnpm test src/agents/harness/context-engine-turn-outbox.test.ts src/agents/embedded-agent-runner/run/attempt-prompt-submit.admission.test.ts --maxWorkers=1
+      - name: Workflow ownership contracts
+        run: pnpm test test/scripts/ci-workflow-guards.test.ts --maxWorkers=1 -t 'pins every external GitHub Action reference|keeps setup cache access explicit'
