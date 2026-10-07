@@ -400,35 +400,6 @@ async function handleDiscordModelPickerInteraction(params: {
     return;
   }
 
-  if (parsed.action === "nav" && parsed.view === "models") {
-    const provider = resolveModelPickerProvider({
-      parsedProvider,
-      currentModelRef,
-      data: pickerData,
-    });
-    const pendingModel = resolveDiscordModelPickerModelSelection({
-      data: pickerData,
-      provider,
-      modelIndex: parsed.modelIndex,
-      modelToken: parsed.modelToken,
-      requireModelToken,
-    });
-    if ((parsed.modelIndex || parsed.modelToken) && !pendingModel) {
-      await showNotice(MODEL_PICKER_CHANGED_MESSAGE);
-      return;
-    }
-    const pendingModelIndex = pendingModel
-      ? resolveDiscordModelPickerModelIndex({ data: pickerData, provider, model: pendingModel })
-      : undefined;
-    await updateModelsView(provider, {
-      modelBucket: parsed.modelBucket,
-      ...(pendingModel ? { pendingModel: `${provider}/${pendingModel}` } : {}),
-      pendingModelIndex: pendingModelIndex ?? undefined,
-      pendingRuntime: resolvePendingRuntime({ data: pickerData, provider, parsed }),
-    });
-    return;
-  }
-
   if (parsed.action === "provider") {
     const selectedProvider = resolveModelPickerSelectionValue(interaction) ?? parsed.provider;
     if (!selectedProvider || !pickerData.byProvider.has(selectedProvider)) {
@@ -442,90 +413,76 @@ async function handleDiscordModelPickerInteraction(params: {
     return;
   }
 
-  if (parsed.action === "model" || parsed.action === "pick") {
-    const selectedValue = resolveModelPickerSelectionValue(interaction);
-    const provider = parsedProvider;
-    // Keep raw values from already-rendered menus distinct from new token values.
+  if (
+    parsed.action === "model" ||
+    parsed.action === "pick" ||
+    parsed.action === "runtime" ||
+    (parsed.action === "nav" && parsed.view === "models")
+  ) {
+    const selectingModel = parsed.action === "model" || parsed.action === "pick";
+    const selectingRuntime = parsed.action === "runtime";
+    const provider =
+      parsed.action === "nav"
+        ? resolveModelPickerProvider({ parsedProvider, currentModelRef, data: pickerData })
+        : (parsedProvider ?? "");
+    if (
+      parsed.action !== "nav" &&
+      (!provider || (selectingRuntime && !pickerData.byProvider.has(provider)))
+    ) {
+      await showNotice(MODEL_PICKER_CHANGED_MESSAGE);
+      return;
+    }
+    const selectedValue = selectingModel ? resolveModelPickerSelectionValue(interaction) : null;
+    // Legacy menus carry raw model IDs; new menus and pending selections carry tokens.
     const selectedModel =
-      parsed.action === "pick"
-        ? resolveDiscordModelPickerModelSelection({
+      parsed.action === "model"
+        ? selectedValue
+        : resolveDiscordModelPickerModelSelection({
             data: pickerData,
-            provider: provider ?? "",
-            modelToken: selectedValue ?? undefined,
-            requireModelToken: true,
-          })
-        : selectedValue;
-    if (!provider || !selectedModel) {
-      await showNotice(MODEL_PICKER_CHANGED_MESSAGE);
-      return;
-    }
-    const modelIndex = resolveDiscordModelPickerModelIndex({
-      data: pickerData,
-      provider,
-      model: selectedModel,
-    });
-    if (!modelIndex) {
-      await showNotice(MODEL_PICKER_CHANGED_MESSAGE);
-      return;
-    }
-    const modelRef = `${provider}/${selectedModel}`;
-    // The model select customId omits providerBucket/modelBucket to stay
-    // under Discord's 100-char limit; derive both from the durable state.
-    const derivedModelBucket =
-      parsed.modelBucket ?? findModelBucketId(pickerData, provider, selectedModel);
-    await updateModelsView(provider, {
-      modelBucket: derivedModelBucket,
-      pendingModel: modelRef,
-      pendingModelIndex: modelIndex,
-      pendingRuntime: resolvePendingRuntime({ data: pickerData, provider, parsed }),
-    });
-    return;
-  }
-
-  if (parsed.action === "runtime") {
-    const selectedRuntime = resolveModelPickerSelectionValue(interaction) ?? parsed.runtime;
-    const provider = parsedProvider;
-    if (!provider || !pickerData.byProvider.has(provider)) {
-      await showNotice(MODEL_PICKER_CHANGED_MESSAGE);
-      return;
-    }
-    const selectedModel = resolveDiscordModelPickerModelSelection({
-      data: pickerData,
-      provider,
-      modelIndex: parsed.modelIndex,
-      modelToken: parsed.modelToken,
-      requireModelToken,
-    });
-    if ((parsed.modelIndex || parsed.modelToken) && !selectedModel) {
-      await showNotice(MODEL_PICKER_CHANGED_MESSAGE);
-      return;
-    }
-    const currentModel = splitDiscordModelRef(currentModelRef ?? "");
-    const runtimeModel =
-      selectedModel ?? (currentModel?.provider === provider ? currentModel.model : undefined);
-    const choices = getDiscordModelPickerRuntimeChoices(pickerData, provider, runtimeModel);
-    if (!selectedRuntime || !choices?.some((choice) => choice.id === selectedRuntime)) {
-      await showNotice("That runtime is not available for this model. Choose a runtime again.");
-      return;
-    }
-    const pendingModel = selectedModel ? `${provider}/${selectedModel}` : undefined;
-    const pendingModelIndex = selectedModel
+            provider,
+            modelIndex: selectingModel ? undefined : parsed.modelIndex,
+            modelToken: selectingModel ? (selectedValue ?? undefined) : parsed.modelToken,
+            requireModelToken: selectingModel || requireModelToken,
+          });
+    const modelIndex = selectedModel
       ? resolveDiscordModelPickerModelIndex({ data: pickerData, provider, model: selectedModel })
       : undefined;
-    // Pending model IDs omit the bucket; preserve browse position from the pending
-    // or current model when the callback does not carry one.
-    const derivedModelBucket =
-      parsed.modelBucket ??
-      (selectedModel
-        ? findModelBucketId(pickerData, provider, selectedModel)
-        : currentModel && currentModel.provider === provider
-          ? findModelBucketId(pickerData, provider, currentModel.model)
-          : undefined);
+    if (
+      (selectingModel && !modelIndex) ||
+      (!selectingModel && (parsed.modelIndex || parsed.modelToken) && !selectedModel)
+    ) {
+      await showNotice(MODEL_PICKER_CHANGED_MESSAGE);
+      return;
+    }
+
+    let modelBucket = parsed.modelBucket;
+    let pendingRuntime: string | undefined;
+    if (selectingRuntime) {
+      const selectedRuntime = resolveModelPickerSelectionValue(interaction) ?? parsed.runtime;
+      const currentModel = splitDiscordModelRef(currentModelRef ?? "");
+      const runtimeModel =
+        selectedModel ?? (currentModel?.provider === provider ? currentModel.model : undefined);
+      const choices = getDiscordModelPickerRuntimeChoices(pickerData, provider, runtimeModel);
+      if (!selectedRuntime || !choices?.some((choice) => choice.id === selectedRuntime)) {
+        await showNotice("That runtime is not available for this model. Choose a runtime again.");
+        return;
+      }
+      pendingRuntime = selectedRuntime;
+      // Pending IDs omit the bucket; recover browse position from the pending or current model.
+      modelBucket ??= runtimeModel
+        ? findModelBucketId(pickerData, provider, runtimeModel)
+        : undefined;
+    } else {
+      pendingRuntime = resolvePendingRuntime({ data: pickerData, provider, parsed });
+      if (selectingModel && selectedModel) {
+        modelBucket ??= findModelBucketId(pickerData, provider, selectedModel);
+      }
+    }
     await updateModelsView(provider, {
-      modelBucket: derivedModelBucket,
-      ...(pendingModel ? { pendingModel } : {}),
-      pendingModelIndex: pendingModelIndex ?? undefined,
-      pendingRuntime: selectedRuntime,
+      modelBucket,
+      ...(selectedModel ? { pendingModel: `${provider}/${selectedModel}` } : {}),
+      pendingModelIndex: modelIndex ?? undefined,
+      pendingRuntime,
     });
     return;
   }
