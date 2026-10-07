@@ -5,6 +5,8 @@ import {
   formatCliImageTurnContext,
   hashCliImageTurnEntryId,
 } from "../agents/cli-image-turn-correlation.js";
+import type { AgentMessage } from "../agents/runtime/index.js";
+import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import { mergeCliHistoryWithLookupStats } from "./cli-session-history-lookup.test-support.js";
@@ -416,6 +418,42 @@ describe("cli session history", () => {
       for (const cliSessionId of ["../outside", "nested/session", "nested\\session"]) {
         expect(await readClaudeCliSessionMessagesAsync({ cliSessionId, homeDir })).toEqual([]);
       }
+    });
+  });
+
+  it("deduplicates a local redacted copy against an imported full copy", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const secretText = "key is sk-abcdef1234567890xyz";
+      const localMessage = redactTranscriptMessage({
+        role: "user",
+        content: secretText,
+      } as AgentMessage);
+      const localMessages = [localMessage];
+      const redactedContent = readRecord(localMessage).content;
+      if (typeof redactedContent !== "string") {
+        throw new Error("expected redacted local text content");
+      }
+      await fs.writeFile(
+        filePath,
+        createClaudeTextHistoryLines([
+          {
+            role: "user",
+            uuid: "user-secret-copy",
+            content: `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\n${secretText}`,
+          },
+        ]),
+        "utf-8",
+      );
+
+      const messages = await augmentBoundClaudeHistory(homeDir, sessionId, localMessages);
+
+      expect(messages).toHaveLength(1);
+      expectFields(readRecord(messages[0])["__openclaw"], {
+        importedFrom: "claude-cli",
+        externalId: "user-secret-copy",
+        cliSessionId: sessionId,
+      });
+      expect(readRecord(messages[0]).content).toBe(redactedContent);
     });
   });
 

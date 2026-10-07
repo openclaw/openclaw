@@ -743,6 +743,23 @@ describe("ManagedWorktreeService", () => {
       expect(await git(repo, "worktree", "list", "--porcelain")).toContain(nested);
     });
 
+    it("records unpushed retention", async () => {
+      const created = await materialize("unpushed");
+      await service.acquire(created.id);
+      await fs.writeFile(path.join(created.path, "committed.txt"), "unpushed\n");
+      await git(created.path, "add", "committed.txt");
+      await git(created.path, "commit", "-m", "unpushed worktree commit");
+
+      await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
+
+      const retained = getRegistryWorktree(env, created.id);
+      expect(retained).toMatchObject({
+        runEndCleanup: { outcome: "retained-unpushed", at: now },
+      });
+      expect(retained?.removedAt).toBeUndefined();
+      await expect(fs.access(created.path)).resolves.toBeUndefined();
+    });
+
     it("records busy retention while a run lease is live", async () => {
       const created = await materialize("busy");
       const lease = await acquireWorktreeRunLease(created.id, { env });
