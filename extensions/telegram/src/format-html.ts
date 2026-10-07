@@ -15,8 +15,7 @@ export function escapeTelegramHtmlAttr(text: string): string {
 const TELEGRAM_HTML_ENTITY_PATTERN = /&(#(?:[xX][0-9A-Fa-f]+|\d+)|[A-Za-z0-9]+);/g;
 const TELEGRAM_HTML_ENTITY_AT = new RegExp(TELEGRAM_HTML_ENTITY_PATTERN.source, "y");
 
-// Structural tags that force a line boundary when projecting HTML to plain text
-// (assistant transcript protection). Block-counting helpers for rich HTML are gone.
+// Structural tags force line boundaries when projecting HTML to plain text (transcript protection).
 const TELEGRAM_LINE_BREAK_STRUCTURAL_TAGS = new Set([
   "aside",
   "audio",

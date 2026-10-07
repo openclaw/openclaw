@@ -577,7 +577,6 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
   };
 }
 
-/** Returns the managed-requirements identity captured for a configured app-server job. */
 export function readScheduledCodexAppManagedRequirementsFingerprint(
   authority: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"],
 ): string | undefined {

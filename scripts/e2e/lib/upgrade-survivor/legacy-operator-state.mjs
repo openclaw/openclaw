@@ -511,6 +511,34 @@ export function seedLegacyOperatorGatewayState() {
   );
 }
 
+export function seedLegacyOperatorPendingDelivery() {
+  // Keep the main agent's restored-index specimen and its archived bytes intact.
+  const storePath = path.join(
+    requiredEnv("OPENCLAW_STATE_DIR"),
+    "agents/ops/sessions/sessions.json",
+  );
+  const store = fs.existsSync(storePath) ? readJson(storePath) : {};
+  const sessionKey = "agent:ops:legacy-pending-delivery";
+  assert(!Object.hasOwn(store, sessionKey), "pending-delivery specimen already exists");
+  store[sessionKey] = {
+    sessionId: "legacy-pending-delivery",
+    updatedAt: 1710000001000,
+    pendingFinalDelivery: true,
+    pendingFinalDeliveryText: "Saved July reply",
+    pendingFinalDeliveryCreatedAt: 1710000000000,
+    pendingFinalDeliveryContext: { channel: "telegram", to: "synthetic-recipient" },
+    pendingFinalDeliveryIntentId: "legacy-pending-intent",
+    pendingFinalDeliveryLastAttemptAt: 1710000000500,
+    pendingFinalDeliveryAttemptCount: 2,
+    pendingFinalDeliveryLastError: "synthetic delivery failure",
+  };
+  writeJson(storePath, store);
+  writeJson(artifact("legacy-operator-pending-delivery.json"), {
+    storePath,
+    original: fs.readFileSync(storePath, "utf8"),
+  });
+}
+
 export function assertLegacyOperatorConfig(stage) {
   const config = readJson(requiredEnv("OPENCLAW_CONFIG_PATH"));
   const webhooks = readJson(artifact("legacy-operator-webhooks.json"));

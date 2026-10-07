@@ -265,23 +265,23 @@ function prepareLegacySessionImport(
   record.sourceFingerprint = transcriptFingerprint;
   const result = countTranscriptEventsForPath(record.transcriptPath);
   const transcriptMtimeMs = readLegacyTranscriptMtimeMs(record);
-  const acpEntry = !record.historical
-    ? normalizePersistedSessionEntryShape(record.entry, { sessionKey: record.sessionKey })
-    : undefined;
+  const normalizedEntry = normalizePersistedSessionEntryShape(record.entry, {
+    sessionKey: record.sessionKey,
+  });
   const params = {
     historicalOnly: Boolean(record.historical),
     allowMalformedRowRepair: true,
     repairLegacyTranscript: true,
     agentId: target.agentId,
-    entry: record.entry,
-    ...(acpEntry?.acp
+    entry: { ...(normalizedEntry ?? record.entry), sessionId: record.entry.sessionId },
+    ...(!record.historical && normalizedEntry?.acp
       ? {
           legacyAcpMigrationSource: prepareLegacyAcpMigrationSource({
             sourcePath: target.storePath,
             sourceSessionKey: record.sessionKey,
-            sessionId: acpEntry.sessionId,
-            lifecycleRevision: acpEntry.lifecycleRevision,
-            meta: acpEntry.acp,
+            sessionId: normalizedEntry.sessionId,
+            lifecycleRevision: normalizedEntry.lifecycleRevision,
+            meta: normalizedEntry.acp,
           }),
         }
       : {}),

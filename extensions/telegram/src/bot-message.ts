@@ -35,17 +35,6 @@ import { resolveSpooledUpdatePersistenceRetryDelayMs } from "./telegram-ingress-
 
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
 
-function formatTelegramInboundLogLine(params: {
-  from: string;
-  to: string;
-  chatType: string;
-  body: string;
-  mediaType?: string;
-}): string {
-  const kindLabel = params.mediaType ? `, ${params.mediaType}` : "";
-  return `Inbound message ${params.from} -> ${params.to} (${params.chatType}${kindLabel}, ${params.body.length} chars)`;
-}
-
 type TelegramMessageProcessorDeps = Omit<
   BuildTelegramMessageContextParams,
   | "primaryCtx"
@@ -242,16 +231,13 @@ export const createTelegramMessageProcessor = (
         logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
       });
     }
+    const logTo = context.primaryCtx.me?.username
+      ? `@${context.primaryCtx.me.username}`
+      : context.ctxPayload.To;
+    const mediaType = allMedia[0]?.contentType ?? allMedia[0]?.kind;
+    const kindLabel = mediaType ? `, ${mediaType}` : "";
     telegramInboundLog.info(
-      formatTelegramInboundLogLine({
-        from: context.ctxPayload.From,
-        to: context.primaryCtx.me?.username
-          ? `@${context.primaryCtx.me.username}`
-          : context.ctxPayload.To,
-        chatType: context.ctxPayload.ChatType,
-        body: context.ctxPayload.RawBody,
-        mediaType: allMedia[0]?.contentType ?? allMedia[0]?.kind,
-      }),
+      `Inbound message ${context.ctxPayload.From} -> ${logTo} (${context.ctxPayload.ChatType}${kindLabel}, ${context.ctxPayload.RawBody.length} chars)`,
     );
     const spooledReplay =
       options?.spooledReplay === true || isTelegramSpooledReplayUpdate(primaryCtx.update);

@@ -219,7 +219,6 @@ export async function ensureCodexComputerUse(
   throw new CodexComputerUseSetupError(status);
 }
 
-/** Forces Computer Use plugin installation and returns the ready status. */
 export async function installCodexComputerUse(
   params: CodexComputerUseSetupParams = {},
 ): Promise<CodexComputerUseStatus> {

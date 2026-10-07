@@ -21,6 +21,10 @@ import { registerGatewayModelCatalogPrivateAccess } from "../server-model-catalo
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
 import { prepareModelsListResult } from "./models-list-result.js";
+import {
+  listModels,
+  providerCatalogEntry,
+} from "./models-list-result.openai-routes.test-support.js";
 import { modelsHandlers } from "./models.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -413,5 +417,87 @@ describe("models.list plugin metadata handoff", () => {
         }
       },
     );
+  });
+
+  it("projects a prepared owner's Claude CLI route with that owner's plugin registry", async () => {
+    const preparedRegistry = createEmptyPluginRegistry();
+    preparedRegistry.cliBackends.push({
+      pluginId: "anthropic",
+      source: "test",
+      backend: { id: "claude-cli", modelProvider: "anthropic", config: { command: "claude" } },
+    });
+    const previousRegistry = captureActivePluginRegistrySnapshot();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    try {
+      const result = await listModels({
+        catalog: [providerCatalogEntry("claude-cli", "claude-opus-5")],
+        staticEntries: [providerCatalogEntry("anthropic", "claude-opus-5")],
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-opus-5" },
+              models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
+            },
+          },
+        },
+        preparedAuthModes: { "claude-cli": "oauth" },
+        catalogComplete: true,
+        pluginRegistry: preparedRegistry,
+        view: "configured",
+        includeDefaultModels: false,
+      });
+      expect(
+        result.models.map((model) => [
+          `${model.provider}/${model.id}`,
+          model.agentRuntime?.id,
+          model.available,
+        ]),
+      ).toEqual([["anthropic/claude-opus-5", "claude-cli", true]]);
+    } finally {
+      restoreActivePluginRegistrySnapshot(previousRegistry);
+    }
+  });
+
+  it("reads a prepared owner's Claude CLI runtime choice with that owner's plugin registry", async () => {
+    const preparedRegistry = createEmptyPluginRegistry();
+    preparedRegistry.cliBackends.push({
+      pluginId: "anthropic",
+      source: "test",
+      backend: { id: "claude-cli", modelProvider: "anthropic", config: { command: "claude" } },
+    });
+    const previousRegistry = captureActivePluginRegistrySnapshot();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    try {
+      const result = await listModels({
+        catalog: [providerCatalogEntry("claude-cli", "claude-opus-5")],
+        staticEntries: [providerCatalogEntry("anthropic", "claude-opus-5")],
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-opus-5" },
+              models: {
+                "anthropic/claude-opus-5": {
+                  agentRuntime: { id: "openclaw" },
+                  pickerRuntimes: ["openclaw", "claude-cli"],
+                },
+              },
+            },
+          },
+        },
+        preparedAuthModes: { "claude-cli": "oauth" },
+        catalogComplete: true,
+        pluginRegistry: preparedRegistry,
+        view: "configured",
+        includeDefaultModels: false,
+      });
+      expect(
+        result.models[0]?.runtimeChoices?.map((choice) => [
+          choice.agentRuntime.id,
+          choice.available,
+        ]),
+      ).toEqual([["claude-cli", true]]);
+    } finally {
+      restoreActivePluginRegistrySnapshot(previousRegistry);
+    }
   });
 });

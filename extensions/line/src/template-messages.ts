@@ -29,14 +29,14 @@ function buildInferredTemplateAction(label: string, data: string): Action {
       : messageAction(label, data);
 }
 
-function resolveTemplateTextLimit(params: {
-  title?: string;
-  thumbnailImageUrl?: string;
-  textOnlyLimit: number;
-}): number {
-  return params.title !== undefined || params.thumbnailImageUrl !== undefined
+function resolveTemplateTextLimit(
+  title: string | undefined,
+  thumbnailImageUrl: string | undefined,
+  textOnlyLimit: number,
+): number {
+  return title !== undefined || thumbnailImageUrl !== undefined
     ? COMPACT_TEMPLATE_TEXT_LIMIT
-    : params.textOnlyLimit;
+    : textOnlyLimit;
 }
 
 function truncateTemplateText(text: string, limit: number): string {
@@ -70,11 +70,7 @@ export function buildTemplateMessageFromPayload(
 
     case "buttons": {
       const title = payload.title || undefined;
-      const textLimit = resolveTemplateTextLimit({
-        title,
-        thumbnailImageUrl: payload.thumbnailImageUrl,
-        textOnlyLimit: 160,
-      });
+      const textLimit = resolveTemplateTextLimit(title, payload.thumbnailImageUrl, 160);
       return {
         type: "template",
         altText: resolveTemplateAltText(
@@ -98,11 +94,7 @@ export function buildTemplateMessageFromPayload(
     case "carousel": {
       const columns = payload.columns.map((column): CarouselColumn => {
         const title = column.title || undefined;
-        const textLimit = resolveTemplateTextLimit({
-          title,
-          thumbnailImageUrl: column.thumbnailImageUrl,
-          textOnlyLimit: 120,
-        });
+        const textLimit = resolveTemplateTextLimit(title, column.thumbnailImageUrl, 120);
         return {
           title: title === undefined ? undefined : truncateTemplateText(title, 40),
           text: truncateTemplateText(column.text, textLimit),

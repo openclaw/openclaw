@@ -11,7 +11,6 @@ import type { ToolCallResult as CodexMcpToolCallResult } from "./protocol-mcp.js
 import type { CodexThreadStartResponse, JsonValue } from "./protocol.js";
 import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
 
-/** Minimal app-server request function needed by Computer Use setup. */
 export type CodexComputerUseRequest = <T = JsonValue | undefined>(
   method: string,
   params?: unknown,

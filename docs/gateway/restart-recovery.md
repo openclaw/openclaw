@@ -743,6 +743,11 @@ charge when a post-dispatch result is uncertain to avoid replaying work.
 Foreground work that already owns the session keeps automatic recovery out
 until that work settles.
 
+Cancelling a recovery reservation after foreground work finishes clears an empty,
+uncharged recovery record. Recovery reconciliation and foreground admission also
+clear this residue from older sessions, so it cannot block a completed subagent's
+requester turn. Interrupted work and pending delivery keep their recovery custody.
+
 After the durable budget is exhausted, the session is tombstoned instead of
 looping forever. Inspect the failed session and use `/new` or `/reset` to start a
 replacement. `openclaw doctor --fix` can repair a stale aborted flag that

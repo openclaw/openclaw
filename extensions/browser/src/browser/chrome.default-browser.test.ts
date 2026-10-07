@@ -35,6 +35,8 @@ vi.mock("node:os", async () => {
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 const actualFs = (await vi.importActual<{ default: typeof fs }>("node:fs")).default;
 const { resolveBrowserExecutableForPlatform, resolveGoogleChromeExecutableForPlatform } =
   await import("./chrome.executables.js");
@@ -142,23 +144,166 @@ describe("browser default executable detection", () => {
   });
 
   it.each([
-    ["XDG ARM64", "chrome-linux-arm64", "/tmp/xdg-cache"],
-    ["empty XDG", "chrome-linux64", ""],
-  ])("discovers Playwright Chromium in the %s cache layout", (_name, linuxDir, xdgCacheHome) => {
-    vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", undefined);
-    vi.stubEnv("XDG_CACHE_HOME", xdgCacheHome);
-    const browserCache = `${xdgCacheHome || "/Users/test/.cache"}/ms-playwright`;
-    const executable = `${browserCache}/chromium-1243/${linuxDir}/chrome`;
-    vi.mocked(fs.readdirSync).mockImplementation((candidate) => {
-      return (String(candidate) === browserCache ? ["chromium-1243"] : []) as never;
-    });
-    vi.mocked(fs.existsSync).mockImplementation((candidate) => String(candidate) === executable);
+    ["XDG ARM64", undefined, "chrome-linux-arm64", "/tmp/xdg-cache"],
+    ["empty XDG", undefined, "chrome-linux64", ""],
+    [
+      "relative install root",
+      "browsers",
+      "chrome-linux64",
+      undefined,
+      "/tmp/install",
+      "/tmp/install/browsers",
+    ],
+    [
+      "relative working directory",
+      "browsers",
+      "chrome-linux64",
+      undefined,
+      undefined,
+      "/tmp/runtime/browsers",
+    ],
+    [
+      "npm cache",
+      undefined,
+      "chrome-linux64",
+      undefined,
+      undefined,
+      "/tmp/npm-cache",
+      { npm_config_playwright_browsers_path: "/tmp/npm-cache" },
+    ],
+    [
+      "package cache",
+      undefined,
+      "chrome-linux64",
+      undefined,
+      undefined,
+      "/tmp/package-cache",
+      { npm_package_config_playwright_browsers_path: "/tmp/package-cache" },
+    ],
+    [
+      "direct cache precedence",
+      "/tmp/direct-cache",
+      "chrome-linux64",
+      undefined,
+      undefined,
+      "/tmp/direct-cache",
+      { npm_config_playwright_browsers_path: "/tmp/ignored" },
+    ],
+    [
+      "npm cache precedence",
+      undefined,
+      "chrome-linux64",
+      undefined,
+      undefined,
+      "/tmp/npm-cache",
+      {
+        npm_config_playwright_browsers_path: "/tmp/npm-cache",
+        npm_package_config_playwright_browsers_path: "/tmp/ignored",
+      },
+    ],
+    [
+      "empty direct cache",
+      "",
+      "chrome-linux64",
+      undefined,
+      undefined,
+      "/Users/test/.cache/ms-playwright",
+      { npm_config_playwright_browsers_path: "/tmp/ignored" },
+    ],
+    [
+      "npm install root",
+      "browsers",
+      "chrome-linux64",
+      undefined,
+      undefined,
+      "/tmp/npm-install/browsers",
+      { npm_config_init_cwd: "/tmp/npm-install" },
+    ],
+    [
+      "package install root",
+      "browsers",
+      "chrome-linux64",
+      undefined,
+      undefined,
+      "/tmp/package-install/browsers",
+      { npm_package_config_init_cwd: "/tmp/package-install" },
+    ],
+    [
+      "empty direct install root",
+      "browsers",
+      "chrome-linux64",
+      undefined,
+      "",
+      "/tmp/runtime/browsers",
+      { npm_config_init_cwd: "/tmp/ignored" },
+    ],
+    [
+      "relative XDG install root",
+      undefined,
+      "chrome-linux64",
+      "cache",
+      "/tmp/install",
+      "/tmp/install/cache/ms-playwright",
+    ],
+    [
+      "cache path spaces",
+      " browsers ",
+      "chrome-linux64",
+      undefined,
+      "/tmp/install",
+      "/tmp/install/ browsers ",
+    ],
+    [
+      "hermetic install",
+      "0",
+      "chrome-linux64",
+      undefined,
+      undefined,
+      path.join(
+        path.dirname(fileURLToPath(import.meta.resolve("playwright-core/package.json"))),
+        ".local-browsers",
+      ),
+    ],
+  ])(
+    "discovers Playwright Chromium in the %s cache layout",
+    (
+      _name,
+      cachePath,
+      linuxDir,
+      xdgCacheHome?: string,
+      initCwd?: string,
+      expectedCache?: string,
+      aliases?: Record<string, string>,
+    ) => {
+      for (const name of [
+        "npm_config_playwright_browsers_path",
+        "npm_package_config_playwright_browsers_path",
+        "npm_config_init_cwd",
+        "npm_package_config_init_cwd",
+      ]) {
+        vi.stubEnv(name, undefined);
+      }
+      for (const [name, value] of Object.entries(aliases ?? {})) {
+        vi.stubEnv(name, value);
+      }
+      vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", cachePath);
+      vi.stubEnv("XDG_CACHE_HOME", xdgCacheHome);
+      vi.stubEnv("INIT_CWD", initCwd);
+      vi.spyOn(process, "cwd").mockReturnValue("/tmp/runtime");
+      const browserCache =
+        expectedCache ?? cachePath ?? `${xdgCacheHome || "/Users/test/.cache"}/ms-playwright`;
+      const executable = `${browserCache}/chromium-1243/${linuxDir}/chrome`;
+      vi.mocked(fs.readdirSync).mockImplementation((candidate) => {
+        return (String(candidate) === browserCache ? ["chromium-1243"] : []) as never;
+      });
+      vi.mocked(fs.existsSync).mockImplementation((candidate) => String(candidate) === executable);
 
-    expect(resolveBrowserExecutableForPlatform(config, "linux")).toEqual({
-      kind: "chromium",
-      path: executable,
-    });
-  });
+      expect(resolveBrowserExecutableForPlatform(config, "linux")).toEqual({
+        kind: "chromium",
+        path: executable,
+      });
+    },
+  );
 
   it("preserves executable and cache precedence when ARM64 Chromium is installed", () => {
     const browserCache = "/tmp/browsers";

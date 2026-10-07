@@ -21,6 +21,10 @@ import {
   WorktreeRemovalLockError,
 } from "./errors.js";
 import {
+  publishPendingWorktreeInDatabase,
+  recoverPendingWorktreesInDatabase,
+} from "./pending-slots.worker.js";
+import {
   findLiveRegistryWorktreeByOwnerInDatabase,
   getRegistryWorktreeInDatabase,
 } from "./registry-read.kernel.js";
@@ -51,11 +55,17 @@ export function insertRegistryWorktreeInDatabase(
   {
     record,
     provisionedPaths,
+    pendingId,
   }: {
     record: ManagedWorktreeRecord;
     provisionedPaths?: readonly string[];
+    pendingId?: string;
   },
+  leases?: readonly OpenClawStateLeaseIdentity[],
 ): void {
+  if (pendingId !== undefined) {
+    publishPendingWorktreeInDatabase(db, pendingId, record, leases);
+  }
   executeSqliteQuerySync(
     db,
     query(db)
@@ -319,7 +329,7 @@ export function assertWorktreeRegistryPredicates(
 
 export function worktreeRunEndMutation<Input>(
   operationLabel: string,
-  mutate: (db: DatabaseSync, input: Input) => void,
+  mutate: (db: DatabaseSync, input: Input, leases?: readonly OpenClawStateLeaseIdentity[]) => void,
 ) {
   return (input: WorktreeRunEndInput<Input>, context: WorkerOperationContext): void => {
     const database = context.open();
@@ -334,7 +344,7 @@ export function worktreeRunEndMutation<Input>(
         };
         admit("transaction");
         assertWorktreeRegistryPredicates(db, input.predicates);
-        mutate(db, input.value);
+        mutate(db, input.value, input.leases);
         admit("commit");
         deferSqliteWorkerCommitReceipt(db, input.receipt);
       },
@@ -343,6 +353,11 @@ export function worktreeRunEndMutation<Input>(
     );
   };
 }
+
+export const recoverPendingWorktreesInWorker = worktreeRunEndMutation(
+  "worktrees.recoverPending",
+  recoverPendingWorktreesInDatabase,
+);
 
 export type WorktreeRemovalRowInput = {
   worktreeId: string;

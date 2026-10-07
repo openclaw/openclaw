@@ -4,6 +4,7 @@ import fs, { type BigIntStats } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { sha256File as hashFile } from "@openclaw/fs-safe/durability";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveLlamaCppDataDir } from "./defaults.js";
@@ -118,12 +119,7 @@ function fileIdentity(stat: BigIntStats): string {
 function rememberVerifiedFile(filePath: string, stat: BigIntStats, sha256: string): void {
   verifiedFiles.delete(filePath);
   verifiedFiles.set(filePath, { identity: fileIdentity(stat), sha256 });
-  if (verifiedFiles.size > VERIFIED_FILE_LIMIT) {
-    const oldest = verifiedFiles.keys().next().value;
-    if (oldest !== undefined) {
-      verifiedFiles.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(verifiedFiles, VERIFIED_FILE_LIMIT);
 }
 
 export async function sha256File(filePath: string, signal?: AbortSignal): Promise<string> {

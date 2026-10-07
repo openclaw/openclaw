@@ -383,8 +383,9 @@ export async function prepareCliSessionHistoryReader(
     },
     sequence,
     applyPagination(historyPage: ChatHistoryPage) {
-      if (historyPage.pagination) {
-        historyPage.pagination.messageSequences = Object.fromEntries(
+      const pagination = historyPage.pagination ?? historyPage.anchor;
+      if (pagination) {
+        pagination.messageSequences = Object.fromEntries(
           historyPage.messages.flatMap((message) => {
             const id = readChatHistoryPaginationKey(message);
             const seq = sequence(message);

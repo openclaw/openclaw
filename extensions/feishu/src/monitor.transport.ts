@@ -320,7 +320,6 @@ export async function monitorWebSocket({
         break;
       }
 
-      // WS start failed (e.g. handshake / auth) — publish disconnected.
       const failedAt = Date.now();
       // The SDK classifier is the only terminal contract here. App-secret/auth refinement is
       // deferred until Feishu exposes a structured authentication failure at this boundary.

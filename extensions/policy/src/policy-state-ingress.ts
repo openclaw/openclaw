@@ -1,3 +1,4 @@
+import { hasConfiguredAccountValue } from "openclaw/plugin-sdk/account-helpers";
 import {
   asNonArrayRecord,
   isRecord,
@@ -118,12 +119,6 @@ function hasImplicitDefaultAccountConfig(
         hasConfiguredAccountValue(config[field]),
       );
   }
-}
-
-function hasConfiguredAccountValue(value: unknown): boolean {
-  return typeof value === "string"
-    ? value.trim().length > 0
-    : value !== undefined && value !== null;
 }
 
 type ChannelIngressParams = {

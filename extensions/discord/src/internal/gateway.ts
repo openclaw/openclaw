@@ -336,10 +336,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
       throw new Error("Discord gateway socket is not open");
     }
     const serialized = JSON.stringify(payload);
-    const payloadSize =
-      typeof Buffer !== "undefined"
-        ? Buffer.byteLength(serialized, "utf8")
-        : new TextEncoder().encode(serialized).byteLength;
+    const payloadSize = Buffer.byteLength(serialized, "utf8");
     if (payloadSize > DISCORD_GATEWAY_PAYLOAD_LIMIT_BYTES) {
       throw new Error(
         `Discord gateway payload exceeds ${DISCORD_GATEWAY_PAYLOAD_LIMIT_BYTES}-byte limit`,
