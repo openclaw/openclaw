@@ -1,3 +1,7 @@
+import {
+  findGraphemeChunkEnd,
+  firstGraphemeClusterLength,
+} from "@openclaw/normalization-core/grapheme";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { FenceSpan } from "../../packages/markdown-core/src/fences.js";
 import {
@@ -441,6 +445,7 @@ export class EmbeddedBlockChunker {
               start,
               maxChars - reopenPrefix.length,
               openFence,
+              params.force,
             );
       if (breakResult.index <= 0) {
         if (force) {
@@ -606,6 +611,7 @@ export class EmbeddedBlockChunker {
     offset = 0,
     maxCharsOverride?: number,
     openFence?: FenceSpan,
+    force = false,
   ): BreakResult {
     const minChars = Math.max(1, Math.floor(minCharsOverride ?? chunking.minChars));
     const maxChars = Math.max(1, Math.floor(maxCharsOverride ?? chunking.maxChars));
@@ -651,6 +657,10 @@ export class EmbeddedBlockChunker {
       ).length;
       // An unfinished span ends at the buffer boundary without a source closer.
       const absoluteBreakIndex = offset + forcedBreakIndex;
+      const endingFence = findFenceSpanAt(spans.fences, absoluteBreakIndex - 1);
+      if (endingFence?.end === absoluteBreakIndex && endingFence !== openFence) {
+        return { index: forcedBreakIndex };
+      }
       const fence =
         findFenceSpanAt(spans.fences, absoluteBreakIndex) ??
         (openFence?.end === absoluteBreakIndex ? openFence : undefined);
@@ -679,7 +689,21 @@ export class EmbeddedBlockChunker {
           fenceSplit: { closeFenceLine, reopenFenceLine, fence },
         };
       }
-      return { index: forcedBreakIndex };
+      // A streamed trailing cluster can still gain a combining mark or ZWJ
+      // continuation in the next delta. Keep it pending until a following
+      // cluster or final drain establishes the boundary.
+      const graphemeSource =
+        !force && /[\uD800-\uDBFF]$/u.test(buffer) ? buffer.slice(0, -1) : buffer;
+      const maxEnd = Math.min(
+        forcedBreakIndex,
+        force ? graphemeSource.length : graphemeSource.length - 1,
+      );
+      const wholeEnd = findGraphemeChunkEnd(graphemeSource, 0, maxEnd, maxEnd, false);
+      return {
+        index:
+          wholeEnd ||
+          (firstGraphemeClusterLength(graphemeSource) >= forcedBreakIndex ? forcedBreakIndex : 0),
+      };
     }
 
     return { index: -1 };

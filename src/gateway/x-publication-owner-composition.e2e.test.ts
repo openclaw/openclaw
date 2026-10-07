@@ -531,6 +531,14 @@ describe("X publication production-owner composition", () => {
               "committed child row",
             );
             expect(resolveSessionPublicShare(entry)?.sessionId).toBe(entry.sessionId);
+            // The append checkpoint precedes the run's final session metadata writes.
+            const childRelease = getSessionWorkAdmissionRelease({
+              scope: sessionStore,
+              identities: [key, entry.sessionId],
+            });
+            if (childRelease) {
+              await withinTest(childRelease, signal);
+            }
             const response = await sendRequest(http, {
               path: new URL(
                 expectDefined(

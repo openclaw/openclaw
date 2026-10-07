@@ -15,11 +15,9 @@ import {
 } from "./goals-operations.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
-import {
-  readRefusedSessionSource,
-  transferSessionEntryWorkerCandidate,
-} from "./session-entry-patch.worker.js";
+import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
+import { readRefusedSessionSource } from "./session-source-predicate.worker.js";
 
 export type SessionGoalManagementResult = Omit<
   ReturnType<typeof mutateSessionGoalInDatabase>,

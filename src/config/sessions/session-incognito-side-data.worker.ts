@@ -40,7 +40,7 @@ import { readSessionGroupCategoryKeys } from "./session-group-categories.read.js
 import type { IncognitoSideDataOperations } from "./session-incognito-side-data-contract.js";
 import { readSessionMembershipRowsInDatabase } from "./session-membership-facts.js";
 import { listSessionReactionsInDatabase } from "./session-reaction-store.read.js";
-import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
+import { readSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { SessionSharingWorkerOperations } from "./session-sharing-store.types.js";
 import { listSessionSuggestionsInDatabase } from "./session-suggestion-store.kernel.js";
 
@@ -359,7 +359,7 @@ export function createIncognitoSideDataWorker(
             case "session.category.keys":
               return result(readSessionGroupCategoryKeys(database, command.input.name));
             case "session.members.read":
-              return result(listSessionMembersInDatabase(database, command.input.sessionKey));
+              return result(readSessionMembersInDatabase(database, command.input.sessionKey));
             case "session.suggestions.read":
               return result(
                 listSessionSuggestionsInDatabase(

@@ -11,6 +11,7 @@ import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
 import { isGatewayAuthPolicyCurrent } from "../auth-policy.js";
 import {
+  hasPreparedGatewayDeviceAuthority,
   readAcceptedGatewayDeviceSourceAuthority,
   readGatewayDeviceRevocationGuard,
 } from "../device-revocation.js";
@@ -104,10 +105,22 @@ function assertRequestAuthorityCurrent(options: RequestMutationOptions): void {
 
 function captureRequestAuthorityAssertion(options: RequestMutationOptions) {
   const source = captureExternalSessionCommitGuard(options.sessionMutationCommitGuard);
-  return composeSessionSourceAssertion([source], (assertSource) => {
-    assertRequestTransportCurrent(options);
-    assertSource();
-  });
+  return composeSessionSourceAssertion(
+    [source],
+    (assertSource) => {
+      assertRequestTransportCurrent(options);
+      assertSource();
+    },
+    {
+      preparedCheck: (assertSource) => {
+        options.signal?.throwIfAborted();
+        if (!hasPreparedGatewayDeviceAuthority(options.client, options.hasCurrentClientAuthority)) {
+          throw new Error("Gateway requester authority changed");
+        }
+        assertSource();
+      },
+    },
+  );
 }
 
 /** Opaque SDK guards retain their synchronous commit boundary from v2026.9.4. */

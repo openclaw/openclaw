@@ -97,7 +97,10 @@ export function composeSessionTranscriptWriteAssertion(
   sources: readonly (SessionSourceAssertion | undefined)[],
   check?: (assertSources: () => void) => void,
 ): SessionSourceAssertion {
-  return composeSessionSourceAssertion(sources.map(captureExternalSessionCommitGuard), check);
+  return composeSessionSourceAssertion(sources.map(captureExternalSessionCommitGuard), check, {
+    // A plugin's wrapper remains opaque even when all of its children are prepared.
+    preparedCheck: (assertSources) => assertSources(),
+  });
 }
 
 export type SessionTranscriptEvent = unknown;

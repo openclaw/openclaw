@@ -148,9 +148,7 @@ type WorktreeCreation =
   | (() => Promise<ManagedWorktreeCreationOutcome>);
 
 type MaterializedRepositoryWorktree = {
-  name: string;
   worktreePath: string;
-  branch: string;
   recordBase: string;
   provisionedBytes: number;
   setupBytes: number;
@@ -222,11 +220,11 @@ export class ManagedWorktreeService {
       async (guard, publication) =>
         await withWorktreeSources(this.env, async (retainRepository) => {
           const retainSources = await retainRepository({ ...params, ...guard, repository });
-          return await this.createForOwner(
-            { ...params, ...guard, retainSources },
-            repository,
-            publication,
+          const owned = { ...params, ...guard, retainSources };
+          const creation = await this.withAllocationLease(owned, (allocation) =>
+            this.reserveForOwner(owned, allocation, repository, publication),
           );
+          return typeof creation === "function" ? await creation() : creation;
         }),
       (record) => this.rollbackPreparation(record, params.withRollback),
     );
@@ -308,17 +306,6 @@ export class ManagedWorktreeService {
       }
       throw error;
     }
-  }
-
-  private async createForOwner(
-    params: CreateManagedWorktreeParams & WorktreeAllocationGuard & WorktreeSourceCustody,
-    repository: ResolvedRepository,
-    publication: WorktreeCreationPublication,
-  ): Promise<ManagedWorktreeCreationOutcome> {
-    const creation = await this.withAllocationLease(params, (allocation) =>
-      this.reserveForOwner(params, allocation, repository, publication),
-    );
-    return typeof creation === "function" ? await creation() : creation;
   }
 
   private async reserveForOwner(
@@ -529,7 +516,7 @@ export class ManagedWorktreeService {
     pending: ManagedWorktreeRecord,
     publication: WorktreeCreationPublication,
   ): Promise<ManagedWorktreeCreationOutcome> {
-    let prepared: MaterializedRepositoryWorktree | undefined;
+    let prepared = false;
     try {
       const materialized = await withWorktreeSource(params, async (current) => {
         const created = await this.materializeRepositoryWorktree(
@@ -538,7 +525,7 @@ export class ManagedWorktreeService {
           destination,
           publication,
         );
-        prepared = created;
+        prepared = true;
         return created;
       });
       const provisionedPaths = await this.completeRepositoryWorktreeSetup(
@@ -568,7 +555,7 @@ export class ManagedWorktreeService {
       const failures = [error];
       if (prepared && !publication.record && !hasWorktreeUnknownOutcome(error)) {
         try {
-          const { worktreePath, branch } = prepared;
+          const { worktreePath, branch } = destination;
           const cleanup = async (assertCheckoutCurrent?: () => void) => {
             const commitGuard = () => {
               params.rollbackGuard();
@@ -619,7 +606,7 @@ export class ManagedWorktreeService {
     destination: Awaited<ReturnType<typeof prepareWorktreeDestination>>,
     publication: WorktreeCreationPublication,
   ): Promise<MaterializedRepositoryWorktree> {
-    const { root, name, worktreePath, branch } = destination;
+    const { root, worktreePath, branch } = destination;
     // Default-base resolution fetches remote refs; it is an effect, not just discovery.
     params.signal?.throwIfAborted();
     params.commitGuard?.();
@@ -745,9 +732,7 @@ export class ManagedWorktreeService {
       throw commandError("git worktree add", added);
     }
     return {
-      name,
       worktreePath,
-      branch,
       recordBase,
       provisionedBytes,
       setupBytes,

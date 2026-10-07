@@ -89,16 +89,17 @@ type RestoreContext = Omit<RestoreDependencies, "admitCapacity"> & {
   recoveryClaim?: string;
 };
 
-async function restoreSnapshotProjection(
+async function settleRestoredProjection(
   worktree: ManagedWorktreeRecord,
   env: NodeJS.ProcessEnv,
   assertCurrent: WorktreeAllocationGuard["commitGuard"],
   workerAuthority: WorktreeAllocationGuard["workerAuthority"],
+  phase: "restoreSnapshot" | "finishRestore" = "restoreSnapshot",
 ) {
   const { withSettledLocalWorkspace } =
     await import("../../gateway/worker-environments/local-workspace-projection.js");
   await withSettledLocalWorkspace(
-    { worktree, env, assertCurrent, workerAuthority, restoreSnapshot: true },
+    { worktree, env, assertCurrent, workerAuthority, [phase]: true },
     async () => {},
   );
 }
@@ -387,7 +388,7 @@ async function restoreSnapshot(
           assertExactStateSourceIdentity(restoreRecord.path, identity);
         },
       };
-      await restoreSnapshotProjection(
+      await settleRestoredProjection(
         restoreRecord,
         env,
         params.commitGuard,
@@ -594,7 +595,7 @@ async function restoreSnapshot(
       params.commitGuard,
     );
     params.commitGuard?.();
-    await restoreSnapshotProjection(record, env, params.commitGuard, params.workerAuthority);
+    await settleRestoredProjection(record, env, params.commitGuard, params.workerAuthority);
     await requireSpace(record.path, repository);
     restoredProvisionedPaths = provisionedState.map((state) => state.path);
   } catch (error) {
@@ -649,17 +650,12 @@ async function finishRestoredSnapshot(
       ["update-ref", "-d", `refs/openclaw/removals/${record.id}`],
       gitOptions,
     );
-    const { withSettledLocalWorkspace } =
-      await import("../../gateway/worker-environments/local-workspace-projection.js");
-    await withSettledLocalWorkspace(
-      {
-        worktree: restored,
-        env,
-        assertCurrent: params.commitGuard,
-        workerAuthority: params.workerAuthority,
-        finishRestore: true,
-      },
-      async () => {},
+    await settleRestoredProjection(
+      restored,
+      env,
+      params.commitGuard,
+      params.workerAuthority,
+      "finishRestore",
     );
   };
   // Settle old leases while the row still refuses new runs. Revival must not race this await.

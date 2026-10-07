@@ -109,22 +109,17 @@ function isFreshDeliverySessionMatch(
 
 function formatNestedLogPrefix(opts: AgentCommandOpts, sessionKey?: string): string {
   const parts = [NESTED_LOG_PREFIX];
-  const session = sessionKey ?? opts.sessionKey ?? opts.sessionId;
-  if (session) {
-    parts.push(`session=${session}`);
-  }
-  if (opts.runId) {
-    parts.push(`run=${opts.runId}`);
-  }
-  const channel = opts.messageChannel ?? opts.channel;
-  if (channel) {
-    parts.push(`channel=${channel}`);
-  }
-  if (opts.to) {
-    parts.push(`to=${opts.to}`);
-  }
-  if (opts.accountId) {
-    parts.push(`account=${opts.accountId}`);
+  const fields = {
+    session: sessionKey ?? opts.sessionKey ?? opts.sessionId,
+    run: opts.runId,
+    channel: opts.messageChannel ?? opts.channel,
+    to: opts.to,
+    account: opts.accountId,
+  };
+  for (const [name, value] of Object.entries(fields)) {
+    if (value) {
+      parts.push(`${name}=${value}`);
+    }
   }
   return parts.join(" ");
 }
@@ -238,32 +233,26 @@ async function filterAlreadyDeliveredReplyPayloads(params: {
     sentMediaUrls: normalizedSentMediaUrls,
   });
 
-  const filteredPayloads: ReplyPayload[] = [];
-  for (const candidate of mediaFiltered) {
+  return mediaFiltered.flatMap((candidate) => {
     if (hasEnabledDeliveryOperation(candidate)) {
-      filteredPayloads.push(candidate);
-      continue;
+      return [candidate];
     }
     const effectiveCandidateText =
       formatBtwTextForExternalDelivery(candidate) ?? candidate.text ?? "";
     if (!effectiveCandidateText.trim() || !exactRouteSentTexts.has(effectiveCandidateText)) {
-      filteredPayloads.push(candidate);
-      continue;
+      return [candidate];
     }
     const withoutDuplicateText = copyReplyPayloadMetadata(candidate, {
       ...candidate,
       text: undefined,
     });
-    if (
-      hasReplyPayloadContent(withoutDuplicateText, {
-        trimText: true,
-        extraContent: withoutDuplicateText.location != null,
-      })
-    ) {
-      filteredPayloads.push(withoutDuplicateText);
-    }
-  }
-  return filteredPayloads;
+    return hasReplyPayloadContent(withoutDuplicateText, {
+      trimText: true,
+      extraContent: withoutDuplicateText.location != null,
+    })
+      ? [withoutDuplicateText]
+      : [];
+  });
 }
 
 function normalizeAgentCommandReplyPayloads(params: {

@@ -55,6 +55,10 @@ import {
 } from "./session-accessor.sqlite-worker-coordination.js";
 import type { SqliteMutationWorkerMessage } from "./session-accessor.sqlite-worker-request.js";
 import type { ValidatedCanonicalSessionValidationBatch } from "./session-canonical-validation.js";
+import {
+  prepareSessionColdSourceGuard,
+  SessionColdSourceRefusedError,
+} from "./session-cold-storage-source-guard.worker.js";
 import type {
   SessionColdWorkerData,
   SessionColdMutationResult,
@@ -129,6 +133,10 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
     data.plan.kind === "cold-restore"
       ? await prepareSessionColdRestoreInWorker(data.plan)
       : undefined;
+  using sourceGuard = prepareSessionColdSourceGuard(
+    data.plan.databaseOptions,
+    data.plan.kind === "cold-restore" ? data.plan.turnGuard?.sources : undefined,
+  );
   const commitGate = data.commitGate;
   let result: SessionColdMutationResult;
   let validation: OpenClawAgentDatabaseValidation | undefined;
@@ -140,12 +148,28 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
       async (openedDatabase) => {
         let transactionDatabase: DatabaseSync | undefined;
         try {
-          return mutateSessionColdTranscriptInWorker(data.plan, coldRecords, (database) => {
-            transactionDatabase = database.db;
-            waitForSqliteReclamationCommit(commitGate, () =>
-              port.postMessage({ type: "commit-request", operationId: 0 }),
-            );
-          });
+          return mutateSessionColdTranscriptInWorker(
+            data.plan,
+            coldRecords,
+            (database) => {
+              transactionDatabase = database.db;
+              waitForSqliteReclamationCommit(commitGate, () =>
+                port.postMessage({ type: "commit-request", operationId: 0 }),
+              );
+            },
+            sourceGuard,
+          );
+        } catch (error) {
+          // The native transaction has rolled back before a post-grant refusal is returned.
+          if (error instanceof SessionColdSourceRefusedError) {
+            return {
+              archivedTranscripts: 0,
+              externalizedTranscripts: 0,
+              restored: false,
+              refusedSource: error.refusal,
+            };
+          }
+          throw error;
         } finally {
           validation = getOpenClawAgentDatabaseValidation(openedDatabase);
           if (

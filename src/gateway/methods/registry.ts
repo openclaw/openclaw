@@ -15,7 +15,9 @@ export {
   isCoreGatewayMethodClassified,
 } from "./core-method-policy.js";
 
-export type GatewayMethodRegistry = GatewayMethodRegistryView;
+export type GatewayMethodRegistry = GatewayMethodRegistryView & {
+  pluginRegistry?: PluginRegistry;
+};
 
 function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethodDescriptor {
   const name = input.name.trim();

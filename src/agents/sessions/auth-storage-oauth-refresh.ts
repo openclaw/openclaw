@@ -31,7 +31,7 @@ export function isAuthStorageOAuthRefreshFence(
 
 export async function refreshAuthStorageOAuthCredential(params: {
   authStorage: object;
-  storage: AuthStorageBackend;
+  storage: Pick<AuthStorageBackend, "withLock">;
   providerId: OAuthProviderId;
   parse: (current: string | undefined) => AuthStorageData;
   commit: (data: AuthStorageData) => void;

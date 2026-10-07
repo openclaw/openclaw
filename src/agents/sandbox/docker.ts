@@ -268,25 +268,16 @@ export function buildSandboxCreateArgs(params: {
       args.push("--add-host", entry);
     }
   }
-  const pidsLimit = normalizeFiniteDockerNumber(params.cfg.pidsLimit);
-  if (pidsLimit !== undefined && pidsLimit > 0) {
-    args.push("--pids-limit", String(pidsLimit));
-  }
-  const memory = normalizeDockerLimit(params.cfg.memory);
-  if (memory) {
-    args.push("--memory", memory);
-  }
-  const memorySwap = normalizeDockerLimit(params.cfg.memorySwap);
-  if (memorySwap) {
-    args.push("--memory-swap", memorySwap);
-  }
-  const cpus = normalizeFiniteDockerNumber(params.cfg.cpus);
-  if (cpus !== undefined && cpus > 0) {
-    args.push("--cpus", String(cpus));
-  }
-  const gpus = params.cfg.gpus?.trim();
-  if (gpus) {
-    args.push("--gpus", gpus);
+  for (const [flag, value] of [
+    ["--pids-limit", normalizeFiniteDockerNumber(params.cfg.pidsLimit)],
+    ["--memory", normalizeDockerLimit(params.cfg.memory)],
+    ["--memory-swap", normalizeDockerLimit(params.cfg.memorySwap)],
+    ["--cpus", normalizeFiniteDockerNumber(params.cfg.cpus)],
+    ["--gpus", params.cfg.gpus?.trim()],
+  ] as const) {
+    if (value) {
+      args.push(flag, String(value));
+    }
   }
   for (const [name, value] of Object.entries(params.cfg.ulimits ?? {})) {
     const formatted = formatUlimitValue(name, value);

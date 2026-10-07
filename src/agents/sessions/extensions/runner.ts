@@ -575,7 +575,7 @@ export class ExtensionRunner {
   }
 
   private async dispatchHandlers<TResult>(
-    eventType: Exclude<ExtensionEvent["type"], "tool_call">,
+    eventType: ExtensionEvent["type"],
     invoke: (
       handler: NonNullable<ReturnType<Extension["handlers"]["get"]>>[number],
       ctx: ExtensionContext,
@@ -594,6 +594,9 @@ export class ExtensionRunner {
             return result;
           }
         } catch (err) {
+          if (eventType === "tool_call") {
+            throw err;
+          }
           // Runtime faults must escape before another handler can run.
           rethrowIncognitoSessionError(err);
           if (err instanceof SessionMetadataCommittedError) {
@@ -695,23 +698,17 @@ export class ExtensionRunner {
   }
 
   async emitToolCall(event: ToolCallEvent): Promise<ToolCallEventResult | undefined> {
-    let ctx: ExtensionContext | undefined;
     let result: ToolCallEventResult | undefined;
-
-    for (const ext of this.extensions) {
-      for (const handler of ext.handlers.get("tool_call") ?? []) {
-        ctx ??= this.createContext();
-        const handlerResult = await handler(event, ctx);
-
-        if (handlerResult) {
-          result = handlerResult as ToolCallEventResult;
-          if (result.block) {
-            return result;
-          }
+    await this.dispatchHandlers("tool_call", async (handler, ctx) => {
+      const handlerResult = await handler(event, ctx);
+      if (handlerResult) {
+        result = handlerResult as ToolCallEventResult;
+        if (result.block) {
+          return result;
         }
       }
-    }
-
+      return undefined;
+    });
     return result;
   }
 
