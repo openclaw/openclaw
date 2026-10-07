@@ -214,6 +214,65 @@ describe("plugins cli inspect", () => {
     },
   );
 
+  it.each([
+    { args: ["inspect", "display-probe", "--runtime"], format: "detail" },
+    { args: ["inspect", "--all", "--runtime"], format: "table" },
+  ] as const)("labels runtime $format output as this CLI process", async ({ args, format }) => {
+    const plugin = createPluginRecord({ id: "display-probe", name: "Display", imported: true });
+    const report = { plugins: [plugin], diagnostics: [] };
+    const inspect = createInspectReport({ plugin });
+    buildPluginSnapshotReportMock.mockReturnValue(report);
+    withDiagnostics.mockImplementation(async (_params, formatReport) =>
+      formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted", ...report }),
+    );
+    buildPluginInspectReportMock.mockReturnValue(inspect);
+    buildAllPluginInspectReportsMock.mockReturnValue([inspect]);
+
+    await runPluginsCommand(["plugins", ...args]);
+
+    const rendered = stripVTControlCharacters(logs.join("\n"));
+    if (format === "detail") {
+      expect(rendered).toContain("Status: loaded (this CLI process, not the Gateway)");
+    } else {
+      expect(rendered).toContain("loaded");
+      expect(rendered).not.toContain("loaded (this CLI process, not the Gateway)");
+      expect(rendered).toContain(
+        "Runtime inspection runs in this CLI process. It does not describe the running Gateway.",
+      );
+    }
+  });
+
+  it("labels runtime JSON as this CLI process without changing registry status", async () => {
+    const plugin = createPluginRecord({ id: "display-probe", name: "Display", imported: true });
+    const report = { plugins: [plugin], diagnostics: [] };
+    const inspect = createInspectReport({ plugin });
+    buildPluginSnapshotReportMock.mockReturnValue(report);
+    withDiagnostics.mockImplementation(async (_params, formatReport) =>
+      formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted", ...report }),
+    );
+    buildPluginInspectReportMock.mockReturnValue(inspect);
+    buildAllPluginInspectReportsMock.mockReturnValue([inspect]);
+
+    for (const args of [
+      ["inspect", plugin.id, "--runtime", "--json"],
+      ["inspect", "--all", "--runtime", "--json"],
+    ]) {
+      logs.length = 0;
+      await runPluginsCommand(["plugins", ...args]);
+      const json = JSON.parse(logs.at(-1) ?? "null") as
+        | { inspectionScope?: string; plugin?: { status?: string } }
+        | Array<{ inspectionScope?: string; plugin?: { status?: string } }>;
+      const entry = Array.isArray(json) ? json[0] : json;
+      expect(entry?.plugin?.status).toBe("loaded");
+      expect(entry?.inspectionScope).toBe("cli");
+    }
+
+    logs.length = 0;
+    await runPluginsCommand(["plugins", "inspect", plugin.id, "--json"]);
+    const cold = JSON.parse(logs.at(-1) ?? "null") as { inspectionScope?: string };
+    expect(cold.inspectionScope).toBeUndefined();
+  });
+
   it("does not publish runtime inspection output when retirement fails", async () => {
     buildAllPluginInspectReportsMock.mockReturnValue([]);
     retirePluginDiagnosticsMock.mockRejectedValue(new Error("diagnostics cleanup failed"));

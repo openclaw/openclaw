@@ -24,6 +24,9 @@ import { formatCliJsonFailure } from "./failure-output.js";
 import { quietPluginJsonLogger } from "./plugins-json-logger.js";
 import { formatPluginBundleFormat, formatPluginStatus } from "./plugins-list-format.js";
 
+const CLI_RUNTIME_INSPECTION_NOTE =
+  "Runtime inspection runs in this CLI process. It does not describe the running Gateway.";
+
 export type PluginInspectOptions = {
   json?: boolean;
   all?: boolean;
@@ -141,6 +144,7 @@ export async function runPluginsInspectCommand(
         const inspectAllWithInstall = inspectAll.map((inspect) => ({
           ...inspect,
           install: resolveInstallRecord(inspect.plugin.id),
+          ...(runtimeInspect ? { inspectionScope: "cli" as const } : {}),
         }));
         return JSON.stringify(inspectAllWithInstall, null, 2);
       }
@@ -170,7 +174,7 @@ export async function runPluginsInspectCommand(
             .filter(Boolean)
             .join(", ") || "-",
       }));
-      return renderTable({
+      const table = renderTable({
         width: tableWidth,
         columns: [
           { key: "Name", header: "Name", minWidth: 14, flex: true },
@@ -184,6 +188,7 @@ export async function runPluginsInspectCommand(
         ],
         rows,
       }).trimEnd();
+      return runtimeInspect ? `${theme.muted(CLI_RUNTIME_INSPECTION_NOTE)}\n${table}` : table;
     };
     const output = runtimeInspect
       ? await tracePluginLifecyclePhaseAsync(
@@ -299,7 +304,15 @@ function formatPluginInspection(
   const runtimeInspect = opts.runtime === true;
 
   if (opts.json) {
-    return JSON.stringify({ ...inspect, install }, null, 2);
+    return JSON.stringify(
+      {
+        ...inspect,
+        install,
+        ...(runtimeInspect ? { inspectionScope: "cli" as const } : {}),
+      },
+      null,
+      2,
+    );
   }
 
   const lines: string[] = [];
@@ -316,7 +329,12 @@ function formatPluginInspection(
     lines.push(inspect.plugin.description);
   }
   lines.push("");
-  lines.push(`${theme.muted("Status:")} ${formatPluginStatus(inspect.plugin, runtimeInspect)}`);
+  const status = formatPluginStatus(inspect.plugin, runtimeInspect);
+  lines.push(
+    `${theme.muted("Status:")} ${status}${
+      runtimeInspect ? theme.muted(" (this CLI process, not the Gateway)") : ""
+    }`,
+  );
   if (inspect.plugin.failurePhase) {
     lines.push(`${theme.muted("Failure phase:")} ${inspect.plugin.failurePhase}`);
   }
