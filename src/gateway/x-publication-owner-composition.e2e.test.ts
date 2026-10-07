@@ -536,6 +536,7 @@ describe("X publication production-owner composition", () => {
               "committed child publication",
             );
             expect(publication.sessionId).toBe(entry.sessionId);
+            // The append checkpoint precedes the run's final session metadata writes.
             const childReleased = getSessionWorkAdmissionRelease({
               scope: sessionStore,
               identities: [key, entry.sessionId],

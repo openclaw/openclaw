@@ -1654,7 +1654,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it.each([
     ["src/agents/**/*.test.ts", "test/plugins"],
     ["src/plugin-sdk/memory-host-events.test.ts", "src/plugin-sdk/provider-auth.test.ts"],
-    ["src/plugin-sdk/outbound-media.bulk.test.ts", "src/plugin-sdk/provider-auth.test.ts"],
+    ["src/agents/provider-transport-fetch.capture.test.ts", "src/plugin-sdk/provider-auth.test.ts"],
   ])("retains the mixed watch rejection for %s and %s", (...targets) => {
     expect(() => buildVitestRunPlans(["--watch", ...targets])).toThrow(
       "watch mode with mixed test suites is not supported",
@@ -1694,7 +1694,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/plugin-sdk/memory-host-events.test.ts",
       );
       expect(plan?.databaseWorkerWatchTests).not.toContain(
-        "src/plugin-sdk/outbound-media.bulk.test.ts",
+        "src/plugin-sdk/session-store-runtime.maintenance.test.ts",
       );
     }
     const [spec] = createVitestRunSpecs(["--watch", config, file], { baseEnv: {} });

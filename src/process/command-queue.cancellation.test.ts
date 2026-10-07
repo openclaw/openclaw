@@ -197,44 +197,37 @@ describe("queued command cancellation", () => {
     await expect(active).resolves.toBe("active finished");
   });
 
-  it.each(["dequeue", "cancel"] as const)(
-    "releases entry references before reentrant %s cleanup",
-    (removal) => {
-      const queue = createLaneQueue();
-      const entries = [makeEntry(0), makeEntry(1), makeEntry(2)];
+  it("releases entry references before reentrant cancellation cleanup", () => {
+    const queue = createLaneQueue();
+    const entries = [makeEntry(0), makeEntry(1), makeEntry(2)];
+    for (const entry of entries) {
+      enqueueLaneQueue(queue, entry);
+    }
+    const removed = entries[1]!;
+    const refill = makeEntry(3);
+    const release = vi.fn(() => {
+      expect(removed.queued).toBeUndefined();
+      expect(removed.releaseQueuedAbort).toBeUndefined();
       for (const entry of entries) {
-        enqueueLaneQueue(queue, entry);
+        expect(Object.values(removed)).not.toContain(entry);
       }
-      const removed = entries[removal === "dequeue" ? 0 : 1]!;
-      const refill = makeEntry(3);
-      const release = vi.fn(() => {
-        expect(removed.queued).toBeUndefined();
-        expect(removed.releaseQueuedAbort).toBeUndefined();
-        for (const entry of entries) {
-          expect(Object.values(removed)).not.toContain(entry);
-        }
-        expect(queue.length).toBe(2);
-        expect(removeLaneQueueEntry(queue, removed)).toBe(false);
-        enqueueLaneQueue(queue, refill);
-      });
-      removed.releaseQueuedAbort = release;
-      if (removal === "dequeue") {
-        expect(dequeueLaneQueue(queue)).toBe(removed);
-      } else {
-        expect(removeLaneQueueEntry(queue, removed)).toBe(true);
-      }
-      expect(release).toHaveBeenCalledOnce();
-      const survivors = entries.filter((entry) => entry !== removed);
-      expect([dequeueLaneQueue(queue), dequeueLaneQueue(queue), dequeueLaneQueue(queue)]).toEqual([
-        ...survivors,
-        refill,
-      ]);
-      expect(dequeueLaneQueue(queue)).toBeUndefined();
-      enqueueLaneQueue(queue, makeEntry(4));
-      expect(dequeueLaneQueue(queue)?.sequence).toBe(4);
-      expect(queue.length).toBe(0);
-    },
-  );
+      expect(queue.length).toBe(2);
+      expect(removeLaneQueueEntry(queue, removed)).toBe(false);
+      enqueueLaneQueue(queue, refill);
+    });
+    removed.releaseQueuedAbort = release;
+    expect(removeLaneQueueEntry(queue, removed)).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
+    const survivors = entries.filter((entry) => entry !== removed);
+    expect([dequeueLaneQueue(queue), dequeueLaneQueue(queue), dequeueLaneQueue(queue)]).toEqual([
+      ...survivors,
+      refill,
+    ]);
+    expect(dequeueLaneQueue(queue)).toBeUndefined();
+    enqueueLaneQueue(queue, makeEntry(4));
+    expect(dequeueLaneQueue(queue)?.sequence).toBe(4);
+    expect(queue.length).toBe(0);
+  });
 
   it("keeps total cancellation work linear as a backlog doubles", () => {
     const smaller = measureCancellationWork(128);

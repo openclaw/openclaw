@@ -125,7 +125,11 @@ export function createSessionRowProjectionArchive(params: {
         }
         if (catalogOnly && row.entry?.archivedAt === undefined) {
           if (!params.dirty.has(records.identity(row))) {
-            row.pendingDatabaseFacts = row.retainedDatabaseFacts;
+            row.pendingDatabaseFacts = records.isPreparedSessionRowDatabaseFacts(
+              row.retainedDatabaseFacts,
+            )
+              ? row.retainedDatabaseFacts
+              : undefined;
           }
         } else {
           row.pendingDatabaseFacts = undefined;

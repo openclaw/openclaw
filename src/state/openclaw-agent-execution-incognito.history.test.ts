@@ -12,7 +12,6 @@ import {
   readActiveTranscriptEntryAnchorAsync,
   readSessionTranscriptAnchorsAsync,
 } from "../config/sessions/session-transcript-anchor-read.js";
-import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import {
   createIncognitoSessionComputeReader,
   createIncognitoSessionHistoryReader,
@@ -390,17 +389,17 @@ it("keeps Memory and Codex history isolated for identical session IDs in differe
   }
 });
 
-it("revalidates Codex history after asynchronous consumption and joins it before release", async () => {
+it("keeps Codex history's prefix across appends and joins it before release", async () => {
   const target = await create("codex-consumption");
   await append(target, "snapshot content");
   const { reader, scope } = await computeReader(target);
   await expect(
     reader.nativeContext(scope, async (messages) => {
       const result = [...messages];
-      await append(target, "invalidates snapshot");
+      await append(target, "after snapshot");
       return result;
     }),
-  ).rejects.toBeInstanceOf(SessionTranscriptReadFenceError);
+  ).resolves.toMatchObject([{ content: [{ text: "snapshot content" }] }]);
 
   const borrowed = await captureOpenClawAgentDatabaseExecution({
     kind: "ephemeral",

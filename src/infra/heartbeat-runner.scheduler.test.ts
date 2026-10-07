@@ -472,6 +472,13 @@ describe("targeted unscheduled wake dispatch", () => {
     cronWake,
     { source: "hook", intent: "immediate", reason: "hook:job-123", agentId: "main" },
     { source: "restart-sentinel", intent: "immediate", reason: "wake", sessionKey },
+    {
+      source: "notifications-event",
+      intent: "event",
+      reason: "notifications-event",
+      agentId: "main",
+      sessionKey,
+    },
   ] satisfies Wake[])("runs one targeted $source wake with disabled cadence", async (request) => {
     start(config("0m", { main: {} }));
     await wake(request);

@@ -268,6 +268,9 @@ export function createSessionRowPlacementProjection(
       }
     },
     invalidateChange(change: SessionRowChange) {
+      if ("sessionKey" in change && change.scope === "acp") {
+        return;
+      }
       if ("sessionKey" in change) {
         for (const read of reads) {
           const target = read.privateSessions.get(change.sessionKey);

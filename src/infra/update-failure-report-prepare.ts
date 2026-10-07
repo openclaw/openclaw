@@ -30,7 +30,10 @@ import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
 import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
 import { projectPublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
 import { formatNpmFailureFacts } from "./update-npm-failure.js";
-import { updatePreflightDetailMessage } from "./update-preflight-details.js";
+import {
+  updatePreflightDetailMessage,
+  UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL,
+} from "./update-preflight-details.js";
 import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
@@ -229,6 +232,10 @@ function resolveRecoveryOutcome(
       },
       sanitizeReportField(recovery?.reason ?? "not-recorded", context, 96),
     ) ??
+    (verification.rollbackOutcome?.status === "not-needed" &&
+    verification.rollbackOutcome.reason === UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL
+      ? UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL
+      : undefined) ??
     (steps.some(
       (step) => step.step === "finalize:package-rollback-not-needed" && step.status === "skipped",
     )
@@ -303,12 +310,15 @@ async function renderBoundedDiagnostics(
       ? [npm.npmErrorCode, npm.packageSpec].filter(Boolean).join(" ")
       : redactPublicSupportDiagnosticLine(message, context);
     const exit = `exit ${step.exitCode ?? "unknown"}`;
-    const detail =
+    const publicDetail =
       diagnostic === "[redacted-diagnostic]"
-        ? exit
-        : step.exitCode == null
-          ? diagnostic
-          : `${exit} (${diagnostic})`;
+        ? facts.map((fact) => updatePreflightDetailMessage(fact.code)).find(Boolean)
+        : diagnostic;
+    const detail = !publicDetail
+      ? exit
+      : step.exitCode == null
+        ? publicDetail
+        : `${exit} (${publicDetail})`;
     diagnostics.push(`Failed phase ${phase}: ${detail}${termination}`);
     diagnostics.push(...formatNpmFailureFacts(facts, context));
     diagnostics.push(

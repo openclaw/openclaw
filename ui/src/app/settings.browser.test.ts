@@ -33,6 +33,23 @@ it("normalizes and persists browser-local chat message width", () => {
   }
 });
 
+it("persists and resets the browser-local terminal font without changing text faces", () => {
+  const initial = loadSettings();
+  try {
+    saveSettings({ ...initial, terminalFontFamily: "  FiraCode Nerd Font Mono  " });
+    expect(loadSettings().terminalFontFamily).toBe("FiraCode Nerd Font Mono");
+    expect(loadSettings().fontUi).toBe(initial.fontUi);
+    expect(loadSettings().fontChat).toBe(initial.fontChat);
+    saveSettings({ ...loadSettings(), terminalFontFamily: undefined });
+    expect(loadSettings().terminalFontFamily).toBeUndefined();
+    expect(
+      JSON.parse(localStorage.getItem(settingsKeyForGateway(initial.gatewayUrl)) ?? "{}"),
+    ).not.toHaveProperty("terminalFontFamily");
+  } finally {
+    saveSettings(initial);
+  }
+});
+
 it.each([
   "none",
   "min-content",

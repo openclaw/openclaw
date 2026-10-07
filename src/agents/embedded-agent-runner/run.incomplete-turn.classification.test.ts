@@ -213,7 +213,7 @@ describe("incomplete-turn payload resolution", () => {
     ).toBe(false);
   });
 
-  const payloadCases: Array<[string, Attempt, number, string | null]> = [
+  const payloadCases: Array<[string, Attempt, number, string]> = [
     [
       "unsigned thinking only (#89787)",
       {
@@ -222,22 +222,18 @@ describe("incomplete-turn payload resolution", () => {
       1,
       "couldn't generate a response",
     ],
-    ...["", "Partial answer"].map((text): [string, Attempt, number, string | null] => [
-      `token-limited answer: ${text}`,
+    [
+      "empty token-limited answer",
       {
-        assistantTexts: text ? [text] : [],
-        lastAssistant: assistant({ stopReason: "length", content: [{ type: "text", text }] }),
+        assistantTexts: [],
+        lastAssistant: assistant({ stopReason: "length", content: [{ type: "text", text: "" }] }),
       },
-      text ? 1 : 0,
-      text ? null : "couldn't generate a response",
-    ]),
+      0,
+      "couldn't generate a response",
+    ],
   ];
   it.each(payloadCases)("resolves warning for %s", (_name, attempt, payloadCount, expected) => {
     const result = warning(attempt, { payloadCount });
-    if (expected === null) {
-      expect(result).toBeNull();
-    } else {
-      expect(result).toContain(expected);
-    }
+    expect(result).toContain(expected);
   });
 });

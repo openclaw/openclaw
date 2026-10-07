@@ -117,7 +117,7 @@ it("exposes a prepared generation only after registration publication and keeps 
   }
 });
 
-it("preserves a fresh borrower when config revokes a completed native open", async () => {
+it("retains both borrowers when config changes after a completed native open", async () => {
   const options = fixture();
   const previousConfig = getRuntimeConfigSnapshot();
   setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
@@ -146,16 +146,16 @@ it("preserves a fresh borrower when config revokes a completed native open", asy
     void preparingFresh.catch(() => {});
   };
   try {
-    await expect(original.prepare(requestSource)).rejects.toThrow("admission is closed");
+    await original.prepare(requestSource);
     assert(fresh);
     assert(preparingFresh);
     assert(originalIncarnation);
     await preparingFresh;
     const claim = fresh.capturePreparedGenerationClaim();
     assert(claim);
-    expect(claim.incarnation).not.toBe(originalIncarnation);
+    expect(claim.incarnation).toBe(originalIncarnation);
     claim.assertCurrent();
-    expect(() => original.assertCurrent()).toThrow("admission is closed");
+    original.assertCurrent();
   } finally {
     await preparingFresh?.catch(() => {});
     await original.release();
