@@ -1412,11 +1412,11 @@
       },
       {
         "deferLoading": true,
-        "description": "List native subagents, wait for selected runIds, or cancel a runId and its descendants. A wait timeout never cancels execution or consumes completion delivery.",
+        "description": "List native subagents, wait for selected runIds, cancel a runId and its descendants, or dismiss a terminal run's undeliverable completion so it stops re-rendering as outstanding. A wait timeout never cancels execution or consumes completion delivery.",
         "inputSchema": {
           "properties": {
             "action": {
-              "enum": ["list", "wait", "cancel"],
+              "enum": ["list", "wait", "cancel", "dismiss"],
               "type": "string"
             },
             "recentMinutes": {
