@@ -1,4 +1,3 @@
-import * as childProcess from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -6,7 +5,6 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
-import { probeScheduledTaskUpdateAccess } from "../daemon/schtasks-state-probe.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -70,6 +68,7 @@ import {
   writeOpenClawPackageFixture,
 } from "./update-cli/update-cli-package.test-support.js";
 import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.test-support.js";
+import { registerWindowsTaskAdmissionTests } from "./update-cli/update-command-windows-preflight.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
@@ -77,77 +76,7 @@ describe("update-cli", () => {
   const nodeExecutable = resolveTestNodeExecPath();
   const fixture = createUpdateCliFixture();
 
-  it.each([
-    { failure: "access denied", tag: "2026.9.8" },
-    { failure: "timeout", tag: "2026.9.8" },
-    { failure: "access denied", tag: "openclaw@2026.9.8" },
-  ])(
-    "refuses Task Scheduler $failure before staging, even with the Gateway stopped ($tag)",
-    async ({ failure, tag }) => {
-      const nativeProbe = await vi.importActual<typeof import("../daemon/schtasks-state-probe.js")>(
-        "../daemon/schtasks-state-probe.js",
-      );
-      vi.mocked(probeScheduledTaskUpdateAccess).mockImplementationOnce(
-        nativeProbe.probeScheduledTaskUpdateAccess,
-      );
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      await fixture.mockPackageInstallAtCaseDir();
-      serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
-      const nativeSpawn = childProcess.spawnSync;
-      vi.spyOn(childProcess, "spawnSync").mockImplementation((command, args, options) =>
-        args?.includes("-EncodedCommand")
-          ? {
-              pid: 0,
-              output: [null, failure === "access denied" ? "-2147024891" : "", ""],
-              stdout: failure === "access denied" ? "-2147024891" : "",
-              stderr: "",
-              status: failure === "access denied" ? 2 : null,
-              signal: null,
-              ...(failure === "timeout"
-                ? {
-                    error: Object.assign(new Error("PowerShell did not complete"), {
-                      code: "ETIMEDOUT",
-                    }),
-                  }
-                : {}),
-            }
-          : nativeSpawn(command, args, options),
-      );
-
-      await expect(invokeUpdateCli({ tag, timeout: "2400", json: true })).rejects.toEqual(
-        new ExitError(1),
-      );
-      expect(lastWriteJsonCall()).toMatchObject({
-        status: "error",
-        reason: "managed-service-preflight",
-      });
-      const output = getErrorOutput();
-      expect(output).toContain("elevated terminal");
-      expect(output).toContain("npm i -g openclaw@2026.9.8 --allow-scripts=openclaw");
-      expect(output).toContain("openclaw doctor --fix");
-      expect(output).toContain("openclaw gateway restart");
-      if (failure === "timeout") {
-        expect(output).toContain("Task Scheduler task lookup/elevation check timed out");
-        expect(output).toContain("60000 ms");
-      }
-      expect(
-        vi
-          .mocked(childProcess.spawnSync)
-          .mock.calls.filter(([, args]) => args?.includes("-EncodedCommand")),
-      ).toHaveLength(1);
-      expect(childProcess.spawnSync).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.arrayContaining(["-EncodedCommand"]),
-        expect.objectContaining({ timeout: 60_000 }),
-      );
-      expectNoSideEffects(
-        serviceStop,
-        suspendScheduledTaskAutoStartForUpdate,
-        fetchNpmPackageTargetStatus,
-      );
-      expect(packageInstallCommandCall()).toBeUndefined();
-    },
-  );
+  registerWindowsTaskAdmissionTests(fixture);
 
   registerFailureSelectorTests({
     updateCommand,

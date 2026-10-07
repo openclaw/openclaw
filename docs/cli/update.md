@@ -17,10 +17,13 @@ If you installed via **npm/pnpm/bun** (global install, no git metadata),
 updates go through the package-manager flow described in
 [Updating](/install/updating).
 
-On Windows, a UAC-filtered administrator must run updates that manage a Gateway
-Scheduled Task from an **elevated terminal** (Run as administrator), even if the
-Gateway is already stopped. Update checks this before staging or changing state.
-Task Scheduler access denial reports elevation as the cause. Task lookup has its
+On Windows, update checks the Gateway Scheduled Task's principal and run level
+before staging or changing state. A per-user `LeastPrivilege` task for the current
+account can be updated from a non-elevated terminal, including a UAC-filtered
+administrator's terminal. A task for another account (including SYSTEM), a task
+that requires highest privileges, or a genuine Task Scheduler query denial needs
+an **elevated terminal** (Run as administrator), even if the Gateway is stopped.
+Unresolved or group principals defer to native permission checks. Task lookup has its
 own 60-second cold-start limit, and each `schtasks` command has a 15-second limit;
 a stalled operation names the check or command instead of using the update's full
 timeout.

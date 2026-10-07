@@ -6,12 +6,36 @@ import {
   listScheduledTasks,
   probeScheduledTaskExists,
   probeScheduledTaskState,
+  probeScheduledTaskUpdateAccess,
   ScheduledTaskInspectionError,
 } from "./schtasks-state-probe.js";
 
 vi.mock("node:child_process", () => ({ spawnSync: vi.fn() }));
 
 beforeEach(() => vi.mocked(spawnSync).mockReset());
+
+it.each([
+  { callerElevated: true, taskUserSid: "S-1-5-18", taskRunLevel: 1, expected: "allowed" },
+  { callerElevated: false, taskUserSid: null, taskRunLevel: 0, expected: "allowed" },
+  {
+    callerElevated: false,
+    taskUserSid: "unresolved account",
+    taskRunLevel: 0,
+    expected: "unknown",
+  },
+])("keeps native task access uncertainty distinct from elevation: %j", (scenario) => {
+  vi.mocked(spawnSync).mockReturnValue(
+    nativeResult(
+      JSON.stringify({
+        callerSid: "S-1-5-21-111-222-333-1001",
+        callerElevated: scenario.callerElevated,
+        taskUserSid: scenario.taskUserSid,
+        taskRunLevel: scenario.taskRunLevel,
+      }),
+    ),
+  );
+  expect(probeScheduledTaskUpdateAccess("Synthetic Gateway").status).toBe(scenario.expected);
+});
 
 function nativeResult(stdout = "", status: number | null = 0, error?: Error) {
   return { pid: 0, output: [null, stdout, ""], stdout, stderr: "", status, signal: null, error };

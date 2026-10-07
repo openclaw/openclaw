@@ -74,14 +74,17 @@ function queryTaskScheduler(
     WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
   );
   const encodedTaskName = Buffer.from(taskName ?? "", "utf8").toString("base64");
-  // A UAC-filtered admin token retains the group SID but cannot control the
-  // administrator-owned task. Task RunLevel=LeastPrivilege does not change its ACL.
+  // Observe the actual principal and token; token filtering alone says nothing
+  // about permission to manage the caller's per-user task.
   const readTask = checkUpdateAccess
     ? [
         "$identity=[Security.Principal.WindowsIdentity]::GetCurrent()",
         "$principal=[Security.Principal.WindowsPrincipal]::new($identity)",
-        "if(($identity.Groups.Value -contains 'S-1-5-32-544') -and -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { Write-Output '-2147024891'; exit 2 }",
-        "Write-Output '{}'",
+        "$taskPrincipal=$task.Definition.Principal",
+        "$result=@{callerSid=[string]$identity.User.Value;callerElevated=$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator);taskUserSid=$null;taskRunLevel=[int]$taskPrincipal.RunLevel}",
+        "$userId=[string]$taskPrincipal.UserId",
+        "if($userId) { try { $result.taskUserSid=if($userId -match '^S-1-\\d+(-\\d+)+$') { ([Security.Principal.SecurityIdentifier]::new($userId)).Value } else { ([Security.Principal.NTAccount]::new($userId)).Translate([Security.Principal.SecurityIdentifier]).Value } } catch {} }",
+        "$result | ConvertTo-Json -Compress",
       ].join("; ")
     : "Read-Task $task | ConvertTo-Json -Depth 4 -Compress";
   const script = [
@@ -164,9 +167,38 @@ function queryTaskScheduler(
 }
 
 /** Read-only admission; lifecycle owners still revalidate before each mutation. */
-export function probeScheduledTaskUpdateAccess(taskName: string, timeoutMs?: number) {
+export function probeScheduledTaskUpdateAccess(
+  taskName: string,
+  timeoutMs?: number,
+):
+  | { status: "allowed" | "elevation-required" }
+  | Exclude<ScheduledTaskStateProbe, { status: "found" }> {
   const result = queryTaskScheduler(taskName, timeoutMs, true);
-  return result.status === "ok" ? { status: "allowed" as const } : result;
+  if (result.status !== "ok") {
+    return result;
+  }
+  const facts = asOptionalRecord(result.value);
+  const { callerSid, callerElevated, taskUserSid, taskRunLevel } = facts ?? {};
+  const sid = /^S-1-\d+(?:-\d+)+$/u;
+  if (
+    typeof callerSid !== "string" ||
+    !sid.test(callerSid) ||
+    typeof callerElevated !== "boolean" ||
+    (taskUserSid !== null && (typeof taskUserSid !== "string" || !sid.test(taskUserSid))) ||
+    (taskRunLevel !== 0 && taskRunLevel !== 1)
+  ) {
+    return {
+      status: "unknown",
+      detail: "Scheduled Task access check returned invalid facts.",
+      diagnostic: { kind: "invalid-response" },
+    };
+  }
+  // Group principals and unresolved accounts do not establish a different user.
+  // Their actual control permissions remain with Task Scheduler.
+  return !callerElevated &&
+    (taskRunLevel === 1 || (taskUserSid !== null && taskUserSid !== callerSid))
+    ? { status: "elevation-required" }
+    : { status: "allowed" };
 }
 
 function readTaskSnapshot(value: unknown): ScheduledTaskSnapshot | undefined {

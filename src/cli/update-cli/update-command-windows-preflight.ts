@@ -19,15 +19,20 @@ export function preflightWindowsUpdateTask(tag?: string, timeoutMs?: number): vo
     return;
   }
   const probe = probeScheduledTaskUpdateAccess(resolveTaskName(process.env), timeoutMs);
-  if (probe.status !== "unknown") {
+  if (probe.status !== "unknown" && probe.status !== "elevation-required") {
     return;
   }
-  const denied = probe.diagnostic.kind === "native" && probe.diagnostic.hresult === -2147024891;
-  const timedOut = probe.diagnostic.kind === "timeout";
-  const error = new ScheduledTaskInspectionError(probe);
-  if (!denied && !timedOut) {
-    defaultRuntime.error(`Warning: ${error.message}`);
-    return;
+  let failureCode: "windows-task-elevation-required" | "windows-task-inspection-timeout" =
+    "windows-task-elevation-required";
+  let error: ScheduledTaskInspectionError | undefined;
+  if (probe.status === "unknown") {
+    error = new ScheduledTaskInspectionError(probe);
+    if (probe.diagnostic.kind === "timeout") {
+      failureCode = "windows-task-inspection-timeout";
+    } else if (probe.diagnostic.kind !== "native" || probe.diagnostic.hresult !== -2147024891) {
+      defaultRuntime.error(`Warning: ${error.message}`);
+      return;
+    }
   }
   const target = resolveGlobalInstallSpec({
     packageName: "openclaw",
@@ -37,8 +42,8 @@ export function preflightWindowsUpdateTask(tag?: string, timeoutMs?: number): vo
   const manual = `For a global npm installation, update manually: npm i -g ${spec} --allow-scripts=openclaw, then openclaw doctor --fix, then openclaw gateway restart.`;
   throw new GatewayServiceUpdateOwnershipError(
     createUpdatePreflightFailure(
-      denied ? "windows-task-elevation-required" : "windows-task-inspection-timeout",
-      `${timedOut ? `${error.message}\n` : ""}${manual}`,
+      failureCode,
+      [error?.message, manual].filter(Boolean).join("\n"),
       "managed-service",
     ),
     error,
