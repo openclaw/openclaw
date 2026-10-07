@@ -152,10 +152,26 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         });
         throw error;
       }
-      this.emitCompactionOutcome("manual", itemId, outcome, false);
+      if (outcome.status === "skipped") {
+        this.emit({ type: "compaction_end", reason: "manual", itemId, outcome });
+        return outcome;
+      }
       if (outcome.status === "aborted") {
+        this.emit({ type: "compaction_end", reason: "manual", itemId, outcome });
         throw new Error("Compaction cancelled");
       }
+
+      this.emit({
+        type: "compaction_end",
+        reason: "manual",
+        itemId,
+        outcome: {
+          status: "completed",
+          tokensBefore: outcome.result.tokensBefore,
+          tokensAfter: outcome.tokensAfter,
+          willRetry: false,
+        },
+      });
       return outcome;
     } finally {
       if (this.compactionAbortController === abortController) {
@@ -173,28 +189,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
 
   abortBranchSummary(): void {
     this.branchSummaryAbortController?.abort();
-  }
-
-  private emitCompactionOutcome(
-    reason: CompactionReason,
-    itemId: string,
-    outcome: CompactionWorkOutcome,
-    willRetry: boolean,
-  ): void {
-    this.emit({
-      type: "compaction_end",
-      reason,
-      itemId,
-      outcome:
-        outcome.status === "completed"
-          ? {
-              status: "completed",
-              tokensBefore: outcome.result.tokensBefore,
-              tokensAfter: outcome.tokensAfter,
-              willRetry,
-            }
-          : outcome,
-    });
   }
 
   private async runCompactionWork(options: {
@@ -641,10 +635,21 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         settings,
         signal: abortController.signal,
       });
-      this.emitCompactionOutcome(reason, itemId, outcome, willRetry);
       if (outcome.status !== "completed") {
+        this.emit({ type: "compaction_end", reason, itemId, outcome });
         return false;
       }
+      this.emit({
+        type: "compaction_end",
+        reason,
+        itemId,
+        outcome: {
+          status: "completed",
+          tokensBefore: outcome.result.tokensBefore,
+          tokensAfter: outcome.tokensAfter,
+          willRetry,
+        },
+      });
 
       if (willRetry) {
         const messages = this.agent.state.messages;

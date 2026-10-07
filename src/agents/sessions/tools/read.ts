@@ -419,10 +419,8 @@ export function createReadToolDefinition(
               );
               ({ absolutePath, note, buffer } = snapshot);
             } catch (error) {
-              if (signal?.aborted) {
-                throw new Error("Operation aborted");
-              }
               if (
+                signal?.aborted ||
                 optional !== true ||
                 (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR"))
               ) {
