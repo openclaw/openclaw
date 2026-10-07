@@ -13,6 +13,7 @@ import {
   patchSessionEntryCore,
   type SessionTranscriptRuntimeTarget,
 } from "../../../config/sessions/session-accessor.js";
+import { applySessionEntryOperation } from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../../config/sessions/session-store-owner.js";
 import { prepareSessionEntryPresenceRead } from "../../../config/sessions/session-transcript-worker-runtime.js";
@@ -482,25 +483,26 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
   }
 
   const previousWriterRunId = normalizeOptionalString(snapshot.entry.activeWriterRunId);
-  const claimed = await patchSessionEntryCore(
+  const claimed = await applySessionEntryOperation(
     {
       ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
       sessionKey: snapshot.sessionKey,
       storePath: snapshot.storePath,
     },
-    (entry) => {
-      if (
-        entry.sessionId !== expectedSessionId ||
-        entry.lifecycleRevision !== expectedLifecycleRevision
-      ) {
-        throw new Error(`Session changed before writer claim commit: ${snapshot.sessionKey}`);
-      }
-      return Object.assign({}, entry, {
-        activeWriterRunId: params.runId,
-      });
+    {
+      kind: "fields",
+      expected: { sessionId: expectedSessionId, lifecycleRevision: expectedLifecycleRevision },
+      patch: { activeWriterRunId: params.runId },
     },
-    { skipMaintenance: true, workerGuard: {} },
+    { skipMaintenance: true },
   );
+  if (
+    claimed &&
+    (claimed.sessionId !== expectedSessionId ||
+      claimed.lifecycleRevision !== expectedLifecycleRevision)
+  ) {
+    throw new Error(`Session changed before writer claim commit: ${snapshot.sessionKey}`);
+  }
   if (!claimed || (claimed as InternalSessionEntry).activeWriterRunId !== params.runId) {
     throw new Error(`Session writer claim was not persisted: ${snapshot.sessionKey}`);
   }

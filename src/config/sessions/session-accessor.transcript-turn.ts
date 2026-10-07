@@ -36,6 +36,7 @@ import { resolvePersistedSessionStoreOwnerForTarget } from "./session-store-owne
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 import {
+  captureSessionTranscriptSourcePublication,
   getOwnedSessionTranscriptWriterFence,
   runWithOwnedSessionTranscriptWrite,
 } from "./transcript-write-context.js";
@@ -309,6 +310,10 @@ async function persistExpectedSessionTranscriptTurn(
 ): Promise<SessionTranscriptTurnPersistResult> {
   const requestedSessionKey = scope.sessionKey?.trim();
   const expectedSessionId = options.expectedSessionId;
+  const onCommittedSource = captureSessionTranscriptSourcePublication({
+    ...scope,
+    sessionId: expectedSessionId,
+  });
   const { selectedSessionId, selectedLifecycleRevision, ...target } =
     preparedTarget ??
     (await prepareTranscriptTurnTarget({ ...scope, sessionId: expectedSessionId }, options.config));
@@ -347,6 +352,7 @@ async function persistExpectedSessionTranscriptTurn(
           message: attachSessionTranscriptRunId(append.message, options.runId),
         })),
         onMessageCommitted: options.onMessageCommitted,
+        onCommittedSource,
         sessionLifecyclePatch: options.sessionLifecyclePatch,
         sessionTurnMutation: options.sessionTurnMutation,
         sessionFile: target.sessionKey!,

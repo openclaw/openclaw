@@ -151,20 +151,13 @@ export function bindSqliteWorkerBackend(
           };
         }
         const input = command.input;
-        return input.selected.projectedRemovals.length
-          ? finishProjectedLifecycleRemovalPlans(
-              database,
-              input.archiveDirectory,
-              input.store,
-              input.selected,
-              input.upsertedEntries,
-            )
-          : {
-              deletePlans: [],
-              removals: [],
-              upsertedEntries: input.upsertedEntries,
-              archiveRecovery: input.archiveRecovery,
-            };
+        return finishProjectedLifecycleRemovalPlans(
+          database,
+          input.archiveDirectory,
+          input.store,
+          input.selected,
+          input.upsertedEntries,
+        );
       });
     },
     assertSettled() {
