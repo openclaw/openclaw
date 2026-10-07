@@ -214,6 +214,7 @@
   "channel-inbound",
   "channel-inbound-debounce",
   "channel-mention-gating",
+  "channel-credential-events",
   "channel-ingress-runtime",
   "channel-ingress-test-runtime",
   "channel-outbound",

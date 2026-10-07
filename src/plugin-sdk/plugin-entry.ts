@@ -180,6 +180,9 @@ export type {
   PluginConversationBindingRequestResult,
 } from "../plugins/conversation-binding.types.js";
 export type {
+  PluginHookChannelTokensRevokedContext,
+  PluginChannelTokensRevokedDispatchOptions,
+  PluginHookChannelTokensRevokedEvent,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,

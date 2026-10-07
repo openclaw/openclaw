@@ -1,5 +1,6 @@
 import type { RequestListener } from "node:http";
 import { type FetchFunction, type WebClientOptions, WebClient } from "@slack/web-api";
+import { assertChannelTokensRevokedConsumersReady } from "openclaw/plugin-sdk/channel-credential-events";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -232,6 +233,15 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
   }
 
   const slackMode = opts.mode ?? account.config.mode ?? "socket";
+  const requiredTokenRevocationConsumers = account.config.requiredTokenRevocationConsumers;
+  if (slackMode === "relay" && (requiredTokenRevocationConsumers?.length ?? 0) > 0) {
+    throw new Error(
+      "Required Slack token revocation consumers need native socket or HTTP delivery.",
+    );
+  }
+  await assertChannelTokensRevokedConsumersReady({
+    requiredConsumerPluginIds: requiredTokenRevocationConsumers,
+  });
   const slackWebhookPath = normalizeSlackWebhookPath(account.config.webhookPath);
   const signingSecret =
     slackMode === "http"
@@ -291,6 +301,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
   const clientOptions = resolveSlackWebClientOptions({}, slackDispatchers.webApi);
   const durableIngress = createSlackDurableIngress({
     accountId: account.accountId,
+    requiredTokenRevocationConsumers,
     ...(runtime.log ? { onLog: runtime.log } : {}),
     ...(opts.abortSignal ? { abortSignal: opts.abortSignal } : {}),
   });
@@ -675,6 +686,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
 
   try {
     await installSlackRuntimeForIdentity(installationIdentity);
+    // Awaited initialization can overlap plugin reload. Refuse source receipt
+    // against the current consumer registry, not the earlier startup check.
+    await assertChannelTokensRevokedConsumersReady({
+      requiredConsumerPluginIds: requiredTokenRevocationConsumers,
+    });
     durableIngress.start();
     runtimeStarted = true;
     presenceMonitor?.start();
@@ -693,6 +709,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
       let hasLoggedSocketConnected = false;
       while (!opts.abortSignal?.aborted) {
         try {
+          await assertChannelTokensRevokedConsumersReady({
+            requiredConsumerPluginIds: requiredTokenRevocationConsumers,
+          });
           const disconnect = await startSlackSocketAndWaitForDisconnect({
             app,
             abortSignal: opts.abortSignal,

@@ -105,6 +105,16 @@ const SlackAccountSchema = z
     appToken: SecretInputSchema.optional(),
     userToken: SecretInputSchema.optional(),
     userTokenReadOnly: z.boolean().optional(),
+    requiredTokenRevocationConsumers: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .max(128)
+          .refine((id) => id === id.trim()),
+      )
+      .max(8)
+      .optional(),
     allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
     botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
     dangerouslyAllowNameMatching: ChannelDangerouslyAllowNameMatchingSchema,
@@ -236,7 +246,21 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   };
 
   const baseMode = value.mode ?? "socket";
+  const validateRevocationTransport = (
+    mode: typeof baseMode,
+    required: readonly string[] | undefined,
+    path: (string | number)[],
+  ) => {
+    if (mode === "relay" && (required?.length ?? 0) > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Required Slack token revocation consumers need native socket or HTTP delivery",
+        path: [...path, "requiredTokenRevocationConsumers"],
+      });
+    }
+  };
   if (!value.accounts) {
+    validateRevocationTransport(baseMode, value.requiredTokenRevocationConsumers, []);
     if (baseMode === "relay") {
       requireRelayConfig(value.relay, ["relay"]);
     }
@@ -248,6 +272,11 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
       continue;
     }
     const accountMode = account.mode ?? baseMode;
+    validateRevocationTransport(
+      accountMode,
+      account.requiredTokenRevocationConsumers ?? value.requiredTokenRevocationConsumers,
+      ["accounts", accountId],
+    );
     refineChannelDmPolicy({ channelId: "slack", value, accountId, ctx });
     if (accountMode === "relay") {
       requireRelayConfig({ ...value.relay, ...account.relay }, ["accounts", accountId, "relay"]);

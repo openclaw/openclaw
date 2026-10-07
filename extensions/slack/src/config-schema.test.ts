@@ -33,6 +33,61 @@ function expectSlackConfigKeyRejected(config: unknown, key: string) {
 }
 
 describe("slack config schema", () => {
+  it("bounds exact required revocation consumer IDs and preserves account inheritance", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          requiredTokenRevocationConsumers: ["pack/one"],
+          accounts: { work: {}, optional: { requiredTokenRevocationConsumers: [] } },
+        },
+      },
+    } satisfies OpenClawConfig;
+    expectSlackConfigValid(cfg.channels.slack);
+    expect(
+      resolveSlackAccount({ cfg, accountId: "work" }).config.requiredTokenRevocationConsumers,
+    ).toEqual(["pack/one"]);
+    expect(
+      resolveSlackAccount({ cfg, accountId: "optional" }).config.requiredTokenRevocationConsumers,
+    ).toEqual([]);
+    expectSlackConfigIssue(
+      { requiredTokenRevocationConsumers: Array(9).fill("synthetic/consumer") },
+      "requiredTokenRevocationConsumers",
+    );
+    for (const ids of [[""], ["a".repeat(129)], [" pack/one"]]) {
+      expectSlackConfigIssue(
+        { requiredTokenRevocationConsumers: ids },
+        "requiredTokenRevocationConsumers.0",
+      );
+    }
+  });
+
+  it("rejects required revocation consumers on inherited relay transport", () => {
+    const relay = {
+      url: "wss://router.example.com/ws",
+      authToken: "synthetic-relay-token",
+      gatewayId: "work",
+    };
+    expectSlackConfigIssue(
+      { mode: "relay", relay, requiredTokenRevocationConsumers: ["synthetic/consumer"] },
+      "requiredTokenRevocationConsumers",
+    );
+    expectSlackConfigIssue(
+      {
+        mode: "relay",
+        relay,
+        requiredTokenRevocationConsumers: ["synthetic/consumer"],
+        accounts: { work: {} },
+      },
+      "accounts.work.requiredTokenRevocationConsumers",
+    );
+    expectSlackConfigValid({
+      mode: "relay",
+      relay,
+      requiredTokenRevocationConsumers: ["synthetic/consumer"],
+      accounts: { work: { requiredTokenRevocationConsumers: [] } },
+    });
+  });
+
   it("accepts compact progress style", () => {
     expectSlackConfigValid({
       streaming: {
