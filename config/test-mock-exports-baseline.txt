@@ -8963,7 +8963,6 @@
 ["src/infra/systemd-stop-timeout.test.ts","./restart.js","4734f8ebcf99b22e89079368916ef74aef40ec071d73ec9ca5c2dc89faeee670",1]
 ["src/infra/tailscale.claim.test.ts","../process/exec.js","425c798f7af41aecb4ee59662f9ec9241e392730bf049e612d897d60af393696",1]
 ["src/infra/tailscale.claim.test.ts","./runtime-worker-url.js","79d05b4587ff154d9d0e01d0049cf05c8736a9e3478090cbd0d85f420f5a4fa5",1]
-["src/infra/tailscale.discovery.test.ts","../process/exec.js","425c798f7af41aecb4ee59662f9ec9241e392730bf049e612d897d60af393696",1]
 ["src/infra/telemetry.async.test.ts","../plugins/plugin-runtime-inventory.js","37094e2188727f2b7d094fb0fee7e238197287332377db967cb6cf270374e4e3",1]
 ["src/infra/telemetry.async.test.ts","../state/openclaw-state-worker-store.js","5980be4d44a7e6489842e740dee97131b73b6b31959ee6027786d3575b559de5",1]
 ["src/infra/tls/gateway.test.ts","../resolve-system-bin.js","72e76747c28a1a9ec02ec102ae88c72534c9915c9cee0302aff184f4bd33d4bb",1]
