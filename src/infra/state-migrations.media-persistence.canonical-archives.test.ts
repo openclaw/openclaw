@@ -20,8 +20,10 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { ensureSessionTranscriptArchiveSchema } from "../state/openclaw-agent-session-transcript-archive-schema.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import { cleanupMediaPersistenceFixtures } from "./state-migrations.media-persistence.test-support.js";
+import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
 
 type ArchiveEncoding = "identity" | "zstd";
 type ArchiveRow = {
@@ -199,6 +201,37 @@ afterEach(() => {
 });
 
 describe("media migration of canonical SQLite transcript archives", () => {
+  it.each([
+    {
+      label: "media",
+      migrate: migrateLegacyMediaPersistence,
+      entry: "migrateCanonicalTranscriptArchives",
+    },
+    {
+      label: "directives",
+      migrate: migrateHistoricalTranscriptDirectives,
+      entry: "migrateTranscriptDirectiveArchives",
+    },
+  ] as const)(
+    "preserves archive interruption through the $label migration owner",
+    async ({ migrate, entry }) => {
+      const f = fixture({ content: canonicalContent });
+      const controller = new AbortController();
+      const interrupted = new Error("Doctor interrupted by SIGINT");
+      const archives = await import("./state-migrations.transcript-directives-archives.js");
+      vi.spyOn(archives, entry).mockImplementation(async () => {
+        controller.abort(interrupted);
+        throw interrupted;
+      });
+      await expect(
+        withSqliteReadOnlyWorkerScope(() => migrate({ env: f.env }), {
+          signal: controller.signal,
+          deadlineOwnedByCaller: true,
+        }),
+      ).rejects.toBe(interrupted);
+    },
+  );
+
   it("seeks across archive batches without skipping retained generations", async () => {
     const f = fixture({ fileContent: null });
     const { DatabaseSync } = requireNodeSqlite();

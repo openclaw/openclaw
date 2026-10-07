@@ -47,6 +47,7 @@ import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { detectLegacyDeliveryQueueFiles } from "./delivery-queue-legacy-files.js";
 import { listLegacyPairingStoreFiles } from "./pairing-files.js";
 import { isPathInside } from "./path-guards.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
 import {
   detectLegacyAcpReplayLedger,
   migrateLegacyAcpReplayLedger,
@@ -110,7 +111,6 @@ import {
   migrateLegacyMeetingTranscripts,
 } from "./state-migrations.meeting-transcripts.js";
 import {
-  createLegacyStateMigrationStepReceipt,
   formatStartupMigrationFailure,
   logStateMigrationResult,
   mergeNotices,
@@ -189,6 +189,7 @@ import {
   createStateSchemaMigrationStep,
   describeStateSchemaMigration,
 } from "./state-migrations.state-schema.js";
+import { runLegacyStateMigrationSteps } from "./state-migrations.steps.js";
 import {
   detectLegacyTuiLastSessions,
   inspectLegacyTuiLastSessionRefusal,
@@ -2272,168 +2273,6 @@ export async function planLegacyStateMigrationsReadOnly(params: {
   return plan;
 }
 
-function refusedStepReceipt(
-  step: LegacyStateMigrationStep,
-  error: unknown,
-): LegacyStateMigrationStepReceipt {
-  const message = error instanceof Error ? error.message : String(error);
-  return {
-    ...migrationStepPlan(step),
-    outcome: "refused",
-    changes: [],
-    warnings: [message],
-    refusal: { code: "step-threw", message },
-  };
-}
-
-async function runLegacyStateMigrationSteps(
-  steps: readonly LegacyStateMigrationStep[],
-  onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void,
-  shouldRun?: (step: LegacyStateMigrationStep) => boolean,
-  options?: {
-    onUnexpectedFailure?: (error: unknown) => void;
-    refusedAgentDatabasePaths?: Set<string>;
-  },
-): Promise<{
-  sources: MigrationMessages[];
-  sharedSources: MigrationMessages[];
-  finalSources: MigrationMessages[];
-  sharedNoticeSources: MigrationMessages[];
-  finalNoticeSources: MigrationMessages[];
-  entries: Array<{ id: string; result: MigrationMessages }>;
-  receipts: LegacyStateMigrationStepReceipt[];
-  deferredSteps: LegacyStateMigrationStep[];
-  haltedBy: LegacyStateMigrationStepReceipt | undefined;
-}> {
-  const sources: MigrationMessages[] = [];
-  const sharedSources: MigrationMessages[] = [];
-  const finalSources: MigrationMessages[] = [];
-  const sharedNoticeSources: MigrationMessages[] = [];
-  const finalNoticeSources: MigrationMessages[] = [];
-  const entries: Array<{ id: string; result: MigrationMessages }> = [];
-  const receipts: LegacyStateMigrationStepReceipt[] = [];
-  const deferredSteps: LegacyStateMigrationStep[] = [];
-  let haltedBy: LegacyStateMigrationStepReceipt | undefined;
-
-  // Keep writers serial. Scoped ownership refusals leave independent owners available.
-  for (let index = 0; index < steps.length; index += 1) {
-    const step = steps[index];
-    if (!step) {
-      continue;
-    }
-    const refusedDependencies = [...(options?.refusedAgentDatabasePaths ?? [])].filter(
-      (databasePath) =>
-        // Post-session plugins depend on canonical session repair, including its database owners.
-        step.deferredExecution?.kind === "post-session-plugin" ||
-        (step.reversibility !== "not-applicable" &&
-          [...step.source, ...step.target].some(
-            (endpoint) =>
-              endpoint.kind !== "owner" &&
-              (path.resolve(endpoint.path) === databasePath ||
-                (endpoint.kind === "path" && isPathInside(endpoint.path, databasePath))),
-          )),
-    );
-    if (refusedDependencies.length > 0) {
-      const message = `Migration step "${step.id}" was not run because it requires refused agent database(s): ${refusedDependencies.join(", ")}.`;
-      const result = { changes: [], warnings: [message] };
-      const receipt: LegacyStateMigrationStepReceipt = {
-        ...migrationStepPlan(step),
-        outcome: "refused",
-        ...result,
-        refusal: { code: "blocked-by-agent-database-refusal", message },
-        refusedAgentDatabasePaths: refusedDependencies,
-      };
-      entries.push({ id: step.id, result });
-      receipts.push(receipt);
-      onStepReceipt?.(receipt);
-      sources.push(result);
-      (step.phase === "shared" ? sharedSources : finalSources).push(result);
-      continue;
-    }
-    if (step.deferredExecution) {
-      // This phase depends on later canonical session repair. Keep its authority open
-      // until that writer runs; an earlier refusal still closes it through the tail path.
-      deferredSteps.push(step);
-      continue;
-    }
-    if (shouldRun && !shouldRun(step) && step.requiredness === "not-required") {
-      const receipt: LegacyStateMigrationStepReceipt = {
-        ...migrationStepPlan(step),
-        outcome: "skipped",
-        changes: [],
-        warnings: [],
-      };
-      receipts.push(receipt);
-      onStepReceipt?.(receipt);
-      continue;
-    }
-    let result: MigrationMessages;
-    try {
-      result = await step.run();
-    } catch (error) {
-      const receipt = refusedStepReceipt(step, error);
-      result = { changes: [], warnings: receipt.warnings };
-      entries.push({ id: step.id, result });
-      receipts.push(receipt);
-      onStepReceipt?.(receipt);
-      options?.onUnexpectedFailure?.(error);
-      sources.push(result);
-      (step.phase === "shared" ? sharedSources : finalSources).push(result);
-      haltedBy = receipt;
-      receipts.push(
-        ...createBlockedLegacyStateMigrationStepReceipts({
-          steps: steps.slice(index + 1),
-          blocker: receipt,
-          onStepReceipt,
-        }),
-      );
-      break;
-    }
-    const receipt = createLegacyStateMigrationStepReceipt(migrationStepPlan(step), result);
-    entries.push({ id: step.id, result });
-    receipts.push(receipt);
-    onStepReceipt?.(receipt);
-    sources.push(result);
-    (step.phase === "shared" ? sharedSources : finalSources).push(result);
-    if (step.collectNotices) {
-      (step.phase === "shared" ? sharedNoticeSources : finalNoticeSources).push(result);
-    }
-    if (receipt.outcome === "refused") {
-      if (
-        step.id === "media-persistence" &&
-        result.refusedAgentDatabasePaths?.length &&
-        options?.refusedAgentDatabasePaths
-      ) {
-        for (const databasePath of result.refusedAgentDatabasePaths) {
-          options.refusedAgentDatabasePaths.add(path.resolve(databasePath));
-        }
-        continue;
-      }
-      haltedBy = receipt;
-      receipts.push(
-        ...createBlockedLegacyStateMigrationStepReceipts({
-          steps: steps.slice(index + 1),
-          blocker: receipt,
-          onStepReceipt,
-        }),
-      );
-      break;
-    }
-  }
-
-  return {
-    sources,
-    sharedSources,
-    finalSources,
-    sharedNoticeSources,
-    finalNoticeSources,
-    entries,
-    receipts,
-    deferredSteps,
-    haltedBy,
-  };
-}
-
 function completedPluginMigrationFields(
   sources: readonly MigrationMessages[],
 ): Pick<MigrationMessages, "completedPluginIds" | "requiredPluginIds" | "statelessPluginIds"> {
@@ -2483,6 +2322,13 @@ export async function runLegacyStateMigrations(params: {
     stepReceipts: LegacyStateMigrationStepReceipt[];
   }
 > {
+  const signal = resolveSqliteInspectionSignal();
+  let failure: { error: unknown } | undefined;
+  const executionOptions = {
+    onUnexpectedFailure: (error: unknown) => {
+      failure ??= { error };
+    },
+  };
   const detected = params.detected;
   const env = params.env ?? process.env;
   const config = params.config ?? ({} as OpenClawConfig);
@@ -2509,22 +2355,31 @@ export async function runLegacyStateMigrations(params: {
     throw new Error("legacy state migration plan is missing its plugin-install-index prelude");
   }
   const preparationSteps = [stateSchemaStep, pluginInstallIndexStep];
-  const preparation = await runLegacyStateMigrationSteps(preparationSteps, params.onStepReceipt);
+  const preparation = await runLegacyStateMigrationSteps(
+    preparationSteps,
+    params.onStepReceipt,
+    undefined,
+    executionOptions,
+  );
   if (preparation.haltedBy) {
     const notices = mergeNotices(preparation.sources);
+    const stepReceipts = [
+      ...preparation.receipts,
+      ...createBlockedLegacyStateMigrationStepReceipts({
+        steps: remainingSteps,
+        blocker: preparation.haltedBy,
+        onStepReceipt: params.onStepReceipt,
+      }),
+    ];
+    if (failure && signal?.aborted && failure.error === signal.reason) {
+      throw failure.error;
+    }
     return {
       changes: preparation.sources.flatMap((source) => source.changes),
       warnings: preparation.sources.flatMap((source) => source.warnings),
       ...(notices.length > 0 ? { notices } : {}),
       mode: "doctor",
-      stepReceipts: [
-        ...preparation.receipts,
-        ...createBlockedLegacyStateMigrationStepReceipts({
-          steps: remainingSteps,
-          blocker: preparation.haltedBy,
-          onStepReceipt: params.onStepReceipt,
-        }),
-      ],
+      stepReceipts,
     };
   }
 
@@ -2534,12 +2389,17 @@ export async function runLegacyStateMigrations(params: {
   const migrations = await runLegacyStateMigrationSteps(
     buildSteps(inventory).slice(2),
     params.onStepReceipt,
+    undefined,
+    executionOptions,
   );
   const notices = mergeNotices([
     ...preparation.sources,
     ...migrations.sharedNoticeSources,
     ...migrations.finalNoticeSources,
   ]);
+  if (failure && signal?.aborted && failure.error === signal.reason) {
+    throw failure.error;
+  }
   return {
     mode: "doctor",
     ...completedPluginMigrationFields(migrations.sources),
@@ -2586,13 +2446,17 @@ export async function autoMigrateLegacyState(params: {
   stepReceipts: LegacyStateMigrationStepReceipt[];
   postSessionPluginMigration?: PreparedPostSessionPluginMigration;
 }> {
+  const signal = resolveSqliteInspectionSignal();
   let failure: { error: unknown } | undefined;
   const result = await executeLegacyStateMigrations(params, (error) => {
     failure ??= { error };
   });
-  // Automatic callers still receive the original failure, but only after the execution
-  // owner has closed every remaining receipt without running later migrations.
-  if (params.doctorOnlyStateMigrations !== true && failure) {
+  // Settle all receipts before forwarding cancellation to Doctor's service restoration.
+  if (
+    failure &&
+    (params.doctorOnlyStateMigrations !== true ||
+      (signal?.aborted && failure.error === signal.reason))
+  ) {
     throw failure.error;
   }
   return result;

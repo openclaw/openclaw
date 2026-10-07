@@ -101,10 +101,12 @@ describe("legacy media persistence doctor migration", () => {
       expect(await Promise.race([checking, migration.then(() => false)])).toBe(true);
     } finally {
       controller.abort(interruption);
-      await migration;
-      check.mockRestore();
+      try {
+        await expect(migration).rejects.toBe(interruption);
+      } finally {
+        check.mockRestore();
+      }
     }
-    expect((await migration).warnings.join("\n")).toContain("Doctor interrupted by SIGTERM");
     const database = new (requireNodeSqlite().DatabaseSync)(pathname, { readOnly: true });
     try {
       expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(21);
