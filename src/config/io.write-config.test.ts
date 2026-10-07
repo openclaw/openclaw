@@ -566,6 +566,8 @@ describe("config io write", () => {
       const staleConfig = {
         plugins: { entries: { demo: { enabled: true } } },
       };
+      // An existing file keeps first-write catalog opt-outs out of these literal rewrites.
+      await writeConfigFixture(home, {});
 
       await io.writeConfigFile(staleConfig);
       await io.writeConfigFile(staleConfig);
