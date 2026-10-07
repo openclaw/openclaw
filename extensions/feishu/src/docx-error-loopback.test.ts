@@ -65,12 +65,10 @@ async function createDocumentLoopback() {
   // SAFETY: The SDK owns this Axios instance and unwraps responses to its HttpInstance contract.
   const sdkHttp = Lark.defaultHttpInstance as Lark.HttpInstance;
   const loopbackHttp = Object.create(sdkHttp) as Lark.HttpInstance;
-  loopbackHttp.request = <T, R = T, D = unknown>(
-    options: Lark.HttpRequestOptions<D>,
-  ): Promise<R> => {
+  loopbackHttp.request = (options) => {
     const upstream = new URL(options.url ?? "");
     const target = new URL(`${upstream.pathname}${upstream.search}`, origin);
-    return sdkHttp.request<T, R, D>({ ...options, url: target.href });
+    return sdkHttp.request({ ...options, url: target.href });
   };
   const client = new Lark.Client({
     appId: config.channels.feishu.appId,
