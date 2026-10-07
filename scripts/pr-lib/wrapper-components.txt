@@ -111,6 +111,7 @@ packages/normalization-core/src/promise-like.ts
 packages/normalization-core/src/record-coerce.ts
 packages/normalization-core/src/response-bytes.ts
 packages/normalization-core/src/result.ts
+packages/normalization-core/src/stable-node-path.ts
 packages/normalization-core/src/stable-stringify.ts
 packages/normalization-core/src/string-coerce.ts
 packages/normalization-core/src/string-normalization.ts
@@ -1071,6 +1072,7 @@ src/infra/sqlite-worker-request-class.ts
 src/infra/sqlite-worker-state-context.ts
 src/infra/sqlite-worker-store.ts
 src/infra/sqlite-worker-transfer.ts
+src/infra/stable-node-path.ts
 src/infra/stale-lock-file.ts
 src/infra/startup-maintenance-required.ts
 src/infra/startup-migration-checkpoint.ts
@@ -1640,6 +1642,7 @@ src/state/openclaw-agent-db.paths.ts
 src/state/openclaw-agent-db.ts
 src/state/openclaw-agent-db.wal.ts
 src/state/openclaw-agent-execution-cleanup.ts
+src/state/openclaw-agent-execution-config.ts
 src/state/openclaw-agent-execution-contract.ts
 src/state/openclaw-agent-execution-incognito.ts
 src/state/openclaw-agent-execution-native.ts

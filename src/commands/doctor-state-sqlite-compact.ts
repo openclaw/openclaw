@@ -21,7 +21,7 @@ type DoctorStateSqliteCompactOptions = {
 export async function runDoctorStateSqliteCompact(options: DoctorStateSqliteCompactOptions = {}) {
   const env = options.env ?? process.env;
   const sqlitePath = resolveOpenClawStateSqlitePath(env);
-  const stat = readCanonicalStateDatabaseStat(sqlitePath);
+  const stat = fs.lstatSync(sqlitePath, { throwIfNoEntry: false });
   if (!stat) {
     return {
       mode: "compact" as const,
@@ -70,15 +70,4 @@ export async function runDoctorStateSqliteCompact(options: DoctorStateSqliteComp
       };
     },
   });
-}
-
-function readCanonicalStateDatabaseStat(sqlitePath: string): fs.Stats | undefined {
-  try {
-    return fs.lstatSync(sqlitePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
 }

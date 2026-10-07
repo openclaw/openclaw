@@ -65,6 +65,7 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
   for (const [heading, errors] of [
     ["Activated plugin load errors:", snapshot.activatedPluginErrors],
     ["Channel health check errors:", snapshot.channelProbeErrors],
+    ["Channel health collection warnings:", snapshot.channelProbeTimeouts],
   ] as const) {
     if (errors?.length) {
       lines.push(heading);

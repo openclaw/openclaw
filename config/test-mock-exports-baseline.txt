@@ -9767,7 +9767,6 @@
 ["src/process/spawn-broker/host-scope-settlement.test.ts","../kill-tree.js","cbf6595843c240438a9b59898a488f26a1435eb0f80906e84793d59abbdb575c",1]
 ["src/process/spawn-broker/host-scope-settlement.test.ts","../windows-command.js","4d3752a13631d356286f15511e0f30df9e2354eb1b9922b2d1ea76531ffbce55",1]
 ["src/process/spawn-broker/host-scope-settlement.test.ts","./cleanup.js","09071558809d9265e0f832af9f4dbc2d64071c587d4fcdef384135135535a97b",1]
-["src/process/spawn-broker/relay-integration.test.ts","../spawn-utils.js","6bdcbeaac544482089c5a4f0381799f34f3f15d749c792be1e1331c5d5cc9cfa",1]
 ["src/process/spawn-broker/resource-host.test.ts","./ipc.js","cd61d866fb7e5e5ebbcfc21ceae28a6651f62669e47142be4185f4394c2807ff",1]
 ["src/process/spawn-broker/worker-admission-settlement.test.ts","../kill-tree.js","eb0f879fc7cfefa613d58b92e2c88b91a72819587b7cc88831bf27d7212a83de",1]
 ["src/process/spawn-broker/worker-admission-settlement.test.ts","./execa-worker.js","c0cd8b1a9d485227671a0977a5fb433001392dfbdc69827cfe98decbbed918e2",1]

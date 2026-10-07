@@ -18,6 +18,11 @@ import {
   releaseOpenClawAgentDatabaseLease,
 } from "./openclaw-agent-db-lease.js";
 import { closeCachedOpenClawAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
+import {
+  getOpenClawAgentDatabaseValidation,
+  getOpenClawAgentDatabaseValidationForTransfer,
+  invalidateOpenClawAgentDatabaseValidation,
+} from "./openclaw-agent-db-validation-cache.js";
 import { withOpenClawAgentDatabaseWrite } from "./openclaw-agent-db-write.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -187,13 +192,15 @@ it.each([
   "alias",
   "warm-additive-table",
   "warm-missing-index",
+  "idle-missing-index",
+  "idle-revoked",
 ] as const)("readmits a host handle with its retained worker after %s", async (change) => {
   const options = {
     agentId: "main",
     env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-retained-readmission-") },
   };
   openOpenClawStateDatabase({ env: options.env });
-  const retainedExecution = captureOpenClawAgentDatabaseExecution(options);
+  let retainedExecution = captureOpenClawAgentDatabaseExecution(options);
   try {
     const database = await withOpenClawAgentDatabaseWrite(options, (opened) => {
       if (change.endsWith("additive-table")) {
@@ -203,7 +210,22 @@ it.each([
       }
       return opened;
     });
-    const nativeClaim = retainedExecution.captureGenerationClaim();
+    let nativeClaim = retainedExecution.captureGenerationClaim();
+    const revokedProof =
+      change === "idle-revoked" ? getOpenClawAgentDatabaseValidation(database) : undefined;
+    if (change.startsWith("idle-")) {
+      const incarnation = nativeClaim.incarnation;
+      await retainedExecution.release();
+      await withOpenClawAgentDatabaseWrite({ ...options, agentId: "sibling" }, () => undefined);
+      if (change === "idle-revoked") {
+        expect(revokedProof).toBeDefined();
+        invalidateOpenClawAgentDatabaseValidation(database.path);
+        expect(getOpenClawAgentDatabaseValidation(database)).toBeUndefined();
+      }
+      retainedExecution = captureOpenClawAgentDatabaseExecution(options);
+      nativeClaim = retainedExecution.captureGenerationClaim();
+      expect(nativeClaim.incarnation).toBe(incarnation);
+    }
     const acquisitionPath =
       change === "alias"
         ? path.join(options.env.OPENCLAW_STATE_DIR, "alias.sqlite")
@@ -229,6 +251,16 @@ it.each([
         },
       );
       expect(count).toBe(0);
+      if (revokedProof) {
+        expect(Atomics.load(new Int32Array(revokedProof.valid), 0)).toBe(0);
+        const readmitted = getOpenClawAgentDatabaseValidationForTransfer({
+          agentId: options.agentId,
+          path: database.path,
+        });
+        expect(readmitted).toBeDefined();
+        expect(Atomics.load(new Int32Array(readmitted!.valid), 0)).toBe(1);
+        expect(readmitted!.valid).not.toBe(revokedProof.valid);
+      }
       nativeClaim.assertCurrent();
       expect(observed.inspections).toEqual([]);
     } finally {

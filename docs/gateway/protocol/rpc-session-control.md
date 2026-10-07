@@ -19,6 +19,8 @@ Once session stores are admitted, authorization for direct session targets prepa
 
 Changing a session's model or native runtime consent can wait for runtime preparation. During that wait, other sessions can still be created or updated. Changes to the same session remain ordered, and a prepared change is rejected if its captured session state changed before commit.
 
+Model-catalog reads in `sessions.create`, `sessions.patch`, `sessions.patchMany`, and Gateway copies through `sessions.catalog.continue` share a 20-second budget per request. A stalled catalog or canceled caller returns retryable `UNAVAILABLE` before the affected session change commits. `sessions.patchMany` retains ordered per-target outcomes; independent successful targets remain committed.
+
 Session list orders update incrementally as committed session metadata changes. Each request still applies current visibility, activity, and time filters before pagination. Archived sessions retain their list position when their display rows are released from memory.
 
 ## Session control
