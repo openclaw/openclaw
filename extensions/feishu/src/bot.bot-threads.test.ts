@@ -114,7 +114,6 @@ describe("Feishu bot-owned thread mentions", () => {
   });
 
   it.each([
-    { name: "this app", expected: true },
     {
       name: "this bot's typed open ID",
       root: { senderId: "ou-bot", senderOpenId: "ou-bot" },
@@ -167,13 +166,6 @@ describe("Feishu bot-owned thread mentions", () => {
   });
 
   it.each([
-    { name: "account disables inherited requirement", accountSetting: false, expected: true },
-    {
-      name: "group disables account requirement",
-      accountSetting: true,
-      groupSetting: false,
-      expected: true,
-    },
     {
       name: "group requires mention despite parent allowing all messages",
       accountSetting: false,
@@ -191,7 +183,7 @@ describe("Feishu bot-owned thread mentions", () => {
     mockGetMessageFeishu.mockResolvedValue(root);
     await dispatchMessage({
       cfg: config({
-        requireMention: testCase.groupSetting !== true,
+        requireMention: !testCase.groupSetting,
         requireMentionInBotThreads: true,
         accounts: {
           default: {

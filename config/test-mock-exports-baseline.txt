@@ -701,8 +701,6 @@
 ["extensions/feishu/src/send.test.ts","./client.js","a0685e76f03b44e1745cddf7d33132605f88dd5086a20c81588e108fcbf07915",1]
 ["extensions/feishu/src/send.test.ts","./runtime.js","534c5817254e2e73dea27ae889761dbc44b8f527411de9bd1cc25318845488d3",1]
 ["extensions/feishu/src/send.test.ts","openclaw/plugin-sdk/markdown-table-runtime","ba2698d66c9f45f522b4fc4d01f501ba326258b9a4517b5ddcb32e64017faf38",1]
-["extensions/feishu/src/send.thread-history.test.ts","./accounts.js","47a318e54741398d8a67820894a07cd3e547cea7eb40a8ba09224489985a2eeb",1]
-["extensions/feishu/src/send.thread-history.test.ts","./client.js","a0685e76f03b44e1745cddf7d33132605f88dd5086a20c81588e108fcbf07915",1]
 ["extensions/feishu/src/setup-surface.test.ts","./app-registration.js","b2d0ae85657583af92dc158e2a9844fc102a94589f6603d942ade4f590d917c2",1]
 ["extensions/feishu/src/setup-surface.test.ts","./probe.js","a3acb61673a1576ead3240201b51bda3e884559460121492dd152f6ac1beea54",1]
 ["extensions/feishu/src/tool-account-routing.test.ts","./client.js","182ebecc52a68a8bf6cc888c9294e9683ec0d54d03e23a1ba4a215bcff91b40a",1]
