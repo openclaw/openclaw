@@ -69,7 +69,7 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
       return;
     }
 
-    let current = await deps.placements.getAsync(placement.sessionId);
+    const current = await deps.placements.getAsync(placement.sessionId);
     if (
       !current ||
       current.agentId !== placement.agentId ||
