@@ -18,6 +18,7 @@ import {
   runSecurityHealth,
   runStartupChannelMaintenanceHealth,
   runWebFetchProxyHealth,
+  runEgressConnectivityHealth,
   runWhatsappResponsivenessHealth,
 } from "./doctor-health-contribution-runners.gateway.js";
 import {
@@ -166,6 +167,12 @@ export function resolveFinalDoctorHealthContributions(params: {
       label: "Web fetch proxy",
       updateWork: { kind: "inspection", scope: "run" },
       run: runWebFetchProxyHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:egress-connectivity",
+      label: "Outbound connectivity",
+      updateWork: { kind: "inspection", scope: "run" },
+      run: runEgressConnectivityHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:github-projects",
