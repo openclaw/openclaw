@@ -11,6 +11,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 8
       - uses: ./.github/actions/setup-node-env
         with:
           node-version: '26.10.0'
