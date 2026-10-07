@@ -25,7 +25,6 @@ import {
   buildSubagentList,
   readSubagentListSessionEntries,
 } from "../subagents/registry/subagent-list.js";
-import { dismissSubagentRunDelivery } from "../subagents/registry/subagent-registry.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "../subagents/registry/subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "../subagents/registry/subagent-registry-publication.js";
@@ -35,6 +34,7 @@ import {
   prepareSubagentRunsSnapshotForRunIds,
   prepareSubagentSessionListReadCache,
 } from "../subagents/registry/subagent-registry-state.js";
+import { dismissSubagentRunDelivery } from "../subagents/registry/subagent-registry.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "../subagents/registry/subagent-run-generation.js";
 import {

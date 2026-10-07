@@ -8,8 +8,7 @@ const owner = vi.hoisted(() => ({
   cancel: vi.fn(),
 }));
 const dismiss = vi.hoisted(() => ({ delivery: vi.fn() }));
-// mock-isolation: the tool test exercises only the dismiss entry point; importing the real
-// registry composition module would pull full state/worker dependencies into a unit test.
+// mock-isolation: this unit test stubs only the dismiss entry point; importing the real registry composition module would pull full state/worker dependencies into a tool test.
 vi.mock("../subagents/registry/subagent-registry.js", () => ({
   dismissSubagentRunDelivery: dismiss.delivery,
 }));

@@ -331,8 +331,7 @@ export const finalizeResumedAnnounceGiveUp = async (
       // A no-route attempt was already recorded as an intentional non-delivery when
       // it was received; terminalising the transport must not demote that back to a
       // bare `failed` obligation that can never be discharged (#154834).
-      const intentionalNonDelivery =
-        draft.delivery?.disposition === "intentional_non_delivery";
+      const intentionalNonDelivery = draft.delivery?.disposition === "intentional_non_delivery";
       clearSubagentPendingDelivery(draft);
       const failedDelivery = ensureDeliveryState(draft);
       failedDelivery.status = "failed";
