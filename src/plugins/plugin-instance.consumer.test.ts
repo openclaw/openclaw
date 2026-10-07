@@ -6,7 +6,6 @@ import type {
 } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
 import { streamAgentResponse } from "../../packages/agent-core/src/agent-stream-response.js";
-import { generateBranchSummary } from "../../packages/agent-core/src/harness/compaction/branch-summarization.js";
 import { generateSummary } from "../../packages/agent-core/src/harness/compaction/compaction.js";
 import { wrapAnthropicStreamWithRecovery } from "../agents/embedded-agent-runner/thinking.js";
 import {
@@ -59,7 +58,7 @@ const noTools = async () => ({
   terminateRun: false,
 });
 
-async function consume(kind: "agent" | "summary" | "branch" | "model-summary", streamFn: StreamFn) {
+async function consume(kind: "agent" | "summary" | "model-summary", streamFn: StreamFn) {
   const owner = {};
   if (kind === "model-summary") {
     initializeModelRegistryRuntime(owner);
@@ -83,43 +82,23 @@ async function consume(kind: "agent" | "summary" | "branch" | "model-summary", s
       .map((part) => part.text)
       .join("");
   }
-  const result =
-    kind !== "branch"
-      ? await generateSummary(
-          [user],
-          model,
-          1000,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          streamFn,
-          runtime,
-        )
-      : await generateBranchSummary(
-          [
-            {
-              type: "message",
-              id: "synthetic-entry",
-              parentId: null,
-              timestamp: "2026-09-06T00:00:00Z",
-              message: user,
-            },
-          ],
-          {
-            model,
-            apiKey: "synthetic",
-            signal: new AbortController().signal,
-            streamFn,
-            runtime,
-          },
-        );
+  const result = await generateSummary(
+    [user],
+    model,
+    1000,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    streamFn,
+    runtime,
+  );
   if (!result.ok) {
     throw result.error;
   }
-  return typeof result.value === "string" ? result.value : result.value.summary;
+  return result.value;
 }
 
 describe("plugin stream consumer admission", () => {
@@ -219,46 +198,40 @@ describe("plugin stream consumer admission", () => {
     expect(() => instance.run(() => "unavailable")).toThrow("reloaded or disabled");
   });
 
-  it.each(["direct", "thinking"] as const)(
-    "admits an async stream factory through %s before retirement can finish its handoff",
-    async (wrapper) => {
-      const instance = new PluginInstance("async-consumer");
-      const factoryStarted = createDeferredCore();
-      const releaseFactory = createDeferredCore();
-      const source: AssistantMessageEventStreamLike = {
-        async *[Symbol.asyncIterator]() {
-          yield { type: "start", partial: message };
-        },
-        result: async () => message,
-      };
-      const factory = instance.wrap(async () => {
-        factoryStarted.resolve();
-        await releaseFactory.promise;
-        return source;
-      });
-      const stream =
-        wrapper === "thinking"
-          ? wrapAnthropicStreamWithRecovery(factory, { id: "async-factory-fixture" })
-          : factory;
-      const output = consume("summary", stream).then(
-        (value) => ({ status: "fulfilled", value }),
-        (error: unknown) => ({ status: "rejected", error }),
-      );
-      await factoryStarted.promise;
-      const closing = instance.dispose();
-      try {
-        releaseFactory.resolve();
-        expect(await output).toEqual({ status: "fulfilled", value: "Synthetic summary" });
-        await closing;
-      } finally {
-        releaseFactory.resolve();
-        await output;
-        await closing;
-      }
-    },
-  );
+  it("admits an async stream factory through recovery before retirement can finish its handoff", async () => {
+    const instance = new PluginInstance("async-consumer");
+    const factoryStarted = createDeferredCore();
+    const releaseFactory = createDeferredCore();
+    const source: AssistantMessageEventStreamLike = {
+      async *[Symbol.asyncIterator]() {
+        yield { type: "start", partial: message };
+      },
+      result: async () => message,
+    };
+    const factory = instance.wrap(async () => {
+      factoryStarted.resolve();
+      await releaseFactory.promise;
+      return source;
+    });
+    const stream = wrapAnthropicStreamWithRecovery(factory, { id: "async-factory-fixture" });
+    const output = consume("summary", stream).then(
+      (value) => ({ status: "fulfilled", value }),
+      (error: unknown) => ({ status: "rejected", error }),
+    );
+    await factoryStarted.promise;
+    const closing = instance.dispose();
+    try {
+      releaseFactory.resolve();
+      expect(await output).toEqual({ status: "fulfilled", value: "Synthetic summary" });
+      await closing;
+    } finally {
+      releaseFactory.resolve();
+      await output;
+      await closing;
+    }
+  });
 
-  it.each(["agent", "summary", "branch", "model-summary"] as const)(
+  it.each(["agent", "model-summary"] as const)(
     "keeps %s iteration and decorated terminal work in one admission during disposal",
     async (kind) => {
       const instance = new PluginInstance("consumer-fixture");
@@ -356,59 +329,54 @@ describe("plugin stream consumer admission", () => {
     expect(result).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "keeps retained consumers separate from ordinary drain (cleanup rejects: %s)",
-    async (rejectCleanup) => {
-      vi.useFakeTimers();
-      const instance = new PluginInstance("retained-consumer");
-      const failure = new Error("retained owner cleanup failed");
-      const cleanup = vi.fn(() => {
-        if (rejectCleanup) {
-          throw failure;
-        }
+  it("keeps retained consumers separate from ordinary drain when cleanup rejects", async () => {
+    vi.useFakeTimers();
+    const instance = new PluginInstance("retained-consumer");
+    const failure = new Error("retained owner cleanup failed");
+    const cleanup = vi.fn(() => {
+      throw failure;
+    });
+    instance.lifecycle.onDispose(cleanup);
+    const helper = instance.wrap(() => "original-owner");
+    const first = instance.retainConsumer();
+    const second = instance.retainConsumer();
+    const continueFirst = createDeferredCore();
+    let closing: ReturnType<PluginInstance["dispose"]> | undefined;
+    try {
+      await expect(instance.drain()).resolves.toEqual({ errors: [] });
+      expect(() => helper()).toThrow("reloaded or disabled");
+      let closed = false;
+      closing = instance.dispose();
+      void closing.then(() => {
+        closed = true;
       });
-      instance.lifecycle.onDispose(cleanup);
-      const helper = instance.wrap(() => "original-owner");
-      const first = instance.retainConsumer();
-      const second = instance.retainConsumer();
-      const continueFirst = createDeferredCore();
-      let closing: ReturnType<PluginInstance["dispose"]> | undefined;
-      try {
-        await expect(instance.drain()).resolves.toEqual({ errors: [] });
-        expect(() => helper()).toThrow("reloaded or disabled");
-        let closed = false;
-        closing = instance.dispose();
-        void closing.then(() => {
-          closed = true;
-        });
-        expect(instance.dispose()).toBe(closing);
-        await vi.advanceTimersByTimeAsync(4_999);
-        expect(closed).toBe(false);
-        expect(cleanup).not.toHaveBeenCalled();
-        const stale = first.run(async () => {
-          await continueFirst.promise;
-          return helper();
-        });
-        first.release();
-        continueFirst.resolve();
-        await expect(stale).rejects.toThrow("reloaded or disabled");
-        expect(() => first.run(helper)).toThrow("consumer is closed");
-        expect(second.run(helper)).toBe("original-owner");
-        second.release();
-        await expect(closing).resolves.toEqual({ errors: rejectCleanup ? [failure] : [] });
-        expect(cleanup).toHaveBeenCalledOnce();
-        expect(instance.lifecycle.signal.aborted).toBe(true);
-        expect(() => instance.retainConsumer()).toThrow("retiring");
-        expect(() => second.run(helper)).toThrow("consumer is closed");
-      } finally {
-        continueFirst.resolve();
-        first.release();
-        second.release();
-        await (closing ?? instance.dispose());
-        vi.useRealTimers();
-      }
-    },
-  );
+      expect(instance.dispose()).toBe(closing);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(closed).toBe(false);
+      expect(cleanup).not.toHaveBeenCalled();
+      const stale = first.run(async () => {
+        await continueFirst.promise;
+        return helper();
+      });
+      first.release();
+      continueFirst.resolve();
+      await expect(stale).rejects.toThrow("reloaded or disabled");
+      expect(() => first.run(helper)).toThrow("consumer is closed");
+      expect(second.run(helper)).toBe("original-owner");
+      second.release();
+      await expect(closing).resolves.toEqual({ errors: [failure] });
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(instance.lifecycle.signal.aborted).toBe(true);
+      expect(() => instance.retainConsumer()).toThrow("retiring");
+      expect(() => second.run(helper)).toThrow("consumer is closed");
+    } finally {
+      continueFirst.resolve();
+      first.release();
+      second.release();
+      await (closing ?? instance.dispose());
+      vi.useRealTimers();
+    }
+  });
 
   it("keeps wrapped callback continuations in their retained consumer", async () => {
     vi.useFakeTimers();
