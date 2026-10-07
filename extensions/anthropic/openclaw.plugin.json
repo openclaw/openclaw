@@ -417,7 +417,7 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "excludeNativeMemory": { "type": "boolean", "default": false }
+          "excludeNativeMemory": { "type": "boolean", "default": true }
         }
       }
     }
@@ -437,7 +437,7 @@
     },
     "claudeCli.excludeNativeMemory": {
       "label": "Exclude Claude Code Memory",
-      "help": "Keep Claude Code's own CLAUDE.md, CLAUDE.local.md and .claude/rules files and its auto memory out of claude-cli agent turns on this Gateway. Off by default. Sessions started before enabling it keep the memory already in their history until /reset. Admin-managed CLAUDE.md still applies, and runs placed on a paired node keep that node's Claude Code memory."
+      "help": "Keep Claude Code's own CLAUDE.md, CLAUDE.local.md and .claude/rules files and its auto memory out of claude-cli agent turns on this Gateway, so the agent uses only OpenClaw's workspace instructions and memory. On by default; set false to load Claude Code's memory again. Sessions that loaded it earlier keep it in their history until /reset. Admin-managed CLAUDE.md still applies, and runs placed on a paired node keep that node's Claude Code memory."
     }
   }
 }

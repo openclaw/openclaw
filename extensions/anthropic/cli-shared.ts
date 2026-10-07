@@ -9,13 +9,12 @@ import type {
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
 import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
-  asOptionalRecord,
   normalizeOptionalLowercaseString,
   normalizeSortedUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
+import { excludesClaudeNativeMemory } from "./cli-native-memory.js";
 
 const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
 const CLAUDE_PERMISSION_MODE_ARG = "--permission-mode";
@@ -41,7 +40,7 @@ const CLAUDE_SAFE_SETTING_SOURCES = "user";
 const CLAUDE_DENY_MCP_TOOLS_VALUE = "mcp__*";
 const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
 // Claude Code's own instruction files and auto memory. Restricted runs and the
-// opt-in ordinary-run exclusion share these fields so the two cannot drift.
+// ordinary-run exclusion share these fields so the two cannot drift.
 const CLAUDE_NATIVE_MEMORY_EXCLUSION = {
   autoMemoryEnabled: false,
   claudeMdExcludes: ["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"],
@@ -451,13 +450,6 @@ function resolveClaudeCliRestrictedExecutionArgs(
   return normalized;
 }
 
-function excludesClaudeNativeMemory(
-  config: CliBackendResolveExecutionArgsContext["config"],
-): boolean {
-  const claudeCli = asOptionalRecord(resolvePluginConfigObject(config, "anthropic")?.claudeCli);
-  return claudeCli?.excludeNativeMemory === true;
-}
-
 export function resolveClaudeCliExecutionArgs(
   context: CliBackendResolveExecutionArgsContext,
   options: { excludeDynamicSystemPromptSections?: boolean } = {},
@@ -476,6 +468,8 @@ export function resolveClaudeCliExecutionArgs(
       ? resolveClaudeCliSideQuestionExecutionArgs(baseArgs)
       : applyClaudeCliEffortArgs(baseArgs, context.thinkingLevel, context.modelId);
   // Restricted runs already carry the memory exclusion; side questions use --safe-mode.
+  // Ordinary base args never hold --settings (the descriptor fixes them), so this is
+  // the run's only --settings; a future producer must merge rather than append.
   const resolvedArgs = context.toolAvailability
     ? resolveClaudeCliRestrictedExecutionArgs(executionArgs, context.toolAvailability)
     : context.executionMode !== "side-question" && excludesClaudeNativeMemory(context.config)

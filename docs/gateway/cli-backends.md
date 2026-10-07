@@ -270,14 +270,19 @@ every request, and ask `off` with less than full security denies without asking.
 
 ### Claude Code memory
 
-By default, ordinary `claude-cli` turns also load Claude Code's own user-level
-memory next to OpenClaw's system prompt: `~/.claude/CLAUDE.md`,
-`~/.claude/rules/`, and Claude Code's auto memory for the workspace under
-`~/.claude/projects/`. Auto memory also prompts the agent to save notes there
-instead of in the workspace memory files. Project-level `CLAUDE.md` files are
-not loaded, because OpenClaw limits Claude Code to user settings.
+OpenClaw's workspace instructions and memory are the agent's memory, so
+ordinary `claude-cli` turns keep Claude Code's own memory out of the context:
+`~/.claude/CLAUDE.md`, `~/.claude/rules/`, any other `CLAUDE.md`,
+`CLAUDE.local.md`, or `.claude/rules/` file Claude Code would load, and its auto
+memory under `~/.claude/projects/`. Fresh and resumed turns pass Claude Code
+`--settings` with `autoMemoryEnabled: false` and `claudeMdExcludes` patterns,
+the same fields restricted runs use. The Codex harness likewise gives each
+agent its own Codex home by default.
 
-To keep this memory out of agent turns, enable the Anthropic plugin setting:
+Earlier releases loaded this memory into every ordinary turn, including group
+and channel sessions that never receive the workspace `MEMORY.md`, and Claude
+Code's auto memory had the agent save notes under `~/.claude/projects/` instead
+of the workspace. To load Claude Code's memory again, opt out:
 
 ```json5
 {
@@ -285,7 +290,7 @@ To keep this memory out of agent turns, enable the Anthropic plugin setting:
     entries: {
       anthropic: {
         config: {
-          claudeCli: { excludeNativeMemory: true },
+          claudeCli: { excludeNativeMemory: false },
         },
       },
     },
@@ -293,22 +298,37 @@ To keep this memory out of agent turns, enable the Anthropic plugin setting:
 }
 ```
 
-Fresh and resumed turns then pass Claude Code `--settings` with
-`autoMemoryEnabled: false` and `claudeMdExcludes` patterns for `CLAUDE.md`,
-`CLAUDE.local.md`, and `.claude/rules/`, the same fields restricted runs use.
-The change applies on the next turn without a Gateway restart. The setting is
-off by default, so existing agents keep their instructions.
+The setting applies on the next turn without a Gateway restart. Claude Code
+stores the memory it loaded at the start of a session in that session's
+history, so a session that started while the memory was loaded keeps it when
+it resumes. Use `/reset` to start a clean session.
 
-Claude Code stores the memory it loaded at the start of a session in that
-session's history, so a session started before you enabled the setting keeps
-that memory when it resumes. Use `/reset` to start a clean session.
+To move existing Claude Code memory into OpenClaw:
+
+- **Auto memory:** `openclaw doctor` lists each `claude-cli` agent whose Claude
+  Code auto memory is no longer loaded and prints its import command:
+
+  ```bash
+  openclaw migrate claude --agent <agent-id> --from ~/.claude/projects/<workspace-key>/memory
+  ```
+
+  The import previews and backs up first, then copies only that workspace's
+  memory into `memory/imports/claude-code/`, where memory search indexes it.
+  The source files stay in place. The Doctor note stops once the workspace has
+  a Claude Code import. See [Import from coding assistants](/concepts/memory#import-from-coding-assistants).
+
+- **`~/.claude/CLAUDE.md`:** these rules apply to every Claude Code session on
+  the host, so OpenClaw does not copy them automatically. Move the rules an
+  agent needs into that agent's `AGENTS.md` or `USER.md`. Running
+  `openclaw migrate claude --agent <agent-id>` without `--from` appends the
+  whole file to `USER.md` and imports the auto memory of every Claude Code
+  project.
 
 Admin-managed `CLAUDE.md` still applies because Claude Code does not allow
 excluding it. Side questions already start Claude Code in safe mode, and
 restricted runs keep their stricter settings. Runs placed on a paired node keep
 that node's own Claude Code memory, because the node does not accept Gateway
-settings. To copy existing auto memory into the workspace, see
-[Import from coding assistants](/concepts/memory#import-from-coding-assistants).
+settings.
 
 ### Native Bash and the exec allowlist
 
