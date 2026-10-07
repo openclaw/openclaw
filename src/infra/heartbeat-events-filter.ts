@@ -53,9 +53,9 @@ export function isRelayableExecCompletionEvent(evt: string): boolean {
 
 function formatExecEventPromptText(pendingEvents: string[]): {
   text: string;
-  hasMissingOutputFailure: boolean;
+  hasMissingOutput: boolean;
 } {
-  let hasMissingOutputFailure = false;
+  let hasMissingOutput = false;
   const lines = pendingEvents.flatMap((event) => {
     const parsed = parseStructuredExecCompletionEvent(event);
     if (!parsed) {
@@ -65,14 +65,11 @@ function formatExecEventPromptText(pendingEvents: string[]): {
     if (parsed.output) {
       return [parsed.raw];
     }
-    if (parsed.succeeded) {
-      return [];
-    }
-    hasMissingOutputFailure = true;
+    hasMissingOutput = true;
     const missingOutput = `Exec ${parsed.action} (${parsed.id}, ${parsed.result}) without captured stdout/stderr.`;
     return [parsed.notes ? `${missingOutput}\n\n${parsed.notes}` : missingOutput];
   });
-  return { text: lines.join("\n").trim(), hasMissingOutputFailure };
+  return { text: lines.join("\n").trim(), hasMissingOutput };
 }
 
 export function buildCronEventPrompt(
@@ -110,17 +107,11 @@ export function buildExecEventPrompt(
 ): string {
   const deliverToUser = opts?.deliverToUser ?? true;
   const useHeartbeatResponseTool = opts?.useHeartbeatResponseTool ?? false;
-  const { text: rawEventText, hasMissingOutputFailure } = formatExecEventPromptText(pendingEvents);
+  const { text: rawEventText, hasMissingOutput } = formatExecEventPromptText(pendingEvents);
   const eventText =
     rawEventText.length > MAX_EXEC_EVENT_PROMPT_CHARS
       ? `${truncateUtf16Safe(rawEventText, MAX_EXEC_EVENT_PROMPT_CHARS)}\n\n[truncated]`
       : rawEventText;
-  if (!eventText) {
-    const completionInstruction = useHeartbeatResponseTool
-      ? HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS
-      : `Reply ${SILENT_REPLY_TOKEN} only.`;
-    return `An async command completion event was triggered, but no command output was found. ${completionInstruction} Do not mention, summarize, or reuse output from any earlier run.`;
-  }
   if (!deliverToUser) {
     const completionInstruction = useHeartbeatResponseTool
       ? `Handle the result internally. ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`
@@ -134,7 +125,7 @@ export function buildExecEventPrompt(
   const completionInstruction = useHeartbeatResponseTool
     ? HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS
     : `If no user-facing update is needed, reply ${SILENT_REPLY_TOKEN} only.`;
-  const missingOutputInstruction = hasMissingOutputFailure
+  const missingOutputInstruction = hasMissingOutput
     ? " If reporting a failure without captured output, include the exit status or signal. " +
       "Do not ask the user to provide missing logs, and do not try to retrieve logs from an exec/session id."
     : "";

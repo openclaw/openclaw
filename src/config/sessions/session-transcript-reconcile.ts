@@ -13,16 +13,14 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "../../state/agent-database-admission-error.js";
 import {
   borrowOpenClawAgentDatabase,
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import {
-  AgentDatabaseExecutionAdmissionClosedError,
-  type OpenClawAgentDatabaseExecution,
-} from "../../state/openclaw-agent-execution-contract.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
@@ -39,6 +37,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import {
   withIncognitoProjection,
+  captureIncognitoProjectionBinding,
   type IncognitoProjectionBinding,
   type IncognitoProjectionSource,
 } from "./session-incognito-projection.js";
@@ -47,7 +46,10 @@ import {
   deleteOrphanedTranscriptIndexRowsInTransaction,
   listSessionsNeedingTranscriptIndexReconcile,
 } from "./session-transcript-index.js";
-import type { TranscriptProjectionPublicationOperations } from "./session-transcript-projection-publication.worker.js";
+import type {
+  ProjectionPublisher,
+  TranscriptProjectionPublicationOperations,
+} from "./session-transcript-projection-publication.worker.js";
 import {
   appendPreparedProjectionChunk,
   claimPreparedSessionTranscriptProjection,
@@ -55,7 +57,6 @@ import {
   readTranscriptIndexBacklog,
   runProjectionWrite,
   type ActivePreparedProjection,
-  type ProjectionPublisher,
   type ReconcileDatabaseOptions,
 } from "./session-transcript-projection-writer.js";
 import { captureMemoryTranscriptProjectionSource } from "./session-transcript-reconcile-memory.js";
@@ -106,8 +107,9 @@ type ReconcilePassResult = PreparedReconcileResult & { yielded: boolean };
 
 function reconcileKey(
   params: OpenClawAgentDatabaseOptions,
-  incognito?: IncognitoProjectionBinding,
+  suppliedIncognito?: IncognitoProjectionBinding,
 ): string {
+  const incognito = suppliedIncognito ?? captureIncognitoProjectionBinding(params);
   const path = resolveOpenClawAgentSqlitePath(params);
   return incognito
     ? `${path}#${JSON.stringify([incognito.actor.identity, incognito.target ?? null])}`
@@ -129,7 +131,7 @@ export async function reconcileSessionTranscriptIndexes(
       const result = await runSessionTranscriptReconcileOperation(
         prepared.generation,
         (operation) => reconcilePreparedTranscriptIndexes(prepared, operation, execution),
-        incognito || isIncognitoOpenClawAgentSqlitePath(reconcileKey(prepared), prepared)
+        prepared.incognito || isIncognitoOpenClawAgentSqlitePath(reconcileKey(prepared), prepared)
           ? undefined
           : { agentId: prepared.agentId, path: reconcileKey(prepared) },
         prepared.signal,
@@ -497,7 +499,9 @@ function startPreparedSessionTranscriptIndexReconcile(params: PreparedReconcileP
   const sameAuthority =
     running?.request.signal === params.signal &&
     running?.request.assertCurrent === params.assertCurrent &&
-    running?.request.incognito?.authority === incognito?.authority;
+    (running?.request.incognito?.authority === incognito?.authority ||
+      (incognito?.sharedBinding !== undefined &&
+        running?.request.incognito?.sharedBinding === incognito.sharedBinding));
   if (
     running?.generation === params.generation &&
     ((running.signal?.aborted && !runningCurrent) ||

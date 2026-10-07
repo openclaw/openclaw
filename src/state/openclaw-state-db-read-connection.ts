@@ -255,11 +255,14 @@ export function readOpenClawStateReadOnlyLocation<T>(
     // Scope and path policy are authority, not ordinary schema SQL failure.
     const existingSchema = isExistingOpenClawStateSchema(pathname, opened.database.db);
     try {
-      runSqliteReadOperationSync(opened.database.db, () => {
-        assertStateReadSchemaForPolicy(opened.database.db, pathname, existingSchema);
-        admitSqliteSchema(opened.database.db);
-      });
-      result = { status: "available", value: operation(opened.database) };
+      result = {
+        status: "available",
+        value: runSqliteReadOperationSync(opened.database.db, () => {
+          assertStateReadSchemaForPolicy(opened.database.db, pathname, existingSchema);
+          admitSqliteSchema(opened.database.db);
+          return operation(opened.database);
+        }),
+      };
     } catch (error) {
       if (isSqliteCorruptionError(error)) {
         invalidateOpenClawStateRuntimeIntegrity(opened.database.db);

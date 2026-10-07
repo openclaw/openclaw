@@ -1,4 +1,3 @@
-// Assertions for live plugin tool E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -61,7 +60,7 @@ function agentErrorPath() {
 }
 
 function readNonEmptyString(value) {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return typeof value === "string" ? value.trim() || undefined : undefined;
 }
 
 function stringifyToolResult(value) {

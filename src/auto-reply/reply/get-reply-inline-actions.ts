@@ -104,19 +104,6 @@ type InlineActionResult =
       explicitSkillSelections?: ExplicitSkillSelection[];
     };
 
-function extractTextFromToolResult(result: unknown): string | null {
-  const content = asOptionalObjectRecord(result)?.content;
-  return normalizeNullableString(
-    typeof content === "string" ? content : collectTextContentBlocks(content).join(""),
-  );
-}
-
-function extractBlockedToolReason(result: unknown): string | null {
-  const details = asOptionalObjectRecord(asOptionalObjectRecord(result)?.details);
-  return details?.status === "blocked" ? normalizeNullableString(details.reason) : null;
-}
-
-/** Handles inline actions or returns continue when the message should become a model turn. */
 export async function handleInlineActions(
   params: Omit<
     CommandDispatchParams,
@@ -425,12 +412,20 @@ export async function handleInlineActions(
         }
         // The execution owner can observe revocation while arming cancellation.
         opts?.abortSignal?.throwIfAborted();
-        const result = await tool.execute(toolCallId, toolArgs, opts?.abortSignal);
-        const blockedReason = extractBlockedToolReason(result);
+        const result = asOptionalObjectRecord(
+          await tool.execute(toolCallId, toolArgs, opts?.abortSignal),
+        );
+        const details = asOptionalObjectRecord(result?.details);
+        const blockedReason =
+          details?.status === "blocked" ? normalizeNullableString(details.reason) : null;
         if (blockedReason) {
           return finishCommand({ text: `❌ Tool call blocked: ${blockedReason}` });
         }
-        const text = extractTextFromToolResult(result) ?? "✅ Done.";
+        const content = result?.content;
+        const text =
+          normalizeNullableString(
+            typeof content === "string" ? content : collectTextContentBlocks(content).join(""),
+          ) ?? "✅ Done.";
         return finishCommand({ text });
       } catch (err) {
         const message = formatErrorMessage(err);

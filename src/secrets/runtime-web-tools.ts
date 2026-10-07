@@ -75,12 +75,6 @@ type SecretResolutionSource =
   | WebSearchCredentialResolutionSource
   | WebFetchCredentialResolutionSource;
 
-type ResolvedRuntimeWebTools = {
-  metadata: RuntimeWebToolsMetadata;
-  degradedOwners: DegradedSecretOwner[];
-  secretOwners: SecretOwnerRefState[];
-};
-
 type RuntimeWebProviderFailure = Omit<RuntimeWebUnavailableProvider, "contractDigest"> & {
   contractDigest?: string;
 };
@@ -578,13 +572,13 @@ export async function resolveRuntimeWebTools(params: {
   context: ResolverContext;
   allowUnavailableSecretOwners?: boolean;
   forceColdRefKeys?: ReadonlySet<string>;
-}): Promise<ResolvedRuntimeWebTools> {
+}) {
   const defaults = params.sourceConfig.secrets?.defaults;
   const diagnostics: RuntimeWebDiagnostic[] = [];
   const degradedOwners: DegradedSecretOwner[] = [];
   const secretOwners: SecretOwnerRefState[] = [];
   const providerFailuresByRefKey: RuntimeWebProviderFailureByRefKey = new Map();
-  const finish = (metadata: RuntimeWebToolsMetadata): ResolvedRuntimeWebTools => ({
+  const finish = (metadata: RuntimeWebToolsMetadata) => ({
     metadata,
     degradedOwners,
     secretOwners,

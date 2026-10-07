@@ -5415,7 +5415,7 @@ class ChatComposerLayoutTest {
         </details>Do not ship: tests are failing on Linux
         """.trimIndent(),
     )
-    composeRule.onNodeWithContentDescription(nativeString("Expand progress card")).performClick()
+    composeRule.onNodeWithContentDescription(nativeString("Expand progress card"), useUnmergedTree = true).performClick()
 
     composeRule.onNodeWithText("Do not ship: tests are failing on Linux").assertIsDisplayed()
     composeRule.onNode(hasAnyAncestor(hasTestTag("chat-progress-card")) and SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo)).assertIsDisplayed()

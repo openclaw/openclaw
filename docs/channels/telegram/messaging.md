@@ -19,7 +19,7 @@ How inbound and outbound Telegram messages are routed, previewed, acknowledged, 
 - When the bot joins an allowed group or supergroup, it posts one introduction grounded in available room metadata: the group title, description, and pinned message. The Telegram Bot API cannot read group messages from before the bot joined, so introductions never claim to use prior chat history. Introductions are enabled by default, never run in private chats, and can be disabled with `channels.telegram.joinIntro: false` or overridden per account with `channels.telegram.accounts.<accountId>.joinIntro`. See [group join introductions](/channels#group-join-introductions) for once-per-room behavior and untrusted-content handling.
 - DM messages can carry `message_thread_id`; OpenClaw preserves it for replies. DM topic sessions split only when Telegram `getMe` reports `has_topics_enabled: true` for the bot; otherwise DMs stay on the flat session.
 - Long polling runs in an isolated worker. Updates are saved to a durable queue and processed in order for each chat and topic.
-- Multi-account startup bounds concurrent `getMe` probes so large bot fleets do not fan out every account probe at once.
+- Multi-account startup bounds concurrent `getMe` checks so large bot fleets do not fan out every account check at once.
 - Each gateway process guards long polling so only one active poller can use a bot token at a time. Persistent `getUpdates` 409 conflicts point to another OpenClaw gateway, script, or external poller using the same token.
 - The polling watchdog restarts after 120 seconds without completed `getUpdates` liveness.
 - Telegram Bot API has no read-receipt support (`sendReadReceipts` does not apply).

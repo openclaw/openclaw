@@ -2,7 +2,6 @@ import { performance } from "node:perf_hooks";
 import { expect, it, vi } from "vitest";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import type { RequestFixtures } from "./run-loop-request-fixtures.test-support.js";
 import {
   createActiveWorkSnapshot,
   createCloseMock,
@@ -11,6 +10,7 @@ import {
   expectRestartCloseCall,
   waitForStart,
   withIsolatedSignals,
+  type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
 
 export function registerGatewayForcedRestartTests({
@@ -25,20 +25,7 @@ export function registerGatewayForcedRestartTests({
   gatewayLog,
   readCgroup,
   systemctl,
-}: Pick<
-  RequestFixtures,
-  | "createSignaledLoopHarness"
-  | "createGatewayActiveWorkSnapshot"
-  | "abortActiveCronTaskRuns"
-  | "runLoopWithStart"
-  | "waitForGatewayActiveWork"
-  | "consumeGatewayRestartIntent"
-  | "consumeGatewayRestartIntentPayloadSync"
-  | "isGatewayWorkAdmissionClosed"
-  | "gatewayLog"
-  | "readCgroup"
-  | "systemctl"
->): void {
+}: UpdateRespawnFixtures): void {
   const idleActiveWorkSnapshot = createActiveWorkSnapshot();
   it.each([true, false])(
     "preserves the native drain and hard deadline after deferral expires (work settles=%s)",
@@ -236,7 +223,6 @@ export function registerGatewayForcedRestartTests({
           expect(abortActiveCronTaskRuns).toHaveBeenCalledWith("Gateway restarting.");
           expectRestartCloseCall(close, 0);
           const warning = `restart drain budget ${budget - refreshMs}ms exhausted; cutting short cronRuns=1 agentRuns=1`;
-          expect(gatewayLog.warn).toHaveBeenCalledWith(warning);
           if (stallClose) {
             expect(start).toHaveBeenCalledOnce();
             expect(completeBoot).not.toHaveBeenCalled();

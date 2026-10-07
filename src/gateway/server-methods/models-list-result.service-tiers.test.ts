@@ -9,6 +9,7 @@ import {
 import { resolveSelectedModelCredential } from "../../agents/model-auth-selected-credential.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { createPreparedAccountCatalogAccess } from "../../agents/prepared-model-runtime.catalog-auth.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
@@ -26,7 +27,7 @@ import {
 
 describe("models.list account service tiers", () => {
   it.each(["profile", "direct"] as const)(
-    "publishes %s API-key embedded tiers without discovery and withdraws a downgraded tier",
+    "keeps %s API-key tiers selectable and projects transient fulfillment without discovery",
     async (source) => {
       const model = {
         id: "synthetic-api-model",
@@ -96,23 +97,31 @@ describe("models.list account service tiers", () => {
       if (!selectedCredential) {
         throw new Error("Missing selected fixture credential");
       }
-      accountCatalog.prepareServiceTierObserver({
+      const record = accountCatalog.prepareServiceTierObserver({
         selectedCredential,
         credential,
-      })({
+      });
+      const observation = {
         modelId: model.id,
         runtimeId: "openclaw",
         api: platformRoute.api,
         baseUrl: platformRoute.baseUrl,
-        serviceTiers: ["priority"],
-      });
+        requestedTier: "ultrafast",
+        responseTier: "priority",
+      };
+      record(observation);
       const next = await prepare();
-      expect(next.read().models.find((row) => row.id === model.id)?.serviceTiers).toEqual([
-        "priority",
-      ]);
-      expect(first.read().models.find((row) => row.id === model.id)?.serviceTiers).toEqual([
-        "priority",
-      ]);
+      for (const projection of [first, next]) {
+        expect(projection.read().models.find((row) => row.id === model.id)).toMatchObject({
+          serviceTiers: ["priority", "ultrafast"],
+          supportsServiceTierRecovery: true,
+          serviceTierObservation: { requestedTier: "ultrafast", responseTier: "priority" },
+        });
+      }
+      record({ ...observation, responseTier: "ultrafast" });
+      expect(first.read().models.find((row) => row.id === model.id)).not.toHaveProperty(
+        "serviceTierObservation",
+      );
     },
   );
   it.each(["codex", "openclaw"] as const)(
@@ -290,7 +299,9 @@ describe("models.list account service tiers", () => {
           expect(discover).toHaveBeenCalledTimes(3);
           expect(a.isCurrent()).toBe(false);
           current = false;
-          expect(readRuntime(a, "codex")).not.toHaveProperty("serviceTiers");
+          expect(() => readRuntime(a, "codex")).toThrow(
+            PreparedModelRuntimePublicationSupersededError,
+          );
         },
       );
     },

@@ -1,4 +1,3 @@
-// Memory Core plugin module owns bounded deep-phase MEMORY.md consolidation.
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
   formatMemoryDreamingDay,

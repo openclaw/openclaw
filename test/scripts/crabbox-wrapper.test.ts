@@ -1681,7 +1681,7 @@ describe("scripts/crabbox-wrapper", () => {
         ...bundleOptions,
         ...options,
         outdir: path.dirname(outfile),
-        entryNames: path.basename(outfile, ".mjs"),
+        entryNames: options.entryNames ?? path.basename(outfile, ".mjs"),
         chunkNames: `crabbox-wrapper-test-${process.pid}-[name]-[hash]`,
         outExtension: { ".js": ".mjs" },
         metafile: true,
@@ -1692,14 +1692,35 @@ describe("scripts/crabbox-wrapper", () => {
       }
       return outputs;
     };
-    realWrapperOutputPaths = await buildFixture(realBundledWrapperPath);
+    const setupEntryName = `crabbox-setup-test-${process.pid}`;
+    const setupOutput = path.join(path.dirname(realBundledWrapperPath), `${setupEntryName}.mjs`);
+    // Both real entry points share the managed-binary dependency graph.
+    const realOutputs = await buildFixture(realBundledWrapperPath, {
+      entryPoints: {
+        [path.basename(realBundledWrapperPath, ".mjs")]: path.join(
+          repoRoot,
+          "scripts/crabbox-wrapper.mts",
+        ),
+        [setupEntryName]: path.join(repoRoot, "scripts/crabbox-setup.mts"),
+      },
+      entryNames: "[name]",
+    });
+    realWrapperOutputPaths = realOutputs.filter((output) => output !== setupOutput);
     bundledSetupPath = path.join(
       makeTempDir(tempDirs, "openclaw-crabbox-setup-"),
       "openclaw/scripts/crabbox-setup.mjs",
     );
-    await buildFixture(bundledSetupPath, {
-      entryPoints: [path.join(repoRoot, "scripts/crabbox-setup.mts")],
-    });
+    mkdirSync(path.dirname(bundledSetupPath), { recursive: true });
+    for (const output of realOutputs) {
+      if (output !== realBundledWrapperPath) {
+        copyFileSync(
+          output,
+          output === setupOutput
+            ? bundledSetupPath
+            : path.join(path.dirname(bundledSetupPath), path.basename(output)),
+        );
+      }
+    }
     // Argument routing tests isolate source preparation; the real-Git fixture below
     // executes the unmocked producer and generated receiver together.
     const producerStub = path.join(

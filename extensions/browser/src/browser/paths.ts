@@ -228,7 +228,6 @@ export async function resolveExistingUploadPaths(
   return resolveUploadPaths({ ...options, strict: false });
 }
 
-/** Strictly resolve upload paths under the upload root only. */
 export async function resolveStrictExistingUploadPaths(
   options: UploadPathResolutionOptions,
 ): Promise<StrictExistingPathsResult> {

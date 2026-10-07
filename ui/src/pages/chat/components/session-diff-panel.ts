@@ -1,4 +1,3 @@
-// Session diff panel: renders selectable branch, working-tree, and commit diffs.
 import { Task, TaskStatus } from "@lit/task";
 import { html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";

@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   bindChatAbortTerminalDispatch,
@@ -15,7 +15,7 @@ import {
 } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
 
-function registeredRun() {
+function registeredRun(onRemoved?: () => void) {
   const entries = new Map<string, ChatAbortControllerEntry>();
   const runId = "terminal-drain";
   const registration = registerChatAbortController({
@@ -24,6 +24,7 @@ function registeredRun() {
     sessionId: "terminal-session",
     sessionKey: "agent:main:terminal",
     timeoutMs: 60_000,
+    onRemoved,
   });
   const entry = registration.entry;
   if (!entry) {
@@ -93,12 +94,14 @@ it("releases the reserved terminal owner when no lifecycle subscriber adopts it"
 it.each(["fulfilled", "rejected"] as const)(
   "drains a promise-only registration after it is %s",
   async (outcome) => {
-    const { entries, runId, entry, registration, drain } = registeredRun();
+    const onRemoved = vi.fn();
+    const { entries, runId, entry, registration, drain } = registeredRun(onRemoved);
     const persistence = createDeferred();
     entry.projectSessionTerminalPersistence = persistence.promise;
     const result = drain();
     registration.cleanup();
     expect(entries.get(runId)).toBe(entry);
+    expect(onRemoved).not.toHaveBeenCalled();
     if (outcome === "fulfilled") {
       persistence.resolve();
     } else {
@@ -106,6 +109,7 @@ it.each(["fulfilled", "rejected"] as const)(
     }
     expect(await result).toBe(outcome === "fulfilled");
     expect(entries.has(runId)).toBe(false);
+    expect(onRemoved).toHaveBeenCalledOnce();
   },
 );
 

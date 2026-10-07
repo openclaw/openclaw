@@ -42,8 +42,8 @@ describe("live-agent-probes", () => {
         "model metadata for `gpt-5.5` not found. defaulting to fallback metadata; this can degrade performance and cause issues.cat",
       ),
     ).toBeUndefined();
-    expect(() => assertLiveImageProbeReply("horse")).toThrow("image probe expected 'cat'");
-    expect(() => assertLiveImageProbeReply("caterpillar")).toThrow("image probe expected 'cat'");
+    expect(() => assertLiveImageProbeReply("horse")).toThrow("image check expected 'cat'");
+    expect(() => assertLiveImageProbeReply("caterpillar")).toThrow("image check expected 'cat'");
   });
 
   it("skips the shared image probe for text-only live agents unless forced", () => {

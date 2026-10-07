@@ -1,5 +1,4 @@
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -61,7 +60,7 @@ function parseDiscordUserInput(raw: string): {
 }
 
 function scoreDiscordMember(member: DiscordMember, query: string): number {
-  const q = normalizeLowercaseStringOrEmpty(query);
+  const q = query.toLowerCase();
   const user = member.user;
   const candidates = [user.username, user.global_name, member.nick]
     .map(normalizeOptionalLowercaseString)
@@ -128,7 +127,7 @@ export async function resolveDiscordUserAllowlist(params: {
     const allGuilds = await getGuilds();
     const guildList = filterDiscordGuilds(allGuilds, {
       guildId: parsed.guildId,
-      guildName: parsed.guildName?.trim(),
+      guildName: parsed.guildName,
     });
 
     let best: { member: DiscordMember; guild: DiscordGuildSummary; score: number } | null = null;

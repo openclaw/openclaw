@@ -1,5 +1,3 @@
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-
 export const TELEGRAM_COMMAND_NAME_PATTERN = /^[a-z0-9_]{1,32}$/;
 
 export type TelegramCustomCommandInput = {
@@ -14,8 +12,7 @@ export type TelegramCustomCommandIssue = {
 };
 
 export function normalizeTelegramCommandName(value: string): string {
-  const withoutSlash = value.trim().replace(/^\//, "");
-  return (normalizeOptionalLowercaseString(withoutSlash) ?? "").replace(/-/g, "_");
+  return value.trim().replace(/^\//, "").trim().toLowerCase().replace(/-/g, "_");
 }
 
 export function normalizeTelegramCommandDescription(value: string): string {

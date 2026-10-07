@@ -319,7 +319,7 @@ async function gatherDaemonStatusImpl(
       allowRpcConfigCredentials = false;
       skippedProbeAuthForDisabledExecSecretRef = true;
       rpcAuthWarning =
-        "Gateway probe auth skipped because gateway credentials use an exec SecretRef and exec SecretRefs are disabled for this status request.";
+        "Gateway check auth skipped because gateway credentials use an exec SecretRef and exec SecretRefs are disabled for this status request.";
     }
   }
 

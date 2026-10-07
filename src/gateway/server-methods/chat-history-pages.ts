@@ -18,6 +18,7 @@ import type { IncognitoSessionHistoryReader } from "../session-history-snapshot.
 import * as sessionTranscriptReaders from "../session-transcript-readers.js";
 import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
 import { projectChatHistoryWithReplies } from "./chat-history-reply-messages.js";
+import { encodeChatHistoryResponsePage } from "./chat-history-response-page.js";
 
 function prepareChatHistoryParams<Params extends ChatHistoryPageParams>(input: Params): Params {
   return getCliSessionBinding(input.entry, "claude-cli")?.sessionId
@@ -31,8 +32,17 @@ function prepareChatHistoryParams<Params extends ChatHistoryPageParams>(input: P
 
 export async function readChatHistoryMessageById(
   input: ChatHistoryMessageParams,
-  incognito?: IncognitoSessionHistoryReader,
+  suppliedIncognito?: IncognitoSessionHistoryReader,
 ) {
+  const incognito =
+    suppliedIncognito ??
+    sessionTranscriptReaders.captureIncognitoSessionHistoryReader({
+      agentId: input.sessionAgentId,
+      sessionId: input.sessionId,
+      sessionKey: input.canonicalKey,
+      storePath: input.storePath,
+      sessionEntry: input.entry,
+    });
   if (incognito) {
     const captured = structuredClone(input);
     return incognito.consume(
@@ -100,9 +110,23 @@ export async function readChatHistoryMessageById(
 export async function readChatHistoryPage(
   input: ChatHistoryPageParams,
   signal?: AbortSignal,
-  incognito?: IncognitoSessionHistoryReader,
+  suppliedIncognito?: IncognitoSessionHistoryReader,
 ): Promise<ChatHistoryPage> {
   signal?.throwIfAborted();
+  const incognito =
+    suppliedIncognito ??
+    (input.sessionId && input.storePath
+      ? sessionTranscriptReaders.captureIncognitoSessionHistoryReader(
+          {
+            agentId: input.sessionAgentId,
+            sessionId: input.sessionId,
+            sessionKey: input.canonicalKey,
+            storePath: input.storePath,
+            sessionEntry: input.entry,
+          },
+          signal,
+        )
+      : undefined);
   const binding = getCliSessionBinding(input.entry, "claude-cli");
   const params = prepareChatHistoryParams(incognito ? structuredClone(input) : input);
   if (incognito) {
@@ -125,9 +149,22 @@ export async function readChatHistoryPage(
         },
       );
     }
-    const page = await incognito.rpc(params);
-    signal?.throwIfAborted();
-    return page;
+    const reader = incognito;
+    return reader.consume(
+      {
+        agentId: params.sessionAgentId,
+        sessionId: params.sessionId ?? "",
+        sessionKey: params.canonicalKey,
+        storePath: params.storePath,
+        sessionEntry: params.entry,
+      },
+      async () => {
+        const page = await reader.rpc({ ...params, encodeResponse: false });
+        const messages = await refreshForwardedLabels(page.messages);
+        signal?.throwIfAborted();
+        return encodeChatHistoryResponsePage({ ...page, messages }, params);
+      },
+    );
   }
   if (
     params.sessionId &&

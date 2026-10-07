@@ -95,10 +95,7 @@ export async function recoverRestartAbortedMainSessions(params: {
   const skipReasons = new Map<MainSessionRecoverySkipReason, number>();
   const handledSessionKeys = params.handledSessionKeys ?? new Set<string>();
 
-  for (const target of await discoverRestartRecoveryStoreTargets({
-    ...params,
-    statuses: ["running"],
-  })) {
+  for (const target of await discoverRestartRecoveryStoreTargets(params)) {
     if (params.shouldContinue?.() === false) {
       break;
     }

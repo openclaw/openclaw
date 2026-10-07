@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import { createChatSendGoalCommitGuard } from "../../gateway/server-methods/chat-send-work-admission.js";
 import { loadSessionEntry as loadGatewaySessionEntry } from "../../gateway/session-utils.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -65,6 +66,15 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
     },
   };
 });
+
+const resetFault = useSqliteWorkerFault([
+  {
+    name: "reject_reset_reactions",
+    match: /^delete from session_reactions /,
+    sql: `CREATE TEMP TRIGGER reject_reset_reactions BEFORE DELETE ON main.session_reactions
+      BEGIN SELECT RAISE(ABORT, 'synthetic reset collaboration refusal'); END;`,
+  },
+]);
 
 afterEach(() => {
   delivery.afterCommit = undefined;
@@ -582,9 +592,7 @@ it("rolls collaboration cleanup back with a refused reset and clears only the co
         buildNextEntry: () => ({ sessionId: "collaboration-reset", updatedAt: 2 }),
         afterEntryMutation: committed,
       });
-    // Refuse the final collaboration deletion after earlier tables have already changed.
-    f.database.db.exec(`CREATE TRIGGER reject_reset_reactions BEFORE DELETE ON session_reactions
-      BEGIN SELECT RAISE(ABORT, 'synthetic reset collaboration refusal'); END;`);
+    resetFault.enable();
     try {
       await expect(reset()).rejects.toThrow("synthetic reset collaboration refusal");
       expect(collaboration(f.scope.sessionKey)).toEqual(before);
@@ -593,7 +601,7 @@ it("rolls collaboration cleanup back with a refused reset and clears only the co
       expect(f.events()).toEqual([]);
       expect(committed).not.toHaveBeenCalled();
     } finally {
-      f.database.db.exec("DROP TRIGGER reject_reset_reactions");
+      resetFault.disable();
     }
     await reset();
     expect(collaboration(f.scope.sessionKey)).toEqual([[], [], []]);

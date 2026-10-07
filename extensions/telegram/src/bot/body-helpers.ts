@@ -198,7 +198,7 @@ export function resolveTelegramRichMessageText(msg: TelegramTextMessage): string
   if (!msg.rich_message) {
     return undefined;
   }
-  return compactRichText(renderRichBlocks(msg.rich_message.blocks)) || undefined;
+  return renderRichBlocks(msg.rich_message.blocks) || undefined;
 }
 
 export function resolveTelegramRichMessageBody(msg: TelegramTextMessage): string | undefined {

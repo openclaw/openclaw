@@ -160,12 +160,8 @@ function collectHandleCandidates(
   return candidates;
 }
 
-function normalizeFaceTimeHandleCandidates(value: unknown): string[] {
-  return [...new Set(collectHandleCandidates(value).map((candidate) => candidate.trim()))];
-}
-
 export function normalizeFaceTimeHandle(value: unknown): string | undefined {
-  return normalizeFaceTimeHandleCandidates(value)[0];
+  return collectHandleCandidates(value)[0];
 }
 
 function canonicalizeFaceTimeHandle(value: string): string {
@@ -229,7 +225,7 @@ export function resolveAuthorizedFaceTimeOwner(params: {
     return undefined;
   }
   const ownerHandles = new Set(params.ownerHandles.map(canonicalizeFaceTimeHandle).filter(Boolean));
-  const senderId = normalizeFaceTimeHandleCandidates(params.event.data.handle)
+  const senderId = collectHandleCandidates(params.event.data.handle)
     .map(canonicalizeFaceTimeHandle)
     .find((candidate) => ownerHandles.has(candidate));
   if (!senderId) {

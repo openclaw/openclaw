@@ -91,7 +91,7 @@ function countSensitiveConfigValuesInner(
   };
   if (Array.isArray(value)) {
     value.some(visit);
-  } else if (value && typeof value === "object") {
+  } else if (typeof value === "object") {
     Object.entries(value).some(([childKey, childValue]) => visit(childValue, childKey));
   }
   return count;

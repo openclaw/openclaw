@@ -180,10 +180,17 @@ continuations do not send activity to an external channel. This
 activity signal does not change the configured message queue mode or restore
 individual tool-progress messages.
 
-The former Tasks-backed detached presenter and its notification policies are no
-longer available. A yielded turn does not start a separate task or flow projection
-to keep editing a channel progress message. Ordinary channel streaming still
-follows the channel's settings while its turn is active.
+On Telegram, a confirmed `progress` draft can stay with the yielding turn's
+announcing children instead of the waiting acknowledgment. Telegram keeps
+rendering, throttling and deleting it; the native registry only forwards child
+status and prepared operation names (never child prose, commands, arguments or
+results) and honors `streaming.progress.toolProgress`. A resumed parent that
+yields again keeps the same draft for its new children. The draft is deleted when
+the settle wake completes the last tracked cohort (final, `NO_REPLY` or terminal
+failure) or when stop or reset cancels the children. It is process-local: a
+Gateway restart does not revive it. Other channels keep the waiting
+acknowledgment. A yielded turn still does not start a separate task or flow
+projection.
 
 [Progress cards](/tools/progress-card) remain durable session state. The parent
 updates its own card as work advances and when child results return. Inspect

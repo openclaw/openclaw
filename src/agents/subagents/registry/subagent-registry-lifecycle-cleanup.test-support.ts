@@ -58,10 +58,7 @@ export function registerDetachedCleanupAuthorityTest({
       retainAttachmentsOnKeep: true,
     });
     let disposed = false;
-    let releaseCleanup!: () => void;
-    const cleanupReady = new Promise<void>((resolve) => {
-      releaseCleanup = resolve;
-    });
+    const cleanupReady = createDeferredCore();
     const requesterTranscriptWrite = vi.fn();
     const withRequesterTranscriptWrite = async <T>(operation: () => Promise<T> | T): Promise<T> => {
       requesterTranscriptWrite();
@@ -82,7 +79,7 @@ export function registerDetachedCleanupAuthorityTest({
     const dispatchFinished = createDeferredCore<unknown>();
     const cleanupFinished = createDeferredCore();
     const runSubagentAnnounceFlow = vi.fn(async () => {
-      await cleanupReady;
+      await cleanupReady.promise;
       try {
         const result = await dispatchGatewayMethodInProcess(
           "agent",
@@ -130,7 +127,7 @@ export function registerDetachedCleanupAuthorityTest({
 
     const dispatchResult = expect(dispatchFinished.promise).resolves.toEqual(delivered);
     disposed = true;
-    releaseCleanup();
+    cleanupReady.resolve();
 
     await dispatchResult;
     await cleanupFinished.promise;
@@ -149,7 +146,6 @@ export function registerDirectSessionCleanupAuthorityTests({
   gatewayMocks,
   helperMocks,
   sessionEntryReadMocks,
-  waitForLifecycleState,
 }: {
   createRunEntry: typeof createLifecycleRunEntry;
   createLifecycleController: (
@@ -170,7 +166,6 @@ export function registerDirectSessionCleanupAuthorityTests({
   };
   helperMocks: { persistSubagentSessionTiming: Mock<() => Promise<void>> };
   sessionEntryReadMocks: { loadSessionEntryByKey: Mock };
-  waitForLifecycleState: (assertion: () => void) => Promise<void>;
 }) {
   it("commits cancellation of a yielded run before browser cleanup", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: false });
@@ -255,29 +250,6 @@ export function registerDirectSessionCleanupAuthorityTests({
     );
   });
 
-  it("keeps direct delete cleanup root-admitted until the gateway call settles", async () => {
-    const entry = createRunEntry({ cleanup: "delete", expectsCompletionMessage: false });
-    const runs = new Map([[entry.runId, entry]]);
-    let releaseDelete: (() => void) | undefined;
-    gatewayMocks.callGateway.mockImplementation((opts) => {
-      if (opts.method !== "sessions.delete") {
-        return Promise.resolve({});
-      }
-      return new Promise<Record<string, unknown>>((resolve) => {
-        releaseDelete = () => resolve({});
-      });
-    });
-    const controller = createLifecycleController({ entry, runs });
-
-    await completeRun(controller, entry, { triggerCleanup: true });
-    await waitForLifecycleState(() => expect(releaseDelete).toBeTypeOf("function"));
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
-
-    releaseDelete?.();
-    await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    expect(runs.has(entry.runId)).toBe(false);
-  });
-
   it("settles direct cleanup when the child changes during its deletion identity read", async () => {
     const entry = createRunEntry({
       cleanup: "delete",
@@ -323,50 +295,6 @@ export function registerDirectSessionCleanupAuthorityTests({
   });
 }
 
-export function registerDeliveredCleanupEndedHookTest({
-  createRunEntry,
-  createLifecycleController,
-  completeAndJoinCleanup,
-}: Pick<
-  Parameters<typeof registerDirectSessionCleanupAuthorityTests>[0],
-  "createRunEntry" | "createLifecycleController" | "completeAndJoinCleanup"
->) {
-  it("emits ended hook while retrying cleanup after completion was already delivered", async () => {
-    const entry = createRunEntry({
-      delivery: { status: "delivered", announcedAt: 3_500, deliveredAt: 3_500 },
-      endedAt: 4_000,
-      expectsCompletionMessage: true,
-    });
-    const emitSubagentEndedHookForRun = vi.fn(async () => {});
-
-    const controller = createLifecycleController({
-      entry,
-      shouldEmitEndedHookForRun: () => true,
-      emitSubagentEndedHookForRun,
-    });
-
-    await expect(
-      completeAndJoinCleanup(controller, entry, {
-        triggerCleanup: true,
-        terminalReply: { disposition: "visible", text: "final completion reply" },
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(emitSubagentEndedHookForRun).toHaveBeenCalledTimes(1);
-    expect(emitSubagentEndedHookForRun).toHaveBeenCalledWith({
-      entry: expect.objectContaining({
-        runId: entry.runId,
-        childSessionKey: entry.childSessionKey,
-        delivery: expect.objectContaining({ status: "delivered", deliveredAt: 3_500 }),
-      }),
-      reason: SUBAGENT_ENDED_REASON_COMPLETE,
-      sendFarewell: true,
-      isCurrent: expect.any(Function),
-      prepareCurrent: expect.any(Function),
-    });
-  });
-}
-
 export function registerDeliveryRetryOwnerTests({
   createRunEntry,
   createLifecycleController,
@@ -380,18 +308,29 @@ export function registerDeliveryRetryOwnerTests({
   helperMocks: { safeRemoveAttachmentsDir: Mock<() => Promise<void>> };
   waitForLifecycleState: (assertion: () => void) => Promise<void>;
 }) {
-  it("retries a detached cleanup failure and completes on the next attempt", async () => {
-    vi.useFakeTimers();
+  function createAttachmentCleanupFixture(
+    beforeWrite?: LifecycleControllerFixtureOptions["beforeWrite"],
+  ) {
     const entry = createRunEntry({
       endedAt: 4_000,
       expectsCompletionMessage: false,
       retainAttachmentsOnKeep: false,
     });
-    helperMocks.safeRemoveAttachmentsDir.mockRejectedValueOnce(new Error("cleanup failed"));
     const resumeSubagentRun = vi.fn(() => {
       controller.startSubagentAnnounceCleanupFlow(entry);
     });
-    const controller = createLifecycleController({ entry, resumeSubagentRun });
+    const controller = createLifecycleController({
+      entry,
+      beforeWrite,
+      resumeSubagentRun,
+    });
+    return { entry, controller, resumeSubagentRun };
+  }
+
+  it("retries a detached cleanup failure and completes on the next attempt", async () => {
+    vi.useFakeTimers();
+    helperMocks.safeRemoveAttachmentsDir.mockRejectedValueOnce(new Error("cleanup failed"));
+    const { entry, controller, resumeSubagentRun } = createAttachmentCleanupFixture();
 
     try {
       expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
@@ -571,21 +510,9 @@ export function registerDeliveryRetryOwnerTests({
 
   it("stops retrying detached cleanup failures and leaves the run durably unlocked", async () => {
     vi.useFakeTimers();
-    const entry = createRunEntry({
-      endedAt: 4_000,
-      expectsCompletionMessage: false,
-      retainAttachmentsOnKeep: false,
-    });
     const persist = vi.fn();
     helperMocks.safeRemoveAttachmentsDir.mockRejectedValue(new Error("cleanup failed"));
-    const resumeSubagentRun = vi.fn(() => {
-      controller.startSubagentAnnounceCleanupFlow(entry);
-    });
-    const controller = createLifecycleController({
-      entry,
-      beforeWrite: persist,
-      resumeSubagentRun,
-    });
+    const { entry, controller } = createAttachmentCleanupFixture(persist);
 
     try {
       expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);

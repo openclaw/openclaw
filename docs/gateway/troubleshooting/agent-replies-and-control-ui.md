@@ -73,7 +73,7 @@ openclaw gateway status --json
 
 Look for:
 
-- Correct probe URL and dashboard URL.
+- Correct check URL and dashboard URL.
 - Auth mode/token mismatch between client and gateway.
 - Clients that connect without the required device identity. The current Control UI can create and sign identity over plain HTTP; see [Insecure HTTP](/web/control-ui#insecure-http).
 

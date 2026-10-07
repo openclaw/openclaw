@@ -21,14 +21,13 @@ extensions/anthropic-vertex/stream-runtime.ts	4
 extensions/anthropic/cli-backend.ts	2
 extensions/anthropic/cli-migration.ts	1
 extensions/anthropic/config-defaults.ts	2
-extensions/anthropic/register.runtime.ts	1
 extensions/anthropic/session-catalog-continue.ts	1
 extensions/anthropic/session-catalog-history.ts	2
 extensions/anthropic/session-catalog-listing.ts	1
 extensions/anthropic/session-catalog-parsing.ts	5
 extensions/anthropic/session-catalog-registration.ts	3
 extensions/anthropic/session-catalog-runtime.ts	1
-extensions/anthropic/stream-wrappers.ts	3
+extensions/anthropic/stream-wrappers.ts	1
 extensions/baseten/models.ts	1
 extensions/beam/src/mirror.ts	2
 extensions/browser/src/browser-node-fallback.ts	1
@@ -437,7 +436,6 @@ extensions/line/src/flex-templates/basic-cards.ts	12
 extensions/line/src/flex-templates/media-control-cards.ts	12
 extensions/line/src/flex-templates/schedule-cards.ts	27
 extensions/line/src/gateway.ts	1
-extensions/line/src/monitor-durable.ts	1
 extensions/line/src/monitor.ts	1
 extensions/line/src/outbound.ts	3
 extensions/line/src/send.ts	1
@@ -466,11 +464,10 @@ extensions/matrix/src/exec-approvals.ts	1
 extensions/matrix/src/group-mentions.ts	1
 extensions/matrix/src/matrix/account-config.ts	2
 extensions/matrix/src/matrix/actions/devices.ts	1
-extensions/matrix/src/matrix/actions/messages.ts	8
+extensions/matrix/src/matrix/actions/messages.ts	7
 extensions/matrix/src/matrix/actions/polls.ts	1
 extensions/matrix/src/matrix/actions/reactions.ts	1
 extensions/matrix/src/matrix/actions/summary.ts	2
-extensions/matrix/src/matrix/client-bootstrap.ts	1
 extensions/matrix/src/matrix/client/config.ts	4
 extensions/matrix/src/matrix/client/logging.ts	2
 extensions/matrix/src/matrix/config-update.ts	4
@@ -514,8 +511,7 @@ extensions/matrix/src/matrix/sdk/fake-indexeddb-prune.ts	4
 extensions/matrix/src/matrix/sdk/idb-persistence.ts	3
 extensions/matrix/src/matrix/sdk/transport.ts	2
 extensions/matrix/src/matrix/send.ts	8
-extensions/matrix/src/matrix/send/chunking.ts	2
-extensions/matrix/src/matrix/send/client.ts	1
+extensions/matrix/src/matrix/send/chunking.ts	1
 extensions/matrix/src/matrix/send/formatting.ts	1
 extensions/matrix/src/matrix/thread-bindings.ts	2
 extensions/matrix/src/onboarding.ts	7
@@ -773,7 +769,7 @@ extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	6
 extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	1
 extensions/qa-lab/src/providers/mock-openai/server.ts	6
 extensions/qa-lab/src/qa-transport.ts	1
-extensions/qa-lab/src/run-config.ts	2
+extensions/qa-lab/src/run-config.ts	1
 extensions/qa-lab/src/runtime-parity.ts	1
 extensions/qa-lab/src/runtime-tool-fixture.ts	2
 extensions/qa-lab/src/scenario-catalog.ts	1
@@ -1615,13 +1611,12 @@ src/auto-reply/reply/inbound-context.ts	8
 src/auto-reply/reply/mentions.ts	1
 src/auto-reply/reply/queue/drain.ts	1
 src/auto-reply/reply/queue/enqueue.ts	1
-src/auto-reply/reply/queue/settings.ts	1
 src/auto-reply/reply/reply-config-runtime-mode.ts	2
 src/auto-reply/reply/reply-operation-run-state.ts	1
 src/auto-reply/reply/reply-run-registry.registry.ts	1
 src/auto-reply/reply/reply-threading.ts	2
 src/auto-reply/reply/reply-timing-tracker.ts	2
-src/auto-reply/reply/restart-recovery-claim.ts	2
+src/auto-reply/reply/restart-recovery-claim.ts	1
 src/auto-reply/reply/session-delivery.ts	1
 src/auto-reply/reply/session.ts	2
 src/auto-reply/reply/source-reply-delivery-runtime.ts	2
@@ -1690,7 +1685,6 @@ src/channels/thread-bindings-policy.ts	2
 src/channels/turn/execution.ts	2
 src/channels/turn/history-window.ts	1
 src/channels/turn/lifecycle.ts	2
-src/channels/turn/route-dm-scope.ts	1
 src/channels/turn/run-channel-turn.ts	4
 src/claws/add.ts	7
 src/claws/cron.ts	11
@@ -1718,7 +1712,6 @@ src/cli/capability-cli/tts.ts	6
 src/cli/capability-cli/video.ts	6
 src/cli/capability-cli/web.ts	5
 src/cli/channel-auth.ts	4
-src/cli/channel-options.ts	1
 src/cli/channels-cli.ts	5
 src/cli/claws-cli.gateway-readiness.ts	1
 src/cli/claws-cli.runtime.ts	2

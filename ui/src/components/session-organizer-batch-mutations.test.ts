@@ -36,6 +36,7 @@ import {
   deleteSessionGroup,
   deleteSessionsBatch,
   patchSession,
+  runBatchSessionAction,
   stopCloudWorker,
   snoozeSessionWithUndo,
 } from "./session-organizer-operations.runtime.ts";
@@ -207,6 +208,49 @@ describe("patchSessionRows", () => {
       { unread: false },
       { agentId: "main", expectedSessionId: row.sessionId },
     );
+  });
+
+  it("acknowledges hidden runs conditionally with Mark as read but not with Mark as unread", async () => {
+    const run = { ...sessionRow(1), key: "agent:main:subagent:done", isChild: true };
+    const parent: SidebarRecentSession = {
+      ...sessionRow(0),
+      unread: false,
+      subagentSummary: {
+        attention: { kind: "none" },
+        runningChildCount: 0,
+        failedChildCount: 0,
+        unreadHiddenRuns: [run],
+      },
+    };
+    const harness = createHarness();
+
+    await runBatchSessionAction(
+      harness.host,
+      { kind: "toggle-unread" },
+      [parent],
+      true,
+      harness.scope,
+    );
+    await runBatchSessionAction(
+      harness.host,
+      { kind: "toggle-unread" },
+      [parent],
+      false,
+      harness.scope,
+    );
+
+    // Selected rows keep their explicit batch read; folded runs keep manual markers.
+    expect(harness.request.mock.calls.map(([, params]) => params)).toEqual([
+      { targets: [sessionTarget(parent)], patch: { unread: false } },
+      { targets: [sessionTarget(parent)], patch: { unread: true } },
+    ]);
+    expect(harness.patch.mock.calls).toEqual([
+      [
+        run.key,
+        { unread: false },
+        { agentId: "main", expectedMarkedUnreadAt: null, expectedSessionId: run.sessionId },
+      ],
+    ]);
   });
 
   it("preflights every lifecycle identity before dispatching the first chunk", async () => {

@@ -224,7 +224,7 @@ node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
 ```
 
 These diagnostics produce `native-build`/`built` or `gateway-probe`/`probe-passed`
-proofs, respectively. Neither is release qualification. The Gateway probe uses the
+proofs, respectively. Neither is release qualification. The Gateway check uses the
 same published-package selection and installation path as full qualification.
 
 The stock gate runs for the `release` operation in **iOS Store Release** after

@@ -304,33 +304,6 @@ export function publishTranscriptArchiveInWorker(
   }
 }
 
-async function runWorkerPort(
-  port: NonNullable<typeof parentPort>,
-  plans: readonly TranscriptArchiveWorkerPlan[],
-): Promise<void> {
-  let materializedBytes = 0;
-  for (const plan of plans) {
-    const result = await materializeTranscriptArchiveInWorker(plan);
-    materializedBytes += result.archive?.bytes.byteLength ?? 0;
-    if (materializedBytes > MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES) {
-      throw new Error(
-        `Archive batch exceeds ${MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES} bytes; use fewer sessions`,
-      );
-    }
-    port.postMessage({ type: "done", results: [result] } satisfies TranscriptArchiveWorkerMessage);
-  }
-  port.close();
-}
-
-function runPublishWorkerPort(
-  port: NonNullable<typeof parentPort>,
-  plans: readonly TranscriptArchivePublishPlan[],
-): void {
-  const results = plans.map((plan) => publishTranscriptArchiveInWorker(plan));
-  port.postMessage({ type: "published", results } satisfies TranscriptArchivePublishWorkerMessage);
-  port.close();
-}
-
 async function runArchiveSession(
   port: NonNullable<typeof parentPort>,
   env: NodeJS.ProcessEnv,
@@ -453,11 +426,30 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
       SqliteArchiveOneShotWorkerData,
       { operation: "materialize" }
     >;
-    await runWorkerPort(parentPort, data.plans);
+    let materializedBytes = 0;
+    for (const plan of data.plans) {
+      const result = await materializeTranscriptArchiveInWorker(plan);
+      materializedBytes += result.archive?.bytes.byteLength ?? 0;
+      if (materializedBytes > MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES) {
+        throw new Error(
+          `Archive batch exceeds ${MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES} bytes; use fewer sessions`,
+        );
+      }
+      parentPort.postMessage(
+        { type: "done", results: [result] } satisfies TranscriptArchiveWorkerMessage,
+        [],
+      );
+    }
+    parentPort.close();
   } else if (operation === "publish") {
     // SAFETY: the paired archive owner constructs this private typed boot payload.
     const data = workerData as Extract<SqliteArchiveOneShotWorkerData, { operation: "publish" }>;
-    runPublishWorkerPort(parentPort, data.plans);
+    const results = data.plans.map((plan) => publishTranscriptArchiveInWorker(plan));
+    parentPort.postMessage(
+      { type: "published", results } satisfies TranscriptArchivePublishWorkerMessage,
+      [],
+    );
+    parentPort.close();
   } else if (operation === "cold-prepare") {
     const { prepareSessionColdBatchInWorker } = await import("./session-cold-storage-worker.js");
     // SAFETY: the paired parent constructs this internal payload with SessionColdPreparationWorkerData.

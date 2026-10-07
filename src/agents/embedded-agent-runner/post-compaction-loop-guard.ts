@@ -36,7 +36,6 @@ type PostCompactionGuardVerdict =
 const observationSignature = (call: PostCompactionGuardObservation): string =>
   `${call.toolName}\0${call.argsHash}`;
 
-/** Creates a stateful post-compaction loop detector for one embedded run. */
 export function createPostCompactionLoopGuard(options?: { enabled?: boolean }) {
   const enabled = options?.enabled ?? true;
   const recentCalls: PostCompactionGuardObservation[] = [];
@@ -123,7 +122,6 @@ export function createPostCompactionLoopGuard(options?: { enabled?: boolean }) {
   return { armPostCompaction, observe };
 }
 
-/** Error raised when the post-compaction loop guard aborts a run. */
 export class PostCompactionLoopPersistedError extends Error {
   readonly detector: "compaction_loop_persisted";
   readonly count: number;

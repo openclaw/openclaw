@@ -267,19 +267,22 @@ export function prepareProjectedSessionPresentation(
       const temporal = runState(record.key, record.entry);
       const facts = [
         record.materialized,
-        record.materializedSequence,
         record.profileRevision,
-        record.subagentRevision,
         record.lastMessagePreview,
         record.fallbackModel,
         liveModel?.provider,
         liveModel?.model,
         liveModel === null,
         sourceSwarm,
-        subagentRuns.revision,
         childOwnerSessionKeys,
-        temporal.subagentRun,
+        temporal.subagentRun?.model,
+        temporal.subagentOwner,
+        temporal.fields.status,
+        temporal.fields.lastRunError,
+        temporal.fields.subagentRunState,
         temporal.fields.hasActiveSubagentRun,
+        temporal.fields.startedAt,
+        temporal.fields.endedAt,
         temporal.fields.runtimeMs,
         // Transient owners can cycle without publishing a row; retire the earlier sample.
         JSON.stringify([run, preparedFacts]),
@@ -288,9 +291,11 @@ export function prepareProjectedSessionPresentation(
         record.entry.goal?.status === "active" && record.entry.goal.tokenBudget !== undefined
           ? now
           : undefined,
+        record.materialized.source.childLinks?.length,
         ...(record.materialized.source.childLinks ?? []).flatMap(({ key, entry }) => {
           const childActive = runState(key, entry).fields.hasActiveSubagentRun;
           return [
+            key,
             childActive,
             resolveSessionChildOwners({
               key,

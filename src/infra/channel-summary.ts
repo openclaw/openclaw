@@ -24,64 +24,6 @@ type ChannelAccountEntry = ChannelAccountInspectionResult & {
   accountId: string;
 };
 
-const buildAccountDetails = (params: {
-  entry: ChannelAccountEntry;
-  plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
-  includeAllowFrom: boolean;
-}): string[] => {
-  const details: string[] = [];
-  const snapshot = params.entry.snapshot;
-  if (snapshot.enabled === false) {
-    details.push("disabled");
-  }
-  if (snapshot.dmPolicy) {
-    details.push(`dm:${snapshot.dmPolicy}`);
-  }
-  for (const [key, label] of [
-    ["tokenSource", "token"],
-    ["botTokenSource", "bot"],
-    ["appTokenSource", "app"],
-    ["signingSecretSource", "signing"],
-  ] as const) {
-    const source = snapshot[key];
-    if (source && source !== "none") {
-      details.push(`${label}:${source}`);
-    }
-  }
-  if (
-    params.entry.kind === "unavailable" ||
-    hasConfiguredUnavailableCredentialStatus(params.entry.account)
-  ) {
-    details.push("secret unavailable in this command path");
-  }
-  if (snapshot.baseUrl) {
-    details.push(snapshot.baseUrl);
-  }
-  if (snapshot.port != null) {
-    details.push(`port:${snapshot.port}`);
-  }
-  if (snapshot.cliPath) {
-    details.push(`cli:${snapshot.cliPath}`);
-  }
-  if (snapshot.dbPath) {
-    details.push(`db:${snapshot.dbPath}`);
-  }
-
-  if (params.includeAllowFrom && snapshot.allowFrom?.length) {
-    const formatted = formatChannelAllowFrom({
-      plugin: params.plugin,
-      cfg: params.cfg,
-      accountId: snapshot.accountId,
-      allowFrom: snapshot.allowFrom,
-    }).slice(0, 2);
-    if (formatted.length > 0) {
-      details.push(`allow:${formatted.join(",")}`);
-    }
-  }
-  return details;
-};
-
 export async function buildChannelSummary(
   cfg?: OpenClawConfig,
   options?: ChannelSummaryOptions,
@@ -179,12 +121,51 @@ export async function buildChannelSummary(
     lines.push(colorize ? statusColor(line) : line);
 
     for (const entry of configuredEntries) {
-      const details = buildAccountDetails({
-        entry,
-        plugin,
-        cfg: effective,
-        includeAllowFrom,
-      });
+      const details: string[] = [];
+      const snapshot = entry.snapshot;
+      if (snapshot.enabled === false) {
+        details.push("disabled");
+      }
+      if (snapshot.dmPolicy) {
+        details.push(`dm:${snapshot.dmPolicy}`);
+      }
+      for (const [key, sourceLabel] of [
+        ["tokenSource", "token"],
+        ["botTokenSource", "bot"],
+        ["appTokenSource", "app"],
+        ["signingSecretSource", "signing"],
+      ] as const) {
+        const source = snapshot[key];
+        if (source && source !== "none") {
+          details.push(`${sourceLabel}:${source}`);
+        }
+      }
+      if (entry.kind === "unavailable" || hasConfiguredUnavailableCredentialStatus(entry.account)) {
+        details.push("secret unavailable in this command path");
+      }
+      if (snapshot.baseUrl) {
+        details.push(snapshot.baseUrl);
+      }
+      if (snapshot.port != null) {
+        details.push(`port:${snapshot.port}`);
+      }
+      if (snapshot.cliPath) {
+        details.push(`cli:${snapshot.cliPath}`);
+      }
+      if (snapshot.dbPath) {
+        details.push(`db:${snapshot.dbPath}`);
+      }
+      if (includeAllowFrom && snapshot.allowFrom?.length) {
+        const formatted = formatChannelAllowFrom({
+          plugin,
+          cfg: effective,
+          accountId: snapshot.accountId,
+          allowFrom: snapshot.allowFrom,
+        }).slice(0, 2);
+        if (formatted.length > 0) {
+          details.push(`allow:${formatted.join(",")}`);
+        }
+      }
       const accountId = entry.accountId || DEFAULT_ACCOUNT_ID;
       const name = entry.snapshot.name?.trim();
       const label = name ? `${accountId} (${name})` : accountId;

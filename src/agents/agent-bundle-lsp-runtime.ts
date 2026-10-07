@@ -1,4 +1,3 @@
-/** Session-scoped embedded LSP runtime and tool materialization for agent bundles. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
@@ -47,7 +46,6 @@ type LspServerCapabilities = {
   [key: string]: unknown;
 };
 
-/** Materialized LSP tools plus session capabilities and cleanup handle. */
 type BundleLspToolRuntime = {
   tools: AnyAgentTool[];
   sessions: Array<{ serverName: string; capabilities: LspServerCapabilities }>;

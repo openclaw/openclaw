@@ -31,7 +31,6 @@ type SandboxRecreateOptions = {
   force: boolean;
 };
 
-/** Lists active sandbox containers or browser containers. */
 export async function sandboxListCommand(
   opts: SandboxListOptions,
   runtime: RuntimeEnv,
@@ -55,7 +54,6 @@ export async function sandboxListCommand(
   displaySummary(opts.browser ? browsers : containers, opts.browser, runtime);
 }
 
-/** Stops and removes sandbox runtimes matching the requested scope. */
 export async function sandboxRecreateCommand(
   opts: SandboxRecreateOptions,
   runtime: RuntimeEnv,

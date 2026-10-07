@@ -1,9 +1,3 @@
-/**
- * Minimal setup command.
- *
- * Ensures config, default workspace, and session directories exist without
- * running the full onboarding wizard.
- */
 import fs from "node:fs/promises";
 import {
   listAgentEntries,
@@ -24,7 +18,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import { isRecord, shortenHomePath } from "../utils.js";
 
-/** Prepares config, workspace, and session directories for a usable installation. */
 export async function setupCommand(
   opts?: { workspace?: string; skipBootstrap?: boolean; json?: boolean },
   runtime: RuntimeEnv = defaultRuntime,

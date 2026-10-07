@@ -74,24 +74,19 @@ vi.mock("../../../infra/agent-events.js", () => ({
 // mock-isolation: Keep loop timing independent of native snapshots and worker startup.
 vi.mock("../../../state/openclaw-state-db-readonly.js", () => ({
   getActiveOpenClawStateDatabaseReadSnapshot: () => undefined,
-  withOpenClawStateDatabaseReadSnapshot: async <T>(operation: () => Promise<T>) =>
-    await operation(),
   executeExistingOpenClawStateRead: vi.fn<
     typeof import("../../../state/openclaw-state-db-readonly.js").executeExistingOpenClawStateRead
-  >(async (_options, command) => {
-    expect(command).toEqual({ type: "subagents.runs", scope: { kind: "page", after: undefined } });
+  >(async (_options, command, options) => {
+    expect(command).toEqual({ type: "subagents.restore" });
     const runs = mocks.loadSubagentRegistryFromSqlite();
-    return {
-      ok: true,
-      type: "subagents.runs",
-      sourceAdmitted: true,
-      runs,
-      versions: new Map([...runs.keys()].map((runId) => [runId, "fixture-version"])),
-      page: {
-        order: [...runs].map(([runId, entry]) => [runId, entry.createdAt] as const),
-        nextRunId: null,
-      },
-    };
+    options?.onChunk?.(
+      [...runs.values()].map((entry) => ({
+        entry,
+        version: "fixture-version",
+        createdAt: entry.createdAt,
+      })),
+    );
+    return { ok: true, type: "subagents.restore", sourceAdmitted: true, count: runs.size };
   }),
 }));
 

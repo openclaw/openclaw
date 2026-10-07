@@ -1,6 +1,3 @@
-/**
- * Model-level auth diagnostics and request-header preparation.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -101,7 +98,6 @@ export function resolveModelAuthMode(
   return "unknown";
 }
 
-/** Checks provider auth availability, including profile fallback order. */
 export async function hasAvailableAuthForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -220,7 +216,6 @@ export async function hasAvailableAuthForProvider(params: {
   return false;
 }
 
-/** Resolves request credentials from the provider attached to a model descriptor. */
 export async function getApiKeyForModelCore(params: {
   model: Model;
   cfg?: OpenClawConfig;

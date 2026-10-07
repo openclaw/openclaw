@@ -129,7 +129,6 @@ export async function listScheduledEventsDiscord(
 
 const ALLOWED_EVENT_COVER_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif"]);
 
-// Loads an image from a URL or path and returns a data URI suitable for the Discord API.
 export async function resolveEventCoverImage(
   imageUrl: string,
   opts?: DiscordOutboundMediaOpts,

@@ -228,7 +228,6 @@ export function buildSlackInteractiveBlocks(
   );
 }
 
-/** Render portable presentation blocks as Slack Block Kit blocks. */
 export function buildSlackPresentationBlocks(
   presentation?: MessagePresentation,
   options: SlackBlockRenderOptions = {},

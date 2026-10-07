@@ -42,15 +42,6 @@ function readDmAllowFrom(params: {
   );
 }
 
-function findGeneratedChannelConfigSchema(
-  channelName: string,
-): Record<string, unknown> | undefined {
-  const normalizedChannelId = normalizeAnyChannelId(channelName);
-  return GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
-    (entry) => entry.channelId === channelName || entry.channelId === normalizedChannelId,
-  )?.schema;
-}
-
 function schemaAllowsConfigPath(schema: unknown, path: SchemaPath): boolean {
   if (path.length === 0) {
     return true;
@@ -93,7 +84,10 @@ function schemaAllowsConfigPath(schema: unknown, path: SchemaPath): boolean {
 }
 
 function generatedSchemaAllowsGroupAllowFrom(channelName: string, path: SchemaPath): boolean {
-  const schema = findGeneratedChannelConfigSchema(channelName);
+  const normalizedChannelId = normalizeAnyChannelId(channelName);
+  const schema = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
+    (entry) => entry.channelId === channelName || entry.channelId === normalizedChannelId,
+  )?.schema;
   // Extension-installed channels (e.g. ClawHub agentmail) have no generated-metadata entry;
   // without schema info we can't prove the write is safe, so fail closed rather than open.
   return schema !== undefined && schemaAllowsConfigPath(schema, path);

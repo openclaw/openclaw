@@ -52,7 +52,7 @@ byte-order marks. If the current Node build cannot decode a service script safel
 OpenClaw prints the code page and continues searching other sources. Unsupported
 OEM pages such as CP850 are skipped rather than guessed. CP949 is also skipped:
 Node's ICU `euc-kr` decoder silently misdecodes UHC extension characters. Neither
-case probes the service executable; recovery continues with PATH and the other
+case checks the service executable; recovery continues with PATH and the other
 available runtime sources.
 
 If none is available and you are in an interactive terminal, the CLI offers:
@@ -159,6 +159,13 @@ fnm use 26
 </Accordion>
 
 ## Troubleshooting
+
+### Homebrew upgrades while the Gateway is running
+
+If Homebrew removes the running Gateway's Node executable, command relays and
+the spawn broker use the formula's available stable Homebrew path for new launches.
+They keep using the original executable while it exists. Restart the Gateway
+after upgrading Node to move the Gateway itself onto the new runtime.
 
 ### `openclaw: command not found`
 

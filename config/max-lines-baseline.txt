@@ -139,7 +139,6 @@ extensions/qa-lab/src/cli.runtime.test.ts
 extensions/qa-lab/src/cli.runtime.ts
 extensions/qa-lab/src/evidence-gallery.ts
 extensions/qa-lab/src/gateway-child.test.ts
-extensions/qa-lab/src/gateway-process-boundary.ts
 extensions/qa-lab/src/lab-server.test.ts
 extensions/qa-lab/src/lab-server.ts
 extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts
@@ -291,7 +290,6 @@ src/agents/tools/image-generate-tool.test.ts
 src/agents/tools/image-tool.test.ts
 src/agents/tools/message-tool.test.ts
 src/agents/tools/music-generate-tool.test.ts
-src/agents/tools/session-status-tool.ts
 src/agents/tools/sessions-send-tool.ts
 src/agents/tools/sessions-spawn-tool.test.ts
 src/agents/tools/sessions.test.ts
@@ -507,7 +505,6 @@ src/infra/update-startup.test.ts
 src/interactive/payload.ts
 src/logging/diagnostic-stability-bundle.ts
 src/logging/diagnostic-stability.ts
-src/logging/diagnostic-support-export.ts
 src/logging/diagnostic.test.ts
 src/logging/diagnostic.ts
 src/logging/redact.test.ts

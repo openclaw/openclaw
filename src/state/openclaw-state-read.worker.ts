@@ -4,7 +4,10 @@ import {
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
 } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
-import { readSubagentRunsInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
+import {
+  readSubagentRunsInWorker,
+  streamSubagentRegistryInWorker,
+} from "../agents/subagents/registry/subagent-registry.store.worker.js";
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
@@ -128,7 +131,7 @@ import {
 import { readUserProfileAvatarCommand } from "./user-profiles-internal.js";
 
 serveOwnedWorkerTasks(
-  function read(input): OpenClawStateReadReply | Promise<OpenClawStateReadReply> {
+  async function read(input, channel, control): Promise<OpenClawStateReadReply> {
     let sourceAdmitted: true | undefined;
     let nativeCleanupFailure: OpenClawStateReadReply["nativeCleanupFailure"];
     try {
@@ -137,9 +140,9 @@ serveOwnedWorkerTasks(
       }
       const prepared = stateReadRegistry.prepare(input.command.type);
       if (prepared) {
-        return prepared.then(() => read(input));
+        return prepared.then(() => read(input, channel, control));
       }
-      const executeRead = (): OpenClawStateReadReply => {
+      const executeRead = async (): Promise<OpenClawStateReadReply> => {
         if (input.checkFreshAdmission) {
           openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
             input.databasePath,
@@ -154,6 +157,17 @@ serveOwnedWorkerTasks(
         const { command } = input;
         if (command.type === "admit") {
           return { ok: true, type: "admit" };
+        }
+        if (command.type === "subagents.restore") {
+          if (!channel) {
+            throw new Error("Subagent restore requires a bounded receiver");
+          }
+          const count = await control.runNativeSection(() =>
+            streamSubagentRegistryInWorker(input, channel, () => {
+              sourceAdmitted = true;
+            }),
+          );
+          return { ok: true, type: command.type, sourceAdmitted: true, count };
         }
         if (command.type === "doctor.gatewayOwnerLease.read") {
           const lease = inspectGatewayOwnerLeaseForMaintenance(input, () => {
@@ -615,7 +629,7 @@ serveOwnedWorkerTasks(
         );
         return { ok: true, sourceAdmitted: true, ...result };
       };
-      const reply = withSqliteReaderOwner(
+      const reply = await withSqliteReaderOwner(
         { operation: input.command.type, ownerKind: "worker" },
         () => runWithSqliteWorkerStateContext(input.context, executeRead),
       );

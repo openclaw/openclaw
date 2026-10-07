@@ -78,6 +78,13 @@ const ModelRuntimeProperties = {
   supportsFastMode: Type.Optional(Type.Boolean()),
   /** Selected route can safely retry rejected service tiers before output. */
   supportsServiceTierRecovery: Type.Optional(Type.Boolean()),
+  /** Recent fulfillment of a requested tier; never a capability restriction. */
+  serviceTierObservation: Type.Optional(
+    closedObject({
+      requestedTier: NonEmptyString,
+      responseTier: Type.Optional(NonEmptyString),
+    }),
+  ),
   supportsTools: Type.Optional(Type.Boolean()),
   input: Type.Optional(
     Type.Array(

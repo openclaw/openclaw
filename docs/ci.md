@@ -58,7 +58,7 @@ Hourly iOS retains `ios-build (tests)` with Rust, voice, native Access, and focu
 
 Current iOS builds restore three independent input caches: verified Mermaid assets, SwiftPM source packages and binary artifacts, and the Watch RTC Cargo registry and compiled simulator library. Only trusted `main` push and scheduled runs save them; PRs restore only. Frozen targets retain their original cold path. Mermaid validates source and output hashes before copying resources. Its key covers the renderer's complete locked dependency graph, including workspace sources and optional build dependencies, so unrelated root dependency upgrades reuse the assets. SwiftPM keys cover Xcode, package manifests, and available `Package.resolved` files; automatic resolution remains enabled (the generated iOS project currently has no tracked lockfile). Watch keys cover Xcode, architecture, target mappings, the pinned Rust toolchain, lockfile, crate sources, and iOS build settings; the build phase verifies the library checksum and input fingerprint before reuse, and otherwise runs the locked Cargo build. Caching the finished slice avoids rebuilding the Rust standard library when a fresh runner installs `rust-src` with new timestamps. The hourly Watch engine test shares registry downloads, while its host Debug products stay out of the simulator Release cache.
 
-Current iOS Debug builds log CPU count, memory, machine model, booted simulators, and timestamps immediately around Xcode execution. The read-only hardware and simulator probes each have a five-second limit; unavailable diagnostics do not block the build. These markers distinguish simulator-query delays from Xcode startup, package resolution, and compilation.
+Current iOS Debug builds log CPU count, memory, machine model, booted simulators, and timestamps immediately around Xcode execution. The read-only hardware and simulator checks each have a five-second limit; unavailable diagnostics do not block the build. These markers distinguish simulator-query delays from Xcode startup, package resolution, and compilation.
 
 iOS screenshot shards, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time; the screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
 
@@ -196,6 +196,10 @@ The generator records successful hosted job walls, including setup, in the exist
 spans and survive the daily refit. The hosted full planner splits measured rows
 above 12 minutes after file bundling, retaining exact coverage and worker settings.
 Complete split generations keep subsequent plans from recombining expensive work.
+The whole Gateway-methods owner retains its completed hosted cost when files are
+added or removed, until a complete observation covers the new inventory. Partial
+generations never supply that floor. Its full-validation rows use the existing
+`-hosted-N` split, while compact main and PR routing retain their existing policy.
 An indivisible over-budget test fails planning with its owner named; unmeasured
 rows still need native timing evidence before claiming the 20-minute objective.
 
@@ -289,7 +293,7 @@ Every section heading from the previous single-page version keeps its anchor her
 - <a id="measured-shard-weights" />[Measured shard weights](/ci/capacity#measured-shard-weights)
 - <a id="clawsweeper-activity-forwarding" />[ClawSweeper activity forwarding](/ci/scheduled-workflows#clawsweeper-activity-forwarding)
 - <a id="manual-dispatches" />[Manual dispatches](/ci/scope-and-routing#manual-dispatches)
-- <a id="windows-testbox-probe" />[Windows Testbox Probe](/ci/scope-and-routing#windows-testbox-probe)
+- <a id="windows-testbox-probe" />[Windows Testbox Check](/ci/scope-and-routing#windows-testbox-probe)
 - <a id="runners" />[Runners](/ci/runners#runners)
 - <a id="blacksmith-runner-capacity" />[Blacksmith runner capacity](/ci/runners#blacksmith-runner-capacity)
 - <a id="runner-backend-modes" />[Runner backend modes](/ci/runners#runner-backend-modes)

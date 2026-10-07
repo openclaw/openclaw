@@ -2018,9 +2018,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
   it("selects provisioning and closure guards without replacing source test owners", () => {
     const guards = [
-      "test/scripts/pr-worktree-provision.test.ts",
-      "test/scripts/eager-import-closure.test.ts",
-    ];
+      // Provisioning inspects templates through the fork-owned SQLite broker.
+      ["test/scripts/pr-worktree-provision.test.ts", "test/vitest/vitest.infra.config.ts"],
+      ["test/scripts/eager-import-closure.test.ts", "test/vitest/vitest.tooling.config.ts"],
+    ] as const;
     const manifest = "scripts/pr-lib/wrapper-components.txt";
     for (const changedPath of [
       "scripts/pr",
@@ -2029,7 +2030,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/plugins/discovery-availability.ts",
     ]) {
       const targets = resolvePolicyTestTargets([changedPath]);
-      for (const guard of guards) {
+      for (const [guard] of guards) {
         expect(targets, changedPath).toContain(guard);
       }
       expect(isPolicyTestOwnedPath(changedPath), changedPath).toBe(false);
@@ -2037,19 +2038,19 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const newModule = "src/plugins/unrelated-new-plugin.ts";
     const newModuleTargets = resolvePolicyTestTargets([newModule]);
     const testOnlyTargets = resolvePolicyTestTargets(["src/plugins/unrelated-new-plugin.test.ts"]);
-    for (const guard of guards) {
+    for (const [guard] of guards) {
       expect(newModuleTargets).toContain(guard);
       expect(testOnlyTargets).not.toContain(guard);
     }
     expect(isPolicyTestOwnedPath(newModule)).toBe(false);
     expect(isPolicyTestOwnedPath(manifest)).toBe(true);
     const shards = expectDefined(createChangedNodeTestShards([manifest]), "manifest test plan");
-    for (const guard of guards) {
+    for (const [guard, config] of guards) {
       const owners = shards
         .flatMap((shard) => shard.groups ?? [])
         .filter((group) => group.includePatterns?.includes(guard));
       expect(owners).toHaveLength(1);
-      expect(owners[0]?.configs).toEqual(["test/vitest/vitest.tooling.config.ts"]);
+      expect(owners[0]?.configs).toEqual([config]);
     }
   });
 

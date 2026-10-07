@@ -283,10 +283,8 @@ function readHistoricalDisplayEventRange(
   const ranged = [...older.toReversed(), ...newer].map((row, index) =>
     Object.assign(row, { displaySeq: start + index + 1 }),
   );
-  const selected = (() => {
-    if (maxBytes === undefined) {
-      return ranged;
-    }
+  let selected = ranged;
+  if (maxBytes !== undefined) {
     const limit = Math.max(1_024, Math.floor(maxBytes));
     let bytes = 2;
     let selectedStart = ranged.length;
@@ -298,8 +296,8 @@ function readHistoricalDisplayEventRange(
       bytes += nextBytes;
       selectedStart--;
     }
-    return ranged.slice(selectedStart);
-  })();
+    selected = ranged.slice(selectedStart);
+  }
   if (selected.length === 0) {
     return [];
   }

@@ -341,17 +341,26 @@ describe("OpenClaw database integrity verifier", () => {
     },
   );
 
-  it("detects index-content damage with a full child check that a quick check cannot detect", async () => {
+  it("quarantines full-check index damage before applying healthy proof", async () => {
     const stateDir = tempDirs.make("openclaw-database-full-verify-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
+    const healthy = openOpenClawAgentDatabase({ agentId: "healthy", env });
     const agent = openOpenClawAgentDatabase({ agentId: "worker-1", env });
     createUnsafeIndexDrift(agent.path);
+    const healthyTarget = {
+      kind: "agent",
+      label: "synthetic healthy agent",
+      path: healthy.path,
+      check: "full",
+    } as const;
     const target = { kind: "agent", label: "synthetic agent", path: agent.path } as const;
     const results = await runDatabaseVerifyWorker([
+      healthyTarget,
       { ...target, check: "quick" },
       { ...target, check: "full" },
     ]);
     expect(results).toEqual([
+      { path: healthy.path, ok: true },
       { path: agent.path, ok: true },
       {
         path: agent.path,
@@ -360,11 +369,29 @@ describe("OpenClaw database integrity verifier", () => {
         terminal: true,
       },
     ]);
+    clearOpenClawAgentIntegrityVerification(healthy.path, env);
+    let quarantineAtPublication: ReturnType<typeof readOpenClawDatabaseQuarantineFailure>;
+    let corruptOwnerOpenAtPublication: boolean | undefined;
+    const onVerified = vi.fn(async () => {
+      quarantineAtPublication = readOpenClawDatabaseQuarantineFailure("agent", agent.path, { env });
+      corruptOwnerOpenAtPublication = agent.db.isOpen;
+      throw new Error("Original healthy writer retired before proof publication");
+    });
     await applyOpenClawDatabaseVerificationResults({
       env,
-      results: results.slice(1),
-      targets: [{ ...target, check: "full" }],
+      results: [results[0]!, results[2]!],
+      targets: [healthyTarget, { ...target, check: "full" }],
+      onVerified,
     });
+    expect(onVerified).toHaveBeenCalledExactlyOnceWith(healthy.path);
+    expect(quarantineAtPublication).toMatchObject({
+      name: "SqliteIntegrityError",
+      message: expect.stringContaining("unsafe_index_records_value"),
+    });
+    expect(corruptOwnerOpenAtPublication).toBe(false);
+    expect(readOpenClawAgentIntegrityVerification(healthy.path, env)).toBeUndefined();
+    expect(healthy.db.isOpen).toBe(true);
+    expect(readPersistedQuarantineRow(healthy.path, { env })).toBeUndefined();
     expect(agent.db.isOpen).toBe(false);
     expect(readPersistedQuarantineRow(agent.path, { env })?.reason).toContain(
       "unsafe_index_records_value",

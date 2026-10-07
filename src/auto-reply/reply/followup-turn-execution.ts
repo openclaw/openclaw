@@ -6,8 +6,8 @@ import { withOrderedSessionEntriesInWorker } from "../../config/sessions/session
 import {
   captureSessionEntryReadScope,
   isNativeSessionEntryRead,
-  withSessionStoreReaderInWorker,
-} from "../../config/sessions/session-entry-read-runtime.js";
+} from "../../config/sessions/session-entry-read-request.js";
+import { withSessionStoreReaderInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -430,7 +430,7 @@ export async function executeFollowupTurn(params: {
       turn.queued.run.bootstrapUserProfileId = turn.queued.personalBootstrapEligible
         ? sessionPersonalProfileId(turn.session.current())
         : undefined;
-      turn.operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(turn.queued));
+      await turn.operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(turn.queued));
       turn.operation.setPhase("running");
       const gatewayOwnsCompletion =
         turn.queued.queuedFollowupReplyDisposition?.kind === "deliver" &&

@@ -230,7 +230,7 @@ Doctor removes a foreign job only when its literal, straight-line script or
 direct arguments invoke an absolute OpenClaw path with a Gateway lifecycle
 subcommand. Shell jobs must also have no launchd environment entries that alter
 shell execution. Everything outside this contract is reported and left unchanged.
-This is command-metadata verification; it does not probe binary executability,
+This is command-metadata verification; it does not check binary executability,
 interpreter availability, or quarantine state.
 
 Doctor preserves managed LaunchAgents, unrelated labels,
@@ -288,7 +288,7 @@ It verifies health before removing old builds. A paused Gateway stays paused.
 Seeded installations never run npm self-update; update OpenClaw.app to update
 their Gateway. A paused legacy app-managed Node installation keeps background-service
 hosting even when the old app removed its LaunchAgent. While paused, the app records
-that preference without probing or changing the runtime. On resume it recovers the
+that preference without checking or changing the runtime. On resume it recovers the
 managed Node CLI before updating; this also applies to named profiles. Existing
 app-managed Node services continue through their installed CLI's update and repair flow, including health verification, and keep their runtime
 pin. A seed left on disk does not adopt an attached Node service. If that legacy
@@ -406,7 +406,7 @@ The app's CLI installer links `openclaw-mac` beside its profile-managed
 [remote control](/platforms/mac/remote#macos-app-setup) for `primary set`,
 saved-Gateway commands, profiles, and credential input.
 
-For standalone Gateway WebSocket handshake and discovery probes from a source
+For standalone Gateway WebSocket handshake and discovery checks from a source
 checkout, the existing debug commands remain available:
 
 ```bash

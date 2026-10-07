@@ -301,15 +301,15 @@ export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean)
   if (probe.ok) {
     const latency =
       typeof probe.connectLatencyMs === "number" ? `${probe.connectLatencyMs}ms` : "unknown";
-    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${capability} · ${colorize(rich, theme.success, "Read probe: ok")}`;
+    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${capability} · ${colorize(rich, theme.success, "Read check: ok")}`;
   }
 
   const detail = probe.error ? ` - ${probe.error}` : "";
   if (probe.gatewayReached && probe.connectLatencyMs != null) {
     const latency = `${probe.connectLatencyMs}ms`;
     const readStatus = isScopeLimitedProbeFailure(probe)
-      ? colorize(rich, theme.warn, "Read probe: limited")
-      : colorize(rich, theme.error, "Read probe: failed");
+      ? colorize(rich, theme.warn, "Read check: limited")
+      : colorize(rich, theme.error, "Read check: failed");
     return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${capability} · ${readStatus}${detail}`;
   }
 

@@ -477,7 +477,7 @@ async function inspectMemorySearchHealthForAgent(
         updateFix
           ? `Installed plugin "${installedOwner.id}" does not provide current local-memory setup diagnostics.`
           : null,
-        gatewayDetail && gatewayDetail !== setupReason ? `Gateway probe: ${gatewayDetail}` : null,
+        gatewayDetail && gatewayDetail !== setupReason ? `Gateway check: ${gatewayDetail}` : null,
         "",
         policyBlock?.fix ??
           updateFix ??
@@ -669,6 +669,6 @@ function buildGatewayProbeWarning(
   }
   const detail = probe.error?.trim();
   return detail
-    ? `Gateway memory probe for default agent is not ready: ${detail}`
-    : "Gateway memory probe for default agent is not ready.";
+    ? `Gateway memory check for default agent is not ready: ${detail}`
+    : "Gateway memory check for default agent is not ready.";
 }

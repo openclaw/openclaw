@@ -278,6 +278,15 @@ the existing executor between commands without holding a writer turn across
 preparation. Each command keeps its own live authority checks. Omit the option
 for cached stores whose lifetime can outlast accepted work.
 
+First-party runtime callers can use `withOpenClawAgentDatabaseRuntime` from the
+same subpath to admit cold agent storage in its existing executor before
+receiving a native handle. The operation callback still runs on the caller;
+dispatch its database work through the existing store worker. Its authority
+callback runs inside worker grants and must not read the same database or do
+blocking work. Put same-database predicates in the worker transaction. The
+released `withOpenClawAgentDatabaseAsync` retains native admission for arbitrary
+synchronous SDK guards, including its post-integrity, pre-repair checkpoint.
+
 ### Memory runtime replacement
 
 Memory runtimes may implement `prepareReload({ retireRuntime, retiringEmbeddingProviders })`

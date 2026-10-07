@@ -151,13 +151,6 @@ function getVolumeCronJob(index) {
   };
 }
 
-function getVolumeSessionFixtures(spec) {
-  return Array.from({ length: spec.sessions }, (_, index) => ({
-    index,
-    ...getVolumeSessionFixture(index),
-  }));
-}
-
 function assertVolumeSessionStores(stores, fixtures, context) {
   for (const agentId of VOLUME_AGENT_IDS) {
     const expectedCount = [...fixtures, ...PREEXISTING_SESSION_FIXTURES].filter(
@@ -316,7 +309,10 @@ function assertHealthySqlite(databasePath, assertContents) {
 export function assertUpgradeVolumeMigrated(stateDir, stage) {
   assertUpgradeVolumeSharedState(stateDir, stage);
   const spec = getVolumeSpec();
-  const fixtures = getVolumeSessionFixtures(spec);
+  const fixtures = Array.from({ length: spec.sessions }, (_, index) => ({
+    index,
+    ...getVolumeSessionFixture(index),
+  }));
   assert(
     !fs.existsSync(path.join(stateDir, "cron", "jobs.json")),
     "volume cron fixture created a retired JSON store",

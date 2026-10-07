@@ -9,7 +9,6 @@ type TelegramPollingLeaseEntry = {
   accountId: string;
   abortSignal?: AbortSignal;
   done: Promise<void>;
-  owner: symbol;
   resolveDone: () => void;
   startedAt: number;
 };
@@ -90,12 +89,10 @@ function createLease(params: {
   const done = new Promise<void>((resolve) => {
     resolveDone = resolve;
   });
-  const owner = Symbol(`telegram-polling:${params.accountId}`);
   const entry: TelegramPollingLeaseEntry = {
     accountId: params.accountId,
     abortSignal: params.abortSignal,
     done,
-    owner,
     resolveDone,
     startedAt: Date.now(),
   };
@@ -112,7 +109,7 @@ function createLease(params: {
       }
       released = true;
       const current = params.registry.get(params.tokenFingerprint);
-      if (current?.owner === owner) {
+      if (current === entry) {
         params.registry.delete(params.tokenFingerprint);
       }
       resolveDone();

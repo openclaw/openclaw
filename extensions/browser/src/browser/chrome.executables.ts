@@ -223,11 +223,10 @@ function detectDefaultChromiumExecutableLinux(): BrowserExecutable | null {
   if (!desktopId) {
     return null;
   }
-  const trimmed = desktopId.trim();
-  if (!CHROMIUM_DESKTOP_IDS.has(trimmed)) {
+  if (!CHROMIUM_DESKTOP_IDS.has(desktopId)) {
     return null;
   }
-  const desktopPath = findDesktopFilePath(trimmed);
+  const desktopPath = findDesktopFilePath(desktopId);
   if (!desktopPath) {
     return null;
   }

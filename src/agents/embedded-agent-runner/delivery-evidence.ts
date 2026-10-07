@@ -113,7 +113,6 @@ export function resolveSourceReplyDelivery(
     : observedDelivery;
 }
 
-/** Returns whether messaging-tool evidence completes the current source reply. */
 export function hasCompletedMessagingToolDeliveryEvidence(
   result: AgentDeliveryEvidence & SourceReplyDeliveryEvidence & ExplicitFinalSourceReplyEvidence,
 ): boolean {
@@ -165,7 +164,6 @@ function collectPayloadMediaUrls(
   return Array.from(urls);
 }
 
-/** Collects media URLs from agent payloads and committed messaging-tool delivery metadata. */
 export function collectDeliveredMediaUrls(result: AgentDeliveryEvidence): string[] {
   return Array.from(
     new Set([
@@ -175,7 +173,6 @@ export function collectDeliveredMediaUrls(result: AgentDeliveryEvidence): string
   );
 }
 
-/** Collects media URLs recorded by messaging-tool sends and their target attachments. */
 export function collectMessagingToolDeliveredMediaUrls(
   result: Pick<AgentDeliveryEvidence, "messagingToolSentMediaUrls" | "messagingToolSentTargets">,
 ): string[] {
@@ -330,7 +327,6 @@ export function getAutomaticDeliveryEvidence(
   return { mayHaveSent, suppressionReason };
 }
 
-/** Extracts a gateway result payload when the response carries delivery evidence fields. */
 export function getGatewayAgentResult(response: unknown): AgentDeliveryEvidence | null {
   const record = asOptionalObjectRecord(response);
   const candidate =
@@ -363,7 +359,6 @@ export function hasMessagingToolDeliveryEvidence(result: AgentDeliveryEvidence):
   );
 }
 
-/** Returns whether messaging-tool metadata proves committed text, media, or target delivery. */
 export function hasCommittedMessagingToolDeliveryEvidence(
   result: Pick<
     AgentDeliveryEvidence,
@@ -430,7 +425,6 @@ export function hasUnaccountedMessagingToolAggregateEvidence(
   );
 }
 
-/** Returns whether messaging-tool metadata proves a user-visible committed delivery. */
 export function hasVisibleCommittedMessagingToolDeliveryEvidence(
   result: Pick<
     AgentDeliveryEvidence,
@@ -445,7 +439,6 @@ export function hasVisibleCommittedMessagingToolDeliveryEvidence(
   );
 }
 
-/** Returns whether a source reply was visibly delivered through the message tool. */
 export function hasCommittedSourceReplyDeliveryEvidence(
   result: SourceReplyDeliveryEvidence,
 ): boolean {
@@ -487,7 +480,6 @@ export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): bool
   );
 }
 
-/** Formats an agent-command delivery failure message from delivery status metadata. */
 export function getAgentCommandDeliveryFailure(result: AgentDeliveryEvidence): string | undefined {
   const status = normalizeEvidenceStatus(result.deliveryStatus?.status);
   if (status !== "failed" && status !== "partial_failed") {

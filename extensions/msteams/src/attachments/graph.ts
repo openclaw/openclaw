@@ -11,7 +11,6 @@ import {
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -427,8 +426,7 @@ export async function downloadMSTeamsGraphMedia(params: {
   const filteredAttachments =
     sharePointMedia.length > 0
       ? normalizedAttachments.filter((att) => {
-          const contentType = normalizeOptionalLowercaseString(att.contentType);
-          if (contentType !== "reference") {
+          if (att.contentType !== "reference") {
             return true;
           }
           const url = typeof att.contentUrl === "string" ? att.contentUrl : "";

@@ -319,10 +319,6 @@ export function createGatewayAuxHandlers(
       questionManager.cancelClosedAuthorities({ runId: claim.runId });
     },
   );
-  const unregisterApprovalAuthorityObserver = () => {
-    unregisterWorkerTurnClaimClosedObserver?.();
-    unregisterApprovalAuthorityClosedObserver();
-  };
   const cancelRunBoundApprovals = (
     target: string | AgentRunDelegatedAuthority,
     context: GatewayRequestContext,
@@ -421,7 +417,8 @@ export function createGatewayAuxHandlers(
       stopPromise = (async () => {
         // Preserve the existing authority-observer stop boundary. Retirement is
         // local only; pending durable approvals belong to next-start epoch recovery.
-        unregisterApprovalAuthorityObserver();
+        unregisterWorkerTurnClaimClosedObserver?.();
+        unregisterApprovalAuthorityClosedObserver();
         beginCloseApprovalObservers();
         for (const manager of approvalManagers) {
           manager.retire();

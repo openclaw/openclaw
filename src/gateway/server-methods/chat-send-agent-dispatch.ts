@@ -25,7 +25,7 @@ import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
-import { broadcastChatDelta, broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
+import { broadcastChatDelta, broadcastChatError } from "./chat-broadcast.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
 import {
   resolveWebchatPromptCacheKey,
@@ -208,8 +208,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     classifyFailure: classifyDispatchFailure,
     context,
     isAgentRunStarted: () => agentRunStarted,
-    isQueuedFollowupEnqueued: queuedFollowup.isEnqueued,
-    isQueuedFollowupCompleted: progressRefresh ? queuedFollowup.isCompleted : undefined,
+    isQueuedFollowupEnqueued: () => queuedFollowup.isEnqueued() || queuedFollowup.isTerminal(),
     persistUserTurnTranscript: persistGatewayUserTurnTranscript,
     session,
     terminalizeRestartSafeAdmission,
@@ -249,8 +248,10 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       measureDiagnosticsTimelineSpan(
         "gateway.chat_send.dispatch_inbound",
         async () => {
-          // The admitted run owns preparation, cancellation, and error publication.
-          admission.assertWorkAdmissionCurrent();
+          // Input already owned by the sink must finalize before source admission can fail.
+          if (!acceptedMessageInjection) {
+            admission.assertWorkAdmissionCurrent();
+          }
           let assertWorkspaceRunOwnership: (() => void) | undefined;
           if (
             !acceptedMessageInjection &&
@@ -374,8 +375,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                     throw new Error("Provider login authority is no longer active.");
                   }
                 },
-                // Keep a Gateway-owned cancel identity after this chat.send
-                // terminalizes while the prompt waits in followup/collect queue.
+                // Retain this input identity while followup/collect owns its execution.
                 onFollowupQueueDisposition: queuedFollowup.onQueueDisposition,
                 onQueuedFollowupReplyBatch: queuedFollowup.onQueuedFollowupReplyBatch,
                 turnAdoptionLifecycle: queuedFollowup.lifecycle,
@@ -393,6 +393,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
                 fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                 onAgentRunStart: (runId, _identity, options, transcriptStart) => {
+                  queuedFollowup.onRunStarted(runId);
                   diagnostics.finish();
                   if (titleWaiting) {
                     stopTitleWait?.();
@@ -510,7 +511,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     )
     .then(async (dispatchResult) => {
       diagnostics.finish();
-      if (acceptedMessageInjection) {
+      if (acceptedMessageInjection || queuedFollowup.isEnqueued() || queuedFollowup.isTerminal()) {
         return;
       }
       emitServerTiming("dispatch-completed", undefined, dispatchStartedAtMs);
@@ -571,7 +572,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           if (
             !progressRefresh &&
             (!agentRunStarted || replyDispatchRun || hasOnlyFinalWarnings) &&
-            !queuedFollowup.isEnqueued() &&
             !hasReturnedAgentError &&
             !context.chatRunState.hasAbortMarker(clientRunId)
           ) {
@@ -653,13 +653,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                       })
                     : {
                         runId: clientRunId,
-                        // Only finished refresh work may retire its retry intent.
-                        // Steering and queued admission alone acknowledge custody.
-                        status:
-                          progressRefresh &&
-                          (!queuedFollowup.isEnqueued() || queuedFollowup.isCompleted())
-                            ? "completed"
-                            : "ok",
+                        status: progressRefresh && !queuedFollowup.isSteered() ? "completed" : "ok",
                         ...(replyDispatchResult?.terminalOutcome?.stopReason
                           ? { stopReason: replyDispatchResult.terminalOutcome.stopReason }
                           : {}),
@@ -682,16 +676,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
         },
         dispatchStartedAtMs,
       );
-      if (queuedFollowup.isEnqueued() && !context.chatRunState.hasAbortMarker(clientRunId)) {
-        // Successful queue admission ends this client run. The later
-        // aggregate/followup owns its own run id.
-        broadcastChatFinal({
-          context,
-          runId: clientRunId,
-          sessionKey,
-          agentId,
-        });
-      }
     })
     .catch((error: unknown) => {
       diagnostics.finish();

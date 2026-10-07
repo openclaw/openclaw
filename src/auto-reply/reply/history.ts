@@ -21,7 +21,6 @@ export function evictOldHistoryKeys<T>(
 
 export type { HistoryEntry } from "./history.types.js";
 
-/** Wraps previous chat history and the current message in the prompt context marker format. */
 export function buildHistoryContext(params: {
   historyText: string;
   currentMessage: string;
@@ -225,7 +224,6 @@ export function buildChannelInboundHistory<T extends HistoryEntry>(params: {
  */
 export const buildInboundHistoryFromMap = buildChannelInboundHistory;
 
-/** Builds structured inbound history entries from an existing window. */
 export function buildInboundHistoryFromEntries(params: {
   entries: readonly HistoryEntry[];
   limit: number;
@@ -300,7 +298,6 @@ export function clearChannelHistoryIfEnabled(params: {
  */
 export const clearHistoryEntriesIfEnabled = clearChannelHistoryIfEnabled;
 
-/** Builds prompt text from already-recorded history entries. */
 export function buildHistoryContextFromEntries(params: {
   entries: HistoryEntry[];
   currentMessage: string;

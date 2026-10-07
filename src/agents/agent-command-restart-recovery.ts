@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
+import { hasMainSessionRecoveryClaim } from "../config/sessions/restart-recovery-state.js";
 import type {
   HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidenceResult,
@@ -306,23 +307,15 @@ export function shouldPersistRestartRecoveryContextClaim(
   if (!current) {
     return allowCreate;
   }
-  if (!shouldPersistCurrentRunSessionCleanup(current, sessionId)) {
+  if (
+    current.sessionId !== sessionId ||
+    (current.abortedLastRun === true && hasMainSessionRecoveryClaim(current))
+  ) {
     return false;
   }
   return (
     current.restartRecoveryDeliveryRunId === undefined ||
     current.restartRecoveryDeliveryRunId === runId
-  );
-}
-
-export function shouldPersistRestartRecoveryCleanup(
-  current: SessionEntry | undefined,
-  sessionId: string,
-  runId: string,
-): boolean {
-  return (
-    shouldPersistCurrentRunSessionCleanup(current, sessionId) &&
-    current?.restartRecoveryDeliveryRunId === runId
   );
 }
 
@@ -375,8 +368,6 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
       restartRecoveryForceSafeTools: entry.restartRecoveryForceSafeTools,
     };
   }
-  const createsTranscriptOnlySourceClaim =
-    params.sourceRunId !== undefined && params.deliveryContext === undefined;
   const createsScopedDeliveryClaim = params.sourceRunId !== undefined;
   if (createsScopedDeliveryClaim && !params.sourceIngress) {
     throw new Error("restart recovery source ownership is required for a new claim");
@@ -396,8 +387,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
       createsScopedDeliveryClaim && params.disableMessageTool === true ? true : undefined,
     restartRecoverySuppressTextDelivery:
       createsScopedDeliveryClaim && params.suppressTextDelivery === true ? true : undefined,
-    restartRecoveryDeliveryRunId:
-      params.deliveryContext || createsTranscriptOnlySourceClaim ? params.runId : undefined,
+    restartRecoveryDeliveryRunId: createsScopedDeliveryClaim ? params.runId : undefined,
     restartRecoveryDeliverySourceRunId: params.sourceRunId,
     restartRecoverySourceIngress: createsScopedDeliveryClaim ? params.sourceIngress : undefined,
     restartRecoverySourceReplyDeliveryMode: params.sourceRunId

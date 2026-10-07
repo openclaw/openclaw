@@ -133,7 +133,6 @@ async function sendTlonOutbound(params: ChannelOutboundContext, kind: "text" | "
           {
             shipUrl: account.url,
             shipName: account.ship,
-            verbose: false,
             getCode: async () => account.code,
             dangerouslyAllowPrivateNetwork: account.dangerouslyAllowPrivateNetwork ?? undefined,
             assertDirectAdapterHandoff,

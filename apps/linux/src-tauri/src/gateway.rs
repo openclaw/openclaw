@@ -176,7 +176,7 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
             .rpc
             .as_ref()
             .and_then(|rpc| rpc.error.as_deref())
-            .unwrap_or("The Gateway RPC probe did not report a healthy connection.");
+            .unwrap_or("The Gateway RPC check did not report a healthy connection.");
         return Err(format!(
             "{service_detail}\n{rpc_detail}\nRun `openclaw gateway status` in a terminal \
              to inspect service access and Gateway credentials, then retry."

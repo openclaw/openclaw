@@ -343,6 +343,18 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                     params.modelOptions.length > 0,
                     hasSelectableModelOptions,
                     params.onModelSetup,
+                    undefined,
+                    undefined,
+                    // Claude Code logs in outside OpenClaw, so name the command. missing-auth also
+                    // covers a disabled plugin or a missing account pin, so the copy stays conditional.
+                    params.modelOptions.some(
+                      (option) =>
+                        option.unavailableReason === "missing-auth" &&
+                        resolveModelRuntimeRoute(option.provider, option.agentRuntimeId) ===
+                          "claudeCli",
+                    )
+                      ? t("chat.modelControls.claudeCliNotReady")
+                      : undefined,
                   )}
                   ${
                     hasOptions || params.accountSection

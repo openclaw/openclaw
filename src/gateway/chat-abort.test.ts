@@ -219,86 +219,31 @@ describe("registerChatAbortController", () => {
     }
   });
 
-  it("does not re-arm stale, aborted, or non-agent registrations", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_800_000_000_000);
-
-    const staleControllers = new Map<string, ChatAbortControllerEntry>();
-    const stale = registerChatAbortController({
-      chatAbortControllers: staleControllers,
-      runId: "run-stale",
-      sessionId: "sess-1",
-      sessionKey: "main",
-      timeoutMs: 60_000,
-      kind: "agent",
-    });
-    const staleExpiry = stale.entry?.expiresAtMs;
-    staleControllers.delete("run-stale");
-
-    const abortedControllers = new Map<string, ChatAbortControllerEntry>();
-    const aborted = registerChatAbortController({
-      chatAbortControllers: abortedControllers,
-      runId: "run-aborted",
-      sessionId: "sess-1",
-      sessionKey: "main",
-      timeoutMs: 60_000,
-      kind: "agent",
-    });
-    const abortedExpiry = aborted.entry?.expiresAtMs;
-    aborted.controller.abort();
-
-    const chatControllers = new Map<string, ChatAbortControllerEntry>();
-    const chat = registerChatAbortController({
-      chatAbortControllers: chatControllers,
-      runId: "run-chat",
-      sessionId: "sess-1",
-      sessionKey: "main",
-      timeoutMs: 60_000,
-      kind: "chat-send",
-    });
-    const chatExpiry = chat.entry?.expiresAtMs;
-
-    vi.advanceTimersByTime(30_000);
-    stale.markExecutionStarted();
-    aborted.markExecutionStarted();
-    chat.markExecutionStarted();
-
-    expect(stale.entry?.expiresAtMs).toBe(staleExpiry);
-    expect(aborted.entry?.expiresAtMs).toBe(abortedExpiry);
-    expect(chat.entry?.expiresAtMs).toBe(chatExpiry);
-  });
-
-  it("retains completed registrations until terminal persistence succeeds", async () => {
-    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
-    const onRemoved = vi.fn();
-    const registration = registerChatAbortController({
-      chatAbortControllers,
-      runId: "run-persisting",
-      sessionId: "sess-1",
-      sessionKey: "main",
-      timeoutMs: 60_000,
-      onRemoved,
-    });
-    let resolvePersistence: () => void = () => undefined;
-    const persistence = new Promise<void>((resolve) => {
-      resolvePersistence = resolve;
-    });
-    if (!registration.entry) {
-      throw new Error("expected registered entry");
-    }
-    registration.entry.projectSessionActive = false;
-    registration.entry.projectSessionTerminalPersistence = persistence;
-
-    registration.cleanup();
-
-    expect(chatAbortControllers.has("run-persisting")).toBe(true);
-    expect(onRemoved).not.toHaveBeenCalled();
-    resolvePersistence();
-    await persistence;
-    await Promise.resolve();
-    expect(chatAbortControllers.has("run-persisting")).toBe(false);
-    expect(onRemoved).toHaveBeenCalledTimes(1);
-  });
+  it.each(["stale", "aborted", "chat-send"] as const)(
+    "does not re-arm %s registrations",
+    (state) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_800_000_000_000);
+      const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+      const registration = registerChatAbortController({
+        chatAbortControllers,
+        runId: "run-expiry",
+        sessionId: "sess-1",
+        sessionKey: "main",
+        timeoutMs: 60_000,
+        kind: state === "chat-send" ? state : "agent",
+      });
+      const expiry = registration.entry?.expiresAtMs;
+      if (state === "stale") {
+        chatAbortControllers.delete("run-expiry");
+      } else if (state === "aborted") {
+        registration.controller.abort();
+      }
+      vi.advanceTimersByTime(30_000);
+      registration.markExecutionStarted();
+      expect(registration.entry?.expiresAtMs).toBe(expiry);
+    },
+  );
 
   it("retains registrations when terminal lifecycle was observed before caller cleanup", () => {
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();

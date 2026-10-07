@@ -576,7 +576,6 @@ class OpenClawShell
   readonly handleNativeToggleSearch = this.shellChrome.handleNativeToggleSearch;
   readonly handleNativeNewSession = this.shellChrome.handleNativeNewSession;
   readonly handleNativeNavigate = this.shellChrome.handleNativeNavigate;
-  readonly handleNativeHistoryState = this.shellChrome.handleNativeHistoryState;
   readonly handleWindowResize = this.shellChrome.handleWindowResize;
   readonly handleDocumentKeydown = this.shellChrome.handleDocumentKeydown;
   get pendingDebugOverlayMode() {

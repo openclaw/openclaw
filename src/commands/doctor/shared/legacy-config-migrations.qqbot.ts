@@ -1,4 +1,8 @@
 // One-time QQBot migrations for the Tencent 2.0 external plugin boundary.
+import {
+  normalizeUniqueStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 import {
   listQQBotConfigEntries,
@@ -27,33 +31,25 @@ function hasQQBotEntryMatching(
 }
 
 function normalizeIds(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return [
-    ...new Set(
-      value
-        .filter((item): item is string | number => ["string", "number"].includes(typeof item))
-        .map((item) => String(item).trim())
-        .filter(Boolean),
-    ),
-  ];
+  return normalizeUniqueStringEntries(
+    Array.isArray(value)
+      ? value.filter((item) => typeof item === "string" || typeof item === "number")
+      : [],
+  );
 }
 
 function normalizeLegacyAllowFrom(value: unknown): string[] {
-  return [
-    ...new Set(
-      normalizeIds(value).map((id) => {
-        const unprefixed = id.replace(/^qqbot:/i, "");
-        if (unprefixed === "*" || unprefixed === APPROVALS_DISABLED_SENTINEL) {
-          return unprefixed;
-        }
-        // The bundled plugin compared QQ OpenIDs case-insensitively, while Tencent
-        // 2.0 expects its canonical uppercase form for runtime allowlist checks.
-        return unprefixed.toUpperCase();
-      }),
-    ),
-  ];
+  return uniqueStrings(
+    normalizeIds(value).map((id) => {
+      const unprefixed = id.replace(/^qqbot:/i, "");
+      if (unprefixed === "*" || unprefixed === APPROVALS_DISABLED_SENTINEL) {
+        return unprefixed;
+      }
+      // The bundled plugin compared QQ OpenIDs case-insensitively, while Tencent
+      // 2.0 expects its canonical uppercase form for runtime allowlist checks.
+      return unprefixed.toUpperCase();
+    }),
+  );
 }
 
 function resolveLegacyQQBotCommandsAllowFrom(raw: Record<string, unknown>): string[] | undefined {

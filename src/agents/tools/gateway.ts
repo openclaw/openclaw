@@ -40,6 +40,7 @@ import {
 } from "../../infra/device-identity-async.js";
 import type { DeviceIdentity } from "../../infra/device-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { prepareQuestionGatewayDispatch } from "../harness/host-private-capabilities.js";
 import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
@@ -628,7 +629,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     requireAgentRuntimeIdentity?: boolean;
     signal?: AbortSignal;
     onHelloOk?: CallGatewayOptions["onHelloOk"];
-    dispatchAuthority?: { version: 2; kind: "run" | "source-bound"; assertCurrent: () => void };
+    dispatchAuthority?: Parameters<typeof prepareQuestionGatewayDispatch>[0];
   },
 ) {
   const dispatchAuthority = extra?.dispatchAuthority;
@@ -668,7 +669,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
           timeoutMs: gateway.timeoutMs,
           signal: extra?.signal,
           expectFinal: extra?.expectFinal,
-          assertDispatchCurrent: dispatchAuthority?.assertCurrent,
+          ...prepareQuestionGatewayDispatch(dispatchAuthority, true),
           ...(Array.isArray(extra?.scopes) ? { scopes } : {}),
         },
         runtimeIdentity,
@@ -710,7 +711,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
       asNullableRecord(nodeInvoke.params)?.executionContext !== undefined
         ? [SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY]
         : undefined,
-    assertDispatchCurrent: extra?.dispatchAuthority?.assertCurrent,
+    ...prepareQuestionGatewayDispatch(dispatchAuthority),
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: "agent",
     mode: GATEWAY_CLIENT_MODES.BACKEND,

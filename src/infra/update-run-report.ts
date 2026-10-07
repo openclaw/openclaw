@@ -160,10 +160,10 @@ export function formatUpdateRunRecovery(
   }
   const code = observation.failureFacts?.[0]?.code;
   if (!code) {
-    return "Gateway readiness is pending; recovery probe completed without verified readiness";
+    return "Gateway readiness is pending; recovery check completed without verified readiness";
   }
   return code === "gateway-probe-failed"
-    ? `recovery probe failed (${code})`
+    ? `recovery check failed (${code})`
     : `not serving (${code})`;
 }
 

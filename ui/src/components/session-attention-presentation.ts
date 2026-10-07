@@ -190,7 +190,7 @@ export function renderTeamSessionSlots(
       row.status === "failed" || row.status === "timeout" || (children?.failedChildCount ?? 0) > 0;
   }
   const state =
-    attention && attention.kind !== "none"
+    attention.kind !== "none"
       ? renderSessionAttentionIcon(attention)
       : failed
         ? html`<span

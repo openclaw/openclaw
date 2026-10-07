@@ -91,7 +91,6 @@ function resolveSubagentDenyListForRole(role: SubagentSessionRole): string[] {
   return [...SUBAGENT_TOOL_DENY_ALWAYS];
 }
 
-/** Resolve sub-agent tool policy from stored session capabilities. */
 export function resolveSubagentToolPolicyForSession(
   cfg: OpenClawConfig | undefined,
   sessionKey: string,
@@ -118,7 +117,6 @@ export function resolveSubagentToolPolicyForSession(
   return { allow: mergedAllow, deny };
 }
 
-/** Resolve the tool policy inherited from a parent sub-agent session. */
 export function resolveInheritedToolPolicyForSession(
   cfg: OpenClawConfig | undefined,
   sessionKey: string | undefined | null,
@@ -143,7 +141,6 @@ export function resolveInheritedToolPolicyForSession(
   };
 }
 
-/** Resolve the shared profile, scope, extra, and sandbox policy layers. */
 export function resolveConfiguredToolPolicies(params: {
   cfg: OpenClawConfig;
   agentTools?: AgentToolsConfig;
@@ -320,7 +317,6 @@ function detectImplicitProfileGrants(params: {
     .map(({ section, grants }) => ({ section: `tools.${section}`, grants }));
 }
 
-/** Resolve the layered global, provider, agent, and profile tool policies. */
 export function resolveEffectiveToolPolicy(params: {
   config?: OpenClawConfig;
   sessionKey?: string;

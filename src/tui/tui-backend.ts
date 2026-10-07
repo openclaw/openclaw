@@ -153,6 +153,11 @@ export type TuiSessionCreateOptions = {
   succeedsParent?: boolean;
 };
 
+export type TuiModelCatalogScope = {
+  agentId?: string;
+  sessionKey?: string;
+};
+
 /** Minimal backend interface shared by Gateway and embedded local TUI modes. */
 export type TuiBackend = {
   connection: {
@@ -190,9 +195,9 @@ export type TuiBackend = {
     opts?: { agentId?: string },
   ) => Promise<TuiSessionMutationResult>;
   getGatewayStatus: () => Promise<unknown>;
-  listModels: (opts?: { agentId?: string }) => Promise<TuiModelChoice[]>;
-  getKnownModels?: (opts?: { agentId?: string }) => TuiModelChoice[] | undefined;
-  onModelsChanged?: (agentId?: string) => void;
+  listModels: (opts?: TuiModelCatalogScope) => Promise<TuiModelChoice[]>;
+  getKnownModels?: (opts?: TuiModelCatalogScope) => TuiModelChoice[] | undefined;
+  onModelsChanged?: (scope: TuiModelCatalogScope) => void;
   listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
   listPluginApprovals?: () => Promise<unknown>;
   resolvePluginApproval?: (id: string, decision: TuiApprovalDecision) => Promise<{ ok?: boolean }>;

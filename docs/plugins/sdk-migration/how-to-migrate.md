@@ -95,6 +95,75 @@ unscoped calls warn once per method. Core and bundled callers use the awaited
 methods. This migration changes no RPC schema, stored data, retention, or update
 behavior.
 
+## Await reply tool authority
+
+Harness attempt parameters from `openclaw/plugin-sdk/agent-harness-runtime`
+expose an optional `replyOperation`. Await its `bindToolAuthoritySnapshotAsync`,
+`projectToolAuthorityFingerprintAsync`, and `bindToolAuthorityRouteAsync` methods.
+They preserve the existing inputs and resolve to `void`, `string | undefined`,
+and `string`, respectively. Preparation checks current session policy and then
+revalidates the original operation and concrete backend route.
+
+Tool-authority snapshot providers can implement optional `fingerprintAsync` and
+`projectAsync` companions while keeping their released synchronous methods.
+Legacy two-method snapshot objects remain accepted. Do not use an earlier hash
+as permission after an await: each action needs fresh preparation and current
+owner authority.
+
+V2 injection backends can add `queueMessageAsync`. It keeps the existing arguments,
+replacing the synchronous assertion argument with
+`{ prepareCurrent(): Promise<void>; assertCurrent(): void; compatAssertCurrent(): void }`.
+Preparation alone does not authorize input after its reader has closed. When
+delegating to built-in steering, forward the supplied preparation functions
+unchanged so the host can bind final reads and enqueue to one admission. Native
+transports can use `withPreparedCurrent` below. A sink without that consuming
+boundary retains the synchronous `compatAssertCurrent()` check immediately
+before its effect, outside worker grants. The host selects the awaited companion
+when supplied; released external V2 implementations remain supported.
+
+Legacy V1 backends still accept run-owned input without a separate caller-lifetime
+binding. Worker policy preparation alone does not create that binding. Input
+bound to a caller, operator, or source still requires V2; the host checks current
+owner and policy authority before invoking an unbound legacy backend.
+
+Native harness backends that await session-lineage admission can use the optional
+`NativeSessionBindingAuthority.withPreparedCurrent(consume, preparations)` companion.
+For worker-prepared policies, it reads tool policy and lineage together through
+the existing session reader, then invokes the synchronous `consume` callback
+while that admission is current.
+Use `withCurrent` for effects without tool-policy preparation; its signature is
+unchanged. Unknown or partly supported preparation providers retain full
+synchronous policy, target, and lineage checks outside worker grants, with no
+await before consumption. An optional per-item
+`onRefused(error)` callback may return `"discarded"` only after rejecting that item;
+otherwise the entire admission fails. A late compatibility refusal rejects the
+entire undispatched batch, without repeating native checks or settlement callbacks.
+
+Pending-question sinks can implement `claimPendingUserInputAnswerAsync` and
+`cancelPendingUserInputAsync`, taking the same preparation object as the queue
+companion. Pass it as `authority.toolAuthorityPreparation` to the shared question
+functions, alongside your current backend assertion. The question owner composes
+fresh policy reads with its final resolve or cancel boundary. Legacy sinks retain
+their full synchronous `compatAssertCurrent` assertion; an earlier snapshot never
+substitutes for current policy.
+
+Custom question dispatchers retain `version: 2`. When source-bound authority
+provides `assertCurrentAsync`, await it after transport preparation, then invoke
+`assertCurrent` immediately before I/O. Older implementations that only invoke
+`assertCurrent` retain the released fresh native check. A failed awaited check
+must not trigger a synchronous fallback or replay a possibly accepted input.
+Run-owned legacy callbacks keep a fresh native policy assertion immediately before
+dispatch because their unscoped contract exposes no awaited effect boundary.
+
+Queue-only target eligibility stays with ordinary enqueue admission; it does not add database
+reads to question callbacks. Built-in ordinary steering installs input inside
+its final admission and notifies subscribers after releasing that admission.
+
+The synchronous fingerprint, projection, binding, and injection methods are deprecated under
+`reply-tool-authority-sync-preparation`, with removal gated on the next Plugin
+SDK major and explicit breaking-release approval. No runtime warning, schema
+change, retention change, or update migration is introduced.
+
 ## Await session upstream links
 
 Use `upsertSessionUpstreamLinkAsync` and `deleteSessionUpstreamLinkAsync` from
@@ -121,6 +190,26 @@ the next Plugin SDK major and explicit breaking-release approval. Their
 deprecation is recorded in TypeScript and the compatibility registry without
 runtime warnings. This migration changes no schema, stored data, retention, or
 update behavior.
+
+## Await locked transcript preparation
+
+Inside `withSessionTranscriptWriteLock`, use
+`prepareMessageAfterIdempotencyCheckAsync` when message preparation needs to await
+work. Returning `undefined` suppresses a fresh append. Duplicate messages and
+accepted pending inputs retain their original preparation decision. The existing
+`prepareMessageAfterIdempotencyCheck` callback remains synchronous inside the
+transaction until the next Plugin SDK major.
+
+Await each append to consume its result. The lock also joins accepted operations
+in call order before releasing the writer, including when its callback fails or
+returns without awaiting an append. Retained context methods reject new calls
+after the callback finishes. Keep current authority checks in
+`beforeFreshMessageCommit`.
+
+Bundled adapters use `composeSessionTranscriptWriteAssertion` to preserve prepared
+owner checks through wrappers. Pass existing assertions as sources; a custom
+check may inspect only owned in-memory state. Unprepared callbacks retain their
+native transaction ordering.
 
 ## Await session transcript persistence
 

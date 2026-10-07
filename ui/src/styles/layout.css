@@ -1,9 +1,5 @@
 @import "./session-menu.css";
 
-/* ===========================================
-   Shell Layout
-   =========================================== */
-
 .shell {
   /* One fixed canvas shared by routes; panels keep their own reading surfaces. */
   background-color: var(--bg-content, var(--bg));
@@ -275,10 +271,7 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   padding-top: 0;
 }
 
-/* ===========================================
-   Settings Takeover
-   ===========================================
-   Settings routes replace the app chrome with a dedicated sidebar
+/* Settings routes replace the app chrome with a dedicated sidebar
    (settings-sidebar.ts). Below the drawer breakpoint the regular mobile
    shell stays in charge and the settings sidebar rides inside the drawer. */
 
@@ -870,11 +863,7 @@ openclaw-settings-save-indicator:empty {
   white-space: nowrap;
 }
 
-.topbar .nav-collapse-toggle__icon {
-  width: 20px;
-  height: 20px;
-}
-
+.topbar .nav-collapse-toggle__icon,
 .topbar .nav-collapse-toggle__icon svg {
   width: 20px;
   height: 20px;
@@ -1707,9 +1696,6 @@ openclaw-settings-save-indicator:empty {
     pointer-events: auto;
   }
 }
-
-/* Agent scope chip: a borderless select in the Sessions group header, sized
-   as metadata rather than a form control. */
 
 .sidebar-recent-sessions__label-text,
 .sidebar-session-catalog-host__label {
@@ -2645,7 +2631,6 @@ wa-dropdown-item.sidebar-customize-menu__item {
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
-/* More-menu row for the route the app is currently on. */
 .sidebar-customize-menu__item--active {
   color: var(--text-strong);
   background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
@@ -3218,7 +3203,6 @@ a:is(
   padding-right: 0;
 }
 
-/* The header identifies the active agent or the whole workspace. */
 .sidebar-brand > openclaw-sidebar-agent-card,
 .sidebar-workspace-header {
   display: flex;
@@ -4265,7 +4249,6 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   height: 16px;
 }
 
-/* Identity-menu strip: build identity left, theme switch right. */
 .sidebar-identity-menu__footer {
   display: flex;
   align-items: center;
