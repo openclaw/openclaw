@@ -214,6 +214,7 @@ describe("context-engine turn outbox", () => {
     const message = { role: "user" as const, content: "next input", timestamp: 2_000 };
     const recorder = createUserTurnTranscriptRecorder({ message, target: async () => undefined });
     const lease = createLease(createEngine(async () => ({ status: "committed" })));
+    await drainPendingContextEngineTurnsBeforeRun({ lease, recorder, sessionTarget: target });
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const writer = runOpenClawAgentWriteAdmission(
@@ -234,13 +235,13 @@ describe("context-engine turn outbox", () => {
     );
     recorder.markRuntimePersistencePending(writer);
     await entered.promise;
-    try {
-      await drainPendingContextEngineTurnsBeforeRun({ lease, recorder, sessionTarget: target });
-      expect(recorder.getAdmissionReceipt()).toBeUndefined();
-    } finally {
-      release.resolve();
-    }
-    await recorder.waitForRuntimePersistence();
+    const concurrent = appendTranscriptMessage(target, {
+      message: { role: "assistant", content: "queued history update" },
+      now: 3_000,
+    });
+    expect(recorder.getAdmissionReceipt()).toBeUndefined();
+    release.resolve();
+    await Promise.all([recorder.waitForRuntimePersistence(), concurrent]);
     expect(recorder.getAdmissionReceipt()).toMatchObject({
       agentId: target.agentId,
       sessionId: target.sessionId,
