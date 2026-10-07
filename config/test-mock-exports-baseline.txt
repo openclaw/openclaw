@@ -5622,7 +5622,6 @@
 ["src/commands/agents.add.test.ts","./auth-choice.apply.js","37a151af68703480f2199b736e9a5461bdb4b7b43530b27d521ab99eda4f82c8",1]
 ["src/commands/agents.add.test.ts","./auth-choice.model-check.js","d6a22fae86514fdd993aa6491fc59787b961839ddc810fd8dd8cf12282a88357",1]
 ["src/commands/agents.add.test.ts","./onboard-helpers.js","3f077576feeb0b976afb8c05497a26646717866602774a1d578eac58013283dd",1]
-["src/commands/agents.bind.commands.test.ts","../agents/agent-scope.js","6f956e6f8afc253b00db397400ff3b27f7a8b7ad8b147cd0a64eeba99c372a7b",1]
 ["src/commands/agents.bind.commands.test.ts","../channels/plugins/bundled.js","1ab050feb9dbd3d0bf61a94175ad817fc0e46e5a3649d5b215c89f6da45c4f1a",1]
 ["src/commands/agents.bind.commands.test.ts","../channels/plugins/index.js","9bbd116f1538d366a46fd6777e064187199f2493785fea1b5b2607aaad42008b",1]
 ["src/commands/agents.bind.commands.test.ts","../config/bindings.js","0ab4e24d0319135158409fdb3c2314a59cf2ac2277b2634b8ca04c7a0c3f170b",1]
