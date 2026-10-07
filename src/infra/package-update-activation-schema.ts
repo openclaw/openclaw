@@ -89,12 +89,6 @@ export type PackageActivationPhase = z.infer<typeof PackageActivationPhaseSchema
 export const intentSchema = z
   .union([
     z.strictObject({
-      kind: z.literal("receipt-device-id-changed"),
-      replacementIdentity: packageActivationIdentitySchema,
-      settled: z.literal(true),
-      detail: settlementDetail,
-    }),
-    z.strictObject({
       kind: z.literal("publication-settled-external-change"),
       replacementIdentity: packageActivationIdentitySchema,
       settled: z.boolean(),

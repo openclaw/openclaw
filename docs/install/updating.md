@@ -486,10 +486,12 @@ the same original executor store; it is not authority to mutate an installation.
 
 On Linux, a filesystem remount can change device numbers without moving files.
 Update admission reconciles this change for completed receipts when the recorded
-inodes, installation path, and ownership still match. It records
-`filesystem device id changed` in the retired receipt and allows a fresh update
-without the retired helper or its old lease identity. Active recovery operations
-and replaced files retain their existing identity checks.
+inodes, installation path, and ownership still match. It refreshes verified
+identities while preserving the original journal format and completion intent,
+so older CLI versions can still read the completed receipt. The warning
+`filesystem device id changed; receipt identities refreshed` reports the repair
+without adding a new persisted intent. Active recovery operations and replaced
+files retain their existing identity checks.
 
 Missing, legacy or identity-mismatched recovery artifacts block the next mutable
 update. They are not silently migrated or deleted. Preserve them and use their

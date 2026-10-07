@@ -4,10 +4,12 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   openPackageActivationJournal,
+  packageActivationIdentity,
   resolvePackageActivationHelper,
   resolvePackageActivationJournalPath,
 } from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
+import { intentSchema } from "./package-update-activation-schema.js";
 import {
   assertNoPendingPackageActivation,
   readPackageActivationReceipt,
@@ -53,6 +55,9 @@ describe.skipIf(process.platform === "win32")("completed package receipt remount
         await runPackageActivationRecovery(first.anchor, "retire", first.operationId);
       }
       const record = openPackageActivationJournal(first.anchor).read();
+      if (scenario === "settled" && record.intent && "replacementIdentity" in record.intent) {
+        record.intent = { ...record.intent, detail: "original manual installation receipt" };
+      }
       const historical = (value: unknown) =>
         JSON.stringify(value, (_key, entry: unknown) => {
           if (typeof entry !== "string" || !/^\d+:\d+$/u.test(entry)) {
@@ -70,6 +75,15 @@ describe.skipIf(process.platform === "win32")("completed package receipt remount
         record.descriptor.authority.installKey = `${first.packageRoot}-other`;
       }
       const journalPath = resolvePackageActivationJournalPath(first.anchor);
+      const readPersistedIntent = () => {
+        const database = new DatabaseSync(journalPath, { readOnly: true });
+        try {
+          const row = database.prepare("SELECT intent_json FROM package_activation").get();
+          return intentSchema.parse(JSON.parse(String(row?.intent_json)));
+        } finally {
+          database.close();
+        }
+      };
       const remount = (current: typeof record) => {
         const database = new DatabaseSync(journalPath);
         try {
@@ -94,12 +108,20 @@ describe.skipIf(process.platform === "win32")("completed package receipt remount
           return;
         }
         for (let reboot = 0; reboot < 2; reboot++) {
+          const originalIntent = readPersistedIntent();
           expect(() => assertNoPendingPackageActivation(first.packageRoot)).not.toThrow();
           const settled = openPackageActivationJournal(first.anchor).read();
           expect(settled).toMatchObject({
             phase: scenario === "settled" ? "superseded" : "anchor-retired",
-            intent: { settled: true, detail: "filesystem device id changed" },
           });
+          expect(readPersistedIntent()).toEqual(
+            originalIntent && "replacementIdentity" in originalIntent
+              ? {
+                  ...originalIntent,
+                  replacementIdentity: packageActivationIdentity(first.packageRoot, true),
+                }
+              : originalIntent,
+          );
           expect(readPackageActivationReceipt(first.packageRoot)).toMatchObject({
             phase: "complete",
           });

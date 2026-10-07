@@ -169,8 +169,7 @@ export function readPackageActivationReceipt(installKey: string):
   if (
     receipt.phase !== "complete" ||
     (record.intent?.kind !== "recovery-lease-identity-changed" &&
-      record.intent?.kind !== "recovery-lease-missing" &&
-      record.intent?.kind !== "receipt-device-id-changed")
+      record.intent?.kind !== "recovery-lease-missing")
   ) {
     assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
   }
@@ -194,10 +193,7 @@ export async function settlePendingPackageActivation(installKey: string) {
       ? {
           operationId: initial.descriptor.operationId,
           reason: initial.intent.kind,
-          retained:
-            initial.phase === "superseded"
-              ? `${anchor}.superseded-${initial.descriptor.operationId}`
-              : undefined,
+          retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
           detail: initial.intent.detail,
         }
       : undefined;

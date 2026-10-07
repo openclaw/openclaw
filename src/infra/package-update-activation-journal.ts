@@ -5,6 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { sql } from "kysely";
 import { z } from "zod";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
@@ -12,7 +13,6 @@ import {
   assertPackageActivationLayout,
   isPackageActivationComplete,
   packageActivationIdentity,
-  reconcileCompletedPackageActivationRecord,
   privatePackageActivationIdentity as assertPrivate,
   resolvePackageActivationAnchor,
   resolvePackageActivationControl,
@@ -35,6 +35,7 @@ import {
   type ExistingSqliteTransaction,
 } from "./sqlite-existing-database.js";
 import { prepareSqliteRollbackRecovery } from "./sqlite-rollback-recovery.js";
+import { captureManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-database.js";
 export {
   assertPackageActivationLayout,
   isPackageActivationComplete,
@@ -55,6 +56,7 @@ export { encodePackageActivationLauncher } from "./package-update-activation-lau
 export { assertPackageActivationOperation } from "./package-update-activation-status.js";
 
 const PACKAGE_ACTIVATION_JOURNAL = "operation.sqlite";
+const log = createSubsystemLogger("update/package-activation");
 const MAX_PACKAGE_ACTIVATION_DESCRIPTOR_BYTES = 1024 * 1024;
 type ActivationRow = {
   slot: number;
@@ -73,6 +75,106 @@ function descriptorJson(descriptor: PackageActivationDescriptor): string {
     throw new Error("Package publication descriptor exceeds 1 MiB");
   }
   return encoded;
+}
+
+/** Reconcile historical completion facts only; never authorize a filesystem effect. */
+function reconcileCompletedPackageActivationRecord(
+  anchor: string,
+  record: PackageActivationRecord,
+): PackageActivationRecord {
+  const refuse = () => {
+    throw new Error("Package publication journal does not match its installation");
+  };
+  if (process.platform !== "linux" || !["anchor-retired", "superseded"].includes(record.phase)) {
+    return refuse();
+  }
+  const sameInode = (expected: string, current: string) => {
+    if (expected.split(":")[1] !== current.split(":")[1]) {
+      refuse();
+    }
+    return current;
+  };
+  const live = record.descriptor.authority.installKey;
+  const control = resolvePackageActivationControl(anchor);
+  const journal = resolvePackageActivationJournalPath(anchor);
+  if (
+    [live, path.dirname(anchor), control, journal].some((file) => fs.realpathSync(file) !== file)
+  ) {
+    return refuse();
+  }
+  const descriptor = {
+    ...record.descriptor,
+    parentIdentity: sameInode(
+      record.descriptor.parentIdentity,
+      packageActivationIdentity(path.dirname(anchor), "parent"),
+    ),
+    journalParentIdentity: sameInode(
+      record.descriptor.journalParentIdentity,
+      assertPrivate(control, "control"),
+    ),
+    journalIdentity: sameInode(
+      record.descriptor.journalIdentity,
+      assertPrivate(journal, "journal"),
+    ),
+  };
+  if (record.phase === "superseded") {
+    const retained = `${anchor}.superseded-${descriptor.operationId}`;
+    descriptor.anchorIdentity = sameInode(
+      descriptor.anchorIdentity,
+      packageActivationIdentity(retained, true),
+    );
+    descriptor.helperIdentity = sameInode(
+      descriptor.helperIdentity,
+      packageActivationIdentity(path.join(retained, "recovery.mjs"), false),
+    );
+    descriptor.preparation = descriptor.preparation.map((entry) =>
+      entry.name === "anchor" || entry.name === "helper"
+        ? {
+            ...entry,
+            identity:
+              entry.name === "anchor" ? descriptor.anchorIdentity : descriptor.helperIdentity,
+          }
+        : entry,
+    );
+  }
+  // First prove the original final intent and retired artifacts; a phase label alone is insufficient.
+  if (!isPackageActivationComplete(anchor, { ...record, descriptor })) {
+    return refuse();
+  }
+  const expected =
+    record.intent?.kind === "unlink-helper"
+      ? descriptor[record.intent.selected].identity
+      : record.intent && "replacementIdentity" in record.intent
+        ? record.intent.replacementIdentity
+        : undefined;
+  if (!expected) {
+    return refuse();
+  }
+  const replacementIdentity = sameInode(expected, packageActivationIdentity(live, true));
+  const authority = descriptor.authority;
+  if (
+    record.intent?.kind !== "recovery-lease-identity-changed" &&
+    record.intent?.kind !== "recovery-lease-missing" &&
+    fs.lstatSync(authority.databasePath, { throwIfNoEntry: false })
+  ) {
+    const current = captureManagedUpdateLeaseDatabaseIdentity(authority.databasePath);
+    if (current.databasePath !== authority.databasePath) {
+      return refuse();
+    }
+    descriptor.authority = {
+      ...authority,
+      databaseIdentity: sameInode(authority.databaseIdentity, current.databaseIdentity),
+      parentIdentity: sameInode(authority.parentIdentity, current.parentIdentity),
+    };
+  }
+  return {
+    ...record,
+    descriptor,
+    intent:
+      record.intent && "replacementIdentity" in record.intent
+        ? { ...record.intent, replacementIdentity }
+        : record.intent,
+  };
 }
 
 /** An existing operation is never bootstrapped, migrated, or repaired on open. */
@@ -290,7 +392,7 @@ export function openPackageActivationJournal(anchor: string) {
         assertFiles();
         assertRecord(reconciled, reconcileCompletedPackageActivationRecord(anchor, initial));
       };
-      return transition(
+      const refreshed = transition(
         initial,
         reconciled.phase,
         reconciled.intent,
@@ -299,6 +401,8 @@ export function openPackageActivationJournal(anchor: string) {
         reconciled.descriptor,
         installKey,
       );
+      log.warn("filesystem device id changed; receipt identities refreshed");
+      return refreshed;
     },
     recordPreviousCopy(
       expected: PackageActivationRecord,
@@ -359,7 +463,6 @@ export function openPackageActivationJournal(anchor: string) {
               previous.descriptor.authority.databasePath !== descriptor.authority.databasePath ||
               (previous.intent?.kind !== "recovery-lease-identity-changed" &&
                 previous.intent?.kind !== "recovery-lease-missing" &&
-                previous.intent?.kind !== "receipt-device-id-changed" &&
                 (previous.descriptor.authority.databaseIdentity !==
                   descriptor.authority.databaseIdentity ||
                   previous.descriptor.authority.parentIdentity !==
