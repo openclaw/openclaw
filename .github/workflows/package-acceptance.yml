@@ -98,7 +98,7 @@ on:
         default: package-acceptance
         type: string
       suite_profile:
-        description: "Acceptance profile: smoke, package, telegram, product, full, or custom"
+        description: "Acceptance profile: smoke, package, telegram, product, full, custom, or native-cleanup"
         required: true
         default: package
         type: choice
@@ -109,6 +109,7 @@ on:
           - product
           - full
           - custom
+          - native-cleanup
       docker_lanes:
         description: Comma/space separated Docker lanes when suite_profile=custom
         required: false
@@ -252,7 +253,7 @@ on:
         default: ""
         type: string
       suite_profile:
-        description: "Acceptance profile: smoke, package, telegram, product, full, or custom"
+        description: "Acceptance profile: smoke, package, telegram, product, full, custom, or native-cleanup"
         required: false
         default: package
         type: string
@@ -1320,10 +1321,20 @@ jobs:
           set -euo pipefail
           node scripts/check-openclaw-installed-package-budget.mts "$RUNNER_TEMP/openclaw-npm12-prefix/lib/node_modules/openclaw"
 
+      - name: Verify retained runtime cleanup on the native host
+        if: inputs.suite_profile == 'native-cleanup'
+        env:
+          EXPECTED_PACKAGE_SOURCE_SHA: ${{ needs.resolve_package.outputs.package_source_sha }}
+          EXPECTED_PACKAGE_VERSION: ${{ needs.resolve_package.outputs.package_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/e2e/retained-runtime-cleanup-native.sh "$RUNNER_TEMP/openclaw-npm12-prefix"
+
   docker_acceptance:
     name: Docker product acceptance (artifact-only)
     needs: [resolve_package, package_integrity]
-    if: inputs.suite_profile != 'telegram' && inputs.shared_image_policy == 'no-push-artifact'
+    if: inputs.suite_profile != 'telegram' && inputs.suite_profile != 'native-cleanup' && inputs.shared_image_policy == 'no-push-artifact'
     permissions:
       actions: read
       contents: read
@@ -1420,7 +1431,7 @@ jobs:
   docker_acceptance_registry:
     name: Docker product acceptance (existing registry images)
     needs: [resolve_package, package_integrity]
-    if: inputs.suite_profile != 'telegram' && inputs.shared_image_policy == 'existing-only'
+    if: inputs.suite_profile != 'telegram' && inputs.suite_profile != 'native-cleanup' && inputs.shared_image_policy == 'existing-only'
     permissions:
       actions: read
       contents: read
@@ -1495,7 +1506,21 @@ jobs:
           if [[ "$docker_result" == "skipped" ]]; then
             docker_result="$DOCKER_REGISTRY_RESULT"
           fi
-          if [[ "$SUITE_PROFILE" == "telegram" ]]; then
+          if [[ "$SUITE_PROFILE" == "native-cleanup" ]]; then
+            if [[ "$RESOLVE_RESULT" != "success" ||
+                  "$PACKAGE_INTEGRITY_RESULT" != "success" ||
+                  "$NPM_12_INSTALL_RESULT" != "success" ]]; then
+              echo "::error::Native cleanup requires successful resolution, package integrity, and npm 12 acceptance."
+              exit 1
+            fi
+            if [[ "$DOCKER_ARTIFACT_RESULT" != "skipped" ||
+                  "$DOCKER_REGISTRY_RESULT" != "skipped" ||
+                  "$PACKAGE_TELEGRAM_RESULT" != "skipped" ||
+                  "$TELEGRAM_ENABLED" != "false" ]]; then
+              echo "::error::Native cleanup requires Docker and Telegram acceptance to remain disabled."
+              exit 1
+            fi
+          elif [[ "$SUITE_PROFILE" == "telegram" ]]; then
             if [[ "$NPM_12_INSTALL_RESULT" != "skipped" ]]; then
               echo "::error::npm_12_install_sh ran for suite_profile=telegram; expected skipped."
               exit 1

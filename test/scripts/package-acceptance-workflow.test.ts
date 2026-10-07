@@ -734,11 +734,16 @@ function packageToolingCheckoutFixture() {
           }),
       );
     if (identity) {
-      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", identity.run ?? ""], {
-        cwd: beforeCheckout,
-        encoding: "utf8",
-        env: { ...env, GITHUB_OUTPUT: identityOutput },
-      });
+      const result = spawnSync(
+        process.platform === "darwin" ? "/bin/bash" : "bash",
+        ["--noprofile", "--norc", "-c", identity.run ?? ""],
+        {
+          cwd: beforeCheckout,
+          encoding: "utf8",
+          timeout: 30_000,
+          env: { ...env, GITHUB_OUTPUT: identityOutput },
+        },
+      );
       if (result.status !== 0) {
         return {
           result,
@@ -764,11 +769,12 @@ function packageToolingCheckoutFixture() {
     git("checkout", "-q", "--detach", options.wrongCheckout ? advancedSha : selectedRef);
     const sha = git("rev-parse", "HEAD");
     const result = spawnSync(
-      "bash",
+      process.platform === "darwin" ? "/bin/bash" : "bash",
       ["--noprofile", "--norc", "-c", `${validate.run}\nprintf 'installation-reachable\\n'`],
       {
         cwd: repository,
         encoding: "utf8",
+        timeout: 30_000,
         env: {
           ...env,
           EXPECTED_TOOLING_SHA: identityOutputs.sha ?? "",
@@ -3791,6 +3797,8 @@ function runPackageAcceptanceSummary(params: {
   dockerArtifactResult?: string;
   dockerRegistryResult?: string;
   npm12InstallResult?: string;
+  integrityResult?: string;
+  resolveResult?: string;
   suiteProfile?: string;
   telegramEnabled: boolean;
   telegramResult: string;
@@ -3805,11 +3813,11 @@ function runPackageAcceptanceSummary(params: {
     env: {
       DOCKER_ARTIFACT_RESULT: params.dockerArtifactResult ?? "success",
       DOCKER_REGISTRY_RESULT: params.dockerRegistryResult ?? "skipped",
-      PACKAGE_INTEGRITY_RESULT: "success",
+      PACKAGE_INTEGRITY_RESULT: params.integrityResult ?? "success",
       NPM_12_INSTALL_RESULT: params.npm12InstallResult ?? "success",
       PACKAGE_TELEGRAM_RESULT: params.telegramResult,
       PATH: process.env.PATH,
-      RESOLVE_RESULT: "success",
+      RESOLVE_RESULT: params.resolveResult ?? "success",
       SUITE_PROFILE: params.suiteProfile ?? "package",
       TELEGRAM_ENABLED: String(params.telegramEnabled),
     },
@@ -3830,22 +3838,26 @@ function runPackageAcceptanceProfile(params: {
   const workdir = tempDirs.make("package-acceptance-profile-");
   const fixture = frozenToolingFixture(workdir, []);
   const outputPath = resolve(workdir, "github-output");
-  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
-    cwd: fixture.tooling,
-    encoding: "utf8",
-    env: {
-      ADMISSION_TOOLING_ROOT: fixture.tooling,
-      ADMISSION_TOOLING_SHA: fixture.toolingSha,
-      CUSTOM_DOCKER_LANES: params.dockerLanes ?? "",
-      GITHUB_OUTPUT: outputPath,
-      PACKAGE_ARTIFACT_NAME: "package-under-test",
-      PATH: process.env.PATH,
-      SOURCE: "ref",
-      SUITE_PROFILE: params.suiteProfile,
-      TELEGRAM_MODE: params.telegramMode ?? "none",
-      TELEGRAM_SCENARIOS: params.telegramScenarios ?? "",
+  const result = spawnSync(
+    process.platform === "darwin" ? "/bin/bash" : "bash",
+    ["--noprofile", "--norc", "-c", script],
+    {
+      cwd: fixture.tooling,
+      encoding: "utf8",
+      env: {
+        ADMISSION_TOOLING_ROOT: fixture.tooling,
+        ADMISSION_TOOLING_SHA: fixture.toolingSha,
+        CUSTOM_DOCKER_LANES: params.dockerLanes ?? "",
+        GITHUB_OUTPUT: outputPath,
+        PACKAGE_ARTIFACT_NAME: "package-under-test",
+        PATH: process.env.PATH,
+        SOURCE: "ref",
+        SUITE_PROFILE: params.suiteProfile,
+        TELEGRAM_MODE: params.telegramMode ?? "none",
+        TELEGRAM_SCENARIOS: params.telegramScenarios ?? "",
+      },
     },
-  });
+  );
   const outputs =
     result.status === 0
       ? Object.fromEntries(
@@ -8430,6 +8442,48 @@ test "$package_manager" = "pnpm@12.1.0"
     );
   });
 
+  it("runs native cleanup only after installing and checking the resolved package", () => {
+    const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh");
+    const budget = workflowStep(job, "Check installed package tree budget");
+    const cleanup = workflowStep(job, "Verify retained runtime cleanup on the native host");
+    const steps = job.steps ?? [];
+    expect(steps.indexOf(cleanup)).toBe(steps.indexOf(budget) + 1);
+    expect(cleanup.env).toEqual({
+      EXPECTED_PACKAGE_SOURCE_SHA: "${{ needs.resolve_package.outputs.package_source_sha }}",
+      EXPECTED_PACKAGE_VERSION: "${{ needs.resolve_package.outputs.package_version }}",
+    });
+    expect(cleanup.run).toContain(
+      'bash scripts/e2e/retained-runtime-cleanup-native.sh "$RUNNER_TEMP/openclaw-npm12-prefix"',
+    );
+    const profiles = readWorkflow(PACKAGE_ACCEPTANCE_WORKFLOW).on?.workflow_dispatch?.inputs
+      ?.suite_profile?.options;
+    for (const profile of profiles ?? []) {
+      expect(runInNewContext(cleanup.if ?? "false", { inputs: { suite_profile: profile } })).toBe(
+        profile === "native-cleanup",
+      );
+    }
+    for (const policy of ["no-push-artifact", "existing-only"]) {
+      const context = { inputs: { suite_profile: "native-cleanup", shared_image_policy: policy } };
+      expect(runInNewContext(job.if ?? "false", context)).toBe(true);
+      for (const transport of ["docker_acceptance", "docker_acceptance_registry"]) {
+        expect(
+          runInNewContext(
+            workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, transport).if ?? "true",
+            context,
+          ),
+        ).toBe(false);
+      }
+    }
+    const profile = runPackageAcceptanceProfile({ suiteProfile: "native-cleanup" });
+    expect(profile.result.status, profile.result.stderr).toBe(0);
+    expect(profile.outputs).toMatchObject({
+      docker_lanes: "",
+      include_live_suites: "false",
+      include_release_path_suites: "false",
+      telegram_enabled: "false",
+    });
+  });
+
   it("binds npm 12 installation to the supplied prerelease dependency artifact", () => {
     const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh");
     const validate = workflowStep(job, "Validate prerelease plugin registry artifact identity");
@@ -8498,8 +8552,9 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(workflow).toContain("suite_profile:");
     expect(parsedWorkflow.on?.workflow_dispatch?.inputs?.suite_profile).toMatchObject({
       default: "package",
-      description: "Acceptance profile: smoke, package, telegram, product, full, or custom",
-      options: ["smoke", "package", "telegram", "product", "full", "custom"],
+      description:
+        "Acceptance profile: smoke, package, telegram, product, full, custom, or native-cleanup",
+      options: ["smoke", "package", "telegram", "product", "full", "custom", "native-cleanup"],
     });
     const dispatchInputs = parsedWorkflow.on?.workflow_dispatch?.inputs;
     const callInputs = parsedWorkflow.on?.workflow_call?.inputs;
@@ -8511,7 +8566,8 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(parsedWorkflow.on?.workflow_dispatch?.inputs?.telegram_advisory).toBeUndefined();
     expect(parsedWorkflow.on?.workflow_call?.inputs?.suite_profile).toMatchObject({
       default: "package",
-      description: "Acceptance profile: smoke, package, telegram, product, full, or custom",
+      description:
+        "Acceptance profile: smoke, package, telegram, product, full, custom, or native-cleanup",
     });
     expect(workflow).toContain("published_upgrade_survivor_baseline:");
     expect(workflow).toContain("published_upgrade_survivor_baselines:");
@@ -8660,10 +8716,10 @@ test "$package_manager" = "pnpm@12.1.0"
     );
     expect(npm12Install.if).toBe("inputs.suite_profile != 'telegram'");
     expect(dockerAcceptance.if).toBe(
-      "inputs.suite_profile != 'telegram' && inputs.shared_image_policy == 'no-push-artifact'",
+      "inputs.suite_profile != 'telegram' && inputs.suite_profile != 'native-cleanup' && inputs.shared_image_policy == 'no-push-artifact'",
     );
     expect(dockerAcceptanceRegistry.if).toBe(
-      "inputs.suite_profile != 'telegram' && inputs.shared_image_policy == 'existing-only'",
+      "inputs.suite_profile != 'telegram' && inputs.suite_profile != 'native-cleanup' && inputs.shared_image_policy == 'existing-only'",
     );
     expect(parsedWorkflow.permissions).toEqual({
       actions: "read",
@@ -13339,6 +13395,38 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(telegramResult.stdout).toContain("::error::package_telegram ended with failure");
     expect(dockerResult.status).toBe(1);
     expect(dockerResult.stdout).toContain("::error::docker_acceptance ended with failure");
+  });
+
+  it("requires native cleanup prerequisites to succeed and unrelated lanes to skip", () => {
+    const valid = {
+      suiteProfile: "native-cleanup",
+      dockerArtifactResult: "skipped",
+      dockerRegistryResult: "skipped",
+      telegramEnabled: false,
+      telegramResult: "skipped",
+    };
+    expect(runPackageAcceptanceSummary(valid).status).toBe(0);
+    for (const key of ["resolveResult", "integrityResult", "npm12InstallResult"]) {
+      for (const result of ["failure", "cancelled", "skipped"]) {
+        const outcome = runPackageAcceptanceSummary({ ...valid, [key]: result });
+        expect(outcome.status, `${key}=${result}`).toBe(1);
+        expect(outcome.stdout).toContain(
+          "requires successful resolution, package integrity, and npm 12 acceptance",
+        );
+      }
+    }
+    for (const conflict of [
+      { dockerArtifactResult: "success" },
+      { dockerRegistryResult: "success" },
+      { telegramEnabled: true },
+      { telegramResult: "success" },
+    ]) {
+      const outcome = runPackageAcceptanceSummary({ ...valid, ...conflict });
+      expect(outcome.status).toBe(1);
+      expect(outcome.stdout).toContain(
+        "requires Docker and Telegram acceptance to remain disabled",
+      );
+    }
   });
 
   it.each(["failure", "skipped"] as const)(
