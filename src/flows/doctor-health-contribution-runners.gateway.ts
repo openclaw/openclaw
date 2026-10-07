@@ -113,6 +113,15 @@ export async function runWebFetchProxyHealth(ctx: DoctorHealthFlowContext): Prom
   await noteWebFetchProxyDiagnostic({ cfg: ctx.cfg, env: ctx.env ?? process.env });
 }
 
+export async function runEgressConnectivityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (!isDefaultInstallIdentity(ctx.env ?? process.env)) {
+    return;
+  }
+  const { noteEgressConnectivityDiagnostic } =
+    await import("../commands/doctor-egress-connectivity.js");
+  await noteEgressConnectivityDiagnostic({ cfg: ctx.cfg, env: ctx.env ?? process.env });
+}
+
 export async function runGitHubProjectHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { hasConfiguredGitHubApiCredential } = await import("../gateway/github-public-api.js");
   if (!hasConfiguredGitHubApiCredential(ctx.env ?? process.env, ctx.cfg)) {
