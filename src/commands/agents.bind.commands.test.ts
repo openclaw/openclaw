@@ -107,6 +107,30 @@ describe("agents bind/unbind commands", () => {
     expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
 
+  it("matches normalized account identities for conflicts, repeats, and removal", async () => {
+    const config: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
+      bindings: [route("telegram", "Work", "ops")],
+    };
+    setConfig(config);
+    const output = jsonRuntime();
+    await commands.agentsBindCommand(
+      { agent: "main", bind: ["telegram:work"], json: true },
+      output,
+    );
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(output.exit).toHaveBeenCalledWith(1);
+    expect(output.writeJson).toHaveBeenLastCalledWith(
+      expect.objectContaining({ conflicts: ["telegram accountId=work (agent=ops)"] }),
+      2,
+    );
+
+    await commands.agentsBindCommand({ agent: "ops", bind: ["telegram:WORK"] }, runtime);
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    await commands.agentsUnbindCommand({ agent: "ops", bind: ["telegram:work"] }, runtime);
+    expect(writeConfigFileMock).toHaveBeenLastCalledWith({ ...config, bindings: undefined });
+  });
+
   it("binds a mixed batch using one manifest inventory per invocation", async () => {
     await commands.agentsBindCommand(
       { bind: ["telegram", "whatsapp", "signal", "external-chat:work", "external-chat:home"] },
