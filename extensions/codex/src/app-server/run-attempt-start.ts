@@ -168,10 +168,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     }
     if (state.thread.lifecycle.action === "started" || state.thread.lifecycle.action === "forked") {
       const activePolicy = resolveReviewerPolicyContext(state.thread);
-      const activeConfig = await resolveRuntimeOptionsForCurrentBinding({
-        modelProvider: activePolicy.modelProvider,
-        model: activePolicy.model,
-      });
+      const activeConfig = await resolveRuntimeOptionsForCurrentBinding(activePolicy);
       connection.assertCurrent();
       const activeAppServer = resolveCodexAppServerForModelProvider({
         appServer: activeConfig,

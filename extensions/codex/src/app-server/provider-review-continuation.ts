@@ -24,13 +24,12 @@ export async function prepareCodexProviderReviewContinuation(params: {
   if (!acknowledgment) {
     return undefined;
   }
-  let nativeChanged = false;
-  let dispatched = false;
+  let state: "prepared" | "dispatched" | "changed" = "prepared";
   const assertCurrent = () => {
     params.signal.throwIfAborted();
     params.assertCurrent();
     acknowledgment.read();
-    if (nativeChanged) {
+    if (state === "changed") {
       throw new Error("The native provider review changed before dispatch");
     }
   };
@@ -59,7 +58,7 @@ export async function prepareCodexProviderReviewContinuation(params: {
       return;
     }
     if (notification.method === "turn/started") {
-      nativeChanged = true;
+      state = "changed";
     } else if (
       notification.method === "turn/completed" ||
       (notification.method === "error" && event.willRetry !== true)
@@ -82,7 +81,7 @@ export async function prepareCodexProviderReviewContinuation(params: {
         failure?.category !== "misalignment" ||
         (error?.misalignment != null && !isDeepStrictEqual(failure.review, review.review))
       ) {
-        nativeChanged = true;
+        state = "changed";
       }
     }
   });
@@ -128,15 +127,15 @@ export async function prepareCodexProviderReviewContinuation(params: {
       dispose,
       dispatch: () => {
         assertCurrent();
-        if (dispatched) {
+        if (state === "dispatched") {
           throw new Error("Provider review continuation already dispatched");
         }
-        dispatched = true;
+        state = "dispatched";
         dispose();
       },
       accept: async (turnId: string) => {
         assertCurrent();
-        if (!dispatched) {
+        if (state !== "dispatched") {
           throw new Error("Provider review continuation has not dispatched");
         }
         await acknowledgment.acceptNativeTurn({

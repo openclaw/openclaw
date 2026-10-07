@@ -1,12 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  createCodexPluginThreadConfigStartupProvider,
-  resolveCodexPluginThreadConfigStartupPolicy,
-} from "./plugin-thread-config-deadline.js";
+import { resolveCodexPluginThreadConfigStartupPolicy } from "./plugin-thread-config-deadline.js";
 import {
   buildPluginAppPolicyContext,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
+import { preparePluginThreadConfigForTest } from "./plugin-thread-config.test-helpers.js";
 import {
   buildLegacyScheduledCodexAppRecoveryPrompt,
   buildScheduledCodexAppAuthorityInputFingerprint,
@@ -921,15 +919,14 @@ describe("scheduled Codex app authority", () => {
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const provider = createCodexPluginThreadConfigStartupProvider({
-      inputFingerprint: "scheduled-input",
-      enabledPluginConfigKeys: [],
-      policy: undefined,
+    const provider = preparePluginThreadConfigForTest(
+      {},
+      "account-1",
+      authority(),
+    )({
       requestTimeoutMs: 400,
       signal: new AbortController().signal,
-      pluginConfig: {},
       client: { request } as never,
-      appCacheKey: "account-1",
       scheduledRuntimeAuthority: authority(),
     });
     const startedAt = Date.now();
@@ -967,15 +964,14 @@ describe("scheduled Codex app authority", () => {
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const provider = createCodexPluginThreadConfigStartupProvider({
-      inputFingerprint: "scheduled-input",
-      enabledPluginConfigKeys: [],
-      policy: undefined,
+    const provider = preparePluginThreadConfigForTest(
+      {},
+      "account-1",
+      authority(),
+    )({
       requestTimeoutMs: 2_000,
       signal: new AbortController().signal,
-      pluginConfig: {},
       client: { request } as never,
-      appCacheKey: "account-1",
       scheduledRuntimeAuthority: authority(),
     });
 

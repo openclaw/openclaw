@@ -69,6 +69,8 @@ export function readCodexInferenceMetadata(
   ) {
     throw new Error("Codex inference request has no native thread metadata");
   }
+  const readTurnId = (field: string, key: string) =>
+    readId(field, flat?.[key], nested?.[key], compatibility?.[key]);
   return Object.freeze({
     sessionId: readId(
       "session",
@@ -78,7 +80,7 @@ export function readCodexInferenceMetadata(
       httpHeaders?.["session-id"],
     ),
     threadId: readId("thread", flat?.thread_id, nativeThreadId, httpHeaders?.["thread-id"]),
-    turnId: readId("turn", flat?.turn_id, nested?.turn_id, compatibility?.turn_id),
+    turnId: readTurnId("turn", "turn_id"),
     parentThreadId: readId(
       "parent thread",
       flat?.["x-codex-parent-thread-id"],
@@ -86,18 +88,8 @@ export function readCodexInferenceMetadata(
       compatibility?.parent_thread_id,
       httpHeaders?.["x-codex-parent-thread-id"],
     ),
-    parentTurnId: readId(
-      "parent turn",
-      flat?.parent_turn_id,
-      nested?.parent_turn_id,
-      compatibility?.parent_turn_id,
-    ),
-    rootTurnId: readId(
-      "root turn",
-      flat?.root_turn_id,
-      nested?.root_turn_id,
-      compatibility?.root_turn_id,
-    ),
+    parentTurnId: readTurnId("parent turn", "parent_turn_id"),
+    rootTurnId: readTurnId("root turn", "root_turn_id"),
     requestKind,
     threadSource: reconcileMetadataStrings(
       "thread source",
@@ -142,16 +134,13 @@ function readNativeMetadata(raw: unknown): Record<string, unknown> | undefined {
   if (encoded === undefined || Buffer.byteLength(encoded) > MAX_NATIVE_METADATA_BYTES) {
     throw new Error("Codex inference request is missing bounded native metadata");
   }
-  let value: unknown;
   try {
-    value = JSON.parse(encoded);
-  } catch {
-    throw new Error("Codex inference request has invalid native metadata");
-  }
-  if (!isRecord(value)) {
-    throw new Error("Codex inference request has invalid native metadata");
-  }
-  return value;
+    const value: unknown = JSON.parse(encoded);
+    if (isRecord(value)) {
+      return value;
+    }
+  } catch {}
+  throw new Error("Codex inference request has invalid native metadata");
 }
 
 const reconcileMetadataStrings = metadataReconciler((value) => {

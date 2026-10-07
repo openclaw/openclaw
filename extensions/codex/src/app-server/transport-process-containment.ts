@@ -87,7 +87,7 @@ export async function terminateCodexAppServerDescendants(
   deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS,
 ): Promise<{ root: PosixProcess; resume: () => void } | "exited" | undefined> {
   const rootPid = child.pid;
-  if (hasExited(child)) {
+  if (child.exitCode != null || child.signalCode != null) {
     return "exited";
   }
   if (process.platform === "win32" || !rootPid || !child.kill) {
@@ -232,7 +232,6 @@ async function quiesceDescendants(
       continue;
     }
     const snapshotByPid = new Map(snapshot.map((process) => [process.pid, process]));
-    const liveProven: PosixProcess[] = [];
     for (const proven of provenByPid.values()) {
       const current = snapshotByPid.get(proven.pid);
       if (!current) {
@@ -248,12 +247,8 @@ async function quiesceDescendants(
       if (stopped.has(key)) {
         stopped.set(key, current);
       }
-      liveProven.push(current);
     }
-    const descendants = collectDescendants(snapshot, [
-      root.pid,
-      ...liveProven.map(({ pid }) => pid),
-    ]);
+    const descendants = collectDescendants(snapshot, [root.pid, ...provenByPid.keys()]);
     for (const descendant of descendants) {
       const proven = provenByPid.get(descendant.pid);
       if (proven && !hasSameIdentity(proven, descendant)) {
@@ -264,12 +259,8 @@ async function quiesceDescendants(
     if (provenByPid.size > MAX_CONTAINED_PROCESSES) {
       return undefined;
     }
-    const quiescenceTargets = new Map(liveProven.map((process) => [process.pid, process]));
-    for (const descendant of descendants) {
-      quiescenceTargets.set(descendant.pid, descendant);
-    }
     let allStopped = true;
-    for (const descendant of quiescenceTargets.values()) {
+    for (const descendant of provenByPid.values()) {
       if (Date.now() >= deadline) {
         return undefined;
       }
@@ -404,10 +395,6 @@ function hasSameIdentity(
 
 function identityKey(row: CodexAppServerProcessIdentity): string {
   return `${row.pid}\0${row.startedAt}`;
-}
-
-function hasExited(child: ContainableTransport): boolean {
-  return child.exitCode != null || child.signalCode != null;
 }
 
 function signalProcess(pid: number, signal: NodeJS.Signals): boolean {

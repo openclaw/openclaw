@@ -131,33 +131,27 @@ async function buildCodexMemoryItems(params: {
   return items;
 }
 
-function uniqueSkillName(skill: CodexSkillSource, counts: Map<string, number>): string {
-  const base = sanitizeName(skill.name) || "codex-skill";
-  if ((counts.get(base) ?? 0) <= 1) {
-    return base;
-  }
-  const parent = sanitizeName(path.basename(path.dirname(skill.source)));
-  return sanitizeName(["codex", parent, base].filter(Boolean).join("-")) || base;
-}
-
 async function buildCodexSkillItems(params: {
   skills: CodexSkillSource[];
   workspaceDir: string;
   overwrite?: boolean;
 }): Promise<MigrationItem[]> {
   const counts = new Map<string, number>();
-  for (const skill of params.skills) {
-    const base = sanitizeName(skill.name) || "codex-skill";
-    counts.set(base, (counts.get(base) ?? 0) + 1);
-  }
-  const planned = params.skills.map((skill) => {
-    const name = uniqueSkillName(skill, counts);
+  const named = params.skills.map((skill) => {
+    const name = sanitizeName(skill.name) || "codex-skill";
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+    return { skill, name };
+  });
+  const resolvedCounts = new Map<string, number>();
+  const planned = named.map(({ skill, name: initialName }) => {
+    let name = initialName;
+    if ((counts.get(name) ?? 0) > 1) {
+      const parent = sanitizeName(path.basename(path.dirname(skill.source)));
+      name = sanitizeName(["codex", parent, name].filter(Boolean).join("-")) || name;
+    }
+    resolvedCounts.set(name, (resolvedCounts.get(name) ?? 0) + 1);
     return { skill, name, target: path.join(params.workspaceDir, "skills", name) };
   });
-  const resolvedCounts = planned.reduce((resolved, item) => {
-    resolved.set(item.name, (resolved.get(item.name) ?? 0) + 1);
-    return resolved;
-  }, new Map<string, number>());
   return await Promise.all(
     planned.map(async (item) => {
       const collision = (resolvedCounts.get(item.name) ?? 0) > 1;

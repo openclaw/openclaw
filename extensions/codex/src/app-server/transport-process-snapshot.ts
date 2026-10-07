@@ -90,14 +90,7 @@ export async function readCodexAppServerProcessSnapshot(
   // Registration proves only known owners. Containment still needs the full tree.
   // Include the observer so an empty selected ps result cannot prove disappearance.
   const selected = pids === undefined ? undefined : [...new Set([process.pid, ...pids])];
-  const rows =
-    process.platform === "linux"
-      ? await readLinuxProcesses(selected, deadline)
-      : await readProcesses(
-          selected ? ["-o", PROCESS_COLUMNS, "-p", selected.join(",")] : ["-axo", PROCESS_COLUMNS],
-          deadline,
-          selected !== undefined,
-        );
+  const rows = await readProcesses(selected, deadline, selected !== undefined);
   if (selected && !rows.some((row) => row.pid === process.pid)) {
     throw new ProcessInspectionError("unavailable");
   }
@@ -108,10 +101,7 @@ export async function readCodexAppServerProcess(
   pid: number,
   deadline: number,
 ): Promise<PosixProcess | undefined> {
-  const rows =
-    process.platform === "linux"
-      ? await readLinuxProcesses([pid], deadline)
-      : await readProcesses(["-o", PROCESS_COLUMNS, "-p", String(pid)], deadline);
+  const rows = await readProcesses([pid], deadline);
   return rows.find((row) => row.pid === pid);
 }
 
@@ -166,13 +156,18 @@ export async function readCodexAppServerProcessCommand(
   return output;
 }
 
-async function readProcesses(
-  args: string[],
+function readProcesses(
+  pids: readonly number[] | undefined,
   deadline: number,
   selected = false,
 ): Promise<PosixProcess[]> {
-  const output = await readProcessOutput({ kind: "ps", args }, deadline);
-  return parseProcesses(output, selected);
+  if (process.platform === "linux") {
+    return readLinuxProcesses(pids, deadline);
+  }
+  const args = pids ? ["-o", PROCESS_COLUMNS, "-p", pids.join(",")] : ["-axo", PROCESS_COLUMNS];
+  return readProcessOutput({ kind: "ps", args }, deadline).then((output) =>
+    parseProcesses(output, selected),
+  );
 }
 
 async function readProcessOutput(

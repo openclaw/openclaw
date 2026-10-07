@@ -155,11 +155,10 @@ export class CodexNativeSubagentHistoryRecovery {
         nativeTurnState = "active";
       }
     } else if (threadStatus !== "systemerror") {
-      const turnRecovery = readThreadTurnRecovery(thread, childThreadId);
-      nativeTurnId = turnRecovery.nativeTurnId;
-      nativeTurnState = turnRecovery.nativeTurnState;
-      completion = turnRecovery.completion;
-      resumable = turnRecovery.resumable;
+      ({ nativeTurnId, nativeTurnState, completion, resumable } = readThreadTurnRecovery(
+        thread,
+        childThreadId,
+      ));
     }
     if (
       !unresolvedAssignment &&
@@ -186,11 +185,10 @@ export class CodexNativeSubagentHistoryRecovery {
       const matchesAssignment = !turnId || readString(latestTurn, "id") === turnId;
       if (latestTurn && matchesAssignment) {
         if (turnId) {
-          const turnRecovery = readThreadTurnRecovery({ turns: [latestTurn] }, childThreadId);
-          nativeTurnId = turnRecovery.nativeTurnId;
-          nativeTurnState = turnRecovery.nativeTurnState;
-          completion = turnRecovery.completion;
-          resumable = turnRecovery.resumable;
+          ({ nativeTurnId, nativeTurnState, completion, resumable } = readThreadTurnRecovery(
+            { turns: [latestTurn] },
+            childThreadId,
+          ));
         } else if (latestTurnStatus === "failed") {
           completion = readTurnCompletion(latestTurn, childThreadId);
         }

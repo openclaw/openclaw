@@ -37,9 +37,8 @@ import {
   isReadOnlyCodexGoalCommand,
   resolveCodexNativeCommandSandboxBlock,
   returnsBeforeNativeCodexExecution,
-  setConversationFastMode,
   setConversationModel,
-  setConversationPermissions,
+  setConversationPreference,
   startThreadAction,
 } from "./command-handler-actions.js";
 import {
@@ -276,17 +275,11 @@ export async function handleCodexSubcommand(
   if (normalized === "model") {
     return { text: await setConversationModel(deps, ctx, rest) };
   }
-  if (normalized === "fast") {
+  if (normalized === "fast" || normalized === "permissions") {
     if (isMenuVerb(rest)) {
-      return buildCodexChoiceMenuReply("fast");
+      return buildCodexChoiceMenuReply(normalized);
     }
-    return { text: await setConversationFastMode(deps, ctx, rest) };
-  }
-  if (normalized === "permissions") {
-    if (isMenuVerb(rest)) {
-      return buildCodexChoiceMenuReply("permissions");
-    }
-    return { text: await setConversationPermissions(deps, ctx, rest) };
+    return { text: await setConversationPreference(deps, ctx, rest, normalized) };
   }
   if (normalized === "compact" || normalized === "review") {
     return { text: await startThreadAction(deps, ctx, options.pluginConfig, normalized, rest) };

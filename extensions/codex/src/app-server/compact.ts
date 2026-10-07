@@ -126,7 +126,7 @@ export async function maybeCompactCodexAppServerSession(
   const abortedResult = (
     attempt: AgentHarnessCompactParams<2>,
     expectedThreadId?: string,
-    currentThreadId = expectedThreadId,
+    currentThreadId?: string,
   ) =>
     options.allowNonManualNativeRequest
       ? skippedCodexNativeCompactionResult(attempt, {
@@ -153,7 +153,8 @@ export async function maybeCompactCodexAppServerSession(
     if (!params.abortSignal?.aborted) {
       throw error;
     }
-    return abortedResult(params, options.bindingStore.read(bindingIdentity)?.threadId);
+    const threadId = options.bindingStore.read(bindingIdentity)?.threadId;
+    return abortedResult(params, threadId, threadId);
   }
   const { binding: initialBinding, authority } = resolvedBinding;
   const assertCurrent = authority.assertCurrent;
@@ -449,13 +450,7 @@ export async function maybeCompactCodexAppServerSession(
                   }
                   return {
                     started: false as const,
-                    result: skippedCodexNativeCompactionResult(attempt, {
-                      reason: "codex app-server compaction aborted before native compaction",
-                      code: "aborted_before_native_compaction",
-                      request: options.nativeCompactionRequest ?? "after_context_engine",
-                      expectedThreadId: binding.threadId,
-                      currentThreadId: currentBinding?.threadId,
-                    }),
+                    result: abortedResult(attempt, binding.threadId, currentBinding?.threadId),
                   };
                 }
                 assertCurrent();
