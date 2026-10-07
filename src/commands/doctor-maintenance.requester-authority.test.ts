@@ -211,6 +211,10 @@ it.each(["configured-owner", "profile"] as const)(
         } finally {
           await maintenance?.release();
         }
+        expect(authorityWorkerLaunches.size).toBe(admissionWorkerLaunches);
+        // Doctor retires an inherited shared-state cache owner before opening
+        // its maintenance resources, which consumes one bounded read admission.
+        expect(admissionWorkerLaunches).toBeLessThanOrEqual(9);
       }),
     );
   },
