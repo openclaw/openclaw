@@ -4424,7 +4424,12 @@ export function createSelectedNodeTestShardBundles(
           : `changed-${timingParent}`,
         stripes: [includePatterns],
       });
-      const selectedSeconds = Math.max(fallbackSeconds, selectedTimings[timingKeys[0]!] ?? 0);
+      // An older complete-group price cannot cap a known indivisible file's cost.
+      const selectedSeconds = Math.max(
+        fallbackSeconds,
+        ...includePatterns.map(stripeFileWeight),
+        selectedTimings[timingKeys[0]!] ?? 0,
+      );
       retainedSeconds += selectedSeconds;
       const projectedGroup = {
         ...group,

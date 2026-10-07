@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
-import { observeSessionMaintenanceCompletion } from "../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
+import { observeSessionMaintenanceCompletion } from "../config/sessions/session-accessor.sqlite-maintenance-completion.test-support.js";
 import { prepareSessionEntryReplacementDatabase } from "../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";

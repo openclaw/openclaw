@@ -288,10 +288,13 @@ export async function prepareCodexThreadFinalConfigPatch(
   binding?: CodexAppServerThreadBinding,
 ): Promise<CodexThreadFinalConfigPatchResult> {
   return (
-    (await params.buildFinalConfigPatch?.({
-      ...(binding ? { action: "resume", binding } : { action: "start" }),
-      ...(nativeModelInputTools ? { nativeModelInputTools } : {}),
-    })) ?? {
+    (await params.buildFinalConfigPatch?.(
+      {
+        ...(binding ? { action: "resume", binding } : { action: "start" }),
+        ...(nativeModelInputTools ? { nativeModelInputTools } : {}),
+      },
+      params.client,
+    )) ?? {
       configPatch: params.finalConfigPatch,
       nativeHookRelayGeneration: params.nativeHookRelayGeneration,
     }

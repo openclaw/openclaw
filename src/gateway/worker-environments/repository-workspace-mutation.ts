@@ -41,8 +41,8 @@ export function createRepositoryWorkspaceMutationService(options: {
         mutate: (assertCurrent: () => void) => Promise<{ changed: boolean; value: T }>;
       },
     ): Promise<T> {
+      const placement = await placements.getAsync(params.sessionId);
       params.assertCurrent();
-      const placement = placements.get(params.sessionId);
       if (placement?.state !== "active") {
         throw new Error("Repository workspace editing requires an active cloud placement");
       }

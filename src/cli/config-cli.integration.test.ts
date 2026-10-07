@@ -364,6 +364,26 @@ describe("config cli integration", () => {
     });
   });
 
+  it("recognizes root editor metadata before and after authored removal", async () => {
+    await withConfig('{"$schema":"https://openclaw.ai/schema.json"}', async () => {
+      await run("get", "$schema");
+      expect(logs.join("\n")).toContain("https://openclaw.ai/schema.json");
+      await run("unset", "$schema");
+      errors.length = 0;
+      await reject(run("get", "$schema"));
+      expect(errors.join("\n")).toContain("Config path is valid but unset: $schema.");
+      for (const field of ["$schema.child", "$notARealKey", "gateway.$schema"]) {
+        errors.length = 0;
+        await reject(run("get", field));
+        expect(errors.join("\n")).toContain(`Unknown config path: ${field}.`);
+      }
+      await set("$schema", "https://openclaw.ai/schema.json");
+      logs.length = 0;
+      await run("get", "$schema");
+      expect(logs.join("\n")).toContain("https://openclaw.ai/schema.json");
+    });
+  });
+
   it("classifies unset model metadata while preserving authored values", async () => {
     const modelPath = "models.providers.fixture.models[0]";
     const raw = JSON.stringify({

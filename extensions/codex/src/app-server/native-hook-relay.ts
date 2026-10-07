@@ -20,6 +20,7 @@ import type { CodexAppServerClient } from "./client.js";
 import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import type { CodexInferenceThreadQualification } from "./inference-qualification.js";
+import { createCodexNativeHookRemoteCredential } from "./native-hook-relay-remote.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import type { CodexNativeModelInputTools } from "./native-model-input-tools.js";
 import type { CodexNativeProcessAuthority } from "./native-process-authority.js";
@@ -198,6 +199,12 @@ export function createCodexNativeHookRelay(params: {
     tools?: CodexNativeModelInputTools;
     readQualification: (threadId: string) => CodexInferenceThreadQualification | undefined;
   };
+  remoteCallback?: {
+    config: NonNullable<CodexAppServerRuntimeOptions["nativeHookRelay"]>;
+    client: CodexAppServerClient;
+    timeoutMs: number;
+    onCleanupFailure(error: Error): void;
+  };
   assertCurrent?: () => void;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void | Promise<void>;
 }): CodexNativeHookRelay | undefined {
@@ -229,6 +236,8 @@ export function createCodexNativeHookRelay(params: {
   };
   let releaseProcessAdmission: (() => void) | undefined;
   let processAdmissionDisposed = false;
+  let remoteCredential: ReturnType<typeof createCodexNativeHookRemoteCredential> | undefined;
+  let remoteCleanup: Promise<void> | undefined;
   const relay = registerNativeHookRelayForBundledRuntime({
     provider: "codex",
     relayId: buildCodexNativeHookRelayId({
@@ -401,6 +410,16 @@ export function createCodexNativeHookRelay(params: {
         rejectPendingAdmissions("native hook relay registration closed");
         processAdmissionDisposed = true;
         releaseProcessAdmission?.();
+        if (remoteCredential) {
+          remoteCleanup = remoteCredential
+            .dispose()
+            .catch((error: unknown) =>
+              params.remoteCallback?.onCleanupFailure(
+                toErrorObject(error, "Native hook relay credential cleanup failed"),
+              ),
+            );
+          nativeHookRelayUnregisterQueue.track(remoteCleanup);
+        }
       },
     },
     onPreToolUseFailure: params.onPreToolUseFailure,
@@ -419,6 +438,20 @@ export function createCodexNativeHookRelay(params: {
       throw error;
     }
   }
+  if (params.remoteCallback) {
+    remoteCredential = createCodexNativeHookRemoteCredential({
+      ...params.remoteCallback,
+      relay,
+      signal: params.signal,
+      assertCurrent: () => {
+        params.hostCapabilities.assertActive();
+        params.assertCurrent?.();
+      },
+    });
+    if (processAdmissionDisposed) {
+      void remoteCredential.dispose();
+    }
+  }
   return {
     ...relay,
     unregister: () => {
@@ -426,6 +459,19 @@ export function createCodexNativeHookRelay(params: {
       rejectPendingAdmissions("native hook relay foreground closed");
       relay.unregister();
     },
+    prepareInvocation: async () => {
+      await relay.prepareInvocation();
+      await remoteCredential?.prepare();
+    },
+    drain: async () => {
+      await relay.drain();
+      await remoteCleanup;
+    },
+    commandForEvent: (event, commandOptions) =>
+      relay.commandForEvent(event, {
+        ...commandOptions,
+        ...(remoteCredential ? { remoteCredentialPath: remoteCredential.path } : {}),
+      }),
     authorizeRetentionAfterSuccessfulYield: () => {
       successfulYieldRetentionAuthorized = true;
     },
@@ -538,6 +584,7 @@ export function buildCodexNativeHookRelayConfig(params: {
   events?: readonly NativeHookRelayEvent[];
   hookTimeoutSec?: number;
   clearOmittedEvents?: boolean;
+  remoteCredentialPath?: string;
 }): JsonObject {
   const events = params.events?.length ? params.events : CODEX_NATIVE_HOOK_RELAY_EVENTS;
   const selectedEvents = new Set<NativeHookRelayEvent>(events);
@@ -565,6 +612,7 @@ export function buildCodexNativeHookRelayConfig(params: {
     const timeout = normalizeHookTimeoutSec(params.hookTimeoutSec);
     const command = params.relay.commandForEvent(event, {
       timeoutMs: resolveCodexNativeHookRelayCommandTimeoutMs(timeout),
+      ...(params.remoteCredentialPath ? { remoteCredentialPath: params.remoteCredentialPath } : {}),
     });
     const matcher = buildCodexNativeToolMatcher(params.relay.toolMatcherForEvent(event));
     // Codex hashes the installed matcher group; retain the omitted match-all

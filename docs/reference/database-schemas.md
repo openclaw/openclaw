@@ -50,6 +50,14 @@ Progress-card writes reuse the transaction's admitted table facts. The schema ow
 
 The agent-database execution owner retains up to four idle physical-agent executors in least-recently-used order. Borrowing an executor refreshes its independent 30-minute idle timeout; a fifth idle executor evicts the least recently used one. Configuration changes to the agent roster or storage paths stop warm retention and drain affected executors after their last borrower settles. Already-admitted work retains its original physical store; new requests resolve the current configuration. Explicit database closure and Gateway shutdown still revoke and drain the existing lifecycle resources. This changes no schema, stored bytes, or update behavior.
 
+Creating an agent database at an admitted absent path revokes the previous file's
+retained validation before worker preparation. A recreated file cannot borrow that
+proof even if Linux reuses its inode. Ordinary reopen still reuses live proof,
+and fresh stores keep their canonical certification. Receipt identifiers survive
+worker transfers so alias publication revokes superseded proof while preserving
+acknowledged copies. Later revocation still refuses publication. Schemas, stored
+bytes, and update behavior are unchanged.
+
 Retaining an already-open agent handle holds its lifetime without querying SQLite. Its read or transaction owner refreshes schema facts when consuming data; canonical readiness owns the freshness check before reusing its clean-store decision.
 
 Agent ownership metadata follows that admitted read revision as well. Unchanged

@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readSessionNodesGeneration } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
@@ -164,6 +164,12 @@ it("admits cold storage in its worker and lends facts to every later native hand
     });
   expect(await Promise.all([read(), read()])).toEqual([0, 0]);
   expect(inspections).toEqual([]);
+  const freshValidation = getOpenClawAgentDatabaseValidationForTransfer({
+    agentId: options.agentId,
+    path: pathname,
+  });
+  assert(freshValidation);
+  expect(Atomics.load(new Int32Array(freshValidation.canonicalReady), 0)).toBe(1);
 
   // The next synchronous caller and an idle-reopened handle consume the same worker admission.
   expectAdmittedSchemaObjects(openOpenClawAgentDatabase(options).db);
@@ -206,6 +212,30 @@ it("publishes freshly verified proof to a previously admitted alias after stale 
     observed.restore();
     releaseOpenClawAgentDatabaseLease(staleLease, { env: options.env }, "read-only");
   }
+});
+
+it("recreates a closed database through its directory alias without revoking fresh publication", async () => {
+  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-alias-recreation-")) };
+  const canonicalPath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+  fs.mkdirSync(path.dirname(canonicalPath), { recursive: true });
+  const alias = path.join(env.OPENCLAW_STATE_DIR, "alias");
+  fs.symlinkSync(
+    path.dirname(canonicalPath),
+    alias,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const options = { agentId: "main", env, path: path.join(alias, path.basename(canonicalPath)) };
+  await withOpenClawAgentDatabaseWrite(options, ({ db }) => {
+    db.exec("INSERT INTO auth_profile_state VALUES ('previous-file', '{}', 1)");
+  });
+  await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
+  fs.unlinkSync(canonicalPath);
+  await expect(
+    withOpenClawAgentDatabaseWrite(
+      options,
+      ({ db }) => db.prepare("SELECT COUNT(*) AS count FROM auth_profile_state").get()?.count,
+    ),
+  ).resolves.toBe(0);
 });
 
 it.each([

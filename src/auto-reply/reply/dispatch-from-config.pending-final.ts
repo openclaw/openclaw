@@ -64,6 +64,7 @@ export async function clearPendingFinalDeliveryAfterSuccess(
           : {
               restartRecoveryBeforeAgentReplyState: undefined,
               restartRecoverySourceIngress: undefined,
+              restartRecoveryOperatorSource: undefined,
               restartRecoveryForceSafeTools: undefined,
             }),
         pendingFinalDelivery: undefined,

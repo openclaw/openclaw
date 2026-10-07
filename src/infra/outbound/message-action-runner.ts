@@ -378,7 +378,7 @@ async function handleInternalSourceReplySendAction(
       throw new Error("Current-source media requires an agent workspace.");
     }
     const { createReplyMediaPathNormalizer } =
-      await import("../../auto-reply/reply/reply-media-paths.runtime.js");
+      await import("../../auto-reply/reply/reply-media-paths.js");
     sourceReplyPayload = await createReplyMediaPathNormalizer({
       cfg: input.cfg,
       sessionKey: input.sessionKey,

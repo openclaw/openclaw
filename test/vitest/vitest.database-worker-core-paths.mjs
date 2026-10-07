@@ -77,7 +77,11 @@ export const databaseWorkerCoreTestFiles = [
   "src/system-agent/transcript-store.test.ts",
   "src/infra/restart-sentinel.update-result.test.ts",
   "src/auto-reply/reply/conversation-turn-capture.test.ts",
+  "src/auto-reply/reply/directive-handling.mixed-inline.test.ts",
+  "src/auto-reply/reply/directive-handling.model.test.ts",
+  "src/auto-reply/reply/get-reply-native-slash-fast-path.test.ts",
   "src/auto-reply/reply/agent-runner-result-accounting.persistence.test.ts",
+  "src/auto-reply/reply/agent-runner.media-ownership.test.ts",
   "src/auto-reply/reply/agent-runner-result-accounting.fallback.test.ts",
   "src/auto-reply/reply/dispatch-from-config.pending-final.test.ts",
   "src/auto-reply/reply/followup-turn-execution.worker.test.ts",
@@ -1097,11 +1101,12 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/worker-environments/worker-turn-transcript-footprint.test.ts",
   "src/plugin-sdk/channel-inbound.test.ts",
   "src/plugin-sdk/session-transcript-mirror-runtime.test.ts",
+  "src/plugin-sdk/session-transcript-runtime.configured-store.test.ts",
   "src/plugin-sdk/session-store-runtime.test.ts",
   "src/plugin-sdk/session-store-runtime.conversation.test.ts",
   "src/plugin-sdk/session-store-runtime.maintenance.test.ts",
   "src/plugin-sdk/session-transcript-runtime-visible-delta.test.ts",
-  "src/plugin-sdk/session-transcript-runtime.configured-store.test.ts",
+  "src/gateway/control-ui-plugin-auth-cookie.test.ts",
 ];
 
 const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);

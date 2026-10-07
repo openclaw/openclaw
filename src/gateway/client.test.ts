@@ -164,8 +164,9 @@ vi.mock("../../packages/gateway-client/src/websocket.js", () => ({
   WebSocket: MockWebSocket,
 }));
 
-vi.mock("@openclaw/proxyline", () => ({
-  installGlobalProxy: installGlobalProxyMock,
+vi.mock("../infra/net/proxyline-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/net/proxyline-runtime.js")>()),
+  loadProxyline: () => ({ installGlobalProxy: installGlobalProxyMock }),
 }));
 
 vi.mock("../infra/device-auth-store.js", async () => {

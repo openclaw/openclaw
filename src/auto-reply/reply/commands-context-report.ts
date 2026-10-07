@@ -32,19 +32,12 @@ function formatCharsAndTokens(chars: number): string {
   return `${formatInt(chars)} chars (~${formatInt(estimateTokensFromChars(chars))} tok)`;
 }
 
-function parseContextArgs(commandBodyNormalized: string): string {
-  if (commandBodyNormalized.startsWith("/context ")) {
-    return commandBodyNormalized.slice(8).trim();
-  }
-  return "";
-}
-
-function formatListTop(
-  entries: Array<{ name: string; value: number }>,
-  cap: number,
-): { lines: string[]; omitted: number } {
+function formatListTop(entries: Array<{ name: string; value: number }>): {
+  lines: string[];
+  omitted: number;
+} {
   const sorted = entries.toSorted((a, b) => b.value - a.value);
-  const top = sorted.slice(0, cap);
+  const top = sorted.slice(0, 30);
   const omitted = Math.max(0, sorted.length - top.length);
   const lines = top.map((e) => `- ${e.name}: ${formatCharsAndTokens(e.value)}`);
   return { lines, omitted };
@@ -155,7 +148,8 @@ async function resolveContextReport(
 
 export async function buildContextReply(params: HandleCommandsParams): Promise<ReplyPayload> {
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const args = parseContextArgs(params.command.commandBodyNormalized);
+  const commandBody = params.command.commandBodyNormalized;
+  const args = commandBody.startsWith("/context ") ? commandBody.slice(8).trim() : "";
   const sub = normalizeLowercaseStringOrEmpty(args.split(/\s+/).find(Boolean));
 
   if (!sub || sub === "help") {
@@ -370,15 +364,12 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   if (sub === "detail" || sub === "deep") {
     const perSkill = formatListTop(
       report.skills.entries.map((s) => ({ name: s.name, value: s.blockChars })),
-      30,
     );
     const perToolSchema = formatListTop(
       report.tools.entries.map((t) => ({ name: t.name, value: t.schemaChars })),
-      30,
     );
     const perToolSummary = formatListTop(
       report.tools.entries.map((t) => ({ name: t.name, value: t.summaryChars })),
-      30,
     );
     const toolPropsLines = report.tools.entries
       .filter((t) => t.propertiesCount != null)

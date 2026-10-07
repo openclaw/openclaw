@@ -34,10 +34,9 @@ const CONVERSATION_TURN_REPLY_CUSTOM_TYPE = "openclaw.conversation-turn-reply";
 
 function readPersistedReplyText(message: unknown): string | undefined {
   const content = (message as { content?: unknown } | undefined)?.content;
-  if (typeof content === "string") {
-    return normalizeOptionalString(content);
-  }
-  return normalizeOptionalString(collectTextContentBlocks(content).join("\n"));
+  return normalizeOptionalString(
+    typeof content === "string" ? content : collectTextContentBlocks(content).join("\n"),
+  );
 }
 
 async function capturePendingConversationTurnReplyUnsafe(params: {

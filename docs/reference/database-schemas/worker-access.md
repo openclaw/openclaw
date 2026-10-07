@@ -1161,7 +1161,7 @@ databases retain their native owner. There is no synchronous fallback when the
 worker is busy and no retained summary cache.
 
 Audited internal session-entry patches use the agent executor for snapshot reads,
-CAS validation, mutation, and COMMIT. Usage accounting, unguarded compaction
+CAS validation, mutation, and COMMIT. Usage accounting, compaction
 accounting, restart cleanup, activity recaps, and the entry owner's prepared
 upsert, replacement, and route-metadata operations select this path explicitly.
 The host runs each updater once and retains live authority. Recap transcript
@@ -1174,6 +1174,22 @@ retain native transactions and yielding writer admission. Arbitrary async plugin
 updaters retain their existing nested-admission behavior. Schemas, durability,
 public callback contracts, and update behavior are unchanged.
 
+Exceptional chat admission settlement retains the accepted work lease and the
+original physical source while the writer checks the exact session, lifecycle,
+and recovery claim. Cancellation can settle its own claim; released or replaced
+admission cannot. Transcript acknowledgment binds a newly created source before
+fallible observers run, so a first Goal can settle after a postcommit observer
+failure without rediscovering its database. The diagnostic and claim cleanup
+remain one synchronous commit; the failure notice remains separate and best effort.
+
+Fixed field updates, embedded writer claims, and compaction accounting evaluate
+their reducers against current rows in the existing patch command's synchronous
+transaction, without a separate snapshot request. Usage accounting can use the
+same path when its pricing inputs are prepared independently of the current row;
+row-dependent pricing retains host preparation and CAS. Each commit retains its
+complete postimage publication and current host grants. Arbitrary updater and
+provider callbacks keep their existing preparation boundary.
+
 First-turn diff-baseline claims and settlement, reply skill snapshots, and child
 agent admission and bookkeeping use that same entry writer. Preparation retains
 the selected physical store; the transaction rereads its entry and same-store
@@ -1185,7 +1201,7 @@ contracts. No schema, retention, durability, or update migration is required.
 
 Embedded writer claims, live-model-switch consolidation, and pending-final delivery
 preparation, settlement, and cleanup explicitly select that worker patch path.
-Their reducers prepare outside the transaction; the worker rereads the selected
+Callback-based reducers prepare outside the transaction; the worker rereads the selected
 rows before applying the patch and publishes acknowledged results before releasing
 the existing writer queue. Uncertain writes never replay. Durable lifecycle start
 and terminal persistence select their route from prepared physical store identities.
@@ -1243,6 +1259,11 @@ physical writer FIFO. Lost replies reconcile through the existing entry-patch
 transfer and native COMMIT receipt; uncertain outcomes never replay. Opaque
 released SDK callbacks and dependent callback batches retain their synchronous
 transaction visibility, and process-held incognito retains its existing owner.
+
+Turns without selection callbacks skip the empty-message planning request.
+Fixed messages without goal operations, host hooks, or keyed user-input custody
+commit directly; their transaction still validates current identity and predicates.
+Callbacks retain the selection and idempotency checks that precede their effects.
 
 Single-entry durable resets use the same executor and receipt owner. The host
 builds the replacement once outside the SQL transaction; the worker rereads the
@@ -2283,6 +2304,12 @@ progress during preparation. Incognito and explicit native maintenance scopes
 retain the same transaction kernels. Schemas, retention, and update behavior are
 unchanged.
 
+Lifecycle projections without removals skip deletion-plan preparation. Empty
+automatic maintenance plans use their verified age receipt to schedule the next
+pass without an empty finalization yield or a second deadline request. Changed
+plans retain finalization and its fresh deadline read; cadence and retention
+policy are unchanged.
+
 Physical page reclamation releases the session writer permit between vacuum units,
 so queued foreground writers receive their FIFO turn before the next unit. Each
 connection starts with eight-page units and adjusts toward a 25 ms hold target,
@@ -3245,6 +3272,24 @@ and discovery snapshots do not grant permission.
 While a Gateway runs, other processes must use its RPCs for profile mutations;
 direct out-of-process SQLite writes are not supported. Doctor repairs and
 migrations run under their existing offline maintenance or startup owners.
+
+Self-profile disclosure travels with the existing profile authority read, reusing
+its selected identity and GitHub facts. Project recents prepare exact merge aliases
+in the same read worker and recheck their original requester and profile authority
+before responding. Their next read observes foreign commits through the reader's
+existing freshness scope. Cold session projections hydrate the profile catalog once
+off-thread; physical replacement or first appearance invalidates readiness and
+refreshes through that same owner. Warm catalog reads remain memory-only.
+Cookie and assistant-media responses retain those catalog facts through response
+closure, with current role and access policy checked synchronously before disclosure.
+Schemas, stored bytes, FIFO writes, accepted-write settlement, and update behavior
+are unchanged.
+
+Cold synchronous profile reads remain for released tool construction, Mention Inbox
+recording, transcript presentation, and standalone bootstrap SDK contracts. History
+workers use the same native selectors on their own thread. These retained paths
+remain migration debt until their SDK callers can use prepared facts; they do not
+justify a native catalog hydration fallback in the Gateway.
 
 Secret-store expiry runs in that worker for scheduled Gateway cleanup and
 post-mutation cleanup. The caller captures the database and expiry cutoffs before

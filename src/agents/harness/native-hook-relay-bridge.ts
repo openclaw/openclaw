@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { hasErrnoCode } from "../../infra/errno.js";
+import { readRequestBodyWithLimit } from "../../infra/http-body.js";
 import { createHttpRequestAbortSignal } from "../../infra/http-request-lifecycle.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { safeEqualSecret } from "../../security/secret-equal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import {
@@ -57,6 +59,7 @@ type NativeHookRelayBridgeRequestAuth = {
   registration: ActiveNativeHookRelayRegistration;
   bridge: NativeHookRelayBridgeRegistration;
   invokeRelay: InvokeNativeHookRelay;
+  remote?: boolean;
 };
 
 export function registerNativeHookRelayBridge(
@@ -276,18 +279,18 @@ export function unregisterNativeHookRelayBridge(
   return bridge.closing;
 }
 
-async function handleNativeHookRelayBridgeRequest(
+export async function handleNativeHookRelayBridgeRequest(
   req: IncomingMessage,
   res: ServerResponse,
   auth: NativeHookRelayBridgeRequestAuth,
 ): Promise<void> {
   const requestAbort = createHttpRequestAbortSignal(req, res);
   try {
-    if (req.method !== "POST" || req.url !== "/invoke") {
+    if (req.method !== "POST" || (!auth.remote && req.url !== "/invoke")) {
       writeNativeHookRelayBridgeJson(res, 404, { ok: false, error: "not found" });
       return;
     }
-    if (req.headers.authorization !== `Bearer ${auth.token}`) {
+    if (!safeEqualSecret(req.headers.authorization, `Bearer ${auth.token}`)) {
       writeNativeHookRelayBridgeJson(res, 403, { ok: false, error: "forbidden" });
       return;
     }
@@ -298,7 +301,12 @@ async function handleNativeHookRelayBridgeRequest(
       });
       return;
     }
-    const body = await readNativeHookRelayBridgeBody(req);
+    const body = auth.remote
+      ? await readRequestBodyWithLimit(req, {
+          maxBytes: MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES,
+          timeoutMs: 5_000,
+        })
+      : await readNativeHookRelayBridgeBody(req);
     const payload = readNativeHookRelayBridgePayload(JSON.parse(body));
     if (payload.provider !== auth.provider || payload.relayId !== auth.relayId) {
       writeNativeHookRelayBridgeJson(res, 403, {
@@ -308,6 +316,14 @@ async function handleNativeHookRelayBridgeRequest(
       return;
     }
     if (!isCurrentNativeHookRelayBridgeRequest(auth)) {
+      writeNativeHookRelayBridgeJson(res, 410, {
+        ok: false,
+        error: NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
+      });
+      return;
+    }
+    // Remote credentials never use the local canonical-fork generation grace.
+    if (auth.remote && payload.generation !== auth.registration.generation) {
       writeNativeHookRelayBridgeJson(res, 410, {
         ok: false,
         error: NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
@@ -326,7 +342,14 @@ async function handleNativeHookRelayBridgeRequest(
     writeNativeHookRelayBridgeJson(
       res,
       isNativeHookRelayBridgeStaleRegistrationError(error) ? 410 : 500,
-      { ok: false, error: error instanceof Error ? error.message : String(error) },
+      {
+        ok: false,
+        error: auth.remote
+          ? "Native hook callback failed"
+          : error instanceof Error
+            ? error.message
+            : String(error),
+      },
     );
   } finally {
     requestAbort.cleanup();
@@ -335,7 +358,9 @@ async function handleNativeHookRelayBridgeRequest(
 
 function isCurrentNativeHookRelayBridgeRequest(auth: NativeHookRelayBridgeRequestAuth): boolean {
   return (
-    relays.get(auth.relayId) === auth.registration && relayBridges.get(auth.relayId) === auth.bridge
+    relays.get(auth.relayId) === auth.registration &&
+    relayBridges.get(auth.relayId) === auth.bridge &&
+    !auth.bridge.closing
   );
 }
 

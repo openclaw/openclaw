@@ -763,10 +763,11 @@ const reviewedOperations = new Map([
         operations: [
           "readUserProfileEmailBindings",
           "readUserProfileSnapshotSync",
-          "readUserProfileAuthorityInDatabase",
+          "readUserProfileAuthorityCommand",
+          "readCurrentUserProfileAliasesInDatabase",
         ],
         evidence:
-          "Only registered user-profile-writes.worker.ts:126,187 / user-profiles.worker.ts:110,111 and state-read.worker.ts:566,592,605 call these readers; projects.ts:432 native aliases and admission fallbacks stay T1",
+          "Registered profile writers and openclaw-state-read.worker.ts execute these readers; projects.list prepares exact aliases through user-profile-reads.ts. Released SDK identity/display fallbacks retain native reads.",
       },
     ],
   ],

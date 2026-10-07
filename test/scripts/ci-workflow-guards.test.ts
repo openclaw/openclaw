@@ -5939,7 +5939,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     expect(installRipgrepStep).toMatchObject({
       if: "matrix.requires_ripgrep == true && runner.os == 'Linux'",
-      run: expect.stringContaining("apt-get install -y --no-install-recommends ripgrep"),
+      uses: "./.ci-harness/.github/actions/setup-ripgrep",
     });
     expect(nodeTestJob.steps.indexOf(buildRuntimeStep)).toBeLessThan(
       nodeTestJob.steps.indexOf(runStep),

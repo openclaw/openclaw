@@ -125,7 +125,8 @@ import { listUserProfileAuthLinksInDatabase } from "./user-model-accounts.js";
 import { selectUserPreferenceValues } from "./user-preferences.store.js";
 import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
 import {
-  readUserProfileAuthorityInDatabase,
+  readUserProfileAuthorityCommand,
+  readCurrentUserProfileAliasesInDatabase,
   readUserProfileSnapshotCommand,
   readUserProfileIdForEmail,
 } from "./user-profile-identity.read.js";
@@ -512,9 +513,12 @@ serveOwnedWorkerTasks(
               };
             }
             if (command.type === "userProfiles.authority.resolve") {
+              return readUserProfileAuthorityCommand(db, command);
+            }
+            if (command.type === "userProfiles.aliases.resolve") {
               return {
                 type: command.type,
-                profile: readUserProfileAuthorityInDatabase(db, command.profileId),
+                ...readCurrentUserProfileAliasesInDatabase(db, command.profileId),
               };
             }
             if (

@@ -2159,6 +2159,7 @@
                 "group": "Concepts and configuration",
                 "pages": [
                   "concepts/models",
+                  "concepts/recommended-models",
                   "concepts/decision-models",
                   "concepts/model-providers",
                   {
