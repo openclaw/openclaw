@@ -16,7 +16,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/line/src/bot-mention-context.test.ts",
   "extensions/line/src/bot-message-context.test.ts",
   "extensions/line/src/inbound-image-set.test.ts",
-  "extensions/mattermost/src/mattermost/monitor-posts.history-limit.test.ts",
   "extensions/msteams/src/monitor-handler/message-handler.authz.test.ts",
   "extensions/msteams/src/monitor-handler/message-handler.bot-threads.test.ts",
   "extensions/msteams/src/monitor-handler/message-handler.history.test.ts",
