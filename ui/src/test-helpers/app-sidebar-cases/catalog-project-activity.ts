@@ -35,6 +35,225 @@ function projectCatalog(
 }
 
 describe("AppSidebar project session activity", () => {
+  it.each([
+    {
+      name: "non-first drive spelling without a canonical id",
+      first: "C:\\Work\\Notes",
+      second: "c:/work/notes/",
+      key: "project:c:\\work\\notes",
+      aliases: ["c:/WORK/NOTES/"],
+    },
+    {
+      name: "multiple drive aliases including an absent worktree",
+      first: "C:\\Work\\Notes",
+      second: "c:/work/notes/",
+      key: "project:c:\\work\\notes",
+      aliases: [
+        "C:\\Work\\Notes",
+        "project:c:/WORK/NOTES/",
+        "project:C:/Work/Notes/.CLAUDE/WORKTREES/removed/src",
+        "project:c:\\work\\notes",
+      ],
+    },
+    {
+      name: "UNC aliases",
+      first: "\\\\Server\\Share\\Notes",
+      second: "\\\\server\\share\\notes\\",
+      key: "project:\\\\server\\share\\notes",
+      aliases: ["\\\\SERVER\\Share\\Notes", "project:\\\\server\\SHARE\\notes\\"],
+    },
+    {
+      name: "legacy separator-free drive-root aliases",
+      first: "C:\\",
+      second: "c:/.CLAUDE/WORKTREES/fix/src",
+      key: "project:c:\\",
+      aliases: ["project:C:", "c:"],
+    },
+    {
+      name: "drive-root worktree aliases",
+      first: "C:\\",
+      second: "c:/.CLAUDE/WORKTREES/fix/src",
+      key: "project:c:\\",
+      aliases: ["c:/", "project:C:/.CLAUDE/WORKTREES/removed/src"],
+    },
+  ])(
+    "clears $name and preserves state through roster reorder and reload",
+    async ({ first, second, key, aliases }) => {
+      const prefix = "catalog-project:codex:gateway:local:";
+      const canonicalId = prefix + key;
+      const retained = [
+        `catalog-project:codex:node:other:${key}`,
+        `catalog-project:claude:gateway:local:${key}`,
+      ];
+      localStorage.setItem(
+        "openclaw:sidebar:sessions:collapsed-sections",
+        JSON.stringify([...retained, ...aliases.map((alias) => prefix + alias)]),
+      );
+      const gateway = createGateway({} as GatewayBrowserClient);
+      const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+      const sessions = Array.from({ length: 6 }, (_, index) => ({
+        threadId: `windows-${index}`,
+        name: `Windows ${index}`,
+        cwd: index === 0 ? first : second,
+        status: "idle" as const,
+        archived: false,
+        canContinue: true,
+        canArchive: true,
+      }));
+      const host = {
+        hostId: "gateway:local",
+        label: "Local Codex",
+        kind: "gateway" as const,
+        connected: true,
+        sessions,
+      };
+      const catalog = {
+        id: "codex",
+        label: "Codex",
+        capabilities: { continueSession: true, archive: true },
+        hosts: [host],
+      };
+      const refresh = async () => {
+        sidebar.sessionData.sessionCatalogs = [{ ...catalog }];
+        sidebar.sessionData.requestSessionDataUpdate();
+        await sidebar.updateComplete;
+      };
+      await refresh();
+      const head = () => sidebar.querySelector<HTMLButtonElement>("[data-session-catalog-project]");
+      expect(sidebar.querySelectorAll("[data-session-catalog-project]")).toHaveLength(1);
+      expect(head()?.getAttribute("aria-expanded")).toBe("false");
+      host.sessions = sessions.toReversed();
+      await refresh();
+      expect(head()?.getAttribute("aria-expanded")).toBe("false");
+      head()?.click();
+      await sidebar.updateComplete;
+      expect(head()?.getAttribute("aria-expanded")).toBe("true");
+      const stored = () =>
+        JSON.parse(localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections") ?? "[]");
+      expect(stored()).toEqual(retained);
+      sidebar.querySelector<HTMLButtonElement>(".sidebar-session-pagination__button")?.click();
+      await sidebar.updateComplete;
+      expect(sidebar.querySelectorAll("[data-catalog-session-key]")).toHaveLength(6);
+      host.sessions = sessions;
+      await refresh();
+      expect(sidebar.querySelectorAll("[data-catalog-session-key]")).toHaveLength(6);
+      expect(head()?.getAttribute("aria-expanded")).toBe("true");
+      head()?.click();
+      await sidebar.updateComplete;
+      expect(stored()).toEqual([...retained, canonicalId]);
+      host.sessions = sessions.toReversed();
+      await refresh();
+      expect(head()?.getAttribute("aria-expanded")).toBe("false");
+      // Recreate the view from the real preference reader, without retaining its in-memory state.
+      const { sidebar: reloaded } = await mountSidebar(
+        gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      reloaded.sessionData.sessionCatalogs = [catalog];
+      reloaded.sessionData.requestSessionDataUpdate();
+      await reloaded.updateComplete;
+      const reloadedHead = reloaded.querySelector<HTMLButtonElement>(
+        "[data-session-catalog-project]",
+      );
+      expect(reloadedHead?.getAttribute("aria-expanded")).toBe("false");
+      reloadedHead?.click();
+      await reloaded.updateComplete;
+      expect(stored()).toEqual(retained);
+      expect(reloaded.querySelectorAll("[data-catalog-session-key]")).toHaveLength(5);
+    },
+  );
+
+  it("keeps drive-relative and absolute-root collapse preferences independent", async () => {
+    const storageKey = "openclaw:sidebar:sessions:collapsed-sections";
+    const relativeId = "catalog-project-drive-relative:codex:gateway:local:project:C:";
+    const rootId = "catalog-project:codex:gateway:local:project:c:\\";
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const sessions = [
+      { threadId: "relative-root", cwd: "C:" },
+      { threadId: "absolute-root", cwd: "C:\\" },
+    ].map((session) =>
+      Object.assign(session, {
+        status: "idle" as const,
+        archived: false,
+        canContinue: true,
+        canArchive: true,
+      }),
+    );
+    const host = {
+      hostId: "gateway:local",
+      label: "Local Codex",
+      kind: "gateway" as const,
+      connected: true,
+      sessions,
+    };
+    const catalog = {
+      id: "codex",
+      label: "Codex",
+      capabilities: { continueSession: true, archive: true },
+      hosts: [host],
+    };
+    const refresh = async () => {
+      sidebar.sessionData.sessionCatalogs = [{ ...catalog }];
+      sidebar.sessionData.requestSessionDataUpdate();
+      await sidebar.updateComplete;
+    };
+    const head = (view: typeof sidebar, key: string) =>
+      Array.from(view.querySelectorAll<HTMLButtonElement>("[data-session-catalog-project]")).find(
+        (button) => button.dataset.sessionCatalogProject === key,
+      );
+    const stored = () => JSON.parse(localStorage.getItem(storageKey) ?? "[]");
+    await refresh();
+    expect(sidebar.querySelectorAll("[data-session-catalog-project]")).toHaveLength(2);
+    head(sidebar, "project:C:")?.click();
+    await sidebar.updateComplete;
+    expect(head(sidebar, "project:C:")?.getAttribute("aria-expanded")).toBe("false");
+    expect(head(sidebar, "project:c:\\")?.getAttribute("aria-expanded")).toBe("true");
+    expect(stored()).toEqual([relativeId]);
+    head(sidebar, "project:c:\\")?.click();
+    await sidebar.updateComplete;
+    expect(stored()).toEqual([relativeId, rootId]);
+    host.sessions = sessions.toReversed();
+    await refresh();
+    expect(head(sidebar, "project:C:")?.getAttribute("aria-expanded")).toBe("false");
+    expect(head(sidebar, "project:c:\\")?.getAttribute("aria-expanded")).toBe("false");
+    head(sidebar, "project:C:")?.click();
+    await sidebar.updateComplete;
+    expect(stored()).toEqual([rootId]);
+    expect(head(sidebar, "project:c:\\")?.getAttribute("aria-expanded")).toBe("false");
+    head(sidebar, "project:C:")?.click();
+    await sidebar.updateComplete;
+    host.sessions = sessions.filter((session) => session.threadId !== "relative-root");
+    await refresh();
+    head(sidebar, "project:c:\\")?.click();
+    await sidebar.updateComplete;
+    expect(stored()).toEqual([relativeId]);
+    // Restore through the persisted reader while the relative session is still absent.
+    const { sidebar: reloaded } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main"]),
+    );
+    const reload = async () => {
+      reloaded.sessionData.sessionCatalogs = [{ ...catalog }];
+      reloaded.sessionData.requestSessionDataUpdate();
+      await reloaded.updateComplete;
+    };
+    await reload();
+    expect(head(reloaded, "project:c:\\")?.getAttribute("aria-expanded")).toBe("true");
+    head(reloaded, "project:c:\\")?.click();
+    await reloaded.updateComplete;
+    head(reloaded, "project:c:\\")?.click();
+    await reloaded.updateComplete;
+    expect(stored()).toEqual([relativeId]);
+    host.sessions = sessions.toReversed();
+    await reload();
+    expect(head(reloaded, "project:C:")?.getAttribute("aria-expanded")).toBe("false");
+    expect(head(reloaded, "project:c:\\")?.getAttribute("aria-expanded")).toBe("true");
+    head(reloaded, "project:C:")?.click();
+    await reloaded.updateComplete;
+    expect(stored()).toEqual([]);
+  });
+
   it("preserves collapsed project sections stored by earlier versions", async () => {
     localStorage.setItem(
       "openclaw:sidebar:sessions:collapsed-sections",
