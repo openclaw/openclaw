@@ -279,6 +279,34 @@ private func waitUntil(
         }
     }
 
+    @Test @MainActor func `fresh install does not advertise camera and persists the default`() async {
+        await withUserDefaults([
+            "node.instanceId": "ios-test",
+            "camera.enabled": nil,
+            "gateway.onboardingComplete": nil,
+        ]) {
+            let controller = GatewayConnectionController(appModel: NodeAppModel(), startDiscovery: false)
+            let options = await controller.makeConnectOptions(deviceAuthGatewayID: nil)
+
+            #expect(!options.caps.contains(OpenClawCapability.camera.rawValue))
+            #expect(UserDefaults.standard.object(forKey: "camera.enabled") as? Bool == false)
+        }
+    }
+
+    @Test @MainActor func `onboarded install without a camera preference keeps camera advertised`() async {
+        await withUserDefaults([
+            "node.instanceId": "ios-test",
+            "camera.enabled": nil,
+            "gateway.onboardingComplete": true,
+        ]) {
+            let controller = GatewayConnectionController(appModel: NodeAppModel(), startDiscovery: false)
+            let options = await controller.makeConnectOptions(deviceAuthGatewayID: nil)
+
+            #expect(options.caps.contains(OpenClawCapability.camera.rawValue))
+            #expect(UserDefaults.standard.object(forKey: "camera.enabled") as? Bool == true)
+        }
+    }
+
     @Test @MainActor func `registration preserves capability toggles and command wire order`() async {
         await withUserDefaults([
             "node.instanceId": "ios-test",

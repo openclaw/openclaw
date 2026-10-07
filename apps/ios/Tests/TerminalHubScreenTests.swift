@@ -87,20 +87,7 @@ struct TerminalHubScreenTests {
         #expect(script?.contains("\"https:\\/\\/gateway.example.com:443\"") == false)
     }
 
-    @Test func `auth user script falls back to stored operator token`() throws {
-        let config = try Self.makeConfig(
-            url: #require(URL(string: "wss://gateway.example.com:8443")),
-            token: nil,
-            password: nil)
-
-        let script = ControlUIHubPage.terminal.authUserScript(
-            config: config,
-            storedOperatorToken: " stored-token ")
-
-        #expect(script?.contains("\"token\":\"stored-token\"") == true)
-    }
-
-    @Test func `auth user script retains configured credentials beside a stored authorization`() throws {
+    @Test func `auth user script selects native signing and withholds the device grant`() throws {
         let gatewayID = "manual|terminal-\(UUID().uuidString)|443"
         let identity = DeviceIdentityStore.loadOrCreate()
         defer {
@@ -125,17 +112,17 @@ struct TerminalHubScreenTests {
             config: config,
             storedOperatorToken: AuthenticatedControlUI.storedOperatorToken(config: config))
 
-        #expect(script?.contains("openclaw-device-identity-v1") == true)
-        #expect(script?.contains("openclaw.device.auth.v1:${scope}") == true)
-        #expect(script?.contains(identity.deviceId) == true)
-        #expect(script?.contains("\"token\":\"scoped-terminal-token\"") == true)
-        #expect(script?.contains("operator.read") == true)
-        #expect(script?.contains("operator.write") == true)
-        #expect(script?.contains("configured-token") == true)
-        #expect(script?.contains("configured-password") == true)
+        #expect(script?.contains("\"nativeConnectAuth\":true") == true)
+        #expect(script?.contains("\"password\":\"configured-password\"") == true)
+        #expect(script?.contains("\"token\":null") == true)
+        #expect(script?.contains("configured-token") == false)
+        #expect(script?.contains("scoped-terminal-token") == false)
+        #expect(script?.contains("privateKey") == false)
+        #expect(script?.contains("openclaw-device-identity-v1") == false)
+        #expect(script?.contains(identity.privateKey) == false)
     }
 
-    @Test func `auth user script retains configured credentials beside an empty-scope grant`() throws {
+    @Test func `auth user script selects native signing for an empty-scope grant`() throws {
         let gatewayID = "manual|terminal-empty-scope-\(UUID().uuidString)|443"
         let identity = DeviceIdentityStore.loadOrCreate()
         defer {
@@ -160,9 +147,9 @@ struct TerminalHubScreenTests {
             config: config,
             storedOperatorToken: AuthenticatedControlUI.storedOperatorToken(config: config))
 
-        #expect(script?.contains("empty-scope-token") == true)
-        #expect(script?.contains("configured-token") == true)
-        #expect(script?.contains("configured-password") == true)
+        #expect(script?.contains("\"nativeConnectAuth\":true") == true)
+        #expect(script?.contains("empty-scope-token") == false)
+        #expect(script?.contains("\"password\":\"configured-password\"") == true)
     }
 
     @Test func `auth user script honors stored device auth suppression`() throws {
@@ -190,7 +177,7 @@ struct TerminalHubScreenTests {
             storedOperatorToken: AuthenticatedControlUI.storedOperatorToken(config: config))
 
         #expect(script?.contains("stale-terminal-token") == false)
-        #expect(script?.contains("const deviceAuthSeed = null;") == true)
+        #expect(script?.contains("nativeConnectAuth") == false)
         #expect(script?.contains("\"password\":\"replacement-password\"") == true)
     }
 

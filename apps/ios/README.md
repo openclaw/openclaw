@@ -310,6 +310,21 @@ See `apps/ios/VERSIONING.md` for the detailed spec.
 This exists to keep the hosted relay limited to genuine OpenClaw official builds and to ensure a
 gateway can only send pushes for iOS devices that paired with that gateway.
 
+## Enhanced Security
+
+The app and the share extension carry the Enhanced Security entitlement family
+(`com.apple.security.hardened-process.*`) in `Sources/OpenClaw.entitlements`,
+`Sources/OpenClawAppAttest.entitlements`, and `ShareExtension/OpenClawShareExtension.entitlements`:
+hardened heap, read-only dyld state, additional platform restrictions, and hardware memory tagging
+(`checked-allocations`) in **soft mode**, where tag violations produce simulated crash reports
+instead of terminating the process. `project.yml` enables the matching compiler settings
+(`CLANG_ENABLE_STACK_ZERO_INIT`, `ENABLE_SECURITY_COMPILER_WARNINGS`, typed allocator support).
+
+Deferred: arm64e pointer authentication (the WebRTC xcframework ships arm64 only), hard-mode
+tagging, the widget, and the watch app. Before disabling soft mode, review the simulated crash
+reports from a device build. `scripts/ios-validate-app-store-ipa.sh` asserts the signed
+`com.apple.security.hardened-process` entitlement on the app and the share extension.
+
 ## What Works Now (Concrete)
 
 - Pairing via QR or setup code flow (`/pair qr` or `/pair`, then `/pair approve` in Telegram).

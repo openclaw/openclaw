@@ -72,6 +72,8 @@ targets:
         buildPhase: resources
       - path: Sources/Fonts
         buildPhase: resources
+      - path: Sources/PrivacyInfo.xcprivacy
+        buildPhase: resources
       - path: Resources/Localizable.xcstrings
         buildPhase: resources
     dependencies:
@@ -119,6 +121,12 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_IDENTITY: "$(OPENCLAW_CODE_SIGN_IDENTITY)"
         CODE_SIGN_ENTITLEMENTS: "$(OPENCLAW_CODE_SIGN_ENTITLEMENTS)"
+        # Enhanced Security phase 1: individual cascade settings; ENABLE_ENHANCED_SECURITY and
+        # arm64e pointer authentication stay off (WebRTC ships arm64-only).
+        CLANG_ENABLE_C_TYPED_ALLOCATOR_SUPPORT: YES
+        CLANG_ENABLE_CPLUSPLUS_TYPED_ALLOCATOR_SUPPORT: YES
+        CLANG_ENABLE_STACK_ZERO_INIT: YES
+        ENABLE_SECURITY_COMPILER_WARNINGS: YES
         CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
         DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
         OPENCLAW_ACTIVE_APP_GROUP_ID: "$(OPENCLAW_APP_GROUP_ID)"
@@ -175,7 +183,6 @@ targets:
           - "$(PRODUCT_BUNDLE_IDENTIFIER).bgrefresh"
         NSLocalNetworkUsageDescription: OpenClaw discovers and connects to your OpenClaw gateway on the local network.
         NSAppTransportSecurity:
-          NSAllowsArbitraryLoadsInWebContent: true
           NSAllowsLocalNetworking: true
         NSBonjourServices:
           - _openclaw-gw._tcp
@@ -218,6 +225,8 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: ShareExtension
+      - path: ShareExtension/PrivacyInfo.xcprivacy
+        buildPhase: resources
       - path: Resources/Localizable.xcstrings
         buildPhase: resources
     dependencies:
@@ -229,6 +238,12 @@ targets:
       base:
         CODE_SIGN_IDENTITY: "$(OPENCLAW_CODE_SIGN_IDENTITY)"
         CODE_SIGN_ENTITLEMENTS: ShareExtension/OpenClawShareExtension.entitlements
+        # Enhanced Security phase 1: individual cascade settings; ENABLE_ENHANCED_SECURITY and
+        # arm64e pointer authentication stay off (WebRTC ships arm64-only).
+        CLANG_ENABLE_C_TYPED_ALLOCATOR_SUPPORT: YES
+        CLANG_ENABLE_CPLUSPLUS_TYPED_ALLOCATOR_SUPPORT: YES
+        CLANG_ENABLE_STACK_ZERO_INIT: YES
+        ENABLE_SECURITY_COMPILER_WARNINGS: YES
         CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
         DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
         ENABLE_APPINTENTS_METADATA: NO
@@ -270,6 +285,8 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: ActivityWidget
+      - path: ActivityWidget/PrivacyInfo.xcprivacy
+        buildPhase: resources
       - path: Sources/LiveActivity/OpenClawActivityAttributes.swift
       # Shared continuous avatar waveform; dependency-free for widget isolation.
       - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/TalkWaveformView.swift
@@ -322,6 +339,8 @@ targets:
       - path: WatchApp
         excludes:
           - Info.plist
+      - path: WatchApp/PrivacyInfo.xcprivacy
+        buildPhase: resources
       - path: Sources/Services/WatchSessionActivationGate.swift
         group: Sources/Services
       - path: Sources/Services/ExactOpaqueIdentifier.swift

@@ -6,6 +6,8 @@ struct StartLiveVoiceIntent: AppIntent {
     static let description: IntentDescription? = IntentDescription(
         "Open the current chat in OpenClaw and start a voice conversation.")
     static let openAppWhenRun = true
+    /// Starting a voice session from the lock screen needs the device owner present.
+    static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
 
     @MainActor
     func perform() async throws -> some IntentResult {

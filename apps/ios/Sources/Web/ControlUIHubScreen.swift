@@ -90,7 +90,10 @@ struct ControlUIHubScreen: View {
                 AuthenticatedControlUIWebView(
                     url: url,
                     authScript: self.page.authUserScript(config: config, storedOperatorToken: storedOperatorToken),
-                    tls: config?.tls)
+                    tls: config?.tls,
+                    nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
+                        config: config,
+                        storedOperatorToken: storedOperatorToken))
                     // Unrelated SwiftUI updates must not reload a live desktop or shell.
                         .id(self.page.webContentIdentity(config: config, storedOperatorToken: storedOperatorToken))
                         .ignoresSafeArea(.container, edges: .bottom)

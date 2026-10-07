@@ -171,6 +171,9 @@ struct EmbeddedDashboardContent: View {
                     usesNativeNavigationChrome: true),
                 tls: self.config?.tls,
                 deviceSettingsBridge: self.bridge,
+                nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
+                    config: self.config,
+                    storedOperatorToken: storedOperatorToken),
                 usesNativeEmbed: true,
                 embedCompatibility: self.embedCompatibility)
                 .id(AuthenticatedControlUI.webContentIdentity(

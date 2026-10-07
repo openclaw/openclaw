@@ -654,23 +654,15 @@ final class WatchDirectNode {
         case .critical: .critical
         @unknown default: .nominal
         }
-        let attributes = (try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())) ?? [:]
-        let total = (attributes[.systemSize] as? NSNumber)?.int64Value ?? 0
-        let free = (attributes[.systemFreeSize] as? NSNumber)?.int64Value ?? 0
         let networkMetrics = self.networkMetrics.snapshot()
         return OpenClawDeviceStatusPayload(
             battery: battery,
             thermal: OpenClawThermalStatusPayload(state: thermalState),
-            storage: OpenClawStorageStatusPayload(
-                totalBytes: total,
-                freeBytes: free,
-                usedBytes: max(0, total - free)),
             network: OpenClawNetworkStatusPayload(
                 status: self.isConnected ? .satisfied : .requiresConnection,
                 isExpensive: networkMetrics?.isExpensive ?? false,
                 isConstrained: networkMetrics?.isConstrained ?? false,
-                interfaces: networkMetrics?.isCellular == true ? [.cellular] : [.other]),
-            uptimeSeconds: ProcessInfo.processInfo.systemUptime)
+                interfaces: networkMetrics?.isCellular == true ? [.cellular] : [.other]))
     }
 
     private func encodedResponse(id: String, payload: some Encodable) throws -> BridgeInvokeResponse {

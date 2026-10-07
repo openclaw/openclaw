@@ -1227,9 +1227,22 @@ extension TalkRealtimeWebRTCSession {
         }
     }
 
+    /// The client secret rides in this request, so it never leaves over cleartext to a host other than the
+    /// gateway that minted it. The gateway URL is a ws(s) route; only host and port are compared.
+    nonisolated static func isAllowedOfferURL(_ url: URL, gatewayURL: URL?) -> Bool {
+        if url.scheme?.lowercased() == "https" { return true }
+        guard let offer = GatewayTLSAuthority(url: url), let gatewayURL,
+              let gateway = GatewayTLSAuthority(url: gatewayURL)
+        else { return false }
+        return offer.matches(host: gateway.host, port: gateway.port)
+    }
+
     private func exchangeOffer(_ sdp: String, session: TalkRealtimeClientSession) async throws -> String {
         let rawURL = session.offerUrl ?? Self.defaultOfferURL
-        guard let url = await gateway.resolveGatewayHTTPURL(rawURL) else {
+        let gatewayURL = await gateway.currentRemoteAddress().flatMap { URL(string: "ws://\($0)") }
+        guard let url = await gateway.resolveGatewayHTTPURL(rawURL),
+              Self.isAllowedOfferURL(url, gatewayURL: gatewayURL)
+        else {
             throw NSError(domain: "TalkRealtimeWebRTC", code: 4, userInfo: [
                 NSLocalizedDescriptionKey: "Invalid OpenAI realtime offer URL",
             ])
@@ -1245,7 +1258,11 @@ extension TalkRealtimeWebRTCSession {
 
         self.trace("openai webrtc offer exchange start urlHost=\(url.host ?? "unknown")")
         let startedAt = ProcessInfo.processInfo.systemUptime
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 20
+        let offerSession = URLSession(configuration: configuration)
+        defer { offerSession.finishTasksAndInvalidate() }
+        let (data, response) = try await offerSession.data(for: request, delegate: OfferNoRedirectDelegate())
         guard let http = response as? HTTPURLResponse else {
             throw NSError(domain: "TalkRealtimeWebRTC", code: 5, userInfo: [
                 NSLocalizedDescriptionKey: "OpenAI realtime offer returned a non-HTTP response",
@@ -1434,5 +1451,17 @@ extension TalkRealtimeWebRTCSession: RTCDataChannelDelegate {
                     .debug("ignored realtime event decode failure: \(error.localizedDescription, privacy: .public)")
             }
         }
+    }
+}
+
+private final class OfferNoRedirectDelegate: NSObject, URLSessionTaskDelegate {
+    func urlSession(
+        _: URLSession,
+        task _: URLSessionTask,
+        willPerformHTTPRedirection _: HTTPURLResponse,
+        newRequest _: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void)
+    {
+        completionHandler(nil)
     }
 }

@@ -133,6 +133,10 @@ if (process.argv[2] === "-convert" && process.argv[3] === "xml1") {
   process.stdout.write(readFileSync(process.argv[process.argv.length - 1], "utf8"));
   process.exit(0);
 }
+if (process.argv[2] === "-lint") {
+  // Structural stand-in for plutil -lint: a plist document with a dict root.
+  process.exit(/<plist[^>]*>\\s*<dict>[\\s\\S]*<\\/dict>\\s*<\\/plist>/.test(readFileSync(process.argv[3], "utf8")) ? 0 : 1);
+}
 const extractIndex = process.argv.indexOf("-extract");
 const expectIndex = process.argv.indexOf("-expect");
 if (extractIndex < 0 || expectIndex < 0 || process.argv[expectIndex + 1] !== "string") process.exit(2);
@@ -221,6 +225,10 @@ async function writeValidFixture(
     localizedDisplayName?: string;
     pushMode?: string;
     legacyKey?: boolean;
+    atsKey?: "NSAllowsArbitraryLoads" | "NSAllowsArbitraryLoadsInWebContent";
+    omitManifest?: "app" | "appex" | "watch";
+    invalidManifest?: boolean;
+    omitHardenedProcess?: "app" | "appex";
   } = {},
 ): Promise<{
   ipaPath: string;
@@ -258,6 +266,13 @@ async function writeValidFixture(
             options.healthUpdateUsage ?? "OpenClaw reads Health data for Health Summaries.",
           ),
     options.legacyKey ? plistString("OpenClawPushRelayProfile", "production") : "",
+    plistDict(
+      "NSAppTransportSecurity",
+      [
+        plistBool("NSAllowsLocalNetworking", true),
+        options.atsKey ? plistBool(options.atsKey, true) : "",
+      ].join(""),
+    ),
   ].join("");
   writeFileSync(path.join(appDir, "Info.plist"), plist(infoBody), "utf8");
   const localizedDir = path.join(appDir, "de.lproj");
@@ -272,6 +287,25 @@ async function writeValidFixture(
     "utf8",
   );
   writeFileSync(path.join(appDir, "embedded.mobileprovision"), "fixture profile", "utf8");
+  const manifestBody = plist(
+    [plistBool("NSPrivacyTracking", false), plistArray("NSPrivacyTrackingDomains", [])].join(""),
+  );
+  const manifestText = options.invalidManifest ? "not a plist" : manifestBody;
+  const manifestDirs = {
+    app: appDir,
+    appex: path.join(appDir, "PlugIns", "OpenClawShareExtension.appex"),
+    watch: path.join(appDir, "Watch", "OpenClawWatchApp.app"),
+  } as const;
+  for (const [name, dir] of Object.entries(manifestDirs)) {
+    mkdirSync(dir, { recursive: true });
+    // Keep the bundle in the IPA zip (it only stores files) even when its manifest is omitted.
+    if (name !== "app") {
+      writeFileSync(path.join(dir, "Info.plist"), plist(""), "utf8");
+    }
+    if (options.omitManifest !== name) {
+      writeFileSync(path.join(dir, "PrivacyInfo.xcprivacy"), manifestText, "utf8");
+    }
+  }
 
   const entitlementsPath = path.join(fixturesDir, "entitlements.plist");
   writeFileSync(
@@ -286,6 +320,24 @@ async function writeValidFixture(
         plistArray("com.apple.security.application-groups", [
           "group.ai.openclawfoundation.app.shared",
         ]),
+        ...(options.omitHardenedProcess === "app"
+          ? []
+          : [plistBool("com.apple.security.hardened-process", true)]),
+      ].join(""),
+    ),
+    "utf8",
+  );
+  const shareEntitlementsPath = path.join(fixturesDir, "share-entitlements.plist");
+  writeFileSync(
+    shareEntitlementsPath,
+    plist(
+      [
+        plistArray("com.apple.security.application-groups", [
+          "group.ai.openclawfoundation.app.shared",
+        ]),
+        ...(options.omitHardenedProcess === "appex"
+          ? []
+          : [plistBool("com.apple.security.hardened-process", true)]),
       ].join(""),
     ),
     "utf8",
@@ -323,7 +375,10 @@ async function writeValidFixture(
     codesign,
     `#!/usr/bin/env bash
 set -euo pipefail
-cat "${entitlementsPath}"
+case "\${!#}" in
+  *.appex) cat "${shareEntitlementsPath}" ;;
+  *) cat "${entitlementsPath}" ;;
+esac
 `,
   );
   const security = path.join(binDir, "security");
@@ -517,6 +572,66 @@ describe("scripts/ios-validate-app-store-ipa.sh", () => {
 
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain("legacy relay profile");
+  });
+
+  it.each([
+    ["app", "app bundle is missing PrivacyInfo.xcprivacy"],
+    ["appex", "PlugIns/OpenClawShareExtension.appex is missing PrivacyInfo.xcprivacy"],
+    ["watch", "Watch/OpenClawWatchApp.app is missing PrivacyInfo.xcprivacy"],
+  ] as const)(
+    "rejects an IPA whose %s bundle lacks a privacy manifest",
+    async (bundle, message) => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
+      tempDirs.push(root);
+      const fixture = await writeValidFixture(root, { omitManifest: bundle });
+
+      const result = runValidator(fixture);
+
+      expect(result.ok).toBe(false);
+      expect(result.stderr).toContain(message);
+    },
+  );
+
+  it.each([
+    ["app", "signed Enhanced Security entitlement mismatch"],
+    ["appex", "share extension signed Enhanced Security entitlement mismatch"],
+  ] as const)("rejects an IPA whose %s is not signed hardened-process", async (target, message) => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
+    tempDirs.push(root);
+    const fixture = await writeValidFixture(root, { omitHardenedProcess: target });
+
+    const result = runValidator(fixture);
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain(message);
+  });
+
+  it("rejects an IPA with an unparsable privacy manifest", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
+    tempDirs.push(root);
+    const fixture = await writeValidFixture(root, { invalidManifest: true });
+
+    const result = runValidator(fixture);
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain("PrivacyInfo.xcprivacy is not a valid plist");
+  });
+
+  it.each([
+    ["NSAllowsArbitraryLoads", "ATS arbitrary loads must not be present"],
+    [
+      "NSAllowsArbitraryLoadsInWebContent",
+      "ATS arbitrary loads in web content must not be present",
+    ],
+  ] as const)("rejects the %s ATS key", async (atsKey, message) => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
+    tempDirs.push(root);
+    const fixture = await writeValidFixture(root, { atsKey });
+
+    const result = runValidator(fixture);
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain(message);
   });
 
   it("rejects malformed or mismatched embedded build provenance", async () => {

@@ -216,6 +216,40 @@ assert_localized_plists_resolve_build_settings() {
   done < <(find "${app_path}" -type f -path "*.lproj/InfoPlist.strings" -print0)
 }
 
+assert_privacy_manifest() {
+  local bundle_path="$1"
+  local label="$2"
+  local manifest="${bundle_path}/PrivacyInfo.xcprivacy"
+  if [[ ! -f "${manifest}" ]]; then
+    echo "Invalid IPA: ${label} is missing PrivacyInfo.xcprivacy." >&2
+    exit 1
+  fi
+  if ! "${PLUTIL_BIN}" -lint "${manifest}" >/dev/null 2>&1; then
+    echo "Invalid IPA: ${label} PrivacyInfo.xcprivacy is not a valid plist." >&2
+    exit 1
+  fi
+}
+
+assert_privacy_manifests() {
+  local bundle
+  local count
+  assert_privacy_manifest "${app_path}" "app bundle"
+  # Every embedded extension and the watch app ships its own manifest.
+  count=0
+  while IFS= read -r -d '' bundle; do
+    assert_privacy_manifest "${bundle}" "${bundle#"${app_path}/"}"
+    count=$((count + 1))
+  done < <(find "${app_path}/PlugIns" -maxdepth 1 -type d -name "*.appex" -print0 2>/dev/null)
+  while IFS= read -r -d '' bundle; do
+    assert_privacy_manifest "${bundle}" "${bundle#"${app_path}/"}"
+    count=$((count + 1))
+  done < <(find "${app_path}/Watch" -maxdepth 1 -type d -name "*.app" -print0 2>/dev/null)
+  if [[ "${count}" -eq 0 ]]; then
+    echo "Invalid IPA: expected embedded extensions or a watch app with privacy manifests." >&2
+    exit 1
+  fi
+}
+
 assert_plist_string "${info_plist}" "CFBundleIdentifier" "${EXPECTED_BUNDLE_ID}" "bundle identifier mismatch"
 assert_plist_string "${info_plist}" "CFBundleDisplayName" "OpenClaw" "display name mismatch"
 assert_plist_string "${info_plist}" "OpenClawPushMode" "${EXPECTED_PUSH_MODE}" "push mode mismatch"
@@ -229,6 +263,9 @@ assert_plist_key_absent "${info_plist}" "OpenClawPushDistribution" "legacy push 
 assert_plist_key_absent "${info_plist}" "OpenClawPushAPNsEnvironment" "legacy APNs environment"
 assert_plist_key_absent "${info_plist}" "OpenClawPushRelayProfile" "legacy relay profile"
 assert_plist_key_absent "${info_plist}" "OpenClawPushProofPolicy" "legacy proof policy"
+assert_plist_key_absent "${info_plist}" "NSAppTransportSecurity:NSAllowsArbitraryLoads" "ATS arbitrary loads"
+assert_plist_key_absent "${info_plist}" "NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent" "ATS arbitrary loads in web content"
+assert_privacy_manifests
 
 if ! "${CODESIGN_BIN}" -d --entitlements :- "${app_path}" >"${entitlements_plist}" 2>"${tmp_dir}/codesign.err"; then
   detail="$(<"${tmp_dir}/codesign.err")"
@@ -242,6 +279,21 @@ assert_plist_string "${entitlements_plist}" "aps-environment" "production" "sign
 assert_plist_string "${entitlements_plist}" "com.apple.developer.devicecheck.appattest-environment" "production" "signed App Attest entitlement mismatch"
 assert_plist_string "${entitlements_plist}" "com.apple.developer.healthkit" "true" "signed HealthKit entitlement mismatch"
 assert_plist_array_contains "${entitlements_plist}" "com.apple.security.application-groups" "${EXPECTED_APP_GROUP}" "signed App Group entitlement mismatch"
+assert_plist_string "${entitlements_plist}" "com.apple.security.hardened-process" "true" "signed Enhanced Security entitlement mismatch"
+
+# The share extension handles untrusted shared content, so it ships hardened too.
+share_extension_path="${app_path}/PlugIns/OpenClawShareExtension.appex"
+share_entitlements_plist="${tmp_dir}/share-entitlements.plist"
+if [[ ! -d "${share_extension_path}" ]]; then
+  echo "Invalid IPA: missing PlugIns/OpenClawShareExtension.appex." >&2
+  exit 1
+fi
+if ! "${CODESIGN_BIN}" -d --entitlements :- "${share_extension_path}" >"${share_entitlements_plist}" 2>"${tmp_dir}/codesign.err"; then
+  detail="$(<"${tmp_dir}/codesign.err")"
+  echo "Invalid IPA: failed to read share extension signed entitlements${detail:+: ${detail}}" >&2
+  exit 1
+fi
+assert_plist_string "${share_entitlements_plist}" "com.apple.security.hardened-process" "true" "share extension signed Enhanced Security entitlement mismatch"
 
 if ! "${SECURITY_BIN}" cms -D -i "${embedded_profile}" >"${profile_plist}" 2>"${tmp_dir}/security.err"; then
   detail="$(<"${tmp_dir}/security.err")"

@@ -33,7 +33,7 @@ struct IOSDeviceSettingsSnapshotTests {
         let device = try #require(json["device"] as? [String: Any])
         #expect(device["profileName"] is NSNull)
         #expect(snapshot.app?.notificationsEnabled == true)
-        #expect(snapshot.capabilities?.cameraEnabled == true)
+        #expect(snapshot.capabilities?.cameraEnabled == false)
         #expect(snapshot.capabilities?.keepAwakeEnabled == true)
         #expect(snapshot.voice.talkButtonEnabled == true)
         #expect(snapshot.voice.talkBackgroundEnabled == false)
@@ -45,6 +45,38 @@ struct IOSDeviceSettingsSnapshotTests {
         ])
         #expect(snapshot.permissions.entries.first?.status == .unavailable)
         #expect(snapshot.permissions.entries.first(where: { $0.id == .location })?.status == .unavailable)
+    }
+
+    @Test func `camera preference owner applies the fresh install and upgrade rule`() throws {
+        let suite = "IOSDeviceSettingsSnapshotTests.camera.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let key = NodeCapabilityPreferences.cameraEnabledKey
+
+        #expect(!NodeCapabilityPreferences.isCameraEnabled(defaults: defaults))
+        #expect(defaults.object(forKey: key) as? Bool == false)
+
+        defaults.removeObject(forKey: key)
+        defaults.set(true, forKey: "gateway.onboardingComplete")
+        #expect(NodeCapabilityPreferences.isCameraEnabled(defaults: defaults))
+        #expect(defaults.object(forKey: key) as? Bool == true)
+
+        NodeCapabilityPreferences.setCameraEnabled(false, defaults: defaults)
+        #expect(!NodeCapabilityPreferences.isCameraEnabled(defaults: defaults))
+    }
+
+    @Test func `snapshot reports the owner camera default`() throws {
+        let suite = "IOSDeviceSettingsSnapshotTests.default.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let producer = IOSDeviceSettingsSnapshotProducer(
+            appModel: NodeAppModel(audioAdmissionInitiallyAllowed: false),
+            appearanceModel: AppAppearanceModel(userDefaults: defaults),
+            defaults: defaults)
+
+        #expect(producer.snapshot(notificationStatus: .denied).capabilities?.cameraEnabled == false)
+        defaults.set(true, forKey: NodeCapabilityPreferences.cameraEnabledKey)
+        #expect(producer.snapshot(notificationStatus: .denied).capabilities?.cameraEnabled == true)
     }
 
     @Test func `snapshot rereads preference owners and system owned precision`() throws {
