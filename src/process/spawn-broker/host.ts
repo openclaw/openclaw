@@ -19,6 +19,7 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
+import { getSpawnBrokerAdmission } from "./admission.js";
 import { waitForBrokerChildCompletion } from "./child-completion.js";
 import { observeBrokerChildDiagnostics } from "./child-diagnostics.js";
 import { terminateBrokerProcessGroup, terminateLostBrokerChild } from "./cleanup.js";
@@ -31,6 +32,8 @@ import { BrokerFileReads } from "./file-reads.js";
 import { createBrokerReceiver, createBrokerSender } from "./ipc.js";
 import { holdPipe, restoreStdinPipe } from "./pipe.js";
 import {
+  childCapacityError,
+  type BrokerAdmission,
   MAX_NATIVE_RESOURCES,
   MAX_PENDING_SPAWNS,
   SpawnBrokerError,
@@ -74,6 +77,7 @@ export class SpawnBrokerHost {
   private consecutiveFailures = 0;
   private sequence = 0;
   private requests = new Map<number, Request>();
+  private readonly childAdmissions = new Map<number, BrokerAdmission>();
   private readonly pendingSpawns = new Set<number>();
   private readonly fileReads = new BrokerFileReads({
     ready: () => this.ready(),
@@ -231,6 +235,8 @@ export class SpawnBrokerHost {
     message: Extract<BrokerRequest, { type: "spawn" | "prepare-spawn" | "spawn-execa" }>,
     initiateSpawn?: SpawnInitiation,
   ): Request {
+    message.admission = getSpawnBrokerAdmission();
+    const capacityError = childCapacityError(this.childAdmissions.values(), message.admission);
     const request = createBrokerCommandRequest(message, initiateSpawn, (value, handle, initiate) =>
       this.transmit(value, handle, initiate),
     );
@@ -241,19 +247,25 @@ export class SpawnBrokerHost {
       child.settleFileOutput();
       child.fail(error);
     };
-    if (!this.available || this.closing || this.pendingSpawns.size + this.fileReads.size >= MAX_PENDING_SPAWNS) {
+    if (
+      !this.available ||
+      this.closing ||
+      this.pendingSpawns.size + this.fileReads.size >= MAX_PENDING_SPAWNS ||
+      capacityError
+    ) {
       child.markNotStarted();
       queueMicrotask(() =>
         fail(
           new SpawnBrokerError(
             this.available && !this.closing
-              ? "Spawn broker startup capacity exceeded"
+              ? (capacityError ?? "Spawn broker startup capacity exceeded")
               : "Spawn broker is unavailable",
           ),
         ),
       );
       return request;
     }
+    this.childAdmissions.set(message.id, message.admission);
     this.requests.set(message.id, request);
     this.pendingSpawns.add(message.id);
     this.refreshNativeReference();
@@ -270,13 +282,10 @@ export class SpawnBrokerHost {
         }
         return;
       }
-      if (!request.nativeInitiated) {
-        if (message.type === "prepare-spawn") {
-          child.markNotStarted();
-        }
-        this.requests.delete(message.id);
-        this.refreshNativeReference();
+      if (!request.nativeInitiated && message.type === "prepare-spawn") {
+        child.markNotStarted();
       }
+      // Delivery failure is not proof that an ordinary launch never reached its peer.
       fail(new SpawnBrokerError("Spawn broker request delivery failed", { cause: error }));
     });
     return request;
@@ -284,15 +293,25 @@ export class SpawnBrokerHost {
 
   private retire(id: number, request: Request): void {
     if (request.childClosed && request.resultSettled && !request.nativeInitiated) {
+      if (request.child.notStarted || (!request.recovering && request.nativeClosed)) {
+        this.childAdmissions.delete(id);
+      } else if (!request.recovering || request.pid === undefined) {
+        return;
+      }
       this.requests.delete(id);
       this.refreshNativeReference();
     }
   }
 
-  private retainCleanup(cleanup: ReturnType<typeof terminateLostBrokerChild>): void {
+  private retainCleanup(cleanup: ReturnType<typeof terminateLostBrokerChild>, id?: number): void {
     this.cleanups.add(cleanup);
     void cleanup.settled.then(
-      () => this.cleanups.delete(cleanup),
+      () => {
+        this.cleanups.delete(cleanup);
+        if (id !== undefined) {
+          this.childAdmissions.delete(id);
+        }
+      },
       (failure: unknown) => {
         this.cleanupErrors.push(toErrorObject(failure, "Spawn broker cleanup failed"));
         this.cleanups.delete(cleanup);
@@ -396,8 +415,9 @@ export class SpawnBrokerHost {
       previousReadiness.reject(error);
       this.fileReads.fail(error);
       const outputRequests: Request[] = [];
-      for (const request of this.requests.values()) {
-        if (request.pid && !request.childClosed) {
+      for (const [id, request] of this.requests) {
+        request.recovering = true;
+        if (request.pid && !request.nativeClosed) {
           const pid = request.pid;
           if (this.closing) {
             let cleanup: ReturnType<typeof terminateLostBrokerChild> | undefined;
@@ -410,11 +430,14 @@ export class SpawnBrokerHost {
                 cleanup = terminateLostBrokerChild(pid, request.detached);
                 await cleanup.settled;
               }),
-            });
+            }, id);
           } else {
-            this.retainCleanup(terminateLostBrokerChild(pid, request.detached));
+            this.retainCleanup(terminateLostBrokerChild(pid, request.detached), id);
           }
+        } else if (request.child.notStarted || request.nativeClosed) {
+          this.childAdmissions.delete(id);
         }
+        // Unknown detached launches retain their reservation across broker restarts.
         request.result?.reject(error);
         if (request.output) {
           outputRequests.push(request);
@@ -608,7 +631,8 @@ export class SpawnBrokerHost {
       } else if (message.type === "owned") {
         request.pid = message.pid;
         if (request.childClosed) {
-          this.retainCleanup(terminateLostBrokerChild(message.pid, request.detached));
+          request.recovering = true;
+          this.retainCleanup(terminateLostBrokerChild(message.pid, request.detached), message.id);
           this.retire(message.id, request);
         }
       } else if (message.type === "pipe") {
@@ -660,6 +684,11 @@ export class SpawnBrokerHost {
         request.resultSettled = true;
         this.retire(message.id, request);
       } else {
+        if (message.type === "closed") {
+          request.nativeClosed = true;
+        } else if (message.type === "error" && message.notStarted) {
+          request.child.markNotStarted();
+        }
         if (message.type === "error" && message.resultUnavailable && request.output) {
           request.output.reject(Object.assign(new Error(message.error.message), message.error));
           request.resultSettled = true;

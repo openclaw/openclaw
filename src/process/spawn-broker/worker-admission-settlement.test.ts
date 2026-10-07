@@ -77,6 +77,7 @@ it.each(["spawn", "spawn-execa", "retained-spawn"] as const)(
       await setImmediate();
       expect(boundary.send).toHaveBeenCalledWith({ type: "ready", pid: process.pid }, undefined);
       if (type === "retained-spawn") {
+        const dispatch = receive;
         const children: ChildProcess[] = [];
         const killed = vi.fn<(pid: number, signal?: NodeJS.Signals | number) => boolean>(
           () => true,
@@ -95,21 +96,49 @@ it.each(["spawn", "spawn-execa", "retained-spawn"] as const)(
           queueMicrotask(() => child.emit("spawn"));
           return child;
         });
-        for (let id = 1; id <= 260; id++) {
-          receive({
+        const start = async (id: number, admission: "mcp" | "command") => {
+          dispatch({
             type: "spawn",
             id,
+            admission,
             argv: ["synthetic-command"],
             options: { stdio: ["ignore", "ignore", "ignore"] },
           });
           await setImmediate();
+        };
+        for (let id = 1; id <= 448; id++) {
+          await start(id, "mcp");
         }
+        await start(449, "mcp");
+        expect(boundary.spawn).toHaveBeenCalledTimes(448);
+        for (let id = 450; id <= 513; id++) {
+          await start(id, "command");
+        }
+        await start(514, "command");
+        expect(boundary.spawn).toHaveBeenCalledTimes(512);
         const responses = boundary.send.mock.calls.map(([message]) => message);
-        expect(responses.filter((message) => message.type === "spawned")).toHaveLength(260);
-        expect(responses.filter((message) => message.type === "error")).toEqual([]);
+        expect(responses.filter((message) => message.type === "spawned")).toHaveLength(512);
+        expect(responses.filter((message) => message.type === "error")).toEqual([
+          expect.objectContaining({
+            id: 449,
+            error: expect.objectContaining({ code: "ERR_SPAWN_BROKER_UNAVAILABLE" }),
+          }),
+          expect.objectContaining({
+            id: 514,
+            error: expect.objectContaining({ code: "ERR_SPAWN_BROKER_UNAVAILABLE" }),
+          }),
+        ]);
         expect(children.every((child) => child.exitCode === null)).toBe(true);
-        receive({ type: "kill", id: 260, signal: "SIGTERM" });
-        expect(killed).toHaveBeenCalledWith(children[259]!.pid, "SIGTERM");
+        receive({ type: "kill", id: 513, signal: "SIGTERM" });
+        expect(killed).toHaveBeenCalledWith(children[511]!.pid, "SIGTERM");
+        children[0]!.emit("exit", 0, null);
+        children[0]!.emit("close", 0, null);
+        await start(515, "mcp");
+        expect(boundary.spawn).toHaveBeenCalledTimes(513);
+        expect(boundary.send).toHaveBeenCalledWith(
+          expect.objectContaining({ type: "spawned", id: 515 }),
+          undefined,
+        );
         expect(boundary.close).not.toHaveBeenCalled();
         return;
       }

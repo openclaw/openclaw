@@ -22,6 +22,8 @@ import { prepareProcessOutputFile } from "./file-output.js";
 import { createBrokerReceiver } from "./ipc.js";
 import { holdPipeForTransfer, takePipePrefix } from "./pipe.js";
 import {
+  childCapacityError,
+  type BrokerAdmission,
   MAX_NATIVE_RESOURCES,
   MAX_PENDING_SPAWNS,
   serializeBrokerError,
@@ -57,6 +59,8 @@ type Admission =
   | { type: "started"; entry: Owned; pid: number }
   | { type: "failed"; execa: BrokerExecaProcess };
 const owned = new Map<number, Owned>();
+// One reservation spans startup and retained custody, without counting either twice.
+const childAdmissions = new Map<number, BrokerAdmission>();
 const receiver = createBrokerReceiver();
 let stopping = false;
 const starting = new Map<number, { canceled?: boolean; signal?: NodeJS.Signals | number }>();
@@ -100,6 +104,7 @@ function forget(id: number, entry: Owned): void {
           if (!isBrokerChildGroupAlive(identity)) {
             entry.groupGone = true;
             owned.delete(id);
+            childAdmissions.delete(id);
             return;
           }
           await delay(50, undefined, { ref: false });
@@ -109,6 +114,7 @@ function forget(id: number, entry: Owned): void {
       return;
     }
     owned.delete(id);
+    childAdmissions.delete(id);
   }
 }
 
@@ -211,7 +217,7 @@ async function readFile(message: Extract<BrokerRequest, { type: "read-file" }>):
   const pending = { canceled: false, controller: new AbortController() };
   try {
     // Resource brokers can hold SQLite locks; only the command broker is a safe reader.
-    if (resources || owned.size + starting.size + fileReads.size >= 256) {
+    if (resources || starting.size + fileReads.size >= MAX_PENDING_SPAWNS) {
       throw new SpawnBrokerError("Spawn broker cannot admit a raw file read");
     }
     fileReads.set(message.id, pending);
@@ -254,8 +260,10 @@ async function readFile(message: Extract<BrokerRequest, { type: "read-file" }>):
 async function launch(
   message: Extract<BrokerRequest, { type: "spawn" | "prepare-spawn" | "spawn-execa" }>,
 ): Promise<void> {
-  if (stopping || starting.size + fileReads.size >= MAX_PENDING_SPAWNS) {
-    const error = new SpawnBrokerError("Spawn broker request capacity exceeded");
+  const admissionClass = message.admission ?? "command";
+  const capacityError = childCapacityError(childAdmissions.values(), admissionClass);
+  if (stopping || starting.size + fileReads.size >= MAX_PENDING_SPAWNS || capacityError) {
+    const error = new SpawnBrokerError(capacityError ?? "Spawn broker startup capacity exceeded");
     // The ordered failed-admission result proves no native work was started.
     // No command metadata exists because this guard precedes spawn preparation.
     await report({
@@ -286,6 +294,7 @@ async function launch(
     return;
   }
   const pending: { canceled?: boolean; signal?: NodeJS.Signals | number } = {};
+  childAdmissions.set(message.id, admissionClass);
   starting.set(message.id, pending);
   let spawnedChild: ChildProcess | undefined;
   let spawnedClose: Promise<void> | undefined;
@@ -549,6 +558,7 @@ async function launch(
       await termination?.settled;
     }
     await destination?.close();
+    childAdmissions.delete(message.id);
     owned.delete(message.id);
     if (!stopping) {
       await report({
@@ -556,10 +566,14 @@ async function launch(
         id: message.id,
         error: serializeBrokerError(error instanceof Error ? error : new Error(String(error))),
         resultUnavailable: true,
+        ...(!spawnedChild?.pid ? { notStarted: true as const } : {}),
       });
     }
   } finally {
     starting.delete(message.id);
+    if (!owned.has(message.id) && !spawnedChild?.pid) {
+      childAdmissions.delete(message.id);
+    }
   }
 }
 

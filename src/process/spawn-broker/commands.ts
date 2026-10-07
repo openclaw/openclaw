@@ -18,6 +18,8 @@ export type BrokerCommandRequest = {
   result?: ReturnType<typeof createDeferredCore<BrokerExecaResult>>;
   output?: ReturnType<typeof createDeferredCore<number>>;
   childClosed: boolean;
+  nativeClosed?: boolean;
+  recovering?: boolean;
   resultSettled: boolean;
 };
 

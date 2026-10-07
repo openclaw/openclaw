@@ -20,6 +20,7 @@ import {
   OwnedStdioCleanupError,
   type OwnedStdioProcess,
 } from "../process/owned-stdio.js";
+import { runWithSpawnBrokerAdmission } from "../process/spawn-broker/admission.js";
 import type { ProcessCleanupResult } from "../process/supervisor/types.js";
 import { parseMcpDockerCommand } from "./mcp-docker-command.js";
 import { McpStdioFrameDecoder } from "./mcp-stdio-frame-decoder.js";
@@ -118,7 +119,7 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
       if (this.startupAbort.signal.aborted) {
         throw new Error("MCP stdio transport is closed");
       }
-      const child = await createOwnedStdioProcess({
+      const child = await runWithSpawnBrokerAdmission("mcp", () => createOwnedStdioProcess({
         argv: this.docker
           ? [this.docker.command, ...this.docker.args]
           : [this.serverParams.command, ...(this.serverParams.args ?? [])],
@@ -131,7 +132,7 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
           ? { assertCurrent: this.docker.assertCurrent }
           : { abortSignal: this.startupAbort.signal }),
         stderrDestination: this.stderrStream,
-      });
+      }));
       this.process = child;
       child.onError((error) => this.notifyError(error));
       const receive = (chunk: Buffer) => {
