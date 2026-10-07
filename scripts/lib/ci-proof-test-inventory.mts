@@ -2222,7 +2222,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/config/sessions/session-accessor.sqlite-export-budget.test.ts",
   "src/config/sessions/session-accessor.sqlite-handle-lifecycle.test.ts",
   "src/config/sessions/session-accessor.sqlite-history-events.test.ts",
-  "src/config/sessions/session-accessor.sqlite-history-marker-gap.test.ts",
   "src/config/sessions/session-accessor.sqlite-history-query-plan.test.ts",
   "src/config/sessions/session-accessor.sqlite-lifecycle-admission.test.ts",
   "src/config/sessions/session-accessor.sqlite-lifecycle-publication.test.ts",
