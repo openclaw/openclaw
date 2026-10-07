@@ -62,11 +62,14 @@ describe("worker chat.abort settlement", () => {
   });
 
   afterEach(async () => {
-    await harness.close();
-    if (previousConfig) {
-      setRuntimeConfigSnapshot(previousConfig, previousSourceConfig ?? undefined);
-    } else {
-      clearRuntimeConfigSnapshot();
+    try {
+      await harness.close();
+    } finally {
+      if (previousConfig) {
+        setRuntimeConfigSnapshot(previousConfig, previousSourceConfig ?? undefined);
+      } else {
+        clearRuntimeConfigSnapshot();
+      }
     }
   });
 
