@@ -885,6 +885,11 @@ Durable and synchronous native retention paths request a refresh before opening
 an empty writer transaction when selection already found an invalid plan.
 Valid batches still revalidate under the writer lock, and actor commands retain
 their commit-receipt transaction.
+Trajectory append derives its next sequence and retained byte window from one
+descending read under the existing writer lock. Retention uses the native
+connection's mutation witness for local changes when available, keeps its
+counter kind for the sweep's lifetime, and still checks foreign commits through
+`data_version`.
 
 Production acquisition remains host-owned, and every native selection arm stays
 in place until the atomic activation. These conditional compositions add no
