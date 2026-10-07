@@ -1,9 +1,13 @@
 import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { diagnosticProfileEntrypoints } from "../../logging/diagnostic-profile-runtime.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -13,7 +17,18 @@ const native = vi.hoisted(() => ({ write: vi.fn(), warn: vi.fn() }));
 vi.mock("node:v8", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:v8")>()),
   writeHeapSnapshot: native.write,
+  getHeapSpaceStatistics: () => [],
 }));
+// Mocked captures must not clear the test worker's own profiler state.
+vi.mock("node:inspector/promises", () => ({
+  url: () => undefined,
+  Session: class {
+    connect() {}
+    disconnect() {}
+    async post() {}
+  },
+}));
+vi.mock("node:trace_events", () => ({ getEnabledCategories: () => undefined }));
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../logging/subsystem.js")>();
   return {
@@ -31,6 +46,7 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const hostBunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
 let stateDir: string;
 let clock = 0;
 const memory = process.memoryUsage();
@@ -70,9 +86,13 @@ function request(
 }
 
 beforeEach(() => {
-  vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun: undefined } });
+  if (hostBunVersion) {
+    Object.defineProperty(process.versions, "bun", { ...hostBunVersion, value: undefined });
+  }
   stateDir = tempDirs.make("openclaw-heap-snapshot-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("NODE_OPTIONS", "");
+  vi.stubEnv("NODE_V8_COVERAGE", "");
   setActivePluginRegistry(createEmptyPluginRegistry());
   clock += 120_000;
   vi.spyOn(performance, "now").mockImplementation(() => clock);
@@ -88,7 +108,9 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  vi.unstubAllGlobals();
+  if (hostBunVersion) {
+    Object.defineProperty(process.versions, "bun", hostBunVersion);
+  }
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
@@ -119,6 +141,15 @@ describe("diagnostics.heapSnapshot", () => {
   });
 
   it("returns only file metadata, writes privately, and refuses immediate recapture", async () => {
+    const stat = fs.stat.bind(fs);
+    // Model queued allocations running after native capture while metadata is awaited.
+    vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      const result = await stat(...args);
+      if (String(args[0]).endsWith(".heapsnapshot")) {
+        vi.mocked(process.memoryUsage).mockReturnValue({ ...memory, heapUsed: 8192 });
+      }
+      return result;
+    });
     const call = request({ params: { reason: "retention baseline" } });
     await call.pending;
     const result = call.respond.mock.calls[0]?.[1];
@@ -169,6 +200,15 @@ describe("diagnostics.heapSnapshot", () => {
         undefined,
         expect.objectContaining({ details: { reason: "busy", cleanupFailed: false } }),
       );
+      const { captureDiagnosticHeapProfile } =
+        await import("../../logging/diagnostic-heap-profile.js");
+      expect(
+        await captureDiagnosticHeapProfile({
+          durationMs: 1,
+          signal: new AbortController().signal,
+          hasAuthority: () => true,
+        }),
+      ).toMatchObject({ status: "unavailable", reason: "busy" });
       if (guard === "authority") {
         authorized = false;
       } else {
@@ -215,4 +255,61 @@ describe("diagnostics.heapSnapshot", () => {
       undefined,
     );
   });
+
+  it.skipIf(Boolean(process.versions.bun))(
+    "releases V8 object IDs after writing a native snapshot",
+    async ({ signal }) => {
+      vi.restoreAllMocks();
+      const ownerUrl = resolveRuntimeWorkerUrl(diagnosticProfileEntrypoints.snapshot);
+      const source = `
+import assert from 'node:assert/strict';
+import { readFile, stat } from 'node:fs/promises';
+import { Session } from 'node:inspector/promises';
+import { captureDiagnosticHeapSnapshot } from ${JSON.stringify(ownerUrl.href)};
+globalThis.snapshotMarker = { label: 'synthetic retention marker' };
+const observer = new Session();
+observer.connect();
+try {
+  const { result } = await observer.post('Runtime.evaluate', { expression: 'globalThis.snapshotMarker' });
+  const outcome = await captureDiagnosticHeapSnapshot({ signal: new AbortController().signal, hasAuthority: () => true });
+  assert.equal(outcome.status, 'complete', JSON.stringify(outcome));
+  assert.ok(outcome.result.sizeBytes > 0);
+  assert.equal((await stat(outcome.result.path)).mode & 0o777, 0o600);
+  const snapshot = JSON.parse(await readFile(outcome.result.path, 'utf8'));
+  assert.ok(snapshot.snapshot.node_count > 0);
+  assert.ok(snapshot.strings.includes('synthetic retention marker'));
+  // Keep the observer connected: disconnecting it would hide leaked V8 tracking.
+  const { heapSnapshotObjectId } = await observer.post('HeapProfiler.getHeapObjectId', { objectId: result.objectId });
+  assert.equal(heapSnapshotObjectId, '0', 'snapshot left V8 object-move tracking active');
+} finally {
+  observer.disconnect();
+}
+`;
+      const env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: stateDir };
+      for (const key of ["PATH", "TMPDIR", "TMP", "TEMP"]) {
+        if (process.env[key]) {
+          env[key] = process.env[key];
+        }
+      }
+      const result = await runNodeScript(
+        (workerArgv) => [
+          ...workerArgv(ownerUrl).slice(0, -1),
+          "--input-type=module",
+          "--eval",
+          source,
+        ],
+        env,
+        20_000,
+        {
+          cwd: fileURLToPath(new URL("../../../", import.meta.url)),
+          signal,
+          maxBuffer: 32768,
+          requireProcessTreeExit: true,
+        },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, [result.stderr, result.stdout].join("\n")).toBe(0);
+    },
+    30_000,
+  );
 });
