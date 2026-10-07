@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptMessage,
+  appendTranscriptMessageSync,
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -222,15 +223,15 @@ describe("context-engine turn outbox", () => {
       async () => {
         entered.resolve();
         await release.promise;
-        const appended = await appendTranscriptMessage(target, {
+        const appended = appendTranscriptMessageSync(target, {
           message,
           parentId: current.messageId,
           now: 2_000,
         });
-        if (!appended?.anchor) {
+        if (!appended.ok || !appended.value?.anchor) {
           throw new Error("expected runtime admission anchor");
         }
-        recorder.markRuntimePersisted(message, appended.anchor, { appended: true });
+        recorder.markRuntimePersisted(message, appended.value.anchor, { appended: true });
       },
     );
     recorder.markRuntimePersistencePending(writer);

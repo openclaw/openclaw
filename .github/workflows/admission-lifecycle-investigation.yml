@@ -15,6 +15,21 @@ jobs:
         with:
           node-version: '26.10.0'
           install-bun: 'false'
+      - name: Before-change diagnostic evidence
+        shell: bash
+        run: |
+          owner=src/agents/harness/context-engine-turn-attempt.ts
+          cp "$owner" /tmp/admission-owner-after.ts
+          trap 'cp /tmp/admission-owner-after.ts "$owner"' EXIT
+          git show d9813e3489766284c105907f30065a83ff798a11:"$owner" > "$owner"
+          set +e
+          pnpm test src/agents/harness/context-engine-turn-outbox.test.ts --maxWorkers=1 -t 'reports only equality booleans' > /tmp/admission-before.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/admission-before.log
+          test "$status" -ne 0
+          grep -Eq '4 failed' /tmp/admission-before.log
+          grep -F 'context-engine transcript target changed before provider dispatch' /tmp/admission-before.log
       - name: Pinned identity and focused boundary tests
         run: |
           git rev-parse HEAD
