@@ -1056,13 +1056,16 @@ describe("gateway server cron", () => {
       ws,
       (payload) => payload?.jobId === jobId && payload?.action === "started",
     );
-    const firstRunRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 1_000);
+    // A forced run acknowledges only after its durable reservation is persisted
+    // through the shared runtime worker, so a fixed 1 s budget sits below
+    // onceMessage's documented default for saturated full-suite runs.
+    const firstRunRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" });
     expect(firstRunRes.ok).toBe(true);
     expectEnqueuedRunPayload(firstRunRes.payload);
     await Promise.all([startedRun, runnerEntered.promise]);
     expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
 
-    const secondRunRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 1_000);
+    const secondRunRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" });
     expect(secondRunRes.ok).toBe(true);
     expect(secondRunRes.payload).toEqual({
       ok: true,
