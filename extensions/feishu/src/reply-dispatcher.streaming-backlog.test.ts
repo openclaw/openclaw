@@ -148,6 +148,9 @@ async function runStreamingTurn(queuedPreviews: string[], signal: AbortSignal) {
           errors.push(String(message));
           firstWriteStarted.reject(new Error(String(message)));
         },
+        exit: (code) => {
+          throw new Error(`Unexpected owned Feishu fixture exit: ${code}`);
+        },
       },
     });
     cleanup = dispatcher.dispatcherOptions.onCleanup;
@@ -166,7 +169,7 @@ async function runStreamingTurn(queuedPreviews: string[], signal: AbortSignal) {
       ),
       signal,
     )) as FeishuReplyDeliveryResultWithFinalization;
-    idle = dispatcher.dispatcherOptions.onIdle?.();
+    idle = Promise.resolve(dispatcher.dispatcherOptions.onIdle?.());
     const settled = Promise.all([idle, delivered.finalization]);
     releaseFirstWrite.resolve();
     const [, accepted] = await withinTest(settled, signal);

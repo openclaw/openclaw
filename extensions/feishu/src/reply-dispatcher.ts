@@ -62,6 +62,7 @@ import {
   FeishuStreamingSession,
   mergeStreamingText,
 } from "./streaming-card.js";
+import { queueFeishuStreamingUpdate } from "./streaming-update.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
 
@@ -363,27 +364,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const flushStreamingCardUpdate = (combined: string) => {
-    const session = streaming;
-    const generation = activeStreamingGeneration;
-    const startPromise = streamingStartPromise;
-    partialUpdateQueue = partialUpdateQueue.then(async () => {
-      if (startPromise) {
-        await startPromise;
-      }
-      // Updates queued before close owns the captured session; updates queued after the
-      // generation is sealed have no owner and cannot race provider finalization.
-      if (generation !== undefined && session?.isActive()) {
-        // update admits pending text synchronously. Let the session own write ordering
-        // and replacement; awaiting transport here would serialize obsolete snapshots.
-        // Its retained write queue still propagates failures through awaited close/discard.
-        void session
-          .update(combined)
-          .catch((error: unknown) =>
-            params.runtime.error?.(
-              `feishu[${account.accountId}] streaming update failed: ${String(error)}`,
-            ),
-          );
-      }
+    partialUpdateQueue = queueFeishuStreamingUpdate({
+      queue: partialUpdateQueue,
+      session: streaming,
+      generation: activeStreamingGeneration,
+      startPromise: streamingStartPromise,
+      text: combined,
+      accountId: account.accountId,
+      runtime: params.runtime,
     });
   };
 
