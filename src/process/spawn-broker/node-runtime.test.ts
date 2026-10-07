@@ -53,24 +53,40 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       }
     });
 
-    it("keeps an explicitly selected worker binary and reports the restart action once", async () => {
-      const log = await import("../supervisor/supervisor-log.runtime.js");
-      const warning = vi
-        .spyOn(log, "warnProcessSupervisorSpawnFailure")
-        .mockImplementation(() => {});
-      const supervisor = createProcessSupervisor();
-      try {
-        for (let attempt = 0; attempt < 2; attempt++) {
-          await expect(
-            supervisor.spawn({ mode: "child", argv: [removedNode, "-e", "process.exit(0)"] }),
-          ).rejects.toThrow("Gateway runtime is stale after Node upgrade:");
+    it.each(["darwin", "linux"] as const)(
+      "keeps an explicitly selected worker binary and reports the restart action once (%s OOM policy)",
+      async (platform) => {
+        const oomScore = await import("../linux-oom-score.js");
+        const prepare = oomScore.prepareOomScoreAdjustedSpawn;
+        vi.spyOn(oomScore, "prepareOomScoreAdjustedSpawn").mockImplementation(
+          (command, args, options) => prepare(command, args, { ...options, platform }),
+        );
+        const env = {
+          PATH: tempDirs.make("openclaw-empty-path-"),
+          OPENCLAW_CHILD_OOM_SCORE_ADJ: "1",
+        };
+        const log = await import("../supervisor/supervisor-log.runtime.js");
+        const warning = vi
+          .spyOn(log, "warnProcessSupervisorSpawnFailure")
+          .mockImplementation(() => {});
+        const supervisor = createProcessSupervisor();
+        try {
+          for (let attempt = 0; attempt < 2; attempt++) {
+            await expect(
+              supervisor.spawn({
+                mode: "child",
+                argv: [removedNode, "-e", "process.exit(0)"],
+                env,
+              }),
+            ).rejects.toThrow("Gateway runtime is stale after Node upgrade:");
+          }
+          expect(warning).toHaveBeenCalledTimes(1);
+          expect(warning).toHaveBeenCalledWith(expect.stringContaining("Restart the Gateway."));
+        } finally {
+          await supervisor.shutdown();
         }
-        expect(warning).toHaveBeenCalledTimes(1);
-        expect(warning).toHaveBeenCalledWith(expect.stringContaining("Restart the Gateway."));
-      } finally {
-        await supervisor.shutdown();
-      }
-    });
+      },
+    );
 
     it("keeps the broker on the exact runtime and reports why it cannot start", async () => {
       const host = createSpawnBrokerHost({ nativeResources: true });
