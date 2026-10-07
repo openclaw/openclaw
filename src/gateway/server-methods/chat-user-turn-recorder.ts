@@ -2,6 +2,7 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import { normalizeMessageClientSources } from "../../chat/message-client-source.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { redactSensitiveText } from "../../logging/redact.js";
@@ -167,10 +168,23 @@ export function createGatewayChatUserTurnController(params: {
           clientRunId: session.clientRunId,
           startedAt: params.startedAt,
           sourceIngress: isBrowserOperatorUiClient(request.clientInfo) ? "control-ui" : "internal",
+          operatorSource: admission.restartSafeAdmission.retryExpectedState
+            ? undefined
+            : createRestartRecoveryOperatorSource({
+                authority: admission.operatorAuthority,
+                entry: admission.admittedSessionEntry ?? admission.initialSessionEntry!,
+                agentId: session.agentId,
+                sessionKey: session.sessionKey,
+                sourceRunId: session.clientRunId,
+                inputProvenance: request.systemInputProvenance,
+              }),
         })
       : {}),
     errorContext: "gateway chat user turn transcript",
-    assertOriginalInputCommit: params.assertOriginalInputCommit,
+    assertOriginalInputCommit: () => {
+      params.assertOriginalInputCommit?.();
+      admission.operatorAuthority?.assertCurrent();
+    },
     beforeMessageWrite: (event) => {
       const originalInput = event.message.idempotencyKey === sourceId;
       const next = runAgentHarnessBeforeMessageWriteHook(event);

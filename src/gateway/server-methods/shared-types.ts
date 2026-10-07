@@ -291,6 +291,7 @@ type GatewayKernelContext = {
   /** Instance-local native approval subscribers; never derived from a network client. */
   approvalEvents?: GatewayApprovalEventPublisher;
   recoveryRuntime?: GatewayRecoveryRuntime;
+  sharedGatewaySessionGenerationState?: import("../server-shared-auth-generation.js").SharedGatewaySessionGenerationState;
   /** Uses the lifecycle owner's module graph for plugin and detached agent turns. */
   createAgentTurnFacade?: InternalAgentTurnFacadeFactory;
   /** Live target facts stay with the instance owner, outside tool dispatch's import graph. */

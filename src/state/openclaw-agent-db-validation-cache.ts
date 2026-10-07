@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -34,6 +35,8 @@ import {
 export type OpenClawAgentDatabaseValidation = {
   agentId: string;
   identity: string;
+  /** Shared-buffer wrappers change across worker transfers; this identifies the proof instance. */
+  receiptId: string;
   /** Shared with admitted workers so owner invalidation revokes borrowed proof. */
   valid: SharedArrayBuffer;
   /** First full canonical proof; subsequent changes remain visible through the pending table. */
@@ -270,6 +273,8 @@ function captureValidationTransfer(
       !isRecord(received) ||
       received.agentId !== database.agentId ||
       received.identity !== identity ||
+      typeof received.receiptId !== "string" ||
+      received.receiptId.length === 0 ||
       !(received.valid instanceof SharedArrayBuffer) ||
       received.valid.byteLength !== Int32Array.BYTES_PER_ELEMENT ||
       !(received.canonicalReady instanceof SharedArrayBuffer) ||
@@ -311,6 +316,7 @@ function captureValidationTransfer(
     const validation = {
       agentId: database.agentId,
       identity,
+      receiptId: received.receiptId,
       valid: received.valid,
       canonicalReady: received.canonicalReady,
       schema,
@@ -326,7 +332,19 @@ function captureValidationTransfer(
               : [],
           )
         : [];
-    invalidateOpenClawAgentDatabaseValidation(pathname);
+    // Revocation before capture already fenced this receipt. Repeating it would
+    // invalidate an alias's later capture or an acknowledged successor receipt.
+    if (wasValid !== 0) {
+      invalidateOpenClawAgentDatabaseValidation(pathname);
+    } else {
+      // Worker cleanup can revoke one borrowed receipt while independent aliases remain live.
+      for (const alias of aliases) {
+        const superseded = validatedPaths.get(alias)?.validation;
+        if (superseded && superseded.receiptId !== validation.receiptId) {
+          Atomics.store(new Int32Array(superseded.valid), 0, 0);
+        }
+      }
+    }
     validatedPaths.set(pathname, { validation, integrityVerified: true });
     // A verified replacement is one physical receipt, including its already-admitted aliases.
     for (const alias of aliases) {
@@ -365,6 +383,9 @@ export function captureOpenClawAgentDatabaseAliasPublication(
       received.agentId === database.agentId &&
       received.identity === identity &&
       current?.identity === identity &&
+      typeof received.receiptId === "string" &&
+      received.receiptId.length > 0 &&
+      current.receiptId === received.receiptId &&
       current.valid === received.valid &&
       current.schema &&
       isRecord(received.schema) &&
@@ -502,6 +523,7 @@ function createValidationReceipt(
   const validation = {
     agentId: database.agentId,
     identity,
+    receiptId: randomUUID(),
     valid: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
     canonicalReady: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
   };
