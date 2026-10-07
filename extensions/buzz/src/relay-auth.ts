@@ -1,6 +1,5 @@
 import { type EventTemplate, finalizeEvent, Relay, type VerifiedEvent } from "nostr-tools";
 import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
-import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
@@ -189,7 +188,12 @@ async function authenticateBuzzRelay(params: {
         if (!awaitingChallenge) {
           throw error;
         }
-        await waitWithSignal(sleep(AUTH_CHALLENGE_POLL_MS), signal);
+        await waitWithSignal(
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, AUTH_CHALLENGE_POLL_MS);
+          }),
+          signal,
+        );
       }
     }
   } catch (error) {
