@@ -373,7 +373,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       // Updates queued before close owns the captured session; updates queued after the
       // generation is sealed have no owner and cannot race provider finalization.
       if (generation !== undefined && session?.isActive()) {
-        await session.update(combined);
+        // update admits pending text synchronously. Let the session own write ordering
+        // and replacement; awaiting transport here would serialize obsolete snapshots.
+        // Its retained write queue still propagates failures through awaited close/discard.
+        void session
+          .update(combined)
+          .catch((error: unknown) =>
+            params.runtime.error?.(
+              `feishu[${account.accountId}] streaming update failed: ${String(error)}`,
+            ),
+          );
       }
     });
   };
