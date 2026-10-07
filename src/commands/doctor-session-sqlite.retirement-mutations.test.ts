@@ -23,7 +23,30 @@ import {
 const { createLegacyStore, createVerifiedRecoveryStore } = useDoctorSessionSqliteTestFixture();
 
 describe("runDoctorSessionSqlite", () => {
-  it.each(["new-manifest", "symlink", "hardlink"])(
+  it("blocks a same-size replacement recovery original during preview", async () => {
+    const { store, archivePath } = await createVerifiedRecoveryStore();
+    const original = fs.readFileSync(archivePath);
+    fs.renameSync(archivePath, path.join(store.tempDir, "parked-original"));
+    const replacement = Buffer.alloc(original.length, "x");
+    fs.writeFileSync(archivePath, replacement);
+
+    const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
+    expect(preview.artifacts.find((artifact) => artifact.path === archivePath)).toMatchObject({
+      outcome: "blocked",
+      reason: "artifact-metadata-changed",
+    });
+    const result = await retireSessionSqliteRecovery({
+      env: store.env,
+      preview,
+      readConfig: async () => ({}),
+      confirm: async () => true,
+    });
+    expect(result.status).toBe("blocked");
+    expect(result.totals.removedBytes).toBe(0);
+    expect(fs.readFileSync(archivePath)).toEqual(replacement);
+  });
+
+  it.each(["new-manifest", "replacement", "symlink", "hardlink"])(
     "refuses a recovery ownership change during confirmation: %s",
     async (kind) => {
       const { store, imported, archivePath } = await createVerifiedRecoveryStore();
@@ -46,7 +69,11 @@ describe("runDoctorSessionSqlite", () => {
               fs.linkSync(databasePath, saved);
             } else {
               fs.renameSync(databasePath, saved);
-              fs.symlinkSync(saved, databasePath);
+              if (kind === "symlink") {
+                fs.symlinkSync(saved, databasePath);
+              } else {
+                fs.copyFileSync(saved, databasePath);
+              }
             }
             return true;
           },
@@ -58,7 +85,7 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it.each(["symlink", "hardlink", "same-size edit"])(
+  it.each(["replacement", "symlink", "hardlink", "same-size edit"])(
     "preserves every recovery dependency after a transcript %s during confirmation",
     async (change) => {
       const { store, imported } = await createVerifiedRecoveryStore();
@@ -69,6 +96,7 @@ describe("runDoctorSessionSqlite", () => {
         moves.find((move) => move.kind === "transcript"),
         "confirmation mutation archive",
       ).archivePath;
+      const original = fs.readFileSync(archivePath);
       const retained = moves
         .filter((move) => move.archivePath !== archivePath)
         .map((move) => ({ path: move.archivePath, contents: fs.readFileSync(move.archivePath) }));
@@ -87,14 +115,21 @@ describe("runDoctorSessionSqlite", () => {
               contents[0] = 0x78;
               fs.writeFileSync(archivePath, contents);
             } else {
-              fs.unlinkSync(archivePath);
-              fs.symlinkSync(replacement, archivePath);
+              fs.renameSync(archivePath, path.join(store.tempDir, "parked-original"));
+              if (change === "symlink") {
+                fs.symlinkSync(replacement, archivePath);
+              } else {
+                fs.writeFileSync(archivePath, Buffer.alloc(original.length, "x"));
+              }
             }
             return true;
           },
         }),
       ).rejects.toThrow(/selection changed|artifact/i);
       expect(fs.existsSync(archivePath)).toBe(true);
+      if (change === "replacement") {
+        expect(fs.readFileSync(archivePath)).toEqual(Buffer.alloc(original.length, "x"));
+      }
       expect(fs.readFileSync(replacement, "utf8")).toBe("unrelated bytes");
       expect(fs.readFileSync(manifestPath)).toEqual(manifestBefore);
       for (const artifact of retained) {

@@ -249,6 +249,41 @@ describe("retained session receipt recovery", () => {
       );
     });
   });
+  it("refuses empty-source recovery without backup or canonical transcript rows", async () => {
+    await withOpenClawTestState({ label: "receipt-empty-missing-history" }, async (state) => {
+      const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(
+        state,
+        "default",
+        "brave",
+      );
+      const options = { cfg, env: state.env, allAgents: true };
+      await runDoctorSessionSqlite({ ...options, mode: "import" });
+      const source = path.join(path.dirname(storePath), "legacy-kept.jsonl");
+      fs.writeFileSync(source, "");
+      closeOpenClawAgentDatabasesForTest();
+      const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, scope).path;
+      fs.copyFileSync(sqlitePath, `${sqlitePath}.replacement`);
+      fs.renameSync(`${sqlitePath}.replacement`, sqlitePath);
+      const db = openNodeSqliteDatabase(sqlitePath);
+      db.prepare("DELETE FROM transcript_events WHERE session_id = ?").run("legacy-kept");
+      db.close();
+      const before = receipt(state.env);
+
+      const recovered = await runDoctorSessionSqlite({ ...options, mode: "recover" });
+      const issues = recovered.targets.flatMap((target) => target.issues);
+      expect(issues).toContainEqual(
+        expect.objectContaining({
+          code: "retained_plugin_source_conflict",
+          message: expect.stringContaining(`Restore a complete verified transcript at ${source}`),
+        }),
+      );
+      expect(issues.map((issue) => issue.message).join("\n")).toContain(sqlitePath);
+      expect(recovered.totals.archivedTranscriptFiles).toBe(0);
+      expect(fs.readFileSync(source, "utf8")).toBe("");
+      expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toEqual([]);
+      expect(receipt(state.env)).toEqual(before);
+    });
+  });
   it("protects retained history when replacement events are reordered", async () => {
     await withOpenClawTestState({ label: "receipt-incomplete-database" }, async (state) => {
       const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(

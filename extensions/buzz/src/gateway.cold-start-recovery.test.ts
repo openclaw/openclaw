@@ -344,17 +344,17 @@ afterEach(async () => {
 });
 
 describe("Buzz gateway cold-start recovery", () => {
-  it("recovers downtime messages from the persisted room activation floor", async () => {
+  it("recovers late downtime messages from the persisted room activation floor", async () => {
     await runGatewayProcess();
     expect(roomSubscriptionSince()).toBe(START_SECONDS);
 
     openProcessBoundary();
-    postRoomMessage("live-msg", START_SECONDS + 10);
+    postRoomMessage("live-msg", START_SECONDS + 200);
     advanceSeconds(600);
     await runGatewayProcess({ until: () => handled.includes("live-msg") });
 
     openProcessBoundary();
-    postRoomMessage("outage-msg", START_SECONDS + 3_610);
+    postRoomMessage("outage-msg", START_SECONDS + 100);
     advanceSeconds(7_200);
     await runGatewayProcess({ until: () => handled.includes("outage-msg") });
     expect(roomSubscriptionSince()).toBe(START_SECONDS);
@@ -467,6 +467,26 @@ describe("Buzz gateway cold-start recovery", () => {
       process.abort.abort();
       await process.lifecycle;
     }
+  });
+
+  it("recovers downtime messages after a sender supplies a future timestamp", async () => {
+    await runGatewayProcess();
+
+    openProcessBoundary();
+    postRoomMessage("backlog-msg", START_SECONDS + 300);
+    postRoomMessage("future-msg", START_SECONDS + 3_600);
+    advanceSeconds(600);
+    await runGatewayProcess({
+      until: () => handled.includes("backlog-msg") && handled.includes("future-msg"),
+    });
+    expect(handled).toEqual(expect.arrayContaining(["backlog-msg", "future-msg"]));
+    expect(await readWatermark()).toBe(START_SECONDS);
+
+    openProcessBoundary();
+    postRoomMessage("outage-msg", START_SECONDS + 900);
+    advanceSeconds(6_600);
+    await runGatewayProcess({ until: () => handled.includes("outage-msg") });
+    expect(handled).toContain("outage-msg");
   });
 
   it("retries a previously failed room message after a process restart", async () => {

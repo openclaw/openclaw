@@ -481,6 +481,51 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     });
   });
 
+  it.each(["ignored", "HEAD"] as const)(
+    "rebuilds a template with %s contamination before creating another checkout",
+    async (change) => {
+      await fs.writeFile(path.join(repo, ".gitignore"), "ignored-*\n");
+      await git(repo, "add", ".gitignore");
+      await git(repo, "commit", "-m", "ignore template fixture");
+      // The older commit has identical files, so HEAD validation cannot be
+      // replaced by comparing the tree or accepting a clean inventory alone.
+      await git(repo, "commit", "--allow-empty", "-m", "new template base");
+      await service.create({ repoRoot: repo, name: "seed", baseRef: "HEAD" });
+      const original = (await listTemplatesAsync(env))[0];
+      assert(original);
+      const unusualName = process.platform === "win32" ? "é space.txt" : "é space\nname.txt";
+      if (change === "HEAD") {
+        await git(original.path, "checkout", "--detach", "HEAD~1");
+      } else {
+        await fs.writeFile(
+          path.join(original.path, `ignored-${unusualName}`),
+          "template contamination\n",
+        );
+      }
+
+      const created = await service.create({
+        repoRoot: repo,
+        name: "replacement",
+        baseRef: "HEAD",
+      });
+
+      const replacement = (await listTemplatesAsync(env))[0];
+      assert(replacement);
+      expect(replacement.id).not.toBe(original.id);
+      await expect(fs.access(original.path)).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await fs.readdir(created.path)).toSorted()).toEqual([
+        ".git",
+        ".gitignore",
+        "README.md",
+      ]);
+      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+      expect(await git(created.path, "rev-parse", "HEAD")).toBe(original.sourceCommit);
+      expect(
+        await git(created.path, "status", "--porcelain", "--untracked-files=all", "--ignored"),
+      ).toBe("");
+    },
+  );
+
   it.each(["advanced", "detached"])(
     "preserves files when clone fallback finds a %s worktree HEAD",
     async (change) => {

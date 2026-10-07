@@ -25,6 +25,7 @@ const { createHistoricalRestoreStore, createVerifiedRecoveryStore } =
 describe("runDoctorSessionSqlite", () => {
   it.each([
     { interrupted: false, changed: false },
+    { interrupted: false, changed: true },
     { interrupted: true, changed: false },
     { interrupted: true, changed: true },
   ])(
@@ -76,14 +77,18 @@ describe("runDoctorSessionSqlite", () => {
         await expect(runPublicSessionSqlite(store, "restore")).rejects.toThrow(/changed/);
       } else {
         const result = await runPublicSessionSqlite(store, "restore");
-        expect(result.report.targets[0]?.restore?.conflicts).toEqual([]);
-        expect(result.exitCode).toBe(0);
+        expect(result.report.targets[0]?.restore?.conflicts).toEqual(
+          changed
+            ? [expect.objectContaining({ archivePath, reason: expect.stringContaining("changed") })]
+            : [],
+        );
+        expect(result.exitCode).toBe(changed ? 1 : 0);
       }
       const recorded = readMigrationManifest(manifestPath);
       expect(recorded.targets).toEqual(retainedTargets);
       if (changed) {
         expect(fs.readFileSync(archivePath, "utf8")).toBe(content);
-        expect(fs.existsSync(store.transcriptPath)).toBe(true);
+        expect(fs.existsSync(store.transcriptPath)).toBe(interrupted);
       } else {
         expect(fs.readFileSync(store.transcriptPath, "utf8")).toBe(original);
         const restored = fs.statSync(store.transcriptPath, { bigint: true });

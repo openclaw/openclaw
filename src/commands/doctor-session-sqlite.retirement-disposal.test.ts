@@ -9,12 +9,15 @@ import {
   readSessionTranscriptHistoryEventCount,
   readSessionTranscriptHistoryEventById,
 } from "../config/sessions/session-accessor.sqlite-history.test-support.js";
+import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
   createSessionSqliteMigrationRun,
   writeSessionSqliteMigrationManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
 import * as sqliteReaders from "../infra/session-sqlite-migration-readers.js";
+import * as sqlitePrivateDirectory from "../infra/sqlite-private-directory.js";
+import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { runOutsideOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
@@ -162,6 +165,81 @@ describe("runDoctorSessionSqlite", () => {
     }
   });
 
+  it.each([
+    { platform: "win32", syncFailure: "unsupported", retires: true },
+    { platform: "linux", syncFailure: "unsupported", retires: false },
+    { platform: "win32", syncFailure: "EIO", retires: false },
+  ] as const)(
+    "applies the manifest directory-sync policy for $platform $syncFailure",
+    async ({ platform, syncFailure, retires }) => {
+      const { store, imported, archivePath } = await createVerifiedRecoveryStore();
+      const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+      const original = fs.readFileSync(archivePath);
+      const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
+      const fsync = fs.fsyncSync;
+      const failureCode =
+        syncFailure === "EIO" ? "EIO" : platform === "win32" ? "EPERM" : "ENOTSUP";
+      // Simulate directory-sync policy without invoking foreign-platform ACL APIs.
+      const stagingRootSpy = vi
+        .spyOn(sqlitePrivateDirectory, "resolvePrivateSqliteSnapshotStagingRoot")
+        .mockReturnValue(store.tempDir);
+      const privateDirectorySpy = vi
+        .spyOn(windowsPrivateDirectory, "createPrivateWindowsDirectory")
+        .mockImplementation((directoryPath) => {
+          fs.mkdirSync(directoryPath, { mode: 0o700 });
+        });
+      const installPlatformSpy = () =>
+        vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      let platformSpy: ReturnType<typeof installPlatformSpy> | undefined;
+      const syncSpy = vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+        if (!isDirectoryDescriptor(fd, path.dirname(manifestPath))) {
+          return fsync(fd);
+        }
+        platformSpy ??= installPlatformSpy();
+        // Assert the persisted intent at the commit boundary, before any original moves.
+        const manifest = readMigrationManifest(manifestPath);
+        if (fs.existsSync(archivePath)) {
+          expect(
+            manifest.targets[0]?.completedMoves.find((move) => move.archivePath === archivePath)
+              ?.artifact?.disposal.state,
+          ).toBe("pending-disposal");
+          expect(fs.readFileSync(archivePath)).toEqual(original);
+        }
+        throw Object.assign(new Error(`injected manifest ${failureCode}`), { code: failureCode });
+      });
+      try {
+        const cleanup = retireSessionSqliteRecovery({
+          env: store.env,
+          preview,
+          readConfig: async () => ({}),
+          confirm: async () => true,
+        });
+        if (retires) {
+          const result = await cleanup;
+          expect(result.status).toBe("complete");
+          expect(result.artifacts.find((item) => item.path === archivePath)).toMatchObject({
+            outcome: "removed",
+            removedBytes: original.length,
+          });
+          expect(fs.existsSync(archivePath)).toBe(false);
+          expect(
+            readMigrationManifest(manifestPath).targets[0]?.completedMoves.find(
+              (move) => move.archivePath === archivePath,
+            )?.artifact?.disposal.state,
+          ).toBe("disposed");
+        } else {
+          await expect(cleanup).rejects.toThrow(`injected manifest ${failureCode}`);
+          expect(fs.readFileSync(archivePath)).toEqual(original);
+        }
+      } finally {
+        syncSpy.mockRestore();
+        platformSpy?.mockRestore();
+        privateDirectorySpy.mockRestore();
+        stagingRootSpy.mockRestore();
+      }
+    },
+  );
+
   it("refuses retirement while a peer maintenance operation holds the selected state", async () => {
     const { store, archivePath } = await createVerifiedRecoveryStore();
     const original = fs.readFileSync(archivePath);
@@ -187,10 +265,12 @@ describe("runDoctorSessionSqlite", () => {
     expect(fs.readFileSync(archivePath)).toEqual(original);
   });
 
-  it("protects duplicate divergent ID and its recovery index", async () => {
-    const store = createLegacyStore({
-      transcriptLines: [
-        { type: "session", id: "session-1", version: 3 },
+  it.each([
+    { name: "invalid message", rows: [{ type: "message", id: "bad", message: {} }] },
+    { name: "unknown event", rows: [{ type: "future_event", id: "unknown", payload: "unique" }] },
+    {
+      name: "duplicate divergent ID",
+      rows: [
         {
           type: "message",
           id: "duplicate",
@@ -203,20 +283,41 @@ describe("runDoctorSessionSqlite", () => {
           parentId: null,
           message: { role: "user", content: "unique second" },
         },
-      ].map((row) => JSON.stringify(row)),
+      ],
+    },
+    {
+      name: "missing ancestor",
+      rows: [
+        {
+          type: "message",
+          id: "child",
+          parentId: "missing",
+          message: { role: "user", content: "history" },
+        },
+      ],
+    },
+  ])("protects $name and its recovery index", async ({ rows, name }) => {
+    const store = createLegacyStore({
+      transcriptLines: [
+        JSON.stringify({ type: "session", id: "session-1", version: 3 }),
+        ...rows.map((row) => JSON.stringify(row)),
+      ],
     });
     const original = fs.readFileSync(store.transcriptPath);
     const imported = await importLegacyStore(store);
-    expect(
-      readMigrationManifest(imported.migrationRun?.manifestPath).targets[0]!.completedMoves.find(
-        (item) => item.kind === "transcript",
-      ),
-    ).toBeUndefined();
-    expect(imported.targets[0]?.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ code: "sqlite_transcript_count_mismatch" }),
-      ]),
-    );
+    const move = readMigrationManifest(
+      imported.migrationRun?.manifestPath,
+    ).targets[0]!.completedMoves.find((item) => item.kind === "transcript");
+    if (name === "duplicate divergent ID") {
+      expect(move).toBeUndefined();
+      expect(imported.targets[0]?.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: "sqlite_transcript_count_mismatch" }),
+        ]),
+      );
+    } else {
+      expect(move).toBeDefined();
+    }
     closeOpenClawAgentDatabasesForTest();
     const result = await retireSessionSqliteRecovery({
       env: store.env,
@@ -225,7 +326,12 @@ describe("runDoctorSessionSqlite", () => {
       confirm: async () => true,
     });
     expect(result.totals.removedFiles).toBe(0);
-    expect(fs.readFileSync(store.transcriptPath)).toEqual(original);
+    if (move) {
+      expect(result.artifacts.find((item) => item.path === move.archivePath)?.outcome).toBe(
+        "protected",
+      );
+    }
+    expect(fs.readFileSync(move?.archivePath ?? store.transcriptPath)).toEqual(original);
   });
 
   it("retains complete recovery when durable transcript verification is short", async () => {
@@ -275,59 +381,97 @@ describe("runDoctorSessionSqlite", () => {
     ).toBe(false);
   });
 
-  it("verifies duplicate replay history against a fresh destination", async () => {
-    const reply = {
-      type: "message",
-      id: "reply",
-      parentId: "root",
-      message: { role: "assistant", content: "same replay" },
-    };
-    const leaf = { type: "leaf", id: "selection", parentId: "reply", targetId: "reply" };
-    const store = createLegacyStore({
-      transcriptLines: [
-        { type: "session", id: "session-1", version: 3 },
+  it.each(["fresh", "identical", "divergent"] as const)(
+    "verifies duplicate replay history against a %s destination",
+    async (kind) => {
+      const fresh = kind === "fresh";
+      const archived = kind !== "divergent";
+      const first = {
+        type: "message",
+        id: "reply",
+        parentId: "root",
+        message: {
+          role: "assistant",
+          content: fresh ? "same replay" : [{ type: "text", text: "same replay" }],
+        },
+      };
+      const leaf = { type: "leaf", id: "selection", parentId: "reply", targetId: "reply" };
+      const sourceEvents = [
+        fresh
+          ? { type: "session", id: "session-1", version: 3 }
+          : { type: "session", id: "session-1", version: 3, timestamp: "", cwd: "" },
         { type: "message", id: "root", parentId: null, message: { role: "user", content: "root" } },
-        reply,
-        reply,
-        leaf,
-        leaf,
-      ].map((event) => JSON.stringify(event)),
-    });
-    const scope = { agentId: "main", env: store.env, sessionId: "session-1" };
-    const imported = await importLegacyStore(store);
-    expect(fs.existsSync(store.transcriptPath)).toBe(false);
-    expect(
-      readMigrationManifest(imported.migrationRun?.manifestPath).targets[0]?.completedMoves.some(
-        (item) => item.kind === "transcript",
-      ),
-    ).toBe(true);
-    expect(
-      imported.targets[0]?.issues.some(
-        (issue) => issue.code === "sqlite_transcript_count_mismatch",
-      ),
-    ).toBe(false);
-    expect(loadTranscriptEventsSync(scope).map((event) => (event as { id?: string }).id)).toEqual([
-      "session-1",
-      "root",
-      "reply",
-      "selection",
-    ]);
-    expect(imported.targets[0]?.issues).toEqual([]);
-    expect(
-      readSessionTranscriptHistoryEvents(scope).map((row) => (row.event as { id?: string }).id),
-    ).toEqual(["root", "reply"]);
-    expect(readSessionTranscriptHistoryEventCount(scope)).toBe(2);
-    expect(
-      readSessionTranscriptHistoryEventPage(scope, { maxMessages: 1, offset: 0 }),
-    ).toMatchObject({
-      activeLeafEntryId: "reply",
-      totalMessages: 2,
-      events: [expect.objectContaining({ event: expect.objectContaining({ id: "reply" }) })],
-    });
-    expect(readSessionTranscriptHistoryEventById(scope, "reply")).toMatchObject({
-      event: expect.objectContaining({ id: "reply" }),
-    });
-  });
+        first,
+        archived
+          ? first
+          : {
+              ...first,
+              message: { role: "assistant", content: [{ type: "text", text: "different replay" }] },
+            },
+        ...(fresh ? [leaf, leaf] : []),
+      ];
+      const store = createLegacyStore({
+        transcriptLines: sourceEvents.map((event) => JSON.stringify(event)),
+      });
+      const original = fs.readFileSync(store.transcriptPath);
+      const scope = { agentId: "main", env: store.env, sessionId: "session-1" };
+      if (!fresh) {
+        await importSqliteSessionRows({
+          ...scope,
+          sessionKey: "agent:main:main",
+          storePath: store.storePath,
+          entry: { sessionId: "session-1", updatedAt: 1000 },
+          readTranscriptEvents: (append) => sourceEvents.slice(0, 3).forEach(append),
+        });
+      }
+      const existingEvents = fresh ? undefined : loadTranscriptEventsSync(scope);
+      const run = () => importLegacyStore(store);
+      const imported = await run();
+      expect(fs.existsSync(store.transcriptPath)).toBe(!archived);
+      expect(
+        readMigrationManifest(imported.migrationRun?.manifestPath).targets[0]?.completedMoves.some(
+          (item) => item.kind === "transcript",
+        ),
+      ).toBe(archived);
+      expect(
+        imported.targets[0]?.issues.some(
+          (issue) => issue.code === "sqlite_transcript_count_mismatch",
+        ),
+      ).toBe(!archived);
+      expect(loadTranscriptEventsSync(scope).map((event) => (event as { id?: string }).id)).toEqual(
+        ["session-1", "root", "reply", ...(fresh ? ["selection"] : [])],
+      );
+      if (existingEvents) {
+        expect(loadTranscriptEventsSync(scope)).toEqual(existingEvents);
+      }
+      if (fresh) {
+        expect(imported.targets[0]?.issues).toEqual([]);
+        expect(
+          readSessionTranscriptHistoryEvents(scope).map((row) => (row.event as { id?: string }).id),
+        ).toEqual(["root", "reply"]);
+        expect(readSessionTranscriptHistoryEventCount(scope)).toBe(2);
+        expect(
+          readSessionTranscriptHistoryEventPage(scope, { maxMessages: 1, offset: 0 }),
+        ).toMatchObject({
+          activeLeafEntryId: "reply",
+          totalMessages: 2,
+          events: [expect.objectContaining({ event: expect.objectContaining({ id: "reply" }) })],
+        });
+        expect(readSessionTranscriptHistoryEventById(scope, "reply")).toMatchObject({
+          event: expect.objectContaining({ id: "reply" }),
+        });
+      } else if (!archived) {
+        const retried = await run();
+        expect(
+          retried.targets[0]?.issues.some(
+            (issue) => issue.code === "sqlite_transcript_count_mismatch",
+          ),
+        ).toBe(true);
+        expect(fs.readFileSync(store.transcriptPath)).toEqual(original);
+        expect(loadTranscriptEventsSync(scope)).toEqual(existingEvents);
+      }
+    },
+  );
 
   it("retires verified originals after remount while preserving current SQLite and unknown archives", async () => {
     const store = createLegacyStore({

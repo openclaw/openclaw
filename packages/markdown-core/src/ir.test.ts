@@ -615,6 +615,19 @@ describe("list paragraph spacing", () => {
 });
 
 describe("markdownToIR raw HTML", () => {
+  it("does not linkify URLs inside raw HTML tag attributes", () => {
+    const ir = markdownToIR(
+      '<img src="https://example.com/diagram.png" alt="Diagram"> https://example.com/page',
+    );
+
+    expect(ir.text).toBe(
+      '<img src="https://example.com/diagram.png" alt="Diagram"> https://example.com/page',
+    );
+    expect(ir.links.map((link) => ir.text.slice(link.start, link.end))).toEqual([
+      "https://example.com/page",
+    ]);
+  });
+
   it("preserves multiline authored attributes before transcript decoding", () => {
     const opening = '<b title="Example\nuser[Thu] note">';
     const ir = markdownToIR(`${opening}**body**</b>`, {
@@ -745,6 +758,18 @@ describe("markdownToIRWithMeta tableMode block", () => {
 });
 
 describe("applyMarkdownTextEdits", () => {
+  it("projects UTF-16 formatting boundaries through insertion, replacement, and removal", () => {
+    const result = applyMarkdownTextEdits("😀 abc tail", [
+      { start: 7, end: 11, text: "" },
+      { start: 0, end: 0, text: "#" },
+      { start: 3, end: 6, text: "`abc`" },
+    ]);
+
+    expect(result.text).toBe("#😀 `abc` ");
+    expect([0, 2, 3, 6, 7, 11].map(result.mapOffset)).toEqual([1, 3, 4, 9, 10, 10]);
+    expect(result.text.slice(result.mapOffset(3), result.mapOffset(6))).toBe("`abc`");
+  });
+
   it("keeps equal-position insertions in caller order and leaves an empty projection unchanged", () => {
     const result = applyMarkdownTextEdits("XY", [
       { start: 1, end: 1, text: "first" },

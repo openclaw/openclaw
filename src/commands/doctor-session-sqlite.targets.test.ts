@@ -6,6 +6,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
+import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
 import {
@@ -55,6 +56,55 @@ function seedUnreadableSiblingDeletion(store: TestStore): void {
 }
 
 describe("runDoctorSessionSqlite", () => {
+  it.each(["destination", "shared-state"] as const)(
+    "preserves legacy sources and orphaned WAL for an unavailable %s database",
+    async (owner) => {
+      const store = createLegacyStore();
+      const sqlitePath = resolveTargetSqlitePath(
+        { agentId: "main", storePath: store.storePath },
+        store.env,
+      );
+      const originals = [store.storePath, store.transcriptPath].map((file) =>
+        fs.readFileSync(file),
+      );
+      const walPath =
+        owner === "destination"
+          ? `${sqlitePath}-wal`
+          : path.join(store.stateDir, "state", "openclaw.sqlite-wal");
+      const wal = Buffer.from("unverified orphaned WAL bytes");
+      fs.mkdirSync(path.dirname(walPath), { recursive: true });
+      fs.writeFileSync(walPath, wal);
+      const cfg: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { main: {} } },
+        session: { store: store.storePath },
+      };
+      const options = { cfg, env: store.env, mode: "import" as const };
+      expect(fs.existsSync(sqlitePath)).toBe(false);
+      const imported = runDoctorSessionSqlite({ ...options, allAgents: true });
+      if (owner === "shared-state") {
+        await expect(imported).rejects.toThrow("is unavailable");
+      } else {
+        expect((await imported).targets).toEqual([]);
+        expect(() =>
+          assertSessionStoreMigrationComplete({ cfg, env: store.env, operation: "doctor" }),
+        ).toThrow("Legacy session store requires migration");
+        for (const selection of [{ agent: "main" }, { store: store.storePath }]) {
+          const explicit = await runDoctorSessionSqlite({ ...options, ...selection });
+          expect(explicit.totals.importedEntries).toBe(0);
+          expect(explicit.targets.flatMap((target) => target.issues)).toContainEqual({
+            code: "plugin_migration_source_retained",
+            message: expect.stringContaining(`store held for agent main database ${sqlitePath}`),
+          });
+        }
+      }
+      expect([store.storePath, store.transcriptPath].map((file) => fs.readFileSync(file))).toEqual(
+        originals,
+      );
+      expect(fs.existsSync(sqlitePath)).toBe(false);
+      expect(fs.readFileSync(walPath)).toEqual(wal);
+    },
+  );
+
   it("holds deleted ownership despite unreadable sibling deletion history", async () => {
     const store = createLegacyStore({ agentDirName: "retired" });
     const sqlitePath = resolveTargetSqlitePath(

@@ -616,6 +616,45 @@ describe("modelsAuthLoginCommand", () => {
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
+  it("does not promote a login profile when protected storage rejects", async () => {
+    const runtime = createRuntime();
+    runProviderAuth.mockResolvedValueOnce({
+      profiles: [
+        {
+          profileId: "github-copilot:github",
+          credential: {
+            type: "token",
+            provider: "github-copilot",
+            token: "synthetic-device-token",
+          },
+          secretStorage: {
+            kind: "store",
+            namePrefix: "GITHUB_COPILOT_TOKEN",
+          },
+        },
+      ],
+    });
+    mocks.resolvePluginProvidersCore.mockReturnValue([
+      createProvider({
+        id: "github-copilot",
+        label: "GitHub Copilot",
+        run: runProviderAuth as ProviderPlugin["auth"][number]["run"],
+      }),
+    ]);
+    mocks.persistProviderAuthProfilesAfterLogin.mockRejectedValueOnce(
+      new Error("Could not write the protected secret store"),
+    );
+
+    await expect(modelsAuthLoginCommand({ provider: "github-copilot" }, runtime)).rejects.toThrow(
+      "Could not write the protected secret store",
+    );
+
+    expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledOnce();
+    expect(mocks.promoteAuthProfileInOrder).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
   it.each([
     { connected: true, outcome: "gateway-rejected", target: "running" },
     { connected: false, outcome: "gateway-unreachable", target: "local" },
@@ -879,6 +918,42 @@ describe("modelsAuthLoginCommand", () => {
     });
     expect(runApiKeyAuth).not.toHaveBeenCalled();
     expect(runCliAuth).toHaveBeenCalledOnce();
+  });
+
+  it("routes OAuth login and refresh to the explicit agent", async () => {
+    const runtime = createRuntime();
+    const originalConfig = useCoderAgentConfig();
+    const note = vi.fn(async () => {});
+    mocks.createClackPrompter.mockReturnValue({ note, select: vi.fn() });
+
+    await modelsAuthLoginCommand({ provider: "openai", agent: "coder" }, runtime);
+
+    expect(note).toHaveBeenCalledWith(
+      [
+        "Scope: System / agent",
+        "Agent: coder",
+        "Location: the machine running OpenClaw",
+        "For personal model accounts on a Gateway, run openclaw models accounts login --help.",
+      ].join("\n"),
+      "Provider sign-in",
+    );
+    expect(note.mock.invocationCallOrder[0]).toBeLessThan(
+      runProviderAuth.mock.invocationCallOrder[0]!,
+    );
+    expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(mocks.resolveAgentDir).toHaveBeenCalledWith(originalConfig, "coder");
+    const authRunCall = readMockCallArg(runProviderAuth) as AuthRunCall;
+    expect(authRunCall.agentDir).toBe("/tmp/openclaw/agents/coder");
+    expect(authRunCall.workspaceDir).toBe("/tmp/openclaw/workspaces/coder");
+    expect(
+      (readMockCallArg(mocks.persistProviderAuthProfilesAfterLogin) as PersistProviderAuthCall)
+        .agentDir,
+    ).toBe("/tmp/openclaw/agents/coder");
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: { operation: "login", agentId: "coder" },
+      }),
+    );
   });
 
   it("refreshes saved credentials before presenting provider notes", async () => {

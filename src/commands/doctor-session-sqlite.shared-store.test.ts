@@ -359,6 +359,23 @@ describe("Doctor canonical session SQLite targets", () => {
     }
   });
 
+  it("never treats an exact SQLite database as a legacy import file", async () => {
+    const store = await createStore();
+    const original = fs.readFileSync(store.sqlitePath);
+    const report = await runDoctorSessionSqlite({
+      cfg: store.cfg,
+      env: store.env,
+      allAgents: true,
+      mode: "import",
+    });
+
+    expect(report.targets).toEqual([]);
+    expect(report.migrationRun).toBeUndefined();
+    expect(fs.readFileSync(store.sqlitePath)).toEqual(original);
+    expect(fs.existsSync(path.join(store.stateDir, "session-sqlite-migration-runs"))).toBe(false);
+    expect(loadExactSessionEntry(store.scope)?.entry.sessionId).toBe("doctor-session");
+  });
+
   it("inspects the shared SQLite database without a legacy session file", async () => {
     const store = await createStore();
     const report = await runDoctorSessionSqlite({

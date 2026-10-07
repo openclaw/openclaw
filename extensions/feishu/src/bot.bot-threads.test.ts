@@ -166,6 +166,13 @@ describe("Feishu bot-owned thread mentions", () => {
   });
 
   it.each([
+    { name: "account disables inherited requirement", accountSetting: false, expected: true },
+    {
+      name: "group disables account requirement",
+      accountSetting: true,
+      groupSetting: false,
+      expected: true,
+    },
     {
       name: "group requires mention despite parent allowing all messages",
       accountSetting: false,

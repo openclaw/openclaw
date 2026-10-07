@@ -178,6 +178,53 @@ test("session:patch hook mutations cannot change the response path", async () =>
   ws.close();
 });
 
+test("sessions.patch stores and clears rootless modes while preserving recorded roots", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const pinnedSessionKey = "agent:main:dashboard:pinned-permission";
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-rootless-permission"),
+      [pinnedSessionKey]: sessionStoreEntry("sess-pinned-permission", {
+        sessionRoot: "/workspace/project",
+      }),
+    },
+  });
+
+  const { ws } = await openClient();
+  try {
+    const patched = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      permissionMode: "guarded",
+    });
+
+    expect(patched).toMatchObject({ ok: true });
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      permissionMode: "guarded",
+    });
+
+    const cleared = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      permissionMode: null,
+    });
+    expect(cleared).toMatchObject({ ok: true });
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).not.toHaveProperty(
+      "permissionMode",
+    );
+
+    const pinned = await rpcReq(ws, "sessions.patch", {
+      key: pinnedSessionKey,
+      permissionMode: "workspace",
+    });
+    expect(pinned).toMatchObject({ ok: true });
+    expect(loadSessionEntry({ sessionKey: pinnedSessionKey, storePath })).toMatchObject({
+      permissionMode: "workspace",
+      sessionRoot: "/workspace/project",
+    });
+  } finally {
+    ws.close();
+  }
+});
+
 test("createGatewaySession stores a permission mode without a prepared session root", async () => {
   await createSessionStoreDir();
   const { createGatewaySession } = await import("./session-create-service.js");

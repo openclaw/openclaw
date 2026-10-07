@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
@@ -12,6 +13,7 @@ import {
   requireMigrationManifestPath,
   trustedMigrationTarget,
   canonicalTestPath,
+  canonicalTestPaths,
   useDoctorSessionSqliteTestFixture,
 } from "./doctor-session-sqlite.test-support.js";
 
@@ -65,6 +67,51 @@ async function importWithIndexArchive(store: TestStore) {
 }
 
 describe("runDoctorSessionSqlite", () => {
+  it.each(["missing-database", "missing-database-all-agents", "planned-only"] as const)(
+    "restores archived artifacts with %s recovery evidence",
+    async (state) => {
+      const store = createLegacyStore();
+      const imported = await importLegacyStore(store);
+      const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+      const manifest = readMigrationManifest(manifestPath);
+      const target = expectDefined(manifest.targets[0], "restore target");
+      const sourcePaths = target.plannedMoves.map((move) => move.sourcePath);
+      if (state === "planned-only") {
+        target.completedMoves = [];
+        fs.writeFileSync(manifestPath, JSON.stringify(manifest), { mode: 0o600 });
+      } else {
+        const sqlitePath = expectDefined(imported.targets[0]?.sqlitePath, "imported SQLite path");
+        closeOpenClawAgentDatabasesForTest();
+        for (const file of [sqlitePath, `${sqlitePath}-wal`, `${sqlitePath}-shm`]) {
+          fs.rmSync(file, { force: true });
+        }
+      }
+      const restore = await runDoctorSessionSqlite({
+        ...(state !== "missing-database" ? { allAgents: true } : {}),
+        cfg: {},
+        env: store.env,
+        mode: "restore",
+      });
+      expect(restore.totals.issues).toBe(0);
+      expect(restore.totals).not.toHaveProperty("archivedLegacyStoreFiles");
+      expect(restore.totals).not.toHaveProperty("reclaimedBytes");
+      expect(restore.targets[0]?.restore).toMatchObject({
+        conflicts: [],
+        restoredFiles: expect.arrayContaining(sourcePaths),
+      });
+      expect(restore.targets[0]?.restore?.restoredFiles).toEqual(
+        expect.arrayContaining(canonicalTestPaths([store.transcriptPath, store.trajectoryPath])),
+      );
+      for (const file of [
+        store.transcriptPath,
+        store.trajectoryPath,
+        store.unreferencedJsonlPath,
+      ]) {
+        expect(fs.existsSync(file)).toBe(true);
+      }
+    },
+  );
+
   it.skipIf(process.platform === "win32").each([
     { version: 1, location: "ancestor" },
     { version: 3, location: "source" },

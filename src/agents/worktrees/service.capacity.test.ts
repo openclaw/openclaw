@@ -211,6 +211,63 @@ describe("ManagedWorktreeService capacity", () => {
     },
   );
 
+  it.each(["source", "destination"] as const)(
+    "refuses allocation when the separate %s volume lacks its reserve",
+    async (limited) => {
+      const dataRoot = path.join(root, "data");
+      await fs.mkdir(dataRoot);
+      service = new ManagedWorktreeService({
+        env,
+        getConfig: () => ({ worktreeAcceleration: false, worktreeRoot: dataRoot }),
+      });
+      const isData = (value: unknown) => String(value).startsWith(dataRoot);
+      const stat = fsSync.statSync;
+      vi.spyOn(fsSync, "statSync").mockImplementation((...args) => {
+        const result = stat(...args);
+        if (result) {
+          result.dev = isData(args[0]) ? 2 : 1;
+        }
+        return result;
+      });
+      const stats = fsSync.statfsSync(root);
+      let recovered = false;
+      vi.mocked(fsSync.statfsSync).mockImplementation((target) => {
+        const low = isData(target) === (limited === "destination");
+        const available = (recovered ? (isData(target) ? 100 : 13) : low ? 3 : 100) * GiB;
+        return {
+          type: stats.type,
+          bsize: stats.bsize,
+          blocks: stats.blocks,
+          bfree: available / 4096,
+          bavail: available / 4096,
+          files: stats.files,
+          frsize: stats.frsize,
+          ffree: stats.ffree,
+        };
+      });
+
+      await expect(
+        service.create({ repoRoot: repo, name: "split-volumes", baseRef: "HEAD" }),
+      ).rejects.toThrow(/disk space/i);
+      expect(await service.listRegistryRecords()).toEqual([]);
+      expect(await git(repo, "branch", "--list", "openclaw/split-volumes")).toBe("");
+      expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("split-volumes");
+
+      recovered = true;
+      const requestedHead = await git(repo, "rev-parse", "HEAD");
+      const created = await service.create({
+        repoRoot: repo,
+        name: "split-volumes",
+        baseRef: requestedHead,
+      });
+      expect(created.path.startsWith(dataRoot + path.sep)).toBe(true);
+      expect(await git(created.path, "rev-parse", "HEAD")).toBe(requestedHead);
+      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+      expect(await git(created.path, "status", "--porcelain")).toBe("");
+      expect(await service.listRegistryRecords()).toEqual([created]);
+    },
+  );
+
   it("admits the registered remote tip before materializing files and rolls back a rejected allocation", async () => {
     const originalCommit = await git(repo, "rev-parse", "HEAD");
     const payload = Buffer.alloc(16 * 1024 ** 2, 7);
@@ -709,26 +766,29 @@ describe("ManagedWorktreeService capacity", () => {
     );
   });
 
-  it("budgets snapshot writes hidden by assume-unchanged in the source index", async () => {
-    const created = await service.create({
-      repoRoot: repo,
-      name: "hidden-delta",
-      baseRef: "HEAD",
-    });
-    await git(created.path, "update-index", "--assume-unchanged", "README.md");
-    await fs.writeFile(path.join(created.path, "README.md"), Buffer.alloc(16 * 1024 ** 2, 8));
-    availableBytes = 144 * 1024 ** 2;
+  it.each(["--assume-unchanged", "--skip-worktree"])(
+    "budgets snapshot writes hidden by %s in the source index",
+    async (flag) => {
+      const created = await service.create({
+        repoRoot: repo,
+        name: "hidden-delta",
+        baseRef: "HEAD",
+      });
+      await git(created.path, "update-index", flag, "README.md");
+      await fs.writeFile(path.join(created.path, "README.md"), Buffer.alloc(16 * 1024 ** 2, 8));
+      availableBytes = 144 * 1024 ** 2;
 
-    await expect(service.remove({ id: created.id, reason: "archive" })).rejects.toThrow(
-      /disk space/i,
-    );
+      await expect(service.remove({ id: created.id, reason: "archive" })).rejects.toThrow(
+        /disk space/i,
+      );
 
-    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
-    expect((await fs.stat(path.join(created.path, "README.md"))).size).toBe(16 * 1024 ** 2);
-    expect(await git(repo, "branch", "--list", "--format=%(refname)", created.branch)).toBe(
-      `refs/heads/${created.branch}`,
-    );
-  });
+      expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+      expect((await fs.stat(path.join(created.path, "README.md"))).size).toBe(16 * 1024 ** 2);
+      expect(await git(repo, "branch", "--list", "--format=%(refname)", created.branch)).toBe(
+        `refs/heads/${created.branch}`,
+      );
+    },
+  );
 
   it("rejects reuse of a broken Git link without destroying its work", async () => {
     const params = {

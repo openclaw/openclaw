@@ -211,6 +211,20 @@ describe("Buzz gateway lifecycle", () => {
     expect(gatewayMocks.recoveryEntries).not.toHaveBeenCalled();
   });
 
+  it("invalidates cached room targets after initial discovery and newer room metadata", async () => {
+    const invalidateDirectoryCache = vi.fn();
+    const { abortController, lifecycle } = startTestGateway({ invalidateDirectoryCache });
+    try {
+      await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
+      expect(invalidateDirectoryCache).toHaveBeenCalledOnce();
+      gatewayMocks.startBuzzBus.mock.calls[0]?.[0].onRoomDirectoryChanged?.();
+      expect(invalidateDirectoryCache).toHaveBeenCalledTimes(2);
+    } finally {
+      abortController.abort();
+      await lifecycle;
+    }
+  });
+
   it("reports unreadable recovery state without connecting or skipping room history", async () => {
     gatewayMocks.recoveryEntries.mockRejectedValueOnce(new Error("room activation unreadable"));
     const setStatus = vi.fn();
@@ -297,6 +311,25 @@ describe("Buzz gateway lifecycle", () => {
       to: CHANNEL_ID,
       messageId: "standalone-event-id",
     });
+  });
+
+  it("routes a named default send with only that account's credentials", async () => {
+    const cfg = createBuzzConfig();
+    cfg.channels!.buzz = {
+      ...cfg.channels!.buzz,
+      defaultAccount: "ada",
+      authTag: "root-auth",
+      accounts: { ada: { relayUrl: "wss://ada.example.com", privateKey: "22".repeat(32) } },
+    };
+    await buzzOutboundAdapter.sendText({ cfg, to: CHANNEL_ID, text: "Ada says hello" });
+    expect(gatewayMocks.sendBuzzTextOneShot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        relayUrl: "wss://ada.example.com",
+        privateKey: "22".repeat(32),
+        authTag: "",
+        text: "Ada says hello",
+      }),
+    );
   });
 
   it("blocks direct sends before opening a relay when an auth-tag SecretRef is unavailable", async () => {
@@ -612,6 +645,25 @@ describe("Buzz gateway lifecycle", () => {
       expect(gatewayMocks.busSendTyping).not.toHaveBeenCalled();
     } finally {
       controller.abort();
+      await lifecycle;
+    }
+  });
+
+  it("preserves room activation after a failed initial session", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(1_700_000_000_900);
+    gatewayMocks.startBuzzBus.mockRejectedValueOnce(new Error("connect failed"));
+    const { abortController, lifecycle } = startTestGateway();
+    try {
+      await vi.advanceTimersByTimeAsync(1_200);
+      await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledTimes(2), {
+        timeout: 3_000,
+      });
+      expect(resolveBusSince(0)).toBe(1_700_000_000);
+      expect(resolveBusSince(1)).toBe(1_700_000_000);
+      expect(Math.floor(Date.now() / 1_000)).toBeGreaterThan(1_700_000_000);
+    } finally {
+      abortController.abort();
       await lifecycle;
     }
   });

@@ -473,6 +473,36 @@ describe("Buzz profile lifecycle", () => {
       }
     },
   );
+
+  it("recycles the Buzz bus when profile synchronization never reaches EOSE", async () => {
+    vi.useFakeTimers();
+    relayMocks.auth.mockResolvedValue("ok");
+    relayMocks.stallProfileQueryEose = true;
+    const onFatalError = vi.fn();
+    const onProfileError = vi.fn();
+    const bus = await startTestBus({
+      profileName: "Configured Agent Name",
+      onFatalError,
+      onProfileError,
+    });
+
+    try {
+      expect(
+        relayMocks.subscriptions.some((entry) =>
+          entry.filters.some((filter) => filter.kinds?.includes(10_100)),
+        ),
+      ).toBe(true);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(onFatalError).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "Timed out loading current Buzz profile" }),
+      );
+      expect(relayMocks.close).toHaveBeenCalledOnce();
+      expect(onProfileError).not.toHaveBeenCalled();
+    } finally {
+      await bus.close();
+    }
+  });
 });
 
 describe("Buzz bot-owned thread mentions", () => {

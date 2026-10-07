@@ -585,6 +585,23 @@ describe("exact-state retirement admission and recovery", () => {
     },
   );
 
+  it("supports repeated retirement after native restore with a new snapshot", async () => {
+    const f = await fixture();
+    const first = await service.remove(f.request);
+    const firstSnapshot = await git(repo, "rev-parse", first.snapshotRef!);
+    const restored = await service.restore({ id: f.record.id });
+    await fs.writeFile(path.join(restored.path, "README.md"), "second working state\n");
+    const second = await service.remove({
+      ...f.request,
+      exactState: { ...f.exactState, lastActiveAt: restored.lastActiveAt },
+    });
+    expect(await git(repo, "rev-parse", second.snapshotRef!)).not.toBe(firstSnapshot);
+    expect(await git(repo, "show", `${second.snapshotRef}:README.md`)).toBe("second working state");
+    const again = await service.restore({ id: f.record.id });
+    expect(await readme(again.path)).toBe("second working state\n");
+    expect(await fs.readFile(f.indexPath)).toEqual(f.index);
+  });
+
   it.each(["missing", "changed"] as const)(
     "preserves recovery when the retained split-index dependency is %s",
     async (kind) => {

@@ -16,6 +16,7 @@ const relayMocks = vi.hoisted(() => ({
   storedEvents: [] as Event[],
   historyRequests: [] as Filter[],
   historySubscriptionCloses: 0,
+  stallHistoryPages: false,
   closeHistoryPagesReason: undefined as string | undefined,
   overReturnHistoryPages: false,
 }));
@@ -102,7 +103,9 @@ vi.mock("nostr-tools", async (importOriginal) => {
             };
           }
         }
-        handlers.oneose?.();
+        if (!relayMocks.stallHistoryPages || !isHistoryPage) {
+          handlers.oneose?.();
+        }
         return {
           id: `sub:${relayMocks.historyRequests.length}`,
           close: vi.fn(() => {
@@ -191,6 +194,7 @@ describe("Buzz reconnect history catch-up", () => {
     vi.clearAllMocks();
     relayMocks.historyRequests.length = 0;
     relayMocks.historySubscriptionCloses = 0;
+    relayMocks.stallHistoryPages = false;
     relayMocks.closeHistoryPagesReason = undefined;
     relayMocks.overReturnHistoryPages = false;
     relayMocks.storedEvents = [
@@ -303,6 +307,28 @@ describe("Buzz reconnect history catch-up", () => {
     expect(
       relayMocks.historyRequests.filter((filter) => filter.limit === undefined).length,
     ).toBeGreaterThan(2);
+  });
+
+  it("fails the bus when a catch-up subscription never reaches EOSE", async () => {
+    vi.useFakeTimers();
+    seedOfflineBacklog(HISTORY_LIMIT + 1, (index) => BASE_TIMESTAMP + index);
+    relayMocks.stallHistoryPages = true;
+    const fatalErrors: string[] = [];
+
+    const bus = await startHistoryBus({
+      onMessage: async () => {},
+      onFatalError: (error) => {
+        fatalErrors.push(error.message);
+      },
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(fatalErrors).toEqual([`Timed out loading Buzz room history for ${CHANNEL_ID}`]);
+      expect(relayMocks.close).toHaveBeenCalled();
+      expect(relayMocks.historySubscriptionCloses).toBe(0);
+    } finally {
+      await bus.close();
+    }
   });
 
   it("fails the bus when a catch-up subscription closes unexpectedly", async () => {

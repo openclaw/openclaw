@@ -84,7 +84,7 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it.each(["directory", "inspection"] as const)(
+  it.each(["directory", "maintenance", "inspection"] as const)(
     "preserves recovery state when inspection fails (%s)",
     async (failure) => {
       const { sqlitePath, recover } = createRecoveryStore();
@@ -100,13 +100,23 @@ describe("runDoctorSessionSqlite", () => {
           : vi
               .spyOn(nodeSqlite, "openNodeSqliteDatabase")
               .mockImplementation((pathname, options) => {
-                if (path.basename(pathname) === path.basename(sqlitePath)) {
+                if (
+                  failure === "maintenance" ||
+                  path.basename(pathname) === path.basename(sqlitePath)
+                ) {
                   throw new Error("node:sqlite unavailable");
                 }
                 return openDatabase(pathname, options);
               });
       try {
         const recovery = recover();
+        if (failure === "maintenance") {
+          await expect(recovery).rejects.toThrow(
+            "failed to acquire agent database maintenance lease",
+          );
+          expect(fs.readFileSync(sqlitePath, "utf8")).toBe("not a sqlite database\n");
+          return;
+        }
         const report = await recovery;
         expect(report.totals.issues).toBe(1);
         expect(report.targets[0]?.corruptRecovery).toBeUndefined();

@@ -102,6 +102,34 @@ describe("gateway plugin HTTP auth boundary", () => {
   );
 
   test.each([
+    { controlUiEnabled: true, method: "GET", status: 503, body: "Control UI assets not found" },
+    { controlUiEnabled: true, method: "POST", status: 404, body: "Not Found" },
+    { controlUiEnabled: false, method: "GET", status: 404, body: "Not Found" },
+  ])(
+    "reserves approval documents ahead of plugins ($method, UI enabled: $controlUiEnabled)",
+    async ({ controlUiEnabled, method, status, body }) => {
+      const plugin = claimingPlugin();
+      await withServer(
+        async (server) => {
+          const response = await sendRequest(server, {
+            path: "/approve/plugin%3Arequest.json",
+            method,
+          });
+          expect(response.res.statusCode).toBe(status);
+          expect(response.getBody()).toContain(body);
+          expect(plugin).not.toHaveBeenCalled();
+        },
+        {
+          controlUiEnabled,
+          controlUiBasePath: "",
+          controlUiRoot: { kind: "missing" },
+          handlePluginRequest: plugin,
+        },
+      );
+    },
+  );
+
+  test.each([
     {
       surface: "write-default",
       header: "operator.read",

@@ -202,6 +202,67 @@ describe("managed exact-state retirement", () => {
       /^[a-f0-9]{40}$/u,
     );
   });
+  it("keeps resolve-undo and cache-tree dependencies after the original index is gone", async () => {
+    await git(repo, "commit", "--allow-empty", "-m", "recorded branch tip");
+    const record = await materializeManagedWorktreeFixture({
+      env,
+      repoRoot: repo,
+      stateDir,
+      name: "resolve-undo",
+      now: 1_800_000_000_000,
+      ownerKind: "manual",
+    });
+    const branchHead = await git(record.path, "rev-parse", "HEAD");
+    await git(record.path, "checkout", "--detach", "HEAD~1");
+    const head = await git(record.path, "rev-parse", "HEAD");
+    await fs.writeFile(path.join(record.path, "README.md"), "ours-only\n");
+    await git(record.path, "add", "README.md");
+    const ours = await git(record.path, "rev-parse", ":README.md");
+    const oursTree = await git(record.path, "write-tree");
+    await fs.writeFile(path.join(record.path, "README.md"), "theirs-only\n");
+    await git(record.path, "add", "README.md");
+    const theirs = await git(record.path, "rev-parse", ":README.md");
+    const theirsTree = await git(record.path, "write-tree");
+    await git(record.path, "read-tree", oursTree);
+    await git(record.path, "read-tree", "-m", "-i", "HEAD", oursTree, theirsTree);
+    await fs.writeFile(path.join(record.path, "README.md"), "resolved\n");
+    await git(record.path, "add", "README.md");
+    const cacheTree = await git(record.path, "write-tree");
+    await git(record.path, "update-index", "--index-version=4");
+    expect(await git(record.path, "ls-files", "--resolve-undo")).toContain(ours);
+    const indexPath = path.resolve(
+      record.path,
+      await git(record.path, "rev-parse", "--git-path", "index"),
+    );
+    const index = await fs.readFile(indexPath);
+    const result = await service.remove({
+      id: record.id,
+      reason: "resolve-undo proof",
+      exactState: {
+        ownerKind: record.ownerKind,
+        createdAt: record.createdAt,
+        lastActiveAt: record.lastActiveAt,
+        head,
+        branchHead,
+        indexSha256: sha256(index),
+      },
+    });
+    await git(repo, "worktree", "remove", "--force", result.recoveryPath!);
+    await git(repo, "prune", "--expire=now");
+    expect(await git(repo, "cat-file", "-p", ours)).toBe("ours-only");
+    expect(await git(repo, "cat-file", "-p", theirs)).toBe("theirs-only");
+    expect(await git(repo, "cat-file", "-t", cacheTree)).toBe("tree");
+    const restored = await service.restore({ id: record.id });
+    const restoredIndex = path.resolve(
+      restored.path,
+      await git(restored.path, "rev-parse", "--git-path", "index"),
+    );
+    expect(await fs.readFile(restoredIndex)).toEqual(index);
+    await git(restored.path, "checkout", "-m", "README.md");
+    expect(await git(restored.path, "ls-files", "--unmerged")).toContain(ours);
+    expect(await git(restored.path, "ls-files", "--unmerged")).toContain(theirs);
+    expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toContain("<<<<<<<");
+  });
   it("refuses a fallback parent swapped to a symlink before publication", async () => {
     const { created, retired } = await retiredFixture("parent-swap", async (checkout) => {
       await fs.mkdir(path.join(checkout, "nested"));

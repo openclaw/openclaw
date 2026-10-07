@@ -45,6 +45,7 @@ describe("workspace root guard", () => {
     ["file://attacker/share/readme.md", "file://attacker/share/readme.md"],
     ["file:///workspace/%E0%A4%A", "file:///workspace/%E0%A4%A"],
     ["file:///workspace/%2FREADME.md", "file:///workspace/%2FREADME.md"],
+    ["/workspace-two/secret.txt", "/workspace-two/secret.txt"],
   ])("guards normalized path %s", async (input, expected) => {
     const { tool, execute } = createToolHarness();
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
@@ -171,5 +172,12 @@ describe("read path normalization", () => {
       { path: "reports/final.docx", offset: 1 },
       undefined,
     );
+  });
+  it("rejects paths emptied by suffix stripping without reading", async () => {
+    const { tool, execute } = createToolHarness();
+    await expect(
+      createOpenClawReadTool(tool).execute("empty", { path: "</arg_value>>" }),
+    ).rejects.toThrow(/Missing required parameter: path/);
+    expect(execute).not.toHaveBeenCalled();
   });
 });

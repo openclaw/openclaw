@@ -183,50 +183,57 @@ describe("session event wake disposition and preemption", () => {
     },
   );
 
-  it("preserves started work through preemption retry and handler replacement", async () => {
-    const oldHandler = vi.fn<WakeHandler>(async () => {
-      markSessionEventWakeWorkStarted();
-      return { status: "skipped", reason: "preempted" };
-    });
-    setSessionEventWakeHandler(oldHandler);
-    const settled = vi.fn();
-    const result = requestSessionEventWakeAndWait(nativePoll());
-    void result.then(settled);
+  it.each(["preempted", "channel-not-ready"])(
+    "preserves started work through %s retry and handler replacement",
+    async (reason) => {
+      const target = { agentId: "retry-owner", sessionKey: "agent:retry-owner:background" };
+      const oldHandler = vi.fn<WakeHandler>(async () => {
+        markSessionEventWakeWorkStarted();
+        return { status: "skipped", reason };
+      });
+      setSessionEventWakeHandler(oldHandler);
+      const settled = vi.fn();
+      const result = requestSessionEventWakeAndWait(nativePoll(target));
+      void result.then(settled);
 
-    await vi.advanceTimersByTimeAsync(SESSION_EVENT_IDLE_RETRY_MS);
-    expect(oldHandler).toHaveBeenCalledTimes(2);
-    expect(oldHandler.mock.calls[1]?.[0].retainedWork).toBe(true);
-    expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_IDLE_RETRY_MS - 1);
+      expect(oldHandler).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(oldHandler).toHaveBeenCalledTimes(2);
+      expect(oldHandler.mock.calls[1]?.[0]).toMatchObject({ ...target, retainedWork: true });
+      expect(settled).not.toHaveBeenCalled();
 
-    const dispositions: boolean[][] = [];
-    const replacement = vi.fn<WakeHandler>(async () => {
-      dispositions.push([
-        isSessionEventWakePollDeferred(),
-        deferSessionEventWakePoll(),
-        isSessionEventWakePollDeferred(),
+      const dispositions: boolean[][] = [];
+      const replacement = vi.fn<WakeHandler>(async () => {
+        dispositions.push([
+          isSessionEventWakePollDeferred(),
+          deferSessionEventWakePoll(),
+          isSessionEventWakePollDeferred(),
+        ]);
+        return dispositions.length === 1
+          ? { status: "skipped", reason: "requests-in-flight" }
+          : terminalFailure;
+      });
+      setSessionEventWakeHandler(replacement);
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(replacement).toHaveBeenCalledOnce();
+      expect(replacement.mock.calls[0]?.[0]).toMatchObject(target);
+      expect(replacement.mock.calls[0]?.[0].retainedWork).toBeUndefined();
+      expect(dispositions).toEqual([[false, false, false]]);
+      expect(settled).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_IDLE_RETRY_MS);
+      expect(replacement).toHaveBeenCalledTimes(2);
+      expect(replacement.mock.calls[1]?.[0]).toMatchObject({ ...target, retainedWork: true });
+      expect(dispositions).toEqual([
+        [false, false, false],
+        [false, false, false],
       ]);
-      return dispositions.length === 1
-        ? { status: "skipped", reason: "requests-in-flight" }
-        : terminalFailure;
-    });
-    setSessionEventWakeHandler(replacement);
-    await vi.advanceTimersByTimeAsync(250);
-
-    expect(replacement).toHaveBeenCalledOnce();
-    expect(replacement.mock.calls[0]?.[0].retainedWork).toBeUndefined();
-    expect(dispositions).toEqual([[false, false, false]]);
-    expect(settled).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(SESSION_EVENT_IDLE_RETRY_MS);
-    expect(replacement).toHaveBeenCalledTimes(2);
-    expect(replacement.mock.calls[1]?.[0].retainedWork).toBe(true);
-    expect(dispositions).toEqual([
-      [false, false, false],
-      [false, false, false],
-    ]);
-    expect(settled).toHaveBeenCalledExactlyOnceWith(terminalFailure);
-    expect(await result).toBe(terminalFailure);
-  });
+      expect(settled).toHaveBeenCalledExactlyOnceWith(terminalFailure);
+      expect(await result).toBe(terminalFailure);
+    },
+  );
 
   it.each(["while-active", "after-retained"])(
     "keeps started work sticky when a later native poll joins %s",
@@ -503,6 +510,23 @@ describe("session event wake disposition and preemption", () => {
     }
   });
 
+  it.each([-86_400_000, 86_400_000])(
+    "dispatches a coalesced wake after the wall clock changes by %i ms",
+    async (clockChangeMs) => {
+      vi.setSystemTime(2_000_000_000_000);
+      const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+      setSessionEventWakeHandler(handler);
+
+      requestSessionEventWake(wake("manual", { coalesceMs: 250 }));
+      vi.setSystemTime(Date.now() + clockChangeMs);
+      await vi.advanceTimersByTimeAsync(249);
+      expect(handler).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handler.mock.calls.map(([request]) => request)).toEqual([wake("manual")]);
+    },
+  );
+
   it("dispatches an urgent wake after the wall clock changes forward", async () => {
     vi.setSystemTime(2_000_000_000_000);
     const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
@@ -516,6 +540,29 @@ describe("session event wake disposition and preemption", () => {
     expect(handler.mock.calls.map(([request]) => request)).toEqual([
       wake("manual", { agentId: "urgent" }),
     ]);
+  });
+
+  it("retries a retained wake on time after the wall clock changes", async () => {
+    vi.setSystemTime(2_000_000_000_000);
+    const handler = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: "skipped",
+        reason: "min-spacing",
+        retryAtMs: Date.now() + 1_000,
+      })
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+    setSessionEventWakeHandler(handler);
+
+    requestSessionEventWake(wake("exec-event", { coalesceMs: 0 }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).toHaveBeenCalledOnce();
+    vi.setSystemTime(Date.now() - 86_400_000);
+    await vi.advanceTimersByTimeAsync(998);
+    expect(handler).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).toHaveBeenCalledTimes(2);
   });
 
   it("hands a suspended wake to the replacement without running the retired handler", async () => {

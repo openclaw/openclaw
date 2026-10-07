@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
+import fs from "node:fs/promises";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { GatewayClient as GatewayClientInstance } from "../gateway/client.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
@@ -201,5 +202,39 @@ it("keeps connection token facts fresh after preparation without duplicate reads
     } finally {
       await client.stopAndWait();
     }
+  });
+});
+
+it.each([
+  { name: "identity omitted", deviceIdentity: null },
+  { name: "read-only missing state", sharedStateMode: "read-only" as const },
+  {
+    name: "password-only read-only",
+    sharedStateMode: "read-only" as const,
+    password: "synthetic-password",
+  },
+  {
+    name: "explicit origin read-only",
+    sharedStateMode: "read-only" as const,
+    deviceAuthScope: "wss://synthetic.example",
+    token: "synthetic-token",
+  },
+  { name: "invalid transport", url: "ws://synthetic.example" },
+  { name: "invalid edge transport", edgeAuthHeaders: { "x-synthetic": "synthetic-value" } },
+])("does not create token storage for $name", async ({ name, ...overrides }) => {
+  await withOpenClawTestState({ label: "client-token-skipped-preparation" }, async (state) => {
+    if (name !== "read-only missing state") {
+      // A skipped storage path must not even consult the legacy migration guard.
+      await state.writeJson("identity/device-auth.json", { synthetic: true });
+    }
+    await prepareGatewayClientDeviceAuth({
+      url: "ws://127.0.0.1:18789",
+      env: state.env,
+      deviceIdentity,
+      ...overrides,
+    });
+    await expect(fs.stat(state.statePath("state", "openclaw.sqlite"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });
