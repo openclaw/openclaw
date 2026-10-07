@@ -1048,7 +1048,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/command/session.exact-target.test.ts",
   "src/agents/command/session.resolve-session-key.test.ts",
   "src/agents/compaction.tool-result-details.test.ts",
-  "src/agents/context.eager-warmup.test.ts",
   "src/agents/context.lookup.test.ts",
   "src/agents/core-coding-tools.exec-workdir.test.ts",
   "src/agents/delegation-guidance.test.ts",
