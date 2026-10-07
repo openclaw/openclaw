@@ -204,6 +204,12 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
     const agentId = resolveMcpAppSessionOwner(params, context.getRuntimeConfig());
     const requesterId = resolveMcpAppRequesterId(client);
     const read = retainSessionScopedRead(options, sessionKey, agentId);
+    const assertRequestCurrent = () => {
+      read?.assertCurrent();
+      if (requesterId !== resolveMcpAppRequesterId(client)) {
+        throw new McpAppViewExpiredError();
+      }
+    };
     try {
       const active = await resolveMcpAppActiveView({
         sessionKey: requireString(params, "sessionKey"),
@@ -290,10 +296,7 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
           // existing authenticated Control UI view payload.
           logWarn(`mcp-app: standalone ticket unavailable: ${formatErrorMessage(error)}`);
         }
-        read?.assertCurrent();
-        if (requesterId !== resolveMcpAppRequesterId(client)) {
-          throw new McpAppViewExpiredError();
-        }
+        assertRequestCurrent();
         return {
           sandboxUrl: buildMcpAppSandboxPath(view.csp),
           sandboxPort,
@@ -323,10 +326,7 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
           updateModelContextSupported,
         };
       });
-      read?.assertCurrent();
-      if (requesterId !== resolveMcpAppRequesterId(client)) {
-        throw new McpAppViewExpiredError();
-      }
+      assertRequestCurrent();
       return payload;
     } finally {
       read?.release();

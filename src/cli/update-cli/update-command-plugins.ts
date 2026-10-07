@@ -279,10 +279,10 @@ async function updatePluginsAfterCoreUpdateWithLease(
   // sync/npm records so repair cannot overwrite them with an older disk snapshot.
   const convergenceBaselineRecords = pluginConfig.plugins?.installs ?? {};
   // Keep the observed records stable if convergence replaces them.
-  const probedNpmRecords = new Map(
+  const probedRecords = new Map(
     cohort.updateOutcomes.map(({ pluginId }) => {
       const record = convergenceBaselineRecords[pluginId];
-      return [pluginId, record?.source === "npm" ? { ...record } : undefined];
+      return [pluginId, record ? { ...record } : undefined];
     }),
   );
   const convergenceEnv = resolvePostCoreConvergenceEnv(process.env, coreVersion ?? undefined);
@@ -356,12 +356,13 @@ async function updatePluginsAfterCoreUpdateWithLease(
   // Report retention only while the probed install survives convergence.
   for (const outcome of cohort.updateOutcomes) {
     const record = convergence.installRecords[outcome.pluginId];
-    const probed = probedNpmRecords.get(outcome.pluginId);
+    const probed = probedRecords.get(outcome.pluginId);
     if (
       outcome.status !== "unchanged" ||
       !outcome.currentVersion ||
-      record?.source !== "npm" ||
-      record.spec !== probed?.spec
+      !record ||
+      record.source !== probed?.source ||
+      record.spec !== probed.spec
     ) {
       continue;
     }
@@ -371,7 +372,8 @@ async function updatePluginsAfterCoreUpdateWithLease(
         ? record.installPath !== probed?.installPath ||
           record.version !== probed?.version ||
           record.resolvedVersion !== probed?.resolvedVersion
-        : !outcome.nextVersion ||
+        : record.source !== "npm" ||
+          !outcome.nextVersion ||
           comparePackageUpdateVersions(outcome.nextVersion, outcome.currentVersion) <= 0 ||
           (record.resolvedVersion ?? record.version) !== outcome.currentVersion ||
           resolveExactNpmSpecVersion(record.spec) !== outcome.currentVersion ||

@@ -102,20 +102,12 @@ function buildApiKeyProfileResult(
     provider: params.provider,
     email: params.email,
   };
-  Object.defineProperties(result, {
-    profileId: {
-      value: params.profileId,
+  for (const key of ["profileId", "profileType", "credential"] as const) {
+    Object.defineProperty(result, key, {
+      value: params[key],
       enumerable: false,
-    },
-    profileType: {
-      value: params.profileType,
-      enumerable: false,
-    },
-    credential: {
-      value: params.credential,
-      enumerable: false,
-    },
-  });
+    });
+  }
   return result as ResolveApiKeyForProfileResult;
 }
 

@@ -429,6 +429,15 @@ async function handleTelegramModelCallback(params: {
     authorizeCallback,
   } = params;
   const { editCallbackMessage, editCallbackMessageWithButtons: editMessageWithButtons } = actions;
+  const resolveSessionState = () =>
+    messageRuntime.resolveTelegramSessionState({
+      chatId,
+      isGroup,
+      threadSpec,
+      botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+      senderId,
+      runtimeCfg,
+    });
   const retryModelAction = async <T>(action: () => Promise<T>): Promise<T> => {
     try {
       return await action();
@@ -447,18 +456,7 @@ async function handleTelegramModelCallback(params: {
     if (page === undefined) {
       return true;
     }
-    const agentId =
-      paginationMatch[2]?.trim() ||
-      (
-        await messageRuntime.resolveTelegramSessionState({
-          chatId,
-          isGroup,
-          threadSpec,
-          botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
-          senderId,
-          runtimeCfg,
-        })
-      ).agentId;
+    const agentId = paginationMatch[2]?.trim() || (await resolveSessionState()).agentId;
     const result = await retryModelAction(async () => {
       const skillCommands = telegramDeps.listSkillCommandsForAgents({
         cfg: runtimeCfg,
@@ -501,14 +499,7 @@ async function handleTelegramModelCallback(params: {
   }
 
   const { sessionState, modelData } = await retryModelAction(async () => {
-    const session = await messageRuntime.resolveTelegramSessionState({
-      chatId,
-      isGroup,
-      threadSpec,
-      botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
-      senderId,
-      runtimeCfg,
-    });
+    const session = await resolveSessionState();
     const providerData = await telegramDeps.buildModelsProviderData(runtimeCfg, session.agentId, {
       sessionEntry: session.sessionEntry,
     });
@@ -585,9 +576,6 @@ async function handleTelegramModelCallback(params: {
     return true;
   }
 
-  if (modelCallback.type !== "select" && modelCallback.type !== "select-ref") {
-    return true;
-  }
   const selection = resolveModelSelection({ callback: modelCallback, providers, byProvider });
   if (selection.kind !== "resolved" || !byProvider.get(selection.provider)?.has(selection.model)) {
     await showChangedModelPicker();

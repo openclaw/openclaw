@@ -1,11 +1,11 @@
 import { parseHostForAddressChecks } from "../../packages/gateway-client/src/client-address-utils.js";
-import { GatewayClient as BaseGatewayClient } from "../../packages/gateway-client/src/index.js";
+import { GatewayClient as BaseGatewayClient } from "../../packages/gateway-client/src/client.js";
 import type {
   GatewayClientConnectionMetadata,
   GatewayClientHostDeps,
   GatewayClientOptions as BaseGatewayClientOptions,
   GatewayClientRequestOptions,
-} from "../../packages/gateway-client/src/index.js";
+} from "../../packages/gateway-client/src/client.js";
 import { markGatewayConnectAssemblyError } from "../../packages/gateway-client/src/request-error.js";
 import { resolveGatewayWebSocketTransport } from "../../packages/gateway-client/src/websocket-transport.js";
 import {
@@ -42,12 +42,12 @@ export {
   GatewayClientRequestError,
   isGatewayConnectAssemblyError,
   isGatewayProtocolResponseError,
-} from "../../packages/gateway-client/src/index.js";
+} from "../../packages/gateway-client/src/client.js";
 export type {
   GatewayClientCloseInfo,
   GatewayClientRequestOptions,
   GatewayReconnectPausedInfo,
-} from "../../packages/gateway-client/src/index.js";
+} from "../../packages/gateway-client/src/client.js";
 
 export type GatewayClientOptions = BaseGatewayClientOptions & {
   /** Exact normalized remote gateway scope for origin-bound device credentials. */

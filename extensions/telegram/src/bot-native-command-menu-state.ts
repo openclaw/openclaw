@@ -200,9 +200,6 @@ const TELEGRAM_MENU_LANGUAGE_CODE_RECORD = {
   za: true,
   zu: true,
 } satisfies Record<LanguageCode, true>;
-const TELEGRAM_MENU_LANGUAGE_CODES: ReadonlySet<string> = new Set(
-  Object.keys(TELEGRAM_MENU_LANGUAGE_CODE_RECORD),
-);
 
 type TelegramMenuLocaleLedger = {
   version: typeof TELEGRAM_MENU_LOCALE_LEDGER_VERSION;
@@ -284,7 +281,7 @@ export function getProcessKnownTelegramMenuLocales(ownerKey: string): Set<Langua
 }
 
 function isTelegramMenuLanguageCode(languageCode: string): languageCode is LanguageCode {
-  return TELEGRAM_MENU_LANGUAGE_CODES.has(languageCode);
+  return Object.hasOwn(TELEGRAM_MENU_LANGUAGE_CODE_RECORD, languageCode);
 }
 
 export function normalizeTelegramMenuLanguageCode(languageCode: string): LanguageCode | null {

@@ -33,8 +33,5 @@ export function buildInlineKeyboard(
         .filter((button): button is InlineKeyboardButton => Boolean(button)),
     )
     .filter((row) => row.length > 0);
-  if (rows.length === 0) {
-    return undefined;
-  }
-  return { inline_keyboard: rows };
+  return rows.length > 0 ? { inline_keyboard: rows } : undefined;
 }

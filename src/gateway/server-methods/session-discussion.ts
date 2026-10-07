@@ -31,6 +31,10 @@ async function maybeGenerateTitleBeforeDiscussionOpen(params: {
   sessionKey: string;
   agentId?: string;
 }): Promise<void> {
+  const warn = (error: unknown) =>
+    params.context.logGateway.warn(
+      `dashboard session title generation failed: ${formatForLog(error)}`,
+    );
   try {
     const cfg = params.context.getRuntimeConfig();
     const resolved = loadAccessorSessionEntryForGatewayTarget({
@@ -44,7 +48,7 @@ async function maybeGenerateTitleBeforeDiscussionOpen(params: {
       return;
     }
 
-    const titleRequest = maybeGenerateSessionTitle({
+    const observedTitleRequest = maybeGenerateSessionTitle({
       cfg,
       agentId: resolved.target.agentId,
       entry,
@@ -54,11 +58,8 @@ async function maybeGenerateTitleBeforeDiscussionOpen(params: {
       sessionKey: resolved.canonicalKey,
       storePath: resolved.storePath,
       userMessage: "",
-    });
-    const observedTitleRequest = titleRequest.catch((error: unknown) => {
-      params.context.logGateway.warn(
-        `dashboard session title generation failed: ${formatForLog(error)}`,
-      );
+    }).catch((error: unknown) => {
+      warn(error);
       return false;
     });
     // Late titles remain owned by generation; discussion open bounds only its wait.
@@ -79,9 +80,7 @@ async function maybeGenerateTitleBeforeDiscussionOpen(params: {
     }
   } catch (error) {
     // Titling is best-effort; provider open remains the authoritative operation.
-    params.context.logGateway.warn(
-      `dashboard session title generation failed: ${formatForLog(error)}`,
-    );
+    warn(error);
   }
 }
 

@@ -86,6 +86,7 @@ describe("command-path-policy", () => {
   it.each([
     { commandPath: ["database"], hideBanner: true },
     { commandPath: ["audit"], hideBanner: false },
+    { commandPath: ["gateway", "call"], hideBanner: false },
     { commandPath: ["node", "identity"], hideBanner: false },
     { commandPath: ["update", "cleanup"], hideBanner: true },
   ])("keeps passive startup for $commandPath", ({ commandPath, hideBanner }) => {
@@ -167,7 +168,7 @@ describe("command-path-policy", () => {
   });
 
   it("keeps gateway control RPCs on core-only config validation", () => {
-    for (const subcommand of ["call", "suspend", "resume"]) {
+    for (const subcommand of ["suspend", "resume"]) {
       expectResolvedPolicy(["gateway", subcommand], {
         configGuard: "validate",
         networkProxy: "bypass",

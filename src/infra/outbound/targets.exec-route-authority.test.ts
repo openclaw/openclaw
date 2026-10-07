@@ -8,6 +8,7 @@ import {
 } from "../../plugins/runtime.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { resolveHeartbeatDeliveryTargetWithSessionRoute } from "./targets.js";
 
 const cfg: OpenClawConfig = {
@@ -49,6 +50,35 @@ it.each(["telegram:-1003774691294:topic:47", "tg:-1003774691294:47", "-100377469
     });
   },
 );
+
+it("does not add a saved topic to a captured unthreaded exec route", async () => {
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
+  );
+  const to = "-1003774691294";
+  const result = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+    cfg,
+    agentId: "main",
+    entry: {
+      sessionId: "captured-unthreaded",
+      updatedAt: 1,
+      chatType: "group",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to, accountId: "work", threadId: 47 },
+      }),
+    },
+    heartbeat: { target: "last" },
+    turnSource: { channel: "telegram", to, accountId: "work" },
+    turnSourceKind: "exec",
+  });
+  expect(result).toMatchObject({
+    channel: "telegram",
+    to: `telegram:${to}`,
+    accountId: "work",
+    chatType: "group",
+  });
+  expect(result.threadId).toBeUndefined();
+});
 
 it("rejects real-plugin embedded topic and post-await explicit thread disagreement", async () => {
   const plugin: ChannelPlugin = {

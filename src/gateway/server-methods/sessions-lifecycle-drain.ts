@@ -297,14 +297,10 @@ export async function prepareSessionLifecycleDrain(
             .then(() => true)
         : Promise.resolve(false)
       : Promise.resolve(true);
-    const workerWork = workerDrained
-      ? withTimeout(workerDrained, timeoutMs, "worker inference lifecycle drain").then(() => true)
-      : Promise.resolve(true);
-    const terminalWork = terminalDrain
-      ? withTimeout(terminalDrain.drained, timeoutMs, "agent terminal lifecycle drain").then(
-          () => true,
-        )
-      : Promise.resolve(true);
+    const waitForDrain = (work: Promise<void> | undefined, label: string) =>
+      work ? withTimeout(work, timeoutMs, label).then(() => true) : Promise.resolve(true);
+    const workerWork = waitForDrain(workerDrained, "worker inference lifecycle drain");
+    const terminalWork = waitForDrain(terminalDrain?.drained, "agent terminal lifecycle drain");
     const drains = await Promise.all([
       prepared.controllerDrain,
       replyWork,

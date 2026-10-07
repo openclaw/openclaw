@@ -21,7 +21,6 @@ import {
   inspectCurrentConversationBindingRecord,
   updateCurrentConversationBindingRecord,
 } from "./current-conversation-bindings.js";
-import type { CurrentConversationBindingTouch } from "./current-conversation-bindings.worker-contract.js";
 import {
   createAccountScopedBindingAdapter,
   projectThreadBindingRecord,
@@ -30,8 +29,7 @@ import { SessionBindingError } from "./session-binding-errors.js";
 import {
   nativeSessionBindingSelection,
   nativeSessionBindingListBySession,
-  type NativeSessionBindingListing,
-  type NativeSessionBindingSelection,
+  type NativeSessionBindingReads,
 } from "./session-binding-native-selection.js";
 import { normalizeConversationRef } from "./session-binding-normalization.js";
 import {
@@ -81,15 +79,9 @@ export type AccountScopedConversationBindingManager<TKind extends string = strin
   stop: () => void;
 };
 
-type AccountScopedConversationBindingsState<TKind extends string> = {
-  managersByAccountId: Map<string, AccountScopedConversationBindingManager<TKind>>;
-};
-
-function getState<TKind extends string>(
-  stateKey: symbol,
-): AccountScopedConversationBindingsState<TKind> {
+function getState<TKind extends string>(stateKey: symbol) {
   return resolveGlobalSingleton(stateKey, () => ({
-    managersByAccountId: new Map(),
+    managersByAccountId: new Map<string, AccountScopedConversationBindingManager<TKind>>(),
   }));
 }
 
@@ -111,16 +103,10 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
     return existingManager;
   }
 
-  const idleTimeoutMs = resolveThreadBindingIdleTimeoutMsForChannel({
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId,
-  });
-  const maxAgeMs = resolveThreadBindingMaxAgeMsForChannel({
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId,
-  });
+  const accountScope = { channel: params.channel, accountId };
+  const policyScope = { cfg: params.cfg, ...accountScope };
+  const idleTimeoutMs = resolveThreadBindingIdleTimeoutMsForChannel(policyScope);
+  const maxAgeMs = resolveThreadBindingMaxAgeMsForChannel(policyScope);
   const asSessionBindingRecord = (
     record: AccountScopedConversationBindingRecord<TKind>,
     metadata?: Record<string, unknown>,
@@ -142,11 +128,7 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
     });
   };
   const conversationRef = (conversationId: string) =>
-    normalizeConversationRef({
-      channel: params.channel,
-      accountId,
-      conversationId,
-    });
+    normalizeConversationRef({ ...accountScope, conversationId });
   const asAccountBindingRecord = (
     record: SessionBindingRecord,
   ): AccountScopedConversationBindingRecord<TKind> => {
@@ -164,12 +146,9 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
         typeof metadata?.lastActivityAt === "number" ? metadata.lastActivityAt : record.boundAt,
     };
   };
-  const bindConversationRecord = (input: {
-    conversationId: string;
-    targetKind: BindingTargetKind;
-    targetSessionKey: string;
-    metadata?: Record<string, unknown>;
-  }): SessionBindingRecord | null => {
+  const bindConversationRecord = (
+    input: Parameters<AccountScopedConversationBindingManager<TKind>["bindConversation"]>[0],
+  ): SessionBindingRecord | null => {
     const normalizedConversationId = input.conversationId.trim();
     const normalizedTargetSessionKey = input.targetSessionKey.trim();
     if (!normalizedConversationId || !normalizedTargetSessionKey) {
@@ -227,24 +206,22 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
     const normalized = normalizeConversationRef(ref);
     return normalized.channel === params.channel && normalized.accountId === accountId;
   };
-  const prepareTouch = (
-    conversationId: string,
-    bindingId: string,
-    at = Date.now(),
-  ): CurrentConversationBindingTouch => ({
-    conversation: conversationRef(conversationId),
-    bindingId,
-    at,
-    accountPolicy: {
-      idleTimeoutMs,
-      maxAgeMs,
-      targetKinds: {
-        subagent: params.toSessionBindingTargetKind(params.toStoredTargetKind("subagent")),
-        session: params.toSessionBindingTargetKind(params.toStoredTargetKind("session")),
-      },
-    },
-  });
-  const accountScope = { channel: params.channel, accountId };
+  const readAccountBindingAsync = async (ref: ConversationRef, inspect: boolean) => {
+    if (!matchesAccount(ref)) {
+      return null;
+    }
+    if (inspect) {
+      assertCurrent();
+    }
+    const record = inspect
+      ? await inspectCurrentConversationBindingRecordAsync(conversationRef(ref.conversationId))
+      : await resolveCurrentConversationBindingRecordAsync(
+          conversationRef(ref.conversationId),
+          assertCurrent,
+        );
+    assertCurrent();
+    return record;
+  };
   const manager: AccountScopedConversationBindingManager<TKind> = {
     accountId,
     getByConversationId: (conversationId) => {
@@ -289,16 +266,13 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
         state.managersByAccountId.delete(accountId);
       }
       unregisterSessionBindingAdapter({
-        channel: params.channel,
-        accountId,
+        ...accountScope,
         adapter: sessionBindingAdapter,
       });
     },
   };
 
-  const sessionBindingAdapter: SessionBindingAdapter &
-    NativeSessionBindingSelection &
-    NativeSessionBindingListing = {
+  const sessionBindingAdapter: SessionBindingAdapter & NativeSessionBindingReads = {
     ...createAccountScopedBindingAdapter<SessionBindingRecord>({
       channel: params.channel,
       accountId,
@@ -349,28 +323,8 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
       ref.channel === params.channel
         ? inspectCurrentConversationBindingRecord(conversationRef(ref.conversationId))
         : null,
-    inspectByConversationAsync: async (ref) => {
-      if (!matchesAccount(ref)) {
-        return null;
-      }
-      assertCurrent();
-      const record = await inspectCurrentConversationBindingRecordAsync(
-        conversationRef(ref.conversationId),
-      );
-      assertCurrent();
-      return record;
-    },
-    resolveByConversationAsync: async (ref) => {
-      if (!matchesAccount(ref)) {
-        return null;
-      }
-      const record = await resolveCurrentConversationBindingRecordAsync(
-        conversationRef(ref.conversationId),
-        assertCurrent,
-      );
-      assertCurrent();
-      return record;
-    },
+    inspectByConversationAsync: (ref) => readAccountBindingAsync(ref, true),
+    resolveByConversationAsync: (ref) => readAccountBindingAsync(ref, false),
     touchAsync: async (bindingId, at) => {
       const conversationId = resolveThreadBindingConversationIdFromBindingId({
         accountId,
@@ -378,7 +332,19 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
       });
       if (conversationId) {
         await touchCurrentConversationBindingRecordAsync(
-          prepareTouch(conversationId, bindingId, at),
+          {
+            conversation: conversationRef(conversationId),
+            bindingId,
+            at: at === undefined ? Date.now() : at,
+            accountPolicy: {
+              idleTimeoutMs,
+              maxAgeMs,
+              targetKinds: {
+                subagent: params.toSessionBindingTargetKind(params.toStoredTargetKind("subagent")),
+                session: params.toSessionBindingTargetKind(params.toStoredTargetKind("session")),
+              },
+            },
+          },
           assertCurrent,
         );
       }

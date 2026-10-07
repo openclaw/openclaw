@@ -1,10 +1,6 @@
 import type { ModelsListParams } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { resolveAgentWorkspaceDir, resolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
-import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
-import type {
-  createModelCatalogDecisions,
-  ModelCatalogDecisionParams,
-} from "../../agents/model-catalog-decisions.js";
+import type { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
@@ -17,11 +13,7 @@ import {
   withCurrentReadAuthority,
   type CurrentReadAuthority,
 } from "../../shared/current-read-authority.js";
-import {
-  loadDeferredCatalog,
-  readPreparedCatalog,
-  type PreparedGatewayModelCatalogSnapshot,
-} from "../server-model-catalog-auth.js";
+import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import type { ChatMetadataReadParams, ChatMetadataSessionEntry } from "./chat-metadata-contract.js";
 import { resolveSessionCatalogProfiles } from "./chat-metadata-session-projection.js";
 import type { ModelsListCatalogSource } from "./models-list-context.js";
@@ -49,46 +41,12 @@ export type BuildModelsListResultParams = {
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
 };
 
-type ModelsListPublishedOwner = Extract<ModelsListCatalogSource, { kind: "published" }>["owner"];
-
-/** Request facts and the resolved catalog owner whose plugin registry preparation runs in. */
-export type ModelsListOwner = {
-  params: Omit<BuildModelsListResultParams, "preparationAuthority">;
-  scope: ChatMetadataReadParams | undefined;
-  publicationScope: BuildModelsListResultParams["publicationScope"];
-  draft: ChatMetadataReadParams["draftAccountSelection"];
-  authority: CurrentReadAuthority | undefined;
-  sessionEntry: ChatMetadataSessionEntry | undefined;
-  useRequesterDefaults: boolean;
-  currentConfig: () => OpenClawConfig;
-  publishedOwner: ModelsListPublishedOwner | undefined;
-  requestConfig: OpenClawConfig;
-  profiles: Pick<
-    ModelCatalogDecisionParams,
-    "preferredProfileId" | "pinnedProfileId" | "profileProvider" | "runtimeOverride"
-  >;
-  view: NonNullable<ModelsListParams["view"]>;
-  refresh: boolean;
-  usedPreloadedCatalog: boolean;
-  ownerSnapshot: PreparedGatewayModelCatalogSnapshot | undefined;
-  snapshot: ModelCatalogSnapshot;
-  sourceOwner: ModelsListPublishedOwner | PreparedGatewayModelCatalogSnapshot | undefined;
-  cfg: OpenClawConfig;
-  agentId: string;
-  workspaceDir: string;
-  preparedProjectionOwner:
-    | ModelsListPublishedOwner
-    | PreparedGatewayModelCatalogSnapshot
-    | BuildModelsListResultParams["catalogProjector"];
-  metadataSnapshot: ModelsListPublishedOwner["metadataSnapshot"] | undefined;
-  preparedAuthStore: AuthProfileStore | undefined;
-  preparedPluginRegistry: ModelsListPublishedOwner["pluginRegistry"];
-};
+export type ModelsListOwner = NonNullable<Awaited<ReturnType<typeof resolveModelsListOwner>>>;
 
 export async function resolveModelsListOwner({
   preparationAuthority,
   ...params
-}: BuildModelsListResultParams): Promise<ModelsListOwner | undefined> {
+}: BuildModelsListResultParams) {
   const { source } = params;
   const scope = params.readScope;
   const publicationScope = params.publicationScope ?? scope;

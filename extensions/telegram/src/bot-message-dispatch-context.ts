@@ -59,27 +59,6 @@ function resolveDispatchTelegramThreadSpec(params: {
     : { ...params.threadSpec, id: recoveredThreadId };
 }
 
-function normalizeDispatchTelegramThreadPayload(params: {
-  context: TelegramMessageContext;
-  threadSpec: TelegramThreadSpec;
-}): TelegramMessageContext {
-  if (params.threadSpec.scope !== "forum" || params.threadSpec.id == null) {
-    return params.context;
-  }
-  const messageThreadId = parseStrictPositiveInteger(params.context.ctxPayload.MessageThreadId);
-  const transportThreadId = parseStrictPositiveInteger(params.context.ctxPayload.TransportThreadId);
-  if (messageThreadId === params.threadSpec.id && transportThreadId === params.threadSpec.id) {
-    return params.context;
-  }
-  // This payload owns private host admission state outside its enumerable fields.
-  // Normalize routing in place so a plugin-visible copier is never needed.
-  Object.assign(params.context.ctxPayload, {
-    MessageThreadId: params.threadSpec.id,
-    TransportThreadId: params.threadSpec.id,
-  });
-  return params.context;
-}
-
 function buildRecoveredTelegramChatActionSender(params: {
   context: TelegramMessageContext;
   threadId?: number;
@@ -116,7 +95,23 @@ export async function resolveDispatchTelegramContext(params: {
     threadSpec: params.context.threadSpec,
   });
   if (threadSpec === params.context.threadSpec || threadSpec.scope !== "forum") {
-    return normalizeDispatchTelegramThreadPayload({ context: params.context, threadSpec });
+    if (threadSpec.scope !== "forum" || threadSpec.id == null) {
+      return params.context;
+    }
+    const messageThreadId = parseStrictPositiveInteger(params.context.ctxPayload.MessageThreadId);
+    const transportThreadId = parseStrictPositiveInteger(
+      params.context.ctxPayload.TransportThreadId,
+    );
+    if (messageThreadId === threadSpec.id && transportThreadId === threadSpec.id) {
+      return params.context;
+    }
+    // This payload owns private host admission state outside its enumerable fields.
+    // Normalize routing in place so a plugin-visible copier is never needed.
+    Object.assign(params.context.ctxPayload, {
+      MessageThreadId: threadSpec.id,
+      TransportThreadId: threadSpec.id,
+    });
+    return params.context;
   }
   const recoveredRoutingTarget = buildTelegramInboundOriginTarget(
     params.context.chatId,

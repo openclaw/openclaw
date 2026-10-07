@@ -219,10 +219,10 @@ export async function reconcileTerminalSourceReplyDelivery(params: {
       { ...params.mirror, deliveredPayload: params.deliveredPayload },
       deliveryFact,
     ) ||
-    !isExactCurrentSourceConversation({
-      ...params.mirror,
-      deliveredPayload: params.deliveredPayload,
-    })
+    !isCurrentSourceConversation(
+      { ...params.mirror, deliveredPayload: params.deliveredPayload },
+      true,
+    )
   ) {
     return "not-source";
   }
@@ -231,11 +231,8 @@ export async function reconcileTerminalSourceReplyDelivery(params: {
 }
 
 function hasCurrentSourceContext(params: SourceReplyTranscriptMirrorParams): boolean {
-  if (!params.sessionKey?.trim()) {
-    return false;
-  }
   const toolContext = params.toolContext;
-  if (!toolContext) {
+  if (!params.sessionKey?.trim() || !toolContext) {
     return false;
   }
   const accountId = normalizeOptionalString(params.accountId);
@@ -258,6 +255,7 @@ function hasCurrentSourceContext(params: SourceReplyTranscriptMirrorParams): boo
 function matchesCurrentSourceTarget(
   params: SourceReplyTranscriptMirrorParams,
   threadPlacement: SourceReplyThreadPlacement,
+  targetMode: "send" | "reply" = "send",
 ): boolean {
   const toolContext = params.toolContext;
   if (!toolContext) {
@@ -267,7 +265,7 @@ function matchesCurrentSourceTarget(
     normalizeOptionalString(toolContext.currentMessagingTarget),
     normalizeOptionalString(toolContext.currentChannelId),
   ].filter((target): target is string => Boolean(target));
-  if (currentTargets.length === 0) {
+  if (currentTargets.length === 0 && targetMode === "send") {
     return false;
   }
   const requestedTarget = resolveSourceReplyTarget(params.actionParams);
@@ -277,7 +275,10 @@ function matchesCurrentSourceTarget(
   if (threadPlacement === "mismatch") {
     return false;
   }
-  const threadId = readTrimmedStringAlias(params.actionParams, ["threadId", "messageThreadId"]);
+  const threadId =
+    targetMode === "send"
+      ? readTrimmedStringAlias(params.actionParams, ["threadId", "messageThreadId"])
+      : undefined;
   const threadedTarget = threadId
     ? (normalizeOptionalString(
         getChannelPlugin(params.channel as ChannelId)?.threading?.resolveCurrentChannelId?.({
@@ -302,13 +303,19 @@ function matchesCurrentSourceTarget(
   ) {
     return true;
   }
+  const normalize = (target: string) =>
+    normalizeTargetForProvider(params.channel, target, plugin) ??
+    (targetMode === "reply" ? target : undefined);
   const normalizedTargets = new Set(
-    [requestedTarget, threadedTarget]
-      .map((target) => normalizeTargetForProvider(params.channel, target, plugin))
-      .filter((target): target is string => Boolean(target)),
+    (targetMode === "reply" ? [requestedTarget] : [requestedTarget, threadedTarget])
+      .map(normalize)
+      .filter(
+        (target): target is string =>
+          target !== undefined && (targetMode === "reply" || Boolean(target)),
+      ),
   );
   return currentTargets.some((target) => {
-    const normalized = normalizeTargetForProvider(params.channel, target, plugin);
+    const normalized = normalize(target);
     return normalized !== undefined && normalizedTargets.has(normalized);
   });
 }
@@ -348,6 +355,7 @@ function matchesDeliveredSourceTargets(
 
 function isCurrentSourceConversation(
   params: SourceReplyTranscriptMirrorParams,
+  requireExactThread = false,
 ): params is MirrorableSourceReplyTranscriptParams {
   // Polls share the send target contract. Transcript mirroring stays send-only
   // because poll params carry no message text to mirror.
@@ -361,17 +369,10 @@ function isCurrentSourceConversation(
     params,
     resolveChannelThreadAddressing(params.channel),
   );
-  return matchesCurrentSourceTarget(params, threadPlacement);
-}
-
-function isExactCurrentSourceConversation(
-  params: SourceReplyTranscriptMirrorParams,
-): params is MirrorableSourceReplyTranscriptParams {
-  const threadPlacement = resolveSourceReplyThreadPlacement(
-    params,
-    resolveChannelThreadAddressing(params.channel),
+  return (
+    (!requireExactThread || threadPlacement === "match") &&
+    matchesCurrentSourceTarget(params, threadPlacement)
   );
-  return threadPlacement === "match" && isCurrentSourceConversation(params);
 }
 
 type SourceReplyMatch = boolean | (() => Promise<boolean>);
@@ -466,7 +467,7 @@ function resolveDeliveredCurrentSourceReply(
       // Send variants share destination proof, not transcript or restart-receipt ownership.
       return (
         (isMessageToolSendActionName(params.action) || params.action === "poll") &&
-        isExactCurrentSourceConversation({ ...params, action: "send" })
+        isCurrentSourceConversation({ ...params, action: "send" }, true)
       );
   }
 }
@@ -507,27 +508,8 @@ function isDeliveredCurrentSourceReplyAction(params: SourceReplyTranscriptMirror
   // Delegate equivalence to the channel plugin first so provider-normalized
   // forms (for example `C123` vs `channel:C123`) are recognized like sends.
   const requestedTarget = resolveSourceReplyTarget(params.actionParams);
-  if (requestedTarget) {
-    const channelPlugin = getChannelPlugin(params.channel as ChannelId);
-    const matchesToolContextTarget = channelPlugin?.threading?.matchesToolContextTarget;
-    if (!matchesToolContextTarget?.({ target: requestedTarget, toolContext })) {
-      const currentTargets = [
-        normalizeOptionalString(toolContext.currentMessagingTarget),
-        normalizeOptionalString(toolContext.currentChannelId),
-      ].filter((target): target is string => Boolean(target));
-      const normalizedTarget =
-        normalizeTargetForProvider(params.channel, requestedTarget, channelPlugin) ??
-        requestedTarget;
-      if (
-        !currentTargets.some(
-          (target) =>
-            (normalizeTargetForProvider(params.channel, target, channelPlugin) ?? target) ===
-            normalizedTarget,
-        )
-      ) {
-        return false;
-      }
-    }
+  if (requestedTarget && !matchesCurrentSourceTarget(params, "match", "reply")) {
+    return false;
   }
   const repliedToMessageId = normalizeMessageIdValue(
     params.action === "react"
@@ -549,14 +531,7 @@ export async function mirrorDeliveredSourceReplyToTranscript(
   ) {
     return false;
   }
-  const threadPlacement = resolveSourceReplyThreadPlacement(
-    params,
-    resolveChannelThreadAddressing(params.channel),
-  );
-  if (!isCurrentSourceConversation(params)) {
-    return false;
-  }
-  if (params.sourceReplyFinal === true && threadPlacement !== "match") {
+  if (!isCurrentSourceConversation(params, params.sourceReplyFinal === true)) {
     return false;
   }
 

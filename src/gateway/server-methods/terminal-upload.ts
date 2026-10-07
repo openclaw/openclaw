@@ -48,11 +48,7 @@ export const terminalUploadHandlers: GatewayRequestHandlers = {
         }),
       });
       if (!result) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown terminal session "${params.sessionId}"`),
-        );
+        invalid(respond, `unknown terminal session "${params.sessionId}"`);
         return;
       }
       respond(true, {
@@ -67,17 +63,15 @@ export const terminalUploadHandlers: GatewayRequestHandlers = {
           : {}),
       });
     } catch (error) {
-      if (error instanceof SessionMutationAuthorizationChangedError) {
-        respond(false, undefined, error.error);
-        return;
-      }
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          error instanceof Error ? error.message : "terminal upload failed",
-        ),
+        error instanceof SessionMutationAuthorizationChangedError
+          ? error.error
+          : errorShape(
+              ErrorCodes.UNAVAILABLE,
+              error instanceof Error ? error.message : "terminal upload failed",
+            ),
       );
     }
   },

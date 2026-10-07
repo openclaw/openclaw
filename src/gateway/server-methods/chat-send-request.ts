@@ -264,21 +264,23 @@ export function normalizeChatSendRequest(params: {
   if (!mentions.ok) {
     return mentions;
   }
+  const ordinaryChat =
+    !goalOperation &&
+    !stopCommand &&
+    turnKind === "main" &&
+    !rawMessage.startsWith("/") &&
+    !rawMessage.startsWith("!");
   if (
     mentions.value &&
     (!isBrowserOperatorUiClient(clientInfo) ||
       !client?.authenticatedUserProfile ||
       client.internal?.syntheticClient ||
       client.internal?.senderAttribution ||
-      goalOperation ||
       systemInputProvenance ||
       systemProvenanceReceipt ||
       explicitOriginResult.value ||
       suppressCommandInterpretation ||
-      stopCommand ||
-      turnKind !== "main" ||
-      rawMessage.startsWith("/") ||
-      rawMessage.startsWith("!"))
+      !ordinaryChat)
   ) {
     return {
       ok: false,
@@ -286,14 +288,7 @@ export function normalizeChatSendRequest(params: {
         "Human mentions require a signed-in Control UI chat. Remove the selected mentions to use this mode.",
     };
   }
-  if (
-    p.workContext &&
-    (goalOperation ||
-      stopCommand ||
-      turnKind !== "main" ||
-      rawMessage.startsWith("/") ||
-      rawMessage.startsWith("!"))
-  ) {
+  if (p.workContext && !ordinaryChat) {
     return { ok: false, error: "Working context is only supported for ordinary chat messages." };
   }
   const workContext = p.workContext

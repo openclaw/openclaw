@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { beforeEach, expect, it, vi } from "vitest";
-import type { GatewayClientHostDeps } from "../../packages/gateway-client/src/index.js";
+import type { GatewayClientHostDeps } from "../../packages/gateway-client/src/client.js";
 import type { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { GatewayClient } from "./client.js";
 
@@ -14,8 +14,8 @@ const fixture = vi.hoisted(() => ({
   readOnlyLoad: vi.fn(),
 }));
 
-vi.mock("../../packages/gateway-client/src/index.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../packages/gateway-client/src/index.js")>()),
+vi.mock("../../packages/gateway-client/src/client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/gateway-client/src/client.js")>()),
   GatewayClient: class {
     constructor(private readonly options: { hostDeps: GatewayClientHostDeps }) {}
 

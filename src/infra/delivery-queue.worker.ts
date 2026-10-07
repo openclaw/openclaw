@@ -28,8 +28,10 @@ import {
   updateDeliveryQueueEntryInDatabase,
   upsertDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite.kernel.js";
-import { retireUnsentDeliveryInDatabase } from "./outbound/delivery-queue-ack.kernel.js";
-import { executeDeliveryQueueAck } from "./outbound/delivery-queue-ack.worker.js";
+import {
+  ackDeliveryInDatabase,
+  retireUnsentDeliveryInDatabase,
+} from "./outbound/delivery-queue-ack.kernel.js";
 import { executeDeliveryQueueEnqueue } from "./outbound/delivery-queue-enqueue.worker.js";
 import {
   createDeliveryQueueMediaRetentionInDatabase,
@@ -38,6 +40,7 @@ import {
 import {
   DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
   OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
+  OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
   OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
@@ -54,6 +57,7 @@ import {
   encodeOutboundDeliverySnapshot,
   projectOutboundDelivery,
 } from "./outbound/delivery-queue-projection.js";
+import type { AckDeliveryOptions } from "./outbound/delivery-queue-settlement.types.js";
 import {
   loadOutboundDeliveryInDatabase,
   restoreDeliveryAttemptBeforeDispatchInDatabase,
@@ -435,10 +439,11 @@ export const deliveryQueueOperations = {
         queueName: resolveOutboundDeliveryQueueNameInDatabase(database, input.id),
       }),
   ),
-  "deliveryQueue.ack": (
-    input: Parameters<typeof executeDeliveryQueueAck>[0],
-    { open, stateOptions },
-  ) => executeDeliveryQueueAck(input, { database: open(), ...stateOptions() }),
+  "deliveryQueue.ack": writeOperation(
+    `mutate owned ${OUTBOUND_DELIVERY_QUEUE_NAME} delivery platform send`,
+    (database, input: { id: string; stateDir: string; options?: AckDeliveryOptions }) =>
+      ackDeliveryInDatabase(database, input.id, input.stateDir, input.options),
+  ),
   "deliveryQueue.enqueue": (
     input: Parameters<typeof executeDeliveryQueueEnqueue>[0],
     { open, stateOptions },
