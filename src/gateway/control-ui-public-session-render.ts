@@ -25,7 +25,14 @@ export const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
     const scope=(location.protocol==="https:"?"wss:":"ws:")+"//"+location.host+link.dataset.gatewayPath;
     let credential=new URLSearchParams(location.hash.slice(1)).get("token")?.trim();
     try{credential ||= sessionStorage.getItem(${JSON.stringify(CONTROL_UI_TOKEN_SESSION_KEY_PREFIX)}+scope)?.trim()}catch{}
-    try{credential ||= JSON.parse(localStorage.getItem(${JSON.stringify(DEVICE_AUTH_STORAGE_KEY_PREFIX)}+scope)||"null")?.tokens?.operator?.token?.trim()}catch{}
+    // Device scopes retain Gateway query strings; either form is only a navigation hint.
+    try{
+      const prefix=${JSON.stringify(DEVICE_AUTH_STORAGE_KEY_PREFIX)}+scope;
+      for(let i=0;!credential&&i<localStorage.length;i++){
+        const key=localStorage.key(i);
+        if(key===prefix||key?.startsWith(prefix+"?"))try{credential=JSON.parse(localStorage.getItem(key)||"null")?.tokens?.operator?.token?.trim()}catch{}
+      }
+    }catch{}
     return Boolean(credential)
   }
   if(link)fetch(link.href+"&probe=1",{credentials:"same-origin",redirect:"error",cache:"no-store",signal:AbortSignal.timeout(5000)}).then(response=>{if(response.status===204||(response.status===401&&hasClientCredential()))location.replace(link.href+location.hash)}).catch(()=>{});

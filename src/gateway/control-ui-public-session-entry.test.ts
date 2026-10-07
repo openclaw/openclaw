@@ -83,6 +83,11 @@ describe("public reader operator handoff", () => {
     { name: "session token on reload", token: "synthetic-token" },
     { name: "paired token/password device in a new tab", device },
     {
+      name: "paired device with an existing Gateway query scope",
+      device,
+      storedScope: "wss://gateway.test/control?account=work",
+    },
+    {
       name: "explicit token fragment",
       url: "https://gateway.test/control/chat/main/private#token=synthetic-token",
     },
@@ -126,6 +131,11 @@ describe("public reader operator handoff", () => {
       token: "synthetic-token",
       device,
       storedScope: "wss://gateway.test/other",
+    },
+    {
+      name: "another mount with a Gateway query scope",
+      device,
+      storedScope: "wss://gateway.test/control-other?account=work",
     },
     {
       name: "another scheme",
