@@ -129,7 +129,7 @@ export function handlePendingApprovalRequestWithDelivery<TKind extends keyof App
           void delivery.then((delivered) => {
             remaining -= 1;
             if (delivered || remaining === 0) {
-              resolve(Boolean(delivered));
+              resolve(delivered);
             }
           });
         }

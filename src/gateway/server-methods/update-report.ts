@@ -55,15 +55,19 @@ function projectReportInput(payload: RestartSentinelPayload): UpdateFailureRepor
       ...(typeof stats.reason === "string" ? { reason: stats.reason } : {}),
       ...(readIdentity(stats.before) ? { before: readIdentity(stats.before) } : {}),
       ...(readIdentity(stats.after) ? { after: readIdentity(stats.after) } : {}),
-      steps: (stats.steps ?? []).map((step) => ({
-        name: step.name,
-        command: "",
-        cwd: "",
-        durationMs: step.durationMs ?? 0,
-        exitCode: step.log?.exitCode ?? null,
-        failureFacts: step.failureFacts,
-        ...(step.advisory ? { advisory: PACKAGE_POST_INSTALL_DOCTOR_ADVISORY } : {}),
-      })),
+      steps: (stats.steps ?? []).map((step) =>
+        Object.assign(
+          {
+            name: step.name,
+            command: "",
+            cwd: "",
+            durationMs: step.durationMs ?? 0,
+            exitCode: step.log?.exitCode ?? null,
+            failureFacts: step.failureFacts,
+          },
+          step.advisory ? { advisory: PACKAGE_POST_INSTALL_DOCTOR_ADVISORY } : {},
+        ),
+      ),
       durationMs: stats.durationMs ?? 0,
       ...(recovery ? { recovery } : {}),
     },

@@ -128,7 +128,7 @@ function captureRequestMutationOptions(options: GatewayRequestOptions) {
     options;
   return {
     transport: { req, client, signal, hasCurrentClientAuthority, sessionMutationCommitGuard },
-    assertCurrent() {
+    assertCurrent: () => {
       if (
         options.req !== req ||
         options.client !== client ||

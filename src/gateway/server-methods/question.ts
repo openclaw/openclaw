@@ -120,7 +120,7 @@ export function createQuestionHandlers(
             const error = authorize.authorize(prepared);
             if (error) {
               respond(false, undefined, error);
-              return;
+              return undefined;
             }
             return consume();
           },

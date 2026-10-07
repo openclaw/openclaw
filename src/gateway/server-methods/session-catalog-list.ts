@@ -73,10 +73,10 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     return;
   }
   const catalogRegistrations = catalogRegistrationSnapshot();
-  const provider = request.catalogId
+  const requestedProvider = request.catalogId
     ? catalogRegistrations.providers.find((candidate) => candidate.id === request.catalogId)
     : undefined;
-  if (request.catalogId && !provider) {
+  if (request.catalogId && !requestedProvider) {
     respond(
       false,
       undefined,
@@ -84,7 +84,7 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     );
     return;
   }
-  const selected = provider ? [provider] : catalogRegistrations.providers;
+  const selected = requestedProvider ? [requestedProvider] : catalogRegistrations.providers;
   if (request.metadataOnly) {
     const metadataConfig = context.getRuntimeConfig();
     const metadataAgent = resolveAgentIdOrRespondError({

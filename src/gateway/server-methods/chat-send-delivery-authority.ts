@@ -41,7 +41,7 @@ export function createChatSendReplyFinalizationAuthority(
     });
   return {
     deliveryAuthorized,
-    authorizeDelivery(stage: string) {
+    authorizeDelivery: (stage: string) => {
       if (deliveryAuthorized()) {
         return true;
       }
