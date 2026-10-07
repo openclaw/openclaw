@@ -15,11 +15,11 @@ import {
 } from "./config.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import { renderWikiMutationSummary, renderWikiSearchResults } from "./presentation.js";
-import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
+import { createWikiDeadlineError, WIKI_SEARCH_TIMEOUT_MS } from "./query-reader.js";
+import { WIKI_SEARCH_MODES } from "./query-scoring.js";
+import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { renderMemoryWikiStatus, resolveMemoryWikiStatus } from "./status.js";
-
-const WIKI_SEARCH_TIMEOUT_MS = 30_000;
 
 function formatWikiToolReportPath(config: ResolvedMemoryWikiConfig, reportPath: string): string {
   const vaultRoot = path.resolve(config.vault.path);
@@ -153,10 +153,7 @@ export function createWikiSearchTool(
       const params = rawParams as Static<typeof WikiSearchSchema>;
       const deadline = new AbortController();
       const timer = setTimeout(
-        () =>
-          deadline.abort(
-            new Error(`wiki_search timed out after ${WIKI_SEARCH_TIMEOUT_MS / 1000}s`),
-          ),
+        () => deadline.abort(createWikiDeadlineError("wiki_search")),
         WIKI_SEARCH_TIMEOUT_MS,
       );
       timer.unref?.();

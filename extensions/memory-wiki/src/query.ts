@@ -15,6 +15,7 @@ import {
 import {
   normalizeLookupKey,
   type QueryableWikiPage,
+  readWikiPagesTask,
   type WikiPageReadTask,
   type WikiPageVisibility,
 } from "./query-pages.js";
@@ -35,9 +36,6 @@ import {
   type SharedMemorySearchParams,
 } from "./query-shared-memory.js";
 import { initializeMemoryWikiVault } from "./vault.js";
-
-// Search modes live with the scorer; tools, the CLI and gateway methods keep importing them here.
-export { WIKI_SEARCH_MODES, type WikiSearchMode } from "./query-scoring.js";
 
 type WikiGetResult = WikiResultMetadata & {
   content: string;
@@ -223,9 +221,11 @@ async function readWikiPage(
   visibility: WikiPageVisibility | null,
   signal?: AbortSignal,
 ): Promise<QueryableWikiPage | null> {
-  const { page } = await readMemoryWikiPages(
+  // One page is read on the calling thread with the reader the worker runs, so an
+  // exact-path wiki_get or a digest claim read never waits behind a whole-vault scan.
+  const { page } = await readWikiPagesTask(
     { rootDir, relativePaths: [relativePath], visibility, select: "page" },
-    signal ? { signal } : {},
+    signal,
   );
   return page;
 }

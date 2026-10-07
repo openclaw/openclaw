@@ -303,9 +303,12 @@ includes compact `Claim:` and `Evidence:` lines when available.
 or cancellation returns a tool error rather than an empty result, and stops
 the ongoing page scan. For a known page, use `wiki_get` with its id or path.
 The page scan itself (reading, parsing and scoring every page when the compiled
-digest cannot narrow the search, resolving `wiki_get` lookups, and `wiki_apply`
-metadata updates) runs in a plugin-owned worker thread, so the gateway event loop
-stays responsive while a large vault is scanned.
+digest cannot narrow the search, resolving `wiki_get` basename and id lookups,
+and `wiki_apply` metadata updates) runs in a plugin-owned pool of two worker
+threads, and every scan is bounded by the same 30-second deadline whether or not
+the caller passed one, so the gateway event loop stays responsive while a large
+vault is scanned. Single-page reads (`wiki_get` by exact path or claim id) stay on
+the calling thread and never wait behind a scan.
 
 The plugin also registers a non-exclusive memory corpus supplement, so shared
 `memory_search` and `memory_get` can reach the wiki when the active memory

@@ -35,12 +35,8 @@ import {
 } from "./obsidian.js";
 import { formatOkfImportSummary, importMemoryWikiOkfBundle } from "./okf.js";
 import { renderWikiMutationSummary, renderWikiSearchResults } from "./presentation.js";
-import {
-  getMemoryWikiPage,
-  searchMemoryWiki,
-  WIKI_SEARCH_MODES,
-  type WikiSearchMode,
-} from "./query.js";
+import { WIKI_SEARCH_MODES, type WikiSearchMode } from "./query-scoring.js";
+import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import type { MemoryWikiImportedSourceSyncResult } from "./source-sync.js";
 import {

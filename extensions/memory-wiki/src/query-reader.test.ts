@@ -8,8 +8,8 @@ import { renderWikiMarkdown } from "./markdown.js";
 import { readWikiPagesTask } from "./query-pages.js";
 import * as queryReader from "./query-reader.js";
 import { closeMemoryWikiQueryReader, readMemoryWikiPages } from "./query-reader.js";
-import { sortWikiSearchResults } from "./query-scoring.js";
-import { getMemoryWikiPage, searchMemoryWiki, type WikiSearchMode } from "./query.js";
+import { sortWikiSearchResults, type WikiSearchMode } from "./query-scoring.js";
+import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
@@ -128,6 +128,30 @@ describe("memory wiki query reader", () => {
         expect(result?.path).toBe(reference?.relativePath);
         expect(result?.content).toBe(reference?.parsed.body.split(/\r?\n/).slice(0, 5).join("\n"));
       }
+      // The pool and the calling thread run the same reader: a scan's page objects and
+      // result lists are byte-identical across the thread boundary.
+      for (const lookup of ["page-4", "source.page-4", "entity.keeper"]) {
+        const inThread = await readWikiPagesTask({
+          rootDir,
+          visibility: null,
+          select: "lookup",
+          lookup,
+        });
+        const pooled = await readMemoryWikiPages({
+          rootDir,
+          visibility: null,
+          select: "lookup",
+          lookup,
+        });
+        expect(pooled.page).not.toBeNull();
+        expect(JSON.stringify(pooled.page)).toBe(JSON.stringify(inThread.page));
+      }
+      for (const search of SEARCHES) {
+        const task = { rootDir, visibility: null, select: "search" as const, ...search };
+        const inThread = await readWikiPagesTask(task);
+        const pooled = await readMemoryWikiPages(task);
+        expect(JSON.stringify(pooled.results)).toBe(JSON.stringify(inThread.results));
+      }
     },
   );
 
@@ -186,17 +210,18 @@ describe("memory wiki query reader", () => {
     ]);
   });
 
-  it("dispatches exact reads as single-page tasks and basename reads as whole-vault lookups", async () => {
+  it("reads exact paths on the calling thread and dispatches basename reads as whole-vault lookups", async () => {
     const { config } = await createScoringVault();
     const dispatch = vi.spyOn(queryReader, "readMemoryWikiPages");
 
-    await getMemoryWikiPage({ config, lookup: "sources/page-1.md" });
+    const exactPage = await getMemoryWikiPage({ config, lookup: "sources/page-1.md" });
     const exact = dispatch.mock.calls.map(([task]) => [task.select, task.relativePaths]);
     dispatch.mockClear();
     await getMemoryWikiPage({ config, lookup: "page-1" });
     const basename = dispatch.mock.calls.map(([task]) => [task.select, task.relativePaths]);
 
-    expect(exact).toEqual([["page", ["sources/page-1.md"]]]);
+    expect(exactPage?.path).toBe("sources/page-1.md");
+    expect(exact).toEqual([]);
     expect(basename).toEqual([["lookup", undefined]]);
   });
 
@@ -276,12 +301,14 @@ describe("memory wiki query reader", () => {
     await fs.unlink(targetPath);
     await fs.symlink(path.join(outside.rootDir, "sources", "page-2.md"), targetPath);
 
+    // A lookup scoped to the swapped page reads it inside the worker.
     await expect(
       readMemoryWikiPages({
         rootDir,
         relativePaths: ["sources/page-2.md"],
         visibility: null,
-        select: "page",
+        select: "lookup",
+        lookup: "page-2",
       }),
     ).rejects.toMatchObject({
       name: "FsSafeError",
