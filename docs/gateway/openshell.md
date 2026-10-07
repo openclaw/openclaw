@@ -426,8 +426,8 @@ Host `.git` entries are preserved even when the sandbox deletes or replaces
 their parent directory. Nested `hooks` directories, such as application source
 folders, still synchronize normally.
 Nested exclusions match the exact name `.git`, including submodule gitdir files;
-names such as `.GIT` or ` .git ` still synchronize. Workspace-root exclusion
-matching remains case-insensitive.
+names such as `.GIT` or `.git` with surrounding spaces still synchronize.
+Workspace-root exclusion matching remains case-insensitive.
 
 Mirror synchronization never copies entries it cannot represent, such as
 symlinks, FIFOs, or Unix sockets, into either workspace. Existing host entries
