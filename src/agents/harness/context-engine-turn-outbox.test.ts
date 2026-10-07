@@ -236,7 +236,12 @@ describe("context-engine turn outbox", () => {
     const message = { role: "user" as const, content: "next input", timestamp: 2_000 };
     const recorder = createUserTurnTranscriptRecorder({ message, target: async () => undefined });
     const lease = createLease(createEngine(async () => ({ status: "committed" })));
-    await drainPendingContextEngineTurnsBeforeRun({ lease, recorder, sessionTarget: target });
+    await drainPendingContextEngineTurnsBeforeRun({
+      admission: undefined,
+      lease,
+      recorder,
+      sessionTarget: target,
+    });
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const writer = runOpenClawAgentWriteAdmission(
@@ -283,7 +288,12 @@ describe("context-engine turn outbox", () => {
       const message = { role: "user" as const, content: "current", timestamp: 1_000 };
       const recorder = createUserTurnTranscriptRecorder({ message, target: async () => undefined });
       const lease = createLease(createEngine(async () => ({ status: "committed" })));
-      await drainPendingContextEngineTurnsBeforeRun({ lease, recorder, sessionTarget: target });
+      await drainPendingContextEngineTurnsBeforeRun({
+        admission: undefined,
+        lease,
+        recorder,
+        sessionTarget: target,
+      });
       recorder.markRuntimePersisted(message, { ...admission, [field]: "synthetic-private-value" });
       const expected = {
         agentIdMatches: field !== "agentId",

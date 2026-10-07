@@ -177,11 +177,14 @@ describe("embedded provider dispatch admission", () => {
                 [field]:
                   field === "storePath"
                     ? path.join(state.workspaceDir, "alternate", "openclaw-agent.sqlite")
-                    : field === "agentId"
-                      ? "other"
-                      : `synthetic-other-${field}`,
+                    : `synthetic-other-${field}`,
               };
-        await drainPendingContextEngineTurnsBeforeRun({ lease, recorder, sessionTarget: prepared });
+        await drainPendingContextEngineTurnsBeforeRun({
+          admission: undefined,
+          lease,
+          recorder,
+          sessionTarget: prepared,
+        });
         expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
         // Deliberate mutation probes the retained callback, not a reachable producer defect.
         // A conflicting agent/store pair is correctly rejected earlier during preparation.
