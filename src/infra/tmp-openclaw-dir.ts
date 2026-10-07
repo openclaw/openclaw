@@ -42,11 +42,10 @@ function loadResolveSecureTempRoot(): ResolveSecureTempRoot {
     throw new Error("sealed temp-root runtime was not registered before use");
   }
   // Keep browser imports safe; load the Node-only resolver when a temp root is needed.
-  const getBuiltinModule = process.getBuiltinModule;
-  if (typeof getBuiltinModule !== "function") {
+  if (typeof process.getBuiltinModule !== "function") {
     throw new Error("Node module loading is unavailable for secure temp-root resolution");
   }
-  const require = getBuiltinModule("module").createRequire(import.meta.url);
+  const require = process.getBuiltinModule("module").createRequire(import.meta.url);
   const fsSafeTemp =
     require("@openclaw/fs-safe/secure-temp-root") as typeof import("@openclaw/fs-safe/secure-temp-root");
   resolveSecureTempRootRuntime = fsSafeTemp.resolveSecureTempRoot;

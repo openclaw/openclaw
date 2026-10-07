@@ -33,8 +33,8 @@ const {
 });
 const forceResetGlobalDispatcherMock = vi.hoisted(() => vi.fn());
 
-// Keep process-global proxy installation inside the lifecycle fixture.
-vi.mock("../proxyline-runtime.js", () => ({
+vi.mock("../proxyline-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../proxyline-runtime.js")>()),
   loadProxyline: () => ({ installGlobalProxy: installGlobalProxyMock }),
 }));
 
