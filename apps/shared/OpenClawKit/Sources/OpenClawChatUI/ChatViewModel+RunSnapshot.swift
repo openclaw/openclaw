@@ -35,6 +35,22 @@ extension OpenClawChatViewModel {
         defer { self.isApplyingRunSnapshot = false }
         self.updateActiveSessionRunWithoutChatSnapshot(false)
         self.adoptRun(runId: runId, bufferedText: snapshot.text)
+        // Reconstruct this snapshot separately, then merge once against newer live telemetry.
+        // Buffered text has no agent sequence and must not erase a live retry on reconnect.
+        var startup: ChatRunStartup? = snapshot.text.isEmpty
+            ? nil : ChatRunStartup(runID: runId, state: .activity, seq: nil)
+        for event in (snapshot.events ?? []).filter({ $0.runId == runId })
+            .sorted(by: { ($0.seq ?? -1) < ($1.seq ?? -1) })
+        {
+            if let next = self.startupState(for: event) {
+                startup = ChatRunStartup.reconciled(current: startup, next: next)
+            }
+        }
+        if let startup {
+            let preservesLiveRetry = startup.state == .activity && startup.seq == nil &&
+                self.runStartup?.isRetrying == true
+            if !preservesLiveRetry { self.reconcileRunStartup(startup) }
+        }
         // Replay only this snapshot's narration through the live owner. Tool
         // grouping and current assistant-text precedence keep their own paths.
         for event in snapshot.events ?? [] where event.runId == runId {

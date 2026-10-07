@@ -68,6 +68,26 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
     }
 
+    func testStartupStatusShowsWaitingForResponse() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-hold-initial-chat-run", "--openclaw-startup-status-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Check the project.")
+        app.buttons["chat-send-message"].tap()
+        XCTAssertTrue(app.buttons["Stop response"].waitForExistence(timeout: 8))
+        let waiting = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Waiting for a response…")).firstMatch
+        let showsWaiting = waiting.waitForExistence(timeout: 5)
+        self.attachScreenshot(named: "startup-status-waiting")
+        XCTAssertTrue(showsWaiting, "STARTUP_STATUS_MISSING: waiting run has no Gateway startup label")
+        app.buttons["Stop response"].tap()
+        XCTAssertTrue(waiting.waitForNonExistence(timeout: 5))
+    }
+
     func testReleaseAgentScreenshot() {
         self.captureReleaseScreenshot(Self.agentScreenshotTarget)
     }

@@ -511,6 +511,8 @@ struct ChatWorkingStatusText: View {
     let startedAt: Date
     let seed: String
     let outputTokens: Int?
+    /// The startup phase replaces the rotating phrase, but keeps the elapsed clock.
+    var status: String?
 
     var body: some View {
         Group {
@@ -529,10 +531,14 @@ struct ChatWorkingStatusText: View {
         let elapsedMilliseconds = max(1000, Int(date.timeIntervalSince(self.startedAt) * 1000))
         let duration = ChatWorkingDurationFormatter.compact(milliseconds: Double(elapsedMilliseconds))
         return HStack(alignment: .firstTextBaseline, spacing: 5) {
+            if let status {
+                Text(verbatim: status)
+                    .font(OpenClawChatTypography.caption)
+            }
             Text(duration)
                 .font(OpenClawChatTypography.captionSemiBold)
                 .monospacedDigit()
-            if let tokensText = ChatTurnRecapText.tokens(self.outputTokens) {
+            if self.status == nil, let tokensText = ChatTurnRecapText.tokens(self.outputTokens) {
                 Text("·")
                     .font(OpenClawChatTypography.caption)
                     .accessibilityHidden(true)
@@ -540,7 +546,7 @@ struct ChatWorkingStatusText: View {
                     .font(OpenClawChatTypography.caption)
                     .monospacedDigit()
             }
-            if let index = ChatWorkingPhrase.index(
+            if self.status == nil, let index = ChatWorkingPhrase.index(
                 seed: self.seed,
                 elapsedMilliseconds: elapsedMilliseconds)
             {

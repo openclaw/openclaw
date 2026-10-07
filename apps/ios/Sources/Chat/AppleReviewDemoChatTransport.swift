@@ -474,6 +474,19 @@ private actor LocalFixtureChatStore {
 
     func history(sessionKey: String) throws -> OpenClawChatHistoryPayload {
         let normalizedSessionKey = Self.normalizedSessionKey(sessionKey, fallback: self.fixture.sessionKey)
+        var startupSnapshot: OpenClawChatInFlightRun?
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-startup-status-fixture"),
+           let runID = self.activeRunID
+        {
+            let wire = try JSONSerialization.data(withJSONObject: [[
+                "runId": runID,
+                "seq": 1,
+                "stream": "run_status",
+                "data": ["phase": "starting_model"],
+            ]])
+            let events = try JSONDecoder().decode([OpenClawAgentEventPayload].self, from: wire)
+            startupSnapshot = OpenClawChatInFlightRun(runId: runID, text: "", events: events)
+        }
         return try OpenClawChatHistoryPayload(
             sessionKey: normalizedSessionKey,
             sessionId: "\(self.fixture.sessionIDPrefix)-\(normalizedSessionKey)",
@@ -482,12 +495,13 @@ private actor LocalFixtureChatStore {
             sessionInfo: OpenClawChatSessionInfo(
                 hasActiveRun: self.activeRunID != nil,
                 activeRunIds: self.activeRunID.map { [$0] }),
-            inFlightRun: ProcessInfo.processInfo.arguments.contains("--openclaw-streaming-layout-fixture")
-                ? self.activeRunID.map {
-                    OpenClawChatInFlightRun(
-                        runId: $0,
-                        text: String(repeating: "Streaming layout response. ", count: 12))
-                } : nil)
+            inFlightRun: startupSnapshot ??
+                (ProcessInfo.processInfo.arguments.contains("--openclaw-streaming-layout-fixture")
+                    ? self.activeRunID.map {
+                        OpenClawChatInFlightRun(
+                            runId: $0,
+                            text: String(repeating: "Streaming layout response. ", count: 12))
+                    } : nil))
     }
 
     func sendMessage(
@@ -512,6 +526,18 @@ private actor LocalFixtureChatStore {
         {
             self.heldInitialRun = true
             self.activeRunID = runId
+            if ProcessInfo.processInfo.arguments.contains("--openclaw-startup-status-fixture") {
+                let wire = try? JSONSerialization.data(withJSONObject: [
+                    "runId": runId,
+                    "sessionKey": sessionKey,
+                    "state": "status",
+                    "phase": "starting_model",
+                    "seq": 1,
+                ])
+                if let wire, let event = try? JSONDecoder().decode(OpenClawChatEventPayload.self, from: wire) {
+                    self.publish(.chat(event))
+                }
+            }
             return OpenClawChatSendResponse(runId: runId, status: "started")
         }
         let assistantMessage = Self.message(
@@ -529,10 +555,25 @@ private actor LocalFixtureChatStore {
 
     private var heldInitialRun = false
     private var activeRunID: String?
-    private var eventContinuation: AsyncStream<OpenClawChatTransportEvent>.Continuation?
+    private var eventContinuations: [UUID: AsyncStream<OpenClawChatTransportEvent>.Continuation] = [:]
 
     func setEventContinuation(_ continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation) {
-        self.eventContinuation = continuation
+        // Chat and its session sidebar independently subscribe to the fixture transport.
+        let id = UUID()
+        self.eventContinuations[id] = continuation
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.removeEventContinuation(id) }
+        }
+    }
+
+    private func removeEventContinuation(_ id: UUID) {
+        self.eventContinuations[id] = nil
+    }
+
+    private func publish(_ event: OpenClawChatTransportEvent) {
+        for continuation in self.eventContinuations.values {
+            continuation.yield(event)
+        }
     }
 
     func runObservation(runId: String) -> OpenClawChatRunObservation {
@@ -542,7 +583,7 @@ private actor LocalFixtureChatStore {
     func abortRun(sessionKey: String, runId: String) {
         guard self.activeRunID == runId else { return }
         self.activeRunID = nil
-        self.eventContinuation?.yield(.chat(OpenClawChatEventPayload(
+        self.publish(.chat(OpenClawChatEventPayload(
             runId: runId,
             sessionKey: sessionKey,
             state: "aborted",
@@ -704,7 +745,7 @@ private actor LocalFixtureChatStore {
     private func publishReactions(for message: OpenClawChatMessage, sessionKey: String, agentID: String? = nil) {
         guard ScreenshotFixtureMode.reactionsEnabled, let messageID = message.transcriptMessageID else { return }
         let key = Self.normalizedSessionKey(sessionKey, fallback: self.fixture.sessionKey)
-        self.eventContinuation?.yield(.sessionReaction(OpenClawChatReactionEvent(
+        self.publish(.sessionReaction(OpenClawChatReactionEvent(
             sessionKey: key,
             agentID: agentID ?? self.fixture.defaultAgentID,
             sessionID: "\(self.fixture.sessionIDPrefix)-\(key)",

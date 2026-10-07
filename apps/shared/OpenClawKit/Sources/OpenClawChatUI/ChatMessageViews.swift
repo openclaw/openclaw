@@ -773,6 +773,7 @@ struct ChatTypingIndicatorBubble: View {
     let isClean: Bool
     let runIdentity: String
     let outputTokens: Int?
+    var status: String?
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
@@ -787,7 +788,8 @@ struct ChatTypingIndicatorBubble: View {
             HStack(spacing: 9) {
                 ChatWorkingIndicatorContent(
                     runIdentity: self.runIdentity,
-                    outputTokens: self.outputTokens)
+                    outputTokens: self.outputTokens,
+                    status: self.status)
                     .id(self.runIdentity)
             }
             .padding(.vertical, self.isClean ? 5 : (self.style == .standard ? 10 : 9))
@@ -799,7 +801,7 @@ struct ChatTypingIndicatorBubble: View {
         .focusable(false)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
-            Text("Writing")
+            Text(verbatim: self.status ?? String(localized: "Writing"))
                 .font(OpenClawChatTypography.caption))
     }
 }
@@ -809,10 +811,13 @@ private struct ChatWorkingIndicatorContent: View {
     let seed: String
     let outputTokens: Int?
 
-    init(runIdentity: String, outputTokens: Int?) {
+    let status: String?
+
+    init(runIdentity: String, outputTokens: Int?, status: String? = nil) {
         _startedAt = State(initialValue: Date())
         self.seed = runIdentity
         self.outputTokens = outputTokens
+        self.status = status
     }
 
     var body: some View {
@@ -821,7 +826,8 @@ private struct ChatWorkingIndicatorContent: View {
             ChatWorkingStatusText(
                 startedAt: self.startedAt,
                 seed: self.seed,
-                outputTokens: self.outputTokens)
+                outputTokens: self.outputTokens,
+                status: self.status)
         }
     }
 }
@@ -903,7 +909,8 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
             lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
             lhs.isClean == rhs.isClean &&
             lhs.runIdentity == rhs.runIdentity &&
-            lhs.outputTokens == rhs.outputTokens
+            lhs.outputTokens == rhs.outputTokens &&
+            lhs.status == rhs.status
     }
 }
 
