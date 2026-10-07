@@ -488,7 +488,10 @@ acquisition owner and does not wait for provider inventory renewal. Both owners
 merge their results with the latest accepted counterpart before publication.
 Catalog workers use a 512 MiB V8 old-generation limit rather than inheriting the
 Gateway's default heap budget. Explicit process-wide heap flags override this
-limit; native and external allocations are outside it.
+limit; native and external allocations are outside it. When a Gateway catalog
+worker fails, the Gateway logs a warning with the reason, republishes the affected
+agent catalogs on a new worker, and counts the failure in `status` as
+`workerPools.modelCatalog.workerFailures`.
 
 Catalog and authentication refresh tasks carry the host's prepared Claw consent
 provenance. Worker config reconstruction and provider imports consume these facts

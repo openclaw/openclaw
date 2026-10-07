@@ -184,6 +184,19 @@ describe("gateway server hooks", () => {
       expect(wakeEvents.join("\n")).toContain("Ping");
       drainSystemEvents(resolveMainKey());
 
+      for (const sessionKey of [null, 42, false, {}, [], "", "   "]) {
+        const invalidSession = await postHook(
+          port,
+          "agent",
+          { message: "Do not redirect malformed routing", sessionKey },
+          { status: 400 },
+        );
+        await expect(invalidSession.json()).resolves.toMatchObject({
+          error: "sessionKey must be a non-empty string",
+        });
+      }
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
+
       setTestPluginRegistry(
         createTestRegistry([
           {
@@ -268,6 +281,37 @@ describe("gateway server hooks", () => {
       await postHook(port, "agent", { message: " " }, { status: 400 });
 
       await postHook(port, "wake", "{", { status: 400 });
+    });
+  });
+
+  test("honors immediate wake overrides from mapped hook transforms", async () => {
+    await writeHookTransformModule(
+      "immediate-wake.mjs",
+      'export default () => ({ mode: "now", wakeMode: "now" });',
+    );
+    configureHooks({
+      mappings: [
+        {
+          match: { path: "immediate-wake" },
+          action: "wake",
+          textTemplate: "Immediate notification",
+          wakeMode: "next-heartbeat",
+          transform: { module: "immediate-wake.mjs" },
+        },
+        agentMapping("immediate-agent", {
+          wakeMode: "next-heartbeat",
+          transform: { module: "immediate-wake.mjs" },
+        }),
+      ],
+    });
+    await withGatewayServer(async ({ port }) => {
+      const wake = await postHook(port, "immediate-wake", {});
+      expect.soft(await wake.json()).toMatchObject({ mode: "now", eventOutcome: "queued" });
+      drainSystemEvents(resolveMainKey());
+
+      mockIsolatedRunOk();
+      await postHook(port, "immediate-agent", { subject: "Immediate completion" });
+      expect(cronRunCall().job.wakeMode).toBe("now");
     });
   });
 
