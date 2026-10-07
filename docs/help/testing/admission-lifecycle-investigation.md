@@ -37,3 +37,20 @@ entry points and must not be labeled an incident reproduction.
 Release-note context: delayed durable admission failures now identify the
 mismatching identity field with privacy-safe equality booleans. Release-owned
 changelogs are intentionally unchanged; this note belongs in the PR evidence.
+
+## Composed runtime dispatch coverage
+
+The provider suite also composes the guarded SessionManager's real runtime
+message write, its recorder notification, the durable admission callback,
+recorder waiter, and provider dispatch gate. Matching ownership dispatches;
+deliberately differing prepared session/key/store bindings reject without a
+provider call and surface the boolean error in the runtime assistant failure.
+An agent mismatch is induced by mutating the retained prepared target after
+preparation; otherwise conflicting physical-store ownership is rejected earlier.
+This is an explicit callback mutation probe, not a reachable incident producer
+or a root-cause repair. Runtime output reports only the diagnostic and zero
+provider calls. The provider stream is mocked; no paid API or production Gateway
+is used. Pre-persisted replay coverage remains a separate lifecycle contract.
+
+The manual workflow explicitly fetches its immutable baseline before reading
+the source blob, so later branch/main dispatches do not depend on shallow depth.
