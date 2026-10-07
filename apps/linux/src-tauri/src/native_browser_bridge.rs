@@ -85,8 +85,12 @@ impl NativeBrowserBridgeState {
             ready: false,
         };
         let script = format!(
-            "{}\n{}",
+            "{}\n{}\n{}",
             initialization_script(&document),
+            scoped_script(
+                &document,
+                crate::native_device_settings::toggle_initialization_script()
+            ),
             crate::window_chrome::initialization_script(Some(dashboard), true)
         );
         state.document = Some(document);
@@ -176,7 +180,13 @@ fn initialization_script(document: &DashboardDocument) -> String {
   const invoke = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
   const handler = {{ postMessage: async message => {{
     await ready;
-    try {{ return await invoke("native_browser_request", {{ message, token }}); }}
+    try {{
+      // CSS pixels and GTK widget units can differ under fractional scaling.
+      const request = message.type === "present" && message.visible && message.rect
+        ? {{ ...message, viewportWidth: window.innerWidth, viewportHeight: window.innerHeight }}
+        : message;
+      return await invoke("native_browser_request", {{ message: request, token }});
+    }}
     catch (error) {{ return {{ ok: false, error: String(error) }}; }}
   }} }};
   window.webkit ??= {{}};

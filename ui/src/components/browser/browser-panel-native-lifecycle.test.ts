@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { flushBrowserResponses } from "./browser-panel-controller-test-support.ts";
 import {
@@ -9,6 +9,33 @@ import {
 } from "./test-helpers/native-browser.ts";
 
 const { controllerFixture, flushFrames } = setupNativeBrowserPanelTests();
+
+describe("native Browser panel geometry", () => {
+  it("rechecks a moved stage even without a resize or scroll event", () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const native = fakeNativeBrowser([nativeTab("mac-one")]);
+    const { host } = controllerFixture();
+    const stage = host.renderRoot.querySelector<HTMLElement>(".bp-stage");
+    expect(stage).not.toBeNull();
+    let x = 100;
+    vi.spyOn(stage!, "getBoundingClientRect").mockImplementation(
+      () => new DOMRect(x, 120, 400, 300),
+    );
+    flushFrames();
+    expect(native.messages().at(-1)).toMatchObject({
+      type: "present",
+      rect: { x: 100, y: 120, width: 400, height: 300 },
+    });
+
+    x = 220;
+    vi.advanceTimersByTime(500);
+    flushFrames();
+    expect(native.messages().at(-1)).toMatchObject({
+      type: "present",
+      rect: { x: 220, y: 120, width: 400, height: 300 },
+    });
+  });
+});
 
 describe("native Browser panel reply ownership", () => {
   it.each(["current", "session", "selection", "newer-command", "hide-and-show"] as const)(

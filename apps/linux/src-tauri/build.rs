@@ -21,6 +21,8 @@ fn main() {
         "gateway_profile_request",
         "gateway_action",
         "install_cli",
+        "native_attachment_files",
+        "native_image_save",
         "native_browser_request",
         "native_device_settings_request",
         "open_release_page",

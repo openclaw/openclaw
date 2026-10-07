@@ -55,6 +55,17 @@
     chromeUpdate = chromeUpdate.then(() => request(!enabled || (modalOpen && !macos) ? "native-frame" : "ready"));
     return chromeUpdate;
   };
+  // Match the browser hard-refresh shortcut on Linux. This reloads the
+  // dashboard without HTTP cache; it does not erase chat history or app data.
+  if (config.platform === "linux") {
+    window.addEventListener("keydown", (event) => {
+      if (!enabled || !event.isTrusted || !event.ctrlKey || !event.shiftKey ||
+          event.altKey || event.metaKey || event.key.toLowerCase() !== "r") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      void request("hard-reload");
+    }, true);
+  }
   window.addEventListener("openclaw:window-state", (event) => applyState(event.detail));
   window.addEventListener("openclaw:native-modal-state", (event) => {
     if (!enabled) return;

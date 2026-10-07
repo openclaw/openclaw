@@ -1,0 +1,2 @@
+*.patch whitespace=-blank-at-eol
+*.diff whitespace=-blank-at-eol

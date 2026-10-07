@@ -23,10 +23,16 @@ mod gateway_ws;
 mod installer;
 mod keep_awake;
 mod keep_awake_platform;
+#[cfg(target_os = "linux")]
+mod native_attachment_files;
 mod native_browser;
 mod native_browser_bridge;
 mod native_browser_platform;
 mod native_device_settings;
+#[cfg(target_os = "linux")]
+mod native_image_save;
+#[cfg(target_os = "linux")]
+mod native_microphone;
 mod notify;
 mod pending_approvals;
 mod quickchat;
@@ -3025,6 +3031,8 @@ fn replace_main_webview_for_target(
         .map_err(|error| format!("Could not measure the dashboard: {error}"))?;
     // Replace only the dashboard document, retaining the native window, tray and geometry.
     if let Some(previous) = previous {
+        #[cfg(target_os = "linux")]
+        native_attachment_files::forget_webview(app, "main");
         native_browser_platform::detach_surface(&previous)?;
         previous
             .close()
@@ -3054,6 +3062,17 @@ fn replace_main_webview_for_target(
     if let Some(registration) = &registration {
         script.push('\n');
         script.push_str(&registration.script);
+        #[cfg(target_os = "linux")]
+        {
+            script.push('\n');
+            script.push_str(&native_attachment_files::initialization_script(
+                &url.origin().ascii_serialization(),
+            ));
+            script.push('\n');
+            script.push_str(&native_image_save::initialization_script(
+                &url.origin().ascii_serialization(),
+            ));
+        }
     }
     let initial_url = registration
         .as_ref()
@@ -3067,6 +3086,43 @@ fn replace_main_webview_for_target(
             open_external_browser(&browser_app, &url);
             NewWindowResponse::Deny
         });
+    // WebKitGTK otherwise saves <a download> blobs in the process working
+    // directory without asking the user where to put them.
+    #[cfg(target_os = "linux")]
+    let builder = builder.on_download(|webview, event| {
+        use gtk::prelude::*;
+        if let tauri::webview::DownloadEvent::Requested { destination, .. } = event {
+            let parent = webview.window().gtk_window().ok();
+            let chooser = gtk::FileChooserNative::new(
+                Some("Save download"),
+                parent
+                    .as_ref()
+                    .map(|window| window.upcast_ref::<gtk::Window>()),
+                gtk::FileChooserAction::Save,
+                Some("Save"),
+                Some("Cancel"),
+            );
+            if let Some(folder) = destination.parent() {
+                chooser.set_current_folder(folder);
+            }
+            chooser.set_current_name(
+                destination
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("download"),
+            );
+            chooser.set_do_overwrite_confirmation(true);
+            if chooser.run() == gtk::ResponseType::Accept {
+                if let Some(path) = chooser.filename() {
+                    *destination = path;
+                    return true;
+                }
+            }
+            return false;
+        }
+        true
+    });
     let builder = match &registration {
         Some(registration) => registration.configure(builder),
         None => builder,
@@ -3075,6 +3131,10 @@ fn replace_main_webview_for_target(
     let readiness_token = document_token.clone();
     let builder = builder
         .on_page_load(move |webview, payload| {
+            #[cfg(target_os = "linux")]
+            if matches!(payload.event(), PageLoadEvent::Started) {
+                native_attachment_files::rotate_document(webview.app_handle(), webview.label());
+            }
             let loaded = matches!(payload.event(), PageLoadEvent::Finished);
             let app = webview.app_handle().clone();
             if let Some(registration) = &registration {
@@ -3127,6 +3187,12 @@ fn replace_main_webview_for_target(
             Ok(view)
         })
         .map_err(|error| format!("Could not open the dashboard: {error}"))?;
+    #[cfg(target_os = "linux")]
+    native_attachment_files::install_webview(&view)?;
+    #[cfg(target_os = "linux")]
+    if startup_registration.is_some() {
+        native_microphone::install_webview(&view)?;
+    }
     if let Some(registration) = startup_registration {
         registration.start(view.clone(), move |view| {
             dashboard_document_ready(view, readiness_token.as_deref(), remote_generation);
@@ -3339,6 +3405,8 @@ fn main() {
         );
 
     let builder = builder.setup(move |app| {
+        #[cfg(target_os = "linux")]
+        native_device_settings::initialize_motion(app);
         let namespace = remote_gateway::config_path()?
             .to_string_lossy()
             .into_owned();
@@ -3458,6 +3526,8 @@ fn main() {
             eprintln!("Deep-link registration unavailable: {error}");
         }
 
+        #[cfg(target_os = "linux")]
+        app.manage(native_attachment_files::DropState::default());
         app.manage(discovery::GatewayDiscovery::default());
         app.manage(quickchat_state.clone());
         app.manage(updater::UpdaterState::default());
@@ -3493,6 +3563,10 @@ fn main() {
         discovery::discover_gateways,
         install_cli,
         gateway_action,
+        #[cfg(target_os = "linux")]
+        native_attachment_files::native_attachment_files,
+        #[cfg(target_os = "linux")]
+        native_image_save::native_image_save,
         native_browser_bridge::native_browser_request,
         native_device_settings::native_device_settings_request,
         gateway_windows::gateway_request,
@@ -3518,8 +3592,14 @@ fn main() {
         window_chrome::window_chrome_request
     ]);
 
+    #[cfg(target_os = "linux")]
+    let builder = builder.on_webview_event(|webview, event| {
+        native_attachment_files::handle_webview_event(webview, event);
+    });
     let app = builder
         .on_window_event(|window, event| {
+            #[cfg(target_os = "linux")]
+            native_attachment_files::handle_window_event(window, event);
             if let Some(routes) = window
                 .app_handle()
                 .try_state::<gateway_windows::GatewayWindows>()
@@ -3542,7 +3622,13 @@ fn main() {
             {
                 window_chrome::publish(window);
             }
-            if window.label() == "main" && matches!(event, tauri::WindowEvent::Resized(_)) {
+            if window.label() == "main"
+                && matches!(
+                    event,
+                    tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }
+                )
+            {
+                // Recompute native panel bounds when the display scale changes.
                 let app = window.app_handle().clone();
                 tauri::async_runtime::spawn(async move {
                     app.state::<native_browser::NativeBrowserState>()

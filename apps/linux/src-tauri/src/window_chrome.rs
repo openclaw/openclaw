@@ -12,6 +12,8 @@ pub enum WindowAction {
     ToggleMaximize,
     Close,
     State,
+    #[cfg(target_os = "linux")]
+    HardReload,
 }
 
 #[derive(Serialize)]
@@ -182,6 +184,11 @@ pub async fn window_chrome_request(
         return Err("Window controls are no longer available for this page.".into());
     }
     let window = webview.window();
+    #[cfg(target_os = "linux")]
+    if matches!(action, WindowAction::HardReload) {
+        crate::native_browser_platform::reload_bypass_cache(&webview).await?;
+        return state(&window);
+    }
     if matches!(action, WindowAction::State) {
         let (_, _, can_go_back, can_go_forward) =
             crate::native_browser_platform::navigation_state(&webview).await?;
@@ -230,6 +237,8 @@ pub async fn window_chrome_request(
             return Ok(current);
         }
         WindowAction::State => Ok(()),
+        #[cfg(target_os = "linux")]
+        WindowAction::HardReload => Ok(()),
     }
     .map_err(|error| error.to_string())?;
     state(&window)

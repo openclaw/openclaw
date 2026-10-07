@@ -1,6 +1,7 @@
 //! WebKit consumes edge presses before GTK's bubbling window handlers. Capture
 //! them on the native window so dashboard and child browser views stay resizable.
 use gtk::prelude::*;
+use tauri::Manager;
 
 pub fn install(window: &tauri::Window) -> Result<(), tauri::Error> {
     let target = window.clone();
@@ -8,6 +9,22 @@ pub fn install(window: &tauri::Window) -> Result<(), tauri::Error> {
         let Ok(window) = target.gtk_window() else {
             return;
         };
+        // GTK accelerators run before WebKit consumes a focused page's key press.
+        // Keep this window-local: the global shortcut plugin is X11-only.
+        let app = target.app_handle().clone();
+        let quit_shortcut = gtk::AccelGroup::new();
+        quit_shortcut.connect_accel_group(
+            *gtk::gdk::keys::constants::q,
+            gtk::gdk::ModifierType::CONTROL_MASK,
+            gtk::AccelFlags::VISIBLE,
+            move |_, _, _, _| {
+                if let Some(state) = app.try_state::<crate::DesktopState>() {
+                    state.quit(&app);
+                }
+                true
+            },
+        );
+        window.add_accel_group(&quit_shortcut);
         let gesture = gtk::GestureMultiPress::new(&window);
         gesture.set_button(1);
         gesture.set_propagation_phase(gtk::PropagationPhase::Capture);

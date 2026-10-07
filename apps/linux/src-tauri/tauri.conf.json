@@ -72,6 +72,7 @@
             "allow-relaunch",
             "allow-updater-ready",
             "allow-window-chrome-request",
+            "allow-native-attachment-files",
             "core:event:allow-listen",
             "core:event:allow-unlisten",
             "process:allow-restart",

@@ -1,0 +1,32 @@
+--- a/Source/WebKit/Shared/glib/ProcessExecutablePathGLib.cpp
++++ b/Source/WebKit/Shared/glib/ProcessExecutablePathGLib.cpp
+@@ -44,7 +44,7 @@
+ 
+ static String findWebKitProcess(const ASCIILiteral processName)
+ {
+-#if ENABLE(DEVELOPER_MODE)
++    // AppImage: use its bundled helper processes in production builds, too.
+     static const char* execDirectory = g_getenv("WEBKIT_EXEC_PATH");
+     if (execDirectory) {
+         String processPath = FileSystem::pathByAppendingComponent(FileSystem::stringFromFileSystemRepresentation(execDirectory), processName);
+@@ -52,6 +52,7 @@
+             return processPath;
+     }
+ 
++#if ENABLE(DEVELOPER_MODE)
+     static String executablePath = getExecutablePath();
+     if (!executablePath.isNull()) {
+         String processPath = FileSystem::pathByAppendingComponent(executablePath, processName);
+--- a/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp
++++ b/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp
+@@ -973,6 +973,10 @@
+         sandboxArgs.append("--unshare-ipc");
+     }
+ 
++    // AppImage is mounted below /tmp, which the sandbox otherwise hides.
++    if (const char* appDir = g_getenv("APPDIR"))
++        bindIfExists(sandboxArgs, appDir);
++
+ #if ENABLE(DEVELOPER_MODE)
+     const char* execDirectory = g_getenv("WEBKIT_EXEC_PATH");
+     if (execDirectory) {

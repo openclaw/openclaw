@@ -88,9 +88,22 @@ impl Rect {
     }
 }
 
+#[derive(Clone, Copy)]
+struct Viewport {
+    width: f64,
+    height: f64,
+}
+
+impl Viewport {
+    fn valid(self) -> bool {
+        self.width.is_finite() && self.height.is_finite() && self.width > 0.0 && self.height > 0.0
+    }
+}
+
 struct Presentation {
     tab_id: String,
     rect: Rect,
+    viewport: Option<Viewport>,
     order: u64,
 }
 
@@ -141,6 +154,8 @@ enum Request {
         tab_id: Option<String>,
         rect: Option<Rect>,
         visible: bool,
+        viewport_width: Option<f64>,
+        viewport_height: Option<f64>,
     },
     ReleaseScope {
         scope: String,
@@ -217,6 +232,23 @@ impl BrowserHost {
     }
 
     async fn layout(&self, app: &AppHandle) -> Result<(), String> {
+        if self.presentations.is_empty() {
+            // A hidden tab may remain alive for reopening, but its GTK overlay
+            // must not remain around the primary dashboard after the last panel
+            // closes. Reattach the surface only when a tab is presented again.
+            for tab in &self.tabs {
+                if let Some(view) = app.get_webview(&tab.label) {
+                    view.hide().map_err(|error| error.to_string())?;
+                }
+            }
+            if let Some(dashboard) = app.get_webview("main") {
+                platform::detach_surface(&dashboard)?;
+            }
+            return Ok(());
+        }
+        if let Some(dashboard) = app.get_webview("main") {
+            platform::prepare_surface(&dashboard).await?;
+        }
         let window = app
             .get_window("main")
             .ok_or_else(|| "The dashboard window is unavailable.".to_string())?;
@@ -226,17 +258,21 @@ impl BrowserHost {
             let Some(view) = app.get_webview(&tab.label) else {
                 continue;
             };
-            let rect = self.presentation(&tab.id).and_then(|item| {
-                item.rect.clipped(
-                    f64::from(size.width) / scale,
-                    f64::from(size.height) / scale,
-                )
+            let bounds = self.presentation(&tab.id).and_then(|item| {
+                let viewport = item.viewport.unwrap_or(Viewport {
+                    width: f64::from(size.width) / scale,
+                    height: f64::from(size.height) / scale,
+                });
+                item.rect
+                    .clipped(viewport.width, viewport.height)
+                    .map(|rect| (rect, (viewport.width, viewport.height)))
             });
-            if let Some(rect) = rect {
+            if let Some((rect, viewport_size)) = bounds {
                 platform::set_bounds(
                     &view,
                     LogicalPosition::new(rect.x, rect.y),
                     LogicalSize::new(rect.width, rect.height),
+                    viewport_size,
                 )
                 .await?;
                 if app.get_webview("main").is_some_and(|dashboard| {
@@ -439,6 +475,13 @@ impl NativeBrowserState {
                 let _ = view.close();
                 return Err(format!("Could not prepare the browser tab: {error}"));
             }
+            #[cfg(target_os = "linux")]
+            if let Err(error) = platform::set_default_charset_utf8(&view).await {
+                let _ = view.close();
+                return Err(format!(
+                    "Could not configure browser text encoding: {error}"
+                ));
+            }
             host.tabs.push(Tab {
                 id: id.clone(),
                 session_key,
@@ -612,8 +655,18 @@ impl NativeBrowserState {
                 tab_id,
                 rect,
                 visible,
+                viewport_width,
+                viewport_height,
             } => {
                 identifier(&scope)?;
+                let viewport = match (viewport_width, viewport_height) {
+                    (Some(width), Some(height)) => Some(Viewport { width, height }),
+                    (None, None) => None,
+                    _ => return Err("Incomplete browser viewport size.".into()),
+                };
+                if viewport.is_some_and(|viewport| !viewport.valid()) {
+                    return Err("Invalid browser viewport size.".into());
+                }
                 if rect.is_some_and(|rect| !rect.valid()) {
                     return Err("Invalid browser panel bounds.".into());
                 }
@@ -626,6 +679,7 @@ impl NativeBrowserState {
                         Presentation {
                             tab_id,
                             rect,
+                            viewport,
                             order,
                         },
                     );
@@ -821,6 +875,7 @@ mod tests {
             Presentation {
                 tab_id: "one".into(),
                 rect,
+                viewport: None,
                 order: 1,
             },
         );
@@ -829,6 +884,7 @@ mod tests {
             Presentation {
                 tab_id: "one".into(),
                 rect: Rect { x: 80.0, ..rect },
+                viewport: None,
                 order: 2,
             },
         );
@@ -838,6 +894,19 @@ mod tests {
         host.presentations.clear();
         assert!(host.presentation("one").is_none());
         assert_eq!(host.tabs.len(), 1);
+    }
+
+    #[test]
+    fn panel_scale_follows_the_effective_css_viewport_at_fractional_dpi() {
+        let normal = Viewport {
+            width: 1200.0,
+            height: 800.0,
+        };
+        assert!(!Viewport {
+            width: 0.0,
+            height: 800.0
+        }
+        .valid());
     }
 
     #[test]
@@ -874,6 +943,7 @@ mod tests {
         for value in [
             json!({"type":"open","tabId":"mac-fixture","url":"https://example.com/","sessionKey":"chat","activate":true}),
             json!({"type":"present","scope":"chat","tabId":"mac-fixture","rect":{"x":1,"y":2,"width":300,"height":200},"visible":true}),
+            json!({"type":"present","scope":"scaled","tabId":"mac-fixture","rect":{"x":600,"y":0,"width":200,"height":300},"visible":true,"viewportWidth":800,"viewportHeight":600}),
             json!({"type":"release-scope","scope":"chat"}),
             json!({"type":"inspect","tabId":"mac-fixture","x":0,"y":0}),
         ] {
