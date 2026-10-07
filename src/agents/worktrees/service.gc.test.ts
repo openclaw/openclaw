@@ -18,7 +18,7 @@ import {
 import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import * as worktreeGit from "./git.js";
 import { requireGit } from "./git.js";
-import { findLiveRegistryWorktreeByPath, getRegistryWorktree } from "./registry.js";
+import { findLiveRegistryWorktreeByPath, getRegistryWorktree } from "./registry.test-support.js";
 import { managedWorktreeGcEntrypoint } from "./service-gc-runtime.test-support.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import {

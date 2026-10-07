@@ -39,7 +39,10 @@ import type {
   OpenClawStateWorkerOpenPreparation,
   OpenClawStateWorkerOperations,
 } from "./openclaw-state-worker-contract.js";
-import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
+import {
+  createWorkerOperationRegistry,
+  type WorkerWriteOperationContext,
+} from "./worker-operation-registry.js";
 
 // Device auth and PR provisioning prepare without loading the application runtime.
 const commandRegistry = createWorkerOperationRegistry<
@@ -129,7 +132,7 @@ function createSharedStateWorkerBackend(
   let borrow = nativeDatabase ? retainOpenClawStateDatabase(nativeDatabase) : undefined;
   let closed = false;
   let secretSchemaAdmitted = false;
-  const open = (admission: "open" | "transaction" = "open"): OpenClawStateDatabase => {
+  const retainedDatabase = (): OpenClawStateDatabase => {
     if (!nativeDatabase) {
       const opened = openOpenClawStateDatabase({
         path: context.databasePath,
@@ -146,17 +149,25 @@ function createSharedStateWorkerBackend(
     ) {
       throw new Error("Shared-state worker lost its retained native database");
     }
-    // Plugin-state mutations validate schema and ownership after BEGIN. Reuse
-    // this retained handle without repeating that row read before the transaction.
-    if (admission === "transaction") {
-      return nativeDatabase;
-    }
-    return openOpenClawStateDatabase({
-      database: nativeDatabase,
+    return nativeDatabase;
+  };
+  const open = (): OpenClawStateDatabase =>
+    openOpenClawStateDatabase({
+      database: retainedDatabase(),
       path: context.databasePath,
       env: getSqliteWorkerStateContext().environment,
     });
-  };
+  // The transaction owner validates schema and write authority after BEGIN.
+  const write: WorkerWriteOperationContext["write"] = (operation, transactionOptions) =>
+    runOpenClawStateWriteTransaction(
+      operation,
+      {
+        database: retainedDatabase(),
+        path: context.databasePath,
+        env: getSqliteWorkerStateContext().environment,
+      },
+      transactionOptions,
+    );
   return {
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
       if (
@@ -345,7 +356,7 @@ function createSharedStateWorkerBackend(
             path: context.databasePath,
             env: getSqliteWorkerStateContext().environment,
           },
-          () => open("transaction"),
+          retainedDatabase,
           nativeDatabase?.db.isOpen === true,
         );
       }
@@ -367,6 +378,7 @@ function createSharedStateWorkerBackend(
         command,
         context,
         open,
+        write,
         () =>
           (updateRunWriter ??= currentRuntime.openUpdateRunWriter({
             path: context.databasePath,

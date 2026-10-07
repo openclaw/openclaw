@@ -26,7 +26,7 @@ import {
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
 import { WorkerInferenceSessionDrainBusyError } from "../worker-environments/inference-control-internal.js";
 import {
-  prepareSessionWorkerPlacementArchiveCheck,
+  prepareSessionWorkerPlacementArchiveCheckAsync,
   prepareSessionWorkerPlacementMutationCheck,
   SessionWorkerPlacementStopError,
 } from "../worker-environments/session-placement-lifecycle.js";
@@ -336,7 +336,7 @@ export async function prepareSessionPatchArchiveTransition(params: {
     context: params.context,
     sessionId: params.entry.sessionId,
   };
-  const placement = prepareSessionWorkerPlacementArchiveCheck(placementTarget);
+  const placement = await prepareSessionWorkerPlacementArchiveCheckAsync(placementTarget);
   let assertWorktreeMutationAllowed: (() => void) | undefined;
   const commitGuard = () => {
     const authorizationError = params.authorize();

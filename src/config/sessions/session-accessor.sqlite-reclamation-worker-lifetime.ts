@@ -239,7 +239,7 @@ export class SqliteReclamationWorker {
   async prepare(
     params: Omit<MutationRunParams<SqliteReclamationPreparation>, "claim"> & {
       expectedSource: SqliteReclamationExistingSource;
-      plan: SqliteArchiveReclamationPlan;
+      plan: SqliteArchiveReclamationPlan | { kind: "canonical-validation" };
       assertCurrent: () => void;
     },
   ): Promise<
@@ -261,7 +261,8 @@ export class SqliteReclamationWorker {
       assertCurrent,
       databaseOptions: this.options,
       kind: params.plan.kind,
-      sessionId: reclamationSessionId(params.plan),
+      sessionId:
+        params.plan.kind === "canonical-validation" ? undefined : reclamationSessionId(params.plan),
       readOpeningValidation: () => {
         assertCurrent();
         const openingValidation = getOpenClawAgentDatabaseValidationForTransfer(this.options);
@@ -297,7 +298,7 @@ export class SqliteReclamationWorker {
         params.expectedSource.key,
         params.expectedSource.birthtime,
       );
-      this.preparedSource = source;
+      const preparedSource = (this.preparedSource ??= source);
       return {
         source,
         validation,
@@ -306,7 +307,7 @@ export class SqliteReclamationWorker {
           incarnation: source.incarnation,
           assertCurrent: () => {
             assertCurrent();
-            if (this.preparedSource !== source) {
+            if (this.preparedSource !== preparedSource) {
               throw new Error("SQLite reclamation native source changed");
             }
           },

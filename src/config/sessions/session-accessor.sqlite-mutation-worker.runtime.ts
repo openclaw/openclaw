@@ -23,6 +23,7 @@ import { readOpenClawAgentDatabaseWorkerLeaseReceipt } from "../../state/opencla
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
   getOpenClawAgentDatabaseValidation,
+  markOpenClawAgentCanonicalValidation,
   type OpenClawAgentDatabaseValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
@@ -413,6 +414,9 @@ export async function runReclamationWorkerPort(
                             authorizeCommit();
                             if (!hasMore) {
                               recordOpenClawAgentCanonicalValidation(transactionDatabase);
+                              if (!markOpenClawAgentCanonicalValidation(transactionDatabase)) {
+                                throw new Error("Canonical validation lost its admitted owner");
+                              }
                             }
                             return {
                               validatedRows: counts.validatedRows,

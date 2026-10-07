@@ -16,6 +16,7 @@ import {
   pendingSessionEntryPublications,
   preparedSharingReads,
   publishRetainedSessionEntryChange,
+  readCurrentSessionEntryProjection,
   recordCommittedSessionEntryPublication,
   recordCommittedSessionMetadataPublication,
   recordCommittedSessionOwnerPublication,
@@ -587,9 +588,7 @@ export function retainSessionEntryWorkerPublication(params: {
                   [...replacement.projection]
                     .filter(
                       ([key, facts]) =>
-                        current(key) &&
-                        !owner.metadataSuperseded.has(key) &&
-                        !owner.projectionSuperseded.has(key) &&
+                        readCurrentSessionEntryProjection(owner, replacement, key) !== undefined &&
                         (facts.activitySummaryWatermark === undefined || transcriptUnchanged),
                     )
                     .map(([key, facts]) => [key, freezeJsonSnapshot(facts)]),
@@ -599,6 +598,9 @@ export function retainSessionEntryWorkerPublication(params: {
       for (const sessionKey of changed) {
         const entry = replacement?.current.get(sessionKey);
         const projection = prepared?.projection?.get(sessionKey);
+        // A later transcript append retires its display watermark, not committed sharing facts.
+        const sharingProjection =
+          prepared && readCurrentSessionEntryProjection(owner, replacement, sessionKey);
         const sharingEntry = entry ? projectSessionSharingEntry(entry) : undefined;
         const placeholder =
           initialization?.sessionKey === sessionKey ? initialization.placeholder : undefined;
@@ -634,14 +636,14 @@ export function retainSessionEntryWorkerPublication(params: {
             !unknown && placeholder
               ? { entry: undefined, placeholder, membership: new Set() }
               : !unknown &&
-                  projection &&
+                  sharingProjection &&
                   sharingEntry &&
                   previous?.entry &&
                   previous.entry.sessionId === sharingEntry.sessionId &&
                   previous.entry.lifecycleRevision === sharingEntry.lifecycleRevision
                 ? {
                     entry: sharingEntry,
-                    membership: new Set(projection.membership[2]),
+                    membership: new Set(sharingProjection.membership[2]),
                   }
                 : undefined;
         }

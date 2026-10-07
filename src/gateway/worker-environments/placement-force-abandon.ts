@@ -2,6 +2,7 @@ import {
   FORCED_WORKER_ABANDONMENT_ERROR,
   placementTurnOwner,
   type WorkerSessionPlacementIdentity,
+  type WorkerSessionPlacementRecord,
 } from "./placement-record.js";
 import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result.js";
@@ -42,7 +43,7 @@ export async function forceAbandonWorkerEnvironment(
   }> = [];
   const retainedJournalSessions = new Set<string>();
   for (const owner of journalOwners) {
-    const placement = placements.get(owner.sessionId);
+    const placement = await placements.getAsync(owner.sessionId);
     const isCurrentOwner =
       (placement?.state === "active" || placement?.state === "draining") &&
       placement.generation === owner.placementGeneration;
@@ -77,7 +78,7 @@ export async function forceAbandonWorkerEnvironment(
   }> = [];
   for (const pending of await placements.listPendingWorkspaceResultsAsync()) {
     if (pending.environmentId === environmentId) {
-      const placement = placements.get(pending.sessionId);
+      const placement = await placements.getAsync(pending.sessionId);
       if (isCurrentWorkerWorkspacePendingResultOwner(placement, pending)) {
         const finalRef = pending.stagedResultRef ?? workerWorkspaceResultRef(pending.claimId);
         stagedResultCleanups.push({
@@ -101,11 +102,11 @@ export async function forceAbandonWorkerEnvironment(
       }
     }
   }
-  for (const placement of placements.listForReconcile()) {
+  for (const placement of await placements.listForReconcileAsync()) {
     if (placement.environmentId !== environmentId) {
       continue;
     }
-    let current = placements.get(placement.sessionId);
+    let current: WorkerSessionPlacementRecord = placement;
     if (current?.state === "active") {
       current = await placements.startDrain({
         sessionId: current.sessionId,

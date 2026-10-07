@@ -283,7 +283,7 @@ describe("worker session placement store", () => {
     expect(store.get(localIdentity.sessionId)?.turnClaim).toBeNull();
     expect(store.validateTurnClaim(workerClaim)).toBe(true);
     expect(
-      store.adoptActive({
+      await store.adoptActive({
         sessionId: SESSION.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,

@@ -381,7 +381,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         (input.command.input.includeRunId === undefined ||
           typeof input.command.input.includeRunId === "string")) ||
       input.command.type === "fleet.list" ||
-      ((input.command.type === "operatorApprovals.history" ||
+      ((input.command.type === "operatorApprovals.placementGrant" ||
+        input.command.type === "operatorApprovals.history" ||
         input.command.type === "operatorApprovals.listCronGrants" ||
         input.command.type === "operatorApprovals.validateCronGrant") &&
         isRecord(input.command.input)) ||
@@ -401,6 +402,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.scopeKey === "string") ||
       (input.command.type === "fleet.get" && typeof input.command.tenantId === "string") ||
       input.command.type === "worktrees.cleanupState" ||
+      input.command.type === "worktrees.list" ||
       (input.command.type === "workerPlacements.changeSnapshot" &&
         (input.command.profileIds === undefined || isStringArray(input.command.profileIds))) ||
       isWorkspaceJournalReadCommand(input.command) ||

@@ -101,6 +101,7 @@ async function serveControlUiPublicSession(
     const { isPublicSessionShareActive, readPublicSessionShare } =
       await import("./control-ui-public-session-read.js");
     const { renderPublicSessionDocument } = await import("./control-ui-public-session-render.js");
+    const { withReadySessionRows } = await import("./session-row-prepared-read.js");
     const admitted = await requestGate.run({
       publicationKey: locator.shareId,
       sessionKey: locator.sessionKey,
@@ -141,26 +142,32 @@ async function serveControlUiPublicSession(
       unavailable(503);
       return;
     }
-    const representation = admitted.value;
-    if (!representation || !isPublicSessionShareActive(cfg, locator, projection)) {
-      unavailable(404);
-      return;
-    }
-    if (!representation.isCurrent()) {
-      unavailable(503);
-      return;
-    }
-    const { body, etag } = representation;
-    res.setHeader("ETag", etag);
-    if (req.headers["if-none-match"] === etag) {
-      res.statusCode = 304;
-      res.end();
-      return;
-    }
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.setHeader("Content-Length", Buffer.byteLength(body));
-    res.end(body);
+    await withReadySessionRows(
+      projection,
+      () => [{ key: locator.sessionKey, agentId: locator.agentId }],
+      () => {
+        const representation = admitted.value;
+        if (!representation || !isPublicSessionShareActive(cfg, locator, projection)) {
+          unavailable(404);
+          return;
+        }
+        if (!representation.isCurrent()) {
+          unavailable(503);
+          return;
+        }
+        const { body, etag } = representation;
+        res.setHeader("ETag", etag);
+        if (req.headers["if-none-match"] === etag) {
+          res.statusCode = 304;
+          res.end();
+          return;
+        }
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.setHeader("Content-Length", Buffer.byteLength(body));
+        res.end(body);
+      },
+    );
   } catch {
     unavailable(503);
   }

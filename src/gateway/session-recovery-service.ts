@@ -52,7 +52,7 @@ import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 import {
-  prepareSessionWorkerPlacementMutationCheck,
+  prepareSessionWorkerPlacementMutationCheckAsync,
   prepareSessionWorkerPlacementStop,
   type SessionWorkerPlacementContext,
 } from "./worker-environments/session-placement-lifecycle.js";
@@ -225,7 +225,7 @@ export async function reconcileOrphanedGatewaySessionRecovery(params: {
         return undefined;
       }
       await source.refresh();
-      const assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck({
+      const assertPlacementCurrent = await prepareSessionWorkerPlacementMutationCheckAsync({
         context: params.workerPlacementContext,
         sessionId: initialSource.sessionId,
       });
@@ -458,7 +458,7 @@ export async function recoverGatewaySession(params: {
       if (prepared.stop) {
         try {
           await prepared.stop();
-          assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck({
+          assertPlacementCurrent = await prepareSessionWorkerPlacementMutationCheckAsync({
             context: params.workerPlacementContext,
             sessionId: initialSource.sessionId,
           });

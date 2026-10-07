@@ -64,7 +64,7 @@ vi.mock("../agents/worktrees/service.js", async (importOriginal) => {
   return {
     ...actual,
     managedWorktrees: {
-      findLiveByOwner: (_kind: string, ownerId: string) => ({
+      findLiveByOwner: async (_kind: string, ownerId: string) => ({
         id: "recovery-worktree",
         ownerId,
         path: boundary.worktreePath,

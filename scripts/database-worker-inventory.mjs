@@ -397,9 +397,11 @@ const reviewedOperations = new Map([
           "readPreparedReservations",
           "createPreparedEnvironmentStoreOps.ensurePreparedIntent",
           "createPreparedEnvironmentStoreOps.requestPreparedDestroy",
+          "hasPlacementReference",
+          "consumePreparedEnvironment",
         ],
         evidence:
-          "Factory only in store.kernel.ts:99 -> store.worker.ts:48; native consume and shared reader stay T1",
+          "Prepared mutations run in store.worker.ts; consumption and its placement-reference predicate run only in placement-lifecycle.worker.ts.",
       },
     ],
   ],
@@ -408,15 +410,18 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["readWorkerPlacementChangeSnapshotInDatabase"],
-        evidence: "Reporting snapshot only called by openclaw-state-read.worker.ts:644",
+        operations: [
+          "readWorkerPlacementChangeSnapshotInDatabase",
+          "readWorkerPlacementsInDatabase",
+        ],
+        evidence:
+          "Snapshots use openclaw-state-read.worker.ts; placement-lifecycle.worker.ts serves point lookups on the existing placement actor. Native reconciliation guards remain T1.",
       },
       {
         tier: "W",
         operations: ["updateTransition"],
-        binding: "activated",
         evidence:
-          "Only activation at placement-transitions.worker.ts:58 reaches this initializer; native placement-store.ts:325 passes provisioning, not active; the placement update stays T1",
+          "Transitions run only in placement-transitions.worker.ts and prepared binding in placement-lifecycle.worker.ts.",
       },
       {
         tier: "W",
@@ -982,6 +987,29 @@ const reviewedOperations = new Map([
         evidence:
           "Only placement-dispatch-store.worker.ts:69, placement-turn-claims.worker.ts:72 and placement-read-projection.ts:85 call the batch reader; projection itself is only called by state/openclaw-state-read.worker.ts:670. Native getPlacementMove uses another reader.",
       },
+      {
+        tier: "W",
+        operations: [
+          "deleteExactMove",
+          "requireExactAttachedEnvironment",
+          "createPlacementMoveOps.completeSourceToLocal",
+          "createPlacementMoveOps.beginPlacementMove",
+          "createPlacementMoveOps.recordPlacementMoveError",
+        ],
+        evidence:
+          "Only placement-lifecycle.worker.ts invokes move mutations; placement-store.ts retains only the native getPlacementMove getter for final effect guards.",
+      },
+    ],
+  ],
+  [
+    "src/gateway/worker-environments/placement-drain.ts",
+    [
+      {
+        tier: "W",
+        operations: ["drainWorkerSessionPlacement"],
+        evidence:
+          "Only placement turn/transition workers and the move mutation kernel in placement-lifecycle.worker.ts drain placements.",
+      },
     ],
   ],
   [
@@ -1112,11 +1140,16 @@ const reviewedOperations = new Map([
       {
         tier: "W",
         operations: [
+          "getRegistryWorktreeInDatabase",
+          "findLiveRegistryWorktreeByOwnerInDatabase",
+          "findLiveRegistryWorktreeByPathInDatabase",
+          "listRegistryWorktreesInDatabase",
+          "readProvisionedData",
           "listLiveRegistryWorktreeIdsInDatabase",
           "getRegistryWorktreeProvisionedChunkInDatabase",
         ],
         evidence:
-          "Only worktrees/dispatch.worker.ts:31,39 calls these kernels; src/state/openclaw-state-worker-registry.ts:149 registers the handlers. Shared native worktree getters/list/provisioned-data readers remain T1.",
+          "Runtime reads and exact-row predicates use worktrees/dispatch.worker.ts and registry-run-end.worker.ts through the shared-state worker registry. Cleanup inventory uses openclaw-state-read-registry.ts in the read worker. Native fixture readers live only in registry.test-support.ts; Doctor migration lists keep their separate registry.ts queries.",
       },
     ],
   ],
@@ -1128,9 +1161,10 @@ const reviewedOperations = new Map([
         operations: [
           "listRegistryWorktreesForMigration",
           "rewriteRegistryWorktreePathsForMigration",
+          "runRegistryMigration",
         ],
         evidence:
-          "Only migration discovery src/infra/state-migrations.doctor-discovery.ts:78 and Doctor repair src/config/sessions/worktree-workspace-migration.ts:116 call the list; the latter requires doctor-fix mode and is invoked at src/commands/doctor-session-worktree-workspace.ts:30. Rewrite is called only by state-migrations.doctor.ts:1362, reached through Doctor/startup migration owner at :2488,2509,2717.",
+          "Only migration discovery src/infra/state-migrations.doctor-discovery.ts:84 and Doctor repair src/config/sessions/worktree-workspace-migration.ts:116 call the list; the latter requires doctor-fix mode. The private runRegistryMigration transaction is called only by discardLegacyRegistryWorktrees and rewriteRegistryWorktreePathsForMigration; their sole production caller is the managed-worktrees step at src/infra/state-migrations.doctor.ts:1256,1258 (Doctor/startup). It acquires the existing schema-maintenance owner before opening the transaction database.",
       },
       {
         tier: "T3",
@@ -1145,9 +1179,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["readWorktreeRunLeaseStateInDatabase"],
+        operations: ["readWorktreeRunLeaseStateInDatabase", "assertRegistryMutationCustody"],
         evidence:
-          "Only src/state/openclaw-state-read-registry.ts:96 calls this reader, dispatched in openclaw-state-read.worker.ts:679. Host worktrees/registry-read.ts:71 uses the existing read worker; live lease/custody helpers retain their native tiers.",
+          "Run-lease inventory is dispatched by openclaw-state-read-registry.ts in the read worker. Registry mutation custody is called only by registry-run-end.worker.ts. The actual lease read/reap primitives remain synchronous exemptions.",
       },
     ],
   ],

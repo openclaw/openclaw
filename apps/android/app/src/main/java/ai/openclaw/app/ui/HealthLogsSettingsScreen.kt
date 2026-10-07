@@ -26,7 +26,6 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,13 +57,7 @@ internal fun HealthLogsSettingsScreen(
   val logsState by viewModel.healthLogsState.collectAsState()
   var selectedLogEntry by remember { mutableStateOf<GatewayLogEntry?>(null) }
 
-  LaunchedEffect(isConnected) {
-    if (isConnected) {
-      // Load logs when the gateway becomes available; manual refresh covers
-      // later updates so this screen does not poll.
-      viewModel.refreshHealthLogs()
-    }
-  }
+  SettingsRefreshOnConnect(isConnected) { viewModel.refreshHealthLogs() }
 
   selectedLogEntry?.let { entry ->
     GatewayLogDetailSettingsScreen(entry = entry, onBack = { selectedLogEntry = null })
@@ -72,9 +65,8 @@ internal fun HealthLogsSettingsScreen(
   }
 
   SettingsDetailFrame(
-    title = nativeString("Health"),
     subtitle = nativeString("Gateway status, phone node readiness, and recent log stream."),
-    icon = SettingsRoute.Health.icon,
+    route = SettingsRoute.Health,
     onBack = onBack,
   ) {
     SettingsMetricPanel(
@@ -145,7 +137,7 @@ private fun GatewayLogDetailSettingsScreen(
   SettingsDetailFrame(
     title = nativeString("Log Entry"),
     subtitle = nativeString("Readable gateway log detail."),
-    icon = SettingsRoute.Health.icon,
+    route = SettingsRoute.Health,
     onBack = onBack,
   ) {
     SettingsMetricPanel(
@@ -156,10 +148,7 @@ private fun GatewayLogDetailSettingsScreen(
           SettingsMetric(nativeString("Subsystem"), entry.subsystem ?: nativeString("Unknown")),
         ),
     )
-    ClawPanel(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-      Text(text = nativeString("Message"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-      Text(text = entry.message, style = ClawTheme.type.body, color = ClawTheme.colors.text)
-    }
+    SettingsMessagePanel(title = nativeString("Message"), text = entry.message, color = ClawTheme.colors.text, spacing = 6.dp)
     ClawPanel(verticalArrangement = Arrangement.spacedBy(6.dp)) {
       Text(text = nativeString("Raw"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       Text(

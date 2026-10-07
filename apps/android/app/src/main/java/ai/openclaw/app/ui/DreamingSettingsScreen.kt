@@ -23,7 +23,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -40,16 +39,11 @@ internal fun DreamingSettingsScreen(
   val state by viewModel.dreamingState.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
 
-  LaunchedEffect(isConnected) {
-    if (isConnected) {
-      viewModel.refreshDreaming()
-    }
-  }
+  SettingsRefreshOnConnect(isConnected) { viewModel.refreshDreaming() }
 
   SettingsDetailFrame(
-    title = nativeString("Dreaming"),
     subtitle = nativeString("Memory consolidation and dream diary."),
-    icon = SettingsRoute.Dreaming.icon,
+    route = SettingsRoute.Dreaming,
     onBack = onBack,
   ) {
     SettingsRefreshControls(isConnected, state.refreshing, state.errorText, viewModel::refreshDreaming)

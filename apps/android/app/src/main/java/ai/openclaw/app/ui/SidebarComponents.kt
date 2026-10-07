@@ -147,6 +147,19 @@ internal fun SidebarSectionTitle(
 }
 
 @Composable
+internal fun SidebarDisclosureIcon(
+  expanded: Boolean,
+  palette: SidebarPalette,
+) {
+  Icon(
+    imageVector = if (expanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+    contentDescription = null,
+    tint = palette.muted,
+    modifier = Modifier.size(18.dp),
+  )
+}
+
+@Composable
 internal fun SidebarCollapsibleHeader(
   label: String,
   expanded: Boolean,
@@ -169,17 +182,7 @@ internal fun SidebarCollapsibleHeader(
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    Icon(
-      imageVector =
-        if (expanded) {
-          Icons.Default.KeyboardArrowDown
-        } else {
-          Icons.AutoMirrored.Filled.KeyboardArrowRight
-        },
-      contentDescription = null,
-      tint = palette.muted,
-      modifier = Modifier.size(18.dp),
-    )
+    SidebarDisclosureIcon(expanded, palette)
     iconContent?.invoke()
     Text(
       text = label,
@@ -304,6 +307,8 @@ internal enum class SidebarSessionActivity {
   Failed,
 }
 
+private val sidebarFailureStatuses = setOf("failed", "timeout", "killed", "error")
+
 internal fun sidebarSessionActivity(
   status: String?,
   lastRunError: String?,
@@ -314,18 +319,10 @@ internal fun sidebarSessionActivity(
   val normalizedStatus = status?.trim()?.lowercase()
   val active = isSessionRunActive(hasActiveRun, normalizedStatus)
   return when {
-    !lastRunError.isNullOrBlank() ||
-      normalizedStatus == "failed" ||
-      normalizedStatus == "timeout" ||
-      normalizedStatus == "killed" ||
-      normalizedStatus == "error" -> SidebarSessionActivity.Failed
-
+    !lastRunError.isNullOrBlank() || normalizedStatus in sidebarFailureStatuses -> SidebarSessionActivity.Failed
     normalizedStatus == "queued" && active -> SidebarSessionActivity.Queued
-
     continuing || active -> SidebarSessionActivity.Running
-
     unread -> SidebarSessionActivity.Unread
-
     else -> null
   }
 }

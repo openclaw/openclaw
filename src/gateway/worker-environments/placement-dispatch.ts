@@ -1,6 +1,7 @@
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import type { WorkerNodePlacementAuthority } from "./device-placement-eligibility.js";
+import { composePlacementAuthorization } from "./placement-authorization.js";
 import {
   createPlacementFailureActions,
   type WorkerActivationBarrier,
@@ -110,10 +111,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     authorize?: WorkerPlacementAuthorization,
     signal?: AbortSignal,
   ): Promise<WorkerActiveDispatchPlacement> => {
-    const assertCurrent = () => {
+    const assertCurrent = composePlacementAuthorization(authorize, () => {
       signal?.throwIfAborted();
-      authorize?.();
-    };
+    });
     let placement: WorkerDispatchPlacement | undefined;
     try {
       signal?.throwIfAborted();

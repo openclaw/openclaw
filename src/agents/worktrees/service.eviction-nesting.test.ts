@@ -10,7 +10,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { listGitWorktrees, requireGit } from "./git.js";
-import { getRegistryWorktree } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import { acquireWorktreeRunLease, hasLiveWorktreeRunLease } from "./run-lease.js";
 import { testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
@@ -274,6 +274,7 @@ it.each([
     const external = await service.create({ repoRoot: source, name: "external", baseRef: "HEAD" });
     await fs.writeFile(path.join(external.path, "unsaved.txt"), "relocated live data\n");
     let relocated = false;
+    let originalSource: string | undefined;
     let lease: Awaited<ReturnType<typeof acquireWorktreeRunLease>> | undefined;
     let privateMetadata: { directory: string; head: Buffer; index: Buffer } | undefined;
     const relocate = async () => {
@@ -306,6 +307,7 @@ it.each([
       lease = await acquireWorktreeRunLease(external.id, { env });
       if (phase === "snapshot with replaced source") {
         await fs.rename(source, `${source}-original`);
+        originalSource = `${source}-original`;
         expect(await initializeRepository(path.dirname(source))).toBe(source);
         expect(await requireGit(source, ["rev-parse", "--git-common-dir"])).toBe(".git");
       }
@@ -364,6 +366,10 @@ it.each([
         );
       }
     } finally {
+      if (originalSource) {
+        await fs.rm(source, { recursive: true, force: true });
+        await fs.rename(originalSource, source);
+      }
       await lease?.release();
     }
   },

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   getActivePluginRegistry,
@@ -11,6 +12,7 @@ import {
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
 import { createWorkerPlacementMoveService } from "../worker-environments/placement-move-service.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "../worker-environments/placement-record.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
@@ -713,93 +715,113 @@ describe("sessions.dispatch", () => {
     );
   });
   it("requires admin before resolving a configured project profile", async () => {
-    useWorktreeSession({}, "/repo/worktree");
-    mocks.runCommandWithTimeout.mockResolvedValue({
-      code: 0,
-      stdout: "git@github.com:Acme/App.git\n",
-      stderr: "",
-    });
-    const dispatch = vi.fn().mockResolvedValue(activePlacementRecord());
-    const context = makeContext({
-      getRuntimeConfig: () => ({
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg = {
+        session: { store: state.statePath("sessions.json") },
         cloudWorkers: {
           profiles: { mapped: { provider: "fake" } },
           projectProfiles: { "github.com/acme/app": "mapped" },
         },
-      }),
-      logGateway: { warn: vi.fn() } as never,
-      workerPlacementDispatchService: { dispatch },
-      workerSessionPlacementService: { getMany: () => new Map() },
-    });
-    const controller = new AbortController();
-    const request = async (scope: "operator.write" | "operator.admin") => {
-      const respond = vi.fn();
-      await handleGatewayRequest({
-        signal: controller.signal,
-        req: {
-          type: "req",
-          id: `configured-default-${scope}`,
-          method: "sessions.dispatch",
-          params: { key: sessionKey },
+      };
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey, storePath: cfg.session.store },
+        {
+          sessionId,
+          updatedAt: 1,
+          providerOverride: "anthropic",
+          modelOverride: "claude-test",
+          worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
         },
-        respond,
-        client: {
-          connId: `conn-${scope}`,
-          connect: {
-            role: "operator",
-            scopes: [scope],
-            client: { id: "test", version: "1", platform: "test", mode: "test" },
-            minProtocol: 1,
-            maxProtocol: 1,
-          },
-        } as Parameters<typeof handleGatewayRequest>[0]["client"],
-        isWebchatConnect: () => false,
-        context,
-        extraHandlers: { "sessions.dispatch": getSessionDispatchHandler() },
+      );
+      mocks.resolveTarget.mockImplementation(resolveGatewaySessionStoreTargetWithStore);
+      mocks.findLiveByOwner.mockReturnValue({
+        id: "worktree-1",
+        ownerKind: "session",
+        ownerId: sessionKey,
+        path: "/repo/worktree",
       });
-      return respond;
-    };
+      mocks.runCommandWithTimeout.mockResolvedValue({
+        code: 0,
+        stdout: "git@github.com:Acme/App.git\n",
+        stderr: "",
+      });
+      const dispatch = vi.fn().mockResolvedValue(activePlacementRecord());
+      const context = makeContext({
+        getRuntimeConfig: () => cfg,
+        logGateway: { warn: vi.fn() } as never,
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      });
+      const controller = new AbortController();
+      const request = async (scope: "operator.write" | "operator.admin") => {
+        const respond = vi.fn();
+        await handleGatewayRequest({
+          signal: controller.signal,
+          req: {
+            type: "req",
+            id: `configured-default-${scope}`,
+            method: "sessions.dispatch",
+            params: { key: sessionKey },
+          },
+          respond,
+          client: {
+            connId: `conn-${scope}`,
+            connect: {
+              role: "operator",
+              scopes: [scope],
+              client: { id: "test", version: "1", platform: "test", mode: "test" },
+              minProtocol: 1,
+              maxProtocol: 1,
+            },
+          } as Parameters<typeof handleGatewayRequest>[0]["client"],
+          isWebchatConnect: () => false,
+          context,
+          extraHandlers: { "sessions.dispatch": getSessionDispatchHandler() },
+        });
+        return respond;
+      };
 
-    const writeRespond = await request("operator.write");
+      const writeRespond = await request("operator.write");
 
-    expect(writeRespond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.FORBIDDEN,
-        details: {
-          code: "MISSING_SCOPE",
-          missingScope: "operator.admin",
-          requiredScopes: ["operator.admin"],
-        },
-      }),
-    );
-    expect(mocks.resolveTarget).not.toHaveBeenCalled();
-    expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
-    expect(dispatch).not.toHaveBeenCalled();
+      expect(writeRespond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: ErrorCodes.FORBIDDEN,
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.admin",
+            requiredScopes: ["operator.admin"],
+          },
+        }),
+      );
+      expect(mocks.resolveTarget).not.toHaveBeenCalled();
+      expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
 
-    const adminRespond = await request("operator.admin");
+      const adminRespond = await request("operator.admin");
 
-    expect(mocks.runCommandWithTimeout).toHaveBeenCalledWith(
-      ["git", "-C", "/repo/worktree", "config", "--get", "remote.origin.url"],
-      { timeoutMs: 4_000 },
-    );
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({ profileId: "mapped" }),
-      expect.any(Function),
-      expect.any(Function),
-      controller.signal,
-    );
-    expect(adminRespond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        ok: true,
-        key: sessionKey,
-        sessionId,
-        placement: expect.objectContaining({ state: "active" }),
-      }),
-      undefined,
-    );
+      expect(mocks.runCommandWithTimeout).toHaveBeenCalledWith(
+        ["git", "-C", "/repo/worktree", "config", "--get", "remote.origin.url"],
+        { timeoutMs: 4_000 },
+      );
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ profileId: "mapped" }),
+        expect.any(Function),
+        expect.any(Function),
+        controller.signal,
+      );
+      expect(adminRespond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          ok: true,
+          key: sessionKey,
+          sessionId,
+          placement: expect.objectContaining({ state: "active" }),
+        }),
+        undefined,
+      );
+    });
   });
   it.each([
     { name: "starts an active abandonment", joined: false },
@@ -832,9 +854,9 @@ describe("sessions.dispatch", () => {
     };
     const moves = createWorkerPlacementMoveService({
       placements: {
-        beginPlacementMove: () => ({ intent, placement: draining, joined }),
-        get: () => existing,
-        getPlacementMove: () => (joined ? intent : undefined),
+        beginPlacementMove: async () => ({ intent, placement: draining, joined }),
+        getAsync: async () => existing,
+        getPlacementMoveAsync: async () => (joined ? intent : undefined),
         recordPlacementMoveError,
       } as never,
       environments: { get: () => undefined },

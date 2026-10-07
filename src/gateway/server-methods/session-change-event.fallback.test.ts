@@ -180,6 +180,13 @@ it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
             database: {
               agentId: "main",
               path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+              initializeCanonicalValidation: false,
+              assertStateCurrent: () => {},
+              source: {
+                key: "synthetic:pending",
+                canonicalPath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+                incarnation: "synthetic-pending",
+              },
             },
           });
         }

@@ -122,6 +122,19 @@ export function recordCommittedSessionOwnerPublication(
   }
 }
 
+/** Commit receipts remain current only until their stored fields are superseded. */
+export function readCurrentSessionEntryProjection(
+  owner: PendingSessionEntryPublication,
+  replacement: SessionEntryReplacementPublication | undefined,
+  sessionKey: string,
+) {
+  return !owner.superseded.has(sessionKey) &&
+    !owner.metadataSuperseded.has(sessionKey) &&
+    !owner.projectionSuperseded.has(sessionKey)
+    ? replacement?.projection?.get(sessionKey)
+    : undefined;
+}
+
 export function applyPendingSessionEntryOwnerChanges(
   replacement: SessionEntryReplacementPublication | undefined,
   ownerChanges: PendingSessionEntryPublication["ownerChanges"],

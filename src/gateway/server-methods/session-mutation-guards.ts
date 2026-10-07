@@ -457,6 +457,25 @@ export function withSessionMutationCommitGuard(
   const admitted = authorization?.admittedInputAuthority;
   return {
     ...authorization,
+    ...(authorization?.prepareWorkerGrant
+      ? {
+          prepareWorkerGrant: async () => {
+            assertExpectedProfile?.();
+            assertCommitAllowed?.();
+            const prepared = await authorization.prepareWorkerGrant!();
+            const wrap = (assertSource: () => void) => () => {
+              assertExpectedProfile?.();
+              assertCommitAllowed?.();
+              assertSource();
+            };
+            return {
+              ...prepared,
+              assertCurrent: wrap(prepared.assertCurrent),
+              assertLifetimeCurrent: wrap(prepared.assertLifetimeCurrent),
+            };
+          },
+        }
+      : {}),
     assertAdmittedInputCurrent,
     ...(admitted
       ? {

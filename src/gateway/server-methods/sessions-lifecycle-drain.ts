@@ -40,8 +40,8 @@ import {
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { isCurrentWorkerWorkspacePendingResultOwner } from "../worker-environments/placement-workspace-result.js";
 import {
-  prepareSessionWorkerPlacementArchiveCheck,
-  prepareSessionWorkerPlacementMutationCheck,
+  prepareSessionWorkerPlacementArchiveCheckAsync,
+  prepareSessionWorkerPlacementMutationCheckAsync,
   prepareSessionWorkerPlacementStop,
 } from "../worker-environments/session-placement-lifecycle.js";
 import { hasGatewaySessionAbortOwner } from "./chat-abort-authorization.js";
@@ -325,8 +325,8 @@ export async function prepareSessionLifecycleDrain(
     const placementTarget = { context: params.context, sessionId: params.sessionId };
     const assertPlacementCurrent =
       params.action === "archive"
-        ? prepareSessionWorkerPlacementArchiveCheck(placementTarget).assertCurrent
-        : prepareSessionWorkerPlacementMutationCheck(placementTarget);
+        ? (await prepareSessionWorkerPlacementArchiveCheckAsync(placementTarget)).assertCurrent
+        : await prepareSessionWorkerPlacementMutationCheckAsync(placementTarget);
     return {
       // Only the caller's active mutation may replace this mutex-free ingress lease.
       handoffToMutation: () => releaseAdmissions(),

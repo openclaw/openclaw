@@ -114,7 +114,7 @@ export function createGatewayAuxHandlers(
     approvalKind: "exec" | "plugin" | "system-agent",
     resolveAllowedDecisions: (request: TPayload) => readonly ExecApprovalDecision[],
     resolveStandingGrantMint?: (request: TPayload) => OperatorStandingGrantMintSpec | null,
-    retainPlacementStandingGrant?: PlacementStandingGrantRuntime["retain"],
+    retainPlacementStandingGrantAsync?: PlacementStandingGrantRuntime["retainAsync"],
   ) =>
     new ExecApprovalManager<TPayload>({
       scheduler: params.scheduler,
@@ -123,7 +123,7 @@ export function createGatewayAuxHandlers(
       resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
       resolveAllowedDecisions,
       ...(resolveStandingGrantMint ? { resolveStandingGrantMint } : {}),
-      ...(retainPlacementStandingGrant ? { retainPlacementStandingGrant } : {}),
+      ...(retainPlacementStandingGrantAsync ? { retainPlacementStandingGrantAsync } : {}),
       ...(params.resolveGrantDefaultExpiresAtMs
         ? { resolveStandingGrantExpiresAtMs: params.resolveGrantDefaultExpiresAtMs }
         : {}),
@@ -228,7 +228,7 @@ export function createGatewayAuxHandlers(
       }
       return { kind: "placement", ...request.placementGrant };
     },
-    placementStandingGrants.retain,
+    placementStandingGrants.retainAsync,
   );
   const systemAgentApprovalManager = createApprovalManager<SystemAgentApprovalRequestPayload>(
     "system-agent",

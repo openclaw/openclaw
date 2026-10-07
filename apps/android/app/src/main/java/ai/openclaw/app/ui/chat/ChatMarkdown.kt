@@ -123,19 +123,13 @@ fun ChatMarkdown(
       baseCallout = bodyStyle,
     )
 
+  val rendering = MarkdownRendering(textColor, inlineStyles, isStreaming, progressBars)
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     for (block in blocks) {
       when (block) {
         is ChatMarkdownSourceBlock.Markdown -> {
           val documentBlocks = remember(block.source) { parseChatMarkdownBlocks(block.source) }
-          RenderMarkdownBlocks(
-            blocks = documentBlocks,
-            textColor = textColor,
-            inlineStyles = inlineStyles,
-            listDepth = 0,
-            isStreaming = isStreaming,
-            progressBars = progressBars,
-          )
+          rendering.RenderMarkdownBlocks(documentBlocks, listDepth = 0)
         }
 
         is ChatMarkdownSourceBlock.Math -> {
@@ -150,25 +144,24 @@ fun ChatMarkdown(
   }
 }
 
+private data class MarkdownRendering(
+  val textColor: Color,
+  val inlineStyles: InlineStyles,
+  val isStreaming: Boolean,
+  val progressBars: Boolean,
+)
+
 @Composable
-private fun RenderMarkdownBlocks(
+private fun MarkdownRendering.RenderMarkdownBlocks(
   blocks: List<ChatMarkdownRenderBlock>,
-  textColor: Color,
-  inlineStyles: InlineStyles,
   listDepth: Int,
-  isStreaming: Boolean,
-  progressBars: Boolean,
 ) {
   for (block in blocks) {
     when (block) {
       is ChatMarkdownRenderBlock.CommonMark -> {
         RenderCommonMarkBlock(
           current = block.node,
-          textColor = textColor,
-          inlineStyles = inlineStyles,
           listDepth = listDepth,
-          isStreaming = isStreaming,
-          progressBars = progressBars,
         )
       }
 
@@ -179,11 +172,7 @@ private fun RenderMarkdownBlocks(
       is ChatMarkdownRenderBlock.Disclosure -> {
         RenderMarkdownDisclosure(
           disclosure = block,
-          textColor = textColor,
-          inlineStyles = inlineStyles,
           listDepth = listDepth,
-          isStreaming = isStreaming,
-          progressBars = progressBars,
         )
       }
     }
@@ -191,13 +180,9 @@ private fun RenderMarkdownBlocks(
 }
 
 @Composable
-private fun RenderCommonMarkBlock(
+private fun MarkdownRendering.RenderCommonMarkBlock(
   current: Node,
-  textColor: Color,
-  inlineStyles: InlineStyles,
   listDepth: Int,
-  isStreaming: Boolean,
-  progressBars: Boolean,
 ) {
   if (progressBars) {
     val progress = remember(current) { parseChatProgressElement(current) }
@@ -208,7 +193,7 @@ private fun RenderCommonMarkBlock(
   }
   when (current) {
     is Paragraph -> {
-      RenderParagraph(current, textColor = textColor, inlineStyles = inlineStyles, progressBars = progressBars)
+      RenderParagraph(current)
     }
 
     is Heading -> {
@@ -264,11 +249,7 @@ private fun RenderCommonMarkBlock(
         ) {
           RenderMarkdownBlocks(
             blocks = commonMarkBlocks(current.firstChild),
-            textColor = textColor,
-            inlineStyles = inlineStyles,
             listDepth = listDepth,
-            isStreaming = isStreaming,
-            progressBars = progressBars,
           )
         }
       }
@@ -277,20 +258,12 @@ private fun RenderCommonMarkBlock(
     is BulletList, is OrderedList -> {
       RenderList(
         list = current,
-        textColor = textColor,
-        inlineStyles = inlineStyles,
         listDepth = listDepth,
-        isStreaming = isStreaming,
-        progressBars = progressBars,
       )
     }
 
     is TableBlock -> {
-      RenderTableBlock(
-        table = current,
-        textColor = textColor,
-        inlineStyles = inlineStyles,
-      )
+      RenderTableBlock(current)
     }
 
     is ThematicBreak -> {
@@ -328,13 +301,9 @@ private fun RenderLiteralHtml(
 }
 
 @Composable
-private fun RenderMarkdownDisclosure(
+private fun MarkdownRendering.RenderMarkdownDisclosure(
   disclosure: ChatMarkdownRenderBlock.Disclosure,
-  textColor: Color,
-  inlineStyles: InlineStyles,
   listDepth: Int,
-  isStreaming: Boolean,
-  progressBars: Boolean,
 ) {
   var isExpanded by rememberSaveable { mutableStateOf(disclosure.isExpanded) }
   val summarySource = disclosure.summary ?: nativeString("Details")
@@ -375,11 +344,7 @@ private fun RenderMarkdownDisclosure(
       ) {
         RenderMarkdownBlocks(
           blocks = disclosure.blocks,
-          textColor = textColor,
-          inlineStyles = inlineStyles,
           listDepth = listDepth,
-          isStreaming = isStreaming,
-          progressBars = progressBars,
         )
       }
     }
@@ -387,12 +352,7 @@ private fun RenderMarkdownDisclosure(
 }
 
 @Composable
-private fun RenderParagraph(
-  paragraph: Paragraph,
-  textColor: Color,
-  inlineStyles: InlineStyles,
-  progressBars: Boolean,
-) {
+private fun MarkdownRendering.RenderParagraph(paragraph: Paragraph) {
   val standaloneImage = remember(paragraph) { standaloneDataImage(paragraph) }
   if (standaloneImage != null) {
     // Render a paragraph that is only a data image as media, not as an inline alt label.
@@ -408,21 +368,19 @@ private fun RenderParagraph(
       while (textEnd !== start && (textEnd.previous is SoftLineBreak || textEnd.previous is HardLineBreak)) {
         textEnd = textEnd.previous
       }
-      RenderInlineMarkdownRange(start, textEnd, textColor, inlineStyles)
+      RenderInlineMarkdownRange(start, textEnd)
       ChatProgressBar(progress.element)
       start = progress.after
       while (start is SoftLineBreak || start is HardLineBreak) start = start.next
     }
   }
-  RenderInlineMarkdownRange(start, null, textColor, inlineStyles)
+  RenderInlineMarkdownRange(start, null)
 }
 
 @Composable
-private fun RenderInlineMarkdownRange(
+private fun MarkdownRendering.RenderInlineMarkdownRange(
   start: Node?,
   endExclusive: Node?,
-  textColor: Color,
-  inlineStyles: InlineStyles,
 ) {
   val annotated = remember(start, endExclusive, inlineStyles) { buildInlineMarkdown(start, inlineStyles, endExclusive) }
   if (annotated.text.trimEnd().isEmpty()) {
@@ -440,13 +398,9 @@ private fun RenderInlineMarkdownRange(
 }
 
 @Composable
-private fun RenderList(
+private fun MarkdownRendering.RenderList(
   list: Node,
-  textColor: Color,
-  inlineStyles: InlineStyles,
   listDepth: Int,
-  isStreaming: Boolean,
-  progressBars: Boolean,
 ) {
   Column(
     modifier = Modifier.padding(start = (LIST_INDENT_DP * listDepth).dp),
@@ -458,11 +412,7 @@ private fun RenderList(
         RenderListItem(
           item = item,
           markerText = if (list is OrderedList) "$index." else "•",
-          textColor = textColor,
-          inlineStyles = inlineStyles,
           listDepth = listDepth,
-          isStreaming = isStreaming,
-          progressBars = progressBars,
         )
         index += 1
       }
@@ -471,14 +421,10 @@ private fun RenderList(
 }
 
 @Composable
-private fun RenderListItem(
+private fun MarkdownRendering.RenderListItem(
   item: ListItem,
   markerText: String,
-  textColor: Color,
-  inlineStyles: InlineStyles,
   listDepth: Int,
-  isStreaming: Boolean,
-  progressBars: Boolean,
 ) {
   var contentStart = item.firstChild
   var marker = markerText
@@ -506,22 +452,14 @@ private fun RenderListItem(
     ) {
       RenderMarkdownBlocks(
         blocks = commonMarkBlocks(contentStart),
-        textColor = textColor,
-        inlineStyles = inlineStyles,
         listDepth = listDepth + 1,
-        isStreaming = isStreaming,
-        progressBars = progressBars,
       )
     }
   }
 }
 
 @Composable
-private fun RenderTableBlock(
-  table: TableBlock,
-  textColor: Color,
-  inlineStyles: InlineStyles,
-) {
+private fun MarkdownRendering.RenderTableBlock(table: TableBlock) {
   val rows = remember(table, inlineStyles) { buildTableRows(table, inlineStyles) }
   if (rows.isEmpty()) return
 
@@ -563,27 +501,17 @@ private fun RenderTableBlock(
 private fun buildTableRows(
   table: TableBlock,
   inlineStyles: InlineStyles,
-): List<TableRenderRow> {
-  val rows = mutableListOf<TableRenderRow>()
-  for (child in markdownSiblings(table.firstChild)) {
-    when (child) {
-      is TableHead -> rows.addAll(readTableSection(child, isHeader = true, inlineStyles = inlineStyles))
-      is TableBody -> rows.addAll(readTableSection(child, isHeader = false, inlineStyles = inlineStyles))
-      is TableRow -> rows.add(readTableRow(child, isHeader = false, inlineStyles = inlineStyles))
-    }
-  }
-  return rows
-}
-
-private fun readTableSection(
-  section: Node,
-  isHeader: Boolean,
-  inlineStyles: InlineStyles,
 ): List<TableRenderRow> =
-  markdownSiblings(section.firstChild)
-    .filterIsInstance<TableRow>()
-    .map { readTableRow(it, isHeader, inlineStyles) }
-    .toList()
+  markdownSiblings(table.firstChild)
+    .flatMap { section ->
+      val rows =
+        when (section) {
+          is TableHead, is TableBody -> markdownSiblings(section.firstChild).filterIsInstance<TableRow>()
+          is TableRow -> sequenceOf(section)
+          else -> emptySequence()
+        }
+      rows.map { readTableRow(it, isHeader = section is TableHead, inlineStyles = inlineStyles) }
+    }.toList()
 
 private fun readTableRow(
   row: TableRow,

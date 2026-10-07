@@ -59,6 +59,7 @@ import type {
 } from "./openclaw-state-worker-contract.js";
 import { stateWorkerRegistry } from "./openclaw-state-worker-registry.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
+import type { WorkerWriteOperationContext } from "./worker-operation-registry.js";
 
 export { openUpdateRunWriter } from "../infra/update-run-mutation.worker.js";
 
@@ -70,6 +71,7 @@ export function executeSharedStateCommand(
   command: OpenClawStateWorkerRuntimeCommand,
   context: { databasePath: string },
   open: () => OpenClawStateDatabase,
+  write: WorkerWriteOperationContext["write"],
   updateRunWriter: () => ExistingOpenClawStateWriter,
 ): ReturnType<OpenClawStateWorkerBackend["execute"]> {
   const stateOptions = () => ({
@@ -77,7 +79,7 @@ export function executeSharedStateCommand(
     env: getSqliteWorkerStateContext().environment,
   });
   if (stateWorkerRegistry.has(command)) {
-    return stateWorkerRegistry.execute(command, { open, stateOptions });
+    return stateWorkerRegistry.execute(command, { open, write, stateOptions });
   }
   if (command.type === "updateRuns.recordStep" || command.type === "updateRuns.recordPhase") {
     return recordUpdateRunMutationInWorker(

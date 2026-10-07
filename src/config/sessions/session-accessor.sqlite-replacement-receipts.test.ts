@@ -60,6 +60,18 @@ it("withholds a watermark receipt after a synchronous transcript append publishe
         omittedContent: false,
       },
     });
+    const source = readOpenClawAgentDatabaseIdentity(database);
+    if (typeof source.identity !== "string") {
+      throw new Error("Expected durable sharing fixture");
+    }
+    const sharing = retainPreparedSessionSharingFacts({
+      databaseIdentity: `file:${source.identity}`,
+      sessionKey: scope.sessionKey,
+      entry: projectSessionSharingEntry(
+        readExactSessionEntryRow(database, scope.sessionKey)!.entry,
+      ),
+      membership: new Set(),
+    });
     let published: ReturnType<typeof readPreparedSessionEntryChange>;
     const stop = sessionChanges.subscribeFacts((change) => {
       if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
@@ -88,9 +100,14 @@ it("withholds a watermark receipt after a synchronous transcript append publishe
       });
       expect(published?.entry?.label).toBe("committed");
       expect(published?.projection).toBeUndefined();
+      expect(sharing.readCurrent()).toMatchObject({
+        entry: { sessionId: scope.sessionId },
+        membership: new Set(),
+      });
       expect(readSessionTranscriptWatermarkInDatabase(database, scope.sessionId).maxSeq).toBe(0);
     } finally {
       delivery.afterResult = undefined;
+      sharing.release();
       stop();
     }
   });

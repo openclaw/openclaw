@@ -2155,7 +2155,6 @@ src/gateway/worker-environments/inference-runtime.ts	2
 src/gateway/worker-environments/live-event-projection.ts	1
 src/gateway/worker-environments/node-worker-workspace-fallback.ts	2
 src/gateway/worker-environments/placement-state.ts	2
-src/gateway/worker-environments/placement-store.ts	1
 src/gateway/worker-environments/service-validation.ts	2
 src/gateway/worker-environments/state.ts	1
 src/gateway/worker-environments/worker-session-tool-executor.ts	1
@@ -2280,7 +2279,7 @@ src/infra/session-cost-usage-reporting.ts	5
 src/infra/session-sqlite-migration-readers.ts	2
 src/infra/sqlite-file-generation.ts	7
 src/infra/sqlite-files.ts	1
-src/infra/sqlite-index-schema.ts	2
+src/infra/sqlite-index-schema.ts	1
 src/infra/sqlite-integrity.ts	2
 src/infra/sqlite-readonly-location.ts	3
 src/infra/sqlite-schema-contract.ts	7

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -27,6 +28,7 @@ import {
 import {
   findLiveRegistryWorktreeByOwnerInDatabase,
   getRegistryWorktreeInDatabase,
+  rowToRecord,
 } from "./registry-read.kernel.js";
 import {
   assertRegistryMutationCustody,
@@ -163,6 +165,9 @@ function assertRemovalToken(db: DatabaseSync, id: string, token: string) {
 }
 
 function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate) {
+  if (predicate.kind === "snapshot-retirement") {
+    return assertSnapshotRetirementInDatabase(db, predicate.record);
+  }
   if (predicate.kind === "removal-claim") {
     return assertRemovalToken(db, predicate.id, predicate.token);
   }
@@ -194,6 +199,26 @@ function assertPredicate(db: DatabaseSync, predicate: WorktreeRegistryPredicate)
       ? findLiveRegistryWorktreeByOwnerInDatabase(db, "session", predicate.ownerId)
       : getRegistryWorktreeInDatabase(db, observed.id);
   switch (predicate.kind) {
+    case "live-binding":
+      if (
+        !current ||
+        current.removedAt !== undefined ||
+        (["ownerKind", "ownerId", "branch", "repoRoot"] as const).some(
+          (key) => current[key] !== predicate.record[key],
+        )
+      ) {
+        throw new SessionWorktreeLifecycleError(
+          "Managed worktree binding authority changed.",
+          "owner-mismatch",
+        );
+      }
+      if (
+        current.path !== predicate.record.path ||
+        current.repoFingerprint !== predicate.record.repoFingerprint
+      ) {
+        throw new SessionWorktreeSourceChangedError("Managed worktree binding source changed.");
+      }
+      return;
     case "session-owner":
       if (
         current &&
@@ -325,6 +350,72 @@ export function assertWorktreeRegistryPredicates(
   for (const predicate of predicates) {
     assertPredicate(db, predicate);
   }
+}
+
+/** Git equality cannot release provisioned bytes or a live lifecycle's recovery custody. */
+function assertSnapshotRetirementInDatabase(
+  db: DatabaseSync,
+  observed: ManagedWorktreeRecord,
+  reapStaleLeases = false,
+): void {
+  const k =
+    getNodeSqliteKysely<
+      Pick<DB, "worktrees" | "worktree_provisioned_file_chunks" | "state_leases">
+    >(db);
+  const row = executeSqliteQuerySync(
+    db,
+    k
+      .selectFrom("worktrees")
+      .selectAll("worktrees")
+      .select((eb) =>
+        eb
+          .exists(
+            eb
+              .selectFrom("worktree_provisioned_file_chunks")
+              .select("worktree_id")
+              .whereRef("worktree_id", "=", "worktrees.id"),
+          )
+          .as("has_chunks"),
+      )
+      .where("id", "=", observed.id),
+  ).rows[0];
+  if (
+    observed.removedAt === undefined ||
+    !row ||
+    JSON.stringify(rowToRecord(row)) !== JSON.stringify(observed)
+  ) {
+    throw new Error("Worktree snapshot retirement identity changed");
+  }
+  const provisioned = safeParseJson(row.provisioned_paths_json ?? "");
+  if (!Array.isArray(provisioned) || provisioned.length !== 0 || row.has_chunks) {
+    throw new Error("Worktree snapshot retains provisioned data; retain its custody");
+  }
+  const leases = collectLiveRunLeases(db, k, worktreeRunLeaseScope(observed.id), reapStaleLeases);
+  if (leases.liveCount !== 0 || leases.removingToken !== undefined) {
+    throw new Error("Worktree snapshot has an active or unresolved run/removal consumer");
+  }
+}
+
+export function deleteRegistryWorktreeInDatabase(
+  db: DatabaseSync,
+  input: { id: string; removalToken?: string; expectedRetired?: ManagedWorktreeRecord },
+): void {
+  if (input.expectedRetired) {
+    if (input.expectedRetired.id !== input.id) {
+      throw new Error("Worktree snapshot retirement ID changed");
+    }
+    assertSnapshotRetirementInDatabase(db, input.expectedRetired, true);
+  }
+  const k =
+    getNodeSqliteKysely<
+      Pick<DB, "worktrees" | "worktree_provisioned_file_chunks" | "state_leases">
+    >(db);
+  assertRegistryMutationCustody(db, k, input.id, input.removalToken);
+  executeSqliteQuerySync(
+    db,
+    k.deleteFrom("worktree_provisioned_file_chunks").where("worktree_id", "=", input.id),
+  );
+  executeSqliteQuerySync(db, k.deleteFrom("worktrees").where("id", "=", input.id));
 }
 
 export function worktreeRunEndMutation<Input>(

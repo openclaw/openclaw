@@ -4,7 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -12,20 +13,18 @@ import {
 } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as backoff from "../../infra/backoff.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import * as commandExec from "../../process/exec.js";
-import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
-  runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
 import * as allocation from "./allocation.js";
+import { captureWorktreeMutationHeartbeat } from "./allocation.test-support.js";
 import * as capacity from "./capacity.js";
 import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import { readPendingWorktrees } from "./pending-slots.js";
-import { getRegistryWorktree } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
@@ -428,6 +427,7 @@ describe("ManagedWorktreeService capacity", () => {
         await service.remove({ id: archived.id, reason: "test" });
       }
       const before = await service.listRegistryRecords();
+      const revokeCheckout = captureWorktreeMutationHeartbeat();
       let destination: string | undefined;
       const realRun = commandExec.runCommandWithTimeout;
       vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
@@ -439,22 +439,12 @@ describe("ManagedWorktreeService capacity", () => {
           result.code === 0
         ) {
           destination = argv[argv.indexOf("-C") + 1];
-          const checkoutId = archived?.id ?? (await readPendingWorktrees(env))[0]?.record.id;
-          expect(checkoutId).toBeDefined();
-          runOpenClawStateWriteTransaction(
-            ({ db }) => {
-              const changed = executeSqliteQuerySync(
-                db,
-                getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
-                  .updateTable("state_leases")
-                  .set({ owner: "successor", expires_at: 0 })
-                  .where("scope", "=", "core:managed-worktrees:mutation")
-                  .where("lease_key", "=", checkoutId!),
-              );
-              expect(changed.numAffectedRows).toBe(1n);
-            },
-            { env },
-          );
+          const checkoutId =
+            archived?.id ??
+            (await readPendingWorktrees(env)).find(({ record }) => record.path === destination)
+              ?.record.id;
+          assert(checkoutId);
+          await revokeCheckout(checkoutId);
         }
         return result;
       });
@@ -486,6 +476,10 @@ describe("ManagedWorktreeService capacity", () => {
       let cleanupEntered = false;
       const recoveryRegistryReads: string[] = [];
       let destination: string | undefined;
+      const revokeCheckout = captureWorktreeMutationHeartbeat();
+      const nativeOutcomeUnknown = Object.assign(new Error("native hydration outcome unknown"), {
+        code: "outcome-unknown",
+      });
       vi.spyOn(capacity, "estimateWorktreeGitBytes").mockImplementationOnce(async () => {
         expect(sourceHeld).toBe(true);
         // Hydration starts after Git has registered the new branch but before publication.
@@ -495,64 +489,65 @@ describe("ManagedWorktreeService capacity", () => {
           .split("\n")
           .find((line) => line.startsWith("worktree ") && line.endsWith("retry-hydration"))
           ?.slice("worktree ".length);
-        const [pending] = await readPendingWorktrees(env);
-        expect(pending?.record.path).toBe(destination);
-        runOpenClawStateWriteTransaction(
-          ({ db }) => {
-            const revoked = executeSqliteQuerySync(
-              db,
-              getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
-                .deleteFrom("state_leases")
-                .where("scope", "=", "core:managed-worktrees:mutation")
-                .where("lease_key", "=", pending!.record.id),
-            );
-            expect(revoked.numAffectedRows).toBe(1n);
-          },
-          { env },
+        const pending = (await readPendingWorktrees(env)).find(
+          ({ record }) => record.path === destination,
         );
+        assert(pending);
+        expect(pending.record.path).toBe(destination);
+        await revokeCheckout(pending.record.id);
         if (changed === "unknown") {
-          throw Object.assign(new Error("native hydration outcome unknown"), {
-            code: "outcome-unknown",
-          });
+          throw nativeOutcomeUnknown;
         }
         return 4096;
       });
 
-      await expect(
-        service.create({
-          ...params,
-          withSource: async (run) => {
-            sourceHeld = true;
-            try {
-              return await run({ assertCurrent() {} });
-            } finally {
-              sourceHeld = false;
-            }
-          },
-          withRollback: async (run) => {
-            // Recovery must release source custody before taking allocation → source again.
-            expect(sourceHeld).toBe(false);
-            cleanupEntered = true;
-            if (changed === "files") {
-              await fs.writeFile(path.join(destination!, "keep.txt"), "new owner data\n");
-            } else if (changed === "registration") {
-              await fs.writeFile(
-                path.join(destination!, ".git"),
-                `gitdir: ${path.join(repo, ".git")}\n`,
-              );
-            }
-            const sql = observeHostDataSql();
-            try {
-              return await run(() => {});
-            } finally {
-              recoveryRegistryReads.push(
-                ...sql.queries.filter((query) => /\bfrom\s+"?worktrees"?\b/i.test(query)),
-              );
-              sql.restore();
-            }
-          },
-        }),
-      ).rejects.toThrow(changed === "unknown" ? "native hydration outcome unknown" : /was lost/);
+      const creation = service.create({
+        ...params,
+        withSource: async (run) => {
+          sourceHeld = true;
+          try {
+            return await run({ assertCurrent() {} });
+          } finally {
+            sourceHeld = false;
+          }
+        },
+        withRollback: async (run) => {
+          // Recovery must release source custody before taking allocation → source again.
+          expect(sourceHeld).toBe(false);
+          cleanupEntered = true;
+          if (changed === "files") {
+            await fs.writeFile(path.join(destination!, "keep.txt"), "new owner data\n");
+          } else if (changed === "registration") {
+            await fs.writeFile(
+              path.join(destination!, ".git"),
+              `gitdir: ${path.join(repo, ".git")}\n`,
+            );
+          }
+          const sql = observeHostDataSql();
+          try {
+            return await run(() => {});
+          } finally {
+            recoveryRegistryReads.push(
+              ...sql.queries.filter((query) => /\bfrom\s+"?worktrees"?\b/i.test(query)),
+            );
+            sql.restore();
+          }
+        },
+      });
+      if (changed === "unknown") {
+        const failure = await creation.then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        expect(failure).toMatchObject({ code: "outcome-unknown" });
+        const causes = collectNestedErrorCandidates(failure);
+        expect(causes).toContain(nativeOutcomeUnknown);
+        expect(causes).toContainEqual(
+          expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_LOST" }),
+        );
+      } else {
+        await expect(creation).rejects.toThrow(/was lost/);
+      }
       expect(recoveryRegistryReads).toEqual([]);
       expect(await service.listRegistryRecords()).toEqual([]);
       if (changed === "unknown") {
