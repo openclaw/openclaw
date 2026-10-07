@@ -429,11 +429,11 @@ export async function prepareWorkerPlacementRepositoryManifestRefs(
 }
 
 export function createWorkerPlacementNodeWorkspaceBindingResolver(options: {
-  placements: Pick<WorkerSessionPlacementStore, "get">;
+  placements: Pick<WorkerSessionPlacementStore, "get" | "getAsync">;
   resolveWorkspace: (identity: WorkerSessionPlacementIdentity) => Promise<WorkerSessionWorkspace>;
 }) {
   return async (binding: { environmentId: string; ownerEpoch: number; sessionId: string }) => {
-    const placement = options.placements.get(binding.sessionId);
+    const placement = await options.placements.getAsync(binding.sessionId);
     if (
       !placement ||
       (placement.state !== "active" &&

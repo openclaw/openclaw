@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   createAgentLifecycleTerminalBackstop,
   resolveAgentLifecycleTerminalMetadata,
@@ -11,7 +10,6 @@ import { revokeMessageActionTurnCapability } from "../../gateway/message-action-
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
-  getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import {
@@ -59,11 +57,8 @@ import {
 } from "../prepared-model-runtime.js";
 import { prepareAgentPromptProjects } from "../prompt-projects.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
-import {
-  applyAgentRunSessionTargetIdentity,
-  resolveAgentRunSessionTarget,
-} from "../run-session-target.js";
 import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
+import { withRequiredSessionPlacement } from "../session-placement-admission.js";
 import { resolveSessionPlacementTurnSettlementAssertion } from "../session-placement-forced-terminal-settlement.js";
 import {
   resolveSessionSuspensionTarget,
@@ -96,7 +91,7 @@ import {
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
 import { createRecoveryMessageActionTurnCapability } from "./run/recovery-message-action-capability.js";
 import { resolveInitialEmbeddedRunModel } from "./run/runtime-resolution.js";
-import { assertAgentHarnessRunAdmission, backfillSessionKey } from "./run/session-bootstrap.js";
+import { prepareEmbeddedRunSession } from "./run/session-bootstrap.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 import {
   createUsageAccumulator,
@@ -134,32 +129,32 @@ export function runEmbeddedAgent(
 async function runEmbeddedAgentInternal(
   paramsInput: RunEmbeddedAgentInternalParams,
 ): Promise<EmbeddedAgentRunResult> {
-  const contextEngineAgentId =
-    normalizeOptionalString(paramsInput.sessionTarget?.agentId) ??
-    normalizeOptionalString(paramsInput.agentId);
-  const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
+  const prepared = await prepareEmbeddedRunSession(paramsInput);
+  return await withRequiredSessionPlacement(
+    prepared.runSessionTarget,
+    {
+      config: prepared.params.config,
+      assertCurrent: () => prepared.params.preparedRunAdmission?.assertSourceCurrent(),
+      signal: prepared.params.abortSignal,
+    },
+    () => runEmbeddedAgentForSession(prepared),
+  );
+}
+
+async function runEmbeddedAgentForSession(
+  prepared: Awaited<ReturnType<typeof prepareEmbeddedRunSession>>,
+): Promise<EmbeddedAgentRunResult> {
+  const {
+    params: paramsBase,
+    runSessionTarget,
+    sessionAdmission,
+    contextEngineAgentId,
+    queuedLifecycleGeneration,
+  } = prepared;
   const skillWorkshopProposalMutationBudget = paramsBase.skillWorkshopProposalOnly
     ? (paramsBase.skillWorkshopProposalMutationBudget ?? { remaining: 1 })
     : undefined;
   let lifecycleGeneration = paramsBase.lifecycleGeneration!;
-  const queuedLifecycleGeneration = getAgentEventLifecycleGeneration();
-  // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
-  // receive a non-null key even when callers omit it. See #60552.
-  const effectiveSessionKey = backfillSessionKey({
-    config: paramsBase.config,
-    sessionId: paramsBase.sessionId,
-    sessionKey: paramsBase.sessionKey,
-    agentId: paramsBase.agentId,
-  });
-  const sessionAdmission = await assertAgentHarnessRunAdmission({
-    ...paramsBase,
-    sessionKey: effectiveSessionKey,
-  });
-  const runSessionTarget = await resolveAgentRunSessionTarget({
-    ...paramsBase,
-    missingSessionKey: "create",
-    sessionKey: effectiveSessionKey,
-  });
   let params: RunEmbeddedAgentParamsWithSessionFile = withExecutionPhaseDiagnostics({
     ...paramsBase,
     // Establish one detached transcript owner for CLI dispatch and every retry.
@@ -168,11 +163,6 @@ async function runEmbeddedAgentInternal(
       (paramsBase.sessionPersistence === "detached"
         ? SessionManager.inMemory(paramsBase.cwd ?? paramsBase.workspaceDir)
         : undefined),
-    agentId: runSessionTarget.agentId,
-    sessionId: runSessionTarget.sessionId,
-    sessionKey: runSessionTarget.sessionKey,
-    sessionTarget: runSessionTarget,
-    sessionFile: runSessionTarget.sessionKey,
     skillWorkshopProposalMutationBudget,
   });
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);

@@ -681,20 +681,22 @@ export async function recoverPendingWorkspaceResults(
             });
           } catch (error) {
             try {
-              const pendingResults = await placements.listPendingWorkspaceResultsAsync(
-                pending.sessionId,
-              );
-              const current = placements.get(pending.sessionId);
-              const currentPending = pendingResults.find(
-                (candidate) =>
-                  candidate.sessionId === pending.sessionId &&
-                  candidate.environmentId === pending.environmentId &&
-                  candidate.ownerEpoch === pending.ownerEpoch &&
-                  candidate.placementGeneration === pending.placementGeneration &&
-                  candidate.claimId === pending.claimId &&
-                  candidate.runId === pending.runId &&
-                  candidate.gatewayInstanceId === pending.gatewayInstanceId,
-              );
+              const currentFacts = await placements.readProjection([pending.sessionId], {
+                current: true,
+              });
+              const current = currentFacts.placements.get(pending.sessionId);
+              const candidate = currentFacts.pendingResults.get(pending.sessionId);
+              const currentPending =
+                candidate &&
+                candidate.sessionId === pending.sessionId &&
+                candidate.environmentId === pending.environmentId &&
+                candidate.ownerEpoch === pending.ownerEpoch &&
+                candidate.placementGeneration === pending.placementGeneration &&
+                candidate.claimId === pending.claimId &&
+                candidate.runId === pending.runId &&
+                candidate.gatewayInstanceId === pending.gatewayInstanceId
+                  ? candidate
+                  : undefined;
               if (
                 currentPending &&
                 isCurrentWorkerWorkspacePendingResultOwner(current, currentPending)

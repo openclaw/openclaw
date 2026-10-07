@@ -9,6 +9,7 @@ import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { prepareReplyRunAdmission } from "./get-reply-run-admission.js";
 import type { PreparedReplyRunContext } from "./get-reply-run-context.js";
 import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
+import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
@@ -123,24 +124,29 @@ function createAdmissionFixture() {
     baseBodyTrimmedRaw: body,
     effectiveResetTriggered: false,
     isBareSessionReset: false,
-    startupAction: "new",
-    startupContextPrelude: null,
-    softResetTail: "",
     shouldInjectGroupIntro: false,
     typingMode: "never",
     isMainSession: false,
-    inboundUserContextPromptJoiner: undefined,
     terminalReplyExpectation: "optional",
     sessionEntry: entry,
     traceRunPhase: async <T>(_name: string, run: () => T | Promise<T>) => await run(),
-    baseBodyFinal: body,
     prefixedBodyBase: body,
     hasUserBody: true,
     workspaceDir: "/tmp/workspace",
     skillsWorkspaceDir: "/tmp/workspace",
     useFastReplyRuntime: false,
     thinkingRuntime: "embedded",
-    getInboundContext: () => ({ activeGoalContext: undefined, inboundUserContext: "" }),
+    buildPromptBodies: (additions) =>
+      buildReplyPromptEnvelope({
+        ctx,
+        sessionCtx: ctx,
+        baseBody: body,
+        hasUserBody: true,
+        inboundUserContext: "",
+        isBareSessionReset: false,
+        startupAction: "new",
+        ...additions,
+      }),
     refreshInboundContextAfterAdmissionWait: async () => {},
   };
   return { context, entry, sessionKey, sessionId };

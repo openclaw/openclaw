@@ -53,18 +53,13 @@ export function buildRecoverablePendingFinalDeliveryText(
     return undefined;
   }
 
-  const recoveryText: string[] = [];
-  for (const payload of sendablePayloads) {
-    const textAndMedia = [
-      payload.text,
-      ...(payload.mediaUrls ?? []).map((mediaUrl) => `MEDIA:${mediaUrl}`),
-    ]
-      .filter((value): value is string => Boolean(value?.trim()))
-      .join("\n");
-    if (textAndMedia) {
-      recoveryText.push(textAndMedia);
-    }
-  }
+  const recoveryText = sendablePayloads
+    .map((payload) =>
+      [payload.text, ...(payload.mediaUrls ?? []).map((mediaUrl) => `MEDIA:${mediaUrl}`)]
+        .filter((value): value is string => Boolean(value?.trim()))
+        .join("\n"),
+    )
+    .filter(Boolean);
   return sanitizePendingFinalDeliveryText(recoveryText.join("\n\n")) || undefined;
 }
 

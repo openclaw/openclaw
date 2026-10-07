@@ -54,8 +54,5 @@ export async function handleSubagentsLogAction(
     lines.push(`${assistant ? "Assistant" : "User"}: ${text}`);
   }
   const header = `📜 Subagent log: ${formatRunLabel(targetResolution.entry)}`;
-  if (lines.length === 0) {
-    return commandReply(`${header}\n(no messages)`);
-  }
-  return commandReply([header, ...lines].join("\n"));
+  return commandReply(`${header}\n${lines.join("\n") || "(no messages)"}`);
 }

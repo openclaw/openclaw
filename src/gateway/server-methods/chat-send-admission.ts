@@ -631,6 +631,16 @@ export async function admitChatSend(
     releaseCallerAuthority,
     releaseGatewayRootContinuation,
     logGateway: context.logGateway,
+    terminal: {
+      target: session.sessionTarget,
+      storePath,
+      sessionBinding,
+      admittedSessionId,
+      runId: clientRunId,
+      lifecycleRevision: (admittedSessionEntry ?? initialSessionEntry)?.lifecycleRevision,
+      isActive: acquiredGatewayWorkAdmission.isActive,
+      currentRegistration: () => context.chatAbortControllers.get(clientRunId),
+    },
   });
   // Prepared inbound media has no transcript reference until the user turn
   // persists; every abandonment exit funnels through cleanupAdmittedRun, so
@@ -691,6 +701,8 @@ export async function admitChatSend(
       rejectSessionRoutingChanged,
       releaseSourceWorkAdmission: retainedWork.release,
       retainGatewayWorkAdmission: retainedWork.retain,
+      settleTerminal: retainedWork.settleTerminal,
+      withInputCommitPublication: retainedWork.withInputCommitPublication,
       setPendingInputCleanup: retainedWork.setPendingInputCleanup,
       assertClientUploadAllowed: uploadAdmission.assertClientUploadAllowed,
       assertWorkAdmissionCurrent: () => {

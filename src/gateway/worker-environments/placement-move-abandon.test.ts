@@ -5,6 +5,7 @@ import {
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
 } from "../../infra/node-commands.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -28,6 +29,10 @@ import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { createWorkerEnvironmentService } from "./service.js";
 import { BUNDLE_ARTIFACT, createProvider } from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
+import {
+  createWorkerWorkspaceOperationCoordinator,
+  type WorkerWorkspaceOperationCoordinator,
+} from "./workspace-operation-coordinator.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -708,6 +713,94 @@ describe("offline device placement abandonment", () => {
     expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
+
+  it.each(["intent", "generation", "authority"] as const)(
+    "refuses abandoned Stop cleanup when its %s changes while waiting for the workspace",
+    async (change) => {
+      const coordinator = createWorkerWorkspaceOperationCoordinator();
+      const queued = createDeferredCore();
+      let observeCleanup = false;
+      const workspaceOperations: WorkerWorkspaceOperationCoordinator = {
+        run: (environmentId, operation, signal) => {
+          if (observeCleanup) {
+            queued.resolve();
+          }
+          return coordinator.run(environmentId, operation, signal);
+        },
+      };
+      const harness = createHarness(database, placements, { workspaceOperations });
+      const active = await harness.service.dispatch(REQUEST);
+      harness.markEnvironmentNodeDeviceId("device-1");
+      seedEnvironment(active);
+      const begun = await placements.beginPlacementMove(requestFor(active));
+      const held = createDeferredCore();
+      const release = createDeferredCore();
+      const holding = coordinator.run(active.environmentId, async () => {
+        held.resolve();
+        await release.promise;
+      });
+      await held.promise;
+      observeCleanup = true;
+      let authorized = true;
+      const revoked = new Error("Stop authority revoked while cleanup waits");
+      const stopping = harness.service
+        .reclaim(REQUEST, () => {
+          if (!authorized) {
+            throw revoked;
+          }
+        })
+        .catch((error: unknown) => error);
+      try {
+        await Promise.race([
+          queued.promise,
+          stopping.then((result) => {
+            throw result instanceof Error
+              ? result
+              : new Error("Stop did not wait for the workspace");
+          }),
+        ]);
+        expect(placements.get(REQUEST.sessionId)).toMatchObject({
+          state: "draining",
+          generation: begun.placement.generation,
+          turnClaim: null,
+        });
+        expect(harness.environments.destroy).not.toHaveBeenCalled();
+        if (change === "intent") {
+          await placements.cancelPlacementMove({
+            sessionId: REQUEST.sessionId,
+            operationId: begun.intent.operationId,
+          });
+        } else if (change === "generation") {
+          database.db
+            .prepare(
+              "UPDATE worker_session_placements SET transition_generation = transition_generation + 1 WHERE session_id = ?",
+            )
+            .run(REQUEST.sessionId);
+        } else {
+          authorized = false;
+        }
+        release.resolve();
+        const result = await stopping;
+        if (change === "authority") {
+          expect(result).toBe(revoked);
+        } else {
+          expect(result).toBeInstanceOf(Error);
+          expect(result).toMatchObject({
+            message: expect.stringContaining("abandonment source changed before teardown"),
+          });
+        }
+        expect(harness.environments.destroy).not.toHaveBeenCalled();
+        expect(placements.get(REQUEST.sessionId)).toMatchObject({
+          state: "draining",
+          turnClaim: null,
+        });
+        expect(await placements.listPendingWorkspaceResultsAsync(REQUEST.sessionId)).toEqual([]);
+      } finally {
+        release.resolve();
+        await Promise.all([holding, stopping]);
+      }
+    },
+  );
 
   it("retains the durable decision when authorization closes after teardown", async () => {
     let revoked = false;

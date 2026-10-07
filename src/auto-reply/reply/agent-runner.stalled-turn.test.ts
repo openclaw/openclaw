@@ -16,7 +16,7 @@ import {
 } from "../../sessions/user-turn-transcript.test-support.js";
 import type { TemplateContext } from "../templating.js";
 import type * as AgentRunnerExecution from "./agent-runner-execution.js";
-import { runReplyAgent } from "./agent-runner.js";
+import { runReplyAgent } from "./agent-runner-run.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import {
   enqueueFollowupRun,

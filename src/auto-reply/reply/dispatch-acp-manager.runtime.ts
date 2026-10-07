@@ -43,11 +43,11 @@ export async function prepareAcpDispatchStart(params: {
 }
 
 function isStaleSessionInitError(params: { code: string; message: string }): boolean {
-  if (params.code !== "ACP_SESSION_INIT_FAILED") {
-    return false;
-  }
-  return /(ACP (session )?metadata is missing|missing ACP metadata|Session is not ACP-enabled|Resource not found)/i.test(
-    params.message,
+  return (
+    params.code === "ACP_SESSION_INIT_FAILED" &&
+    /(ACP (session )?metadata is missing|missing ACP metadata|Session is not ACP-enabled|Resource not found)/i.test(
+      params.message,
+    )
   );
 }
 

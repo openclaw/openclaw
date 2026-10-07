@@ -1,5 +1,6 @@
 import type { WebSocket } from "ws";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type { PairedDeviceTokenIdentity } from "../../infra/device-pairing-identity.js";
 import type { UserProfileIdentity } from "../../state/user-profiles.types.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { GatewayAuthPolicy } from "../auth-policy.types.js";
@@ -64,6 +65,10 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   /** Server-attested inputs for rechecking browser-origin policy after config publication. */
   browserOrigin?: GatewayWsBrowserOrigin;
   internal?: {
+    /** Authenticated operator transport ingress; never accepted from wire params. */
+    authenticatedOperator?: true;
+    /** Exact accepted/issued operator token; null attests a tokenless ingress. */
+    operatorDeviceTokenIdentity?: Readonly<PairedDeviceTokenIdentity> | null;
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
     /** Authenticated Control UI operator ingress; never accepted from wire params. */

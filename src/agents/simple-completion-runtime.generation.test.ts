@@ -3,6 +3,7 @@ import { createApiRegistry } from "@openclaw/ai";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { Model } from "../llm/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { resolveSecretSentinel } from "../secrets/sentinel.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
@@ -314,5 +315,63 @@ it.each(["/", "entry"])(
       }
     }
     expect(release).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(["current", "credential lookup", "provider auth exchange"] as const)(
+  "keeps required-worker authority live through %s",
+  async (revokedDuring) => {
+    const setRuntimeApiKey = vi.spyOn(
+      preparedModelRuntime.createStores().authStorage,
+      "setRuntimeApiKey",
+    );
+    let current = true;
+    const revoked = new Error("worker claim revoked");
+    const required = { cloudWorkers: { requiredProfile: "required" } };
+    preparedModelRuntime = { ...preparedModelRuntime, config: required };
+    mocks.getApiKeyForModel.mockImplementation(async () => {
+      await Promise.resolve();
+      if (revokedDuring === "credential lookup") {
+        current = false;
+      }
+      return { apiKey: "worker-source-token", source: "worker fixture", mode: "token" };
+    });
+    mocks.prepareProviderRuntimeAuth.mockImplementation(async () => {
+      await Promise.resolve();
+      if (revokedDuring === "provider auth exchange") {
+        current = false;
+      }
+      return { apiKey: "worker-runtime-token" };
+    });
+    const preparing = prepareSimpleCompletionModel({
+      preparedModelRuntime,
+      cfg: required,
+      provider: "ollama",
+      modelId: "fixture-model",
+      modelResolver: createOllamaModelResolver(),
+      workerInferenceAuthority: {
+        assertCurrent: () => {
+          if (!current) {
+            throw revoked;
+          }
+        },
+      },
+    });
+    if (revokedDuring === "current") {
+      expect(await preparing).not.toHaveProperty("error");
+      expect(mocks.prepareProviderRuntimeAuth).toHaveBeenCalledOnce();
+      expect(setRuntimeApiKey).toHaveBeenCalledOnce();
+      const [provider, credential] = setRuntimeApiKey.mock.calls[0] as [string, string];
+      expect(provider).toBe("ollama");
+      expect(resolveSecretSentinel(credential)).toBe("worker-runtime-token");
+    } else {
+      await expect(preparing).rejects.toBe(revoked);
+      if (revokedDuring === "credential lookup") {
+        expect(mocks.prepareProviderRuntimeAuth).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.prepareProviderRuntimeAuth).toHaveBeenCalledOnce();
+      }
+      expect(setRuntimeApiKey).not.toHaveBeenCalled();
+    }
   },
 );

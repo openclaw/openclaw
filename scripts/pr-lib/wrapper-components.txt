@@ -73,6 +73,7 @@ packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts
 packages/memory-host-sdk/src/host/sqlite-vec-platform-variant.ts
 packages/memory-host-sdk/src/host/sqlite-vec.ts
 packages/model-catalog-core/package.json
+packages/model-catalog-core/src/canonical-model-key.ts
 packages/model-catalog-core/src/configured-model-refs.ts
 packages/model-catalog-core/src/index.ts
 packages/model-catalog-core/src/model-catalog-context-windows.ts
