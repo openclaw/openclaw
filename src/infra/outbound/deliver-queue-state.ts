@@ -15,14 +15,13 @@ import {
   type PlatformMessageNotDispatchedError,
   type PlatformSendRoute,
 } from "./deliver-types.js";
-import { rejectDurableDelivery, type ConversationDeliveryTarget } from "./delivery-completion.js";
+import { settleDurableDelivery, type ConversationDeliveryTarget } from "./delivery-completion.js";
 import { retireUnsentDelivery } from "./delivery-queue-ack.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
   ackDelivery,
-  failDelivery,
+  type failDelivery,
   failDeliveryAfterPlatformSend,
-  failDeliveryBeforePlatformSend,
   finalizeDeliveryFailureSettlement,
   loadPendingDelivery,
   markDeliveryPlatformOutcomeUnknown,
@@ -31,20 +30,13 @@ import {
   stageDeliveryFailureSettlement,
 } from "./delivery-queue-storage.js";
 import type { DeliveryFailureSettlement, QueuedDelivery } from "./delivery-queue-types.js";
-import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
+import { preparedOutboundPayloads } from "./prepared-batch.js";
 
 const log = createSubsystemLogger("outbound/deliver");
 
 export type QueuedPostSendState = "marked" | "acked" | "failed";
 
 export type QueuedPreSendState = "marked" | "acked";
-
-type QueuedDeliveryFailureRecorder = (
-  id: string,
-  error: string,
-  stateDir?: string,
-  expectedPlatformSendAttemptId?: string | null,
-) => Promise<void>;
 
 /** Keeps live and recovered queue transitions on the same producer claim. */
 export function createQueuedDeliveryOwner(
@@ -123,17 +115,9 @@ export function createQueuedDeliveryOwner(
       custody = "released";
       return true;
     },
-    fail(record: QueuedDeliveryFailureRecorder, error: string): Promise<void> {
+    fail(record: typeof failDelivery, error: string): Promise<void> {
       owner.signal?.throwIfAborted();
-      // Internal transitions retain captured state; caller-supplied recorders keep their public arguments.
-      const recordInState = [
-        failDelivery,
-        failDeliveryAfterPlatformSend,
-        failDeliveryBeforePlatformSend,
-      ].find((candidate) => candidate === record);
-      return recordInState
-        ? recordInState(owner.queueId, error, owner.stateDir, owner.claimId, context)
-        : record(owner.queueId, error, owner.stateDir, owner.claimId);
+      return record(owner.queueId, error, owner.stateDir, owner.claimId, context);
     },
     async retire(): Promise<void> {
       owner.signal?.throwIfAborted();
@@ -229,16 +213,16 @@ export async function rejectQueuedDelivery(
     // The exact claim is now durably unsendable. Recovery resumes only this
     // idempotent completion projection if projection or terminal cleanup fails.
     if (entry.deliveryCompletion) {
-      await rejectDurableDelivery(
+      await settleDurableDelivery(
         entry.deliveryCompletion,
-        rejection.message,
+        { rejectionError: rejection.message },
         owner.stateDir,
         params.deliveryQueueStateContext,
         params.conversationDeliveryTarget,
       );
     }
     const spoolPaths = collectEntrySpoolPaths(
-      acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => prepared.payload),
+      preparedOutboundPayloads(entry.preparedBatch),
       owner.stateDir,
     );
     if (!(await owner.finalizeFailure(entry))) {
@@ -265,11 +249,10 @@ export async function persistQueuedPreSendState(
   const { owner } = params;
   owner.signal?.throwIfAborted();
   try {
-    const route = { replyToId: params.route.replyToId ?? null };
     await markDeliveryPlatformSendAttemptStarted(
       owner.queueId,
       owner.stateDir,
-      route,
+      { replyToId: params.route.replyToId ?? null },
       owner.claimId || undefined,
       context,
     );

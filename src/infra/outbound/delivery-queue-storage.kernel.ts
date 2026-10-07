@@ -69,10 +69,7 @@ export function loadOutboundDeliveryInDatabase(
 ): QueuedDelivery | null {
   const queueName = resolveOutboundDeliveryQueueNameInDatabase(database, id);
   const entry = loadDeliveryQueueEntryInDatabase(database, queueName, id, mode);
-  if (!entry) {
-    return null;
-  }
-  return projectOutboundDelivery(queueName, entry);
+  return entry ? projectOutboundDelivery(queueName, entry) : null;
 }
 
 /** One read snapshot orders all executable formats without pruning or mutating custody. */

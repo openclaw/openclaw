@@ -11,7 +11,6 @@ import {
   prepareSqliteQueryTakeFirstSync,
 } from "../kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../sqlite-transaction.js";
-import { currentConversationBindingRow } from "./current-conversation-binding-row.js";
 import { normalizeConversationRef } from "./session-binding-normalization.js";
 import type { ConversationRef, SessionBindingRecord } from "./session-binding.types.js";
 
@@ -28,6 +27,30 @@ type CurrentConversationBindingRow = Pick<
   CurrentConversationBindingDatabase["current_conversation_bindings"],
   "binding_key" | "binding_id" | "target_session_key" | "record_json"
 >;
+
+function currentConversationBindingRow(
+  record: SessionBindingRecord,
+  conversation: ConversationRef,
+  bindingKey: string,
+) {
+  return {
+    binding_key: bindingKey,
+    binding_id: record.bindingId,
+    target_session_key: record.targetSessionKey,
+    channel: conversation.channel,
+    account_id: conversation.accountId,
+    conversation_kind: "current",
+    parent_conversation_id: conversation.parentConversationId ?? null,
+    conversation_id: conversation.conversationId,
+    target_kind: record.targetKind,
+    status: record.status,
+    bound_at: record.boundAt,
+    expires_at: record.expiresAt ?? null,
+    metadata_json: record.metadata ? JSON.stringify(record.metadata) : null,
+    record_json: JSON.stringify(record),
+    updated_at: Date.now(),
+  };
+}
 
 function createCurrentConversationBindingQueries(db: DatabaseSync) {
   const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
@@ -167,57 +190,43 @@ export function isBindingExpired(record: SessionBindingRecord, now = Date.now())
   return nowMs !== undefined && !isFutureDateTimestampMs(expiresAt, { nowMs });
 }
 
-function normalizePersistedBindingRecord(
-  record: SessionBindingRecord,
-): SessionBindingRecord | null {
-  if (!record?.bindingId || !record?.conversation?.conversationId) {
-    return null;
-  }
-  const conversation = normalizeConversationRef(record.conversation);
-  const targetSessionKey = record.targetSessionKey?.trim() ?? "";
-  if (!targetSessionKey) {
-    return null;
-  }
-  return {
-    ...record,
-    bindingId: record.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)
-      ? buildBindingId(conversation)
-      : record.bindingId,
-    targetSessionKey,
-    conversation,
-  };
-}
-
-export function bindingRowsToRecords(rows: Array<{ record_json: string }>): SessionBindingRecord[] {
-  return rows.flatMap((row) => {
-    try {
-      // SAFETY: Rows use the binding writer's record shape; normalization rejects missing identity fields.
-      const parsed = JSON.parse(row.record_json) as SessionBindingRecord;
-      const normalized = normalizePersistedBindingRecord(parsed);
-      return normalized ? [normalized] : [];
-    } catch {
-      return [];
+export function bindingRowToRecord(row: { record_json: string }): SessionBindingRecord | null {
+  try {
+    // SAFETY: Rows use the binding writer's record shape; normalization rejects missing identity fields.
+    const record = JSON.parse(row.record_json) as SessionBindingRecord;
+    if (!record?.bindingId || !record?.conversation?.conversationId) {
+      return null;
     }
-  });
+    const conversation = normalizeConversationRef(record.conversation);
+    const targetSessionKey = record.targetSessionKey?.trim() ?? "";
+    if (!targetSessionKey) {
+      return null;
+    }
+    return {
+      ...record,
+      bindingId: record.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)
+        ? buildBindingId(conversation)
+        : record.bindingId,
+      targetSessionKey,
+      conversation,
+    };
+  } catch {
+    return null;
+  }
 }
 
-function readCurrentConversationBindingRow(
-  db: DatabaseSync,
-  conversation: ConversationRef,
-  bindingKey: string,
-): CurrentConversationBindingRow | undefined {
+function readCurrentConversationBinding(db: DatabaseSync, conversation: ConversationRef) {
+  const bindingKey = buildConversationKey(conversation);
   const queries = getCurrentConversationBindingQueries(db);
-  const exact = queries.exact(bindingKey);
-  if (exact) {
-    return exact;
-  }
   // Shipped self-parent rows have a stale key; use the existing conversation
   // index and normalize the candidate before accepting the same conversation.
-  const candidates = queries.legacy(conversation).rows;
-  return candidates.find((candidate) => {
-    const record = bindingRowsToRecords([candidate])[0];
-    return record !== undefined && buildConversationKey(record.conversation) === bindingKey;
-  });
+  const row =
+    queries.exact(bindingKey) ??
+    queries.legacy(conversation).rows.find((candidate) => {
+      const record = bindingRowToRecord(candidate);
+      return record !== null && buildConversationKey(record.conversation) === bindingKey;
+    });
+  return { bindingKey, row, record: row ? bindingRowToRecord(row) : null };
 }
 
 export function deleteCurrentConversationBindingRow(db: DatabaseSync, bindingKey: string): void {
@@ -230,9 +239,11 @@ export function updateCurrentConversationBindingRecordInDatabase(
   update: (current: SessionBindingRecord | null) => SessionBindingRecord | null,
 ): { previous: SessionBindingRecord | null; current: SessionBindingRecord | null } {
   const conversation = normalizeConversationRef(ref);
-  const bindingKey = buildConversationKey(conversation);
-  const existingRow = readCurrentConversationBindingRow(db, conversation, bindingKey);
-  const existing = existingRow ? (bindingRowsToRecords([existingRow])[0] ?? null) : null;
+  const {
+    bindingKey,
+    row: existingRow,
+    record: existing,
+  } = readCurrentConversationBinding(db, conversation);
   const previous = existing && !isBindingExpired(existing) ? existing : null;
   const current = update(previous);
   if (!current) {
@@ -258,12 +269,7 @@ export function inspectCurrentConversationBindingRecordInDatabase(
   conversation: ConversationRef,
   now = Date.now(),
 ): SessionBindingRecord | null {
-  const row = readCurrentConversationBindingRow(
-    db,
-    conversation,
-    buildConversationKey(conversation),
-  );
-  const record = row ? bindingRowsToRecords([row])[0] : undefined;
+  const { record } = readCurrentConversationBinding(db, conversation);
   return record && !isBindingExpired(record, now) ? record : null;
 }
 
@@ -284,12 +290,7 @@ export function readCurrentConversationBindingResolutionInDatabase(
   db: DatabaseSync,
   conversation: ConversationRef,
 ): { record: SessionBindingRecord | null; repair: boolean } {
-  const row = readCurrentConversationBindingRow(
-    db,
-    conversation,
-    buildConversationKey(conversation),
-  );
-  const record = row ? bindingRowsToRecords([row])[0] : undefined;
+  const { row, record } = readCurrentConversationBinding(db, conversation);
   return {
     record: record ?? null,
     repair: Boolean(
@@ -327,9 +328,9 @@ export function readCurrentConversationBindingListInDatabase(
   targetSessionKey: string,
   scope?: CurrentConversationBindingScope,
 ): { records: SessionBindingRecord[]; requiresPrune: boolean } {
-  const records = bindingRowsToRecords(
-    listCurrentConversationBindingRowsBySession(db, targetSessionKey, scope),
-  );
+  const records = listCurrentConversationBindingRowsBySession(db, targetSessionKey, scope)
+    .map(bindingRowToRecord)
+    .filter((record) => record !== null);
   return { records, requiresPrune: records.some((record) => isBindingExpired(record)) };
 }
 
@@ -342,7 +343,7 @@ export function pruneCurrentConversationBindingListInTransaction(
   const rows = listCurrentConversationBindingRowsBySession(db, targetSessionKey, scope);
   const active: SessionBindingRecord[] = [];
   for (const row of rows) {
-    const record = bindingRowsToRecords([row])[0];
+    const record = bindingRowToRecord(row);
     if (!record || isBindingExpired(record)) {
       deleteCurrentConversationBindingRow(db, row.binding_key);
     } else {

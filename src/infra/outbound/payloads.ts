@@ -221,13 +221,12 @@ function createStructuredOutboundPayloadPlanEntry(
   if (!isRenderablePayload(normalizedPayload)) {
     return null;
   }
-  const hasChannelData = hasReplyChannelData(normalizedPayload.channelData);
   return {
     payload: normalizedPayload,
     parts: resolveSendableOutboundReplyParts(normalizedPayload),
     hasPresentation: hasMessagePresentationBlocks(normalizedPayload.presentation),
     hasInteractive: hasLegacyInteractiveReplyBlocks(normalizedPayload.interactive),
-    hasChannelData,
+    hasChannelData: hasReplyChannelData(normalizedPayload.channelData),
   };
 }
 
@@ -241,14 +240,10 @@ function buildOutboundPayloadPlan(
   const plan: OutboundPayloadPlan[] = [];
   for (const [sourceIndex, payload] of payloads.entries()) {
     const prepared = preparePayload ? preparePayload(payload) : payload;
-    if (!prepared) {
-      continue;
+    const entry = prepared ? createStructuredOutboundPayloadPlanEntry(prepared) : null;
+    if (entry) {
+      plan.push({ sourceIndex, ...entry });
     }
-    const entry = createStructuredOutboundPayloadPlanEntry(prepared);
-    if (!entry) {
-      continue;
-    }
-    plan.push({ sourceIndex, ...entry });
   }
   return plan;
 }

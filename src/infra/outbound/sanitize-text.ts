@@ -34,12 +34,11 @@ function removeMatchesUntilStable(
   replacement?: (match: string, offset: number, source: string) => string,
 ): string {
   let previous: string;
-  let current = text;
   do {
-    previous = current;
-    current = replacement ? current.replace(pattern, replacement) : current.replace(pattern, "");
-  } while (current !== previous);
-  return current;
+    previous = text;
+    text = replacement ? text.replace(pattern, replacement) : text.replace(pattern, "");
+  } while (text !== previous);
+  return text;
 }
 
 function stripHtmlTagUnlessComparison(

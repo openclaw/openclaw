@@ -73,21 +73,17 @@ function applySessionAuthProfileOverrideState(
   state: SessionAuthProfileOverrideState,
   updatedAt: number,
 ): void {
-  if (state.authProfileOverride === undefined) {
-    delete entry.authProfileOverride;
-  } else {
-    entry.authProfileOverride = state.authProfileOverride;
-  }
-  if (state.authProfileOverrideSource === undefined) {
-    delete entry.authProfileOverrideSource;
-  } else {
-    entry.authProfileOverrideSource = state.authProfileOverrideSource;
-  }
-  if (state.authProfileOverrideCompactionCount === undefined) {
-    delete entry.authProfileOverrideCompactionCount;
-  } else {
-    entry.authProfileOverrideCompactionCount = state.authProfileOverrideCompactionCount;
-  }
+  const apply = <K extends keyof SessionAuthProfileOverrideState>(key: K) => {
+    const value = state[key];
+    if (value === undefined) {
+      delete entry[key];
+    } else {
+      entry[key] = value;
+    }
+  };
+  apply("authProfileOverride");
+  apply("authProfileOverrideSource");
+  apply("authProfileOverrideCompactionCount");
   entry.updatedAt = Math.max(entry.updatedAt ?? 0, updatedAt);
 }
 
@@ -187,24 +183,21 @@ function isProfileForProvider(params: {
   store: ReturnType<typeof ensureAuthProfileStore>;
 }): boolean {
   const entry = params.store.profiles[params.profileId];
-  if (entry) {
-    if (!entry.provider) {
-      return false;
-    }
-    return params.providers.some((provider) =>
-      isStoredCredentialCompatibleWithAuthProvider({
-        cfg: params.cfg,
-        provider,
-        credential: entry,
-      }),
-    );
+  if (entry && !entry.provider) {
+    return false;
   }
   return params.providers.some((provider) =>
-    isConfiguredAwsSdkAuthProfileForProvider({
-      cfg: params.cfg,
-      provider,
-      profileId: params.profileId,
-    }),
+    entry
+      ? isStoredCredentialCompatibleWithAuthProvider({
+          cfg: params.cfg,
+          provider,
+          credential: entry,
+        })
+      : isConfiguredAwsSdkAuthProfileForProvider({
+          cfg: params.cfg,
+          provider,
+          profileId: params.profileId,
+        }),
   );
 }
 

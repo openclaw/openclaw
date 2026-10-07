@@ -27,6 +27,7 @@ import {
 } from "./legacy-source-diagnostic.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
 import { getRuntimeAuthProfileStoreCredentialMutationToken } from "./mutation-lineage.js";
+import { withAuthProfileCleanup } from "./operation-cleanup.js";
 import { shouldUseMainOwnerForLocalOAuthCredential } from "./ownership.js";
 import {
   resolveSharedAuthStoreOwnership,
@@ -359,36 +360,29 @@ export async function withAuthProfileUsage<T>(
                 input: {},
               },
             );
-            let executionResult: Result<AuthProfileUsageReceipt, unknown>;
-            try {
-              executionResult = {
-                ok: true,
-                value: await client.run(
+            return withAuthProfileCleanup(
+              () =>
+                client.run(
                   async (scope) =>
                     publish(await scope.execute({ type: "authProfiles.usage", input }), () =>
                       scope.execute({ type: "authProfiles.inlineSnapshot", input: undefined }),
                     ),
                   assertCurrent,
                 ),
-              };
-            } catch (error) {
-              executionResult = { ok: false, error };
-            }
-            try {
-              await client.close();
-            } catch (error) {
-              throw !executionResult.ok
-                ? new AggregateError(
-                    [executionResult.error, error],
-                    "Auth usage and client cleanup failed",
-                    { cause: executionResult.error },
-                  )
-                : error;
-            }
-            if (!executionResult.ok) {
-              throw executionResult.error;
-            }
-            return executionResult.value;
+              async (outcome) => {
+                try {
+                  await client.close();
+                } catch (error) {
+                  throw !outcome.ok
+                    ? new AggregateError(
+                        [outcome.error, error],
+                        "Auth usage and client cleanup failed",
+                        { cause: outcome.error },
+                      )
+                    : error;
+                }
+              },
+            );
           });
         } catch (error) {
           const outcomeUnknown = hasSqliteWorkerOutcomeUnknown(error);
@@ -442,42 +436,34 @@ export async function withAuthProfileUsage<T>(
     }
     return await operation;
   };
-  let outcome: Result<T, unknown>;
-  try {
-    outcome = { ok: true, value: await executeUsage() };
-  } catch (error) {
-    outcome = { ok: false, error };
-  }
-  try {
-    const released = await Promise.allSettled([
-      ...[...writers.values()].map((writer) => writer.dispose()),
-      ...[...readers.values()].map((reader) => reader.dispose()),
-      ...[...executions.values()].flatMap((execution) =>
-        execution.ok ? [execution.value.release()] : [],
-      ),
-    ]);
-    const failures = released.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length) {
-      if (committed) {
-        reportCommittedInlineAuthFailure(
-          "auth usage committed before owner cleanup failed",
-          failures,
-        );
-      } else {
-        throw new AggregateError(
-          [...(!outcome.ok ? [outcome.error] : []), ...failures],
-          "Auth usage read owner cleanup failed",
-          { cause: (!outcome.ok ? outcome.error : undefined) ?? failures[0] },
-        );
+  return withAuthProfileCleanup(executeUsage, async (outcome) => {
+    try {
+      const released = await Promise.allSettled([
+        ...[...writers.values()].map((writer) => writer.dispose()),
+        ...[...readers.values()].map((reader) => reader.dispose()),
+        ...[...executions.values()].flatMap((execution) =>
+          execution.ok ? [execution.value.release()] : [],
+        ),
+      ]);
+      const failures = released.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length) {
+        if (committed) {
+          reportCommittedInlineAuthFailure(
+            "auth usage committed before owner cleanup failed",
+            failures,
+          );
+        } else {
+          throw new AggregateError(
+            [...(!outcome.ok ? [outcome.error] : []), ...failures],
+            "Auth usage read owner cleanup failed",
+            { cause: (!outcome.ok ? outcome.error : undefined) ?? failures[0] },
+          );
+        }
       }
+    } finally {
+      preparation?.release();
     }
-  } finally {
-    preparation?.release();
-  }
-  if (!outcome.ok) {
-    throw outcome.error;
-  }
-  return outcome.value;
+  });
 }

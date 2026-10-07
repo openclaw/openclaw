@@ -62,16 +62,10 @@ export function closeAuthProfileReadPool(scope?: AuthProfileReadPoolCloseScope):
     closeAuthProfileReadDatabase(scope.databasePath);
     return;
   }
-  if (scope?.kind === "root") {
-    for (const pathname of authProfileReadDatabases.keys()) {
-      if (isPathInside(scope.rootPath, pathname)) {
-        closeAuthProfileReadDatabase(pathname);
-      }
-    }
-    return;
-  }
   for (const pathname of authProfileReadDatabases.keys()) {
-    closeAuthProfileReadDatabase(pathname);
+    if (scope?.kind !== "root" || isPathInside(scope.rootPath, pathname)) {
+      closeAuthProfileReadDatabase(pathname);
+    }
   }
 }
 
