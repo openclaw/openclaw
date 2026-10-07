@@ -1461,7 +1461,7 @@ extension GatewayNodeSession {
             onInvoke: onInvoke)
     }
 
-    /// Waits for recorded receipt joins without a test-side deadline.
+    // Waits for recorded receipt joins without a test-side deadline.
     // periphery:ignore - package tests await receipt joining without exposing the receipt store.
     func waitForComputerReceiptJoinsForTesting(
         idempotencyKey: String,
