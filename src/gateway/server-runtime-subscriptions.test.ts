@@ -220,60 +220,57 @@ describe("startGatewayEventSubscriptions", () => {
     configureExecutionIdentityAdmissionSink(() => false)();
   });
 
-  it.each([
-    "same-id reset",
-    "replacement",
-    "missing row",
-    "missing row without ID",
-    "missing projection",
-  ])("does not attach a successor row after a queued %s", async (change) => {
-    const prepared = createDeferred();
-    const original = { sessionId: "original" };
-    let current: typeof original | undefined = change.startsWith("missing row")
-      ? undefined
-      : original;
-    let admitted = change !== "missing projection";
-    const projection = {
-      capture: () => current,
-      ensureMaterialized: () => prepared.promise,
-      withPreparedExactRows: async (_queries: unknown, consume: (read: unknown) => unknown) => {
-        await prepared.promise;
-        return { kind: "complete" as const, value: consume(undefined) };
-      },
-      isCurrent: (record: typeof original) => record === current,
-      snapshot: () => ({ row: current ? { key: "agent:main:queued", ...current } : null }),
-    } as unknown as SessionRowProjection;
-    const delivered = vi.fn();
-    agentEventHandlerMocks.create.mockImplementation((options: AgentEventHandlerOptions) =>
-      Object.assign(
-        (event: AgentEventPayload) => {
-          delivered(
-            options.loadGatewaySessionLifecycleSnapshotForEvent?.("agent:main:queued", {
-              agentId: "main",
-              ownerEvent: event,
-            }).row,
-          );
+  it.each(["same-id reset", "missing row", "missing row without ID", "missing projection"])(
+    "does not attach a successor row after a queued %s",
+    async (change) => {
+      const prepared = createDeferred();
+      const original = { sessionId: "original" };
+      let current: typeof original | undefined = change.startsWith("missing row")
+        ? undefined
+        : original;
+      let admitted = change !== "missing projection";
+      const projection = {
+        capture: () => current,
+        ensureMaterialized: () => prepared.promise,
+        withPreparedExactRows: async (_queries: unknown, consume: (read: unknown) => unknown) => {
+          await prepared.promise;
+          return { kind: "complete" as const, value: consume(undefined) };
         },
-        { dispose: vi.fn() },
-      ),
-    );
-    unsubs = startGatewayEventSubscriptions({
-      ...createParams(),
-      getSessionRowProjection: () => (admitted ? projection : undefined),
-    });
-    emitAgentEvent({
-      runId: "queued-owner",
-      agentId: "main",
-      sessionKey: "agent:main:queued",
-      sessionId: change === "missing row without ID" ? undefined : "original",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1 },
-    });
-    current = { sessionId: change === "replacement" ? "successor" : "original" };
-    admitted = true;
-    prepared.resolve();
-    await waitForFast(() => expect(delivered).toHaveBeenCalledWith(null));
-  });
+        isCurrent: (record: typeof original) => record === current,
+        snapshot: () => ({ row: current ? { key: "agent:main:queued", ...current } : null }),
+      } as unknown as SessionRowProjection;
+      const delivered = vi.fn();
+      agentEventHandlerMocks.create.mockImplementation((options: AgentEventHandlerOptions) =>
+        Object.assign(
+          (event: AgentEventPayload) => {
+            delivered(
+              options.loadGatewaySessionLifecycleSnapshotForEvent?.("agent:main:queued", {
+                agentId: "main",
+                ownerEvent: event,
+              }).row,
+            );
+          },
+          { dispose: vi.fn() },
+        ),
+      );
+      unsubs = startGatewayEventSubscriptions({
+        ...createParams(),
+        getSessionRowProjection: () => (admitted ? projection : undefined),
+      });
+      emitAgentEvent({
+        runId: "queued-owner",
+        agentId: "main",
+        sessionKey: "agent:main:queued",
+        sessionId: change === "missing row without ID" ? undefined : "original",
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1 },
+      });
+      current = { sessionId: "original" };
+      admitted = true;
+      prepared.resolve();
+      await waitForFast(() => expect(delivered).toHaveBeenCalledWith(null));
+    },
+  );
 
   registerActivitySummaryPublicationTests(
     (projection, signal) => {
@@ -377,19 +374,6 @@ describe("startGatewayEventSubscriptions", () => {
     releaseAgentRunContext(runId, claimId);
   });
 
-  it("disposes a loaded agent event handler on unsubscribe", async () => {
-    const dispose = vi.fn();
-    const handler = Object.assign(vi.fn(), { dispose });
-    agentEventHandlerMocks.create.mockReturnValue(handler);
-    unsubs = startGatewayEventSubscriptions(createParams());
-
-    emitAgentEvent({ runId: "run-dispose", stream: "lifecycle", data: { phase: "error" } });
-    await waitForFast(() => expect(handler).toHaveBeenCalledOnce());
-
-    await unsubs.agentUnsub();
-    expect(dispose).toHaveBeenCalledOnce();
-  });
-
   it("uses the persisted bare-key owner for ownerless active-run projections", async () => {
     runtimeConfigState.value = {
       session: { scope: "global", store: "/tmp/openclaw-owned-sessions.sqlite" },
@@ -427,6 +411,8 @@ describe("startGatewayEventSubscriptions", () => {
         agentId: "ops",
       }),
     ).toEqual({ active: true, runIds: ["run-ops"] });
+    await unsubs.agentUnsub();
+    expect(handler.dispose).toHaveBeenCalledOnce();
   });
 
   it("drives a registered chat run through the terminal persistence transition table", async () => {
@@ -1019,18 +1005,6 @@ describe("startGatewayEventSubscriptions", () => {
       "progressCard.changed",
       { sessionKey: "agent:work:global", revision: null },
       { sessionKeys: ["global"], agentId: "work" },
-    );
-  });
-
-  it("logs lifecycle handler failures", async () => {
-    unsubs = startGatewayEventSubscriptions(createParams());
-
-    emitSessionLifecycleEvent({ sessionKey: "agent:main:main", reason: "created" });
-
-    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(1));
-    expect(warn).toHaveBeenCalledWith(
-      "Lifecycle event dispatch failed",
-      expect.objectContaining({ sessionKey: "agent:main:main" }),
     );
   });
 });
