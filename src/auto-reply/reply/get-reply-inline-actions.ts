@@ -39,7 +39,7 @@ import {
 import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
 import { takeCommandSessionMetadataChangesFromTargets } from "./command-session-metadata.js";
 import type { CommandDispatchParams } from "./commands-types.js";
-import type { buildStatusReply } from "./commands.runtime.js";
+import type { buildStatusReply } from "./commands.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { extractExplicitGroupId } from "./group-id.js";
@@ -56,14 +56,11 @@ const skillToolDispatchRuntimeLoader = createLazyImportLoader(
   () => import("../../skills/runtime/tool-dispatch.js"),
 );
 const abortCutoffRuntimeLoader = createLazyImportLoader(() => import("./abort-cutoff.runtime.js"));
-const commandsRuntimeLoader = createLazyImportLoader(() => import("./commands.runtime.js"));
+const commandsRuntimeLoader = createLazyImportLoader(() => import("./commands.js"));
 let builtinSlashCommands: Set<string> | null = null;
 
 function getBuiltinSlashCommands(): Set<string> {
-  if (builtinSlashCommands) {
-    return builtinSlashCommands;
-  }
-  builtinSlashCommands = listReservedChatSlashCommandNames([
+  return (builtinSlashCommands ??= listReservedChatSlashCommandNames([
     "btw",
     "think",
     "verbose",
@@ -73,8 +70,7 @@ function getBuiltinSlashCommands(): Set<string> {
     "model",
     "status",
     "queue",
-  ]);
-  return builtinSlashCommands;
+  ]));
 }
 
 function resolveSlashCommandName(commandBodyNormalized: string): string | null {
@@ -538,9 +534,8 @@ export async function handleInlineActions(
     const { handleCommands } = await commandsRuntimeLoader.load();
     return handleCommands({
       ...commandParams,
-      // Pass sessionCtx so command handlers can mutate stripped body for same-turn continuation.
+      // Command handlers mutate the continuation context and retain the dispatch context.
       ctx: sessionCtx,
-      // Keep original finalized context in sync when command handlers need outer-dispatch side effects.
       rootCtx: ctx,
       command: commandInput,
       directives,

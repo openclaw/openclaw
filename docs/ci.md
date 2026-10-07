@@ -121,7 +121,9 @@ Windows keeps its complete explicit test inventory in five [measured project-ali
 
 Real-Gateway browser checks use [job budgets matched to their selected runner](/ci/runners#blacksmith-runner-capacity).
 
-Control UI CI installs the Chromium revision pinned by Playwright even when the browser cache misses. Current targets use the installer's `--require-playwright-chromium` mode; historical targets retain their existing installer. Browser startup diagnostics include provider, page, WebSocket, and Chromium process events to diagnose a session-readiness timeout even when it is reported only after unrelated unit work finishes.
+Control UI, repo E2E, and native live browser CI restore the Chromium revision pinned by the selected target's installed Playwright package, with separate OS/architecture cache keys and no fallback prefixes. The protected-main Vitest cache warmer publishes the browser cache in its short dependency job for both Linux backends; PR and release jobs remain restore-only. A cache miss still installs the managed browser, and current targets use the installer's `--require-playwright-chromium` mode rather than substituting system Chrome. Historical targets retain their Playwright installer and Linux dependency setup. Browser startup diagnostics include provider, page, WebSocket, and Chromium process events to diagnose a session-readiness timeout even when it is reported only after unrelated unit work finishes.
+
+Linux baseline ratchets and native grep tests reuse an existing `rg` or download the checksum-pinned ripgrep 14.1.1 release directly into the runner's temporary directory. Setup does not use apt, sudo, package-index refreshes, or package-manager locks. The small archive download has bounded retries and transfer timeouts; unsupported architectures and checksum failures fail the job.
 
 Browser extension CI launches the installed, patched Chrome MCP dependency directly, on Node and on the pinned Bun fork.
 

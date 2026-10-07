@@ -76,22 +76,17 @@ export function resolveSourceReplyDeliveryMode(params: {
     return "automatic";
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
-  if (
-    (chatType === "group" || chatType === "channel") &&
-    isUnauthorizedTextSlashCommand(params.ctx)
-  ) {
+  const isGroup = chatType === "group" || chatType === "channel";
+  if (isGroup && isUnauthorizedTextSlashCommand(params.ctx)) {
     return "message_tool_only";
   }
-  const configuredMode =
-    chatType === "group" || chatType === "channel"
-      ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
-      : (params.cfg.messages?.visibleReplies ??
-        (isInternalSourceReplyChannel(params.ctx) ? "automatic" : params.defaultVisibleReplies));
-  const mode = configuredMode === "message_tool" ? "message_tool_only" : "automatic";
-  if (mode === "message_tool_only" && params.messageToolAvailable === false) {
-    return "automatic";
-  }
-  return mode;
+  const configuredMode = isGroup
+    ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
+    : (params.cfg.messages?.visibleReplies ??
+      (isInternalSourceReplyChannel(params.ctx) ? "automatic" : params.defaultVisibleReplies));
+  return configuredMode === "message_tool" && params.messageToolAvailable !== false
+    ? "message_tool_only"
+    : "automatic";
 }
 
 /** Selects reply requiredness at admission, preserving configured ambient group silence. */

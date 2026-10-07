@@ -130,22 +130,23 @@ export function createWorkerPlacementMoveService(options: {
           };
           // Existing durable decisions own retries. Prepare only a new intent, outside
           // the synchronous commit, so both branches publish their owner before yielding.
-          if (
-            request.abandonSource &&
-            !(await options.placements.getPlacementMoveAsync(request.sessionId))
-          ) {
-            const placement = await options.placements.getAsync(request.sessionId);
-            options.validateAbandonSource(request, placement);
-            const claim = placement ? projectWorkerSessionTurnClaim(placement) : undefined;
-            if (claim && prepareNew) {
-              await prepareNew(claim.runId);
-              const current = await options.placements.getAsync(request.sessionId);
-              if (!current || !isCurrentPlacementTurnClaim(current, claim)) {
-                throw new Error(
-                  `Session ${request.sessionKey} abandonment worker turn changed; retry`,
-                );
+          if (request.abandonSource) {
+            const { placement, move: existingMove } = await options.placements.getWithMoveAsync(
+              request.sessionId,
+            );
+            if (!existingMove) {
+              options.validateAbandonSource(request, placement);
+              const claim = placement ? projectWorkerSessionTurnClaim(placement) : undefined;
+              if (claim && prepareNew) {
+                await prepareNew(claim.runId);
+                const current = await options.placements.getAsync(request.sessionId);
+                if (!current || !isCurrentPlacementTurnClaim(current, claim)) {
+                  throw new Error(
+                    `Session ${request.sessionKey} abandonment worker turn changed; retry`,
+                  );
+                }
+                options.validateAbandonSource(request, current);
               }
-              options.validateAbandonSource(request, current);
             }
           }
           const started = await options.placements.beginPlacementMove(moveRequest, {

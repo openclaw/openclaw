@@ -117,15 +117,10 @@ function normalizeRelativePath(filePath: string): string {
   return filePath.split(path.sep).join("/");
 }
 
+const ARTIFACT_STAT_FIELDS = ["dev", "ino", "mode", "size", "mtimeNs", "ctimeNs"] as const;
+
 function sameOpenedFile(left: BigIntStats, right: BigIntStats): boolean {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mode === right.mode &&
-    left.size === right.size &&
-    left.mtimeNs === right.mtimeNs &&
-    left.ctimeNs === right.ctimeNs
-  );
+  return ARTIFACT_STAT_FIELDS.every((field) => left[field] === right[field]);
 }
 
 async function readRegularFileFingerprint(params: {

@@ -1,3 +1,4 @@
+import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import {
@@ -43,7 +44,11 @@ import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { modelKey } from "../model-ref-shared.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
-import { resolveSessionPlacementRuntimeOverride } from "../session-placement-admission.js";
+import {
+  resolveSessionPlacementRuntimeOverride,
+  sessionPlacementUsesWorkerInference,
+  withRequiredSessionPlacement,
+} from "../session-placement-admission.js";
 import {
   didEmbeddedCyberFailoverTargetCommitWork,
   EMBEDDED_CYBER_FAILOVER_TRIGGER_CODE,
@@ -164,7 +169,21 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
     abortSignal: params.abortSignal,
   };
   try {
-    const result = await runEmbeddedAgentEntryInternal(params);
+    assertRequiredWorkerSelection(params.selection.cfg, {
+      agentRuntime: params.harness.resolveRuntimeOverride(
+        params.selection.provider,
+        params.selection.model,
+      ),
+    });
+    const result = await withRequiredSessionPlacement(
+      params.identity,
+      {
+        config: params.selection.cfg,
+        assertCurrent: () => admission?.assertSourceCurrent(),
+        signal: params.abortSignal,
+      },
+      () => runEmbeddedAgentEntryInternal(params),
+    );
     // Placement and asynchronous terminal cleanup have finished. Only this
     // accepted logical result may release children retained across candidates.
     await settleRequesterRun(requester, result.result, () => admission?.assertSourceCurrent());
@@ -193,12 +212,16 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
   });
   const resolveRuntimeOverride = (provider: string, model: string) => {
     const requestedRuntime = params.harness.resolveRuntimeOverride(provider, model);
-    if (requestedRuntime || !placementRuntime) {
-      return requestedRuntime;
-    }
+    assertRequiredWorkerSelection(params.selection.cfg, { agentRuntime: requestedRuntime });
     const policy = resolveAgentHarnessPolicy(harnessContext(provider, model));
-    // Explicit runtime choices still reach placement's compatibility check.
-    return policy.runtimeSource === "implicit" ? placementRuntime : undefined;
+    if (params.selection.cfg.cloudWorkers?.requiredProfile) {
+      return policy.runtime;
+    }
+    return requestedRuntime || !placementRuntime
+      ? requestedRuntime
+      : policy.runtimeSource === "implicit"
+        ? placementRuntime
+        : undefined;
   };
   const clearObservedModel = () => {
     const event = {
@@ -288,6 +311,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
         ...selection,
         ...params.identity,
         operatorAuthority,
+        skipAuthProfileRuntime: sessionPlacementUsesWorkerInference(params.identity),
         abortSignal: params.abortSignal,
         resolveAgentHarnessRuntimeOverride: resolveRuntimeOverride,
         prepareCandidateChain: async (candidates) => {

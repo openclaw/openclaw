@@ -34,28 +34,24 @@ export async function handleAcpDoctorAction(
   const installHint = resolveAcpInstallCommandHint(params.cfg);
   const registeredBackend = getAcpRuntimeBackend(backendId);
   const managerSnapshot = getAcpSessionManager().getObservabilitySnapshot();
-  const lines = ["ACP doctor:", "-----", `configuredBackend: ${backendId}`];
-  lines.push(`activeRuntimeSessions: ${managerSnapshot.runtimeCache.activeSessions}`);
-  lines.push(`runtimeIdleTtlMs: ${managerSnapshot.runtimeCache.idleTtlMs}`);
-  lines.push(`evictedIdleRuntimes: ${managerSnapshot.runtimeCache.evictedTotal}`);
-  lines.push(`activeTurns: ${managerSnapshot.turns.active}`);
-  lines.push(`queueDepth: ${managerSnapshot.turns.queueDepth}`);
-  lines.push(
+  const lines = [
+    "ACP doctor:",
+    "-----",
+    `configuredBackend: ${backendId}`,
+    `activeRuntimeSessions: ${managerSnapshot.runtimeCache.activeSessions}`,
+    `runtimeIdleTtlMs: ${managerSnapshot.runtimeCache.idleTtlMs}`,
+    `evictedIdleRuntimes: ${managerSnapshot.runtimeCache.evictedTotal}`,
+    `activeTurns: ${managerSnapshot.turns.active}`,
+    `queueDepth: ${managerSnapshot.turns.queueDepth}`,
     `turnLatencyMs: avg=${managerSnapshot.turns.averageLatencyMs}, max=${managerSnapshot.turns.maxLatencyMs}`,
-  );
-  lines.push(
     `turnCounts: completed=${managerSnapshot.turns.completed}, failed=${managerSnapshot.turns.failed}`,
-  );
+  ];
   const errorStatsText =
     Object.entries(managerSnapshot.errorsByCode)
       .map(([code, count]) => `${code}=${count}`)
       .join(", ") || "(none)";
   lines.push(`errorCodes: ${errorStatsText}`);
-  if (registeredBackend) {
-    lines.push(`registeredBackend: ${registeredBackend.id}`);
-  } else {
-    lines.push("registeredBackend: (none)");
-  }
+  lines.push(`registeredBackend: ${registeredBackend ? registeredBackend.id : "(none)"}`);
   const allow = params.cfg.plugins?.allow;
   const normalizedBackendId = normalizeLowercaseStringOrEmpty(backendId);
   const backendBlockedByAllowlist =
@@ -103,7 +99,6 @@ export async function handleAcpDoctorAction(
     if ((capabilities.configOptionKeys?.length ?? 0) > 0) {
       lines.push(`configKeys: ${capabilities.configOptionKeys?.join(", ")}`);
     }
-    return commandReply(lines.join("\n"));
   } catch (error) {
     const acpError = toAcpRuntimeError({
       error,
@@ -120,8 +115,8 @@ export async function handleAcpDoctorAction(
     if (normalizedBackendId === "acpx") {
       lines.push("next: verify acpx is installed (`acpx --help`).");
     }
-    return commandReply(lines.join("\n"));
   }
+  return commandReply(lines.join("\n"));
 }
 
 export function handleAcpInstallAction(
@@ -204,9 +199,5 @@ export async function handleAcpSessionsAction(
     })
     .filter(Boolean);
 
-  if (rows.length === 0) {
-    return commandReply("ACP sessions:\n-----\n(none)");
-  }
-
-  return commandReply(["ACP sessions:", "-----", ...rows].join("\n"));
+  return commandReply(["ACP sessions:", "-----", ...(rows.length ? rows : ["(none)"])].join("\n"));
 }

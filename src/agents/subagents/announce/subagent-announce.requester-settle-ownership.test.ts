@@ -38,7 +38,6 @@ const { registryRuntimeMock, deliverSpy } = vi.hoisted(() => ({
 vi.mock("../../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../registry/subagent-registry-read.js", () => registryRuntimeMock);
 vi.mock("../spawn/subagent-depth.js", () => ({ getSubagentDepthFromSessionStore: () => 0 }));
-vi.mock("./subagent-announce.js", () => ({ hasUsableSessionEntry: () => true }));
 vi.mock("./subagent-announce-delivery.js", () => ({
   deliverSubagentAnnouncement: (params: Record<string, unknown>) => deliverSpy(params),
   loadRequesterSessionEntry: () => ({

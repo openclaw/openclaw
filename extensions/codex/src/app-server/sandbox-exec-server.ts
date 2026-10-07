@@ -70,10 +70,8 @@ export async function ensureCodexSandboxExecServerEnvironment(params: {
     );
   }
   const { server: execServer, nodeLease } = await acquireOpenClawExecServer({
+    ...params,
     sandbox: params.sandbox,
-    runtime: params.runtime,
-    signal: params.signal,
-    onExecutionDisconnect: params.onExecutionDisconnect,
   });
   // Codex retains a thread's environment instance when its id and cwd stay equal.
   // A single-use paired-node channel therefore needs a fresh selected identity.
@@ -382,13 +380,9 @@ function readCodexPlacementWorkspaceIdentity(sandbox: SandboxContext): {
 } {
   if (
     !("placementEnvironmentId" in sandbox) ||
-    typeof sandbox.placementEnvironmentId !== "string" ||
-    !sandbox.placementEnvironmentId ||
-    sandbox.placementEnvironmentId.trim() !== sandbox.placementEnvironmentId ||
+    !isWorkspaceIdentityString(sandbox.placementEnvironmentId) ||
     !("placementSessionId" in sandbox) ||
-    typeof sandbox.placementSessionId !== "string" ||
-    !sandbox.placementSessionId ||
-    sandbox.placementSessionId.trim() !== sandbox.placementSessionId ||
+    !isWorkspaceIdentityString(sandbox.placementSessionId) ||
     !("placementOwnerEpoch" in sandbox) ||
     typeof sandbox.placementOwnerEpoch !== "number" ||
     !Number.isSafeInteger(sandbox.placementOwnerEpoch) ||
@@ -404,6 +398,10 @@ function readCodexPlacementWorkspaceIdentity(sandbox: SandboxContext): {
     ownerEpoch: sandbox.placementOwnerEpoch,
     sessionKey: sandbox.sessionKey,
   };
+}
+
+function isWorkspaceIdentityString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.trim() === value;
 }
 
 function handleNodeConnection(

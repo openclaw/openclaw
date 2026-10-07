@@ -19,7 +19,7 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import { scheduleResumeSubagentRun } from "./subagent-registry-lifecycle-attempt.js";
+import { scheduleResumeSubagentRun } from "./subagent-registry-lifecycle-cleanup.js";
 import {
   readLifecycleRun,
   type createRunEntry as createLifecycleRunEntry,

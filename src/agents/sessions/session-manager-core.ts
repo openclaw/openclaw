@@ -580,14 +580,11 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
         roots.push(node);
       }
     }
-    const stack = [...roots];
-    while (stack.length > 0) {
-      const node = stack.pop()!;
+    for (const node of nodeMap.values()) {
       node.children.sort(
         (left, right) =>
           new Date(left.entry.timestamp).getTime() - new Date(right.entry.timestamp).getTime(),
       );
-      stack.push(...node.children);
     }
     return roots;
   }

@@ -109,15 +109,12 @@ export function buildCodexPluginThreadConfigTimeoutFallback(params: {
   message: string;
 }): CodexPluginThreadConfig {
   const inputFingerprint = buildCodexPluginThreadConfigInputFingerprint(params);
-  const fallback = emptyPluginThreadConfig({
+  return finishPluginThreadConfig({
     enabled: true,
     inputFingerprint,
     configPatch: buildDisabledAppsConfigPatch(),
-  });
-  return {
-    ...fallback,
     diagnostics: [{ code: "plugin_config_timeout", message: params.message }],
-  };
+  });
 }
 
 export async function buildCodexPluginThreadConfig(
@@ -125,19 +122,10 @@ export async function buildCodexPluginThreadConfig(
 ): Promise<CodexPluginThreadConfig> {
   const appCache = params.appCache ?? defaultCodexAppInventoryCache;
   const threadAppCacheKey = resolveCodexPluginThreadAppCacheKey(params);
-  const threadRequest: CodexPluginRuntimeRequest = (method, requestParams) =>
-    params.request(
-      method,
-      (method === "app/installed" || method === "app/read") &&
-        params.threadId &&
-        isJsonObject(requestParams)
-        ? { ...requestParams, threadId: params.threadId }
-        : requestParams,
-    );
   let inputFingerprint = buildCodexPluginThreadConfigInputFingerprint(params);
   const policy = resolveCodexPluginsPolicy(params.pluginConfig);
   if (!policy.enabled) {
-    return emptyPluginThreadConfig({
+    return finishPluginThreadConfig({
       enabled: false,
       inputFingerprint,
       configPatch: buildDisabledAppsConfigPatch(),
@@ -145,7 +133,8 @@ export async function buildCodexPluginThreadConfig(
   }
 
   const inventoryParams = {
-    request: threadRequest,
+    request: params.request,
+    threadId: params.threadId,
     appCache,
     appCacheKey: params.appCacheKey,
     appInventoryCacheKey: threadAppCacheKey,
@@ -364,22 +353,16 @@ export async function buildCodexPluginThreadConfig(
       ? buildDisabledAppsConfigPatch()
       : disableUnlistedCodexApps({ apps }, (await getAdmissionConfig()).config);
   const policyContext = buildPluginAppPolicyContext(policyApps, pluginAppIds);
-  return {
+  return finishPluginThreadConfig({
     enabled: true,
     configPatch,
     ...(provisionalAppIds.size > 0
       ? { provisionalAppIds: Array.from(provisionalAppIds).toSorted() }
       : {}),
-    fingerprint: fingerprintCodexPolicy({
-      version: CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION,
-      inputFingerprint,
-      configPatch,
-      policyContext,
-    }),
     inputFingerprint,
     policyContext,
     diagnostics,
-  };
+  });
 }
 
 /** Deep-merges optional Codex thread config patches, returning undefined when empty. */
@@ -418,24 +401,21 @@ export function isCodexPluginThreadBindingStale(params: {
   return params.bindingInputFingerprint !== params.currentInputFingerprint;
 }
 
-function emptyPluginThreadConfig(params: {
-  enabled: boolean;
-  inputFingerprint: string;
-  configPatch?: JsonObject;
-}): CodexPluginThreadConfig {
-  const policyContext = buildPluginAppPolicyContext({}, {});
+function finishPluginThreadConfig(
+  config: Omit<CodexPluginThreadConfig, "fingerprint" | "policyContext" | "diagnostics"> &
+    Partial<Pick<CodexPluginThreadConfig, "policyContext" | "diagnostics">>,
+): CodexPluginThreadConfig {
+  const policyContext = config.policyContext ?? buildPluginAppPolicyContext({}, {});
   return {
-    enabled: params.enabled,
+    ...config,
+    policyContext,
+    diagnostics: config.diagnostics ?? [],
     fingerprint: fingerprintCodexPolicy({
       version: CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION,
-      inputFingerprint: params.inputFingerprint,
-      configPatch: params.configPatch ?? null,
+      inputFingerprint: config.inputFingerprint,
+      configPatch: config.configPatch ?? null,
       policyContext,
     }),
-    inputFingerprint: params.inputFingerprint,
-    ...(params.configPatch ? { configPatch: params.configPatch } : {}),
-    policyContext,
-    diagnostics: [],
   };
 }
 

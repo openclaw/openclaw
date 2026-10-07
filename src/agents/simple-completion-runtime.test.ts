@@ -223,6 +223,26 @@ function createOpenAIRouteModelResolver(params: {
 }
 
 describe("prepareSimpleCompletionModel", () => {
+  it.each([undefined, {}])(
+    "blocks helper inference under the admitted required policy with caller config %j",
+    async (cfg) => {
+      preparedModelRuntime = {
+        ...preparedModelRuntime,
+        config: { cloudWorkers: { requiredProfile: "required" } },
+      };
+      const result = await prepareSimpleCompletionModel({
+        preparedModelRuntime,
+        cfg,
+        provider: "anthropic",
+        modelId: "claude-opus-4-6",
+        modelResolver: hoisted.resolveModelAsyncMock as SimpleCompletionModelResolver,
+      });
+      expect(result).toMatchObject({ error: expect.stringContaining("Sessionless model helpers") });
+      expect(hoisted.resolveModelAsyncMock).not.toHaveBeenCalled();
+      expect(hoisted.getApiKeyForModelMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("captures the exact locked auth owner used by a bound completion", async () => {
     const credential = {
       type: "api_key" as const,

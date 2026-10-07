@@ -64,8 +64,12 @@ export function resolveCodexToolResultSourceReply(params: {
       !continuesSourceReplyProgress) ||
     // Yield is an explicit owner-level turn handoff, not termination
     // inferred from source-reply delivery, so finality does not mask it.
-    isToolResultYield(params.rawResult) ||
-    isToolResultYield(params.result) ||
+    [params.rawResult, params.result].some(
+      ({ details }) =>
+        isRecord(details) &&
+        typeof details.status === "string" &&
+        details.status.trim().toLowerCase() === "yielded",
+    ) ||
     (confirmed && final === true) ||
     undefined;
   params.response.terminate = terminate;
@@ -97,12 +101,4 @@ function captureCodexToolAuthoredSourceReply(
   }
   params.payloads.push(payload);
   return true;
-}
-
-function isToolResultYield(result: AgentToolResult<unknown>): boolean {
-  const details = result.details;
-  if (!isRecord(details) || typeof details.status !== "string") {
-    return false;
-  }
-  return details.status.trim().toLowerCase() === "yielded";
 }

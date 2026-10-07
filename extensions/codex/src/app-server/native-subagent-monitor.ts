@@ -254,13 +254,8 @@ class Monitor {
           this.retainParentThread?.(state.parentThreadId),
           this.retainParentThread?.(threadId),
         ];
-        let retained = true;
         return () => {
-          if (!retained) {
-            return;
-          }
-          retained = false;
-          for (const release of releases) {
+          for (const release of releases.splice(0)) {
             release?.();
           }
         };
@@ -458,11 +453,7 @@ class Monitor {
     }
     this.admissionCustody.retainOnly(() => false);
     for (const [parentThreadId] of this.parentStates) {
-      if (
-        ![...this.childStates.values()].some(
-          (childState) => childState.parentThreadId === parentThreadId,
-        )
-      ) {
+      if (!this.hasChildrenForParent(parentThreadId)) {
         this.parentStates.delete(parentThreadId);
       }
     }
@@ -558,9 +549,7 @@ class Monitor {
       request.signal?.throwIfAborted();
       capture.assertCurrent();
       if (
-        this.disposed ||
-        this.retiredParentStates.has(state) ||
-        this.parentStates.get(state.parentThreadId) !== state ||
+        !this.isCurrentParent(state) ||
         this.knownChildren.get(request.threadId) !== known ||
         (current
           ? this.currentChild(request.threadId) !== current ||
@@ -1806,11 +1795,7 @@ class Monitor {
     if (this.childStates.get(childState.runId) === childState) {
       this.childStates.delete(childState.runId);
     }
-    if (
-      ![...this.childStates.values()].some(
-        (remainingChild) => remainingChild.parentThreadId === childState.parentThreadId,
-      )
-    ) {
+    if (!this.hasChildrenForParent(childState.parentThreadId)) {
       const releaseParentThread = this.parentThreadRetentions.get(childState.parentThreadId);
       this.parentThreadRetentions.delete(childState.parentThreadId);
       releaseParentThread?.();
@@ -1903,26 +1888,26 @@ class Monitor {
   private hasParentWork(state: ParentState): boolean {
     if (
       state.modelSourceReferences ||
-      (state.pendingRegistrations && !this.disposed && !this.retiredParentStates.has(state))
+      (state.pendingRegistrations && !this.disposed && !this.retiredParentStates.has(state)) ||
+      this.assignments.hasWrites(state) ||
+      this.submissions.hasCustody(state) ||
+      state.owners.size > 0 ||
+      this.childCloses.hasPending(state) ||
+      this.hasChildrenForParent(state.parentThreadId)
     ) {
       return true;
     }
-    if (this.assignments.hasWrites(state) || this.submissions.hasCustody(state)) {
-      return true;
-    }
-    if (state.owners.size > 0) {
-      return true;
-    }
-    if (this.childCloses.hasPending(state)) {
-      return true;
-    }
-    for (const childState of this.childStates.values()) {
-      if (childState.parentThreadId === state.parentThreadId) {
+    for (const known of this.knownChildren.values()) {
+      if (known.parent === state && this.currentChild(known.assignment.childThreadId)) {
         return true;
       }
     }
-    for (const known of this.knownChildren.values()) {
-      if (known.parent === state && this.currentChild(known.assignment.childThreadId)) {
+    return false;
+  }
+
+  private hasChildrenForParent(parentThreadId: string): boolean {
+    for (const childState of this.childStates.values()) {
+      if (childState.parentThreadId === parentThreadId) {
         return true;
       }
     }

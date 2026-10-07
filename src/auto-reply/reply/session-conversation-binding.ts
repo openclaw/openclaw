@@ -83,10 +83,7 @@ export async function resolveBoundAcpSessionForCommandReset(params: {
     params.bindingContext ?? resolveSessionConversationBindingContext(params.cfg, params.ctx);
   return await resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
-    channel: bindingContext?.channel,
-    accountId: bindingContext?.accountId,
-    conversationId: bindingContext?.conversationId,
-    parentConversationId: bindingContext?.parentConversationId,
+    ...bindingContext,
     commandTargetSessionKey: resolveCommandTurnTargetSessionKey(params.ctx),
     activeSessionKey: normalizeOptionalString(params.ctx.SessionKey),
     allowNonAcpBindingSessionKey: false,

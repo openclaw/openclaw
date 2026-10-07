@@ -14,7 +14,7 @@ import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { appendSessionTranscriptMessageByIdentityStrict } from "./session-transcript-runtime.js";
 
-const delivery = vi.hoisted((): { afterCommit?: (type: string) => void } => ({}));
+const delivery = vi.hoisted((): { beforeTurnCommit?: () => void } => ({}));
 vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../state/openclaw-agent-execution.js")>();
   return {
@@ -34,9 +34,10 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
             (worker) =>
               operation({
                 execute: async (command, commandOptions) => {
-                  const result = await worker.execute(command, commandOptions);
-                  delivery.afterCommit?.(command.type);
-                  return result;
+                  if (command.type === "session.turn.commit") {
+                    delivery.beforeTurnCommit?.();
+                  }
+                  return await worker.execute(command, commandOptions);
                 },
               }),
             options,
@@ -47,7 +48,7 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
 });
 
 afterEach(() => {
-  delivery.afterCommit = undefined;
+  delivery.beforeTurnCommit = undefined;
   vi.restoreAllMocks();
 });
 
@@ -240,16 +241,14 @@ it("replays a skipped async preparation after a foreign transcript append", asyn
     expect(appendTranscriptMessageSnapshotSync(f.scope, { message, eventId: "existing" }).ok).toBe(
       true,
     );
-    let preparations = 0;
-    delivery.afterCommit = (type) => {
-      if (type === "session.turn.prepare" && ++preparations === 2) {
-        expect(
-          appendTranscriptMessageSnapshotSync(f.scope, {
-            message: { role: "assistant", content: "foreign" },
-            eventId: "foreign",
-          }).ok,
-        ).toBe(true);
-      }
+    delivery.beforeTurnCommit = () => {
+      delivery.beforeTurnCommit = undefined;
+      expect(
+        appendTranscriptMessageSnapshotSync(f.scope, {
+          message: { role: "assistant", content: "foreign" },
+          eventId: "foreign",
+        }).ok,
+      ).toBe(true);
     };
     const prepare = vi.fn(async (value: unknown) => value);
     await expect(

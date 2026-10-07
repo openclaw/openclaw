@@ -5,7 +5,7 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
-import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
+import * as sessionEntryWriter from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import { useTempSessionsFixture } from "../../../config/sessions/test-helpers.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../../config/sessions/transcript-write-context.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../../../config/sessions/transcript.js";
@@ -398,7 +398,7 @@ describe("embedded run durable writer admission", () => {
         lifecycleEvents.push(event);
       }
     });
-    vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockRejectedValueOnce(
+    vi.spyOn(sessionEntryWriter, "applySessionEntryOperation").mockRejectedValueOnce(
       new Error("replacement claim conflict"),
     );
     let params: RunEmbeddedAgentParams & { sessionFile: string } = {

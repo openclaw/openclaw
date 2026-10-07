@@ -24,6 +24,7 @@ import {
   prepareCommandHarnessCompletionRecovery,
 } from "../agent-command-restart-recovery.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
+import { createRestartRecoveryOperatorSource } from "../operator-run-recovery-source.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import { loadExecDefaultsRuntime, loadSkillsRuntime } from "./runtime-loaders.js";
@@ -48,6 +49,19 @@ export function prepareCommandSessionRecoveryEntry(
       ...params,
       hasDeliveryContext: Boolean(params.deliveryContext),
     });
+  const directOperatorSource =
+    !sourceOptions.sourceRunId &&
+    entry.restartRecoveryDeliveryRunId !== runId &&
+    (!opts.inputProvenance || opts.inputProvenance.kind === "external_user")
+      ? createRestartRecoveryOperatorSource({
+          authority: opts.operatorAuthority,
+          entry: { ...entry, sessionId },
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          sourceRunId: runId,
+          inputProvenance: opts.inputProvenance,
+        })
+      : undefined;
   return {
     guardedHarnessCompletion,
     isCompletionCurrent,
@@ -76,6 +90,13 @@ export function prepareCommandSessionRecoveryEntry(
         runId,
         harnessCompletion,
         ...sourceOptions,
+        ...(directOperatorSource
+          ? {
+              operatorSource: directOperatorSource,
+              sourceRunId: runId,
+              sourceIngress: directOperatorSource.snapshot.sourceIngress,
+            }
+          : {}),
         suppressTextDelivery: opts.internalDeliverySuppressText,
       }),
     },

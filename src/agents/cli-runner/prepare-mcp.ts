@@ -6,6 +6,7 @@ import { resolveExecConfigState } from "../exec-defaults.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import { finalizeCliMcpGrant } from "./mcp-grant-context.js";
+import { projectNativeMcpRunContext } from "./native-mcp-context.js";
 import { admitCliRunParams } from "./run-admission.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -33,6 +34,7 @@ export function resolveCliNativeMcpPolicy(
     agentId: options.policyAgentId,
   });
   const capabilityProfile = resolveConversationCapabilityProfile({
+    ...projectNativeMcpRunContext(run),
     config: options.config,
     sessionKey: options.policySessionKey,
     sandboxSessionKey: requesterSessionKey,
@@ -42,22 +44,7 @@ export function resolveCliNativeMcpPolicy(
         : undefined,
     runSessionKey:
       run.sessionKey && run.sessionKey !== options.policySessionKey ? run.sessionKey : undefined,
-    sessionId: run.sessionId,
-    runId: run.runId,
     agentId: options.policyAgentId,
-    agentAccountId: run.agentAccountId,
-    messageProvider: run.messageProvider ?? run.messageChannel,
-    messageChannel: run.messageChannel,
-    groupId: run.groupId,
-    groupChannel: run.groupChannel,
-    groupSpace: run.groupSpace,
-    spawnedBy: run.spawnedBy,
-    senderId: run.senderId,
-    senderName: run.senderName,
-    senderUsername: run.senderUsername,
-    senderE164: run.senderE164,
-    senderIsOwner: run.senderIsOwner,
-    conversationToolPolicy: run.conversationToolPolicy,
     modelProvider: options.modelProvider,
     modelId: options.modelId,
     workspaceDir: options.workspaceDir,
@@ -65,9 +52,6 @@ export function resolveCliNativeMcpPolicy(
     sandboxToolPolicy: sandboxStatus.sandboxed ? sandboxStatus.toolPolicy : undefined,
     runtimeToolAllowlist: options.runtimeToolsAllowPolicy,
     inheritRuntimeToolAllowlist: true,
-    inputProvenance: run.inputProvenance,
-    trustedInternalHandoff: run.trustedInternalHandoff,
-    scheduledToolPolicy: run.scheduledToolPolicy,
   });
   return { capabilityProfile, sandboxStatus };
 }

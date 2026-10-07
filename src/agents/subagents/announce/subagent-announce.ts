@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isSilentReplyText,
@@ -51,6 +50,7 @@ import {
   loadRequesterSessionEntry,
   loadSessionEntryByKey,
 } from "./subagent-announce-delivery.js";
+import { hasUsableSessionEntry } from "./subagent-announce-delivery.runtime.js";
 import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import {
@@ -104,14 +104,6 @@ function buildAnnounceReplyInstruction(params: {
     return `${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} Convert the reviewed outcome into a concise internal orchestration update for your parent agent in your own words.${modelRouteInstruction} Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
   }
   return `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}${modelRouteInstruction} Otherwise send a truthful user-facing update unless this exact result is already visible to the user in this same turn. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim.`;
-}
-
-export function hasUsableSessionEntry(entry: unknown): entry is Record<string, unknown> {
-  if (!isRecord(entry)) {
-    return false;
-  }
-  const sessionId = entry.sessionId;
-  return typeof sessionId !== "string" || sessionId.trim() !== "";
 }
 
 function stripAndClassifyReply(text: string): string | null {
@@ -339,7 +331,6 @@ async function runSubagentAnnounceFlowBound(
         prepareCurrent: prepareChildSessionEffects,
         isChildSessionEffectsAllowed: () =>
           childSessionEffectsAllowed() && completionDeliveryAllowed(),
-        hasUsableSessionEntry,
         resolveGatewayContext: params.resolveGatewayContext,
         deps: {
           callGateway: callSubagentLifecycleGateway,

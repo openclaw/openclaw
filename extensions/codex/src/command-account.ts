@@ -296,6 +296,14 @@ function describeFailureStatus(
   return "temporarily unavailable";
 }
 
+const ELIGIBILITY_STATUS = new Map([
+  ["expired", "sign-in expired"],
+  ["invalid_expires", "sign-in expired"],
+  ["unresolved_ref", "credential unavailable"],
+  ["provider_mismatch", "wrong provider"],
+  ["mode_mismatch", "wrong credential type"],
+]);
+
 function describeEligibilityStatus(
   reason: string,
   credential: AuthProfileCredential | undefined,
@@ -303,19 +311,7 @@ function describeEligibilityStatus(
   if (reason === "profile_missing" || reason === "missing_credential") {
     return credential?.type === "api_key" ? "not configured" : "sign-in required";
   }
-  if (reason === "expired" || reason === "invalid_expires") {
-    return "sign-in expired";
-  }
-  if (reason === "unresolved_ref") {
-    return "credential unavailable";
-  }
-  if (reason === "provider_mismatch") {
-    return "wrong provider";
-  }
-  if (reason === "mode_mismatch") {
-    return "wrong credential type";
-  }
-  return "unavailable";
+  return ELIGIBILITY_STATUS.get(reason) ?? "unavailable";
 }
 
 function isActiveUntil(value: number | undefined, now: number): value is number {

@@ -42,6 +42,7 @@ import {
 import {
   resolveProtectedSessionVisibilityError,
   resolveSessionWorkerPlacementPatchError,
+  prepareSessionWorkerPlacementPatchError,
   sessionLog,
 } from "./sessions-shared.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -218,7 +219,7 @@ export async function prepareSessionPatchArchive(params: {
   if (!preview.ok) {
     return err(preview.error);
   }
-  const previewPlacementError = resolveSessionWorkerPlacementPatchError({
+  const previewPlacementError = await prepareSessionWorkerPlacementPatchError({
     agentId: freshResolved.agentId,
     cfg,
     context: params.context,

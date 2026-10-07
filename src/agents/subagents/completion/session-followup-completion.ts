@@ -68,7 +68,6 @@ export function withFollowupSuccessor<T>(successor: FollowupSuccessor, run: () =
 }
 
 export class SessionFollowupCompletion implements FollowupCompletionOwner {
-  readonly request: FollowupRequest;
   private readonly lifetime = new AbortController();
   readonly signal = this.lifetime.signal;
   private readonly lifecycleGeneration = getAgentRunLifecycleGeneration();
@@ -86,8 +85,7 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
   private consumed = false;
   private readonly revoked: () => void;
 
-  private constructor(request: FollowupRequest) {
-    this.request = request;
+  private constructor(readonly request: FollowupRequest) {
     this.execution = { runId: request.runId, settled: createDeferredCore(), yielded: false };
     this.revoked = () => this.close(new Error("Followup completion authority was revoked."));
     void this.result.promise.catch(() => {});

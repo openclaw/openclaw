@@ -43,7 +43,7 @@ import type { createTypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
 
-const commandsRuntimeLoader = createLazyImportLoader(() => import("./commands.runtime.js"));
+const commandsRuntimeLoader = createLazyImportLoader(() => import("./commands.js"));
 const skillCommandsRuntimeLoader = createLazyImportLoader(
   () => import("../../skills/discovery/chat-commands.runtime.js"),
 );

@@ -176,7 +176,7 @@ function readSessionWorkerPlacement(params: {
     : undefined;
 }
 
-async function readSessionWorkerPlacementAsync(params: {
+export async function readSessionWorkerPlacementAsync(params: {
   context: SessionWorkerPlacementContext;
   sessionId?: string;
 }): Promise<Placement | undefined> {
@@ -296,7 +296,7 @@ export async function prepareSessionWorkerPlacementRetirement(
     retire: async () => {
       // Called only after confirmed deletion; orphan reconciliation may have
       // retired this placement while transcript archive publication awaited.
-      if (!readSessionWorkerPlacement(params)) {
+      if (!(await readSessionWorkerPlacementAsync(params))) {
         return;
       }
       assertCurrent();

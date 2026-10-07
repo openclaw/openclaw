@@ -158,11 +158,7 @@ export async function requestPluginApprovalOutcome(
     }
     const approvalResult = approvalRequestExplicitlyUnavailable(requestResult)
       ? undefined
-      : await waitForPluginApprovalDecision({
-          hostCapabilities: params.hostCapabilities,
-          approvalId,
-          signal: params.signal,
-        });
+      : await waitForPluginApprovalDecision({ ...params, approvalId });
     if (params.signal?.aborted) {
       return "cancelled";
     }

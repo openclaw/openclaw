@@ -54,9 +54,7 @@ export async function buildExportTrajectoryCommandReply(
     if (!privateTarget) {
       return { text: EXPORT_TRAJECTORY_PRIVATE_ROUTE_UNAVAILABLE };
     }
-    const privateReply = await buildExportTrajectoryApprovalReply(params, request, {
-      privateApprovalTarget: privateTarget,
-    });
+    const privateReply = await buildExportTrajectoryApprovalReply(params, request, privateTarget);
     const outcome = await deliverPrivateCommandReply({
       commandParams: params,
       targets: [privateTarget],
@@ -72,7 +70,7 @@ export async function buildExportTrajectoryCommandReply(
 async function buildExportTrajectoryApprovalReply(
   params: HandleCommandsParams,
   request: TrajectoryExportExecRequest,
-  options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
+  privateApprovalTarget?: PrivateCommandRouteTarget,
 ): Promise<ReplyPayload> {
   return {
     text: [
@@ -81,7 +79,7 @@ async function buildExportTrajectoryApprovalReply(
       "",
       formatTrajectoryExportRequestDetails(request.request),
       "",
-      await requestTrajectoryExportApproval(params, request, options),
+      await requestTrajectoryExportApproval(params, request, privateApprovalTarget),
     ].join("\n"),
   };
 }
@@ -89,7 +87,7 @@ async function buildExportTrajectoryApprovalReply(
 async function requestTrajectoryExportApproval(
   params: HandleCommandsParams,
   request: TrajectoryExportExecRequest,
-  options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
+  privateApprovalTarget?: PrivateCommandRouteTarget,
 ): Promise<string> {
   const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
   try {
@@ -113,7 +111,7 @@ async function requestTrajectoryExportApproval(
       },
       ...resolveCommandExecApprovalRoute({
         commandParams: params,
-        privateApprovalTarget: options.privateApprovalTarget,
+        privateApprovalTarget,
       }),
       notifyOnExit: params.cfg.tools?.exec?.notifyOnExit,
       notifyOnExitEmptySuccess: params.cfg.tools?.exec?.notifyOnExitEmptySuccess,
@@ -178,14 +176,11 @@ function buildTrajectoryExportExecRequest(
 }
 
 function formatTrajectoryExportRequestDetails(request: TrajectoryExportCliRequest): string {
-  const lines = [
+  return [
     `Session: ${request.sessionKey}`,
     `Workspace: ${request.workspace}`,
     `Output: ${request.output ?? "(default)"}`,
-  ];
-  if (request.store) {
-    lines.push(`Store: ${request.store}`);
-  }
-  lines.push(`Agent: ${request.agent}`);
-  return lines.join("\n");
+    ...(request.store ? [`Store: ${request.store}`] : []),
+    `Agent: ${request.agent}`,
+  ].join("\n");
 }

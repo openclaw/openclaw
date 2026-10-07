@@ -132,10 +132,9 @@ extensions/codex/src/app-server/event-projector.ts	1
 extensions/codex/src/app-server/image-payload-sanitizer.ts	3
 extensions/codex/src/app-server/native-mcp-app.ts	9
 extensions/codex/src/app-server/native-skill-isolation.ts	1
-extensions/codex/src/app-server/plugin-activation.ts	2
+extensions/codex/src/app-server/plugin-activation.ts	1
 extensions/codex/src/app-server/plugin-inventory.ts	6
 extensions/codex/src/app-server/plugin-metadata-cache.ts	5
-extensions/codex/src/app-server/plugin-thread-app-admission.ts	1
 extensions/codex/src/app-server/protocol-validators.ts	3
 extensions/codex/src/app-server/run-attempt-context.ts	2
 extensions/codex/src/app-server/run-attempt-resources.ts	12
@@ -1130,7 +1129,7 @@ packages/gateway-client/src/protocol-client.ts	1
 packages/gateway-client/src/scope-upgrade.ts	4
 packages/gateway-protocol/src/client-info.ts	4
 packages/gateway-protocol/src/connect-error-details.ts	4
-packages/gateway-protocol/src/protocol-validator.ts	2
+packages/gateway-protocol/src/protocol-validator.ts	1
 packages/gateway-protocol/src/schema/audit-activity.ts	1
 packages/gateway-protocol/src/schema/devices.ts	1
 packages/gateway-protocol/src/schema/failover-reason.ts	1
@@ -1263,7 +1262,7 @@ src/agents/code-mode-runtime.ts	2
 src/agents/code-mode-script-syntax.ts	1
 src/agents/code-mode.ts	2
 src/agents/codex-mcp-config.ts	1
-src/agents/command/attempt-execution.helpers.ts	5
+src/agents/command/attempt-execution.helpers.ts	1
 src/agents/compaction-planning-projection.ts	6
 src/agents/compaction-planning-worker.ts	1
 src/agents/compaction-planning.ts	1
@@ -1465,8 +1464,7 @@ src/agents/sessions/tools/tool-definition-wrapper.ts	1
 src/agents/sessions/tools/write.ts	3
 src/agents/shell-snapshot.ts	1
 src/agents/spawn-plan.ts	1
-src/agents/subagents/announce/subagent-announce-completion-delivery.ts	2
-src/agents/subagents/announce/subagent-announce-delivery-retry.ts	2
+src/agents/subagents/announce/subagent-announce-completion-delivery.ts	1
 src/agents/subagents/announce/subagent-announce-origin.ts	2
 src/agents/subagents/registry/subagent-recovery-state.ts	1
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
@@ -1496,7 +1494,6 @@ src/agents/tools-effective-inventory-build.ts	2
 src/agents/tools-effective-inventory.ts	4
 src/agents/tools/agents-wait-tool.ts	1
 src/agents/tools/ask-user-tool.ts	3
-src/agents/tools/automations-tool-name.ts	1
 src/agents/tools/chat-history-text.ts	3
 src/agents/tools/common.ts	2
 src/agents/tools/computer-tool-node.ts	1
@@ -1512,14 +1509,12 @@ src/agents/tools/embedded-gateway-stub.ts	7
 src/agents/tools/gateway-tool.ts	2
 src/agents/tools/goal-tools.ts	2
 src/agents/tools/heartbeat-response-tool.ts	1
-src/agents/tools/image-generate-tool.ts	1
 src/agents/tools/image-tool.helpers.ts	2
 src/agents/tools/image-tool.ts	1
 src/agents/tools/in-process-gateway.ts	1
 src/agents/tools/message-tool-discovery.ts	2
 src/agents/tools/message-tool-execution.ts	3
 src/agents/tools/mobile-ui-tool.ts	2
-src/agents/tools/music-generate-tool.ts	1
 src/agents/tools/nodes-tool.ts	1
 src/agents/tools/openclaw-delegate-tool.ts	1
 src/agents/tools/pdf-native-providers.ts	2
@@ -1539,7 +1534,6 @@ src/agents/tools/system-agent-tool.ts	1
 src/agents/tools/task-suggestion-tools.ts	2
 src/agents/tools/terminal-tool.ts	1
 src/agents/tools/tts-tool.ts	1
-src/agents/tools/video-generate-tool.ts	1
 src/agents/tools/web-fetch.ts	2
 src/agents/tools/web-search-output.ts	3
 src/agents/tools/web-search-provider-common.ts	1
@@ -1560,7 +1554,7 @@ src/auto-reply/command-turn-context.ts	1
 src/auto-reply/heartbeat-filter.ts	2
 src/auto-reply/heartbeat-tool-response.ts	2
 src/auto-reply/reply.directive.directive-behavior.e2e-mocks.ts	1
-src/auto-reply/reply/acp-reset-target.ts	2
+src/auto-reply/reply/acp-reset-target.ts	1
 src/auto-reply/reply/agent-lifecycle-terminal.ts	2
 src/auto-reply/reply/agent-runner-event-handler.ts	1
 src/auto-reply/reply/agent-runner-execution.ts	1
@@ -1579,7 +1573,6 @@ src/auto-reply/reply/commands-mcp.ts	2
 src/auto-reply/reply/commands-plugin.ts	1
 src/auto-reply/reply/commands-plugins.ts	1
 src/auto-reply/reply/commands-private-route.ts	1
-src/auto-reply/reply/commands-reset-hooks.ts	3
 src/auto-reply/reply/commands-reset.ts	1
 src/auto-reply/reply/commands-subagents/action-log.ts	1
 src/auto-reply/reply/config-mutations.ts	1
@@ -1911,7 +1904,6 @@ src/config/sessions/session-accessor.entry.ts	1
 src/config/sessions/session-accessor.sqlite-archive-store.ts	1
 src/config/sessions/session-accessor.sqlite-canonical-inventory.ts	1
 src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
-src/config/sessions/session-accessor.sqlite-entry.ts	1
 src/config/sessions/session-accessor.sqlite-message-cut.ts	1
 src/config/sessions/session-accessor.sqlite-read.ts	4
 src/config/sessions/session-accessor.sqlite-reset-window.ts	2
@@ -2213,7 +2205,6 @@ src/infra/kysely-sync-cache-state.ts	1
 src/infra/kysely-sync.ts	7
 src/infra/net/fetch-guard.ts	2
 src/infra/net/form-data.ts	2
-src/infra/net/node-proxy-agent.ts	1
 src/infra/net/proxy-fetch.ts	2
 src/infra/net/proxy/proxy-validation.ts	1
 src/infra/net/runtime-fetch.ts	4
@@ -2297,7 +2288,7 @@ src/infra/state-migrations.workspace-setup-store.ts	1
 src/infra/state-migrations.workspace-setup.ts	1
 src/infra/system-presence.ts	1
 src/infra/tailscale.ts	4
-src/infra/tmp-openclaw-dir.ts	3
+src/infra/tmp-openclaw-dir.ts	1
 src/infra/update-check-package-target.ts	2
 src/infra/update-global.ts	3
 src/infra/update-package-manager.ts	1

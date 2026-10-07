@@ -129,6 +129,16 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       } catch (err) {
         return sendFailure("forbidden", formatErrorMessage(err));
       }
+      const readSession = (key: string, agentId: string) =>
+        resolveGatewaySessionStoreTargetWithStore({
+          cfg,
+          key,
+          agentId,
+          readOnly: true,
+          exactRead: true,
+          clone: false,
+          projection: "full",
+        });
 
       const sessionKeyParam = readToolStringParam(params, "sessionKey");
       const labelParam = readToolStringParam(params, "label");
@@ -356,15 +366,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       const mayUseRequesterForLiteralSentinel =
         isLiteralUnscopedMainTarget && normalizeAgentId(targetAgentId) === requesterAgentId;
       const requesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
-      const requesterSession = resolveGatewaySessionStoreTargetWithStore({
-        cfg,
-        key: effectiveRequesterKey,
-        agentId: requesterAgentId,
-        readOnly: true,
-        exactRead: true,
-        clone: false,
-        projection: "full",
-      });
+      const requesterSession = readSession(effectiveRequesterKey, requesterAgentId);
       const requesterSessionEntry = requesterSession.store[requesterSession.canonicalKey];
       const requesterSessionId = opts?.agentSessionId ?? requesterSessionEntry?.sessionId;
       const requesterContinuationSession = requesterSessionId
@@ -482,15 +484,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
 
           const requesterChannel = opts?.agentChannel;
           const isIsolatedCronRequester = isCronRunSessionKey(requesterSessionKey);
-          const targetSession = resolveGatewaySessionStoreTargetWithStore({
-            cfg,
-            key: resolvedKey,
-            agentId: targetAgentId,
-            readOnly: true,
-            exactRead: true,
-            clone: false,
-            projection: "full",
-          });
+          const targetSession = readSession(resolvedKey, targetAgentId);
           const targetSessionEntry = targetSession.store[targetSession.canonicalKey];
           const targetAcpMeta = readAcpSessionMetaForEntry({
             sessionKey: targetSession.canonicalKey,
@@ -633,15 +627,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           });
           try {
             const acceptedTarget = start.a2aSessionKey
-              ? resolveGatewaySessionStoreTargetWithStore({
-                  cfg,
-                  key: acceptedTargetSessionKey,
-                  agentId: targetAgentId,
-                  readOnly: true,
-                  exactRead: true,
-                  clone: false,
-                  projection: "full",
-                })
+              ? readSession(acceptedTargetSessionKey, targetAgentId)
               : targetSession;
             if (start.a2aSessionKey && !acceptedTarget.store[acceptedTarget.canonicalKey]) {
               throw new Error("Accepted Cron parent has no stored session entry.");
@@ -726,4 +712,3 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
     }),
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

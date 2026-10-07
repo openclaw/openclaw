@@ -105,7 +105,6 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     });
     return {
       candidateRun,
-      sessionRuntimeOverride,
       ...resolveRunEntryCliRuntime({
         config: params.runtimeConfig,
         provider,
@@ -240,7 +239,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           agentId: turn.followupRun.run.agentId,
           sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
           sessionEntry: params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry(),
-          agentRuntime: runtime.sessionRuntimeOverride,
+          agentRuntime: runOptions.agentHarnessRuntimeOverride,
         });
         const candidateThinkLevel = resolveRunThinkingLevelForFallbackCandidate({
           cfg: params.runtimeConfig,

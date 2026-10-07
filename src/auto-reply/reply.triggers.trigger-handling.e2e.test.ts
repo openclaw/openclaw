@@ -59,7 +59,7 @@ const TELEGRAM_DIRECT_MESSAGE = {
 } as const;
 
 // mock-isolation: Exercise command routing without starting a provider-backed agent runtime.
-vi.mock("./reply/agent-runner.runtime.js", () => ({
+vi.mock("./reply/agent-runner-run.js", () => ({
   runReplyAgent: async (params: {
     commandBody: string;
     followupRun: {
