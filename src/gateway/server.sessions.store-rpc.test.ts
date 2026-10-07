@@ -587,8 +587,9 @@ test("lists and patches session store via sessions.* RPC", async () => {
 });
 
 test("sessions.search real WS run: configured ACP store owner with a non-ACP-shaped key", async () => {
-  const rootStateDir = expectDefined(process.env.OPENCLAW_STATE_DIR, "OPENCLAW_STATE_DIR");
-  const stateDir = path.join(rootStateDir, "acp-non-acp-key-real-run");
+  // Persistent dir on purpose: the seeded state doubles as real-configured-setup
+  // evidence for a standalone (non-harness) gateway run afterwards.
+  const stateDir = "/tmp/real-proof-state";
   await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
     // Config comes from the real config file (no test overrides) so this run
     // doubles as real-configured-setup behavior evidence.
