@@ -38,6 +38,7 @@ import {
   invalidateOpenClawStateRuntimeIntegrity,
   type OpenClawStateIntegrityPolicy,
 } from "./openclaw-state-db-integrity-admission.js";
+import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
@@ -205,6 +206,24 @@ function assertStateReadSchemaForPolicy(
   }
 }
 
+function admitStateReadSchema(
+  database: DatabaseSync,
+  pathname: string,
+  existingSchema: boolean,
+): void {
+  try {
+    admitSqliteSchema(database, (userVersion) =>
+      assertSupportedStateSchemaVersion(database, pathname, {
+        userVersion,
+        contentVersion: userVersion,
+      }),
+    );
+    assertStateReadSchemaForPolicy(database, pathname, existingSchema);
+  } catch (error) {
+    throw normalizeOpenClawStateSchemaReadError(error, pathname);
+  }
+}
+
 export function withOpenClawStateReadOnlyLocation<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   pathname: string,
@@ -258,8 +277,7 @@ export function readOpenClawStateReadOnlyLocation<T>(
       result = {
         status: "available",
         value: runSqliteReadOperationSync(opened.database.db, () => {
-          assertStateReadSchemaForPolicy(opened.database.db, pathname, existingSchema);
-          admitSqliteSchema(opened.database.db);
+          admitStateReadSchema(opened.database.db, pathname, existingSchema);
           return operation(opened.database);
         }),
       };
@@ -337,8 +355,11 @@ export function openOpenClawStateReadOnlyLocation(
   const connection = openOpenClawStateReadConnection(pathname, source);
   try {
     runSqliteReadOperationSync(connection.database.db, () => {
-      assertStateReadSchema(connection.database.db, pathname);
-      admitSqliteSchema(connection.database.db);
+      admitStateReadSchema(
+        connection.database.db,
+        pathname,
+        isExistingOpenClawStateSchema(pathname, connection.database.db),
+      );
     });
   } catch (error) {
     try {

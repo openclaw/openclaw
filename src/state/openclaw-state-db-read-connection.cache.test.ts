@@ -53,6 +53,7 @@ vi.mock("../infra/worker-task-server.js", async (importOriginal) => ({
   },
 }));
 import "./openclaw-state-read.worker.js";
+import { createDanglingSkillWorkshopReviewIndex } from "./openclaw-state-db-corruption.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -126,8 +127,10 @@ it("reuses one reader in registered worker commands, refreshes idle, and reopens
   const contentVersionSelect = /^select "value_json" from "config_machine_state"/iu;
   const dataVersion = /^PRAGMA data_version$/iu;
   const userVersion = /^PRAGMA user_version$/iu;
+  const catalogRead = /\b(?:sqlite_schema|sqlite_master)\b/iu;
   expect(await value()).toBe(1);
-  expect(observation.queries.filter((sql) => userVersion.test(sql))).toHaveLength(2);
+  expect.soft(observation.queries.filter((sql) => userVersion.test(sql))).toHaveLength(1);
+  expect.soft(observation.queries.filter((sql) => catalogRead.test(sql))).toHaveLength(1);
   expect(await value()).toBe(1);
   prepare.mockClear();
   observation.queries.length = 0;
@@ -164,6 +167,30 @@ it("reuses one reader in registered worker commands, refreshes idle, and reopens
   expect(prepare.mock.calls.filter(([sql]) => dataVersion.test(sql))).toHaveLength(1);
   observation.restore();
 });
+
+it.each([false, true])(
+  "preserves cold schema refusal precedence with a malformed catalog (newer header: %s)",
+  (newerHeader) => {
+    const { pathname, value } = fixture();
+    const seed = sqlite.openNodeSqliteDatabase(pathname);
+    try {
+      seed.exec(
+        "CREATE TABLE skill_workshop_collection_reviews (review_id TEXT PRIMARY KEY, create_time INTEGER)",
+      );
+      if (newerHeader) {
+        seed.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+      }
+    } finally {
+      seed.close();
+    }
+    createDanglingSkillWorkshopReviewIndex(pathname);
+    expect(value).toThrow(
+      newerHeader
+        ? /newer schema version/iu
+        : /legacy-workshop-review-index.*openclaw doctor --fix/iu,
+    );
+  },
+);
 
 it.each([
   { change: "insertion", before: undefined, after: "1", expected: 1 },
