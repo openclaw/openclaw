@@ -645,18 +645,53 @@ public enum OpenClawChatGatewayRequests {
     }
 
     public static func progressCardGet(sessionKey: String, agentID: String?) -> OpenClawChatGatewayRequest {
+        self.progressCardRequest("progressCard.get", sessionKey: sessionKey, agentID: agentID)
+    }
+
+    /// A put without a card clears the saved one for every viewer; the revision keeps it off a newer card.
+    public static func progressCardClear(
+        sessionKey: String,
+        agentID: String?,
+        expectedRevision: Int) -> OpenClawChatGatewayRequest
+    {
+        self.progressCardRequest(
+            "progressCard.put",
+            sessionKey: sessionKey,
+            agentID: agentID,
+            extra: ["expectedRevision": AnyCodable(expectedRevision)])
+    }
+
+    public static func progressCardRefresh(
+        sessionKey: String,
+        agentID: String?,
+        idempotencyKey: String) -> OpenClawChatGatewayRequest
+    {
+        self.progressCardRequest(
+            "progressCard.refresh",
+            sessionKey: sessionKey,
+            agentID: agentID,
+            extra: ["idempotencyKey": AnyCodable(idempotencyKey)])
+    }
+
+    private static func progressCardRequest(
+        _ method: String,
+        sessionKey: String,
+        agentID: String?,
+        extra: [String: AnyCodable] = [:]) -> OpenClawChatGatewayRequest
+    {
         let target = OpenClawChatSessionTarget.resolve(
             sessionKey,
             selectedAgentID: nil,
             overrideAgentID: agentID,
             policy: .scopeBareKeysToSelectedAgent)
-        var params: [String: AnyCodable] = ["sessionKey": AnyCodable(target.sessionKey)]
+        var params = extra
+        params["sessionKey"] = AnyCodable(target.sessionKey)
         // Released gateways reject extra fields; qualified keys already carry their owner.
         if target.agentID != OpenClawChatSessionKey.agentID(from: target.sessionKey)?.lowercased() {
             self.add(target.agentID, to: &params, key: "agentId")
         }
         return OpenClawChatGatewayRequest(
-            method: "progressCard.get",
+            method: method,
             params: params,
             timeoutMs: self.defaultTimeoutMs)
     }

@@ -125,6 +125,11 @@ public final class OpenClawChatViewModel {
     var narration = ChatNarration()
     public internal(set) var progressCard: ProgressCard?
     var progressCardStoreAvailable: Bool?
+    var progressCardRefreshAvailable = false
+    var progressCardRefreshPending = false
+    @ObservationIgnored
+    var progressCardRefreshTask: Task<Void, Never>?
+    var progressCardRefreshKey: String?
     @ObservationIgnored
     var progressCardGeneration: UInt64 = 0
     @ObservationIgnored

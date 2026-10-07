@@ -21,6 +21,10 @@ enum ScreenshotFixtureMode {
     static var reactionsEnabled: Bool {
         !ProcessInfo.processInfo.arguments.contains("--openclaw-no-reactions-fixture")
     }
+
+    static var progressCardEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-progress-card-fixture")
+    }
 }
 
 struct LocalChatFixture {
@@ -231,6 +235,27 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         try await self.store.history(sessionKey: sessionKey)
+    }
+
+    func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
+        guard ScreenshotFixtureMode.progressCardEnabled,
+              ["progressCard.get", "progressCard.refresh"].contains(method)
+        else { return nil }
+        return true
+    }
+
+    func fetchProgressCard(sessionKey: String, agentID _: String?) async throws -> ProgressCard? {
+        guard ScreenshotFixtureMode.progressCardEnabled else { return nil }
+        return ProgressCard(
+            sessionkey: sessionKey,
+            revision: 1,
+            updatedat: 0,
+            markdown: nil,
+            steps: [
+                ProgressCardStep(step: "Collect the sample data", status: .completed),
+                ProgressCardStep(step: "Draft the summary", status: .inProgress),
+                ProgressCardStep(step: "Share the result", status: .pending),
+            ])
     }
 
     func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease? {
@@ -474,14 +499,18 @@ private actor LocalFixtureChatStore {
 
     func history(sessionKey: String) throws -> OpenClawChatHistoryPayload {
         let normalizedSessionKey = Self.normalizedSessionKey(sessionKey, fallback: self.fixture.sessionKey)
+        let progressCardOwner = ScreenshotFixtureMode.progressCardEnabled ? self.fixture.defaultAgentID : nil
         return try OpenClawChatHistoryPayload(
             sessionKey: normalizedSessionKey,
             sessionId: "\(self.fixture.sessionIDPrefix)-\(normalizedSessionKey)",
             messages: JSONDecoder().decode([AnyCodable].self, from: JSONEncoder().encode(self.messages)),
             thinkingLevel: self.thinkingLevel,
+            // The progress card is read only for a session whose owner the history names.
             sessionInfo: OpenClawChatSessionInfo(
                 hasActiveRun: self.activeRunID != nil,
-                activeRunIds: self.activeRunID.map { [$0] }),
+                activeRunIds: self.activeRunID.map { [$0] },
+                key: progressCardOwner.map { "agent:\($0):\(normalizedSessionKey)" },
+                agentId: progressCardOwner),
             inFlightRun: ProcessInfo.processInfo.arguments.contains("--openclaw-streaming-layout-fixture")
                 ? self.activeRunID.map {
                     OpenClawChatInFlightRun(

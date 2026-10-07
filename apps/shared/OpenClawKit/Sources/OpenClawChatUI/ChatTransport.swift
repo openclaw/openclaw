@@ -797,6 +797,8 @@ public protocol OpenClawChatTransport: Sendable {
     func gatewayAdvertisesMethod(_ method: String) async -> Bool?
     func attachmentLimits() async -> GatewayAttachmentLimits?
     func fetchProgressCard(sessionKey: String, agentID: String?) async throws -> ProgressCard?
+    func clearProgressCard(sessionKey: String, agentID: String?, expectedRevision: Int) async throws
+    func refreshProgressCard(sessionKey: String, agentID: String?, idempotencyKey: String) async throws
     func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease?
     func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage?
     func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice]
@@ -965,6 +967,14 @@ extension OpenClawChatTransport {
 
     public func fetchProgressCard(sessionKey _: String, agentID _: String?) async throws -> ProgressCard? {
         nil
+    }
+
+    public func clearProgressCard(sessionKey _: String, agentID _: String?, expectedRevision _: Int) async throws {
+        throw CancellationError()
+    }
+
+    public func refreshProgressCard(sessionKey _: String, agentID _: String?, idempotencyKey _: String) async throws {
+        throw CancellationError()
     }
 
     public func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease? {

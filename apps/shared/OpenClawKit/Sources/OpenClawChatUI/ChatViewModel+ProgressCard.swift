@@ -34,12 +34,14 @@ extension OpenClawChatViewModel {
         return Task { [weak self] in
             guard let self else { return }
             let storeAvailable = await self.transport.gatewayAdvertisesMethod("progressCard.get")
+            let refreshAvailable = await self.transport.gatewayAdvertisesMethod("progressCard.refresh")
             guard self.isCurrentProgressCardRequest(
                 session: session,
                 generation: generation,
                 requestID: requestID)
             else { return }
             self.progressCardStoreAvailable = storeAvailable
+            self.progressCardRefreshAvailable = refreshAvailable == true
             // Gateways without the durable store reject the fetch outright
             // (2026.7.x: "missing scope: operator.admin"); the legacy
             // stream:"plan" fallback owns the card there.
@@ -74,6 +76,74 @@ extension OpenClawChatViewModel {
     func invalidateProgressCardTarget() {
         self.progressCardGeneration &+= 1
         self.preparedProgressCardTarget = nil
+        self.finishProgressCardRefresh()
+    }
+
+    /// Clears the saved card for every viewer of this session, as the web client's bin does.
+    func clearSavedProgressCard() {
+        let session = self.currentSessionSnapshot()
+        guard let card = self.progressCard,
+              let target = self.progressCardTarget(for: session), let owner = target.agentID
+        else { return }
+        Task { [weak self] in
+            do {
+                try await self?.transport.clearProgressCard(
+                    sessionKey: target.sessionKey,
+                    agentID: owner,
+                    expectedRevision: card.revision)
+                // The change event can be lost across a reconnect; the read decides.
+                self?.scheduleProgressCardFetch(for: session)
+            } catch {
+                guard let self, self.isCurrentSession(session), !(error is CancellationError) else { return }
+                self.errorText = String(localized: "Could not clear the saved plan.")
+            }
+        }
+    }
+
+    /// Asks the agent to bring the card up to date. The new card arrives as a change event.
+    func requestProgressCardRefresh() {
+        let session = self.currentSessionSnapshot()
+        guard !self.progressCardRefreshPending,
+              let target = self.progressCardTarget(for: session), let owner = target.agentID
+        else { return }
+        self.progressCardRefreshPending = true
+        // A refresh whose answer never came may still be running. Until a new card settles it, a retry
+        // repeats the same key so the Gateway does not start the work twice. The web client does the same.
+        let retry = self.progressCardRefreshKey != nil
+        let key = self.progressCardRefreshKey ?? UUID().uuidString
+        self.progressCardRefreshKey = key
+        // A repeated request is only acknowledged again: it does not replay a change event that was missed,
+        // so the saved card is read to let a newer revision settle the refresh.
+        if retry { self.scheduleProgressCardFetch(for: session) }
+        self.progressCardRefreshTask = Task { [weak self] in
+            do {
+                try await self?.transport.refreshProgressCard(
+                    sessionKey: target.sessionKey,
+                    agentID: owner,
+                    idempotencyKey: key)
+                // Stop waiting where the web client does.
+                try await Task.sleep(nanoseconds: 120 * 1_000_000_000)
+            } catch {
+                guard !Task.isCancelled else { return }
+                if !(error is CancellationError) {
+                    // The Gateway says this attempt ended without a new card: the next tap is new work.
+                    if (error as? GatewayResponseError)?.details["code"]?.value as? String
+                        == "PROGRESS_CARD_REFRESH_TERMINAL"
+                    {
+                        self?.progressCardRefreshKey = nil
+                    }
+                    self?.errorText = String(localized: "Could not refresh the plan.")
+                }
+            }
+            self?.progressCardRefreshPending = false
+        }
+    }
+
+    private func finishProgressCardRefresh() {
+        self.progressCardRefreshTask?.cancel()
+        self.progressCardRefreshTask = nil
+        self.progressCardRefreshPending = false
+        self.progressCardRefreshKey = nil
     }
 
     func clearProgressCard() {
@@ -162,6 +232,9 @@ extension OpenClawChatViewModel {
             self.progressCard?.sessionkey != normalized?.sessionkey ||
             self.progressCard?.revision != normalized?.revision
         else { return }
+        if self.progressCard?.revision != normalized?.revision {
+            self.finishProgressCardRefresh()
+        }
         self.progressCard = normalized
         if presentationChanged {
             self.markTimelineChanged()

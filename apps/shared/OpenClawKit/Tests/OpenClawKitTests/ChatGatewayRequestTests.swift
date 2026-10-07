@@ -24,6 +24,24 @@ struct ChatGatewayRequestTests {
         #expect(Set(request.params.keys) == (expectedOwner == nil ? ["sessionKey"] : ["sessionKey", "agentId"]))
     }
 
+    @Test func `clearing and refreshing a progress card send the target and one extra field`() {
+        let clear = OpenClawChatGatewayRequests.progressCardClear(
+            sessionKey: "agent:main:main",
+            agentID: "main",
+            expectedRevision: 7)
+        #expect(clear.method == "progressCard.put")
+        #expect(clear.params["expectedRevision"]?.value as? Int == 7)
+        #expect(Set(clear.params.keys) == ["sessionKey", "expectedRevision"])
+
+        let refresh = OpenClawChatGatewayRequests.progressCardRefresh(
+            sessionKey: "agent:main:main",
+            agentID: "main",
+            idempotencyKey: "tap-1")
+        #expect(refresh.method == "progressCard.refresh")
+        #expect(refresh.params["idempotencyKey"]?.value as? String == "tap-1")
+        #expect(Set(refresh.params.keys) == ["sessionKey", "idempotencyKey"])
+    }
+
     @Test func `progress payloads validate the captured agent without replacing null`() throws {
         let valid = Data(
             #"{"card":{"sessionKey":"agent:research:global","revision":1,"updatedAt":10,"markdown":"Research","steps":[]}}"#
