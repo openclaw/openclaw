@@ -187,8 +187,10 @@ export async function mutateSubagentRunForKill(
       return { claim: undefined };
     } catch (error) {
       return {
-        failure: killFailure(error, "Failed to persist subagent kill intent: ", (error) =>
-          formatErrorMessage(error instanceof SubagentRegistryWriteError ? error.cause : error),
+        failure: killFailure(error, "Failed to persist subagent kill intent: ", (candidate) =>
+          formatErrorMessage(
+            candidate instanceof SubagentRegistryWriteError ? candidate.cause : candidate,
+          ),
         ),
       };
     }

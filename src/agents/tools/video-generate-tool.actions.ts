@@ -73,7 +73,7 @@ function summarizeVideoGenerationCapabilities(
         ["supportsWatermark", "watermark"],
       ] as const
     ).flatMap(([key, label]) =>
-      activeModeCapabilities.some((capabilities) => capabilities[key]) ? [label] : [],
+      activeModeCapabilities.some((modeCapabilities) => modeCapabilities[key]) ? [label] : [],
     ),
     Object.keys(declaredProviderOptions).length > 0
       ? `providerOptions={${Object.entries(declaredProviderOptions)

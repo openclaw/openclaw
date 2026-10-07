@@ -69,9 +69,9 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
 ];
 
 function isWriterClaimReboundAnnounceError(error: unknown): boolean {
-  return Boolean(
+  return (
     asOptionalObjectRecord(error)?.name === "SessionTranscriptWriterClaimReboundError" ||
-    WRITER_CLAIM_REBOUND_ANNOUNCE_RE.test(summarizeDeliveryError(error)),
+    WRITER_CLAIM_REBOUND_ANNOUNCE_RE.test(summarizeDeliveryError(error))
   );
 }
 

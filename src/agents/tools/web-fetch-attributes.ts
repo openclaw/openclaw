@@ -65,11 +65,10 @@ export function readHtmlAttribute(
         pos = valueEnd === -1 ? input.length : valueEnd + 1;
       } else {
         const valueStart = pos;
-        while (
-          pos < input.length &&
-          !isAsciiWhitespace(input.charAt(pos)) &&
-          (!rendering || !RENDER_UNQUOTED_VALUE_BREAK.test(input.charAt(pos)))
-        ) {
+        while (pos < input.length && !isAsciiWhitespace(input.charAt(pos))) {
+          if (rendering && RENDER_UNQUOTED_VALUE_BREAK.test(input.charAt(pos))) {
+            break;
+          }
           pos += 1;
         }
         value = input.slice(valueStart, pos);

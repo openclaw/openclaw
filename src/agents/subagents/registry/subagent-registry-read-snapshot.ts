@@ -127,8 +127,8 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
       }
       const snapshot = new Map<string, SubagentRunReadRecord>();
       for (const key of new Set([...persistedKeys, ...liveKeys])) {
-        const live = inMemoryRuns.get(key);
-        const entry = live ? projectSubagentRunForSessionList(live) : compact.get(key);
+        const liveEntry = inMemoryRuns.get(key);
+        const entry = liveEntry ? projectSubagentRunForSessionList(liveEntry) : compact.get(key);
         if (entry) {
           snapshot.set(key, entry);
         }

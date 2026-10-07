@@ -194,12 +194,17 @@ export function createNodesTool(options?: {
             const requestId = readToolStringParam(params, "requestId", {
               required: true,
             });
-            const options =
+            const approvalOptions =
               action === "approve"
                 ? { scopes: await resolveNodePairApproveScopes(gatewayOpts, requestId) }
                 : undefined;
             return jsonResult(
-              await callGatewayTool(`node.pair.${action}`, gatewayOpts, { requestId }, options),
+              await callGatewayTool(
+                `node.pair.${action}`,
+                gatewayOpts,
+                { requestId },
+                approvalOptions,
+              ),
             );
           }
           case "notify": {

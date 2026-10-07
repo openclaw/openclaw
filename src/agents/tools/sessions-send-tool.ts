@@ -712,4 +712,3 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
     }),
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

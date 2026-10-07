@@ -10,18 +10,18 @@ export function createFailedQueuedRun(
   ownedSession = true,
 ): SubagentRunRecord {
   const entry = structuredClone(current);
-  endedAt ??= Date.now();
+  const finishedAt = endedAt ?? Date.now();
   entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
   entry.execution = {
     ...entry.execution,
     status: "terminal",
-    endedAt,
-    outcome: { status: "error", error, endedAt },
+    endedAt: finishedAt,
+    outcome: { status: "error", error, endedAt: finishedAt },
     ...(!ownedSession ? { suppressSessionEffects: true } : {}),
   };
   entry.queuedLaunch = undefined;
   entry.collectorLaunchCleanupPending = true;
-  entry.completion = { required: false, resultText: error, capturedAt: endedAt };
+  entry.completion = { required: false, resultText: error, capturedAt: finishedAt };
   return entry;
 }
 
