@@ -21,6 +21,7 @@ import {
   getEmbeddedSessionPromptState,
 } from "../session-prompt-state.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
+import { preparePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";
 
 registerAgentSessionLoopTestLifecycle();
 const sessionId = "attempt-prompt-admission-test";
@@ -121,7 +122,7 @@ describe("embedded provider dispatch admission", () => {
     },
   );
 
-  it.each(["matching", "agentId", "sessionId", "sessionKey", "storePath"] as const)(
+  it.each(["matching", "replay", "agentId", "sessionId", "sessionKey", "storePath"] as const)(
     "composes the real manager writer, durable callback, recorder wait and provider gate (%s)",
     async (field) => {
       await withOpenClawTestState({ label: "composed-admission" }, async (state) => {
@@ -170,7 +171,7 @@ describe("embedded provider dispatch admission", () => {
           dispose: vi.fn(async () => undefined),
         };
         const prepared =
-          field === "matching" || field === "agentId"
+          field === "matching" || field === "replay" || field === "agentId"
             ? { ...target }
             : {
                 ...target,
@@ -194,15 +195,31 @@ describe("embedded provider dispatch admission", () => {
         streamMocks.streamSimple.mockImplementation((model) =>
           createAssistantResultStream(createAssistant(model, [{ type: "text", text: "done" }])),
         );
-        const sessionManager = guardSessionManager(
-          SessionManager.open(target, state.workspaceDir),
-          {
-            preparedUserTurnMessage: message,
-            preparedUserTurnTranscriptRecorder: recorder,
-          },
-        );
+        const manager = SessionManager.open(target, state.workspaceDir);
+        if (field === "replay") {
+          await manager.appendMessage(message);
+          const markPersisted = vi.spyOn(recorder, "markRuntimePersisted");
+          const replay = await preparePersistedCurrentUserTurn({
+            sessionManager: manager,
+            message,
+            recorder,
+            runId: "synthetic-replay-run",
+          });
+          expect(replay).toBeDefined();
+          expect(markPersisted).toHaveBeenCalledWith(message, expect.any(Object), {
+            appended: false,
+          });
+          await recorder.waitForRuntimePersistence();
+        }
+        const sessionManager = guardSessionManager(manager, {
+          preparedUserTurnMessage: message,
+          preparedUserTurnTranscriptRecorder: recorder,
+          suppressNextUserMessagePersistence: field === "replay",
+        });
         const { session } = await createTestSession({ sessionManager });
-        expect(recorder.getAdmissionReceipt()).toBeUndefined();
+        if (field !== "replay") {
+          expect(recorder.getAdmissionReceipt()).toBeUndefined();
+        }
         await submitEmbeddedAttemptPrompt({
           contextTokenBudget: 8_000,
           images: [],
@@ -228,7 +245,7 @@ describe("embedded provider dispatch admission", () => {
           sessionKey: target.sessionKey,
           storePath: target.storePath,
         });
-        if (field === "matching") {
+        if (field === "matching" || field === "replay") {
           expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
           expect(session.getLastAssistantText()).toBe("done");
         } else {
