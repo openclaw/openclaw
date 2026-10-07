@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachBrokerNativeResource } from "./resource-client.js";
-import type { BrokerResourceAttachment, BrokerResourceResponse } from "./resource-protocol.js";
+import type { BrokerResourceAttachment } from "./resource-protocol.js";
 import { createBrokerResourceSocket } from "./resource-socket.js";
 
 type Peer = ReturnType<typeof createBrokerResourceSocket>;
@@ -97,17 +97,62 @@ function makeTarget() {
   return { port: channel.port1 as unknown as MessagePort, peer: channel.port2 };
 }
 
-function makeOwner(attachment: BrokerResourceAttachment, target: MessagePort) {
-  const responses: BrokerResourceResponse[] = [];
+/**
+ * Records broker responses and failures, waking awaited assertions as each arrives.
+ * A wait resolves once its assertion passes, so completion is signalled by the decoded
+ * callback rather than by polling the wall clock.
+ */
+function makeRecord() {
+  const received: unknown[] = [];
   const failures: Error[] = [];
-  const owner = attachBrokerNativeResource(
-    attachment,
-    target,
-    (response) => responses.push(response),
-    (error) => failures.push(error),
-  );
+  const waiters = new Map<() => boolean, () => void>();
+  const notify = () => {
+    for (const [waiter, resolve] of waiters) {
+      if (waiter()) {
+        waiters.delete(waiter);
+        resolve();
+      }
+    }
+  };
+  const settled = (assertion: () => void) => {
+    try {
+      assertion();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const waitFor = (assertion: () => void) => {
+    if (settled(assertion)) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      waiters.set(() => settled(assertion), resolve);
+    });
+  };
+  return {
+    received,
+    failures,
+    waitFor,
+    record: (response: unknown) => {
+      received.push(response);
+      notify();
+    },
+    fail: (error: Error) => {
+      failures.push(error);
+      notify();
+    },
+  };
+}
+
+function makeOwner(
+  record: ReturnType<typeof makeRecord>,
+  attachment: BrokerResourceAttachment,
+  target: MessagePort,
+) {
+  const owner = attachBrokerNativeResource(attachment, target, record.record, record.fail);
   cleanups.push(async () => owner.dispose());
-  return { owner, failures };
+  return { owner };
 }
 
 describe("spawn broker native resource client", () => {
@@ -115,18 +160,18 @@ describe("spawn broker native resource client", () => {
     const { endpoint, accepted } = await brokerEndpoint();
     const attachment = makeAttachment(endpoint);
     const target = makeTarget();
-    const { owner, failures } = makeOwner(attachment, target.port);
+    const record = makeRecord();
+    const { owner } = makeOwner(record, attachment, target.port);
 
     // The attachment dials the private endpoint; the server accepts that connection.
     const ownerSocket = await accepted;
-    const received: unknown[] = [];
     const peer: Peer = createBrokerResourceSocket(ownerSocket, {
-      message: (value) => received.push(value),
+      message: (value) => record.record(value),
       close: () => {},
     });
 
-    await vi.waitFor(() =>
-      expect(received).toContainEqual({ type: "resource-attach", attachment }),
+    await record.waitFor(() =>
+      expect(record.received).toContainEqual({ type: "resource-attach", attachment }),
     );
 
     // Input arriving before the factory admits ownership is forwarded once it does.
@@ -138,19 +183,19 @@ describe("spawn broker native resource client", () => {
     const closing = owner.close();
 
     await peer.send({ type: "resource-created", id: attachment.id });
-    await vi.waitFor(() =>
-      expect(received).toContainEqual({
+    await record.waitFor(() =>
+      expect(record.received).toContainEqual({
         type: "resource-target",
         id: attachment.id,
         value: "early-input",
       }),
     );
-    await vi.waitFor(() =>
-      expect(received.some((value) => (value as { type?: string }).type === "resource-close")).toBe(
-        true,
-      ),
+    await record.waitFor(() =>
+      expect(
+        record.received.some((value) => (value as { type?: string }).type === "resource-close"),
+      ).toBe(true),
     );
-    const closeRequest = received.find(
+    const closeRequest = record.received.find(
       (value): value is { type: "resource-close"; requestId: number } =>
         (value as { type?: string }).type === "resource-close",
     );
@@ -163,23 +208,23 @@ describe("spawn broker native resource client", () => {
     });
     await expect(closing).resolves.toBeUndefined();
     expect(ownerSocket.closed).toBe(false);
-    expect(failures).toEqual([]);
+    expect(record.failures).toEqual([]);
   });
 
   it("forwards input that arrived before another consumer started the port", async () => {
     const { endpoint, accepted } = await brokerEndpoint();
     const attachment = makeAttachment(endpoint);
     const target = makeTarget();
-    const { failures } = makeOwner(attachment, target.port);
+    const record = makeRecord();
+    makeOwner(record, attachment, target.port);
 
     const ownerSocket = await accepted;
-    const received: unknown[] = [];
     const peer: Peer = createBrokerResourceSocket(ownerSocket, {
-      message: (value) => received.push(value),
+      message: (value) => record.record(value),
       close: () => {},
     });
-    await vi.waitFor(() =>
-      expect(received).toContainEqual({ type: "resource-attach", attachment }),
+    await record.waitFor(() =>
+      expect(record.received).toContainEqual({ type: "resource-attach", attachment }),
     );
 
     // Another consumer of the target port starts it: the port drains queued input before the
@@ -199,33 +244,34 @@ describe("spawn broker native resource client", () => {
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    expect(received).toHaveLength(1);
+    expect(record.received).toHaveLength(1);
 
     await peer.send({ type: "resource-ready", id: attachment.id, pid: 1, generation: 1 });
     await peer.send({ type: "resource-created", id: attachment.id });
 
-    await vi.waitFor(() =>
-      expect(received).toContainEqual({
+    await record.waitFor(() =>
+      expect(record.received).toContainEqual({
         type: "resource-target",
         id: attachment.id,
         value: "input-before-start",
       }),
     );
-    expect(failures).toEqual([]);
+    expect(record.failures).toEqual([]);
   });
 
   it("rejects a response identity that belongs to another attachment", async () => {
     const { endpoint, accepted } = await brokerEndpoint();
     const attachment = makeAttachment(endpoint);
     const target = makeTarget();
-    const { failures } = makeOwner(attachment, target.port);
+    const record = makeRecord();
+    makeOwner(record, attachment, target.port);
 
     const ownerSocket = await accepted;
     const peer = createBrokerResourceSocket(ownerSocket, { message: () => {}, close: () => {} });
     await peer.send({ type: "resource-ready", id: attachment.id + 1, pid: 1, generation: 1 });
 
-    await vi.waitFor(() =>
-      expect(failures.map((error) => error.message)).toContain(
+    await record.waitFor(() =>
+      expect(record.failures.map((error) => error.message)).toContain(
         "Invalid native resource response identity",
       ),
     );
@@ -240,11 +286,12 @@ describe("spawn broker native resource client", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const attachment = makeAttachment(endpoint, { startupDeadline: Date.now() + 50 });
     const target = makeTarget();
-    const { failures } = makeOwner(attachment, target.port);
+    const record = makeRecord();
+    makeOwner(record, attachment, target.port);
     await accepted;
 
     vi.advanceTimersByTime(60);
-    expect(failures.map((error) => error.message)).toContain(
+    expect(record.failures.map((error) => error.message)).toContain(
       "Spawn broker readiness deadline exceeded",
     );
   });
