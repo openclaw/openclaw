@@ -221,9 +221,9 @@ async function runStreamingTurn(queuedPreviews: string[], signal: AbortSignal) {
     }
     setDefaultCACertificates(previousCertificates);
     server.closeAllConnections();
-    await new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
-    );
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
   }
 }
 
