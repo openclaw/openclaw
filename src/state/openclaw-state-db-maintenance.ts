@@ -32,6 +32,7 @@ import {
   tableHasColumn,
 } from "./openclaw-state-db-schema-helpers.js";
 import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
+import { migrateDelegatedExecutionOwnershipV21 } from "./openclaw-state-db-schema-v21.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -529,6 +530,10 @@ export const versionedStateMigrations: ReadonlyArray<{
   {
     migrate: migrateCronDeliveryAttemptState,
     applied: "Recorded cron completion delivery attempt uncertainty (v20)",
+  },
+  {
+    migrate: migrateDelegatedExecutionOwnershipV21,
+    applied: "Installed the durable delegated execution ownership registry (v21)",
   },
 ];
 

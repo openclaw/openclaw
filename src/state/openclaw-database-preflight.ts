@@ -8,6 +8,7 @@ import {
   resolveConfiguredAgentDatabaseCandidatePaths,
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareDelegatedExecutionOwnershipStartup } from "../delegation/delegated-execution-ownership-recovery.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
@@ -62,7 +63,10 @@ import {
   assertOpenClawStateDatabaseForMaintenance,
   openClawStateMigrationAssertions,
 } from "./openclaw-state-db-maintenance.js";
-import { getActiveOpenClawStateDatabaseReadSnapshot } from "./openclaw-state-db-readonly.js";
+import {
+  getActiveOpenClawStateDatabaseReadSnapshot,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+} from "./openclaw-state-db-readonly.js";
 import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
 import { assertCanonicalStateSchemaShape } from "./openclaw-state-db-schema-repair.js";
 import {
@@ -86,6 +90,33 @@ export type {
 
 export { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "./openclaw-state-db.js";
 export { OpenClawDatabaseSchemaPreflightError } from "./openclaw-database-preflight.messages.js";
+
+/**
+ * Delegated execution ownership is durable shared state, not a plugin concern:
+ * an otherwise-ready database may only be certified after every retained
+ * reservation has been rehydrated from the canonical state database and its
+ * downgrade/enforcement-floor guards have passed. A registry that cannot be
+ * read, a corrupt live row, or an unsupported enforcement floor fails database
+ * readiness instead of being read as "no delegated work here".
+ */
+export function assertDelegatedExecutionOwnershipStartupReady(env: NodeJS.ProcessEnv): void {
+  const prepared = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+    (database) => {
+      prepareDelegatedExecutionOwnershipStartup({
+        db: database.db,
+        // The published schema version decides whether a missing registry is a
+        // rolled-back artifact that must be refused.
+        publishedSchemaVersion: readSqliteUserVersion(database.db),
+      });
+      return true;
+    },
+    { env },
+  );
+  // No state database artifact exists yet, so no reservation can be retained.
+  if (prepared === undefined) {
+    return;
+  }
+}
 
 // Public readiness rows stay serializable; their original failures belong to this inspection.
 const indeterminateCauses = new WeakMap<IndeterminateOpenClawDatabase, unknown>();
@@ -175,6 +206,11 @@ export async function assertOpenClawDatabasesReady(
     throw failures.length === 1
       ? failures[0]
       : new AggregateError(failures, failures.map((error) => formatErrorMessage(error)).join("\n"));
+  }
+  if (options.operation !== "doctor") {
+    // Startup and restart must rehydrate delegated execution ownership and
+    // validate the enforcement floor before any successful admission returns.
+    assertDelegatedExecutionOwnershipStartupReady(options.env);
   }
   if (options.operation === "gateway-startup") {
     recordAgentDatabaseAdmissions(schemas.agentRefusals ?? [], {

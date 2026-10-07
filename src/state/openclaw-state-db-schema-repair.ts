@@ -378,6 +378,12 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   ) {
     migrations.push({ kind: "github-publication-requester-authority-v18", path: pathname });
   }
+  // v21 is the direct successor of v20. Earlier schema families have their own
+  // positive-shape detection, and legacy/pre-v2 databases are rebuilt wholesale,
+  // so only a v20 database may receive this migration.
+  if (userVersion === 20 && !tableExists(db, "delegated_execution_ownership")) {
+    migrations.push({ kind: "delegated-execution-ownership-v21", path: pathname });
+  }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });
   }

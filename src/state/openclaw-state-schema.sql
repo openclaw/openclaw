@@ -309,6 +309,84 @@ CREATE TABLE IF NOT EXISTS execution_owner_lifecycle_bindings (
   PRIMARY KEY (owner_kind, owner_id)
 ) STRICT;
 
+-- Durable delegated-execution ownership. DIRECT work is the implicit absence of
+-- a live row, so a missing or unreadable registry entry can never read as a
+-- grant. Terminal events release the reservation; nothing else may.
+CREATE TABLE IF NOT EXISTS delegated_execution_ownership (
+  delegation_ref TEXT NOT NULL PRIMARY KEY CHECK (length(delegation_ref) BETWEEN 1 AND 256),
+  state TEXT NOT NULL CHECK (state IN ('DELEGATED_LOCKED', 'FALLBACK_AUTHORIZED', 'RELEASED')),
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  owner_kind TEXT NOT NULL CHECK (length(owner_kind) BETWEEN 1 AND 256),
+  owner_id TEXT NOT NULL CHECK (length(owner_id) BETWEEN 1 AND 256),
+  owner_state TEXT NOT NULL CHECK (owner_state IN ('available', 'unavailable')),
+  delegate_goal_ref TEXT CHECK (
+    delegate_goal_ref IS NULL OR length(delegate_goal_ref) BETWEEN 1 AND 256
+  ),
+  task_scope_ref TEXT NOT NULL CHECK (length(task_scope_ref) BETWEEN 1 AND 256),
+  lineage_ref TEXT CHECK (lineage_ref IS NULL OR length(lineage_ref) BETWEEN 1 AND 256),
+  context_id TEXT CHECK (context_id IS NULL OR length(context_id) BETWEEN 1 AND 256),
+  execution_id TEXT CHECK (execution_id IS NULL OR length(execution_id) BETWEEN 1 AND 256),
+  run_id TEXT CHECK (run_id IS NULL OR length(run_id) BETWEEN 1 AND 256),
+  enforcement_floor INTEGER NOT NULL CHECK (enforcement_floor >= 1),
+  authority_ref TEXT CHECK (authority_ref IS NULL OR length(authority_ref) BETWEEN 1 AND 256),
+  created_at INTEGER NOT NULL CHECK (created_at >= 0),
+  updated_at INTEGER NOT NULL CHECK (updated_at >= 0),
+  released_at INTEGER CHECK (released_at IS NULL OR released_at >= 0),
+  release_event TEXT CHECK (
+    release_event IS NULL OR release_event IN (
+      'DELEGATE_TERMINAL_COMPLETED',
+      'DELEGATE_TERMINAL_CANCELLED',
+      'DELEGATE_TERMINAL_HANDBACK',
+      'HUMAN_REVOKED_DELEGATION'
+    )
+  ),
+  last_event TEXT NOT NULL CHECK (last_event IN (
+    'DELEGATION_ESTABLISHED',
+    'DELEGATE_OWNER_UNAVAILABLE',
+    'DELEGATE_OWNER_AVAILABLE',
+    'HUMAN_FALLBACK_AUTHORIZED',
+    'DELEGATE_TERMINAL_COMPLETED',
+    'DELEGATE_TERMINAL_CANCELLED',
+    'DELEGATE_TERMINAL_HANDBACK',
+    'HUMAN_REVOKED_DELEGATION'
+  )),
+  UNIQUE (updated_at, delegation_ref)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_delegated_execution_ownership_live
+  ON delegated_execution_ownership (state, updated_at, delegation_ref);
+
+CREATE TABLE IF NOT EXISTS delegated_execution_ownership_events (
+  event_id TEXT NOT NULL PRIMARY KEY CHECK (length(event_id) BETWEEN 1 AND 256),
+  delegation_ref TEXT NOT NULL CHECK (length(delegation_ref) BETWEEN 1 AND 256),
+  event TEXT NOT NULL CHECK (event IN (
+    'DELEGATION_ESTABLISHED',
+    'DELEGATE_OWNER_UNAVAILABLE',
+    'DELEGATE_OWNER_AVAILABLE',
+    'HUMAN_FALLBACK_AUTHORIZED',
+    'DELEGATE_TERMINAL_COMPLETED',
+    'DELEGATE_TERMINAL_CANCELLED',
+    'DELEGATE_TERMINAL_HANDBACK',
+    'HUMAN_REVOKED_DELEGATION'
+  )),
+  from_state TEXT CHECK (from_state IS NULL OR from_state IN (
+    'DELEGATED_LOCKED', 'FALLBACK_AUTHORIZED', 'RELEASED'
+  )),
+  to_state TEXT NOT NULL CHECK (to_state IN (
+    'DELEGATED_LOCKED', 'FALLBACK_AUTHORIZED', 'RELEASED'
+  )),
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  actor_kind TEXT NOT NULL CHECK (actor_kind IN ('host', 'delegate', 'trusted-human')),
+  actor_ref TEXT NOT NULL CHECK (length(actor_ref) BETWEEN 1 AND 256),
+  authority_ref TEXT CHECK (authority_ref IS NULL OR length(authority_ref) BETWEEN 1 AND 256),
+  occurred_at INTEGER NOT NULL CHECK (occurred_at >= 0),
+  detail_json TEXT NOT NULL CHECK (length(detail_json) > 0),
+  UNIQUE (occurred_at, event_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_delegated_execution_ownership_events_ref
+  ON delegated_execution_ownership_events (delegation_ref, occurred_at, event_id);
+
 CREATE TABLE IF NOT EXISTS session_state_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   dedupe_key TEXT UNIQUE,

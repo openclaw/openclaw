@@ -61,7 +61,11 @@ import {
 import { dispatchAgentRunWithCommentaryMedia } from "./agent-run-commentary-media.js";
 import { createAgentRunDiagnostics } from "./agent-run-diagnostics.js";
 import { withAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
-import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
+import {
+  resolveChildRunDelegatedExecutionLineage,
+  resolveExecutionIdentitySpawnFacts,
+  runWithChildRunDelegatedExecutionLineage,
+} from "./agent-run-execution-lineage.js";
 import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
 import { settleUnstartedGatewayFollowup } from "./agent-run-subagent.js";
 import {
@@ -172,6 +176,8 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
       }
     };
     let dispatched = false;
+    // Assigned once the trusted Gateway identity is validated, before dispatch.
+    let childRunDelegatedExecutionLineage: string | undefined;
     const dispatchAdmittedAgentRun = (
       dispatch: Parameters<typeof dispatchAgentRunWithCommentaryMedia>[0],
     ) => {
@@ -184,7 +190,11 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         dispatched = true;
         return execution;
       };
-      return withCurrentUserTurnInput(prepared.userTurn.recorder, run);
+      // Run the child launch inside the delegated lineage it proved, so the
+      // agent/tool admission gates inherit the relation automatically.
+      return runWithChildRunDelegatedExecutionLineage(childRunDelegatedExecutionLineage, () =>
+        withCurrentUserTurnInput(prepared.userTurn.recorder, run),
+      );
     };
     return await prepared.activeGatewayWorkAdmission.run(async () => {
       await yieldAfterAgentAcceptedAck();
@@ -376,11 +386,21 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           sessionEntry: params.sessionEntry,
         });
         const agentRuntimeIdentity = params.client?.internal?.agentRuntimeIdentity;
+        const agentRuntimeIdentityCurrent =
+          agentRuntimeIdentity !== undefined &&
+          params.context.validateAgentRuntimeApprovalAuthority?.(agentRuntimeIdentity) === true;
         const executionIdentitySpawnFacts =
-          agentRuntimeIdentity &&
-          params.context.validateAgentRuntimeApprovalAuthority?.(agentRuntimeIdentity) === true
+          agentRuntimeIdentityCurrent && agentRuntimeIdentity
             ? resolveExecutionIdentitySpawnFacts(agentRuntimeIdentity)
             : undefined;
+        // Host ownership relation carried by the trusted Gateway identity. It is
+        // re-bound to this child run only after the identity above passed
+        // validation; a lineage carried by a stale identity fails closed rather
+        // than running the child as if it were unrelated (DIRECT).
+        childRunDelegatedExecutionLineage = resolveChildRunDelegatedExecutionLineage({
+          identity: agentRuntimeIdentity,
+          identityCurrent: agentRuntimeIdentityCurrent,
+        });
         const restartRecoveryContext = resolveAgentRestartRecoveryContext({
           isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
           canUseInternalRuntimeHandoff: params.canUseInternalRuntimeHandoff,
