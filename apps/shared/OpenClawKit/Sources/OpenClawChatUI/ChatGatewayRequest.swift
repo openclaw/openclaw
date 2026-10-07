@@ -606,11 +606,13 @@ public enum OpenClawChatGatewayRequests {
         limit: Int? = nil,
         maxChars: Int? = nil,
         inputRunIDs: [String]? = nil,
+        offset: Int? = nil,
         timeoutMs: Int? = nil) -> OpenClawChatGatewayRequest
     {
         var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID, key: "sessionKey")
         params["limit"] = limit.map(AnyCodable.init)
         params["maxChars"] = maxChars.map(AnyCodable.init)
+        params["offset"] = offset.map(AnyCodable.init)
         if let inputRunIDs, !inputRunIDs.isEmpty {
             params["inputRunIds"] = AnyCodable(inputRunIDs)
         }

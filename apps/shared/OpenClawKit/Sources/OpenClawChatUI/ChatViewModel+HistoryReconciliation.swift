@@ -710,6 +710,7 @@ extension OpenClawChatViewModel {
         guard self.canApplyHistory(request) else { return false }
         let incoming = self.adoptingProvisionalFinalMessageIDs(
             in: Self.decodeMessages(payload.messages ?? [], activity: payload.activity))
+        let earlierPrefix = self.retainedEarlierHistoryPrefix(payload, incoming: incoming)
         let unmatchedProvisionalFinalIDs = Set(provisionalFinalMessagesMissing(from: incoming).map(\.id))
         var retainedMessageIDs = unmatchedProvisionalFinalIDs
         if request.historyMutationGeneration != self.historyMutationGeneration {
@@ -737,7 +738,7 @@ extension OpenClawChatViewModel {
         nextMessages.append(contentsOf: self.messages.filter { message in
             retainedMessageIDs.contains(message.id) && !reconciledMessageIDs.contains(message.id)
         })
-        nextMessages = Self.dedupeMessages(nextMessages)
+        nextMessages = Self.dedupeMessages(earlierPrefix + nextMessages)
         // Explicit idle includes terminal persistence. Only a current, complete
         // snapshot may retire narration absent from canonical history.
         let narrationSettled = payload.sessionInfo?.hasActiveRun == false &&
@@ -747,6 +748,8 @@ extension OpenClawChatViewModel {
             unmatchedProvisionalFinalIDs.isEmpty &&
             (!preservingOptimisticLocalMessages || !incoming.isEmpty)
         replaceMessages(nextMessages, narrationSettled: narrationSettled)
+        // Accepted history can admit rows while an older bootstrap is still in flight.
+        self.invalidateHistorySnapshots()
         confirmOutboxCommands(in: incoming)
         self.prunePendingLocalUserEchoMessageIDs()
         self.clearProvisionalFinalMarkersAdoptedByHistory(incoming)
