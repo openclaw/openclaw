@@ -658,6 +658,27 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
     second.close();
   });
 
+  it("enforces sandbox read policy before opening a streamed file", async () => {
+    const readFile = vi.fn(async () => Buffer.from("secret"));
+    const sandbox = createSandboxContext({ readFile });
+    const socket = await openSandboxSocket(sandbox);
+
+    await expect(
+      rpc(socket, "fs/open", {
+        handleId: "denied",
+        path: "file:///workspace/private/secret.txt",
+        sandbox: codexFsSandboxContext({
+          entries: [
+            { path: specialPath("root"), access: "read" },
+            { path: globPath("private/*.txt"), access: "deny" },
+          ],
+        }),
+      }),
+    ).rejects.toThrow("Codex fs sandbox denied read access");
+    expect(readFile).not.toHaveBeenCalled();
+    socket.close();
+  });
+
   it("rejects duplicate, oversized, and invalid sandbox file read handles", async () => {
     const data = Buffer.from("bounded");
     const sandbox = createSandboxContext({

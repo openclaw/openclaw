@@ -774,4 +774,46 @@ describe("ManagedWorktreeService provisioned state", () => {
     expect(checkedIndex).toBe(true);
     expect(await git(repo, "show", `${removed.snapshotRef}:README.md`)).toBe("edit");
   });
+
+  it.each(["missing", "sparse"])(
+    "snapshots working contents with a %s source index",
+    async (kind) => {
+      for (const directory of ["included", "excluded"]) {
+        await fs.mkdir(path.join(repo, directory));
+        await fs.writeFile(path.join(repo, directory, "file.txt"), `${directory} original\n`);
+      }
+      await git(repo, "add", ".");
+      await git(repo, "commit", "-m", "add snapshot directories");
+      const created = await materializeManagedWorktreeFixture({
+        env,
+        name: `index-${kind}`,
+        now,
+        repoRoot: repo,
+        stateDir: env.OPENCLAW_STATE_DIR!,
+      });
+      const originalHead = await git(created.path, "rev-parse", "HEAD");
+      if (kind === "sparse") {
+        await git(created.path, "sparse-checkout", "set", "--cone", "--sparse-index", "included");
+      }
+      await fs.writeFile(path.join(created.path, "README.md"), "staged content\n");
+      await git(created.path, "add", "README.md");
+      if (kind === "missing") {
+        const index = await git(created.path, "rev-parse", "--git-path", "index");
+        await fs.rm(path.resolve(created.path, index));
+      }
+      await fs.writeFile(path.join(created.path, "README.md"), "current working contents\n");
+      const removed = await service.remove({ id: created.id, reason: "test" });
+      expect(await git(repo, "show", `${removed.snapshotRef}:README.md`)).toBe(
+        "current working contents",
+      );
+      expect(await git(repo, "show", `${removed.snapshotRef}:excluded/file.txt`)).toBe(
+        "excluded original",
+      );
+      const restored = await service.restore({ id: created.id });
+      expect(await git(restored.path, "rev-parse", "HEAD")).toBe(originalHead);
+      expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+        "current working contents\n",
+      );
+    },
+  );
 });

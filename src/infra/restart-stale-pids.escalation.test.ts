@@ -3,6 +3,7 @@ import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 
 const mocks = vi.hoisted(() => ({
   starts: new Map<number, number | null>(),
+  dead: new Set<number>(),
   kill: vi.fn<typeof process.kill>(),
   readOwner: vi.fn<typeof import("./gateway-owner-lease.js").readGatewayOwnerLease>(),
   sleep: vi.fn<() => Promise<void>>(),
@@ -16,7 +17,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
 vi.mock("./gateway-owner-lease.js", () => ({ readGatewayOwnerLease: mocks.readOwner }));
 vi.mock("../shared/pid-alive.js", () => ({
   getFileLockProcessStartTime: (pid: number) => mocks.starts.get(pid) ?? null,
-  isPidDefinitelyDead: (pid: number) => !mocks.starts.has(pid),
+  isPidDefinitelyDead: (pid: number) => mocks.dead.has(pid) || !mocks.starts.has(pid),
 }));
 vi.mock("../utils/sleep.js", () => ({ sleep: mocks.sleep }));
 
@@ -29,6 +30,7 @@ describe("stale Gateway process-group escalation", () => {
 
   beforeEach(() => {
     mocks.starts.clear();
+    mocks.dead.clear();
     mocks.starts.set(leader, 1000);
     mocks.starts.set(child, 1001);
     mocks.starts.set(unrelated, 1002);
@@ -62,7 +64,7 @@ describe("stale Gateway process-group escalation", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["recorded owner", "missing start identity"])(
+  it.each(["recorded owner", "missing start identity", "dead candidate"])(
     "does not signal a PID with %s",
     async (reason) => {
       if (reason === "recorded owner") {
@@ -77,8 +79,10 @@ describe("stale Gateway process-group escalation", () => {
           state: "dead",
           expired: true,
         });
-      } else {
+      } else if (reason === "missing start identity") {
         mocks.starts.set(leader, null);
+      } else {
+        mocks.dead.add(leader);
       }
       await withMockedPlatform("darwin", async () => {
         expect(await terminateStaleGatewayPids([leader])).toEqual([]);

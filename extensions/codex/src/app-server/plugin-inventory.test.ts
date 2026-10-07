@@ -629,6 +629,16 @@ const approvalAppMetadata = {
 };
 
 describe("Codex owned app approval metadata", () => {
+  it("keeps approval checks conservative when tool metadata is absent", () => {
+    expect(toCodexPluginOwnedAccountApp(approvalAppMetadata)).not.toHaveProperty(
+      "approvalOverrideToolConfigKeys",
+    );
+    expect(
+      toCodexPluginOwnedAccountApp({ ...approvalAppMetadata, toolSummaries: [] })
+        .approvalOverrideToolConfigKeys,
+    ).toStrictEqual([]);
+  });
+
   it("preserves writable approval checks for keys shared with read-only tools", () => {
     const app = {
       ...approvalAppMetadata,

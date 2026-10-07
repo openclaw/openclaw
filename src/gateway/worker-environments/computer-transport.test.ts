@@ -628,29 +628,28 @@ describe("session computer transport", () => {
     },
   );
 
-  it.each(revocations.filter(({ name }) => name === "turn claim"))(
-    "withholds an awaited result after $name revocation",
-    async (revocation) => {
-      const h = createHarness();
-      const { transport, prepared } = await h.prepare();
-      const entered = createDeferredCore();
-      const result = createDeferredCore();
-      h.state.afterDispatch = async () => {
-        entered.resolve();
-        await result.promise;
-      };
-      h.privateInvoke.mockClear();
-      const invoked = transport.invoke(request("type"));
-      const rejected = expect(invoked).rejects.toThrow();
-      await entered.promise;
-      revocation.revoke(h);
-      result.resolve();
-      await rejected;
-      expect(h.privateInvoke).toHaveBeenCalledOnce();
-      expect(h.publicInvoke).not.toHaveBeenCalled();
-      await prepared.close("cancellation");
-    },
-  );
+  it.each(
+    revocations.filter(({ name }) => ["turn claim", "lease", "plugin registry"].includes(name)),
+  )("withholds an awaited result after $name revocation", async (revocation) => {
+    const h = createHarness();
+    const { transport, prepared } = await h.prepare();
+    const entered = createDeferredCore();
+    const result = createDeferredCore();
+    h.state.afterDispatch = async () => {
+      entered.resolve();
+      await result.promise;
+    };
+    h.privateInvoke.mockClear();
+    const invoked = transport.invoke(request("type"));
+    const rejected = expect(invoked).rejects.toThrow();
+    await entered.promise;
+    revocation.revoke(h);
+    result.resolve();
+    await rejected;
+    expect(h.privateInvoke).toHaveBeenCalledOnce();
+    expect(h.publicInvoke).not.toHaveBeenCalled();
+    await prepared.close("cancellation");
+  });
 
   it.each([
     { sharedHost: false, revoke: "policy" },
@@ -708,47 +707,49 @@ describe("session computer transport", () => {
     await prepared.close("completion");
   });
 
-  it("releases owned resources without re-entering an input policy", async () => {
-    const sharedHost = false;
-    const h = createHarness(sharedHost);
-    const sourceCheck = vi.spyOn(h.workerSource, "assertCurrent");
-    const { transport, prepared } = await h.prepare();
-    await transport.invoke(request("snapshot"));
-    releaseAgentRunDelegatedAuthority(h.authority);
-    h.releaseClaim();
-    h.privateInvoke.mockClear();
-    h.publicInvoke.mockClear();
-    h.policyHandle.mockClear();
-    h.policyHandle.mockImplementationOnce((policy) =>
-      policy.invokeNode({ params: request("type").commandParams }),
-    );
-    sourceCheck.mockClear();
-    await prepared.close("completion");
-    await prepared.close("completion");
-    await expect(transport.invoke(request("type"))).rejects.toThrow(/closed/);
-    expect(sourceCheck).not.toHaveBeenCalled();
-    expect(h.policyHandle).not.toHaveBeenCalled();
-    if (sharedHost) {
-      expect(h.publicInvoke).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          command: "computer.act",
-          params: { ...request("close").commandParams, executionId: h.nativeExecutionIds[0] },
-        }),
+  it.each([false, true])(
+    "releases owned resources without re-entering an input policy (shared host: %s)",
+    async (sharedHost) => {
+      const h = createHarness(sharedHost);
+      const sourceCheck = vi.spyOn(h.workerSource, "assertCurrent");
+      const { transport, prepared } = await h.prepare();
+      await transport.invoke(request("snapshot"));
+      releaseAgentRunDelegatedAuthority(h.authority);
+      h.releaseClaim();
+      h.privateInvoke.mockClear();
+      h.publicInvoke.mockClear();
+      h.policyHandle.mockClear();
+      h.policyHandle.mockImplementationOnce((policy) =>
+        policy.invokeNode({ params: request("type").commandParams }),
       );
-      expect(h.privateInvoke).not.toHaveBeenCalled();
-    } else {
-      expect(h.privateInvoke).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          params: {
-            operation: "close",
-            executionId: h.nativeExecutionIds[0],
-            reason: "completion",
-          },
-        }),
-      );
-      expect(h.publicInvoke).not.toHaveBeenCalled();
-    }
-  });
+      sourceCheck.mockClear();
+      await prepared.close("completion");
+      await prepared.close("completion");
+      await expect(transport.invoke(request("type"))).rejects.toThrow(/closed/);
+      expect(sourceCheck).not.toHaveBeenCalled();
+      expect(h.policyHandle).not.toHaveBeenCalled();
+      if (sharedHost) {
+        expect(h.publicInvoke).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            command: "computer.act",
+            params: { ...request("close").commandParams, executionId: h.nativeExecutionIds[0] },
+          }),
+        );
+        expect(h.privateInvoke).not.toHaveBeenCalled();
+      } else {
+        expect(h.privateInvoke).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            params: {
+              operation: "close",
+              executionId: h.nativeExecutionIds[0],
+              reason: "completion",
+            },
+          }),
+        );
+        expect(h.publicInvoke).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each(
     revocations.filter(({ name }) =>

@@ -609,6 +609,12 @@ describe("runGlobalPackageUpdateSteps", () => {
           remove: "dist/.runtime-postbuildstamp",
           error: "runtimeStamp=missing",
         },
+        {
+          name: "stale build identity",
+          stale: "dist/build-info.json",
+          error: "git runtime mismatch",
+        },
+        { name: "stale build stamp", stale: "dist/.buildstamp", error: "git runtime mismatch" },
         { name: "missing build identity", remove: "dist/build-info.json", error: "build=missing" },
         { name: "missing built SHA", error: "expected=missing" },
         {
@@ -629,7 +635,7 @@ describe("runGlobalPackageUpdateSteps", () => {
             ? name === "wrong checkout"
             : name === "prepared checkout",
       ),
-    )("verifies $name before finalization", async ({ name: caseName, error, remove }) => {
+    )("verifies $name before finalization", async ({ name: caseName, error, remove, stale }) => {
       await withTestDir({ prefix: "openclaw-package-update-source-" }, async (base) => {
         const prefix = path.join(base, "prefix");
         const globalRoot =
@@ -652,6 +658,12 @@ describe("runGlobalPackageUpdateSteps", () => {
         }
         if (remove) {
           await fs.rm(path.join(checkoutRoot, remove));
+        }
+        if (stale) {
+          await fs.writeFile(
+            path.join(checkoutRoot, stale),
+            JSON.stringify({ commit: "b".repeat(40), head: "b".repeat(40) }),
+          );
         }
         const postVerifyStep = vi.fn(async () => ({
           name: "candidate doctor",
