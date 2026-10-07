@@ -246,7 +246,7 @@ describe("Gateway computer service", () => {
 
   it("keeps native readiness authoritative when an unprepared declaration fails", async () => {
     const f = createFixture();
-    const entry = f.registry.nodeHostCommands.find((entry) => entry.command.computerUse)!;
+    const entry = f.registry.nodeHostCommands.find((candidate) => candidate.command.computerUse)!;
     entry.command.computerUse = () => {
       throw new Error("Declaration needs a native desktop");
     };
@@ -262,7 +262,7 @@ describe("Gateway computer service", () => {
 
   it("invalidates declared capabilities on provider replacement and disablement", async () => {
     const f = createFixture();
-    const entry = f.registry.nodeHostCommands.find((entry) => entry.command.computerUse)!;
+    const entry = f.registry.nodeHostCommands.find((candidate) => candidate.command.computerUse)!;
     const descriptor = (await f.service.status({ probe: false })).computerUse!;
     const computerUse = vi.fn(() => ({ ...descriptor, actions: ["screenshot", "list_windows"] }));
     entry.command = { ...entry.command, computerUse };
