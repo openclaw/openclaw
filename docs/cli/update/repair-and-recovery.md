@@ -84,6 +84,13 @@ the original manager and service identity. This does not start the service or
 rewrite its definition. A later refusal still uses the recorded stop to restore
 the previous Gateway; a service that was already stopped remains stopped.
 
+An already-current installation can still need plugin maintenance. If the update
+parks its Gateway for Doctor and a maintenance step is refused, recovery uses
+the current run's latest stop and restarts the installed package after Doctor's
+writers settle. It records the observed recovery outcome while preserving the
+failed update result. Earlier runs' stop receipts never authorize that restart;
+operator-stopped services and explicit data-risk refusals remain stopped.
+
 After activation succeeds, a failure to read or publish update reporting leaves
 the updated installation in place. Reporting failures do not trigger package
 rollback. The command still exits nonzero when required finalization cannot
