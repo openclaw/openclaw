@@ -4994,7 +4994,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/gateway/server.device-token-rotate-authz.test.ts",
   "src/gateway/server.encrypted-tool-continuation.test.ts",
   "src/gateway/server.hooks-admission.test.ts",
-  "src/gateway/server.hooks-session-mode.test.ts",
   "src/gateway/server.hooks.test.ts",
   "src/gateway/server.plugin-http-role-scopes.test.ts",
   "src/gateway/server.preauth-hardening.test.ts",
