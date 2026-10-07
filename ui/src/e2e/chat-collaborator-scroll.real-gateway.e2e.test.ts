@@ -299,7 +299,80 @@ async function wheel(page: Page, delta: number) {
   await waitForChatScrollIdle(page);
 }
 
+async function installFollowTrace(page: Page) {
+  await page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate((element) => {
+    const state = (element.closest("openclaw-chat-pane") as any).state;
+    const log: unknown[] = [];
+    (window as any).followTrace = log;
+    let proto = Object.getPrototypeOf(state);
+    let desc: PropertyDescriptor | undefined;
+    while (proto && !(desc = Object.getOwnPropertyDescriptor(proto, "chatFollowLocked"))) {
+      proto = Object.getPrototypeOf(proto);
+    }
+    let own = state.chatFollowLocked;
+    Object.defineProperty(state, "chatFollowLocked", {
+      configurable: true,
+      get: () => (desc?.get ? desc.get.call(state) : own),
+      set: (value: boolean) => {
+        const prev = desc?.get ? desc.get.call(state) : own;
+        if (value !== prev) {
+          log.push({
+            at: Math.round(performance.now()),
+            locked: value,
+            top: element.scrollTop,
+            dist: element.scrollHeight - element.clientHeight - element.scrollTop,
+            stack: new Error().stack?.split("\n").slice(2, 9).join(" | "),
+          });
+        }
+        if (desc?.set) desc.set.call(state, value);
+        else own = value;
+      },
+    });
+    const original = state.chatScrollToEnd;
+    if (typeof original === "function") {
+      state.chatScrollToEnd = (options: any) => {
+        const result = original.call(state, options);
+        if (!result) {
+          log.push({
+            at: Math.round(performance.now()),
+            declined: options?.source,
+            top: element.scrollTop,
+          });
+        }
+        return result;
+      };
+    }
+  });
+}
+
 async function waitForChatFollow(page: Page, renderedText: string, message: string) {
+  try {
+    await waitForChatFollowInner(page, renderedText, message);
+  } catch (error) {
+    console.info(
+      "FOLLOW_TRACE",
+      JSON.stringify(await page.evaluate(() => (window as any).followTrace)),
+    );
+    console.info(
+      "FOLLOW_STATE",
+      JSON.stringify(
+        await page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate((element) => {
+          const state = (element.closest("openclaw-chat-pane") as any).state;
+          return {
+            locked: state.chatFollowLocked,
+            near: state.chatUserNearBottom,
+            reading: state.chatReadingHistory,
+            runId: state.chatRunId,
+            dist: element.scrollHeight - element.clientHeight - element.scrollTop,
+          };
+        }),
+      ),
+    );
+    throw error;
+  }
+}
+
+async function waitForChatFollowInner(page: Page, renderedText: string, message: string) {
   // Measure only after the streamed growth renders; smooth follow can outlast the
   // default one-second poll on loaded CI hosts.
   await expect
@@ -437,6 +510,7 @@ suite.define(() => {
                     ),
                 ),
               );
+              await installFollowTrace(reader);
               const finishVisibility = await Promise.all(pages.map(startAssistantVisibilityProbe));
               // Short actual turns qualify both reciprocal sender alignments before scroll assertions.
               const alignments: unknown[] = [];
