@@ -187,26 +187,20 @@ export function resolveDiscordEndpointMediaGuard(
   url: string,
   retainedRuntime?: DiscordEndpointRuntime | null,
 ): Readonly<{ maxRedirects: 0; ssrfPolicy: SsrFPolicy }> | undefined {
-  if (retainedRuntime === null) {
-    return undefined;
-  }
-  const runtime = retainedRuntime ?? getDiscordEndpointRuntime();
-  if (!runtime) {
-    return undefined;
-  }
-  const target = parseHttpAnchor(url, "Discord endpoint media URL");
-  const restOrigin = new URL(runtime.descriptor.restApiBaseUrl).origin;
-  if (target.origin !== restOrigin) {
-    throw new Error("Discord endpoint media URL is outside the configured REST origin");
-  }
-  return {
-    maxRedirects: 0,
-    ssrfPolicy: { allowedOrigins: [restOrigin], hostnameAllowlist: [target.hostname] },
-  };
+  const guard = resolveEndpointResourceGuard(url, "media", retainedRuntime);
+  return guard ? { maxRedirects: guard.maxRedirects, ssrfPolicy: guard.policy } : undefined;
 }
 
 export function resolveDiscordEndpointAttachmentGuard(
   url: string,
+  retainedRuntime?: DiscordEndpointRuntime | null,
+): Readonly<{ maxRedirects: 0; policy: SsrFPolicy; requireHttps: boolean }> | undefined {
+  return resolveEndpointResourceGuard(url, "attachment upload", retainedRuntime);
+}
+
+function resolveEndpointResourceGuard(
+  url: string,
+  kind: "media" | "attachment upload",
   retainedRuntime?: DiscordEndpointRuntime | null,
 ): Readonly<{ maxRedirects: 0; policy: SsrFPolicy; requireHttps: boolean }> | undefined {
   if (retainedRuntime === null) {
@@ -216,10 +210,10 @@ export function resolveDiscordEndpointAttachmentGuard(
   if (!runtime) {
     return undefined;
   }
-  const target = parseHttpAnchor(url, "Discord endpoint attachment upload URL");
+  const target = parseHttpAnchor(url, `Discord endpoint ${kind} URL`);
   const restOrigin = new URL(runtime.descriptor.restApiBaseUrl).origin;
   if (target.origin !== restOrigin) {
-    throw new Error("Discord endpoint attachment upload URL is outside the configured REST origin");
+    throw new Error(`Discord endpoint ${kind} URL is outside the configured REST origin`);
   }
   return {
     maxRedirects: 0,

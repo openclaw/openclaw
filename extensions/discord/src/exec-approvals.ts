@@ -61,11 +61,7 @@ export function isDiscordExecApprovalClientEnabled(params: {
   const config = params.configOverride ?? resolveDiscordAccount(params).config.execApprovals;
   return isChannelExecApprovalClientEnabledFromConfig({
     enabled: config?.enabled,
-    approverCount: getDiscordExecApprovalApprovers({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      configOverride: params.configOverride,
-    }).length,
+    approverCount: getDiscordExecApprovalApprovers(params).length,
   });
 }
 
@@ -79,11 +75,7 @@ export function isDiscordExecApprovalApprover(params: {
   if (!senderId) {
     return false;
   }
-  return getDiscordExecApprovalApprovers({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    configOverride: params.configOverride,
-  }).includes(senderId);
+  return getDiscordExecApprovalApprovers(params).includes(senderId);
 }
 
 export function shouldSuppressLocalDiscordExecApprovalPrompt(params: {

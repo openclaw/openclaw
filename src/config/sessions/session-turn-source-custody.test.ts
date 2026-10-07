@@ -8,8 +8,8 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
-import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-turn.js";
-import type { SessionTranscriptTurnPersistOptions } from "./session-accessor.types.js";
+import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
+import { withSessionTranscriptSourcePublication } from "./transcript-write-context.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -54,7 +54,6 @@ it.each(["fresh", "replay"])(
           },
           target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: f.read() },
           assertOriginalInputCommit: assertCurrent,
-          onCommittedSource: sourceCommitted,
           beforeMessageWrite: ({ message }) => {
             assertCurrent();
             return message;
@@ -62,8 +61,12 @@ it.each(["fresh", "replay"])(
           onPersistenceError: () => {},
           updateMode: "none",
         });
+      const persist = () =>
+        withSessionTranscriptSourcePublication(f.scope, sourceCommitted, () =>
+          recorder().persistFallback(),
+        );
       if (mode === "replay") {
-        await recorder().persistFallback();
+        await persist();
         expect(sourceCommitted).toHaveBeenCalledOnce();
         sourceCommitted.mockClear();
         live = false;
@@ -82,14 +85,12 @@ it.each(["fresh", "replay"])(
           }, attachment),
       );
       if (mode === "fresh") {
-        await expect(recorder().persistFallback()).rejects.toThrow(
-          "original input authority closed",
-        );
+        await expect(persist()).rejects.toThrow("original input authority closed");
         expect(commitSeen).toBe(true);
         expect(sourceCommitted).not.toHaveBeenCalled();
         expect(f.events()).toEqual([]);
       } else {
-        await expect(recorder().persistFallback()).resolves.toMatchObject({ appended: false });
+        await expect(persist()).resolves.toMatchObject({ appended: false });
         expect(assertCurrent).not.toHaveBeenCalled();
         expect(sourceCommitted).toHaveBeenCalledOnce();
         expect(f.events().filter((event) => event.type === "message")).toHaveLength(1);
@@ -109,68 +110,71 @@ it.each(["worker", "native"] as const)(
         storePath: state.statePath("goal-source.sqlite"),
       };
       const failure = new Error("synthetic postcommit failure");
-      const sourceCommitted =
-        vi.fn<NonNullable<SessionTranscriptTurnPersistOptions["onCommittedSource"]>>();
+      const sourceCommitted = vi.fn<Parameters<typeof withSessionTranscriptSourcePublication>[1]>();
       await expect(
-        appendExpectedSessionTranscriptTurn(scope, {
-          keyFormat: "agent-qualified",
-          expectedSessionId: scope.sessionId,
-          selectedSessionId: null,
-          initialSessionEntry: { sessionId: scope.sessionId, updatedAt: Date.now() },
-          sessionFile: scope.sessionKey,
-          sessionTurnMutation: {
-            kind: "goal",
-            runId: "goal-source-run",
-            operation: {
-              action: "start",
-              objective: "Retain this committed Goal.",
-              operationId: "goal-source-operation",
-              requestFingerprint: "goal-source-fingerprint",
-              issuedAtMs: Date.now(),
+        withSessionTranscriptSourcePublication(scope, sourceCommitted, () =>
+          persistSessionTranscriptTurn(scope, {
+            expectedSessionId: scope.sessionId,
+            initialSessionEntry: { sessionId: scope.sessionId, updatedAt: Date.now() },
+            sessionTurnMutation: {
+              kind: "goal",
+              runId: "goal-source-run",
+              operation: {
+                action: "start",
+                objective: "Retain this committed Goal.",
+                operationId: "goal-source-operation",
+                requestFingerprint: "goal-source-fingerprint",
+                issuedAtMs: Date.now(),
+              },
             },
-          },
-          messages: [
-            {
-              eventId: "goal-source-message",
-              message: { role: "user", content: "Retain this committed Goal." },
-              ...(writer === "native"
-                ? {
-                    beforeFreshMessageCommit() {
-                      const database = openOpenClawAgentDatabase({
-                        agentId: scope.agentId,
-                        path: scope.storePath,
-                      });
-                      expect(
-                        deferSqlitePostCommitPublication(database.db, () => {
-                          throw failure;
-                        }),
-                      ).toBe(true);
-                    },
-                  }
-                : {}),
-            },
-          ],
-          onCommittedSource: sourceCommitted,
-          ...(writer === "worker"
-            ? {
-                onMessageCommitted() {
-                  throw failure;
-                },
-              }
-            : {}),
-        }),
+            messages: [
+              {
+                eventId: "goal-source-message",
+                message: { role: "user", content: "Retain this committed Goal." },
+                ...(writer === "native"
+                  ? {
+                      beforeFreshMessageCommit() {
+                        const database = openOpenClawAgentDatabase({
+                          agentId: scope.agentId,
+                          path: scope.storePath,
+                        });
+                        expect(
+                          deferSqlitePostCommitPublication(database.db, () => {
+                            throw failure;
+                          }),
+                        ).toBe(true);
+                      },
+                    }
+                  : {}),
+              },
+            ],
+            ...(writer === "worker"
+              ? {
+                  onMessageCommitted() {
+                    throw failure;
+                  },
+                }
+              : {}),
+          }),
+        ),
       ).rejects.toBe(failure);
       const database = openOpenClawAgentDatabase({
         agentId: scope.agentId,
         path: scope.storePath,
       });
       const identity = readOpenClawAgentDatabaseIdentity(database);
-      expect(sourceCommitted).toHaveBeenCalledExactlyOnceWith({
-        agentId: database.agentId,
-        path: database.path,
-        databaseIdentity: identity.identity,
-        databaseBirthtime: identity.birthtime,
-      });
+      expect(sourceCommitted).toHaveBeenCalledExactlyOnceWith(
+        {
+          agentId: database.agentId,
+          path: database.path,
+          databaseIdentity: identity.identity,
+          databaseBirthtime: identity.birthtime,
+        },
+        expect.objectContaining({
+          sessionId: scope.sessionId,
+          goal: expect.objectContaining({ objective: "Retain this committed Goal." }),
+        }),
+      );
       expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.goal?.objective).toBe(
         "Retain this committed Goal.",
       );

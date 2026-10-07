@@ -5,16 +5,23 @@ import type {
   WorkerOperationContext,
   WorkerOperationHandlers,
   WorkerOperations,
+  WorkerWriteOperationContext,
 } from "../../state/worker-operation-registry.js";
 import { requestSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-admission.js";
 import {
+  bindCurrentConversationInDatabase,
+  removeCurrentConversationBindingsInDatabase,
   readCurrentConversationBindingListInDatabase,
   pruneCurrentConversationBindingListInTransaction,
   readCurrentConversationBindingResolutionInDatabase,
   readCurrentConversationBindingSelectionInDatabase,
   updateCurrentConversationBindingRecordInDatabase,
 } from "./current-conversation-bindings.kernel.js";
-import type { CurrentConversationBindingTouch } from "./current-conversation-bindings.worker-contract.js";
+import type {
+  CurrentConversationBindingBind,
+  CurrentConversationBindingRemove,
+  CurrentConversationBindingTouch,
+} from "./current-conversation-bindings.worker-contract.js";
 import type { ConversationRef, SessionBindingRecord } from "./session-binding.types.js";
 
 function runBindingTransaction<T>(
@@ -76,6 +83,23 @@ function touchCurrentConversationBindingInDatabase(
 }
 
 export const conversationBindingOperations = {
+  "conversationBindings.bind": (input: CurrentConversationBindingBind, { write }) => {
+    return write(({ db }) => {
+      const record = bindCurrentConversationInDatabase(db, input, (requiresAgentId) =>
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: requiresAgentId }),
+      );
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      return record;
+    });
+  },
+  "conversationBindings.remove": (input: CurrentConversationBindingRemove, { write }) => {
+    return write(({ db }) => {
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      const records = removeCurrentConversationBindingsInDatabase(db, input);
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      return records;
+    });
+  },
   "conversationBindings.readSelection": (
     input: readonly ConversationRef[],
     { stateOptions },
@@ -85,23 +109,29 @@ export const conversationBindingOperations = {
       ({ db }) => readCurrentConversationBindingSelectionInDatabase(db, input),
       stateOptions(),
     ) ?? input.map(() => null),
-  "conversationBindings.listBySession": (
-    input: { targetSessionKey: string; scope?: { channel: string; accountId: string } },
+  "conversationBindings.listBySessions": (
+    input: { targetSessionKeys: readonly string[]; scope?: { channel: string; accountId: string } },
     context,
   ) => {
     const database = context.open();
-    const prepared = readCurrentConversationBindingListInDatabase(
-      database.db,
-      input.targetSessionKey,
-      input.scope,
+    const prepared = input.targetSessionKeys.map((key) =>
+      readCurrentConversationBindingListInDatabase(database.db, key, input.scope),
     );
-    if (!prepared.requiresPrune) {
-      return prepared.records;
+    if (!prepared.some((list) => list.requiresPrune)) {
+      return prepared.map((list) => list.records);
     }
     return runBindingTransaction(
       context,
       (db) =>
-        pruneCurrentConversationBindingListInTransaction(db, input.targetSessionKey, input.scope),
+        prepared.map((list, index) => {
+          const key = input.targetSessionKeys[index]!;
+          const current = list.requiresPrune
+            ? list
+            : readCurrentConversationBindingListInDatabase(db, key, input.scope);
+          return current.requiresPrune
+            ? pruneCurrentConversationBindingListInTransaction(db, key, input.scope)
+            : current.records;
+        }),
       database,
     );
   },
@@ -120,7 +150,7 @@ export const conversationBindingOperations = {
   },
   "conversationBindings.touch": (input: CurrentConversationBindingTouch, context) =>
     runBindingTransaction(context, (db) => touchCurrentConversationBindingInDatabase(db, input)),
-} satisfies WorkerOperationHandlers;
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;
 
 export type CurrentConversationBindingWorkerOperations = WorkerOperations<
   typeof conversationBindingOperations

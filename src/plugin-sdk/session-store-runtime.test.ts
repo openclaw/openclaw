@@ -8,7 +8,7 @@ import {
   patchSessionEntryCore as patchInternalSessionEntry,
   replaceSessionEntry as replaceInternalSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { observeSessionMaintenanceCompletion } from "../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
+import { observeSessionMaintenanceCompletion } from "../config/sessions/session-accessor.sqlite-maintenance-completion.test-support.js";
 import type * as ConfigSessionTypes from "../config/sessions/types.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {

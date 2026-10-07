@@ -16,11 +16,7 @@ import {
   createReusableDiscordReplyReference,
   type DiscordReplyReference,
 } from "./reply-reference.js";
-import {
-  createDiscordSendReceiptFromResults,
-  createDiscordSendResult,
-  type DiscordReceiptResultSource,
-} from "./send.receipt.js";
+import { createDiscordSendReceiptFromResults, createDiscordSendResult } from "./send.receipt.js";
 import {
   buildDiscordMessageRequest,
   buildDiscordSendError,
@@ -166,6 +162,20 @@ async function sendMessageDiscordInternal(
     maxBytes: mediaMaxBytes,
   };
 
+  async function sendWithError<T>(targetChannelId: string, send: () => Promise<T>): Promise<T> {
+    try {
+      return await send();
+    } catch (err) {
+      throw await buildDiscordSendError(err, {
+        channelId: targetChannelId,
+        cfg,
+        rest,
+        token,
+        hasMedia: Boolean(opts.mediaUrl),
+      });
+    }
+  }
+
   if (isForumLikeChannel(channel)) {
     if (((channel.flags ?? 0) & DISCORD_FORUM_REQUIRE_TAG_FLAG) !== 0) {
       throw new Error(
@@ -197,9 +207,8 @@ async function sendMessageDiscordInternal(
       flags: starterFlags,
       allowedMentions: opts.allowedMentions,
     });
-    let threadRes: { id: string; message?: { id: string; channel_id: string } };
-    try {
-      threadRes = (await request(
+    const threadRes = await sendWithError(channelId, () =>
+      request(
         async () => {
           await opts.onPlatformSendDispatch?.();
           opts.assertPlatformSendAuthorized?.();
@@ -221,16 +230,8 @@ async function sendMessageDiscordInternal(
         },
         "forum-thread",
         { safety: "non-idempotent-create" },
-      )) as { id: string; message?: { id: string; channel_id: string } };
-    } catch (err) {
-      throw await buildDiscordSendError(err, {
-        channelId,
-        cfg,
-        rest,
-        token,
-        hasMedia: Boolean(opts.mediaUrl),
-      });
-    }
+      ),
+    );
 
     const threadId = threadRes.id;
     deliveryThreadId = threadId;
@@ -249,7 +250,7 @@ async function sendMessageDiscordInternal(
     deliveredResults.push(starterResult);
     await opts.onDeliveryResult?.(starterResult);
 
-    try {
+    await sendWithError(threadId, async () => {
       let textChunks = remainingChunks;
       if (opts.mediaUrl) {
         const [mediaCaption, ...afterMediaChunks] = remainingChunks;
@@ -265,15 +266,7 @@ async function sendMessageDiscordInternal(
       for (const chunk of textChunks) {
         await sendDiscordText({ ...textSendOptions, channelId: threadId, text: chunk });
       }
-    } catch (err) {
-      throw await buildDiscordSendError(err, {
-        channelId: threadId,
-        cfg,
-        rest,
-        token,
-        hasMedia: Boolean(opts.mediaUrl),
-      });
-    }
+    });
 
     recordChannelActivity({
       channel: "discord",
@@ -286,8 +279,7 @@ async function sendMessageDiscordInternal(
     };
   }
 
-  let result: DiscordReceiptResultSource;
-  try {
+  const result = await sendWithError(channelId, async () => {
     const message = {
       ...textSendOptions,
       channelId,
@@ -296,18 +288,10 @@ async function sendMessageDiscordInternal(
       components: opts.components,
       embeds: opts.embeds,
     };
-    result = opts.mediaUrl
+    return opts.mediaUrl
       ? await sendDiscordMedia({ ...message, ...mediaSendOptions, mediaUrl: opts.mediaUrl })
       : await sendDiscordText(message);
-  } catch (err) {
-    throw await buildDiscordSendError(err, {
-      channelId,
-      cfg,
-      rest,
-      token,
-      hasMedia: Boolean(opts.mediaUrl),
-    });
-  }
+  });
 
   recordChannelActivity({
     channel: "discord",

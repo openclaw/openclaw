@@ -80,16 +80,7 @@ function toTrajectoryToolDefinitions(
   return flattenCodexDynamicToolFunctions(tools)
     .flatMap((tool) => {
       const name = tool.name?.trim();
-      if (!name) {
-        return [];
-      }
-      return [
-        {
-          name,
-          description: tool.description,
-          parameters: tool.inputSchema,
-        },
-      ];
+      return name ? [{ name, description: tool.description, parameters: tool.inputSchema }] : [];
     })
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }

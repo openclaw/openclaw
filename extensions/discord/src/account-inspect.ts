@@ -1,5 +1,5 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -11,19 +11,12 @@ import {
   mergeDiscordAccountConfig,
   resolveDefaultDiscordAccountId,
   resolveDiscordAccountConfig,
+  type ResolvedDiscordAccount,
 } from "./accounts.js";
-import type { DiscordCredentialStatus } from "./token.js";
 
-export type InspectedDiscordAccount = {
-  accountId: string;
-  enabled: boolean;
-  name?: string;
-  token: string;
-  tokenSource: "env" | "config" | "none";
-  tokenStatus: DiscordCredentialStatus;
+export type InspectedDiscordAccount = ResolvedDiscordAccount & {
   configured: boolean;
   stateReason?: string;
-  config: DiscordAccountConfig;
 };
 
 function inspectDiscordAccountPrimary(params: {

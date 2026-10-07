@@ -207,29 +207,32 @@ const noOpUIContext: ExtensionUIContext = {
   setToolsExpanded: () => {},
 };
 
+const noOpCommandContextActions: ExtensionCommandContextActions = {
+  waitForIdle: async () => {},
+  newSession: async () => ({ cancelled: false }),
+  fork: async () => ({ cancelled: false }),
+  navigateTree: async () => ({ cancelled: false }),
+  switchSession: async () => ({ cancelled: false }),
+  reload: async () => {},
+};
+
 export class ExtensionRunner {
   private uiContext: ExtensionUIContext;
   private errorListeners: Set<ExtensionErrorListener> = new Set();
   private getModel: () => Model | undefined = () => undefined;
   private isIdleFn: () => boolean = () => true;
   private getSignalFn: () => AbortSignal | undefined = () => undefined;
-  private waitForIdleFn: () => Promise<void> = async () => {};
+  private waitForIdleFn = noOpCommandContextActions.waitForIdle;
   private abortFn: () => void = () => {};
   private hasPendingMessagesFn: () => boolean = () => false;
   private getContextUsageFn: () => ContextUsage | undefined = () => undefined;
   private compactFn: (options?: CompactOptions) => void = () => {};
   private getSystemPromptFn: () => string = () => "";
-  private newSessionHandler: ExtensionCommandContextActions["newSession"] = async () => ({
-    cancelled: false,
-  });
-  private forkHandler: ExtensionCommandContextActions["fork"] = async () => ({ cancelled: false });
-  private navigateTreeHandler: ExtensionCommandContextActions["navigateTree"] = async () => ({
-    cancelled: false,
-  });
-  private switchSessionHandler: ExtensionCommandContextActions["switchSession"] = async () => ({
-    cancelled: false,
-  });
-  private reloadHandler: ExtensionCommandContextActions["reload"] = async () => {};
+  private newSessionHandler = noOpCommandContextActions.newSession;
+  private forkHandler = noOpCommandContextActions.fork;
+  private navigateTreeHandler = noOpCommandContextActions.navigateTree;
+  private switchSessionHandler = noOpCommandContextActions.switchSession;
+  private reloadHandler = noOpCommandContextActions.reload;
   private shutdownHandler: ShutdownHandler = () => {};
   private shortcutDiagnostics: ResourceDiagnostic[] = [];
   private commandDiagnostics: ResourceDiagnostic[] = [];
@@ -297,22 +300,13 @@ export class ExtensionRunner {
   }
 
   bindCommandContext(actions?: ExtensionCommandContextActions): void {
-    if (actions) {
-      this.waitForIdleFn = actions.waitForIdle;
-      this.newSessionHandler = actions.newSession;
-      this.forkHandler = actions.fork;
-      this.navigateTreeHandler = actions.navigateTree;
-      this.switchSessionHandler = actions.switchSession;
-      this.reloadHandler = actions.reload;
-      return;
-    }
-
-    this.waitForIdleFn = async () => {};
-    this.newSessionHandler = async () => ({ cancelled: false });
-    this.forkHandler = async () => ({ cancelled: false });
-    this.navigateTreeHandler = async () => ({ cancelled: false });
-    this.switchSessionHandler = async () => ({ cancelled: false });
-    this.reloadHandler = async () => {};
+    const boundActions = actions ?? noOpCommandContextActions;
+    this.waitForIdleFn = boundActions.waitForIdle;
+    this.newSessionHandler = boundActions.newSession;
+    this.forkHandler = boundActions.fork;
+    this.navigateTreeHandler = boundActions.navigateTree;
+    this.switchSessionHandler = boundActions.switchSession;
+    this.reloadHandler = boundActions.reload;
   }
 
   setUIContext(uiContext?: ExtensionUIContext): void {

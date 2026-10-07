@@ -96,16 +96,11 @@ export async function resolveBoundAcpDispatchSessionKey(params: {
     return undefined;
   }
 
-  const binding = preparedRoute
-    ? await readPreparedConversationBindingRouteCurrent(params.ctx)
-    : await getSessionBindingService().resolveByConversationAsync({
-        channel: bindingContext.channel,
-        accountId: bindingContext.accountId,
-        conversationId: bindingContext.conversationId,
-        ...(bindingContext.parentConversationId
-          ? { parentConversationId: bindingContext.parentConversationId }
-          : {}),
-      });
+  const readCurrentBinding = () =>
+    preparedRoute
+      ? readPreparedConversationBindingRouteCurrent(params.ctx)
+      : getSessionBindingService().resolveByConversationAsync(bindingContext);
+  const binding = await readCurrentBinding();
   assertPreparedConversationBindingRoute(params.ctx, binding);
   const targetSessionKey = normalizeOptionalString(binding?.targetSessionKey);
   if (!binding || !targetSessionKey || !isAcpSessionKey(targetSessionKey)) {
@@ -117,9 +112,7 @@ export async function resolveBoundAcpDispatchSessionKey(params: {
   const { bindingId, boundAt, targetSessionKey: boundTargetSessionKey, targetKind } = binding;
   const scope = { ...binding.conversation };
   await getSessionBindingService().touchAsync(bindingId, undefined, scope);
-  const currentBinding = preparedRoute
-    ? await readPreparedConversationBindingRouteCurrent(params.ctx)
-    : await getSessionBindingService().resolveByConversationAsync(bindingContext);
+  const currentBinding = await readCurrentBinding();
   assertPreparedConversationBindingRoute(params.ctx, currentBinding);
   if (
     currentBinding &&

@@ -208,7 +208,6 @@ async function preparePendingCodexThreadResume(
   }
   assertCodexThreadAcceptsDirectInput(thread);
   const observation = observeCodexThreadConfiguration(params, thread, assertCurrent);
-  const dispose = observation.dispose;
   try {
     const rolloutPath = thread.path ?? binding.rolloutPath;
     const metadata = rolloutPath
@@ -229,7 +228,7 @@ async function preparePendingCodexThreadResume(
     assertCurrent();
     return { ...observation, assertCurrent };
   } catch (error) {
-    dispose();
+    observation.dispose();
     throw error;
   }
 }

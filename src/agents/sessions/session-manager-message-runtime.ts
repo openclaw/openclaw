@@ -158,15 +158,12 @@ export async function appendSessionTranscriptMessage(
   } catch (error) {
     failures.push(error);
   } finally {
-    try {
-      await worker?.close();
-    } catch (error) {
-      failures.push(error);
-    }
-    try {
-      await execution.release();
-    } catch (error) {
-      failures.push(error);
+    for (const release of [() => worker?.close(), () => execution.release()]) {
+      try {
+        await release();
+      } catch (error) {
+        failures.push(error);
+      }
     }
   }
   try {

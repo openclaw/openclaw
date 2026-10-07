@@ -144,42 +144,24 @@ export function selectGuardianApprovalPolicy(
   allowedApprovalPolicies: Set<CodexAppServerManagedApprovalPolicy> | undefined,
   execModeRequiringPromptingApprovals?: Extract<OpenClawExecMode, "auto" | "ask">,
 ): CodexAppServerManagedApprovalPolicy {
-  if (allowedApprovalPolicies === undefined || allowedApprovalPolicies.has("on-request")) {
-    return "on-request";
-  }
-  if (allowedApprovalPolicies.has("untrusted")) {
-    return "untrusted";
-  }
-  if (execModeRequiringPromptingApprovals) {
-    throw new Error(
+  return selectManagedPolicy(
+    allowedApprovalPolicies,
+    ["on-request", "untrusted", "never"],
+    execModeRequiringPromptingApprovals &&
       `tools.exec.mode=${execModeRequiringPromptingApprovals} requires Codex app-server prompting approvals`,
-    );
-  }
-  if (allowedApprovalPolicies.has("never")) {
-    return "never";
-  }
-  return "on-request";
+  );
 }
 
 export function selectGuardianApprovalsReviewer(
   allowedApprovalsReviewers: Set<CodexApprovalsReviewer> | undefined,
   execModeRequiringAutoReviewer?: Extract<OpenClawExecMode, "auto">,
 ): CodexApprovalsReviewer {
-  if (allowedApprovalsReviewers === undefined || allowedApprovalsReviewers.has("auto_review")) {
-    return "auto_review";
-  }
-  if (allowedApprovalsReviewers.has("guardian_subagent")) {
-    return "guardian_subagent";
-  }
-  if (execModeRequiringAutoReviewer) {
-    throw new Error(
+  return selectManagedPolicy(
+    allowedApprovalsReviewers,
+    ["auto_review", "guardian_subagent", "user"],
+    execModeRequiringAutoReviewer &&
       `tools.exec.mode=${execModeRequiringAutoReviewer} requires Codex app-server auto approvals`,
-    );
-  }
-  if (allowedApprovalsReviewers.has("user")) {
-    return "user";
-  }
-  return "auto_review";
+  );
 }
 
 export function selectUserApprovalsReviewer(
@@ -192,4 +174,21 @@ export function selectUserApprovalsReviewer(
   throw new Error(
     `tools.exec.mode=${execModeRequiringUserReviewer ?? "ask"} requires Codex app-server user approvals`,
   );
+}
+
+function selectManagedPolicy<T extends string>(
+  allowed: Set<T> | undefined,
+  [preferred, alternate, fallback]: readonly [T, T, T],
+  requiredMessage: string | undefined,
+): T {
+  if (allowed === undefined || allowed.has(preferred)) {
+    return preferred;
+  }
+  if (allowed.has(alternate)) {
+    return alternate;
+  }
+  if (requiredMessage) {
+    throw new Error(requiredMessage);
+  }
+  return allowed.has(fallback) ? fallback : preferred;
 }

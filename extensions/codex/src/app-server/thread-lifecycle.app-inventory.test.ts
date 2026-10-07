@@ -11,7 +11,7 @@ import {
 } from "./client-runtime.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { threadStartResult } from "./codex-app-server.test-fixtures.js";
-import { resolveCodexPluginsPolicy, type CodexPluginConfig } from "./config.js";
+import type { CodexPluginConfig } from "./config.js";
 import {
   appInfo,
   appSummary,
@@ -20,10 +20,8 @@ import {
   pluginSummary,
 } from "./plugin-inventory.test-helpers.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
-import { createCodexPluginThreadConfigStartupProvider } from "./plugin-thread-config-deadline.js";
-import { buildCodexPluginThreadConfigInputFingerprint } from "./plugin-thread-config.js";
+import { preparePluginThreadConfigForTest } from "./plugin-thread-config.test-helpers.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
-import { buildScheduledCodexAppAuthorityInputFingerprint } from "./scheduled-app-authority.js";
 import { createCodexAppServerBindingStore, sessionBindingIdentity } from "./session-binding.js";
 import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 import { createCodexTestModel, useAutoCleanupTempDirTracker } from "./test-support.js";
@@ -359,28 +357,18 @@ describe("Codex app inventory across physical process restart", () => {
       processes.push({ close });
       const abandonClient = vi.fn(async () => close());
       const appCacheKey = "same-account-home-version";
-      const policy = resolveCodexPluginsPolicy(configuredPlugins);
-      const inputFingerprint = buildScheduledCodexAppAuthorityInputFingerprint(
-        buildCodexPluginThreadConfigInputFingerprint({
-          pluginConfig: configuredPlugins,
-          appCacheKey,
-        }),
+      const prepareProvider = preparePluginThreadConfigForTest(
+        configuredPlugins,
+        appCacheKey,
         params.scheduledRuntimeAuthority,
       );
       const provider = () =>
-        createCodexPluginThreadConfigStartupProvider({
-          inputFingerprint,
-          enabledPluginConfigKeys: policy.pluginPolicies
-            .filter((plugin) => plugin.enabled)
-            .map((plugin) => plugin.configKey),
-          policy,
+        prepareProvider({
           requestTimeoutMs: appServer.requestTimeoutMs,
           signal: abort.signal,
-          pluginConfig: configuredPlugins,
           client: fake.client,
           configCwd: workspaceDir,
           appCache,
-          appCacheKey,
           metadataCache,
           scheduledRuntimeAuthority: params.scheduledRuntimeAuthority,
         });

@@ -53,14 +53,24 @@ export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database
 }
 
 /** A single bound set avoids SQLite parameter and JS variadic-call limits. */
-export function sqliteStringSet(values: readonly string[]): RawBuilder<string> {
+export function encodeSqliteStringSet(values: readonly (string | null)[]): string {
   // Keep node:sqlite's USV binding. SQLite 3.44 needs JSON5 \x00 to retain NUL;
   // consuming escaped backslashes first preserves literal "\\u0000" keys.
-  const encoded = JSON.stringify(values.map(toUSVString)).replace(/\\(?:\\|u0000)/g, (escape) =>
-    escape === "\\u0000" ? "\\x00" : escape,
-  );
+  return JSON.stringify(
+    values.map((value) => (value === null ? null : toUSVString(value))),
+  ).replace(/\\(?:\\|u0000)/g, (escape) => (escape === "\\u0000" ? "\\x00" : escape));
+}
+
+export function sqliteStringSet(values: readonly string[]): RawBuilder<string> {
   /* kysely-allow-raw: JSON table-valued selection keeps one read snapshot and outer query ordering. */
-  return kyselySql<string>`(SELECT value FROM json_each(${encoded}))`;
+  return kyselySql<string>`(SELECT value FROM json_each(${encodeSqliteStringSet(values)}))`;
+}
+
+/** Expands encoded string tuples without adding one SQLite parameter per field. */
+export function sqliteStringSetEntries(
+  encoded: string | RawBuilder<string>,
+): RawBuilder<{ key: number; value: string | null }> {
+  return kyselySql<{ key: number; value: string | null }>`json_each(${encoded})`;
 }
 
 function reportNodeSqliteKyselyQueryError(db: DatabaseSync, error: unknown): void {

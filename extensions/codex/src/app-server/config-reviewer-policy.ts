@@ -6,11 +6,7 @@ import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerUserHomeDir,
 } from "./auth-start-options.js";
-import type {
-  CodexAppServerHomeScope,
-  CodexModelBackedReviewerContext,
-  ProviderAuthAliasConfig,
-} from "./config-contracts.js";
+import type { CodexModelBackedReviewerContext } from "./config-contracts.js";
 import { readCodexEffectiveConfig, type CodexConfigReadClient } from "./config-layer-policy.js";
 import { readNonEmptyString, readRecord } from "./config-utils.js";
 import { readCodexAppServerConfigOptions } from "./launch-args.js";
@@ -73,37 +69,28 @@ export function canUseCodexModelBackedApprovalsReviewerForModel(
   if (explicitProvider && explicitProvider !== "codex" && explicitProvider !== "openai") {
     return false;
   }
-  return (
-    (inferredProvider ?? explicitProvider) === "openai" &&
-    isTrustedCodexModelBackedOpenAIProvider(params, resolveAuthProviderId)
-  );
-}
-
-function isTrustedCodexModelBackedOpenAIProvider(
-  params: {
-    config?: ProviderAuthAliasConfig;
-    env?: NodeJS.ProcessEnv;
-    model?: string;
-    agentDir?: string;
-    codexConfigToml?: string | null;
-    homeScope?: CodexAppServerHomeScope;
-    codexArgs?: readonly string[];
-  },
-  resolveAuthProviderId: typeof resolveProviderIdForAuth,
-): boolean {
+  if ((inferredProvider ?? explicitProvider) !== "openai") {
+    return false;
+  }
   if (![params.env?.OPENAI_BASE_URL, params.env?.OPENAI_API_BASE].every(isNativeOpenAIBaseUrl)) {
     return false;
   }
   if (!nativeCodexConfigIsTrustedForModelBackedReview(params)) {
     return false;
   }
-  const openAIProviders = readConfiguredOpenAIProvidersForModelBackedReview(
-    params.config,
-    resolveAuthProviderId,
-  );
-  return openAIProviders.every((openAIProvider) =>
-    configuredOpenAIProviderIsTrustedForModelBackedReview(openAIProvider, params.model),
-  );
+  const config = params.config;
+  const providerRecords = readRecord(readRecord(readRecord(config)?.models)?.providers);
+  return Object.entries(providerRecords ?? {})
+    .flatMap(([providerId, providerConfig]) => {
+      if (resolveAuthProviderId(providerId, { config }) !== "openai") {
+        return [];
+      }
+      const record = readRecord(providerConfig);
+      return record ? [record] : [];
+    })
+    .every((provider) =>
+      configuredOpenAIProviderIsTrustedForModelBackedReview(provider, params.model),
+    );
 }
 
 export function resolveCodexModelBackedReviewerPolicyContext(params: {
@@ -301,20 +288,6 @@ function resolveCodexAppServerConfigPath(
 
 function readErrorCode(error: unknown): string | undefined {
   return error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
-}
-
-function readConfiguredOpenAIProvidersForModelBackedReview(
-  config: ProviderAuthAliasConfig | undefined,
-  resolveAuthProviderId: typeof resolveProviderIdForAuth,
-): Array<Record<string, unknown>> {
-  const providerRecords = readRecord(readRecord(readRecord(config)?.models)?.providers);
-  return Object.entries(providerRecords ?? {}).flatMap(([providerId, providerConfig]) => {
-    if (resolveAuthProviderId(providerId, { config }) !== "openai") {
-      return [];
-    }
-    const record = readRecord(providerConfig);
-    return record ? [record] : [];
-  });
 }
 
 function configuredOpenAIProviderIsTrustedForModelBackedReview(

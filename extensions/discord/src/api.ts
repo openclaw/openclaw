@@ -43,14 +43,10 @@ function parseDiscordApiErrorPayload(text: string): DiscordApiErrorPayload | nul
     return null;
   }
   try {
-    const payload = JSON.parse(trimmed);
-    if (payload && typeof payload === "object") {
-      return payload as DiscordApiErrorPayload;
-    }
+    return JSON.parse(trimmed) as DiscordApiErrorPayload;
   } catch {
     return null;
   }
-  return null;
 }
 
 function parseRetryAfterSeconds(text: string, response: Response): number | undefined {
@@ -60,10 +56,7 @@ function parseRetryAfterSeconds(text: string, response: Response): number | unde
     return retryAfter;
   }
   const header = response.headers.get("Retry-After");
-  if (!header) {
-    return undefined;
-  }
-  return parseRetryAfterHeaderSeconds(header);
+  return header ? parseRetryAfterHeaderSeconds(header) : undefined;
 }
 
 function formatRetryAfterSeconds(value: number | undefined): string | undefined {
@@ -120,16 +113,6 @@ export class DiscordApiError extends Error {
     this.status = status;
     this.retryAfter = retryAfter;
   }
-}
-
-function getDiscordApiRetryAfterMs(
-  err: unknown,
-  retryConfig: Required<RetryConfig>,
-): number | undefined {
-  if (!(err instanceof DiscordApiError) || typeof err.retryAfter !== "number") {
-    return undefined;
-  }
-  return Math.min(Math.max(0, err.retryAfter * 1000), retryConfig.maxDelayMs);
 }
 
 type DiscordFetchOptions = {
@@ -262,7 +245,10 @@ export async function requestDiscord<T>(
       ...retryConfig,
       label: options?.label ?? path,
       shouldRetry: (err) => err instanceof DiscordApiError && err.status === 429,
-      retryAfterMs: (err) => getDiscordApiRetryAfterMs(err, retryConfig),
+      retryAfterMs: (err) =>
+        err instanceof DiscordApiError && typeof err.retryAfter === "number"
+          ? Math.min(Math.max(0, err.retryAfter * 1000), retryConfig.maxDelayMs)
+          : undefined,
       // 429 backoffs can run for minutes; keep them abortable like the fetch itself.
       sleep: (ms) => sleepWithAbort(ms, options?.signal),
     },

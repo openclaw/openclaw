@@ -52,12 +52,10 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
     !isHeartbeatLifecycleRun &&
     params.bootstrapMode === "full";
 
-  const context = shouldSkipBootstrapInjection
-    ? { bootstrapFiles: [], contextFiles: [] }
-    : await params.resolveBootstrapContextForRun();
-
   return {
-    ...context,
+    ...(shouldSkipBootstrapInjection
+      ? { bootstrapFiles: [], contextFiles: [] }
+      : await params.resolveBootstrapContextForRun()),
     isContinuationTurn,
     shouldRecordCompletedBootstrapTurn,
   };
@@ -120,13 +118,10 @@ export function findCurrentAttemptAssistantMessage(params: {
   prePromptMessageCount: number;
 }): AssistantMessage | undefined {
   const firstAttemptIndex = Math.max(0, params.prePromptMessageCount);
-  for (let i = params.messagesSnapshot.length - 1; i >= firstAttemptIndex; i--) {
-    const message = params.messagesSnapshot[i];
-    if (message?.role === "assistant") {
-      return message;
-    }
-  }
-  return undefined;
+  return params.messagesSnapshot.findLast(
+    (message, index): message is AssistantMessage =>
+      index >= firstAttemptIndex && message?.role === "assistant",
+  );
 }
 
 /** Finds the newest usable per-call usage without letting a zero-usage abort erase it. */
@@ -154,10 +149,7 @@ export function findLatestUncompactedAttemptUsageSnapshot(params: {
   prePromptMessageCount: number;
   compactionOccurred: boolean;
 }): { assistant: AssistantMessage; usage: NormalizedUsage } | undefined {
-  if (params.compactionOccurred) {
-    return undefined;
-  }
-  return findLatestCurrentAttemptUsageSnapshot(params);
+  return params.compactionOccurred ? undefined : findLatestCurrentAttemptUsageSnapshot(params);
 }
 
 /**
@@ -173,11 +165,10 @@ export function resolvePromptCacheTouchTimestamp(params: {
   const hasCacheUsage =
     typeof params.lastCallUsage?.cacheRead === "number" ||
     typeof params.lastCallUsage?.cacheWrite === "number";
-  if (!hasCacheUsage) {
-    return params.fallbackLastCacheTouchAt ?? null;
-  }
   return (
-    parseDateFirstTimestampMs(params.assistantTimestamp) ?? params.fallbackLastCacheTouchAt ?? null
+    (hasCacheUsage ? parseDateFirstTimestampMs(params.assistantTimestamp) : undefined) ??
+    params.fallbackLastCacheTouchAt ??
+    null
   );
 }
 

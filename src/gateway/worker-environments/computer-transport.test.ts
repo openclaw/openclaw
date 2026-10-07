@@ -131,6 +131,20 @@ describe("session computer transport", () => {
     resetPluginRuntimeStateForTest();
   });
 
+  it("refuses computer preparation when the turn closes during its placement read", async () => {
+    const h = createHarness();
+    const placement = structuredClone(h.state.placement);
+    h.options.placements.getAsync = async () => {
+      h.releaseClaim();
+      return placement;
+    };
+    await expect(createWorkerComputerService(h.options).prepare(h.claim)).rejects.toThrow(
+      "Session desktop placement is no longer active",
+    );
+    expect(h.privateInvoke).not.toHaveBeenCalled();
+    expect(h.publicInvoke).not.toHaveBeenCalled();
+  });
+
   it("controls an attached environment without moving the conversation and fences attachment revocation", async () => {
     const h = createHarness();
     h.releaseClaim();

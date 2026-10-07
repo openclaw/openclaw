@@ -3,7 +3,6 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { normalizeMessageClientSources } from "../../chat/message-client-source.js";
-import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import {
@@ -55,7 +54,6 @@ export function createGatewayChatUserTurnController(params: {
   mentionInbox?: MentionInbox;
   goalCommitGuard?: ReturnType<typeof createChatSendGoalCommitGuard>;
   assertOriginalInputCommit?: () => void;
-  onCommittedSource?: (source: CapturedSessionEntryReadSource) => void;
 }): GatewayChatUserTurnController {
   const { admission, request, session } = params;
   const sender =
@@ -173,7 +171,6 @@ export function createGatewayChatUserTurnController(params: {
       : {}),
     errorContext: "gateway chat user turn transcript",
     assertOriginalInputCommit: params.assertOriginalInputCommit,
-    onCommittedSource: params.onCommittedSource,
     beforeMessageWrite: (event) => {
       const originalInput = event.message.idempotencyKey === sourceId;
       const next = runAgentHarnessBeforeMessageWriteHook(event);

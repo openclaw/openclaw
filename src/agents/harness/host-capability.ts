@@ -307,6 +307,13 @@ export function createAgentHarnessHostCapabilities(params: {
         : callerIdentity,
       run,
     );
+  const hookContextForOperation = (operation?: Readonly<{ cwd?: string }>) => {
+    const cwd =
+      operation?.cwd !== undefined
+        ? normalizeNativeOperationCwd(operation.cwd, hookContext.cwd)
+        : undefined;
+    return cwd ? Object.freeze({ ...hookContext, cwd }) : hookContext;
+  };
   const runBeforeToolCallWithAssertion = async (
     assertCurrent: () => void,
     {
@@ -317,13 +324,7 @@ export function createAgentHarnessHostCapabilities(params: {
   ) => {
     assertCurrent();
     const hostApprovalMode = approvalMode === "defer" ? "defer" : "request";
-    const actionCwd =
-      nativeOperation?.cwd !== undefined
-        ? normalizeNativeOperationCwd(nativeOperation.cwd, hookContext.cwd)
-        : undefined;
-    const actionHookContext = actionCwd
-      ? Object.freeze({ ...hookContext, cwd: actionCwd })
-      : hookContext;
+    const actionHookContext = hookContextForOperation(nativeOperation);
     const result = await runBeforeToolCallHook({
       ...request,
       approvalMode: hostApprovalMode,
@@ -374,13 +375,7 @@ export function createAgentHarnessHostCapabilities(params: {
     const boundAbortSignal = attempt.abortSignal
       ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
       : capabilityAbortController.signal;
-    const bindingCwd =
-      options?.cwd !== undefined
-        ? normalizeNativeOperationCwd(options.cwd, hookContext.cwd)
-        : undefined;
-    const bindingHookContext = bindingCwd
-      ? Object.freeze({ ...hookContext, cwd: bindingCwd })
-      : hookContext;
+    const bindingHookContext = hookContextForOperation(options);
     return tools
       .map((tool) => bindAgentToolSourceExecutionGuard(tool, assertActive))
       .map((tool) => rewrapToolWithBeforeToolCallHook(tool, bindingHookContext))
@@ -443,6 +438,10 @@ export function createAgentHarnessHostCapabilities(params: {
     }
     return tools;
   };
+  const withToolConstructionScope = <T>(run: () => T): T =>
+    withAgentQuestionAnswerAuthority(resolveAgentQuestionAnswerAuthority(capabilities), () =>
+      withInstallationTarget(installationTarget, run),
+    );
   const capabilities: AgentHarnessHostCapabilities = Object.freeze({
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
@@ -488,33 +487,27 @@ export function createAgentHarnessHostCapabilities(params: {
     createToolSurface: (options, bindingOptions) => {
       const inputs = toolConstructionInputs(options);
       return bindCreatedTools(
-        withAgentQuestionAnswerAuthority(resolveAgentQuestionAnswerAuthority(capabilities), () =>
-          withInstallationTarget(installationTarget, () =>
-            createOpenClawCodingToolsInternal(inputs.options, inputs.skillReadResources),
-          ),
+        withToolConstructionScope(() =>
+          createOpenClawCodingToolsInternal(inputs.options, inputs.skillReadResources),
         ),
         bindingOptions,
       );
     },
     createToolSurfaceAsync: async (options, bindingOptions) => {
       const inputs = toolConstructionInputs(options);
-      const sourceTools = await withAgentQuestionAnswerAuthority(
-        resolveAgentQuestionAnswerAuthority(capabilities),
-        () =>
-          withInstallationTarget(installationTarget, () =>
-            createOpenClawCodingToolsInternalAsync(
-              inputs.options,
-              inputs.skillReadResources,
-              undefined,
-              undefined,
-              {
-                assertCurrent: assertActive,
-                signal: attemptSignal
-                  ? AbortSignal.any([attemptSignal, capabilityAbortController.signal])
-                  : capabilityAbortController.signal,
-              },
-            ),
-          ),
+      const sourceTools = await withToolConstructionScope(() =>
+        createOpenClawCodingToolsInternalAsync(
+          inputs.options,
+          inputs.skillReadResources,
+          undefined,
+          undefined,
+          {
+            assertCurrent: assertActive,
+            signal: attemptSignal
+              ? AbortSignal.any([attemptSignal, capabilityAbortController.signal])
+              : capabilityAbortController.signal,
+          },
+        ),
       );
       return bindCreatedTools(sourceTools, bindingOptions);
     },

@@ -211,15 +211,17 @@ export async function createModelSelectionState(params: {
   let storedOverrideResetForRun = false;
   let resetModelOverrideRef: string | undefined;
   let resetModelOverrideReason: "disallowed" | "stale" | "temporarily-unavailable" | undefined;
-  const effectiveStoredModelOverride = storedModelOverrides.resolveStoredModelOverrideCore({
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    parentSessionKey,
-    defaultProvider,
-    allowPluginNormalization: runtimeModelNormalization.allowPluginNormalization,
-    manifestPlugins: runtimeModelNormalization.manifestPlugins,
-  });
+  const resolveStoredOverride = () =>
+    storedModelOverrides.resolveStoredModelOverrideCore({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      parentSessionKey,
+      defaultProvider,
+      allowPluginNormalization: runtimeModelNormalization.allowPluginNormalization,
+      manifestPlugins: runtimeModelNormalization.manifestPlugins,
+    });
+  const effectiveStoredModelOverride = resolveStoredOverride();
   const directStoredModelOverride =
     effectiveStoredModelOverride?.source === "session" ? effectiveStoredModelOverride : null;
   const primaryHarnessPolicy = resolveAgentHarnessPolicy({
@@ -280,19 +282,13 @@ export async function createModelSelectionState(params: {
       "catalog-loaded",
       `entries=${modelCatalog.length} authoritative=${catalogAuthoritative}`,
     );
-    visibilityPolicy = createVisibilityPolicy(modelCatalog);
+  }
+  if (modelCatalog || hasAllowlist || hasConfiguredModels || configuredModelCatalog.length > 0) {
+    visibilityPolicy = createVisibilityPolicy(modelCatalog ?? configuredModelCatalog);
     allowedModelCatalog = visibilityPolicy.allowedCatalog;
     allowedModelKeys = visibilityPolicy.allowedKeys;
     logStage(
-      "allowlist-built",
-      `allowed=${allowedModelCatalog.length} keys=${allowedModelKeys.size}`,
-    );
-  } else if (hasAllowlist || hasConfiguredModels || configuredModelCatalog.length > 0) {
-    visibilityPolicy = createVisibilityPolicy(configuredModelCatalog);
-    allowedModelCatalog = visibilityPolicy.allowedCatalog;
-    allowedModelKeys = visibilityPolicy.allowedKeys;
-    logStage(
-      "configured-allowlist-built",
+      modelCatalog ? "allowlist-built" : "configured-allowlist-built",
       `allowed=${allowedModelCatalog.length} keys=${allowedModelKeys.size}`,
     );
   }
@@ -380,15 +376,7 @@ export async function createModelSelectionState(params: {
     model = primaryModel;
   }
 
-  const storedOverride = storedModelOverrides.resolveStoredModelOverrideCore({
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    parentSessionKey,
-    defaultProvider,
-    allowPluginNormalization: runtimeModelNormalization.allowPluginNormalization,
-    manifestPlugins: runtimeModelNormalization.manifestPlugins,
-  });
+  const storedOverride = resolveStoredOverride();
   // Skip stored session model override only when an explicit heartbeat.model
   // was resolved. Heartbeats without heartbeat.model still inherit normal
   // overrides unless a direct auto fallback override is stale for the current

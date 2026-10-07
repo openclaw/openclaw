@@ -5,11 +5,11 @@ import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
-import * as entryPatch from "../config/sessions/session-entry-patch.js";
 import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import * as writeAdmission from "../state/openclaw-agent-write-admission.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import { terminalizeRestartSafeChatAdmission } from "./server-methods/chat-restart-recovery.js";
 
@@ -17,7 +17,7 @@ it("joins accepted restart-safe terminal persistence after the real close prelud
   signal,
 }) => {
   const fixture = await createGatewayMetadataCloseFixture("restart-safe-terminal-close");
-  const prepared = createDeferredCore();
+  const accepted = createDeferredCore();
   const release = createDeferredCore();
   const settled = createDeferredCore<boolean>();
   const finish = createDeferredCore();
@@ -28,6 +28,7 @@ it("joins accepted restart-safe terminal persistence after the real close prelud
   let callerSignal: AbortSignal | undefined;
   let observer: DatabaseSync | undefined;
   let sql: ReturnType<typeof observeHostDataSql> | undefined;
+  const settlementAuthority = new AbortController();
   try {
     const port = await fixture.reservePort();
     const server = await fixture.start(port);
@@ -57,25 +58,26 @@ it("joins accepted restart-safe terminal persistence after the real close prelud
       readSource: read.source,
     };
     observer = new DatabaseSync(target.storePath, { readOnly: true });
-    const patch = entryPatch.patchSessionEntryInWorker;
-    vi.spyOn(entryPatch, "patchSessionEntryInWorker").mockImplementation((params) => {
-      if (
-        params.selection.kind !== "target" ||
-        params.selection.target.canonicalKey !== target.sessionKey
-      ) {
-        return patch(params);
-      }
-      return patch({
-        ...params,
-        async prepare(snapshot) {
-          const input = await params.prepare(snapshot);
-          prepared.resolve();
-          await release.promise;
-          expect(callerSignal?.aborted).toBe(true);
-          return input;
-        },
-      });
-    });
+    const write = writeAdmission.runOpenClawAgentWorkerWrite;
+    let held = false;
+    vi.spyOn(writeAdmission, "runOpenClawAgentWorkerWrite").mockImplementation(
+      (options, run, timing, signal) =>
+        write(
+          options,
+          async () => {
+            if (!("target" in options) && options.path === target.storePath && !held) {
+              held = true;
+              // The real FIFO and captured execution already own this write.
+              accepted.resolve();
+              await release.promise;
+              expect(callerSignal?.aborted).toBe(true);
+            }
+            return run();
+          },
+          timing,
+          signal,
+        ),
+    );
     kernel.scheduler.signal.addEventListener(
       "abort",
       () => work.beginClose(kernel.scheduler.signal.reason),
@@ -95,6 +97,8 @@ it("joins accepted restart-safe terminal persistence after the real close prelud
           callerSignal = getAsyncWorkSignal();
           const result = await terminalizeRestartSafeChatAdmission({
             target: terminalTarget,
+            expectedLifecycleRevision: read.entries[0]?.entry.lifecycleRevision,
+            assertCurrent: () => settlementAuthority.signal.throwIfAborted(),
             admittedSessionId: "close-session",
             clientRunId: "close-run",
             startedAt: 1_000,
@@ -111,7 +115,7 @@ it("joins accepted restart-safe terminal persistence after the real close prelud
     vi.useRealTimers();
     assert(job);
     await withinTest(
-      awaitGateBeforeSettlement(prepared.promise, job, "Terminal persistence skipped preparation"),
+      awaitGateBeforeSettlement(accepted.promise, job, "Terminal persistence skipped admission"),
       signal,
     );
     closing = server.close({ reason: "restart-safe terminal close proof" });
@@ -136,6 +140,7 @@ it("joins accepted restart-safe terminal persistence after the real close prelud
       ),
     ).toBe(true);
     expect(sql.queries).toEqual([]);
+    settlementAuthority.abort(new Error("Terminal settlement completed"));
     sql.restore();
     sql = undefined;
     expect(
@@ -159,6 +164,7 @@ it("joins accepted restart-safe terminal persistence after the real close prelud
     sql?.restore();
     observer?.close();
     await Promise.allSettled([job, closing]);
+    settlementAuthority.abort(new Error("Terminal fixture closed"));
     await work.drain();
     vi.restoreAllMocks();
     await fixture.cleanup();

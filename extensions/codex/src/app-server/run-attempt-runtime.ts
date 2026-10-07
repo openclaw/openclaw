@@ -171,9 +171,8 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
             agentDir,
             config: params.config,
           });
-  const startupEnvApiKeyCacheKey = usesSupervisionConnection
-    ? undefined
-    : startupPreparedAuth || startupAuthProfileId
+  const startupEnvApiKeyCacheKey =
+    usesSupervisionConnection || startupPreparedAuth || startupAuthProfileId
       ? undefined
       : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: appServer.start });
   preDynamicStartupStages.mark("auth-cache");

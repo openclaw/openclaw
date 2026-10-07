@@ -362,29 +362,26 @@ export class DiscordAudioWorker {
     });
   }
 
-  private readonly onSpeakingStart = (userId: string) => {
-    if (this.stopped) {
-      return;
-    }
-    for (const capture of this.captures.values()) {
-      if (capture.userId === userId) {
-        clearTimeout(capture.timer);
-        capture.timer = undefined;
-      }
-    }
-    this.post({ type: "speaking", userId, speaking: true });
-  };
-  private readonly onSpeakingEnd = (userId: string) => {
+  private readonly onSpeakingStart = (userId: string) => this.onSpeaking(userId, true);
+  private readonly onSpeakingEnd = (userId: string) => this.onSpeaking(userId, false);
+
+  private onSpeaking(userId: string, speaking: boolean): void {
     if (this.stopped) {
       return;
     }
     for (const [id, capture] of this.captures) {
-      if (capture.userId === userId) {
+      if (capture.userId !== userId) {
+        continue;
+      }
+      if (speaking) {
+        clearTimeout(capture.timer);
+        capture.timer = undefined;
+      } else {
         this.finalizeLater(id, capture);
       }
     }
-    this.post({ type: "speaking", userId, speaking: false });
-  };
+    this.post({ type: "speaking", userId, speaking });
+  }
   private stopCapture(capture: Capture): void {
     if (capture.closed) {
       return;

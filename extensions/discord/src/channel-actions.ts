@@ -7,7 +7,10 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { Type } from "typebox";
 import { inspectDiscordAccount } from "./account-inspect.js";
@@ -248,12 +251,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     if (!componentSpec && !nativeComponents && !embeds?.length && !filename) {
       return payloadWithDeliveryMetadata;
     }
-    const discordData =
-      payloadWithDeliveryMetadata.channelData?.discord &&
-      typeof payloadWithDeliveryMetadata.channelData.discord === "object" &&
-      !Array.isArray(payloadWithDeliveryMetadata.channelData.discord)
-        ? (payloadWithDeliveryMetadata.channelData.discord as Record<string, unknown>)
-        : {};
+    const discordData = asNonArrayRecord(payloadWithDeliveryMetadata.channelData?.discord);
     return {
       ...payloadWithDeliveryMetadata,
       channelData: {

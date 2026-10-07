@@ -3,6 +3,7 @@ import {
   modelFallbackOverrideFromAvailability,
   resolveModelFallbackAvailability,
 } from "../../agents/agent-scope.js";
+import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
   findModelInCatalog,
   modelSupportsInput,
@@ -20,13 +21,13 @@ import {
 } from "../../config/model-provider-config.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profile.js";
+import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import type { FollowupRun } from "./queue.js";
 
 export function resolveModelFallbackOptions(
   run: FollowupRun["run"],
-  configOverride: FollowupRun["run"]["config"] = run.config,
+  config: FollowupRun["run"]["config"] = run.config,
 ) {
-  const config = configOverride;
   const modelFallbackAvailability = resolveModelFallbackAvailability({
     cfg: config,
     agentId: run.agentId,
@@ -135,35 +136,20 @@ export async function buildEmbeddedRunBaseParams(params: {
       }));
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
   return {
+    ...buildReplyRunStateParams(params.run),
     providerReviewAcknowledgment: params.run.providerReviewAcknowledgment,
-    sessionFile: params.run.sessionFile,
-    workspaceDir: params.run.workspaceDir,
-    cwd: params.run.cwd,
     permissionMode: params.run.permissionMode,
     sessionRoot: params.run.sessionRoot,
     agentDir: params.run.agentDir,
     config,
-    toolOverrides: params.run.toolOverrides,
-    skillsSnapshot: params.run.skillsSnapshot,
-    ownerNumbers: params.run.ownerNumbers,
-    inputProvenance: params.run.inputProvenance,
     trustedInternalHandoff: params.run.trustedInternalHandoff,
     scheduledToolPolicy: params.run.scheduledToolPolicy,
     runtimePluginToolGrant: params.run.runtimePluginToolGrant,
-    senderIsOwner: params.run.senderIsOwner,
-    conversationToolPolicy: params.run.conversationToolPolicy,
-    channelContext: params.run.channelContext,
-    approvalReviewerDeviceId: params.run.approvalReviewerDeviceId,
     enforceFinalTag,
     silentExpected: params.run.silentExpected,
-    terminalReplyExpectation: params.run.terminalReplyExpectation,
     silentReplyPromptMode: params.run.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
-    clientCaps: params.run.clientCaps,
-    bootstrapUserProfileId: params.run.bootstrapUserProfileId,
-    gatewayUiCommandTarget: params.run.gatewayUiCommandTarget,
     toolBindings: params.run.toolBindings,
-    taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
     skillWorkshopProposalRevision: params.run.skillWorkshopProposalRevision,
     skillLibraryAuthoring: params.run.skillLibraryAuthoring,
     provider: params.provider,
@@ -187,5 +173,70 @@ export async function buildEmbeddedRunBaseParams(params: {
     runId: params.runId,
     promptCacheKey: params.promptCacheKey,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+  };
+}
+
+/** Project prepared turn facts shared by the CLI and embedded runtime adapters. */
+export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateCommonParams) {
+  const { turn } = params;
+  return {
+    preparedTtsPreferences: turn.opts?.preparedTtsPreferences,
+    preparedRunAdmission: params.preparedRunAdmission,
+    messageActionTurnCapability: params.messageActionTurnCapability,
+    trigger: turn.isHeartbeat ? "heartbeat" : "user",
+    lane: params.runLane,
+    fastModeStartedAtMs: params.fastModeStartedAtMs,
+    fastModeAutoProgressState: params.fastModeAutoProgressState,
+    isFinalFallbackAttempt: params.isFinalFallbackAttempt,
+    prompt: turn.commandBody,
+    transcriptPrompt: turn.transcriptCommandBody,
+    media: turn.followupRun.media,
+    userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+    contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
+    onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
+    currentInboundEventKind: turn.followupRun.currentInboundEventKind,
+    currentInboundContext: turn.followupRun.currentInboundContext,
+    extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
+    sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
+    // Omit false so heartbeat routes require explicit recipients without changing subagent defaults.
+    ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true as const } : {}),
+    cleanupBundleMcpOnRunEnd: turn.opts?.cleanupBundleMcpOnRunEnd,
+    silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
+    suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
+    onUserMessagePersisted: params.notifyUserMessagePersisted,
+    prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
+    toolsAllow: turn.opts?.toolsAllow,
+    disableTools: turn.opts?.disableTools,
+    continuesConversation: turn.opts?.continuesConversation,
+    bootstrapContextMode: turn.opts?.bootstrapContextMode,
+    bootstrapContextRunKind: params.bootstrapContextRunKind,
+    images: params.currentTurnImages.images,
+    imageOrder: params.currentTurnImages.imageOrder,
+    abortSignal: params.runAbortSignal,
+    replyOperation: turn.replyOperation,
+    bootstrapPromptWarningSignaturesSeen: params.bootstrapPromptWarningSignaturesSeen,
+    bootstrapPromptWarningSignature: params.bootstrapPromptWarningSignaturesSeen.at(-1),
+  } satisfies Partial<RunEmbeddedAgentInternalParams>;
+}
+
+/** Carry the same session-selected facts while each adapter owns runtime and route overrides. */
+export function buildReplyRunStateParams(run: FollowupRun["run"]) {
+  return {
+    sessionFile: run.sessionFile,
+    workspaceDir: run.workspaceDir,
+    cwd: run.cwd,
+    toolOverrides: run.toolOverrides,
+    skillsSnapshot: run.skillsSnapshot,
+    ownerNumbers: run.ownerNumbers,
+    inputProvenance: run.inputProvenance,
+    senderIsOwner: run.senderIsOwner,
+    conversationToolPolicy: run.conversationToolPolicy,
+    channelContext: run.channelContext,
+    approvalReviewerDeviceId: run.approvalReviewerDeviceId,
+    terminalReplyExpectation: run.terminalReplyExpectation,
+    clientCaps: run.clientCaps,
+    bootstrapUserProfileId: run.bootstrapUserProfileId,
+    gatewayUiCommandTarget: run.gatewayUiCommandTarget,
+    taskSuggestionDeliveryMode: run.taskSuggestionDeliveryMode,
   };
 }

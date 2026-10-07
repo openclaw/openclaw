@@ -8,7 +8,6 @@ import type {
   SessionTranscriptTurnMutation,
   SessionTranscriptTurnMutationResult,
 } from "../config/sessions/goals-operations.types.js";
-import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
@@ -165,8 +164,6 @@ export type PersistUserTurnTranscriptParams = UserTurnTranscriptTarget & {
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   onOriginalInputCommitted?: (commit: UserTurnOriginalInputCommit) => void;
-  /** Record the guarded persistence owner's acknowledged store; must not throw. */
-  onCommittedSource?: (source: CapturedSessionEntryReadSource) => void;
 };
 
 type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnInput | undefined>;
@@ -193,8 +190,6 @@ export type CreateUserTurnTranscriptRecorderParams = {
   onMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
   /** Fresh original input only, after durable append and before transcript publication. */
   onOriginalInputCommitted?: (commit: UserTurnOriginalInputCommit) => void;
-  /** Record the guarded persistence owner's acknowledged store; must not throw. */
-  onCommittedSource?: (source: CapturedSessionEntryReadSource) => void;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
 };

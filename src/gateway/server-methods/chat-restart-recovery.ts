@@ -15,16 +15,15 @@ import {
 } from "../../config/sessions/entry-freshness.js";
 import type { SessionLifecycleTimestamps } from "../../config/sessions/lifecycle.types.js";
 import {
-  buildRestartRecoveryClaimCleanupPatch,
   hasRestartRecoveryTerminalRun,
   isRetryableUnadoptedChatClaim,
 } from "../../config/sessions/restart-recovery-state.js";
-import {
-  patchSessionEntryTarget,
-  type SessionEntryTargetPatchScope,
-  type SessionTranscriptTurnExpectedState,
-  type SessionTranscriptTurnLifecyclePatch,
+import type {
+  SessionTranscriptTurnExpectedState,
+  SessionTranscriptTurnLifecyclePatch,
 } from "../../config/sessions/session-accessor.js";
+import { applySessionEntryTargetOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -432,25 +431,27 @@ export async function terminalizeRestartSafeChatAdmission(
   params: RestartSafeChatTerminalState & {
     admittedSessionId: string;
     clientRunId: string;
+    expectedLifecycleRevision: string | undefined;
     target: SessionEntryTargetPatchScope & { readSource: CapturedSessionEntryReadSource };
+    assertCurrent: () => void;
     startedAt: number;
   },
 ): Promise<boolean> {
   const endedAt = Date.now();
   let terminalized = false;
-  const persisted = await patchSessionEntryTarget(
+  params.assertCurrent();
+  const persisted = await applySessionEntryTargetOperation(
     params.target,
-    (current) => {
-      if (
-        current.sessionId !== params.admittedSessionId ||
-        current.restartRecoveryDeliveryRunId !== params.clientRunId
-      ) {
-        return null;
-      }
-      terminalized = true;
-      // Commit the diagnostic with claim release; a later lifecycle write could
-      // race the next admission before a newly mounted chat reads the failure.
-      return {
+    {
+      kind: "restart-safe-terminal",
+      runId: params.clientRunId,
+      retryable: params.retryable,
+      expected: {
+        sessionId: params.admittedSessionId,
+        lifecycleRevision: params.expectedLifecycleRevision,
+      },
+      // Sanitize on the host; the writer commits this diagnostic with exact claim cleanup.
+      patch: {
         ...deriveGatewaySessionLifecycleSnapshot({
           event: {
             runId: params.clientRunId,
@@ -468,16 +469,16 @@ export async function terminalizeRestartSafeChatAdmission(
         abortedLastRun: params.retryable ? false : params.status === "killed",
         lifecycleRunId: undefined,
         lastRunId: params.clientRunId,
-        ...(params.retryable
-          ? {}
-          : buildRestartRecoveryClaimCleanupPatch({
-              entry: current,
-              recordTerminalSource: true,
-              terminalSourceRunId: current.restartRecoveryDeliverySourceRunId,
-            })),
-      };
+      },
     },
-    { requireWriteSuccess: true, skipMaintenance: true, workerGuard: {} },
+    {
+      requireWriteSuccess: true,
+      skipMaintenance: true,
+      workerGuard: { assertCurrent: params.assertCurrent },
+      onCommitted: () => {
+        terminalized = true;
+      },
+    },
   );
   if (terminalized && persisted && params.status === "failed") {
     await recordGatewaySessionRunFailure({
@@ -493,6 +494,7 @@ export async function terminalizeRestartSafeChatAdmission(
       error: params.error,
       errorKind: params.errorKind,
       assertCommitAllowed: () => {
+        params.assertCurrent();
         const source = params.target.readSource;
         if (
           !isIncognitoSessionKey(params.target.target.canonicalKey) &&

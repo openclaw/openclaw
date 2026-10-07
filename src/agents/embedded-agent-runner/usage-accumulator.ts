@@ -48,10 +48,9 @@ export const mergeUsageIntoAccumulator = (
   if (usage.cacheWrite !== undefined) {
     target.cacheWriteReported = true;
   }
-  target.input += usage.input ?? 0;
-  target.output += usage.output ?? 0;
-  target.cacheRead += usage.cacheRead ?? 0;
-  target.cacheWrite += usage.cacheWrite ?? 0;
+  for (const key of USAGE_COST_COMPONENTS) {
+    target[key] += usage[key] ?? 0;
+  }
   target.cacheWrite1h += usage.cacheWrite1h ?? 0;
   target.reasoningTokens += usage.reasoningTokens ?? 0;
   target.total += callTotal;
@@ -101,10 +100,7 @@ export const mergeAttemptRunStatsIntoAccumulator = (
 
 export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | undefined => {
   const hasUsage =
-    usage.input > 0 ||
-    usage.output > 0 ||
-    usage.cacheRead > 0 ||
-    usage.cacheWrite > 0 ||
+    USAGE_COST_COMPONENTS.some((key) => usage[key] > 0) ||
     usage.reasoningTokens > 0 ||
     usage.total > 0;
   const cost = usage.cost === "unavailable" ? undefined : usage.cost;

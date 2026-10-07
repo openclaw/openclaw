@@ -86,10 +86,6 @@ function readDiscordRequesterSenderId(ctx: Ctx): string | undefined {
   return undefined;
 }
 
-function senderParam(senderUserId: string | undefined) {
-  return senderUserId ? { senderUserId } : {};
-}
-
 export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   ctx: Ctx;
   resolveChannelId: () => string;
@@ -100,6 +96,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   const { action, params: actionParams, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(actionParams, "accountId");
   const senderUserId = readDiscordRequesterSenderId(ctx);
+  const sender = senderUserId ? { senderUserId } : {};
   const runAction = (
     runtimeAction: string,
     values: Record<string, unknown>,
@@ -135,30 +132,24 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     );
   }
 
-  if (action === "emoji-upload") {
+  if (action === "emoji-upload" || action === "sticker-upload") {
+    const emoji = action === "emoji-upload";
     return await runAction(
-      "emojiUpload",
+      emoji ? "emojiUpload" : "stickerUpload",
       {
         guildId: readStringParam(actionParams, "guildId", { required: true }),
-        name: readStringParam(actionParams, "emojiName", { required: true }),
+        name: readStringParam(actionParams, emoji ? "emojiName" : "stickerName", {
+          required: true,
+        }),
+        ...(emoji
+          ? {}
+          : {
+              description: readStringParam(actionParams, "stickerDesc", { required: true }),
+              tags: readStringParam(actionParams, "stickerTags", { required: true }),
+            }),
         mediaUrl: readStringParam(actionParams, "media", { required: true, trim: false }),
-        roleIds: readStringArrayParam(actionParams, "roleIds"),
-        ...senderParam(senderUserId),
-      },
-      actionOptions,
-    );
-  }
-
-  if (action === "sticker-upload") {
-    return await runAction(
-      "stickerUpload",
-      {
-        guildId: readStringParam(actionParams, "guildId", { required: true }),
-        name: readStringParam(actionParams, "stickerName", { required: true }),
-        description: readStringParam(actionParams, "stickerDesc", { required: true }),
-        tags: readStringParam(actionParams, "stickerTags", { required: true }),
-        mediaUrl: readStringParam(actionParams, "media", { required: true, trim: false }),
-        ...senderParam(senderUserId),
+        ...(emoji ? { roleIds: readStringArrayParam(actionParams, "roleIds") } : {}),
+        ...sender,
       },
       actionOptions,
     );
@@ -169,7 +160,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
       guildId: readStringParam(actionParams, "guildId", { required: true }),
       userId: readStringParam(actionParams, "userId", { required: true }),
       roleId: readStringParam(actionParams, "roleId", { required: true }),
-      ...senderParam(senderUserId),
+      ...sender,
     });
   }
 
@@ -177,14 +168,14 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const mutation = channelMutation[action];
     return await runAction(mutation.action, {
       ...mutation.read(actionParams),
-      ...senderParam(senderUserId),
+      ...sender,
     });
   }
 
   if (action === "channel-delete") {
     return await runAction("channelDelete", {
       channelId: readStringParam(actionParams, "channelId", { required: true }),
-      ...senderParam(senderUserId),
+      ...sender,
     });
   }
 
@@ -205,7 +196,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
       {
         ...(creating ? { guildId: categoryId } : { categoryId }),
         ...fields,
-        ...senderParam(senderUserId),
+        ...sender,
       },
     );
   }
@@ -223,7 +214,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         location: readStringParam(actionParams, "location"),
         entityType: readStringParam(actionParams, "eventType"),
         image: readStringParam(actionParams, "image", { trim: false }),
-        ...senderParam(senderUserId),
+        ...sender,
       },
       actionOptions,
     );

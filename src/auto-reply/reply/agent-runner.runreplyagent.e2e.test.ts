@@ -218,12 +218,12 @@ function makeCompletedFallbackRunner(
 }
 
 let runReplyAgentPromise:
-  | Promise<(typeof import("./agent-runner.js"))["runReplyAgent"]>
+  | Promise<(typeof import("./agent-runner-run.js"))["runReplyAgent"]>
   | undefined;
 
 async function getRunReplyAgent() {
   if (!runReplyAgentPromise) {
-    runReplyAgentPromise = import("./agent-runner.js").then((m) => m.runReplyAgent);
+    runReplyAgentPromise = import("./agent-runner-run.js").then((m) => m.runReplyAgent);
   }
   return await runReplyAgentPromise;
 }

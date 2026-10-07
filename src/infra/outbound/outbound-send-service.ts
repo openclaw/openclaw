@@ -319,6 +319,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     requireUnknownSendReconciliation: params.ctx.input.requireQueuePersistence ? false : undefined,
     onDeliveryIntent: params.ctx.input.onDeliveryIntent,
     onDeliveryAttempt: params.ctx.input.onDeliveryAttempt,
+    withDirectAdapterHandoff: params.ctx.input.withDirectAdapterHandoff,
     onDeliveryResult: async (evidence) => {
       await params.ctx.onSendAccepted?.();
       await params.ctx.input.onDeliveryResult?.(evidence);

@@ -1466,15 +1466,21 @@ const reviewedOperations = new Map([
           "expireStagingAndLoadDeliveryQueueEntriesInDatabase",
           "expireStagingAndLoadDeliveryQueueEntriesInDatabase.read",
           "countFailedDeliveryQueueEntriesInDatabase",
+          "inspectDeliveryQueueReceiptInDatabase",
         ],
         evidence:
           "Expiry snapshot: src/infra/delivery-queue.worker.ts:487 → outbound/delivery-queue-media-staging.kernel.ts:74. Failed count: delivery-queue.worker.ts:455.",
       },
       {
         tier: "T2",
-        operations: ["loadDeliveryQueueEntriesInDatabase", "deleteDeliveryQueueEntryInDatabase"],
+        operations: [
+          "loadDeliveryQueueEntriesInDatabase",
+          "deleteDeliveryQueueEntryInDatabase",
+          "countPendingDeliveryQueueEntriesInDatabase",
+          "selectDeliveryQueueEntryOwners.readExact.readChunk",
+        ],
         evidence:
-          "Native loads/deletes are Doctor migration: src/commands/doctor-outbound-delivery.ts:47,48,52,137,162 and src/infra/outbound/delivery-queue-migration.ts:289,349,435,506,528,551. Remaining calls use queue workers.",
+          "Native loads/deletes/count and receipt ownership serve Doctor migration via commands/doctor-outbound-delivery.ts and infra/outbound/delivery-queue-migration.ts. Post-ready recovery count and cron receipt selection use delivery-queue.worker.ts; test-only status inspection lives in test support. Initial post-ready recovery is not boot admission.",
       },
     ],
   ],

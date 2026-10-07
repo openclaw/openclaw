@@ -246,7 +246,8 @@ export function createGatewayWorkerPlacementRuntime(
           ...identity,
           action: "recovery",
           run: async (workspace, assertCurrent) => {
-            const placement = params.placements.get(identity.sessionId);
+            const placement = await params.placements.getAsync(identity.sessionId);
+            assertCurrent();
             if (
               placement?.state !== "provisioning" ||
               placement.generation !== expectedGeneration ||

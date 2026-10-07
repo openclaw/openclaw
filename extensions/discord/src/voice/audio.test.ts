@@ -46,7 +46,7 @@ vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {
 });
 
 import {
-  createDiscordOpusEncodeStream,
+  DiscordOpusEncodeStream,
   createDiscordOpusPlaybackStream,
   decodeOpusStreamChunks,
   writeVoiceWavFile,
@@ -81,7 +81,7 @@ async function collectBuffers(stream: Readable): Promise<Buffer[]> {
 
 describe("discord voice opus codec", () => {
   it("round-trips Discord PCM while preserving the source packet identity", async () => {
-    const encoder = createDiscordOpusEncodeStream();
+    const encoder = new DiscordOpusEncodeStream();
     const packetsPromise = collectBuffers(encoder);
 
     encoder.end(Buffer.alloc(960 * 2 * 2));
@@ -138,7 +138,7 @@ describe("discord voice opus codec", () => {
   });
 
   it("pads final partial PCM frames before encoding", async () => {
-    const encoder = createDiscordOpusEncodeStream();
+    const encoder = new DiscordOpusEncodeStream();
     const packetsPromise = collectBuffers(encoder);
 
     encoder.end(Buffer.alloc((960 * 2 * 2) / 2));

@@ -80,7 +80,7 @@ describe("worker session placement moves", () => {
     };
   }
 
-  it("mutates native move state without caller-thread SQL", async () => {
+  it("reads and mutates native move state without caller-thread SQL", async () => {
     const active = await seedActiveEnvironment();
     const request = {
       sessionId: ` ${SESSION.sessionId} `,
@@ -90,6 +90,18 @@ describe("worker session placement moves", () => {
     const sql = observeMainThreadSql();
     try {
       const begun = await store.beginPlacementMove(request);
+      expect(await store.getWithMoveAsync(request.sessionId)).toMatchObject({
+        placement: {
+          sessionId: SESSION.sessionId,
+          state: "draining",
+          generation: begun.placement.generation,
+        },
+        move: {
+          operationId: begun.intent.operationId,
+          sessionId: SESSION.sessionId,
+          source: request.source,
+        },
+      });
       expect(
         await store.recordPlacementMoveError({
           operationId: begun.intent.operationId,
