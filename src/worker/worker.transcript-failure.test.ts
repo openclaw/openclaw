@@ -1,7 +1,16 @@
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
 import * as workerServer from "../gateway/server/ws-connection/worker-connection.js";
+import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
+import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "../state/agent-database-admission-error.js";
+import {
+  AgentDatabaseAdmissionError,
+  createAgentDatabaseInspectionRefusal,
+} from "../state/agent-database-admission.js";
+import { StateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { ComposedGatewayHarness } from "./worker-fault-injection.test-support.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
 
@@ -53,6 +62,63 @@ it("fails a worker turn after one deterministic transcript failure without recon
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       expect.stringContaining("transcript operation failed | synthetic transcript storage failure"),
     );
+  } finally {
+    controller.abort(new Error("fixture teardown"));
+    await Promise.allSettled([run]);
+    await harness.close();
+  }
+});
+
+it("replays transient transcript failures and completes the run without duplicate messages", async () => {
+  const harness = await ComposedGatewayHarness.create(tempDirs.make("oc-tf-"));
+  const controller = new AbortController();
+  let run: ReturnType<typeof runWorkerDescriptor> | undefined;
+  try {
+    await harness.start();
+    const failures = [
+      Object.assign(new Error("synthetic busy"), { code: "ERR_SQLITE_ERROR", errcode: 5 }),
+      Object.assign(new Error("synthetic locked"), { code: "SQLITE_LOCKED" }),
+      new AgentDatabaseExecutionAdmissionClosedError("synthetic retiring owner"),
+      new AgentDatabaseAdmissionError(
+        createAgentDatabaseInspectionRefusal({
+          agentId: "main",
+          paths: [],
+          reason: "synthetic pending inspection",
+          pending: true,
+        }),
+      ),
+      new StateDatabaseAdmissionPendingError(
+        harness.sessionTarget.storePath,
+        "synthetic maintenance",
+      ),
+      new StateDatabaseReadAdmissionInvalidatedError("synthetic replaced admission"),
+      new SqliteWorkerError("synthetic broker overload", "overloaded"),
+      new SqliteWorkerError("synthetic broker retirement", "closed"),
+      new SqliteWorkerError("synthetic worker loss", "unavailable"),
+      new DOMException("synthetic operation cancellation", "AbortError"),
+    ];
+    const apply = harness.serviceValue.commitTranscript;
+    const commit = vi.spyOn(harness.serviceValue, "commitTranscript");
+    for (const failure of failures) {
+      commit.mockRejectedValueOnce(failure);
+    }
+    commit.mockImplementationOnce(async (...args) => {
+      await apply(...args);
+      throw new SqliteWorkerError("synthetic lost commit receipt", "outcome-unknown");
+    });
+    run = runWorkerDescriptor(await harness.createDescriptor(), { signal: controller.signal });
+
+    await expect(run).resolves.toMatchObject({ status: "completed" });
+    const requests = harness.requestParams("worker.transcript.commit");
+    expect(harness.connectionCount).toBe(failures.length + 2);
+    expect(requests).toHaveLength(failures.length + 3);
+    for (const replay of requests.slice(1, -1)) {
+      expect(replay).toEqual(requests[0]);
+    }
+    expect(harness.providerCalls).toBe(1);
+    const transcript = await SessionManager.openAsync(harness.sessionTarget);
+    expect(transcript.getEntries()).toHaveLength(2);
+    expect(await run).toMatchObject({ transcriptLeafId: transcript.getLeafId() });
   } finally {
     controller.abort(new Error("fixture teardown"));
     await Promise.allSettled([run]);

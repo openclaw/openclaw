@@ -180,6 +180,10 @@ Vitest without dropping coverage. Production sources remain free to change and
 are still exercised. Extra Vitest arguments, including cache-warming collection,
 retain the existing Vitest path.
 
+A changed shared setup fingerprint invalidates the entire native cohort.
+Refreshing those fingerprints requires fresh qualification of the retained
+entries; tests without matching proof keep their Vitest coverage.
+
 Native Bun receives explicit file paths, the existing hermetic environment setup,
 the repository tsconfig, and the shared test deadline. It disables automatic env
 file loading and runs one test process inside the existing plan and worker budget.
@@ -222,6 +226,11 @@ existing CI resource budgets. Precise PR targets use the existing
 test-project planner to find their owners. The runtime owner admits only qualified
 configs, exact files, and partitions; ambiguous selections retain Node. No tests
 are removed from the selected inventory.
+
+The complete CLI and embedded-agent-run leaf configs also support Bun. Their
+existing pools, exclusions, and worker limits remain in effect. CLI-process and
+other agent owners keep their separate qualification policies. Dual validation
+runs each complete selected owner on Node before Bun in the same worker slot.
 
 Worktree removal recovery (`src/agents/worktrees/service.removal-recovery.test.ts`),
 OpenAI realtime worker messaging (`extensions/openai/realtime-quicksilver-peer-worker.test.ts`),

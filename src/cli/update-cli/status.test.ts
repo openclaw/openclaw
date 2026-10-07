@@ -302,12 +302,7 @@ describe("update status Node runtime findings", () => {
         this: DatabaseSync,
         sql,
       ) {
-        return realPrepare.call(
-          this,
-          sql === "SELECT sqlite_version() AS version"
-            ? `SELECT '${sqliteVersion}' AS version`
-            : sql,
-        );
+        return realPrepare.call(this, sql.replaceAll("sqlite_version()", `'${sqliteVersion}'`));
       });
       const freshGuard = await import("../../infra/runtime-guard.js");
       vi.spyOn(freshGuard, "detectRuntime").mockResolvedValue({

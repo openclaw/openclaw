@@ -13,7 +13,6 @@ import { controlUiE2eTestGlobs, controlUiTestGlobs } from "../../test/vitest/vit
 import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
-  getUnitFastTestFilesForIncludePatterns,
   getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import {
@@ -72,6 +71,8 @@ const nativeBunTestHashes: Readonly<Record<string, string>> = nativeBunQualifica
 const nativeBunHelperHashes: Readonly<Record<string, Readonly<Record<string, string>>>> =
   nativeBunQualification.helpers;
 const bunCompatibleConfigs = new Set([
+  agentVitestProjectOwners.embeddedRun.config,
+  "test/vitest/vitest.cli.config.ts",
   "test/vitest/vitest.unit-fast-fake-timers.config.ts",
   "test/vitest/vitest.unit-fast-isolated.config.ts",
   "test/vitest/vitest.extension-memory.config.ts",
@@ -221,16 +222,6 @@ const bunCompatibleScopedOwners = new Map([
     },
   ],
   [
-    "test/vitest/vitest.cli.config.ts",
-    {
-      dir: "src/cli",
-      files: [
-        "src/cli/update-cli/update-command-mutable-signals.test.ts",
-        "src/cli/update-cli/update-command-rollback-executor.test.ts",
-      ],
-    },
-  ],
-  [
     "test/vitest/vitest.commands.config.ts",
     {
       dir: "src/commands",
@@ -263,7 +254,6 @@ const bunCompatibleScopedOwners = new Map([
     },
   ],
 ]);
-const embeddedRunOwner = agentVitestProjectOwners.embeddedRun;
 const bunCompatibleUnitFiles = new Set([
   "packages/normalization-core/src/grapheme.test.ts",
   "src/library.test.ts",
@@ -314,25 +304,6 @@ const runtimePartitions = new Map<
         "test/scripts/bench-session-history.test.ts",
         "test/scripts/update-restart-module-outcome.test.ts",
       ]),
-    },
-  ],
-  [
-    embeddedRunOwner.config,
-    {
-      files: (cwd) =>
-        globSync(embeddedRunOwner.include, {
-          cwd,
-          exclude: [
-            ...sharedVitestExcludePatterns,
-            ...getUnitFastTestFilesForIncludePatterns(embeddedRunOwner.include),
-            ...embeddedRunOwner.exclude,
-          ],
-        })
-          .map((file) => file.replaceAll("\\", "/"))
-          .toSorted(),
-      // Only the runtime-neutral transcript lifecycle contract is qualified here.
-      nodeRequired: (file) =>
-        file !== "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle.test.ts",
     },
   ],
   [
