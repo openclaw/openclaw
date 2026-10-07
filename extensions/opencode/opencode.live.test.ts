@@ -51,7 +51,8 @@ async function resolveOpencodeToolLiveModel() {
   );
   const model: Model<"openai-completions"> = {
     ...row,
-    api: row.api,
+    // isToolCapable admitted only openai-completions rows.
+    api: "openai-completions",
     contextWindow: row.contextWindow,
     provider: "opencode",
     baseUrl: row.baseUrl ?? provider.baseUrl,
