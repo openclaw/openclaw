@@ -2471,7 +2471,6 @@ describe("openclaw state database", () => {
     };
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual(refusal);
 
-
     const after = new DatabaseSync(databasePath, { readOnly: true });
     try {
       expect(hashSqliteSchema(after)).toBe(schemaBefore);
