@@ -1,12 +1,14 @@
+import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+
 type Claude5ContractCase = {
   defaultLevel?: "medium" | "high";
   name: string;
   modelId: string;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  cost: ProviderRuntimeModel["cost"];
   thinkingLevelMap: Record<string, string>;
   thinkingLevels: readonly string[];
   checksMedia?: boolean;
-  restoresMissingCost?: boolean;
+  restoresMissingCost?: boolean | "tiers";
   checksCliPolicy?: boolean;
 };
 
@@ -23,6 +25,39 @@ const optionalThinkingLevels = [
 const mandatoryThinkingLevels = ["low", "medium", "high", "xhigh", "max"];
 
 export const claude5ContractCases: Claude5ContractCase[] = [
+  ...["claude-haiku-5-5", "haiku", "haiku-5.5", "haiku-5-5"].map<Claude5ContractCase>(
+    (modelId) => ({
+      name: `resolves ${modelId} with its adaptive thinking and tiered pricing contract`,
+      defaultLevel: "medium" as const,
+      modelId,
+      cost: {
+        input: 0.1,
+        output: 0.5,
+        cacheRead: 0.01,
+        cacheWrite: 0.125,
+        tieredPricing: [
+          {
+            range: [0, 100001],
+            input: 0.1,
+            output: 0.5,
+            cacheRead: 0.01,
+            cacheWrite: 0.125,
+          },
+          {
+            range: [100001, null],
+            input: 0.5,
+            output: 2.5,
+            cacheRead: 0.05,
+            cacheWrite: 0.625,
+          },
+        ],
+      },
+      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+      thinkingLevels: ["off", "low", "medium", "high", "xhigh", "max"],
+      checksMedia: true,
+      restoresMissingCost: "tiers" as const,
+    }),
+  ),
   ...["claude-sonnet-5-5", "sonnet", "sonnet-5.5", "sonnet-5-5"].map((modelId) => ({
     name: `resolves ${modelId} with its between-tools thinking contract`,
     defaultLevel: "high" as const,

@@ -18,6 +18,7 @@ import {
   type ProviderPlugin,
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeHaiku55ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
@@ -341,6 +342,7 @@ function isAnthropicMandatoryClaude5Model(modelId: string): boolean {
 function isAnthropicExact1MClaude5Model(modelId: string): boolean {
   return (
     isAnthropicMandatoryClaude5Model(modelId) ||
+    resolveClaudeHaiku55ModelIdentity({ id: modelId }) !== undefined ||
     resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined ||
     resolveClaudeOpus5ModelIdentity({ id: modelId }) !== undefined
   );
@@ -445,7 +447,9 @@ function normalizeAnthropicResolvedModel(
     const preview = isAnthropicMythosPreviewModel(contractModelId);
     const mandatory = requiresClaudeMandatoryAdaptiveThinking({ id: contractModelId });
     const remapsMinimal =
-      mandatory || resolveClaudeSonnet55ModelIdentity({ id: contractModelId }) !== undefined;
+      mandatory ||
+      resolveClaudeSonnet55ModelIdentity({ id: contractModelId }) !== undefined ||
+      resolveClaudeHaiku55ModelIdentity({ id: contractModelId }) !== undefined;
     if (
       current?.max === undefined ||
       (!preview &&

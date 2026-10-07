@@ -701,7 +701,19 @@ describe("anthropic provider replay hooks", () => {
           ...(checksCliPolicy
             ? {}
             : { contextWindow: 200_000, contextTokens: 200_000, maxTokens: 64_000 }),
-          ...(restoresMissingCost ? { cost: undefined } : {}),
+          ...(restoresMissingCost
+            ? {
+                cost:
+                  restoresMissingCost === "tiers" && cost
+                    ? {
+                        input: cost.input,
+                        output: cost.output,
+                        cacheRead: cost.cacheRead,
+                        cacheWrite: cost.cacheWrite,
+                      }
+                    : undefined,
+              }
+            : {}),
         } as ProviderRuntimeModel,
       } as never);
       expectFields(normalized, {
