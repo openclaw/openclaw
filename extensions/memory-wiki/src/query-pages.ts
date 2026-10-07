@@ -5,13 +5,9 @@ import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listMemoryWikiPagePaths } from "./bounded-walk.js";
+import { scanWikiPageSummary, WIKI_PAGE_GROUPS } from "./markdown.js";
 import {
-  type ParsedWikiMarkdown,
-  scanWikiPageSummary,
-  type WikiPageSummary,
-  WIKI_PAGE_GROUPS,
-} from "./markdown.js";
-import {
+  type QueryableWikiPage,
   sortWikiSearchResults,
   toWikiSearchResult,
   type WikiSearchMode,
@@ -19,11 +15,6 @@ import {
 } from "./query-scoring.js";
 
 const QUERY_PAGE_READ_CONCURRENCY = 16;
-
-export type QueryableWikiPage = WikiPageSummary & {
-  raw: string;
-  parsed: ParsedWikiMarkdown;
-};
 
 /** Serializable sandbox scope for bridge pages; `null` admits every page. */
 export type WikiPageVisibility = { scopedAgentId: string };

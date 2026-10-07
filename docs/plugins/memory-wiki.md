@@ -305,10 +305,12 @@ the ongoing page scan. For a known page, use `wiki_get` with its id or path.
 The page scan itself (reading, parsing and scoring every page when the compiled
 digest cannot narrow the search, resolving `wiki_get` basename and id lookups,
 and `wiki_apply` metadata updates) runs in a plugin-owned pool of two worker
-threads, and every scan is bounded by the same 30-second deadline whether or not
-the caller passed one, so the gateway event loop stays responsive while a large
-vault is scanned. Single-page reads (`wiki_get` by exact path or claim id) stay on
-the calling thread and never wait behind a scan.
+threads, so the gateway event loop stays responsive while a large vault is
+scanned; a third concurrent scan waits for a free worker. The pool adds no
+deadline of its own: `wiki_search` keeps its 30-second deadline and turn
+cancellation, and CLI, RPC and lookup scans run to completion as before.
+Single-page reads (`wiki_get` by exact path or claim id) stay on the calling
+thread and never wait behind a scan.
 
 The plugin also registers a non-exclusive memory corpus supplement, so shared
 `memory_search` and `memory_get` can reach the wiki when the active memory

@@ -14,7 +14,6 @@ import {
 } from "./query-memory-provider.js";
 import {
   normalizeLookupKey,
-  type QueryableWikiPage,
   readWikiPagesTask,
   type WikiPageReadTask,
   type WikiPageVisibility,
@@ -23,6 +22,7 @@ import { readMemoryWikiPages } from "./query-reader.js";
 import {
   buildDigestCandidatePaths,
   buildWikiResultMetadata,
+  type QueryableWikiPage,
   sortWikiSearchResults,
   type WikiResultMetadata,
   type WikiResultSource,

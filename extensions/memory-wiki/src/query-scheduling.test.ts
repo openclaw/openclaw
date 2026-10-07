@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
+import { WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWikiMarkdown } from "./markdown.js";
 import * as queryReader from "./query-reader.js";
@@ -14,39 +14,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-// A vault without a digest whose whole-vault scan takes hundreds of milliseconds, long
-// enough for a read issued during the scan to be observed against it.
+// A small vault without a digest, so every search is a whole-vault scan task.
 async function createScanVault() {
   const vault = await createVault({
     initialize: true,
     config: { search: { backend: "local", corpus: "wiki" } },
   });
-  const groups = ["sources", "entities", "concepts", "syntheses"] as const;
-  const pageTypes = {
-    sources: "source",
-    entities: "entity",
-    concepts: "concept",
-    syntheses: "synthesis",
-  };
-  for (let index = 0; index < 400; index += 1) {
-    const group = groups[index % groups.length]!;
-    const lines = Array.from(
-      { length: 150 },
-      (_, line) =>
-        `cobalt lantern ledger line ${line} of page ${index} harbor quarry meridian saffron tundra velvet.`,
-    );
+  for (let index = 0; index < 8; index += 1) {
     await fs.writeFile(
-      path.join(vault.rootDir, group, `page-${index}.md`),
+      path.join(vault.rootDir, "sources", `page-${index}.md`),
       renderWikiMarkdown({
-        frontmatter: {
-          pageType: pageTypes[group],
-          id: `${group.slice(0, -1)}.page-${index}`,
-          title: `Lantern page ${index}`,
-          claims: [
-            { id: `claim.page-${index}`, text: `Cobalt note ${index}.`, status: "supported" },
-          ],
-        },
-        body: `# Lantern page ${index}\n\n${lines.join("\n")}\n`,
+        frontmatter: { pageType: "source", id: `source.page-${index}`, title: `Lantern ${index}` },
+        body: `# Lantern ${index}\n\ncobalt lantern ledger note ${index}.\n`,
       }),
     );
   }
@@ -63,11 +42,23 @@ const scanTask = (rootDir: string) => ({
 });
 
 describe("memory wiki query scheduling", () => {
-  it("serves an exact-path read on the calling thread while a whole-vault scan runs in the pool", async () => {
+  it("serves an exact-path read without the pool while a whole-vault search scan is held", async () => {
     const { config } = await createScanVault();
-    const dispatch = vi.spyOn(queryReader, "readMemoryWikiPages");
+    const dispatchScan = queryReader.readMemoryWikiPages;
+    const { promise: held, resolve: hold } = Promise.withResolvers<void>();
+    const { promise: released, resolve: release } = Promise.withResolvers<void>();
+    // Hold every search scan before it reaches the pool; other tasks pass through, so a
+    // read that still went through the pool would show up in the dispatch log.
+    const dispatch = vi
+      .spyOn(queryReader, "readMemoryWikiPages")
+      .mockImplementation(async (task, options) => {
+        if (task.select === "search") {
+          hold();
+          await released;
+        }
+        return dispatchScan(task, options);
+      });
     let scanSettled = false;
-    const scanStart = performance.now();
     const scan = searchMemoryWiki({
       config,
       query: "cobalt lantern ledger",
@@ -75,61 +66,56 @@ describe("memory wiki query scheduling", () => {
     }).finally(() => {
       scanSettled = true;
     });
-    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+    await held;
 
-    const readStart = performance.now();
     const page = await getMemoryWikiPage({ config, lookup: "sources/page-4.md", lineCount: 1 });
-    const readMs = performance.now() - readStart;
-    const settledBeforeScan = !scanSettled;
-    const results = await scan;
-    const scanMs = performance.now() - scanStart;
 
     expect(page?.path).toBe("sources/page-4.md");
-    expect(results.length).toBeGreaterThan(0);
-    // The read finished while the scan was still running and never touched the pool.
-    expect(settledBeforeScan).toBe(true);
+    expect(scanSettled).toBe(false);
     expect(dispatch.mock.calls.map(([task]) => task.select)).toEqual(["search"]);
-    expect(readMs * 5).toBeLessThan(scanMs);
+    release();
+    expect((await scan).length).toBeGreaterThan(0);
   });
 
-  it("rejects a scan that exceeds the task bound with the deadline error and keeps serving scans", async () => {
+  it("leaves an unsignalled scan unbounded, as on main, and passes a caller signal through", async () => {
     const { rootDir } = await createScanVault();
+    const run = vi.spyOn(WorkerTaskPool.prototype, "run");
+    const controller = new AbortController();
 
-    await expect(readMemoryWikiPages(scanTask(rootDir), { timeoutMs: 10 })).rejects.toThrow(
-      "wiki_search timed out after 0.01s",
-    );
-    const served = await readMemoryWikiPages(scanTask(rootDir));
+    await readMemoryWikiPages(scanTask(rootDir));
+    await readMemoryWikiPages(scanTask(rootDir), { signal: controller.signal });
 
-    expect(served.results.length).toBeGreaterThan(0);
+    expect(run.mock.calls.map(([, options]) => options.timeoutMs)).toEqual([undefined, undefined]);
+    expect(run.mock.calls.map(([, options]) => options.signal)).toEqual([
+      undefined,
+      controller.signal,
+    ]);
   });
 
-  it("runs two whole-vault scans in parallel on two workers and queues a third", async () => {
+  it("admits at most two scans at once and queues the rest", async () => {
     const { rootDir } = await createScanVault();
     await closeMemoryWikiQueryReader();
-    let workersCreated = 0;
-    const onWorker = () => {
-      workersCreated += 1;
-    };
-    process.on("worker", onWorker);
-    try {
-      const settledOrder: number[] = [];
-      const scans = [0, 1, 2].map((index) =>
-        readMemoryWikiPages(scanTask(rootDir)).then((result) => {
-          settledOrder.push(index);
-          return result;
-        }),
-      );
-      const results = await Promise.all(scans);
+    const run = vi.spyOn(WorkerTaskPool.prototype, "run");
 
-      expect(workersCreated).toBe(2);
-      // The third scan waited for a worker and settled after both that ran first.
-      expect(settledOrder[2]).toBe(2);
-      for (const result of results) {
-        expect(JSON.stringify(result.results)).toBe(JSON.stringify(results[0]?.results));
-      }
-      expect(results[0]?.results.length).toBeGreaterThan(0);
-    } finally {
-      process.off("worker", onWorker);
+    // Admission and dispatch happen synchronously inside run(), so the snapshot taken
+    // right after the third submission is the pool's state before any scan can settle.
+    const scans = [0, 1, 2].map(() => readMemoryWikiPages(scanTask(rootDir)));
+    const pool = run.mock.contexts[0] as WorkerTaskPool<unknown, unknown>;
+    const admitted = pool.getSnapshot();
+    const results = await Promise.all(scans);
+    const settled = pool.getSnapshot();
+
+    expect(new Set(run.mock.contexts).size).toBe(1);
+    expect(admitted.maxWorkers).toBe(2);
+    expect(admitted.pendingTasks).toBe(3);
+    // Shared compute can admit fewer than two on a small host; never more.
+    expect(admitted.activeTasks).toBeGreaterThanOrEqual(1);
+    expect(admitted.activeTasks).toBeLessThanOrEqual(2);
+    expect(settled.workersCreated).toBeLessThanOrEqual(2);
+    expect(settled).toMatchObject({ activeTasks: 0, pendingTasks: 0 });
+    for (const result of results) {
+      expect(JSON.stringify(result.results)).toBe(JSON.stringify(results[0]?.results));
     }
+    expect(results[0]?.results.length).toBeGreaterThan(0);
   });
 });

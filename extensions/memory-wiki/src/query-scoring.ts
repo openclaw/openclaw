@@ -12,9 +12,14 @@ import type {
   MemoryWikiCompiledClaim,
   MemoryWikiCompiledDigestPage,
 } from "./compiled-cache.js";
-import type { WikiClaim, WikiPageSummary } from "./markdown.js";
+import type { ParsedWikiMarkdown, WikiClaim, WikiPageSummary } from "./markdown.js";
 import { isPersonLikePage } from "./person-page.js";
-import type { QueryableWikiPage } from "./query-pages.js";
+
+/** A wiki page as read for queries: its summary plus raw text and parsed markdown. */
+export type QueryableWikiPage = WikiPageSummary & {
+  raw: string;
+  parsed: ParsedWikiMarkdown;
+};
 
 export const WIKI_SEARCH_MODES = [
   "auto",
