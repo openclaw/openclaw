@@ -657,6 +657,10 @@ export class EmbeddedBlockChunker {
       ).length;
       // An unfinished span ends at the buffer boundary without a source closer.
       const absoluteBreakIndex = offset + forcedBreakIndex;
+      const endingFence = findFenceSpanAt(spans.fences, absoluteBreakIndex - 1);
+      if (endingFence?.end === absoluteBreakIndex && endingFence !== openFence) {
+        return { index: forcedBreakIndex };
+      }
       const fence =
         findFenceSpanAt(spans.fences, absoluteBreakIndex) ??
         (openFence?.end === absoluteBreakIndex ? openFence : undefined);
@@ -698,7 +702,7 @@ export class EmbeddedBlockChunker {
       return {
         index:
           wholeEnd ||
-          (firstGraphemeClusterLength(graphemeSource) > forcedBreakIndex ? forcedBreakIndex : 0),
+          (firstGraphemeClusterLength(graphemeSource) >= forcedBreakIndex ? forcedBreakIndex : 0),
       };
     }
 

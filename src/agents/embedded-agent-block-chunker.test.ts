@@ -22,15 +22,15 @@ function expectChunksWithinLength(chunks: string[], maxLength: number) {
 }
 
 describe("EmbeddedBlockChunker", () => {
-  it("holds a leading grapheme that exactly fills the hard cap until its boundary is known", () => {
+  it("emits a whole leading grapheme that exactly fills the hard cap", () => {
     const cluster = `e${"\u0301".repeat(1199)}`;
     const chunker = new EmbeddedBlockChunker({ minChars: 800, maxChars: 1200 });
     chunker.append(cluster);
-    expect(drainChunks(chunker)).toEqual([]);
-    expect(chunker.bufferedText).toBe(cluster);
+    expect(drainChunks(chunker)).toEqual([cluster]);
+    expect(chunker.bufferedText).toBe("");
 
     chunker.append("done");
-    expect(drainChunks(chunker)).toEqual([cluster]);
+    expect(drainChunks(chunker)).toEqual([]);
     expect(drainChunks(chunker, true)).toEqual(["done"]);
     expect(chunker.consumedLength).toBe(cluster.length + 4);
   });
