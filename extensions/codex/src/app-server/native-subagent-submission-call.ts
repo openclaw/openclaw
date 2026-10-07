@@ -43,14 +43,34 @@ export type NativeSubmissionCallDependencies = {
   currentChild: (threadId: string) => ChildState | undefined;
   currentModelExecution: (threadId: string) => ParentOwner | undefined;
   prepareReceiver: (state: ParentState, threadId: string) => boolean;
+  hasObservationBacking?: (parentThreadId: string, childThreadId: string) => boolean;
+  acceptContinuation: (
+    state: ParentState,
+    owner: ParentOwner,
+    childThreadId: string,
+    call: NativeSubagentSubmissionCall,
+    modelOwner?: ParentOwner,
+  ) => void;
+};
+type SubmissionCallOperations = {
+  isCurrent: (state: ParentState) => boolean;
+  capture: (
+    state: ParentState,
+    receipt: CodexNativeSubagentSubmission,
+    owner: ParentOwner | undefined,
+    persist: boolean,
+    completionCustody?: AgentHarnessCompletionCustody,
+  ) => void;
+  observeKnownChild: (threadId: string) => void;
 };
 type SubmissionCalls = Map<ParentState, Map<string, NativeSubagentSubmissionCall>>;
 
 export function createNativeSubagentSubmissionCalls(
   calls: SubmissionCalls,
   dependencies: NativeSubmissionCallDependencies,
-  isCurrent: (state: ParentState) => boolean,
+  operations: SubmissionCallOperations,
 ) {
+  const { isCurrent } = operations;
   function admitModelInput(
     state: ParentState,
     owner: ParentOwner,
@@ -128,7 +148,7 @@ export function createNativeSubagentSubmissionCalls(
     for (const entries of calls.values()) {
       for (const call of entries.values()) {
         if (call.modelInput?.threadId === threadId) {
-          settleSubmissionModelInput(call, false, dependencies);
+          settleSubmissionModelInput(call, false);
           call.closed = true;
         }
       }
@@ -216,8 +236,229 @@ export function createNativeSubagentSubmissionCalls(
     call.accepted = true;
     accept(call.modelInput.source.owner);
     call.closed = true;
-    settleSubmissionModelInput(call, true, dependencies);
+    settleSubmissionModelInput(call, true);
     return true;
+  }
+
+  function readObservedSubmissionTurn(
+    state: ParentState,
+    threadId: string,
+    turnId: string,
+  ): JsonObject | undefined {
+    const known = dependencies.knownChildren.get(threadId);
+    if (known?.parent !== state) {
+      return undefined;
+    }
+    const pending = known.pendingTurns.find((turn) => turn.turnId === turnId);
+    const child = dependencies.currentChild(threadId);
+    const status =
+      pending?.state ?? (child?.nativeTurnId === turnId ? child.nativeTurnState : undefined);
+    return status ? { id: turnId, status: status === "active" ? "inProgress" : status } : undefined;
+  }
+
+  function settleSubmissionModelInput(call: NativeSubagentSubmissionCall, accepted: boolean): void {
+    const input = call.modelInput;
+    if (!input) {
+      return;
+    }
+    // An ambiguous accepted receiver keeps the pending dispatch fence until its
+    // exact execution is known; cleanup itself never needs to select a receiver.
+    const receiver = accepted ? dependencies.currentModelExecution(input.threadId) : undefined;
+    call.modelInput = undefined;
+    try {
+      const known = dependencies.knownChildren.get(input.threadId);
+      const isOtherTurn =
+        call.submissionId &&
+        known?.observedTurns.has(call.submissionId) &&
+        receiver?.turnId !== call.submissionId;
+      if (accepted && receiver && !isOtherTurn) {
+        try {
+          assertNativeModelInputCompatible(input.source.owner, receiver);
+        } catch {
+          // V1's opaque receipt is not a new turn ID when it steers. Do not
+          // reassign that execution; its mixed input cannot dispatch again.
+          receiver.modelExecutionCancelled = true;
+        }
+      }
+    } finally {
+      input.source.release();
+    }
+  }
+
+  function hasSubmissionCallCustody(
+    state: ParentState,
+    call: NativeSubagentSubmissionCall,
+  ): boolean {
+    return Boolean(
+      call.accepted &&
+      call.targets.some(
+        ({ childThreadId }) =>
+          state.owners.size > 0 ||
+          dependencies.hasObservationBacking?.(state.parentThreadId, childThreadId),
+      ),
+    );
+  }
+
+  function observeSubmissionPredecessor(
+    state: ParentState,
+    call: NativeSubagentSubmissionCall,
+    threadId: string,
+    turn?: JsonObject,
+  ): void {
+    const known = dependencies.knownChildren.get(threadId);
+    const submissionId = call.submissionId;
+    if (!call.accepted || !submissionId) {
+      return;
+    }
+    call.targets = call.targets.filter(({ childThreadId, predecessor }) => {
+      if (childThreadId !== threadId || !("child" in predecessor)) {
+        return true;
+      }
+      const child = predecessor.child;
+      if (
+        known?.parent !== state ||
+        known.assignment.runId !== child.runId ||
+        (state.owners.size === 0 &&
+          !dependencies.hasObservationBacking?.(state.parentThreadId, threadId))
+      ) {
+        return false;
+      }
+      const nativeTurnId = child.nativeTurnId;
+      if (
+        !nativeTurnId ||
+        nativeTurnId === submissionId ||
+        known.assignment.nativeTurnId !== nativeTurnId
+      ) {
+        return true;
+      }
+      const ended = readString(turn, "id") === nativeTurnId ? readNativeTurnEnd(turn) : undefined;
+      const nativeState = ended ?? child.nativeTurnState;
+      const owner =
+        call.owner && [...state.owners.values()].includes(call.owner) ? call.owner : undefined;
+      if (nativeState === "interrupted") {
+        if (owner) {
+          dependencies.acceptContinuation(state, owner, threadId, call);
+        }
+        return false;
+      }
+      if (!known.assignment.terminal && nativeState !== "completed" && nativeState !== "failed") {
+        return true;
+      }
+      operations.capture(
+        state,
+        {
+          parentTurnId: call.parentTurnId,
+          callId: call.callId,
+          childThreadId,
+          submissionId,
+          predecessorRunId: child.runId,
+          predecessorNativeTurnId: nativeTurnId,
+        },
+        owner,
+        true,
+        call.completionCustody,
+      );
+      return false;
+    });
+    if (call.targets.length === 0) {
+      call.owner = undefined;
+      call.completionCustody?.release();
+      call.completionCustody = undefined;
+    }
+  }
+
+  function pruneSubmissionCalls(
+    state: ParentState,
+    parentCalls: Map<string, NativeSubagentSubmissionCall> | undefined,
+  ): void {
+    const hasUnboundOwner = [...state.owners.values()].some((owner) => !owner.turnId);
+    for (const [key, call] of parentCalls ?? []) {
+      if (hasSubmissionCallCustody(state, call)) {
+        if (!call.owner || ![...state.owners.values()].includes(call.owner)) {
+          call.owner = undefined;
+        }
+        continue;
+      }
+      if (
+        (call.owner && ![...state.owners.values()].includes(call.owner)) ||
+        (!dependencies.parentOwner(state, call.parentTurnId) && !hasUnboundOwner)
+      ) {
+        settleSubmissionModelInput(call, false);
+        parentCalls!.delete(key);
+        call.completionCustody?.release();
+      }
+    }
+  }
+
+  function acceptNativeSubmission(state: ParentState, call: NativeSubagentSubmissionCall): void {
+    const owner = dependencies.parentOwner(state, call.parentTurnId);
+    if (
+      call.closed ||
+      !owner ||
+      (call.owner && owner !== call.owner) ||
+      !call.submissionId ||
+      !isCurrent(state)
+    ) {
+      return;
+    }
+    call.closed = true;
+    call.accepted = true;
+    call.owner = owner;
+    call.completionCustody ??= owner.completionCustody?.retain();
+    const modelSource = retainNativeModelSource(call.modelInput?.source.owner);
+    try {
+      settleSubmissionModelInput(call, true);
+      const targets = call.targets;
+      call.targets = [];
+      for (const target of targets) {
+        const { childThreadId, predecessor } = target;
+        const modelOwner = modelSource?.owner ?? owner;
+        if (modelOwner.modelSource && ("child" in predecessor || predecessor.terminal)) {
+          dependencies.acceptContinuation(
+            state,
+            {
+              ...owner,
+              claimDirectChild: undefined,
+              rejectPendingDirectChild: undefined,
+              onDirectChildAccepted: undefined,
+            },
+            childThreadId,
+            call,
+            modelOwner,
+          );
+        }
+        if ("child" in predecessor) {
+          call.targets.push(target);
+          continue;
+        }
+        if (!predecessor.terminal) {
+          dependencies.acceptContinuation(state, owner, childThreadId, call, modelOwner);
+          continue;
+        }
+        operations.capture(
+          state,
+          {
+            parentTurnId: call.parentTurnId,
+            callId: call.callId,
+            childThreadId,
+            submissionId: call.submissionId,
+            predecessorRunId: predecessor.runId,
+            predecessorNativeTurnId: predecessor.nativeTurnId,
+          },
+          owner,
+          true,
+        );
+      }
+      for (const { childThreadId } of call.targets) {
+        operations.observeKnownChild(childThreadId);
+      }
+      if (!call.targets.length) {
+        call.completionCustody?.release();
+        call.completionCustody = undefined;
+      }
+    } finally {
+      modelSource?.release();
+    }
   }
 
   return {
@@ -227,71 +468,13 @@ export function createNativeSubagentSubmissionCalls(
     observeCall,
     assertModelInputCurrent,
     acceptInteraction,
+    readObservedSubmissionTurn,
+    settleSubmissionModelInput,
+    hasSubmissionCallCustody,
+    observeSubmissionPredecessor,
+    pruneSubmissionCalls,
+    acceptNativeSubmission,
   };
-}
-
-export function readObservedSubmissionTurn(
-  state: ParentState,
-  threadId: string,
-  turnId: string,
-  dependencies: NativeSubmissionCallDependencies,
-): JsonObject | undefined {
-  const known = dependencies.knownChildren.get(threadId);
-  if (known?.parent !== state) {
-    return undefined;
-  }
-  const pending = known.pendingTurns.find((turn) => turn.turnId === turnId);
-  const child = dependencies.currentChild(threadId);
-  const status =
-    pending?.state ?? (child?.nativeTurnId === turnId ? child.nativeTurnState : undefined);
-  return status ? { id: turnId, status: status === "active" ? "inProgress" : status } : undefined;
-}
-
-export function settleSubmissionModelInput(
-  call: NativeSubagentSubmissionCall,
-  accepted: boolean,
-  dependencies: Pick<NativeSubmissionCallDependencies, "knownChildren" | "currentModelExecution">,
-): void {
-  const input = call.modelInput;
-  if (!input) {
-    return;
-  }
-  // An ambiguous accepted receiver keeps the pending dispatch fence until its
-  // exact execution is known; cleanup itself never needs to select a receiver.
-  const receiver = accepted ? dependencies.currentModelExecution(input.threadId) : undefined;
-  call.modelInput = undefined;
-  try {
-    const known = dependencies.knownChildren.get(input.threadId);
-    const isOtherTurn =
-      call.submissionId &&
-      known?.observedTurns.has(call.submissionId) &&
-      receiver?.turnId !== call.submissionId;
-    if (accepted && receiver && !isOtherTurn) {
-      try {
-        assertNativeModelInputCompatible(input.source.owner, receiver);
-      } catch {
-        // V1's opaque receipt is not a new turn ID when it steers. Do not
-        // reassign that execution; its mixed input cannot dispatch again.
-        receiver.modelExecutionCancelled = true;
-      }
-    }
-  } finally {
-    input.source.release();
-  }
-}
-
-export function hasSubmissionCallCustody(
-  state: ParentState,
-  call: NativeSubagentSubmissionCall,
-  hasObservationBacking?: (parentThreadId: string, childThreadId: string) => boolean,
-): boolean {
-  return Boolean(
-    call.accepted &&
-    call.targets.some(
-      ({ childThreadId }) =>
-        state.owners.size > 0 || hasObservationBacking?.(state.parentThreadId, childThreadId),
-    ),
-  );
 }
 
 function captureSubmissionPredecessor(params: {
@@ -322,190 +505,4 @@ function captureSubmissionPredecessor(params: {
       child?.nativeTurnState === "completed" ||
       child?.nativeTurnState === "failed",
   };
-}
-
-export function observeSubmissionPredecessor(params: {
-  state: ParentState;
-  call: NativeSubagentSubmissionCall;
-  threadId: string;
-  turn?: JsonObject;
-  known: KnownChild | undefined;
-  hasObservationBacking?: (parentThreadId: string, childThreadId: string) => boolean;
-  acceptContinuation: (owner: ParentOwner) => void;
-  capture: (receipt: CodexNativeSubagentSubmission, owner: ParentOwner | undefined) => void;
-}): void {
-  const { state, call, threadId, turn, known } = params;
-  const submissionId = call.submissionId;
-  if (!call.accepted || !submissionId) {
-    return;
-  }
-  call.targets = call.targets.filter(({ childThreadId, predecessor }) => {
-    if (childThreadId !== threadId || !("child" in predecessor)) {
-      return true;
-    }
-    const child = predecessor.child;
-    if (
-      known?.parent !== state ||
-      known.assignment.runId !== child.runId ||
-      (state.owners.size === 0 && !params.hasObservationBacking?.(state.parentThreadId, threadId))
-    ) {
-      return false;
-    }
-    const nativeTurnId = child.nativeTurnId;
-    if (
-      !nativeTurnId ||
-      nativeTurnId === submissionId ||
-      known.assignment.nativeTurnId !== nativeTurnId
-    ) {
-      return true;
-    }
-    const ended = readString(turn, "id") === nativeTurnId ? readNativeTurnEnd(turn) : undefined;
-    const nativeState = ended ?? child.nativeTurnState;
-    const owner =
-      call.owner && [...state.owners.values()].includes(call.owner) ? call.owner : undefined;
-    if (nativeState === "interrupted") {
-      if (owner) {
-        params.acceptContinuation(owner);
-      }
-      return false;
-    }
-    if (!known.assignment.terminal && nativeState !== "completed" && nativeState !== "failed") {
-      return true;
-    }
-    params.capture(
-      {
-        parentTurnId: call.parentTurnId,
-        callId: call.callId,
-        childThreadId,
-        submissionId,
-        predecessorRunId: child.runId,
-        predecessorNativeTurnId: nativeTurnId,
-      },
-      owner,
-    );
-    return false;
-  });
-  if (call.targets.length === 0) {
-    call.owner = undefined;
-    call.completionCustody?.release();
-    call.completionCustody = undefined;
-  }
-}
-
-export function pruneSubmissionCalls(
-  state: ParentState,
-  calls: Map<string, NativeSubagentSubmissionCall> | undefined,
-  dependencies: {
-    parentOwner: (state: ParentState, turnId: string) => ParentOwner | undefined;
-    hasObservationBacking?: (parentThreadId: string, childThreadId: string) => boolean;
-  } & Pick<NativeSubmissionCallDependencies, "knownChildren" | "currentModelExecution">,
-): void {
-  const hasUnboundOwner = [...state.owners.values()].some((owner) => !owner.turnId);
-  for (const [key, call] of calls ?? []) {
-    if (hasSubmissionCallCustody(state, call, dependencies.hasObservationBacking)) {
-      if (!call.owner || ![...state.owners.values()].includes(call.owner)) {
-        call.owner = undefined;
-      }
-      continue;
-    }
-    if (
-      (call.owner && ![...state.owners.values()].includes(call.owner)) ||
-      (!dependencies.parentOwner(state, call.parentTurnId) && !hasUnboundOwner)
-    ) {
-      settleSubmissionModelInput(call, false, dependencies);
-      calls!.delete(key);
-      call.completionCustody?.release();
-    }
-  }
-}
-
-export function acceptNativeSubmission(
-  state: ParentState,
-  call: NativeSubagentSubmissionCall,
-  dependencies: NativeSubmissionCallDependencies & {
-    isCurrent: (state: ParentState) => boolean;
-    acceptContinuation: (
-      state: ParentState,
-      owner: ParentOwner,
-      childThreadId: string,
-      call: NativeSubagentSubmissionCall,
-      modelOwner?: ParentOwner,
-    ) => void;
-    capture: (
-      state: ParentState,
-      receipt: CodexNativeSubagentSubmission,
-      owner: ParentOwner | undefined,
-      persist: boolean,
-    ) => void;
-    observeKnownChild: (threadId: string) => void;
-  },
-): void {
-  const owner = dependencies.parentOwner(state, call.parentTurnId);
-  if (
-    call.closed ||
-    !owner ||
-    (call.owner && owner !== call.owner) ||
-    !call.submissionId ||
-    !dependencies.isCurrent(state)
-  ) {
-    return;
-  }
-  call.closed = true;
-  call.accepted = true;
-  call.owner = owner;
-  call.completionCustody ??= owner.completionCustody?.retain();
-  const modelSource = retainNativeModelSource(call.modelInput?.source.owner);
-  try {
-    settleSubmissionModelInput(call, true, dependencies);
-    const targets = call.targets;
-    call.targets = [];
-    for (const target of targets) {
-      const { childThreadId, predecessor } = target;
-      const modelOwner = modelSource?.owner ?? owner;
-      if (modelOwner.modelSource && ("child" in predecessor || predecessor.terminal)) {
-        dependencies.acceptContinuation(
-          state,
-          {
-            ...owner,
-            claimDirectChild: undefined,
-            rejectPendingDirectChild: undefined,
-            onDirectChildAccepted: undefined,
-          },
-          childThreadId,
-          call,
-          modelOwner,
-        );
-      }
-      if ("child" in predecessor) {
-        call.targets.push(target);
-        continue;
-      }
-      if (!predecessor.terminal) {
-        dependencies.acceptContinuation(state, owner, childThreadId, call, modelOwner);
-        continue;
-      }
-      dependencies.capture(
-        state,
-        {
-          parentTurnId: call.parentTurnId,
-          callId: call.callId,
-          childThreadId,
-          submissionId: call.submissionId,
-          predecessorRunId: predecessor.runId,
-          predecessorNativeTurnId: predecessor.nativeTurnId,
-        },
-        owner,
-        true,
-      );
-    }
-    for (const { childThreadId } of call.targets) {
-      dependencies.observeKnownChild(childThreadId);
-    }
-    if (!call.targets.length) {
-      call.completionCustody?.release();
-      call.completionCustody = undefined;
-    }
-  } finally {
-    modelSource?.release();
-  }
 }

@@ -9,6 +9,7 @@ import {
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
   GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 } from "../daemon/constants.js";
+import * as taskProbe from "../daemon/schtasks-state-probe.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
@@ -147,6 +148,7 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
 
   const invocationCwd = process.cwd();
   beforeEach(async () => {
+    vi.spyOn(taskProbe, "probeScheduledTaskUpdateAccess").mockReturnValue({ status: "allowed" });
     // Default install roots use cwd; artifact admission must own the fixture, not the checkout.
     process.chdir(path.join(fixtureRoot, "checkout"));
     process.exitCode = undefined;

@@ -40,37 +40,9 @@ export function fingerprintUserMcpServersConfigPatch(
 ): string | undefined {
   return configPatch
     ? hashCodexAppServerBindingFingerprint(
-        JSON.stringify(stabilizeJsonValue(redactUserMcpServersFingerprintSecrets(configPatch))),
+        JSON.stringify(stabilizeFingerprintValue(configPatch, true)),
       )
     : undefined;
-}
-
-function redactUserMcpServersFingerprintSecrets(value: JsonValue): JsonValue {
-  if (Array.isArray(value)) {
-    return value.map(redactUserMcpServersFingerprintSecrets);
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  // Native server names are literal keys, including __proto__.
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => {
-      if (key === "http_headers" && entry && typeof entry === "object" && !Array.isArray(entry)) {
-        return [
-          key,
-          Object.fromEntries(
-            Object.entries(entry).map(([header, headerValue]) => [
-              header,
-              header.toLowerCase() === "authorization"
-                ? fingerprintUserMcpServersAuthorizationHeader(headerValue)
-                : headerValue,
-            ]),
-          ),
-        ];
-      }
-      return [key, redactUserMcpServersFingerprintSecrets(entry)];
-    }),
-  );
 }
 
 function fingerprintUserMcpServersAuthorizationHeader(value: unknown): string {
@@ -94,24 +66,19 @@ export function fingerprintCodexThreadConfig(
     preserveNativeModel?: boolean;
   },
 ): string {
-  let request = initialRequest;
+  let { model, requestedModel, modelProvider, requestedModelProvider } = initialRequest;
   if (selection) {
     const preserve = selection.preserveNativeModel;
-    request = {
-      ...request,
-      model: preserve ? null : (selection.model ?? request.model ?? null),
-      requestedModel: preserve ? null : (request.model ?? null),
-      // A normalized native-auth provider is explicitly null; an absent warm
-      // observation falls back to the requested provider.
-      modelProvider: preserve
-        ? null
-        : selection.modelProvider === undefined
-          ? (request.modelProvider ?? null)
-          : selection.modelProvider,
-      requestedModelProvider: preserve
-        ? null
-        : (request.modelProvider ?? selection.modelProvider ?? null),
-    };
+    requestedModel = preserve ? null : (model ?? null);
+    model = preserve ? null : (selection.model ?? model ?? null);
+    requestedModelProvider = preserve ? null : (modelProvider ?? selection.modelProvider ?? null);
+    // A normalized native-auth provider is explicitly null; an absent warm
+    // observation falls back to the requested provider.
+    modelProvider = preserve
+      ? null
+      : selection.modelProvider === undefined
+        ? (modelProvider ?? null)
+        : selection.modelProvider;
   }
   return hashCodexAppServerBindingFingerprint(
     fingerprintJsonObject({
@@ -121,23 +88,21 @@ export function fingerprintCodexThreadConfig(
       // whole session; only same-generation model changes are turn-mutable.
       nativeMultiAgentVersion:
         resolveCodexGpt56MultiAgentVersion(
-          typeof request.requestedModel === "string"
-            ? request.requestedModel
-            : typeof request.model === "string"
-              ? request.model
+          typeof requestedModel === "string"
+            ? requestedModel
+            : typeof model === "string"
+              ? model
               : undefined,
         ) ?? null,
-      modelProvider: request.modelProvider ?? null,
+      modelProvider: modelProvider ?? null,
       requestedModelProvider:
-        request.requestedModelProvider === undefined
-          ? (request.modelProvider ?? null)
-          : request.requestedModelProvider,
+        requestedModelProvider === undefined ? (modelProvider ?? null) : requestedModelProvider,
       // Named permission profiles are not currently forwarded by turn/start,
       // so changing one still requires recreating the native thread.
-      permissions: request.permissions ?? null,
-      baseInstructions: request.baseInstructions ?? null,
-      developerInstructions: request.developerInstructions ?? null,
-      config: request.config ?? {},
+      permissions: initialRequest.permissions ?? null,
+      baseInstructions: initialRequest.baseInstructions ?? null,
+      developerInstructions: initialRequest.developerInstructions ?? null,
+      config: initialRequest.config ?? {},
     }),
   );
 }
@@ -149,17 +114,35 @@ export function fingerprintEnvironmentSelection(
 }
 
 export function stabilizeJsonValue(value: JsonValue): JsonValue {
+  return stabilizeFingerprintValue(value, false);
+}
+
+function stabilizeFingerprintValue(value: JsonValue, redactMcpHeaders: boolean): JsonValue {
   if (Array.isArray(value)) {
-    return value.map(stabilizeJsonValue);
+    return value.map((child) => stabilizeFingerprintValue(child, redactMcpHeaders));
   }
   if (!isJsonObject(value)) {
     return value;
   }
-  // Indexed assignment would lose __proto__ schema and policy changes from the fingerprint.
+  // Indexed assignment would lose literal __proto__ schema, server, and policy keys.
   return Object.fromEntries(
     Object.entries(value)
       .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, child]) => [key, stabilizeJsonValue(child)]),
+      .map(([key, child]) => {
+        if (redactMcpHeaders && key === "http_headers" && isJsonObject(child)) {
+          const headers = Object.fromEntries(
+            Object.entries(child).map(([header, headerValue]) => [
+              header,
+              header.toLowerCase() === "authorization"
+                ? fingerprintUserMcpServersAuthorizationHeader(headerValue)
+                : headerValue,
+            ]),
+          );
+          // Header values are opaque to redaction; only canonicalize their contents.
+          return [key, stabilizeFingerprintValue(headers, false)];
+        }
+        return [key, stabilizeFingerprintValue(child, redactMcpHeaders)];
+      }),
   );
 }
 

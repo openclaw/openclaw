@@ -95,10 +95,7 @@ export function codexProviderRefusalDiagnostics(
 
 export function readNullableString(record: JsonObject, key: string): string | null | undefined {
   const value = record[key];
-  if (value === null) {
-    return null;
-  }
-  return typeof value === "string" ? value : undefined;
+  return value === null || typeof value === "string" ? value : undefined;
 }
 
 export function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {

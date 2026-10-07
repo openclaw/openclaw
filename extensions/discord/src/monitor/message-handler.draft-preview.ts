@@ -194,12 +194,11 @@ export function createDiscordDraftPreviewController(params: {
 
   const beginNewProgressTurn = (options?: { force?: boolean }) => {
     const beganNewTurn = progressDraft.beginNewTurn(options);
-    if (!beganNewTurn) {
-      progressDraft.beginAssistantMessage();
-    }
     if (beganNewTurn) {
       lifecycle.reset();
       progressNarratorLifecycle?.beginTurn();
+    } else {
+      progressDraft.beginAssistantMessage();
     }
     if (discordStreamMode === "progress") {
       if (beganNewTurn) {
@@ -263,13 +262,12 @@ export function createDiscordDraftPreviewController(params: {
       const cleaned = stripInlineDirectiveTagsForDelivery(
         stripReasoningTagsFromText(text, { mode: "strict", trim: "both" }),
       ).text;
-      if (!cleaned || cleaned.startsWith("Reasoning:\n")) {
-        return;
-      }
-      if (cleaned === lastPartialText) {
-        return;
-      }
-      if (discordStreamMode === "progress") {
+      if (
+        !cleaned ||
+        cleaned.startsWith("Reasoning:\n") ||
+        cleaned === lastPartialText ||
+        discordStreamMode === "progress"
+      ) {
         return;
       }
       progressDraft.resetActivity({ suppressed: true });

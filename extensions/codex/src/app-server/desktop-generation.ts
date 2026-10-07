@@ -185,11 +185,7 @@ function isCurrentArm(
   owner: GenerationOwner,
   watchers: Set<FSWatcher>,
 ): boolean {
-  return (
-    current.owner === owner &&
-    !current.context?.scheduler.signal.aborted &&
-    current.watchers === watchers
-  );
+  return isCurrentOwner(current, owner) && current.watchers === watchers;
 }
 
 function scheduleRearm(current: DesktopGenerationState, owner: GenerationOwner): void {
@@ -209,7 +205,7 @@ function scheduleRearm(current: DesktopGenerationState, owner: GenerationOwner):
     delayMs,
     run: async () => {
       current.rearmPending = false;
-      if (current.owner !== owner || current.context?.scheduler.signal.aborted) {
+      if (!isCurrentOwner(current, owner)) {
         return;
       }
       const wasUnhealthy = current.watchHealthy === false;
@@ -229,16 +225,12 @@ function refreshGeneration(
 ): Promise<void> {
   return refresh
     .then(() => {
-      if (
-        current.owner === owner &&
-        !current.context?.scheduler.signal.aborted &&
-        current.watchHealthy
-      ) {
+      if (isCurrentOwner(current, owner) && current.watchHealthy) {
         current.context?.serviceHealth?.clearFailure();
       }
     })
     .catch((error: unknown) => {
-      if (current.owner !== owner || current.context?.scheduler.signal.aborted) {
+      if (!isCurrentOwner(current, owner)) {
         return;
       }
       current.context?.serviceHealth?.reportFailure(error);
@@ -252,4 +244,8 @@ function closeWatchers(current: DesktopGenerationState): void {
   for (const watcher of watchers ?? []) {
     watcher.close();
   }
+}
+
+function isCurrentOwner(current: DesktopGenerationState, owner: GenerationOwner): boolean {
+  return current.owner === owner && !current.context?.scheduler.signal.aborted;
 }

@@ -134,10 +134,7 @@ async function runBoundTurn(params: {
         binding.networkProxyProfileName !== permissionProfile ||
         binding.networkProxyConfigFingerprint !== networkProxyConfigFingerprint;
       const serviceTier = binding.serviceTier ?? runtime.serviceTier;
-      let useStickyNetworkProfile =
-        permissionProfile !== undefined &&
-        binding.networkProxyProfileName === permissionProfile &&
-        binding.networkProxyConfigFingerprint === networkProxyConfigFingerprint;
+      let useStickyNetworkProfile = permissionProfile !== undefined && !networkProxyBindingChanged;
       assertNativeConversationApprovalPolicySupported(runtime);
       const modelSelection = binding.model
         ? resolveCodexAppServerRequestModelSelection({

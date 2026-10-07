@@ -39,6 +39,7 @@ import {
 } from "../worker-environments/placement-session-runtime.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/placement-target.js";
 import type { WorkerPlacementDispatchRequest } from "../worker-environments/service-contract.js";
+import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
 import type { WorkerSessionWorkspace } from "../worker-environments/session-workspace.js";
 import { listGatewayEnvironments } from "./environments.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -260,7 +261,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { cfg, entry, session, service: dispatchService, reader: placementReader } = resolved;
+    const { cfg, entry, session, service: dispatchService } = resolved;
     const { sessionId, sessionKey, agentId } = session;
     let { dispatchTarget } = resolved;
     const autoDevice = params.autoDevice === true;
@@ -355,7 +356,8 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     if (!autoDevice && dispatchTarget && !(await validateExecutionMode(dispatchTarget))) {
       return;
     }
-    const existingPlacement = placementReader.getMany([sessionId]).get(sessionId);
+    const existingPlacement = await readSessionWorkerPlacementAsync({ context, sessionId });
+    sessionMutationAuthorization?.assertCurrent();
     if (
       existingPlacement?.state === "failed" &&
       !isFailedWorkerPlacementEnvironmentGone({
@@ -503,7 +505,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
                 deviceId: candidateTarget.deviceId,
                 ...session,
                 attempted: attemptedPlacement,
-                current: placementReader.getMany([sessionId]).get(sessionId),
+                current: await readSessionWorkerPlacementAsync({ context, sessionId }),
                 environments: context.workerEnvironmentService,
               })
             ) {
@@ -539,13 +541,14 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { entry, session, service: placementService, reader: placementReader } = resolved;
+    const { entry, session, service: placementService } = resolved;
     const { sessionId, sessionKey } = session;
     if (entry.archivedAt !== undefined) {
       respondInvalidWorkerSession(respond, "cannot move an archived session");
       return;
     }
-    const existingPlacement = placementReader.getMany([sessionId]).get(sessionId);
+    const existingPlacement = await readSessionWorkerPlacementAsync({ context, sessionId });
+    sessionMutationAuthorization?.assertCurrent();
     const retryAbandonment =
       "abandonSource" in params && isForceAbandonedWorkerPlacement(existingPlacement);
     if (
@@ -619,9 +622,10 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { entry, session, service: placementService, reader: placementReader } = resolved;
+    const { entry, session, service: placementService } = resolved;
     const { sessionId, sessionKey } = session;
-    const existingPlacement = placementReader.getMany([sessionId]).get(sessionId);
+    const existingPlacement = await readSessionWorkerPlacementAsync({ context, sessionId });
+    sessionMutationAuthorization?.assertCurrent();
     const reportPlacementChange = (placement: WorkerSessionPlacementRecord | undefined): void => {
       if (
         !placement ||
@@ -663,7 +667,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
       }
-      reportPlacementChange(placementReader.getMany([sessionId]).get(sessionId));
+      reportPlacementChange(await readSessionWorkerPlacementAsync({ context, sessionId }));
       respondWorkerDispatchError(error, respond);
       return;
     }

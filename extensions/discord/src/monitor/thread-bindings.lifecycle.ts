@@ -168,10 +168,6 @@ export function unbindThreadBindingsBySessionKey(params: {
   farewellText?: string;
 }): ThreadBindingRecord[] {
   const ids = resolveBindingIdsForTargetSession(params);
-  if (ids.length === 0) {
-    return [];
-  }
-
   const removed: ThreadBindingRecord[] = [];
   for (const bindingKey of ids) {
     const record = BINDINGS_BY_THREAD_ID.get(bindingKey);
@@ -307,17 +303,11 @@ async function reconcileAcpThreadBindings(
             binding,
             session,
           });
-          return {
-            binding,
-            status: result?.status ?? ("uncertain" satisfies AcpThreadBindingHealthStatus),
-          };
+          return result?.status === "stale" ? binding : undefined;
         } catch (error) {
           rethrowIncognitoSessionError(error);
           // Treat probe failures as uncertain and keep the binding.
-          return {
-            binding,
-            status: "uncertain" satisfies AcpThreadBindingHealthStatus,
-          };
+          return undefined;
         }
       }),
       limit: ACP_STARTUP_HEALTH_PROBE_CONCURRENCY_LIMIT,
@@ -325,19 +315,11 @@ async function reconcileAcpThreadBindings(
       throwOnError: true,
     });
 
-    for (const probeResult of probeResults) {
-      if (probeResult.status === "stale") {
-        staleBindings.push(probeResult.binding);
+    for (const binding of probeResults) {
+      if (binding) {
+        staleBindings.push(binding);
       }
     }
-  }
-
-  if (staleBindings.length === 0) {
-    return {
-      checked: acpBindings.length,
-      removed: 0,
-      staleSessionKeys: [],
-    };
   }
 
   const staleSessionKeys: string[] = [];

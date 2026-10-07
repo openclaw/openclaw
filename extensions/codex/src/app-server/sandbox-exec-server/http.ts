@@ -153,45 +153,8 @@ async function runSandboxHttpRequest(
     }
     embeddedAgentLog.warn("codex sandbox http/request stdin write failed", { error });
   });
-  void readSandboxHttpResponse({
-    child,
-    lifecycle,
-    terminate,
-    requestId,
-    notifications,
-    streamResponse: params.streamResponse,
-  }).then(response.resolve, response.reject);
-  try {
-    if (notifications.signal.aborted) {
-      abortOnSessionClose();
-    } else {
-      owner.assertCurrent();
-      child.stdin.end(JSON.stringify(params));
-    }
-    // Headers can finish the RPC while its body or backend finalization is still running.
-    await completion.promise;
-    await termination;
-  } catch (error) {
-    lifecycle.failed = true;
-    response.reject(error);
-    await terminate().catch((cleanupError: unknown) => {
-      embeddedAgentLog.warn("codex sandbox http/request cleanup failed", { error: cleanupError });
-    });
-    throw error;
-  } finally {
-    notifications.signal.removeEventListener("abort", abortOnSessionClose);
-  }
-}
-
-function readSandboxHttpResponse(params: {
-  child: SandboxPipeChildOwner["process"];
-  lifecycle: { failed: boolean };
-  terminate: () => Promise<void>;
-  requestId: string;
-  notifications: CodexSandboxExecSessionNotifications;
-  streamResponse: boolean;
-}): Promise<JsonObject> {
-  return new Promise((resolve, reject) => {
+  const { streamResponse } = params;
+  void new Promise<JsonObject>((resolve, reject) => {
     let headerResolved = false;
     let failed = false;
     let childFailure: string | null = null;
@@ -207,13 +170,13 @@ function readSandboxHttpResponse(params: {
         return;
       }
       failed = true;
-      params.lifecycle.failed = true;
-      void params.terminate().catch((error: unknown) => {
+      lifecycle.failed = true;
+      void terminate().catch((error: unknown) => {
         embeddedAgentLog.warn("codex sandbox http/request cleanup failed", { error });
       });
       if (headerResolved) {
-        params.notifications.send("http/request/bodyDelta", {
-          requestId: params.requestId,
+        notifications.send("http/request/bodyDelta", {
+          requestId,
           seq: lastBodySeq + 1,
           deltaBase64: "",
           done: true,
@@ -234,14 +197,14 @@ function readSandboxHttpResponse(params: {
       output.chunks.push(buffer);
     };
     for (const stream of ["stdout", "stderr"] as const) {
-      if (params.streamResponse) {
-        params.child[stream].setEncoding("utf8");
+      if (streamResponse) {
+        child[stream].setEncoding("utf8");
       }
-      params.child[stream].on("data", (chunk: Buffer | string) => {
+      child[stream].on("data", (chunk: Buffer | string) => {
         if (failed) {
           return;
         }
-        if (!params.streamResponse) {
+        if (!streamResponse) {
           bufferOutput(stream, chunk);
           return;
         }
@@ -269,8 +232,8 @@ function readSandboxHttpResponse(params: {
               } else if (type === "bodyDelta") {
                 const seq = requireNumber(message.seq, "http body sequence");
                 lastBodySeq = Math.max(lastBodySeq, seq);
-                params.notifications.send("http/request/bodyDelta", {
-                  requestId: params.requestId,
+                notifications.send("http/request/bodyDelta", {
+                  requestId,
                   seq,
                   deltaBase64: typeof message.deltaBase64 === "string" ? message.deltaBase64 : "",
                   done: message.done === true,
@@ -290,13 +253,13 @@ function readSandboxHttpResponse(params: {
         }
       });
     }
-    params.child.once("error", (error) => {
+    child.once("error", (error) => {
       // ChildProcess error can precede close while the helper is still alive.
       // Keep its backend lease until close provides the terminal exit state.
       childFailure ??= error.message;
-      params.lifecycle.failed = true;
+      lifecycle.failed = true;
     });
-    params.child.once("close", (code) => {
+    child.once("close", (code) => {
       const exitCode = code ?? 1;
       if (failed) {
         return;
@@ -306,7 +269,7 @@ function readSandboxHttpResponse(params: {
         return;
       }
       if (exitCode === 0) {
-        if (!params.streamResponse) {
+        if (!streamResponse) {
           try {
             const parsed = JSON.parse(Buffer.concat(buffered.stdout.chunks).toString("utf8")) as {
               status?: unknown;
@@ -327,17 +290,37 @@ function readSandboxHttpResponse(params: {
           return;
         }
         if (!headerResolved) {
-          params.lifecycle.failed = true;
+          lifecycle.failed = true;
           reject(new Error("sandbox http/request exited before returning headers"));
         }
         return;
       }
-      if (!params.streamResponse) {
+      if (!streamResponse) {
         stderr = Buffer.concat(buffered.stderr.chunks).toString("utf8");
       }
       fail(stderr.trim() || `sandbox http/request failed with code ${exitCode}`);
     });
-  });
+  }).then(response.resolve, response.reject);
+  try {
+    if (notifications.signal.aborted) {
+      abortOnSessionClose();
+    } else {
+      owner.assertCurrent();
+      child.stdin.end(JSON.stringify(params));
+    }
+    // Headers can finish the RPC while its body or backend finalization is still running.
+    await completion.promise;
+    await termination;
+  } catch (error) {
+    lifecycle.failed = true;
+    response.reject(error);
+    await terminate().catch((cleanupError: unknown) => {
+      embeddedAgentLog.warn("codex sandbox http/request cleanup failed", { error: cleanupError });
+    });
+    throw error;
+  } finally {
+    notifications.signal.removeEventListener("abort", abortOnSessionClose);
+  }
 }
 
 const SANDBOX_HTTP_REQUEST_SCRIPT = String.raw`
@@ -355,9 +338,6 @@ import urllib.request
 
 def emit(payload):
     print(json.dumps(payload, separators=(",", ":")), flush=True)
-
-def response_headers(response):
-    return [{"name": name, "value": value} for name, value in response.headers.items()]
 
 BLOCKED_HOSTNAMES = {
     "localhost",
@@ -394,9 +374,7 @@ def is_blocked_hostname(hostname):
     normalized = normalize_hostname(hostname)
     return (
         normalized in BLOCKED_HOSTNAMES
-        or normalized.endswith(".localhost")
-        or normalized.endswith(".local")
-        or normalized.endswith(".internal")
+        or normalized.endswith((".localhost", ".local", ".internal"))
     )
 
 def is_blocked_ip(address):
@@ -409,12 +387,9 @@ def is_blocked_ip(address):
         return True
     if str(parsed).lower() in CLOUD_METADATA_IP_ADDRESSES:
         return True
-    if isinstance(parsed, ipaddress.IPv4Address):
-        if any(parsed in network for network in BLOCKED_IPV4_NETWORKS):
-            return True
-    else:
-        if any(parsed in network for network in BLOCKED_IPV6_NETWORKS):
-            return True
+    networks = BLOCKED_IPV4_NETWORKS if isinstance(parsed, ipaddress.IPv4Address) else BLOCKED_IPV6_NETWORKS
+    if any(parsed in network for network in networks):
+        return True
     return (
         parsed.is_loopback
         or parsed.is_private
@@ -515,7 +490,7 @@ def pinned_getaddrinfo(original_getaddrinfo):
     return getaddrinfo
 
 def handle_response(input_data, response):
-    headers = response_headers(response)
+    headers = [{"name": name, "value": value} for name, value in response.headers.items()]
     status = int(getattr(response, "status", getattr(response, "code", 0)))
     if input_data.get("streamResponse"):
         emit({"type": "headers", "status": status, "headers": headers})

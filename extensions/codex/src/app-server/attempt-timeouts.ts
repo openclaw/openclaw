@@ -62,10 +62,8 @@ export async function withCodexStartupTimeout<T>(params: {
       params.operation(),
       new Promise<never>((_, reject) => {
         const rejectOnce = (error: Error) => {
-          if (timeout) {
-            clearTimeout(timeout);
-            timeout = undefined;
-          }
+          clearTimeout(timeout);
+          timeout = undefined;
           reject(error);
         };
         timeout = setTimeout(() => {
@@ -90,9 +88,7 @@ export async function withCodexStartupTimeout<T>(params: {
     }
     throw error;
   } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
+    clearTimeout(timeout);
     abortCleanup?.();
   }
 }

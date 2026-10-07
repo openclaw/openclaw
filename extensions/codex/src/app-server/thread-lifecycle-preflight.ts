@@ -64,6 +64,7 @@ import { resolveCodexAppServerThreadModelSelection } from "./thread-model-select
 import {
   assertCodexManagedRequirementsDoNotOverrideToolPolicy,
   buildCodexRingZeroThreadConfigPatch,
+  buildThreadResumeParams,
   CODEX_RING_ZERO_BASE_INSTRUCTIONS,
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
@@ -127,6 +128,7 @@ export async function prepareCodexThreadRequestContext(
     agentDir: params.params.agentDir,
     config: params.params.config,
   });
+  const startModelProvider = startModelSelection.modelProvider;
   const source = params.params.hostCapabilities.retainSourceAuthority?.();
   const modelPolicyEnforced =
     params.nativeModelAdmission === undefined ||
@@ -168,7 +170,7 @@ export async function prepareCodexThreadRequestContext(
     ...options.preflight,
     bindingIdentity: options.bindingIdentity,
     startModelSelection,
-    startModelProvider: startModelSelection.modelProvider,
+    startModelProvider,
     normalizeBindingModelProvider: (
       authProfileId: string | undefined,
       modelProvider: string | undefined,
@@ -179,6 +181,31 @@ export async function prepareCodexThreadRequestContext(
         authProfileStore: params.params.authProfileStore,
         agentDir: params.params.agentDir,
         config: params.params.config,
+      }),
+    assertInferenceConfig: (config: JsonObject | undefined, modelProvider?: string) =>
+      assertCodexInferenceRouteConfig(
+        params.client,
+        params.inferenceRoute,
+        config,
+        modelProvider,
+        params.inferenceProviderRoutes,
+      ),
+    buildResumeParams: (
+      binding: CodexAppServerThreadBinding,
+      authProfileId: string | undefined,
+      config: JsonObject | undefined,
+    ) =>
+      buildThreadResumeParams(params.params, {
+        ...params,
+        threadId: binding.threadId,
+        authProfileId,
+        model: startModelSelection.model,
+        modelProvider: startModelProvider,
+        preserveNativeModel: binding.preserveNativeModel === true,
+        config,
+        hostSystemAgentActive: options.preflight.hostSystemAgentActive,
+        restrictedToolSurfaceInheritedMcpServerNames:
+          options.preflight.restrictedToolSurfaceInheritedMcpServerNames,
       }),
     throwIfAborted: options.throwIfAborted,
   };

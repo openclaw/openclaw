@@ -282,7 +282,7 @@ export function createWorkerSessionToolExecutor(
                 throw new Error("Cloud child placement does not match its parent profile");
               }
             };
-            const childPlacement = params.placements.get(childSessionId);
+            const childPlacement = await params.placements.getAsync(childSessionId);
             assertSource();
             if (childPlacement?.state !== "active") {
               try {

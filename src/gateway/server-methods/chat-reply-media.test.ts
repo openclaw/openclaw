@@ -29,7 +29,10 @@ import {
   buildAssistantReplyContent,
   buildAssistantReplyContentFromInputs,
 } from "./chat-assistant-content.js";
-import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
+import {
+  captureWebchatReplyMediaScope,
+  normalizeWebchatReplyMediaPathsForDisplay,
+} from "./chat-reply-media.js";
 import { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
 
 const PNG_BYTES = Buffer.from(
@@ -135,11 +138,14 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     cfg: OpenClawConfig;
     payloads: ReplyMediaPayloads;
   }) {
-    const [payload] = await normalizeWebchatReplyMediaPathsForDisplay({
+    const scope = captureWebchatReplyMediaScope({
       cfg: params.cfg,
       sessionKey: TEST_SESSION_KEY,
       agentId: "main",
-      sessionEntry: undefined,
+      sessionLoadOptions: { agentId: "main" },
+    });
+    const [payload] = await normalizeWebchatReplyMediaPathsForDisplay({
+      ...scope,
       payloads: params.payloads,
     });
     return payload;

@@ -36,6 +36,14 @@ export function createPlacementReadStore(params: {
       const id = required(sessionId, "session id");
       return (await getManyAsync([id])).get(id);
     },
+    async getWithMoveAsync(sessionId: string) {
+      const id = required(sessionId, "session id");
+      const result = await runOpenClawStateWorkerOperation(context, (scope) =>
+        scope.execute({ type: "workerPlacements.readWithMove", input: { sessionId: id } }),
+      );
+      const [placement] = decorate(result.placement ? [result.placement] : []);
+      return { ...result, placement };
+    },
     listAsync: () => read(),
     async getPlacementMoveAsync(sessionId: string) {
       const id = required(sessionId, "move session id");

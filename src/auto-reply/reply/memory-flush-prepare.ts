@@ -36,22 +36,13 @@ function resolveMemoryFlushModelFallbackOptions(
     return options;
   }
   const slashIdx = override.indexOf("/");
-  if (slashIdx > 0) {
-    const overrideProvider = override.slice(0, slashIdx).trim();
-    const overrideModel = override.slice(slashIdx + 1).trim();
-    if (overrideProvider && overrideModel) {
-      return {
-        ...options,
-        provider: overrideProvider,
-        model: overrideModel,
-        requestedRouteResolution: "raw" as const,
-        fallbacksOverride: [],
-      };
-    }
-  }
+  const overrideProvider = override.slice(0, slashIdx).trim();
+  const overrideModel = override.slice(slashIdx + 1).trim();
   return {
     ...options,
-    model: override,
+    ...(slashIdx > 0 && overrideProvider && overrideModel
+      ? { provider: overrideProvider, model: overrideModel }
+      : { model: override }),
     requestedRouteResolution: "raw" as const,
     fallbacksOverride: [],
   };

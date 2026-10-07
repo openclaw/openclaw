@@ -56,8 +56,7 @@ export async function deleteSubagentSessionForCleanup(params: {
   if (!params.expectedSessionId || !params.expectedLifecycleRevision) {
     return "failed";
   }
-  const prepareCurrent = params.prepareCurrent;
-  const isCurrent = params.isCurrent;
+  const { prepareCurrent, isCurrent } = params;
   const cleanupParams: SessionsDeleteParams = {
     key: params.childSessionKey,
     deleteTranscript: params.deleteTranscript ?? true,

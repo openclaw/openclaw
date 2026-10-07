@@ -2,17 +2,26 @@ import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operat
 import { createSqliteWorkerTransferOwner } from "../../infra/sqlite-worker-transfer.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
-import { applySessionEntryPatchInDatabase } from "./session-accessor.sqlite-entry-mutation.js";
+import {
+  applySessionEntryPatchInDatabase,
+  writeSessionEntryPatchInDatabase,
+} from "./session-accessor.sqlite-entry-mutation.js";
 import {
   readLifecycleTargetSnapshot,
   readSessionEntrySelectionSnapshot,
 } from "./session-accessor.sqlite-entry-store.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import { sessionEntryPatchPredicateMatches } from "./session-entry-patch-guard.js";
+import {
+  mergeSessionEntryPatch,
+  reduceSessionEntryPatch,
+} from "./session-entry-patch-operation.js";
 import type {
   SessionEntryPatchCommit,
   SessionEntryPatchCommitted,
   SessionEntryPatchReceipt,
+  SessionEntryPatchReduction,
   SessionEntryPatchSelection,
 } from "./session-entry-patch.types.js";
 import { readRefusedSessionSource } from "./session-source-predicate.worker.js";
@@ -27,7 +36,7 @@ export function readSessionEntryPatchSnapshot(
 }
 
 export function commitSessionEntryPatch(
-  input: SessionEntryPatchCommit,
+  input: SessionEntryPatchCommit | SessionEntryPatchReduction,
   { writeTransaction, admit }: AgentWorkerOperationContext,
 ): SessionEntryPatchReceipt {
   return writeTransaction(input.operationLabel, "Session patch", (database) => {
@@ -36,24 +45,55 @@ export function commitSessionEntryPatch(
       // A false predicate precedes CAS and the throwing guard, including for a null patch.
       result = { kind: "session-entry-patch", entry: null };
     } else {
-      const mutation = applySessionEntryPatchInDatabase(database, {
-        ...input,
-        readSnapshot: (current) => readSessionEntryPatchSnapshot(current, input.selection),
-        options: {
-          consumePendingReset: input.consumePendingReset,
-          providerReviewMutation: input.providerReviewMutation,
-          workerGuard: { cliHistory: input.cliHistory, conversation: input.conversation },
-          assertCommitAllowed: () => {
-            const refusedSource = readRefusedSessionSource(database, input.sources);
-            if (refusedSource) {
-              result = { kind: "session-entry-patch", entry: null, refusedSource };
-              transferSessionEntryWorkerCandidate(database, admit, result);
-              throw new Error("Session source refusal was not rejected");
-            }
-            admit("transaction", { kind: "session-entry-patch-validated" });
-          },
+      const options = {
+        consumePendingReset: input.consumePendingReset,
+        providerReviewMutation: input.providerReviewMutation,
+        workerGuard: { cliHistory: input.cliHistory, conversation: input.conversation },
+        assertCommitAllowed: () => {
+          const refusedSource = readRefusedSessionSource(database, input.sources);
+          if (refusedSource) {
+            result = { kind: "session-entry-patch", entry: null, refusedSource };
+            transferSessionEntryWorkerCandidate(database, admit, result);
+            throw new Error("Session source refusal was not rejected");
+          }
+          admit("transaction", { kind: "session-entry-patch-validated" });
         },
-      });
+      };
+      let mutation;
+      if ("operation" in input) {
+        if (input.validateCanonicalKeys) {
+          assertCanonicalSqliteSessionKeysCurrent(database);
+        }
+        const fresh = readSessionEntryPatchSnapshot(database, input.selection);
+        const existing = fresh[0]?.entry;
+        const writeBase = existing ?? input.fallbackEntry;
+        if (!writeBase) {
+          result = {
+            kind: "session-entry-patch",
+            entry: null,
+          };
+          return transferSessionEntryWorkerCandidate(database, admit, result);
+        }
+        const next = mergeSessionEntryPatch({
+          ...input,
+          existing,
+          writeBase,
+          patch: reduceSessionEntryPatch(input.operation, writeBase),
+        });
+        mutation = writeSessionEntryPatchInDatabase(database, {
+          sessionKey: input.sessionKey,
+          fresh,
+          writeBase,
+          next,
+          options,
+        });
+      } else {
+        mutation = applySessionEntryPatchInDatabase(database, {
+          ...input,
+          readSnapshot: (current) => readSessionEntryPatchSnapshot(current, input.selection),
+          options,
+        });
+      }
       const publication = mutation.identity
         ? prepareSessionEntryReplacementPublication(
             {

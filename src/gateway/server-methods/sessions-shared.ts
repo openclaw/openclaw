@@ -18,27 +18,45 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
 import { resolveWorkerPlacementSessionRuntimeCapabilities } from "../worker-environments/placement-session-runtime.js";
-import type { SessionWorkerPlacementContext } from "../worker-environments/session-placement-lifecycle.js";
-import { resolveWorkerPlacementArchiveRestoreError } from "../worker-environments/session-placement-lifecycle.js";
+import {
+  readSessionWorkerPlacementAsync,
+  resolveWorkerPlacementArchiveRestoreError,
+  type SessionWorkerPlacementContext,
+} from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 export { sessionLog } from "../session-log.js";
 
-export function resolveSessionWorkerPlacementPatchError(params: {
-  agentId: string;
-  cfg: OpenClawConfig;
-  context: SessionWorkerPlacementContext;
-  entry: SessionEntry | undefined;
-  key: string;
-  patch: SessionsPatchParams;
-  sessionKey: string;
-  validateModelRuntime: boolean;
-}): string | undefined {
-  const placement = params.entry?.sessionId
-    ? params.context.workerSessionPlacementService
-        ?.getMany([params.entry.sessionId])
-        .get(params.entry.sessionId)
-    : undefined;
+export async function prepareSessionWorkerPlacementPatchError(
+  params: Parameters<typeof resolveSessionWorkerPlacementPatchError>[0],
+) {
+  const placement = await readSessionWorkerPlacementAsync({
+    context: params.context,
+    sessionId: params.entry?.sessionId,
+  });
+  return resolveSessionWorkerPlacementPatchError(params, { placement });
+}
+
+export function resolveSessionWorkerPlacementPatchError(
+  params: {
+    agentId: string;
+    cfg: OpenClawConfig;
+    context: SessionWorkerPlacementContext;
+    entry: SessionEntry | undefined;
+    key: string;
+    patch: SessionsPatchParams;
+    sessionKey: string;
+    validateModelRuntime: boolean;
+  },
+  prepared?: { placement: Awaited<ReturnType<typeof readSessionWorkerPlacementAsync>> },
+): string | undefined {
+  const placement = prepared
+    ? prepared.placement
+    : params.entry?.sessionId
+      ? params.context.workerSessionPlacementService
+          ?.getMany([params.entry.sessionId])
+          .get(params.entry.sessionId)
+      : undefined;
   if (!placement || placement.state === "local") {
     return undefined;
   }

@@ -2,15 +2,9 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import {
-  isSilentReplyPayloadText,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-  stripSilentToken,
-} from "../tokens.js";
+import { isSilentReplyPayloadText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import { stripInternalMetadataForDisplay } from "./display-text-sanitize.js";
+import { stripMixedSilentReplyTokens } from "./mixed-silent-reply-tokens.js";
 
 // A delivered or discarded final must lose the whole record. Keeping this list
 // centralized prevents new ownership fields from leaving a phantom pending delivery.
@@ -33,17 +27,8 @@ export function sanitizePendingFinalDeliveryText(text: string): string {
     return "";
   }
   if (stripped && !isSilentReplyText(stripped, SILENT_REPLY_TOKEN)) {
-    const hasLeadingSilentToken = startsWithSilentToken(stripped, SILENT_REPLY_TOKEN);
-    if (hasLeadingSilentToken) {
-      stripped = stripLeadingSilentToken(stripped, SILENT_REPLY_TOKEN);
-    }
     // Remove stray silent tokens only after confirming the payload is not entirely silent.
-    if (
-      hasLeadingSilentToken ||
-      stripped.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())
-    ) {
-      stripped = stripSilentToken(stripped, SILENT_REPLY_TOKEN);
-    }
+    stripped = stripMixedSilentReplyTokens(stripped) ?? stripped;
   }
   if (!stripped.trim()) {
     return "";

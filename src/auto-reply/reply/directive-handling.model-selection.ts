@@ -29,29 +29,31 @@ function validateOperatorSelection(
   }
 }
 
-function resolveStoredNumericProfileModelDirective(params: { raw: string; agentDir: string }): {
+function resolveStoredNumericProfileModelDirective(
+  raw: string,
+  agentDir: string,
+): {
   modelRaw: string;
   profileId: string;
   profileProvider: string;
 } | null {
-  const trimmed = params.raw.trim();
-  const lastSlash = trimmed.lastIndexOf("/");
-  const profileDelimiter = trimmed.indexOf("@", lastSlash + 1);
+  const lastSlash = raw.lastIndexOf("/");
+  const profileDelimiter = raw.indexOf("@", lastSlash + 1);
   if (profileDelimiter <= 0) {
     return null;
   }
 
-  const profileId = trimmed.slice(profileDelimiter + 1).trim();
+  const profileId = raw.slice(profileDelimiter + 1).trim();
   if (!/^\d{8}$/.test(profileId)) {
     return null;
   }
 
-  const modelRaw = trimmed.slice(0, profileDelimiter).trim();
+  const modelRaw = raw.slice(0, profileDelimiter).trim();
   if (!modelRaw) {
     return null;
   }
 
-  const store = ensureAuthProfileStore(params.agentDir, {
+  const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
   const profile = store.profiles[profileId];
@@ -125,10 +127,7 @@ export async function resolveModelSelectionFromDirective(params: {
   }
   const storedNumericProfile =
     params.directives.rawModelProfile === undefined
-      ? resolveStoredNumericProfileModelDirective({
-          raw,
-          agentDir: params.agentDir,
-        })
+      ? resolveStoredNumericProfileModelDirective(raw, params.agentDir)
       : null;
   const resolveSelection = (directive: string) =>
     resolveModelDirectiveSelection({

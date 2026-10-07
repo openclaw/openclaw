@@ -572,22 +572,15 @@ function readDisplayParamLines(meta: JsonObject): string[] {
   if (!Array.isArray(displayParams)) {
     return [];
   }
-  const lines = displayParams
-    .slice(0, MAX_DISPLAY_PARAM_ENTRIES)
-    .map((entry) => {
-      const param = isJsonObject(entry) ? entry : undefined;
-      if (!param) {
-        return undefined;
-      }
-      const name =
-        sanitizeOptionalDisplayText(readNonBlankString(param.display_name)) ??
-        sanitizeOptionalDisplayText(readNonBlankString(param.name));
-      if (!name) {
-        return undefined;
-      }
-      return `- ${name}: ${formatDisplayParamValue(param.value)}`;
-    })
-    .filter((line): line is string => Boolean(line));
+  const lines = displayParams.slice(0, MAX_DISPLAY_PARAM_ENTRIES).flatMap((param) => {
+    if (!isJsonObject(param)) {
+      return [];
+    }
+    const name =
+      sanitizeOptionalDisplayText(readNonBlankString(param.display_name)) ??
+      sanitizeOptionalDisplayText(readNonBlankString(param.name));
+    return name ? [`- ${name}: ${formatDisplayParamValue(param.value)}`] : [];
+  });
   const remaining = displayParams.length - MAX_DISPLAY_PARAM_ENTRIES;
   return remaining > 0 ? [...lines, `- Additional parameters: ${remaining} more`] : lines;
 }
@@ -626,24 +619,18 @@ function formatDisplayJsonValue(value: JsonValue, depth = MAX_DISPLAY_VALUE_DEPT
       return "{truncated}";
     }
     const parts: string[] = [];
-    let count = 0;
-    let truncated = false;
     for (const key in value) {
       if (!Object.hasOwn(value, key)) {
         continue;
       }
-      if (count >= MAX_DISPLAY_VALUE_OBJECT_KEYS) {
-        truncated = true;
+      if (parts.length >= MAX_DISPLAY_VALUE_OBJECT_KEYS) {
+        parts.push("...");
         break;
       }
       const safeKey = truncateDisplayText(sanitizeDisplayText(key), 80);
       parts.push(
         `${JSON.stringify(safeKey)}:${formatDisplayJsonValue(value[key] ?? null, depth - 1)}`,
       );
-      count += 1;
-    }
-    if (truncated) {
-      parts.push("...");
     }
     return `{${parts.join(",")}}`;
   }

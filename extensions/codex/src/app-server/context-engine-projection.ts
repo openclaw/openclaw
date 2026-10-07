@@ -492,14 +492,13 @@ async function renderMessagesForCodexContext(
   };
 }
 
-function renderMessageBody(
-  message: AgentMessage,
-  options: {
-    maxTextPartChars: number;
-    toolPayloadMode: "elide" | "preserve";
-    mediaPrepared?: boolean;
-  },
-): string {
+type MessageRenderOptions = {
+  maxTextPartChars: number;
+  toolPayloadMode: "elide" | "preserve";
+  mediaPrepared?: boolean;
+};
+
+function renderMessageBody(message: AgentMessage, options: MessageRenderOptions): string {
   // Canonical summaries carry `summary`, not `content`; keep them in the quoted history.
   if (message.role === "compactionSummary" || message.role === "branchSummary") {
     return message.summary.trim();
@@ -533,11 +532,7 @@ function renderMessageBody(
 
 function renderMessagePart(
   part: unknown,
-  options: {
-    maxTextPartChars: number;
-    toolPayloadMode: "elide" | "preserve";
-    mediaPrepared?: boolean;
-  },
+  options: MessageRenderOptions,
   toolResultBody: boolean,
 ): string {
   if (!part || typeof part !== "object") {

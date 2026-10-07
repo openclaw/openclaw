@@ -11,19 +11,17 @@ import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-even
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
 } from "./session-accessor.pending-inputs.js";
-import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { resetSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
-import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { readCommittedTranscriptMessageSequence } from "./session-accessor.sqlite-transcript-sequences.js";
 import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-turn.js";
 import type { SessionTranscriptTurnPersistOptions } from "./session-accessor.types.js";
+import { createSessionCompoundWorkerFixture as fixture } from "./session-compound-worker.test-support.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import * as transcriptReconcile from "./session-transcript-reconcile.js";
@@ -412,25 +410,6 @@ it.for(["turn", "reset"] as const)(
   },
 );
 
-function fixture() {
-  const database = openOpenClawAgentDatabase({ agentId: "main" });
-  const scope = {
-    agentId: "main",
-    storePath: database.path,
-    sessionKey: "agent:main:compound-worker",
-    sessionId: "original",
-  };
-  replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1, label: "initial" });
-  return {
-    database,
-    scope,
-    target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
-    read: () => readExactSessionEntryRow(database, scope.sessionKey)?.entry,
-    events: () =>
-      readTranscriptEventRows(database, scope.sessionId).map((row) => JSON.parse(row.eventJson)),
-  };
-}
-
 it("commits a reset with zero host SQL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
@@ -680,6 +659,12 @@ it("commits a pending-input turn with zero host SQL", async () => {
         expect(readCommittedTranscriptMessageSequence(message)).toBe(1);
       },
     );
+    const turnRequests: string[] = [];
+    delivery.afterCommit = (type) => {
+      if (type.startsWith("session.turn.")) {
+        turnRequests.push(type);
+      }
+    };
     const sql = observeHostDataSql();
     try {
       const turn = await pending!.run(() =>
@@ -700,6 +685,7 @@ it("commits a pending-input turn with zero host SQL", async () => {
       expect(committed).toHaveBeenCalledOnce();
       expect(observedCustody.length).toBeGreaterThan(0);
       expect(new Set(observedCustody)).toEqual(new Set(["consumed"]));
+      expect(turnRequests.length, "pending-input promotion request budget").toBeLessThanOrEqual(2);
     } finally {
       sql.restore();
       stopRows();
@@ -722,6 +708,12 @@ it("evaluates the latest-assistant predicate against earlier writes in the same 
       __openclaw: { runId: "same-run" },
     };
     const committed = vi.fn();
+    const turnRequests: string[] = [];
+    delivery.afterCommit = (type) => {
+      if (type.startsWith("session.turn.")) {
+        turnRequests.push(type);
+      }
+    };
     const sql = observeHostDataSql();
     try {
       const result = await appendExpectedSessionTranscriptTurn(f.scope, {
@@ -744,6 +736,7 @@ it("evaluates the latest-assistant predicate against earlier writes in the same 
       expect(result.appendedMessages).toMatchObject([{ messageId: "first-assistant" }]);
       expect(committed).toHaveBeenCalledOnce();
       expect(sql.queries).toEqual([]);
+      expect(turnRequests.length, "fixed transcript append request budget").toBeLessThanOrEqual(1);
     } finally {
       sql.restore();
     }

@@ -1195,18 +1195,19 @@ function resolveManagedFallbackStartOptions(
   return candidates;
 }
 
+function detachCurrentSharedClient(
+  client: CodexAppServerClient | undefined,
+): client is CodexAppServerClient {
+  const entry = client && getCurrentSharedClientEntry(client);
+  return Boolean(entry && getSharedCodexAppServerClientState().clients.delete(entry.key));
+}
+
 export function clearSharedCodexAppServerClientIfCurrent(
   client: CodexAppServerClient | undefined,
 ): boolean {
-  if (!client) {
+  if (!detachCurrentSharedClient(client)) {
     return false;
   }
-  const state = getSharedCodexAppServerClientState();
-  const entry = getCurrentSharedClientEntry(client);
-  if (!entry) {
-    return false;
-  }
-  state.clients.delete(entry.key);
   client.close();
   return true;
 }
@@ -1333,15 +1334,9 @@ export async function clearSharedCodexAppServerClientIfCurrentAndWait(
   client: CodexAppServerClient | undefined,
   options?: Parameters<CodexAppServerClient["closeAndWait"]>[0],
 ): Promise<boolean> {
-  if (!client) {
+  if (!detachCurrentSharedClient(client)) {
     return false;
   }
-  const state = getSharedCodexAppServerClientState();
-  const entry = getCurrentSharedClientEntry(client);
-  if (!entry) {
-    return false;
-  }
-  state.clients.delete(entry.key);
   await client.closeAndWait(options);
   return true;
 }

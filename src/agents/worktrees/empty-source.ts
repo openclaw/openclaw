@@ -24,18 +24,21 @@ function sourceName(ownerId: string): string {
   return createHash("sha256").update(ownerId).digest("hex");
 }
 
+async function hasEmptySourceLayout(sourceRoot: string): Promise<boolean> {
+  const root = await fs.lstat(sourceRoot);
+  const metadata = await fs.lstat(path.join(sourceRoot, ".git"));
+  const entries = await fs.readdir(sourceRoot);
+  return (
+    root.isDirectory() && metadata.isDirectory() && entries.length === 1 && entries[0] === ".git"
+  );
+}
+
 async function validateSource(
   sourceRoot: string,
   gitOptions: Parameters<typeof requireGit>[2],
 ): Promise<void> {
-  const root = await fs.lstat(sourceRoot);
-  const metadata = await fs.lstat(path.join(sourceRoot, ".git"));
-  const entries = await fs.readdir(sourceRoot);
   if (
-    !root.isDirectory() ||
-    !metadata.isDirectory() ||
-    entries.length !== 1 ||
-    entries[0] !== ".git" ||
+    !(await hasEmptySourceLayout(sourceRoot)) ||
     (await requireGit(sourceRoot, ["symbolic-ref", "HEAD"], gitOptions)) !== "refs/heads/main" ||
     (await requireGit(sourceRoot, ["rev-parse", "--verify", "HEAD^{commit}"], gitOptions)) !==
       INITIAL_COMMIT_ID ||
@@ -135,24 +138,6 @@ export async function ensureEmptyWorktreeSource(params: {
   return sourceRoot;
 }
 
-async function resolveEmptyWorktreeSourceRoot(params: {
-  env: NodeJS.ProcessEnv;
-  record: Pick<ManagedWorktreeRecord, "repoRoot" | "ownerKind" | "ownerId">;
-}): Promise<string | undefined> {
-  const { env, record } = params;
-  const sourceDirectory = sourceParent(env);
-  if (
-    record.ownerKind !== "session" ||
-    !record.ownerId ||
-    !(await worktreePathExists(sourceDirectory))
-  ) {
-    return undefined;
-  }
-  const ownerRoot = path.join(await fs.realpath(sourceDirectory), sourceName(record.ownerId));
-  const expected = path.join(ownerRoot, "workspace");
-  return path.relative(expected, record.repoRoot) === "" ? expected : undefined;
-}
-
 /** Called under the allocation lease after failed creation or final snapshot expiry. */
 export async function removeUnusedEmptyWorktreeSource(params: {
   env: NodeJS.ProcessEnv;
@@ -162,11 +147,19 @@ export async function removeUnusedEmptyWorktreeSource(params: {
 }): Promise<void> {
   const { env, record, commitGuard } = params;
   const context = captureWorktreeRunEndContext(env);
-  const expected = await resolveEmptyWorktreeSourceRoot({ ...params, env: context.environment });
-  if (!expected || !(await worktreePathExists(expected))) {
+  const sourceDirectory = sourceParent(context.environment);
+  if (
+    record.ownerKind !== "session" ||
+    !record.ownerId ||
+    !(await worktreePathExists(sourceDirectory))
+  ) {
     return;
   }
-  const ownerRoot = path.dirname(expected);
+  const ownerRoot = path.join(await fs.realpath(sourceDirectory), sourceName(record.ownerId));
+  const expected = path.join(ownerRoot, "workspace");
+  if (path.relative(expected, record.repoRoot) !== "" || !(await worktreePathExists(expected))) {
+    return;
+  }
   if (
     (await readPendingWorktrees(context.environment)).some(
       ({ record: pending }) => path.relative(expected, pending.repoRoot) === "",
@@ -193,16 +186,8 @@ export async function removeUnusedEmptyWorktreeSource(params: {
     return;
   }
   const ownerDirectory = await fs.lstat(ownerRoot);
-  const root = await fs.lstat(expected);
-  const metadata = await fs.lstat(path.join(expected, ".git"));
-  const entries = await fs.readdir(expected);
-  if (
-    !ownerDirectory.isDirectory() ||
-    !root.isDirectory() ||
-    !metadata.isDirectory() ||
-    entries.length !== 1 ||
-    entries[0] !== ".git"
-  ) {
+  const empty = await hasEmptySourceLayout(expected);
+  if (!ownerDirectory.isDirectory() || !empty) {
     throw new Error(`Empty workspace source contains unexpected files; preserved ${expected}`);
   }
   const worktrees = await listGitWorktrees(expected, {

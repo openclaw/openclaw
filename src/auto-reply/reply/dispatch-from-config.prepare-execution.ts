@@ -213,10 +213,8 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
           }
         }
         if ((await shouldForwardProgressCallback(options)) && !isDispatchOperationAborted()) {
-          if (preserveProgressCallbackStartOrder && options?.onForward) {
-            await options.onForward(...args);
-          } else if (!preserveProgressCallbackStartOrder) {
-            // Preserve the historical microtask boundary for unflagged channels.
+          // Preserve the historical microtask boundary for unflagged channels.
+          if (!preserveProgressCallbackStartOrder || options?.onForward) {
             await options?.onForward?.(...args);
           }
           if (isDispatchOperationAborted()) {

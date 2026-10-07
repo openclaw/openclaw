@@ -45,12 +45,13 @@ vi.mock("./plugin-app-cache-key.js", () => ({
   buildCodexPluginAppCacheKey: () => "account-cache",
   buildCodexAppServerRuntimeFingerprint: () => "native-owner",
 }));
-vi.mock("./plugin-thread-config-deadline.js", () => ({
+vi.mock("./plugin-thread-config-deadline.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-thread-config-deadline.js")>()),
   resolveCodexPluginThreadConfigStartupPolicy: () => ({ pluginThreadConfigRequired: false }),
-  createCodexPluginThreadConfigStartupProvider: vi.fn(),
+  prepareCodexPluginThreadConfigStartupProvider: vi.fn(),
 }));
-vi.mock("./plugin-thread-config.js", () => ({
-  buildCodexPluginThreadConfigInputFingerprint: () => "plugins",
+vi.mock("./plugin-thread-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-thread-config.js")>()),
   mergeCodexThreadConfigs: (...parts: object[]) => Object.assign({}, ...parts),
 }));
 vi.mock("./session-permission-policy.js", () => ({
@@ -62,7 +63,8 @@ vi.mock("./shared-client.js", () => ({
 }));
 // mock-isolation: Lifecycle imports evaluate binding fingerprints outside this fixture's stubbed binding contract.
 vi.mock("./thread-lifecycle-run.js", () => ({ startOrResumeThread: mocks.start }));
-vi.mock("./session-binding.js", () => ({
+vi.mock("./session-binding.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-binding.js")>()),
   sessionBindingIdentity: () => ({ sessionId: "session" }),
   resolveCodexSessionBinding: async () => ({
     binding: undefined,

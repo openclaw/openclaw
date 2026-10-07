@@ -101,8 +101,7 @@ export async function withSubagentKillScope<T>(
   const selected = new Map<string, Set<string | undefined>>();
   let selectedCount = 0;
   const releaseSessions: Array<SubagentKillSession["release"]> = [];
-  const releaseRetirements: Array<() => void> = [];
-  const completeRetirementPublications: Array<() => void> = [];
+  const retirements: Array<ReturnType<typeof subagentRuns.captureRetirement>> = [];
   const holds: Array<NonNullable<ReturnType<typeof holdQueuedSwarmRun>>> = [];
   const hold = (tree: KillTree) => {
     if (!tree.dispatchHold) {
@@ -112,6 +111,10 @@ export async function withSubagentKillScope<T>(
       }
     }
   };
+  const controllerFor = (tree: KillTree) => ({
+    controllerSessionKey: tree.entry.childSessionKey,
+    controllerAgentId: resolveSubagentChildSessionOwner(tree.entry, params.cfg).agentId,
+  });
   const capture = (
     pending: Array<{ tree: KillTree; prepare: () => Promise<void> }>,
     runs: Iterable<SubagentRunRecord>,
@@ -164,8 +167,7 @@ export async function withSubagentKillScope<T>(
       const retirement = subagentRuns.captureRetirement(entry, (candidate) =>
         isSameSubagentRunOwner(latest(), candidate),
       );
-      completeRetirementPublications.push(retirement.completePublication);
-      releaseRetirements.push(retirement.release);
+      retirements.push(retirement);
       const selectedEntry = () => retirement.observation.entry;
       const ownsRun = () => {
         const observed = retirement.observation;
@@ -303,10 +305,7 @@ export async function withSubagentKillScope<T>(
     // descendants first; persisted-only discovery below remains worker-owned.
     const resident = new Map(subagentRuns);
     for (const { tree } of pending) {
-      const controller = {
-        controllerSessionKey: tree.entry.childSessionKey,
-        controllerAgentId: resolveSubagentChildSessionOwner(tree.entry, params.cfg).agentId,
-      };
+      const controller = controllerFor(tree);
       capture(
         pending,
         listRunsForControllerFromRuns(resident, controller.controllerSessionKey),
@@ -352,10 +351,7 @@ export async function withSubagentKillScope<T>(
       }
       if (tree.isCurrent(tree.entry)) {
         hold(tree);
-        const controller = {
-          controllerSessionKey: tree.entry.childSessionKey,
-          controllerAgentId: resolveSubagentChildSessionOwner(tree.entry, params.cfg).agentId,
-        };
+        const controller = controllerFor(tree);
         // Retirement preserves captured work, not discovery beneath a missing ancestor.
         const candidates = await withSubagentRunReadSnapshot(
           subagentRuns,
@@ -519,7 +515,7 @@ export async function withSubagentKillScope<T>(
   // Failed-launch cleanup may own the same provisional session. Let it proceed only
   // after the selected snapshot publishes (including failure), before releasing a
   // scheduler hold that can itself await that cleanup.
-  completeRetirementPublications.forEach((complete) => complete());
+  retirements.forEach(({ completePublication }) => completePublication());
   const settleQueued = async (tree: KillTree): Promise<void> => {
     const { entry, session, dispatchHold } = tree;
     const executionTail =
@@ -608,7 +604,7 @@ export async function withSubagentKillScope<T>(
     }
   }
   const released = await Promise.allSettled(holds.map((reservation) => reservation.release()));
-  const retired = await Promise.allSettled(releaseRetirements.map(async (release) => release()));
+  const retired = await Promise.allSettled(retirements.map(async ({ release }) => release()));
   const releasedSessions = await Promise.allSettled(
     releaseSessions.map(async (release) => release()),
   );

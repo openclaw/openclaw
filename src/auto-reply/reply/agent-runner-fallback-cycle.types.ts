@@ -20,6 +20,7 @@ import type {
 } from "./agent-runner-execution.types.js";
 import type { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
+import type { CurrentTurnImages } from "./current-turn-images.js";
 import type { FollowupRun } from "./queue.js";
 import type { DirectBlockDelivery } from "./reply-delivery.js";
 
@@ -44,9 +45,7 @@ export type AgentFallbackCandidateCommonParams = RunEntryCandidateOptions & {
   fastModeAutoProgressState: FastModeAutoProgressState;
   bootstrapContextRunKind: BootstrapContextRunKind;
   bootstrapPromptWarningSignaturesSeen: string[];
-  currentTurnImages: Awaited<
-    ReturnType<typeof import("./current-turn-images.js").resolveCurrentTurnImages>
-  >;
+  currentTurnImages: CurrentTurnImages;
   signalExecutionPhaseForTyping: NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>;
   prepareAgentRunStart: () => void | Promise<void>;
   notifyAgentRunStart: (transcriptStart?: PreparedReplyTranscriptStart | null) => void;
@@ -107,9 +106,7 @@ export type AgentFallbackCycleParams = {
   >;
   runId: string;
   runAbortSignal?: AbortSignal;
-  currentTurnImages: Awaited<
-    ReturnType<typeof import("./current-turn-images.js").resolveCurrentTurnImages>
-  >;
+  currentTurnImages: CurrentTurnImages;
   state: AgentFallbackCycleState;
   presentation: ReturnType<typeof createAgentTurnPresentation>;
   directBlockDeliveries: DirectBlockDelivery[];

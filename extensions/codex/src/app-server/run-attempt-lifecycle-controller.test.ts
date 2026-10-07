@@ -26,6 +26,7 @@ function createTerminalReleaseHarness() {
     resolveCompletion,
   };
   const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
+  const activeTurnItemIds = new Set<string>();
   const client = {
     request,
     addNotificationHandler: (handler: (notification: unknown) => void) => {
@@ -53,7 +54,7 @@ function createTerminalReleaseHarness() {
     } as never,
     {
       state,
-      activeTurnItemIds: new Set(),
+      activeTurnItemIds,
       pendingOpenClawDynamicToolCompletionIds,
       steeringQueueRef: { current: { cancel } },
       interruptTurn: (turnId: string) =>
@@ -79,6 +80,7 @@ function createTerminalReleaseHarness() {
     }
   };
   return {
+    activeTurnItemIds,
     cancel,
     completeTurn,
     controller,
@@ -259,6 +261,42 @@ describe("Codex terminal dynamic-tool release", () => {
     }
   });
 
+  it.each(["request", "native-item", "tool-response"] as const)(
+    "waits for a pending %s before releasing a terminal tool batch",
+    async (pending) => {
+      vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
+      const harness = createTerminalReleaseHarness();
+      harness.state.activeAppServerTurnRequests = pending === "request" ? 1 : 0;
+      if (pending === "native-item") {
+        harness.activeTurnItemIds.add("native-item");
+      } else if (pending === "tool-response") {
+        harness.pendingOpenClawDynamicToolCompletionIds.add("tool-response");
+      }
+      try {
+        harness.controller.scheduleTurnReleaseAfterTerminalDynamicTool(terminalYieldResult(true));
+        await vi.runOnlyPendingTimersAsync();
+        expect(harness.request).not.toHaveBeenCalled();
+        expect(harness.state.completed).toBe(false);
+        // Native activity delays interruption, but the accepted terminal response
+        // already fenced steering once its own response and siblings settled.
+        expect(harness.cancel).toHaveBeenCalledTimes(pending === "native-item" ? 1 : 0);
+
+        harness.state.activeAppServerTurnRequests = 0;
+        harness.activeTurnItemIds.clear();
+        harness.pendingOpenClawDynamicToolCompletionIds.clear();
+        harness.controller.scheduleTerminalDynamicToolReleaseCheck();
+        await vi.runOnlyPendingTimersAsync();
+        expect(harness.request).toHaveBeenCalledOnce();
+        expect(harness.state.completed).toBe(true);
+        expect(harness.resolveCompletion).toHaveBeenCalledOnce();
+      } finally {
+        harness.completeTurn();
+        await vi.runOnlyPendingTimersAsync();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("keeps steering open when the yield result fails", async () => {
     const harness = createTerminalReleaseHarness();
 
@@ -339,6 +377,7 @@ describe("Codex batch release after a tool-authored final reply", () => {
       expect(releasedAfter.every((entry) => entry.endsWith(":open"))).toBe(true);
       expect(harness.request).not.toHaveBeenCalled();
       expect(harness.state.currentTurnHadToolAuthoredFinalReply).toBe(false);
+      expect(harness.state.currentTurnHadNonTerminalDynamicToolResult).toBe(false);
     },
   );
 });

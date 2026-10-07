@@ -66,11 +66,7 @@ export function hasConfiguredModelRouteSupport(params: {
   const endpoint = resolveProviderEndpoint(params.route.baseUrl, params.providerMetadataOwners);
   // Vercel AI Gateway is classified only for app attribution; routing catalog models through it
   // remains an operator-owned proxy route like any custom baseUrl.
-  if (
-    endpoint.endpointClass === "custom" ||
-    endpoint.endpointClass === "local" ||
-    endpoint.endpointClass === "vercel-ai-gateway"
-  ) {
+  if (["custom", "local", "vercel-ai-gateway"].includes(endpoint.endpointClass)) {
     return true;
   }
   if (!params.catalogModel) {
@@ -336,13 +332,6 @@ export function mergeConfiguredRuntimeModelParams(params: {
   );
 }
 
-function markDiscoveredMaxTokensSource(model: ProviderRuntimeModel): ProviderRuntimeModel {
-  if (model.maxTokens === undefined || model.maxTokensSource !== undefined) {
-    return model;
-  }
-  return { ...model, maxTokensSource: "discovered" };
-}
-
 export function clampModelMaxTokensToContextWindow(
   maxTokens: number | undefined,
   contextWindow: number | undefined,
@@ -371,9 +360,11 @@ export function applyConfiguredProviderOverrides(params: {
   getStaticCatalogModel?: () => ProviderRuntimeModel | undefined;
   workspaceDir?: string;
 }): ProviderRuntimeModel | undefined {
-  const { providerConfig, modelId } = params;
-  const discoveredModel = attachModelProviderRequestRouteFacts(
-    markDiscoveredMaxTokensSource(params.discoveredModel),
+  const { providerConfig, modelId, discoveredModel: source } = params;
+  const discoveredModel = attachModelProviderRequestRouteFacts<ProviderRuntimeModel>(
+    source.maxTokens === undefined || source.maxTokensSource !== undefined
+      ? source
+      : { ...source, maxTokensSource: "discovered" },
     params.providerMetadataOwners,
   );
   const manifestAliasTransport = params.manifestAlias.transport;
@@ -510,44 +501,23 @@ export function applyConfiguredProviderOverrides(params: {
     ...params,
     providerConfig,
   });
-  const metadataOverrideBaseUrl = normalizeOptionalString(metadataOverrideModel?.baseUrl);
-  const providerConfiguredBaseUrl = normalizeOptionalString(providerConfig.baseUrl);
-  const discoveredBaseUrl = normalizeOptionalString(discoveredModel.baseUrl);
-  const configuredStaticCatalogBaseUrl = normalizeOptionalString(
-    configuredStaticCatalogModel?.baseUrl,
-  );
-  const manifestAliasBaseUrl = normalizeOptionalString(manifestAliasTransport?.baseUrl);
   // A retained alias owns transport identity and always takes the second branch
   // below. Discovery-first ordering is therefore alias-free by construction.
   const preferDiscoveredTransport = params.preferDiscoveredTransport && !manifestAliasTransport;
-  const resolvedTransportApi = preferDiscoveredTransport
-    ? (discoveredModel.api ??
-      metadataOverrideModel?.api ??
-      providerConfig.api ??
-      configuredStaticCatalogModel?.api ??
-      providerDefaultApi)
-    : (metadataOverrideModel?.api ??
-      providerConfig.api ??
-      manifestAliasTransport?.api ??
-      discoveredModel.api ??
-      configuredStaticCatalogModel?.api ??
-      providerDefaultApi);
-  const resolvedTransportBaseUrl = preferDiscoveredTransport
-    ? (discoveredBaseUrl ??
-      metadataOverrideBaseUrl ??
-      providerConfiguredBaseUrl ??
-      configuredStaticCatalogBaseUrl)
-    : (metadataOverrideBaseUrl ??
-      providerConfiguredBaseUrl ??
-      manifestAliasBaseUrl ??
-      discoveredBaseUrl ??
-      configuredStaticCatalogBaseUrl);
-
+  const transportSources = preferDiscoveredTransport
+    ? [discoveredModel, metadataOverrideModel, providerConfig, configuredStaticCatalogModel]
+    : [
+        metadataOverrideModel,
+        providerConfig,
+        manifestAliasTransport,
+        discoveredModel,
+        configuredStaticCatalogModel,
+      ];
   const resolvedTransport = resolveProviderTransport({
     provider: params.provider,
     modelId: discoveredModel.id,
-    api: resolvedTransportApi,
-    baseUrl: resolvedTransportBaseUrl,
+    api: transportSources.find((entry) => entry?.api != null)?.api ?? providerDefaultApi,
+    baseUrl: transportSources.map((entry) => normalizeOptionalString(entry?.baseUrl)).find(Boolean),
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     runtimeHooks: params.runtimeHooks,

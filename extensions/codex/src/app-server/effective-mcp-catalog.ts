@@ -52,10 +52,9 @@ function buildCodexEffectiveMcpCatalog(
   statuses: readonly CodexMcpServerStatus[],
   toolOverrides?: AgentHarnessMcpCatalogParams["toolOverrides"],
 ): McpToolCatalog {
-  const statusByName = new Map(statuses.map((status) => [status.name, status] as const));
-  const orderedStatuses = [...statusByName.values()].toSorted((left, right) =>
-    left.name.localeCompare(right.name),
-  );
+  const orderedStatuses = [
+    ...new Map(statuses.map((status) => [status.name, status] as const)).values(),
+  ].toSorted((left, right) => left.name.localeCompare(right.name));
   const safeNames = assignMcpCatalogSafeServerNames(orderedStatuses.map((status) => status.name));
   const serverEntries: Array<[string, McpToolCatalog["servers"][string]]> = [];
   const tools: McpToolCatalog["tools"] = [];
