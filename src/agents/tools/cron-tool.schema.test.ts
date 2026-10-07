@@ -389,6 +389,16 @@ describe("cron shorthand and schedule recovery", () => {
         jobs: [{ id: "one", name: "private reminder", payload: { text: "secret" } }],
       };
       expect(present("list", details)).toEqual({ text: "Automations listed.\nCount: 250" });
+      expect(
+        present("list", {
+          total: 1,
+          jobs: [{ id: "one", name: "private reminder" }],
+          scope: "caller",
+          scopeHint: "Restricted automation inventory.",
+        }),
+      ).toEqual({
+        text: "Automations listed.\nCount: 1\nRestricted automation inventory.",
+      });
       expect(present("add", details)).toBeUndefined();
     });
 
