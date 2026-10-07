@@ -30,6 +30,7 @@ import {
   createWikiPromptSectionBuilder,
   createWikiPromptSectionPreparer,
 } from "./src/prompt-section.js";
+import { closeMemoryWikiQueryReader } from "./src/query-reader.js";
 import {
   configureMemoryWikiSourceSyncStateStore,
   createMemoryWikiSourceSyncStateStore,
@@ -172,6 +173,7 @@ export default definePluginEntry({
         deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
         await waitForMemoryWikiImportedSourceSyncs();
         deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
+        await closeMemoryWikiQueryReader();
       },
     });
 

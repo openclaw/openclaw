@@ -21,6 +21,7 @@ import {
   resolveMemoryWikiVaultSourceGeneration,
 } from "./src/log.js";
 import { withMemoryWikiVaultMutation } from "./src/mutation-coordinator.js";
+import * as queryReader from "./src/query-reader.js";
 import { waitForMemoryWikiImportedSourceSyncs } from "./src/source-sync.js";
 import { createMemoryWikiTestHarness } from "./src/test-helpers.js";
 
@@ -251,6 +252,20 @@ describe("memory-wiki plugin", () => {
     await expect(loadMemoryWikiVaultIdentity(rootDir)).resolves.toMatchObject({
       vaultGeneration: expect.any(String),
     });
+  });
+
+  it("closes the query reader worker when the plugin service stops", async () => {
+    const rootDir = await createTempDir("memory-wiki-index-stop-reader-");
+    const { api, registerService } = createPluginApi();
+    api.pluginConfig = { vault: { path: rootDir } };
+    plugin.register(api);
+    const service = registerService.mock.calls[0]?.[0];
+    await service?.start?.();
+    const closeReader = vi.spyOn(queryReader, "closeMemoryWikiQueryReader");
+
+    await service?.stop?.();
+
+    expect(closeReader).toHaveBeenCalledOnce();
   });
 
   it("fences cache publication when the plugin service stops", async () => {

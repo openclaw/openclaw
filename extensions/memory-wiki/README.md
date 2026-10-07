@@ -241,3 +241,4 @@ unknown ids fail in multi-agent setups.
 - Rollback quarantine clears immediately for an in-process compile. After a separate compiler process publishes, refresh the plugin lifecycle so the daemon can validate that durable publication.
 - Pre-publication-epoch cache rows are rebuildable misses, not migrated state; the next compile replaces them.
 - Obsidian CLI support requires the official `obsidian` CLI to be installed and available on `PATH`.
+- Whole-vault reads for `wiki_search`, `wiki_get` lookups and `wiki_apply` metadata updates run in a plugin-owned worker thread; the gateway main thread only merges the returned results, so the gateway event loop stays responsive during a large vault scan.
