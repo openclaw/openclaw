@@ -1,6 +1,10 @@
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import {
+  readCurrentDelegatedExecutionLineage,
+  runWithDelegatedExecutionLineage,
+} from "../../../delegation/delegated-execution-scope.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getCanonicalGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { recordSessionCreated } from "../../../sessions/session-created.js";
@@ -65,6 +69,9 @@ export async function spawnSubagentDirect(
 ): Promise<SpawnSubagentResult> {
   const assertActive = ctx.assertActive;
   const promptedAt = Date.now();
+  // A delegated parent passes its proven lineage to the child through the
+  // Host-owned delegated execution scope; an unrelated parent passes nothing.
+  const parentDelegatedExecutionLineage = readCurrentDelegatedExecutionLineage();
   const task = params.task;
   const label = params.label?.trim() || "";
   const requestThreadBinding = params.thread === true;
@@ -385,42 +392,50 @@ export async function spawnSubagentDirect(
       });
     let acceptedChildRunId: string | undefined;
     const launchChildRun = async (assertDispatchCurrent?: () => void) => {
-      const launch = await callNativeSubagentGateway(
-        withSubagentGatewayExecutionIdentity(
-          {
-            method: "agent",
-            assertDispatchCurrent,
-            params: childLaunch.request,
-            timeoutMs: childLaunch.timeoutMs,
-          },
-          {
-            sessionSpawnContext: buildSubagentExecutionSessionSpawnContext({
-              enabled: isExecutionIdentityCollectionEnabled(cfg),
-              backend: "subagent",
-              parentAgentId: requesterAgentId,
-              requesterRef: requesterInternalKey,
-              controllerRef: ownership.controllerSessionKey,
-              depth: childDepth,
-              maxDepth: maxSpawnDepth,
-              targetAgentId,
-              sandbox: sandboxMode,
-              inheritedToolAllowlist: ctx.inheritedToolAllowlist,
-              inheritedToolDenylist: ctx.inheritedToolDenylist,
-            }),
-            parentExecutionIdentityToken: readParentExecutionIdentity(ctx),
-          },
-        ),
-        childLaunch.authorization,
-        gatewayContextResolver,
-        childEntry?.sessionId && childEntry.lifecycleRevision
-          ? {
-              sessionKey: childSessionKey,
-              sessionId: childEntry.sessionId,
-              lifecycleRevision: childEntry.lifecycleRevision,
-              runId: childIdem,
-            }
-          : undefined,
+      const launchRequest = withSubagentGatewayExecutionIdentity(
+        {
+          method: "agent",
+          assertDispatchCurrent,
+          params: childLaunch.request,
+          timeoutMs: childLaunch.timeoutMs,
+        },
+        {
+          sessionSpawnContext: buildSubagentExecutionSessionSpawnContext({
+            enabled: isExecutionIdentityCollectionEnabled(cfg),
+            backend: "subagent",
+            parentAgentId: requesterAgentId,
+            requesterRef: requesterInternalKey,
+            controllerRef: ownership.controllerSessionKey,
+            depth: childDepth,
+            maxDepth: maxSpawnDepth,
+            targetAgentId,
+            sandbox: sandboxMode,
+            inheritedToolAllowlist: ctx.inheritedToolAllowlist,
+            inheritedToolDenylist: ctx.inheritedToolDenylist,
+          }),
+          parentExecutionIdentityToken: readParentExecutionIdentity(ctx),
+        },
       );
+      const runLaunch = () =>
+        callNativeSubagentGateway(
+          launchRequest,
+          childLaunch.authorization,
+          gatewayContextResolver,
+          childEntry?.sessionId && childEntry.lifecycleRevision
+            ? {
+                sessionKey: childSessionKey,
+                sessionId: childEntry.sessionId,
+                lifecycleRevision: childEntry.lifecycleRevision,
+                runId: childIdem,
+              }
+            : undefined,
+        );
+      // The child launch runs inside the Host-owned delegated scope the parent
+      // proved, so a causally descended child inherits the delegated lineage; an
+      // unrelated parent has no scope and the child stays DIRECT.
+      const launch = await (parentDelegatedExecutionLineage
+        ? runWithDelegatedExecutionLineage(parentDelegatedExecutionLineage, runLaunch)
+        : runLaunch());
       acceptedChildRunId = readGatewayRunId(launch.response) ?? childIdem;
       cleanupOwner?.bindAcceptedRun(acceptedChildRunId);
       return launch;

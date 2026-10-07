@@ -11,6 +11,7 @@ import {
 import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { getRuntimeConfig, resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readCurrentDelegatedExecutionLineage } from "../../delegation/delegated-execution-scope.js";
 import {
   createAgentRuntimeExecutionLineageHandoff,
   readAgentRuntimeExecutionLineage,
@@ -435,6 +436,11 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
   try {
     const sessionSpawnContext = getGatewaySessionSpawnContext();
     const parentExecutionIdentityToken = getGatewaySessionSpawnParentExecutionIdentityToken();
+    // A child-run launch the Host is running inside the delegated execution scope
+    // carries that proven lineage alongside the spawn context. The value comes
+    // only from the Host-owned scope; a caller cannot supply it, and the signed
+    // token is what makes it trustworthy on the far side of the boundary.
+    const delegatedExecutionLineage = readCurrentDelegatedExecutionLineage();
     const activeAuthority =
       identity.approvalAuthority ??
       getActiveAgentRunDelegatedAuthority(identity.operationalRunInstance);
@@ -472,6 +478,7 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
         ...identity,
         operationalRunInstance: identity.operationalRunInstance,
         approvalAuthority,
+        ...(delegatedExecutionLineage ? { delegatedExecutionLineage } : {}),
         ...(lineageHandoff ? { executionIdentityToken: undefined } : {}),
         ...(lineageHandoff
           ? { executionLineageHandoffId: lineageHandoff.id }

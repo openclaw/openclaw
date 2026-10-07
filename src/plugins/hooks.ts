@@ -18,6 +18,12 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { projectModelContextMessages } from "../shared/model-context-message.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import {
+  deriveBeforeDispatchDelegationOwnerId,
+  runWithBeforeDispatchDelegationFrame,
+  type BeforeDispatchDelegationFrame,
+  type BeforeDispatchDelegationScope,
+} from "./before-dispatch-delegation.js";
+import {
   projectAgentEndEvent,
   withAgentRunId,
   withoutIncognitoLlmContent,
@@ -788,6 +794,10 @@ export function createHookRunner(
     event: HookEvent<K>,
     ctx: HookContext<K> & ClaimingHookAdmission,
     runHandler?: (run: () => Promise<TResult | void>) => Promise<TResult | void>,
+    handlerScope?: (
+      hook: PluginHookRegistration<K>,
+      run: () => Promise<TResult | void>,
+    ) => Promise<TResult | void>,
   ): Promise<TResult | undefined> {
     const hooks = getHooksForName(registry, hookName, ctx);
     if (hooks.length === 0) {
@@ -796,7 +806,14 @@ export function createHookRunner(
 
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, first-claim wins)`);
 
-    const outcome = await runClaimingHooksList(hooks, hookName, event, ctx, runHandler);
+    const outcome = await runClaimingHooksList(
+      hooks,
+      hookName,
+      event,
+      ctx,
+      runHandler,
+      handlerScope,
+    );
     return outcome.status === "handled" ? outcome.result : undefined;
   }
 
@@ -809,6 +826,10 @@ export function createHookRunner(
     event: HookEvent<K>,
     ctx: HookContext<K> & ClaimingHookAdmission,
     runHandler?: (run: () => Promise<TResult | void>) => Promise<TResult | void>,
+    handlerScope?: (
+      hook: PluginHookRegistration<K>,
+      run: () => Promise<TResult | void>,
+    ) => Promise<TResult | void>,
   ): Promise<
     | { status: "handled"; result: TResult }
     | { status: "declined" }
@@ -830,7 +851,12 @@ export function createHookRunner(
           );
           return await awaitHook(hook, promise);
         };
-        handlerResult = runHandler ? await runHandler(invokeHandler) : await invokeHandler();
+        // The per-handler scope (for example a before_dispatch delegation frame)
+        // stays active only for this exact handler invocation and closes when it
+        // settles, so retained capabilities fail afterwards.
+        const invokeWithScope = (): Promise<TResult | void> =>
+          handlerScope ? handlerScope(hook, invokeHandler) : invokeHandler();
+        handlerResult = runHandler ? await runHandler(invokeWithScope) : await invokeWithScope();
       } catch (err) {
         firstError ??= sanitizeHookError(err);
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
@@ -968,16 +994,42 @@ export function createHookRunner(
     event: PluginHookBeforeDispatchEvent,
     ctx: PluginHookBeforeDispatchContext,
     requester?: PluginSubagentRequesterContext,
+    delegation?: BeforeDispatchDelegationScope,
   ): Promise<PluginHookBeforeDispatchResult | undefined> {
     const runHandler = requester
       ? (run: () => Promise<PluginHookBeforeDispatchResult | void>) =>
           withPluginSubagentRequesterContext(requester, run)
+      : undefined;
+    // Each before_dispatch handler runs inside its own Host-owned delegation
+    // frame. The frame carries the Host-derived owner identity and task scope,
+    // and closes the moment the handler settles.
+    const handlerScope = delegation
+      ? (
+          hook: PluginHookRegistration<"before_dispatch">,
+          run: () => Promise<PluginHookBeforeDispatchResult | void>,
+        ): Promise<PluginHookBeforeDispatchResult | void> => {
+          const admissionAssert = readClaimingHookAdmission(ctx)?.assertCurrent;
+          const assertCurrent = delegation.assertCurrent ?? admissionAssert;
+          const frame: BeforeDispatchDelegationFrame = {
+            active: true,
+            pluginId: hook.pluginId,
+            ...(hook.registrationId === undefined ? {} : { registrationId: hook.registrationId }),
+            ownerId: deriveBeforeDispatchDelegationOwnerId(hook.pluginId, hook.registrationId),
+            taskScopeRef: delegation.taskScopeRef,
+            context: delegation.context,
+            slot: delegation.slot,
+            ...(assertCurrent === undefined ? {} : { assertCurrent }),
+            ...(delegation.options === undefined ? {} : { options: delegation.options }),
+          };
+          return runWithBeforeDispatchDelegationFrame(frame, run);
+        }
       : undefined;
     return runClaimingHook<"before_dispatch", PluginHookBeforeDispatchResult>(
       "before_dispatch",
       event,
       ctx,
       runHandler,
+      handlerScope,
     );
   }
 

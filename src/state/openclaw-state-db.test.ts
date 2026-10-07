@@ -1991,6 +1991,7 @@ describe("openclaw state database", () => {
         "Consolidated shared state tables (v13)",
         "Qualified historical cron creator attribution as unknown (v14)",
         "Removed redundant conversation binding target projections (v15)",
+        "Installed the durable delegated execution ownership registry (v21)",
         "Migrated shared state tables to SQLite STRICT typing (48)",
       ],
       warnings: [],

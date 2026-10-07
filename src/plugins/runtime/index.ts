@@ -16,6 +16,7 @@ import {
 } from "../../shared/lazy-runtime.js";
 import { VERSION } from "../../version.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
+import { createPluginDelegationRuntime } from "../before-dispatch-delegation.js";
 import {
   resolveNativePluginModelAuth,
   resolveNativePluginModelConfig,
@@ -222,6 +223,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
         (await import("../../decisions/runtime.js")).evaluateDecision(...args),
     },
     gateway: _options.gateway ?? createRuntimeGateway(),
+    delegation: createPluginDelegationRuntime(),
     config: base.config,
     agent,
     hooks: _options.hooks ?? {
