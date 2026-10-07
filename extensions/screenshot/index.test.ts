@@ -35,8 +35,12 @@ describe("screenshot plugin", () => {
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-screenshot-"));
     processMocks.runCommandWithTimeout.mockReset();
     processMocks.runCommandWithTimeout.mockImplementation(
-      async (_argv: string[], opts: { env: Record<string, string> }) => {
-        await fs.writeFile(opts.env.OPENCLAW_SCREENSHOT_OUT, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      async (_argv: string[], opts: { env: Record<string, string | undefined> }) => {
+        const outputPath = opts.env.SCREENSHOT_OUTPUT_PATH;
+        if (!outputPath) {
+          throw new Error("capture command was launched without an output path");
+        }
+        await fs.writeFile(outputPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
         return { code: 0, stdout: "", stderr: "" };
       },
     );

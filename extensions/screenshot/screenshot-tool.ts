@@ -7,7 +7,7 @@ import type { AnyAgentTool, OpenClawPluginToolContext } from "./api.js";
 
 const CAPTURE_TIMEOUT_MS = 30_000;
 const SCREENSHOT_DIR = "screenshots";
-const OUTPUT_ENV = "OPENCLAW_SCREENSHOT_OUT";
+const OUTPUT_ENV = "SCREENSHOT_OUTPUT_PATH";
 
 // The output path travels in the environment, not in the script text, so it is
 // never parsed as PowerShell. SetProcessDPIAware makes the capture cover the
