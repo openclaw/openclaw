@@ -62,11 +62,15 @@ async function createDocumentLoopback() {
     throw new Error("Missing document loopback address");
   }
   const origin = `http://127.0.0.1:${address.port}`;
-  const loopbackHttp = Object.create(Lark.defaultHttpInstance) as Lark.HttpInstance;
-  loopbackHttp.request = (options) => {
+  // SAFETY: The SDK owns this Axios instance and unwraps responses to its HttpInstance contract.
+  const sdkHttp = Lark.defaultHttpInstance as Lark.HttpInstance;
+  const loopbackHttp = Object.create(sdkHttp) as Lark.HttpInstance;
+  loopbackHttp.request = <T, R = T, D = unknown>(
+    options: Lark.HttpRequestOptions<D>,
+  ): Promise<R> => {
     const upstream = new URL(options.url ?? "");
     const target = new URL(`${upstream.pathname}${upstream.search}`, origin);
-    return Lark.defaultHttpInstance.request({ ...options, url: target.href });
+    return sdkHttp.request<T, R, D>({ ...options, url: target.href });
   };
   const client = new Lark.Client({
     appId: config.channels.feishu.appId,
