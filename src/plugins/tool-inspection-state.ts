@@ -10,6 +10,7 @@ import {
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-state.js";
 import { getPluginRuntimeLoadContext } from "./runtime/load-context.js";
 
 export const inspectionToolOwners = new WeakMap<
@@ -90,7 +91,8 @@ export function getCurrentPluginToolInspection(
   env: NodeJS.ProcessEnv,
   workspaceDir?: string,
 ) {
-  const registry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const registry =
+    getPluginRuntimeGenerationRegistry() ?? getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   const inspection = registry && inspectionToolOwners.get(registry);
   const loadContext = inspection && getPluginRuntimeLoadContext(registry);
   if (

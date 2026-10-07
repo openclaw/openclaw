@@ -184,7 +184,8 @@ export function resolvePluginWebProviders<TEntry>(
     : discoveredPluginIds;
   const onlyPluginIds = shouldFilterProviders ? candidatePluginIds : undefined;
   const generationRegistry = getPluginRuntimeGenerationRegistry();
-  if (generationRegistry) {
+  const current = getCurrentPluginToolInspection(params.config, env, params.workspaceDir);
+  if (generationRegistry && !current) {
     return deps.mapRegistryProviders({ registry: generationRegistry, onlyPluginIds });
   }
   const loadOptions = buildPluginRuntimeLoadOptions(
@@ -208,16 +209,18 @@ export function resolvePluginWebProviders<TEntry>(
     },
   );
   const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
-  const compatible = scopedRegistry
-    ? registryContainsRuntimePluginIds(scopedRegistry, candidatePluginIds)
-      ? scopedRegistry
-      : undefined
-    : getLoadedRuntimePluginRegistry({
-        env,
-        loadOptions,
-        workspaceDir,
-        requiredPluginIds: candidatePluginIds,
-      });
+  const compatible = current
+    ? undefined
+    : scopedRegistry
+      ? registryContainsRuntimePluginIds(scopedRegistry, candidatePluginIds)
+        ? scopedRegistry
+        : undefined
+      : getLoadedRuntimePluginRegistry({
+          env,
+          loadOptions,
+          workspaceDir,
+          requiredPluginIds: candidatePluginIds,
+        });
   const hasExplicitEmptyScope = onlyPluginIds !== undefined && onlyPluginIds.length === 0;
   // Unknown candidates require a complete inspected inventory before absence is authoritative.
   if (compatible) {
@@ -264,7 +267,6 @@ export function resolvePluginWebProviders<TEntry>(
       return bundledArtifactProviders;
     }
   }
-  const current = getCurrentPluginToolInspection(params.config, env, params.workspaceDir);
   const inspectedManifests = manifestRecords ?? current?.loadContext.manifestRegistry?.plugins;
   if (current && inspectedManifests) {
     const candidates = candidatePluginIds && new Set(candidatePluginIds);
