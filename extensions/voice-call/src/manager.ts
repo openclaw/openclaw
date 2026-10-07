@@ -16,6 +16,7 @@ import {
   speakInitialMessage as speakInitialMessageWithContext,
   type SpeakOptions,
 } from "./manager/outbound.js";
+import { copyCallRecord } from "./manager/state.js";
 import {
   findCallInStore,
   getCallHistoryFromStore,
@@ -23,7 +24,7 @@ import {
   persistCallRecord,
 } from "./manager/store.js";
 import { resolveVoiceCallSecondsTimerDelayMs } from "./manager/timer-delays.js";
-import { startMaxDurationTimer } from "./manager/timers.js";
+import { resolveCallMaxDurationSeconds, startMaxDurationTimer } from "./manager/timers.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import { resolveCallAgentId } from "./resolve-call-agent-id.js";
 import type { VoiceCallStateRuntime } from "./runtime-state.js";
@@ -126,18 +127,70 @@ export class CallManager {
     return this.stopPromise;
   }
 
-  /** Serialize transient metadata with persisted updates without adding event-store writes. */
+  /** Serialize realtime metadata; persisted steering commits before bridge effects. */
   updateCallMetadata(
     call: CallRecord,
     update: (metadata: CallRecord["metadata"]) => CallRecord["metadata"],
+    options?: { persist?: boolean; assertCurrent?: () => void },
   ): Promise<void> {
     return this.runOperation(() =>
       this.mutationQueue.enqueue("state", async () => {
-        if (this.activeCalls.get(call.callId) === call && !TerminalStates.has(call.state)) {
-          call.metadata = update(call.metadata ? { ...call.metadata } : undefined);
+        if (this.activeCalls.get(call.callId) !== call || TerminalStates.has(call.state)) {
+          if (options?.persist) {
+            throw new Error("Call has ended");
+          }
+          return;
         }
+        const next = copyCallRecord(call);
+        next.metadata = update(next.metadata);
+        if (options?.persist) {
+          await persistCallRecord(
+            this.storePath,
+            next,
+            this.stateRuntime,
+            options.assertCurrent ? { assertCurrent: options.assertCurrent } : undefined,
+          );
+        }
+        Object.assign(call, next);
       }),
     );
+  }
+
+  onCallUpdated: CallManagerContext["onCallUpdated"];
+  beforeCallEnd: CallManagerContext["beforeCallEnd"];
+  playRealtimeVoicemail: CallManagerContext["playRealtimeVoicemail"];
+  beforeCarrierPlayback: CallManagerContext["beforeCarrierPlayback"];
+
+  private publishCallUpdate = (call: CallRecord): void => {
+    const work = this.onCallUpdated?.(call);
+    if (work) {
+      this.trackCallWork(work);
+    }
+  };
+
+  /** Accepted notification work may settle its status after terminal removal or shutdown admission. */
+  persistDeliveryStatus(snapshot: CallRecord): Promise<void> {
+    const work = this.mutationQueue.enqueue("state", async () => {
+      const current =
+        this.activeCalls.get(snapshot.callId) ??
+        (await findCallInStore(this.storePath, snapshot.callId, this.stateRuntime));
+      if (!current) {
+        throw new Error("Call delivery record is unavailable");
+      }
+      const next = copyCallRecord(current);
+      next.metadata = { ...next.metadata };
+      for (const key of ["callReport", "liveTranscriptDelivery"]) {
+        if (snapshot.metadata?.[key] !== undefined) {
+          next.metadata[key] = snapshot.metadata[key];
+        }
+      }
+      await persistCallRecord(this.storePath, next, this.stateRuntime);
+      if (this.activeCalls.get(snapshot.callId) === current) {
+        Object.assign(current, next);
+      }
+    });
+    this.trackCallWork(work);
+    return work;
   }
 
   /**
@@ -191,6 +244,30 @@ export class CallManager {
     this.processedEventIds = persisted.processedEventIds;
     this.rejectedProviderCallIds = new Map();
 
+    for (const call of persisted.interruptedDeliveries) {
+      const metadata = { ...call.metadata };
+      for (const key of ["callReport", "liveTranscriptDelivery"] as const) {
+        const status = metadata[key];
+        if (
+          status !== null &&
+          typeof status === "object" &&
+          "status" in status &&
+          status.status === "pending"
+        ) {
+          metadata[key] = {
+            status: "failed",
+            error: "interrupted by restart",
+            at: Date.now(),
+          };
+        }
+      }
+      call.metadata = metadata;
+      await persistCallRecord(this.storePath, call, this.stateRuntime);
+    }
+    if (this.closing) {
+      return;
+    }
+
     const verified = await this.verifyRestoredCalls(provider, persisted.activeCalls);
     if (this.closing) {
       return;
@@ -203,8 +280,15 @@ export class CallManager {
         (call.state === "speaking" || call.state === "listening" ? call.startedAt : undefined);
       if (maxDurationAnchor !== undefined && !TerminalStates.has(call.state)) {
         const elapsed = Date.now() - maxDurationAnchor;
-        const maxDurationMs = resolveVoiceCallSecondsTimerDelayMs(this.config.maxDurationSeconds);
+        const maxDurationMs = resolveVoiceCallSecondsTimerDelayMs(
+          resolveCallMaxDurationSeconds(call, this.config.maxDurationSeconds),
+        );
         if (elapsed >= maxDurationMs) {
+          markRestoredCallSkipped(call, "timeout");
+          await persistCallRecord(this.storePath, call, this.stateRuntime);
+          if (!this.closing) {
+            this.publishCallUpdate(call);
+          }
           verified.delete(callId);
           skippedAlreadyElapsedTimers += 1;
           continue;
@@ -258,7 +342,9 @@ export class CallManager {
     provider: VoiceCallProvider,
     candidates: Map<CallId, CallRecord>,
   ): Promise<Map<CallId, CallRecord>> {
-    const maxAgeMs = resolveVoiceCallSecondsTimerDelayMs(this.config.maxDurationSeconds);
+    if (candidates.size === 0) {
+      return new Map();
+    }
     const now = Date.now();
     const verified = new Map<CallId, CallRecord>();
     const verifyTasks: Promise<void>[] = [];
@@ -288,10 +374,17 @@ export class CallManager {
           continue;
         }
 
+        // Skip calls older than maxDurationSeconds (time-based fallback)
+        const maxAgeMs = resolveVoiceCallSecondsTimerDelayMs(
+          resolveCallMaxDurationSeconds(call, this.config.maxDurationSeconds),
+        );
         if (now - call.startedAt > maxAgeMs) {
           skippedOlderThanMaxDuration += 1;
           markRestoredCallSkipped(call, "timeout");
           await persistCallRecord(this.storePath, call, this.stateRuntime);
+          if (!this.closing) {
+            this.publishCallUpdate(call);
+          }
           if (this.closing) {
             break;
           }
@@ -317,6 +410,9 @@ export class CallManager {
               skippedTerminalStatuses.set(status, (skippedTerminalStatuses.get(status) ?? 0) + 1);
               markRestoredCallSkipped(call, "completed");
               await persistCallRecord(this.storePath, call, this.stateRuntime);
+              if (!this.closing) {
+                this.publishCallUpdate(call);
+              }
             } else if (result.isUnknown) {
               keptUnknownProviderStatus += 1;
               verified.set(callId, call);
@@ -426,6 +522,10 @@ export class CallManager {
       transcriptWaiters: this.transcriptWaiters,
       maxDurationTimers: this.maxDurationTimers,
       initialMessageInFlight: this.initialMessageInFlight,
+      onCallUpdated: this.publishCallUpdate,
+      beforeCallEnd: this.beforeCallEnd,
+      playRealtimeVoicemail: this.playRealtimeVoicemail,
+      beforeCarrierPlayback: this.beforeCarrierPlayback,
       onCallerSpeech: (call) => this.invalidateAutoResponse(call),
       onCallAnswered: (call) => this.maybeSpeakInitialMessageOnAnswered(call),
       streamSessionIssuer: this.streamSessionIssuer,

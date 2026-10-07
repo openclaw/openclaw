@@ -38,6 +38,7 @@ import {
   type ResolvedSqliteReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
+import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
@@ -249,6 +250,15 @@ async function readSessionTranscriptJsonlBytes(
   sessionIds: readonly string[],
   isCurrent: () => boolean,
 ): Promise<Map<string, number>> {
+  const binding = captureIncognitoSessionBinding({ ...scope, storePath: scope.path });
+  if (binding) {
+    binding.admissionSignal?.throwIfAborted();
+    binding.actor.assertReadable();
+    if (sessionIds.length) {
+      throw new Error("Incognito session maintenance cannot archive transcripts");
+    }
+    return new Map<string, number>();
+  }
   const bytesBySessionId = new Map<string, number>();
   const options = resolveSessionReclamationDatabaseOptions(toDatabaseOptions(scope));
   for (let offset = 0; offset < sessionIds.length; offset += SESSION_TRANSCRIPT_BYTE_QUERY_BATCH) {

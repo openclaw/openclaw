@@ -53,7 +53,10 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     readSourceReplyDeliveryRuntime(turn.followupRun.run) ??
     createSourceReplyDeliveryRuntime({
       origin: sourceReplyDeliveryRuntimeOptions?.sourceReplyDeliveryModeOrigin ?? "stable_policy",
-      initialMode: turn.followupRun.run.sourceReplyDeliveryMode ?? "automatic",
+      initialMode:
+        turn.followupRun.run.sourceReplyDeliveryMode ??
+        turn.opts?.sourceReplyDeliveryMode ??
+        "automatic",
       projections: [turn.followupRun.run, ...(turn.opts ? [turn.opts] : [])],
       promptComponentByMode: { automatic: "", message_tool_only: "" },
       promptComponentOffset: undefined,

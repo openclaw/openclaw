@@ -85,6 +85,7 @@ import {
 import { buildDashboardSessionKey, resolveSessionCreateTargetKey } from "./session-create-key.js";
 import {
   createSessionCreateCommitGuard,
+  resolveSessionCreationCommitGuard,
   prepareSessionCreateDefaultAccount,
   prepareSessionCreateModelSelection,
   resolveSessionCreateModelInputError,
@@ -109,6 +110,7 @@ import {
 } from "./session-lifecycle-preparation.js";
 import { loadSessionLifecycleRuntime } from "./session-lifecycle-runtime-loader.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
+import { prepareSessionPublicShareGrant } from "./session-publication-grant.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { invalidSessionRequest, sessionCreationFailure } from "./session-request-error.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
@@ -120,7 +122,7 @@ import { projectSessionsPatchEntry } from "./sessions-patch.js";
 export async function createGatewaySession(
   params: CreateGatewaySessionParams,
 ): Promise<CreateGatewaySessionResult> {
-  const { personalModelSelection, personalAccountDefaults, onPhase } = params;
+  const { personalAccountDefaults, onPhase } = params;
   let operatorAuthority: Parameters<typeof createSessionCreateCommitGuard>[0]["operatorAuthority"];
   let assertPreparedTargetCurrent: (() => void) | undefined;
   let creationOperation: SessionEntryCreationOperation | undefined;
@@ -133,33 +135,11 @@ export async function createGatewaySession(
   // Fresh account authority covers title generation and resource preparation,
   // not just the final row. An inherited parent pin is not a new selection.
   let validateRuntimeSelection: (() => ErrorShape | undefined) | undefined;
-  const commitGuard =
-    personalModelSelection ||
-    params.operatorAuthority ||
-    personalAccountDefaults ||
-    params.activeParentFork ||
-    params.preparedModelSelection ||
-    params.preparedPermissionSelection ||
-    typeof params.model === "string" ||
-    params.agentRuntime !== undefined
-      ? createSessionCreateCommitGuard({
-          assertCallerCurrent: () => {
-            params.commitGuard?.();
-            assertPreparedTargetCurrent?.();
-          },
-          get operatorAuthority() {
-            return operatorAuthority;
-          },
-          selections: [
-            params.activeParentFork,
-            params.preparedModelSelection,
-            params.preparedPermissionSelection,
-            personalModelSelection,
-            personalAccountDefaults,
-          ],
-          validateSelection: () => validateRuntimeSelection?.(),
-        })
-      : params.commitGuard;
+  const commitGuard = resolveSessionCreationCommitGuard(params, {
+    readOperatorAuthority: () => operatorAuthority,
+    assertPreparedTargetCurrent: () => assertPreparedTargetCurrent?.(),
+    validateSelection: () => validateRuntimeSelection?.(),
+  });
   commitGuard?.();
   const displayName = truncateUtf16Safe(params.displayName?.trim() ?? "", 500).trimEnd();
   const label = normalizeOptionalString(params.label);
@@ -943,11 +923,10 @@ export async function createGatewaySession(
         };
         const explicitParentSessionKey =
           canonicalParentSessionKey ?? normalizeOptionalString(initializedEntry.parentSessionKey);
-        const entry: SessionEntry = {
+        const entry: InternalSessionEntry = {
           ...initializedEntry,
           ...inheritSessionCreateParentFields({
             parent: currentParentSessionEntry,
-            existing: existingEntry,
             overrides: params,
           }),
           // Main groups dashboard roots; it must not supply their reply-time model.
@@ -1018,6 +997,17 @@ export async function createGatewaySession(
           return runtimeSelection;
         }
         validateRuntimeSelection = runtimeSelection.validate;
+        if (params.childSessionPublication) {
+          params.childSessionPublication.claim({
+            sessionKey: target.canonicalKey,
+            entry,
+            parentSessionKey: canonicalParentSessionKey,
+            parent: currentParentSessionEntry,
+            isNew: createdNewEntry,
+            fork: params.fork,
+          });
+          entry.publicShare = prepareSessionPublicShareGrant(entry, target.canonicalKey);
+        }
         if (params.fork !== true) {
           return { ...patched, entry };
         }

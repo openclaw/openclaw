@@ -377,7 +377,6 @@ export function toCodexDynamicToolProtocolResponse(
   };
 }
 
-/** Adds async-started progress details when a tool result continues out of band. */
 export function toCodexDynamicToolProgressResponse(
   response: CodexDynamicToolRuntimeResponse,
   protocolResponse: CodexDynamicToolCallResponse,

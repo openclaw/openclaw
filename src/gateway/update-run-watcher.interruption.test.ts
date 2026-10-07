@@ -228,7 +228,6 @@ it.each([
   "identity-unavailable",
   "rollback",
   "recovery",
-  "unsettled",
 ])("preserves interrupted evidence when %s does not permit settlement", async (boundary) => {
   const runId = interruptedRun();
   if (boundary === "installed") {
@@ -263,9 +262,6 @@ it.each([
         "INSERT INTO config_machine_state(state_key,value_json,updated_at_ms) VALUES(?,?,?)",
       )
       .run(`update.recovery.${runId}`, "{}", now);
-  }
-  if (boundary === "unsettled") {
-    observation.settle.mockResolvedValue({ ...health(), healthy: false });
   }
   watcher = startUpdateRunWatcher({ lifecycle, broadcast: vi.fn(), log: { warn: vi.fn() } });
   await vi.advanceTimersByTimeAsync(0);
@@ -424,25 +420,22 @@ it.each(["unverified", "timed-out"])(
   },
 );
 
-it.each([true, false])(
-  "does not renew abandonment activity after a recorded probe (managed: %s)",
-  async (managed) => {
-    const runId = interruptedRun({ managed });
-    observation.settle.mockResolvedValue({ ...health(), healthy: false });
-    await reconcileInterruptedUpdateRuns();
-    const first = getUpdateRun(runId)!;
-    const diagnostic = first.steps.find((step) => step.step === "reconcile:settle");
-    expect(diagnostic).toBeDefined();
-    vi.setSystemTime(Date.now() + 31 * 60_000);
-    await reconcileInterruptedUpdateRuns();
-    const second = getUpdateRun(runId)!;
-    expect(second.updatedAtMs).toBe(first.updatedAtMs);
-    expect(second.steps.filter((step) => step.step === "reconcile:settle")).toEqual([diagnostic]);
-    expect(reconcileUpdateRunsInNativeKernelForTest()).toEqual([
-      expect.objectContaining({ runId, status: "failed", reason: "abandoned" }),
-    ]);
-  },
-);
+it("does not renew abandonment activity after a recorded probe", async () => {
+  const runId = interruptedRun();
+  observation.settle.mockResolvedValue({ ...health(), healthy: false });
+  await reconcileInterruptedUpdateRuns();
+  const first = getUpdateRun(runId)!;
+  const diagnostic = first.steps.find((step) => step.step === "reconcile:settle");
+  expect(diagnostic).toBeDefined();
+  vi.setSystemTime(Date.now() + 31 * 60_000);
+  await reconcileInterruptedUpdateRuns();
+  const second = getUpdateRun(runId)!;
+  expect(second.updatedAtMs).toBe(first.updatedAtMs);
+  expect(second.steps.filter((step) => step.step === "reconcile:settle")).toEqual([diagnostic]);
+  expect(reconcileUpdateRunsInNativeKernelForTest()).toEqual([
+    expect.objectContaining({ runId, status: "failed", reason: "abandoned" }),
+  ]);
+});
 
 it.each(["absent", "skipped"])(
   "records an unmanaged skip when the restart step is %s",

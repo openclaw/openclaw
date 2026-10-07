@@ -52,8 +52,8 @@ import {
   withSendNormalization,
 } from "./message-action-send-payload.js";
 import {
-  prepareOutboundMirrorRoute,
   resolveAndApplyOutboundReplyToId,
+  resolveAndApplyOutboundThreadId,
 } from "./message-action-threading.js";
 import { maybeApplyTtsToMessageActionSendPayload } from "./message-action-tts.js";
 import {
@@ -422,22 +422,37 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     toolContext: input.toolContext,
     matchesToolContextTarget: channelPlugin?.threading?.matchesToolContextTarget,
   });
-  const { resolvedThreadId, outboundRoute } = await prepareOutboundMirrorRoute({
+  const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
     cfg,
-    channel,
     to,
-    actionParams: params,
     accountId,
     toolContext: input.toolContext,
-    agentId,
-    currentSessionKey: input.sessionKey,
-    dryRun,
-    resolvedTarget,
     resolveAutoThreadId: channelPlugin?.threading?.resolveAutoThreadId,
     resolveReplyTransport: channelPlugin?.threading?.resolveReplyTransport,
     replyToIsExplicit: initialReply?.source === "explicit",
-    resolveOutboundSessionRoute,
   });
+  // Route resolution is read-only; persist only after the send succeeds so a
+  // failed probe cannot rebind the main session's delivery route.
+  const outboundRoute =
+    agentId && !dryRun
+      ? await resolveOutboundSessionRoute({
+          cfg,
+          channel,
+          agentId,
+          accountId,
+          target: to,
+          currentSessionKey: input.sessionKey,
+          resolvedTarget,
+          replyToId: readToolStringParam(params, "replyTo"),
+          threadId: resolvedThreadId,
+        })
+      : null;
+  if (outboundRoute) {
+    params["__sessionKey"] = outboundRoute.sessionKey;
+  }
+  if (agentId) {
+    params["__agentId"] = agentId;
+  }
   const canonicalReplyToId = readToolStringParam(params, "replyTo");
   const reply =
     initialReply && canonicalReplyToId && canonicalReplyToId !== initialReply.replyToId

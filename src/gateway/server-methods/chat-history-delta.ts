@@ -29,6 +29,7 @@ import {
   type SessionMessageProjectionState,
 } from "../session-transcript-message.js";
 import type { SubagentCoordinationDisplayResolver } from "../session-transcript-read.types.js";
+import { captureIncognitoSessionHistoryReader } from "../session-transcript-readers.js";
 import {
   chatHistoryActivityBytes,
   createChatHistoryActivityProjection,
@@ -62,9 +63,10 @@ type ChatHistoryDeltaParams = {
 export async function readChatHistoryDelta(
   params: ChatHistoryDeltaParams & { incognito?: boolean },
   signal?: AbortSignal,
-  incognito?: IncognitoSessionHistoryReader,
+  suppliedIncognito?: IncognitoSessionHistoryReader,
 ): Promise<ChatHistoryDeltaRead> {
   signal?.throwIfAborted();
+  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryReader(params.scope, signal);
   if (incognito) {
     const actorDelta = await incognito.delta(
       params.scope,
@@ -73,7 +75,11 @@ export async function readChatHistoryDelta(
         maxBytes: Math.min(params.maxBytes ?? Infinity, CHAT_HISTORY_DELTA_MAX_BYTES),
         maxEvents: CHAT_HISTORY_DELTA_MAX_EVENTS,
       },
-      (delta, subagents) => projectChatHistoryDelta(params, delta, subagents),
+      (delta, subagents) =>
+        // A cursor cannot qualify hidden earlier inputs without prepared visibility facts.
+        subagents
+          ? projectChatHistoryDelta(params, delta, subagents)
+          : Promise.resolve<ChatHistoryDeltaRead>({ kind: "reset" }),
     );
     signal?.throwIfAborted();
     return actorDelta;

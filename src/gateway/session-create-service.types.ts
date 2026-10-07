@@ -203,6 +203,8 @@ export type CreateGatewaySessionParams = {
     /** Trusted config-resolved spawn model provenance for the `model` field. */
     spawnModelAutoSelection?: AgentRuntimeSpawnModelAutoSelection;
   };
+  /** Creation-only publication, committed with the exact new row before its initial turn. */
+  childSessionPublication?: import("../channels/message-access/child-session-publication.js").ChildSessionPublication;
   /** Exact harness namespace authorized by the scoped plugin runtime. */
   authorizedAgentHarnessId?: string;
   /** Exact plugin namespace authorized by the scoped plugin runtime. */

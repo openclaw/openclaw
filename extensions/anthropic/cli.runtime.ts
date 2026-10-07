@@ -4,7 +4,6 @@ import { PassThrough } from "node:stream";
 import type {
   CliBackendExecuteContext,
   CliBackendLiveSessionCapability,
-  CliBackendLiveSessionCloseReason,
   CliBackendLiveSessionHandle,
   CliBackendToolPermissionResult,
 } from "openclaw/plugin-sdk/cli-backend";
@@ -207,11 +206,7 @@ async function handleRequest(
   throw new Error("Unknown Claude CLI hook callback.");
 }
 
-function closeSession(
-  session: ClaudeCliSession,
-  _reason: CliBackendLiveSessionCloseReason,
-  error?: unknown,
-) {
+function closeSession(session: ClaudeCliSession, error?: unknown) {
   if (session.closed) {
     return;
   }
@@ -372,7 +367,7 @@ function createSession(capability?: CliBackendLiveSessionCapability): ClaudeCliS
       generation: randomUUID(),
       fingerprint: capability?.fingerprint ?? randomUUID(),
       isIdle: () => !session.closed && !session.currentTurn,
-      close: (reason, error) => closeSession(session, reason, error),
+      close: (_reason, error) => closeSession(session, error),
       waitForExit: () => session.transport?.waitForExit() ?? Promise.resolve(),
     },
   };

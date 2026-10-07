@@ -569,7 +569,6 @@ function selectOrphanedTranscriptOwners(
   );
 }
 
-/** Drops index rows for sessions whose transcript rows are gone. */
 export function deleteOrphanedTranscriptIndexRowsInTransaction(db: DatabaseSync): void {
   const kysely = getIndexKysely(db);
   for (const table of transcriptIndexTables) {

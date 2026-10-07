@@ -213,8 +213,8 @@ Control UI tests support Bun. Control UI WeakRef-collection proofs in
 `chat-thread-retention.test.ts`, `session-snapshot-store.test.ts`, and
 `usage-page-retention.test.ts` stay on Node because JavaScriptCore's
 conservative stack scanning can keep an unreachable target alive after a forced
-collection. V8-specific heap and worker-limit assertions and the remaining
-qualified Node-only selections still run on Node.
+collection. Unqualified V8-specific heap and worker-limit assertions and the
+remaining Node-only selections still run on Node.
 The missing-Docker test also runs on Bun, using an empty executable directory
 instead of an empty `PATH`, which Bun resolves through its default search path.
 Other families retain Node until they pass on the pinned fork within their
@@ -237,6 +237,17 @@ The pinned hooks-capable fork extends that whole-file qualification to proven
 tooling, update, Doctor, handoff, QA, and workspace-hash fixtures. The Crabbox
 wrapper suite retains Node because its retained-allocation and source-capsule
 short-write cases still fail on Bun.
+Whole-file qualification also covers test-project discovery, worker memory
+accounting, Gateway and native Codex session-catalog sampling, and diagnostic
+memory logging in their existing scoped owners. The native allocation-attribution
+case in `diagnostic-heap-profile.test.ts` still skips on Bun, so that file retains
+Node ownership.
+Five exact UI E2E selections also support Bun: boot module boundaries, device
+platform identity, new-session cloud startup recovery, phone stale-build recovery,
+and service-worker updates. They retain the ordinary E2E config's resource
+projects, pools, bundle ownership and exclusions. This qualification does not
+change the dedicated broad or sharded UI E2E jobs or the separate prebuilt config;
+those jobs retain their existing Node execution.
 
 The gateway-client leaf config also supports Bun. Its existing ordered
 gateway-core/gateway-client stripes use the core leaf's exact-file qualification
@@ -258,7 +269,7 @@ wall time from 58.72s to 52.79s cold and from 43.51s to 38.68s with warm caches
 and reversed runtime order: 10–11% faster, with warm aggregate RSS near 3.94 GiB
 on both. PR selections use Bun. Full Release Validation's plugin prerelease
 batch retains its complete Node inventory and adds Bun after each qualified
-memory group in the same worker slot. Separate database-worker tests remain
+memory group in the same worker slot. Unqualified database-worker tests remain
 on Node. Both runtimes preserve the selected files, exclusions, and worker caps;
 either failing fails the job. Historical targets without dual batch support
 retain their original Node execution.
@@ -358,7 +369,7 @@ native readable `ref`/`unref`, the default `module-sync` condition, and
 It retains the upstream Bun sync through `4b02e1031d` and fixes for thread-safe
 function ownership, shared-environment deletion, and a module-key crash.
 The shared provider-catalog retention test is qualified on this build and runs
-on Bun; tests that assert V8 heap behavior continue to run on Node.
+on Bun; unqualified tests that assert V8 heap behavior continue to run on Node.
 UI retention tests use the local inspector's `HeapProfiler.collectGarbage` on
 both runtimes. Only an unavailable inspector method permits the older Bun GC
 fallback. The qualified UI inventory has no Node-only subset, so each native

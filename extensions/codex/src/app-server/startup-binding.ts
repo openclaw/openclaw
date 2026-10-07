@@ -1,7 +1,3 @@
-/**
- * Guards Codex app-server thread reuse during startup by rotating bindings when
- * native transcripts exceed byte or token budgets.
- */
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -292,7 +288,6 @@ function maxDefinedNumber(values: Array<number | undefined>): number | undefined
   return nums.length ? Math.max(...nums) : undefined;
 }
 
-/** Clears and drops a binding when the native Codex thread is too large to resume safely. */
 export async function rotateOversizedCodexAppServerStartupBinding(params: {
   assertCurrent?: () => void;
   authority?: CodexBindingAuthority;

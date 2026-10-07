@@ -21,14 +21,13 @@ extensions/anthropic-vertex/stream-runtime.ts	4
 extensions/anthropic/cli-backend.ts	2
 extensions/anthropic/cli-migration.ts	1
 extensions/anthropic/config-defaults.ts	2
-extensions/anthropic/register.runtime.ts	1
 extensions/anthropic/session-catalog-continue.ts	1
 extensions/anthropic/session-catalog-history.ts	2
 extensions/anthropic/session-catalog-listing.ts	1
 extensions/anthropic/session-catalog-parsing.ts	5
 extensions/anthropic/session-catalog-registration.ts	3
 extensions/anthropic/session-catalog-runtime.ts	1
-extensions/anthropic/stream-wrappers.ts	3
+extensions/anthropic/stream-wrappers.ts	1
 extensions/baseten/models.ts	1
 extensions/beam/src/mirror.ts	2
 extensions/browser/src/browser-node-fallback.ts	1
@@ -773,7 +772,7 @@ extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	6
 extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	1
 extensions/qa-lab/src/providers/mock-openai/server.ts	6
 extensions/qa-lab/src/qa-transport.ts	1
-extensions/qa-lab/src/run-config.ts	2
+extensions/qa-lab/src/run-config.ts	1
 extensions/qa-lab/src/runtime-parity.ts	1
 extensions/qa-lab/src/runtime-tool-fixture.ts	2
 extensions/qa-lab/src/scenario-catalog.ts	1
@@ -1620,7 +1619,7 @@ src/auto-reply/reply/reply-operation-run-state.ts	1
 src/auto-reply/reply/reply-run-registry.registry.ts	1
 src/auto-reply/reply/reply-threading.ts	2
 src/auto-reply/reply/reply-timing-tracker.ts	2
-src/auto-reply/reply/restart-recovery-claim.ts	2
+src/auto-reply/reply/restart-recovery-claim.ts	1
 src/auto-reply/reply/session-delivery.ts	1
 src/auto-reply/reply/session.ts	2
 src/auto-reply/reply/source-reply-delivery-runtime.ts	2
@@ -1689,7 +1688,6 @@ src/channels/thread-bindings-policy.ts	2
 src/channels/turn/execution.ts	2
 src/channels/turn/history-window.ts	1
 src/channels/turn/lifecycle.ts	2
-src/channels/turn/route-dm-scope.ts	1
 src/channels/turn/run-channel-turn.ts	4
 src/claws/add.ts	7
 src/claws/cron.ts	11
@@ -1717,7 +1715,6 @@ src/cli/capability-cli/tts.ts	6
 src/cli/capability-cli/video.ts	6
 src/cli/capability-cli/web.ts	5
 src/cli/channel-auth.ts	4
-src/cli/channel-options.ts	1
 src/cli/channels-cli.ts	5
 src/cli/claws-cli.gateway-readiness.ts	1
 src/cli/claws-cli.runtime.ts	2

@@ -143,7 +143,6 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
         body.aspect_ratio = req.aspectRatio.trim();
       }
 
-      // Map input images to subject_reference for image-to-image generation
       const ref = req.inputImages?.at(0);
       if (ref) {
         const mime = ref.mimeType || "image/jpeg";

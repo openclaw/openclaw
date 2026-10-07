@@ -189,7 +189,7 @@ describe("agent session resolution", () => {
     });
   });
 
-  it("handles terminal main sessions whose transcript is newer than the registry", async () => {
+  it("uses explicit outcomes when a main transcript is newer than the registry", async () => {
     const scenarios = [
       {
         label: "canonical done main",
@@ -229,7 +229,7 @@ describe("agent session resolution", () => {
         requestedSessionKey: "agent:main:main",
         storedSessionKey: "agent:main:main",
         status: undefined,
-        expectNewSession: true,
+        expectNewSession: false,
       },
     ] as const;
     for (const scenario of scenarios) {
@@ -277,6 +277,10 @@ describe("agent session resolution", () => {
         expect(resolution.isNewSession).toBe(scenario.expectNewSession);
         if (!scenario.expectNewSession) {
           expect(resolution.sessionId).toBe(sessionId);
+          expect(resolution.sessionEntry?.status).toBe(scenario.status);
+          if (scenario.status === undefined) {
+            expect(resolution.sessionEntry?.endedAt).toBe(registryUpdatedAt - 100);
+          }
           return;
         }
         expect(resolution.sessionId).not.toBe(sessionId);

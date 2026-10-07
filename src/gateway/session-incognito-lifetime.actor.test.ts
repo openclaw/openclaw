@@ -2,9 +2,15 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  captureIncognitoSessionBinding,
+  withIncognitoSessionBinding,
+} from "../config/sessions/session-incognito-binding.js";
 import { deleteIncognitoSessionLifecycle } from "../config/sessions/session-incognito-lifecycle-operations.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import {
   createGatewaySchedulerClock,
@@ -12,7 +18,19 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { startIncognitoActorSessionLifetime } from "./session-incognito-lifetime.js";
+import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import * as deletion from "./server-methods/sessions-delete.js";
+import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
+import {
+  startIncognitoActorsSessionLifetime,
+  startIncognitoActorSessionLifetime,
+} from "./session-incognito-lifetime.js";
+
+// The fixture retains two actors while the shared-state worker prepares lifecycle cleanup.
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  availableParallelism: () => 24,
+}));
 
 it.for(["sidecar", "actor"] as const)(
   "keeps the original actor deadline and joins accepted expiry before %s shutdown",
@@ -78,10 +96,14 @@ it.for(["sidecar", "actor"] as const)(
       let closing: Promise<void> | undefined;
       try {
         await time.advanceBy(23 * 60 * 60_000);
-        await actor.sessions.create(authority, {
-          sessionKey,
-          entry: { ...entry, createdAt: time.clock.now(), updatedAt: time.clock.now() },
-        });
+        const updated = await withIncognitoSessionBinding({ actor }, () =>
+          patchSessionEntryCore(
+            { agentId: actor.agentId, sessionKey, storePath: actor.path, env: state.env },
+            () => ({ createdAt: time.clock.now(), updatedAt: time.clock.now() }),
+          ),
+        );
+        expect(updated?.createdAt).toBe(entry.createdAt);
+        expect(updated?.updatedAt).toBeGreaterThan(entry.updatedAt);
         const sql = observeMainThreadSql();
         try {
           sessionChanges.emit({ agentId: actor.agentId, storePath: actor.path, sessionKey });
@@ -142,3 +164,133 @@ it.for(["sidecar", "actor"] as const)(
     });
   },
 );
+
+it("follows new actors and retires an old incarnation before expiring its successor", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const authority = { assertCurrent() {} };
+    const time = createGatewaySchedulerClock(Date.now());
+    const scheduler = createTestGatewayScheduler(time.clock);
+    const opened: IncognitoAgentDatabaseExecution[] = [];
+    const expected = new Map<string, string>();
+    const createActor = async (agentId: string, sessionId: string) => {
+      const actor = await captureOpenClawAgentDatabaseExecution({
+        kind: "ephemeral",
+        agentId,
+        env: state.env,
+        authority,
+      });
+      assert(actor);
+      opened.push(actor);
+      expected.set(agentId, actor.identity.incarnation);
+      await actor.sessions.create(authority, {
+        sessionKey: `agent:${agentId}:dashboard:incognito-all-expiry`,
+        entry: {
+          sessionId,
+          incognito: true,
+          createdAt: time.clock.now(),
+          updatedAt: time.clock.now(),
+        },
+      });
+      return actor;
+    };
+    const empty = await captureOpenClawAgentDatabaseExecution({
+      kind: "ephemeral",
+      agentId: "empty",
+      env: state.env,
+      authority,
+    });
+    assert(empty);
+    opened.push(empty);
+    const first = await createActor("main", "main-original");
+    const gates = [createDeferredCore(), createDeferredCore(), createDeferredCore()];
+    const scheduled: AbortSignal[] = [];
+    const createScope = scheduler.scope.bind(scheduler);
+    const scheduling = vi.spyOn(scheduler, "scope").mockImplementation(() => {
+      const scope = createScope();
+      const schedule = scope.schedule;
+      scope.schedule = (params) => {
+        const job = schedule(params);
+        scheduled.push(scope.signal);
+        gates[scheduled.length - 1]?.resolve();
+        return job;
+      };
+      return scope;
+    });
+    const deleted: string[] = [];
+    const deleting = vi
+      .spyOn(deletion, "deleteGatewaySession")
+      .mockImplementation(async (params) => {
+        const binding = captureIncognitoSessionBinding({ sessionKey: params.params.key });
+        assert(binding);
+        expect(binding.actor.identity.incarnation).toBe(expected.get(binding.actor.agentId));
+        const current = await binding.actor.sessions.read(authority, {
+          sessionKey: params.params.key,
+        });
+        assert(current.entry);
+        expect(current.entry.sessionId).toBe(params.params.expectedSessionId);
+        const result = await deleteIncognitoSessionLifecycle({
+          actor: binding.actor,
+          authority: { assertCurrent: () => params.assertCurrent?.() },
+          env: state.env,
+          target: { sessionKey: params.params.key, entry: current.entry },
+          reason: "deleted",
+        });
+        deleted.push(current.entry.sessionId);
+        return {
+          ok: true,
+          result: { ok: true, key: params.params.key, deleted: result.deleted, archived: [] },
+        };
+      });
+    const context = createDirectChatContext();
+    const logWarning = vi.fn();
+    const owner = createGatewaySidecarStopOwner();
+    owner.publish(
+      startIncognitoActorsSessionLifetime({ context, scheduler, logWarning, env: state.env }),
+    );
+    const publish = (actor: typeof first) =>
+      sessionChanges.emit({
+        agentId: actor.agentId,
+        storePath: actor.path,
+        sessionKey: `agent:${actor.agentId}:dashboard:incognito-all-expiry`,
+      });
+    try {
+      // No session publication accompanies this empty actor's loss after topology capture.
+      await empty.close();
+      await withinTest(gates[0]!.promise, signal);
+      const added = await createActor("work", "work-added");
+      publish(added);
+      await withinTest(gates[1]!.promise, signal);
+      await time.advanceBy(60 * 60_000);
+      await first.close();
+      const successor = await createActor("main", "main-successor");
+      publish(successor);
+      await withinTest(gates[2]!.promise, signal);
+      expect(scheduled[0]?.aborted).toBe(true);
+      expect(() => first.assertCurrent()).toThrow();
+      const sql = observeMainThreadSql();
+      try {
+        await time.advanceBy(23 * 60 * 60_000);
+        expect(deleted).toEqual(["work-added"]);
+        await time.advanceBy(60 * 60_000);
+        owner.beginClose();
+        await owner.stop();
+        await owner.sealAndJoin();
+        expect(deleted).toEqual(["work-added", "main-successor"]);
+        expect(logWarning).toHaveBeenCalledExactlyOnceWith(
+          "Incognito expiry could not reconcile a captured actor.",
+        );
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+      }
+    } finally {
+      await owner.stop();
+      await scheduler.stop();
+      scheduling.mockRestore();
+      deleting.mockRestore();
+      await Promise.all(opened.map((actor) => actor.close()));
+    }
+  });
+});

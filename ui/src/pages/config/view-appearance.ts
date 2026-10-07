@@ -61,7 +61,7 @@ const ACCENT_PRESETS = [
 /* Builtin cards preview their real palette (chip colors live in config.css,
    mirrored from the base.css theme blocks). The custom card only has real
    colors while active — its chips read the live CSS variables — so it falls
-   back to the spark icon otherwise. */
+   back to the download icon otherwise. */
 function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
   if ((id === "custom" || id.includes("/")) && activeTheme !== id) {
     return html`<span class="settings-theme-card__icon" aria-hidden="true"

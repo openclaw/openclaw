@@ -54,7 +54,6 @@ import type {
 import { MAX_OWNER_PROMPT_CONTENT_BYTES, resolveOwnerPromptNumbers } from "./owner-display.js";
 import { filterProjectScopedCuratedContextFiles } from "./project-memory-bootstrap.js";
 import { buildPromisedWorkPromptSection } from "./promised-work-prompt.js";
-import { buildOpenClawToolFallbackText } from "./prompt-surface.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 import {
   buildSkillWorkshopPromptSection,
@@ -72,7 +71,10 @@ import type {
 import { buildMessagingSection, resolveSilentReplyPromptMode } from "./system-prompt-messaging.js";
 import { buildRuntimeLine } from "./system-prompt-runtime.js";
 import { buildSkillsSection } from "./system-prompt-skills.js";
-import { buildSystemPromptToolLines } from "./system-prompt-tool-list.js";
+import {
+  buildSystemPromptToolLines,
+  buildSystemPromptToolingSection,
+} from "./system-prompt-tool-list.js";
 import type {
   PromptMode,
   SilentReplyPromptMode,
@@ -282,6 +284,8 @@ export function buildAgentSystemPrompt(params: {
   toolNames?: string[];
   /** Callable tool names used for capability guidance without listing them as visible tools. */
   capabilityToolNames?: string[];
+  /** Prepared absence of managed setup after native routing and tool policy. */
+  webSearchUnconfigured?: boolean;
   modelAliasLines?: string[];
   userTimezone?: string;
   userDate?: string;
@@ -620,6 +624,7 @@ export function buildAgentSystemPrompt(params: {
       sourcePath: params.sourcePath,
       skillsPrompt,
       codeModeActive: params.codeModeActive,
+      webSearchUnconfigured: params.webSearchUnconfigured,
       modelAliasLines: params.modelAliasLines,
       includeMemorySection: params.includeMemorySection,
       memoryCitationsMode: params.memoryCitationsMode,
@@ -632,21 +637,14 @@ export function buildAgentSystemPrompt(params: {
     const lines = [
       "You are a personal assistant running inside OpenClaw.",
       "",
-      ...(includeToolGuidance
-        ? [
-            "## Tooling",
-            "Tools policy-filtered. Names case-sensitive; call exact.",
-            toolLines.length > 0
-              ? toolLines.join("\n")
-              : buildOpenClawToolFallbackText({
-                  surface: promptSurface,
-                }),
-            ...(toolSchemaDirectoryPrompt
-              ? ["", "### Deferred Tool Schemas", toolSchemaDirectoryPrompt]
-              : []),
-            "The AGENTS.md Tools section guides usage; it never grants availability.",
-          ]
-        : []),
+      ...buildSystemPromptToolingSection({
+        includeToolGuidance,
+        toolLines,
+        toolSchemaDirectoryPrompt,
+        promptSurface,
+        availableTools,
+        webSearchUnconfigured: params.webSearchUnconfigured,
+      }),
       ...(renderOpenClawToolWorkflowHints
         ? [
             ...(waitToolHints.length > 0

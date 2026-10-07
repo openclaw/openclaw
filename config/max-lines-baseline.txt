@@ -290,7 +290,6 @@ src/agents/tools/image-generate-tool.test.ts
 src/agents/tools/image-tool.test.ts
 src/agents/tools/message-tool.test.ts
 src/agents/tools/music-generate-tool.test.ts
-src/agents/tools/session-status-tool.ts
 src/agents/tools/sessions-send-tool.ts
 src/agents/tools/sessions-spawn-tool.test.ts
 src/agents/tools/sessions.test.ts
@@ -506,7 +505,6 @@ src/infra/update-startup.test.ts
 src/interactive/payload.ts
 src/logging/diagnostic-stability-bundle.ts
 src/logging/diagnostic-stability.ts
-src/logging/diagnostic-support-export.ts
 src/logging/diagnostic.test.ts
 src/logging/diagnostic.ts
 src/logging/redact.test.ts

@@ -36,6 +36,7 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import {
   prepareIncognitoSessionHistoryRead,
   type IncognitoSessionHistoryBinding,
@@ -106,40 +107,107 @@ export async function searchSessionTranscripts(
   incognito?: IncognitoSessionHistoryBinding,
 ): Promise<SessionTranscriptSearchResult> {
   validateSearchQuery(params.query);
-  if (incognito) {
+  const shared = incognito
+    ? undefined
+    : captureIncognitoSessionBinding({
+        ...params,
+        storePath: preparedDatabase?.path ?? params.storePath,
+      });
+  const binding: Pick<IncognitoSessionHistoryBinding, "actor" | "authority"> | undefined =
+    incognito ??
+    (shared && {
+      actor: shared.actor,
+      authority: {
+        assertCurrent() {
+          shared.admissionSignal?.throwIfAborted();
+          shared.actor.assertReadable();
+        },
+      },
+    });
+  if (binding) {
     if (
+      incognito &&
       params.sessionKeys &&
       (params.sessionKeys.length !== 1 || params.sessionKeys[0] !== incognito.target.sessionKey)
     ) {
       throw new Error("Incognito search requires its captured session selection");
     }
-    const prepared = prepareIncognitoSessionHistoryRead(incognito, {
-      ...params,
-      sessionId: params.sessionId ?? incognito.target.sessionId,
-      storePath: preparedDatabase?.path ?? params.storePath,
-    });
-    const { actor, target } = prepared;
-    const projection = { actor, authority: incognito.authority };
+    const prepared =
+      incognito &&
+      prepareIncognitoSessionHistoryRead(incognito, {
+        ...params,
+        sessionId: params.sessionId ?? incognito.target.sessionId,
+        storePath: preparedDatabase?.path ?? params.storePath,
+      });
+    const { actor, authority } = prepared ?? binding;
+    const selected = new Set(params.sessionKeys);
+    const currentSelection = () =>
+      actor.sessions
+        .deadlines()
+        .filter(({ sessionKey }) => !selected.size || selected.has(sessionKey));
+    const sessions = prepared
+      ? [prepared.target]
+      : currentSelection().map(({ sessionKey, sessionId }) => ({
+          sessionKey,
+          sessionId,
+          lifecycleRevision: actor.sessions.readSharing(sessionKey)?.entry?.lifecycleRevision,
+        }));
+    const claims = new Map(
+      sessions.map(({ sessionKey }) => [sessionKey, actor.sessions.captureCurrent(sessionKey)]),
+    );
+    const snapshots = new Map<string, ReturnType<typeof actor.sessions.captureSnapshot>>();
+    const assertCurrent = () => {
+      authority.assertCurrent();
+      actor.assertReadable();
+      if (!prepared) {
+        const current = currentSelection();
+        if (
+          current.length !== claims.size ||
+          current.some(({ sessionKey }) => !claims.has(sessionKey))
+        ) {
+          throw new Error("Incognito search selection changed during preparation");
+        }
+      }
+      for (const [key, claim] of claims) {
+        claim.assertCurrent();
+        snapshots.get(key)?.assertCurrent();
+      }
+    };
+    const selection = {
+      sessions,
+      sessionId: prepared ? (params.sessionId ?? prepared.target.sessionId) : params.sessionId,
+      query: params.query,
+      limit: params.limit,
+      match: params.match,
+      role: params.role,
+      order: params.order,
+    };
+    assertCurrent();
+    const projection = { actor, authority: binding.authority };
     const database = captureLifecycleDatabaseScope({
       agentId: actor.agentId,
       path: actor.path,
       env: params.env,
     });
-    const result = await actor.sessions.history(prepared.authority, {
-      type: "session.history.search",
-      input: {
-        ...target,
-        query: params.query,
-        limit: params.limit,
-        match: params.match,
-        role: params.role,
-        order: params.order,
-      },
-    });
-    prepared.authority.assertCurrent();
+    const result = await actor.sessions.withSharedState(() =>
+      actor.sessions.history(
+        { assertCurrent, authorize: (stage, facts) => authority.authorize?.(stage, facts) },
+        { type: "session.history.search", input: selection },
+        undefined,
+        () => {
+          for (const key of claims.keys()) {
+            snapshots.set(key, actor.sessions.captureSnapshot(key));
+          }
+        },
+      ),
+    );
+    assertCurrent();
+    for (const claim of claims.values()) {
+      claim.authorize(authority, "commit");
+    }
     if (result.result.indexing) {
       startSessionTranscriptIndexReconcile(
-        { ...database, preferredSessionId: target.sessionId },
+        { ...database, preferredSessionId: selection.sessionId },
         projection,
       );
     }

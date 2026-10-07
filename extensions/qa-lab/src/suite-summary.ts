@@ -139,26 +139,24 @@ export async function readCompletedQaSuiteSummaryFile(summaryPath: string): Prom
       { cause: error },
     );
   }
+  let summary: unknown;
   try {
-    const summary = JSON.parse(summaryText) as unknown;
-    const completionError = findQaSuiteSummaryCompletionError(summary);
-    if (completionError) {
-      throw new QaSuiteArtifactError(
-        "summary_not_completed",
-        `QA summary at ${summaryPath} ${completionError}.`,
-      );
-    }
-    return summary;
+    summary = JSON.parse(summaryText);
   } catch (error) {
-    if (error instanceof QaSuiteArtifactError) {
-      throw error;
-    }
     throw new QaSuiteArtifactError(
       "summary_parse_failed",
       `Could not parse QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
       { cause: error },
     );
   }
+  const completionError = findQaSuiteSummaryCompletionError(summary);
+  if (completionError) {
+    throw new QaSuiteArtifactError(
+      "summary_not_completed",
+      `QA summary at ${summaryPath} ${completionError}.`,
+    );
+  }
+  return summary;
 }
 
 function readNonNegativeCount(value: unknown): number | null {

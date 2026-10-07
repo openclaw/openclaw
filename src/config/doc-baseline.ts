@@ -469,7 +469,6 @@ function writeFileAtomic(filePath: string, content: string): void {
   });
 }
 
-/** Build the sha256 hash file content for all config baseline artifacts. */
 function computeConfigBaselineHashFileContent(json: ConfigDocBaselineArtifacts): string {
   const lines = [
     `${sha256Hex(json.combined)}  config-baseline.json`,

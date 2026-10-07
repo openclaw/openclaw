@@ -8,6 +8,7 @@ import {
   CHAT_HISTORY_MAX_ENTRIES,
   CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
   CHAT_INPUT_RUN_ID_MAX_CHARS,
+  CHAT_MESSAGE_MAX_CHARS,
 } from "./chat-history-constants.js";
 import { closedObject } from "./closed-object.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
@@ -239,8 +240,9 @@ export type ChatToolTitlesResult = Static<typeof ChatToolTitlesResultSchema>;
 export const ChatMessageGetParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  sessionId: Type.Optional(NonEmptyString),
   messageId: NonEmptyString,
-  maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_000_000 })),
+  maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: CHAT_MESSAGE_MAX_CHARS })),
 });
 
 /**

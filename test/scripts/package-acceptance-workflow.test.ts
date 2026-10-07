@@ -15781,9 +15781,9 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       ]),
     ) as Record<(typeof profiles)[number], number[]>;
     expect(releasePackagePaths).toEqual({
-      beta: [30, 15, 60, 10, 30, 60, 90, 5, 5],
-      stable: [30, 15, 60, 10, 30, 60, 90, 5, 5],
-      full: [30, 15, 60, 10, 30, 90, 90, 5, 5],
+      beta: [30, 35, 60, 10, 30, 60, 90, 5, 5],
+      stable: [30, 35, 60, 10, 30, 60, 90, 5, 5],
+      full: [30, 35, 60, 10, 30, 90, 90, 5, 5],
     });
     const releaseChecksParent = workflowJob(
       FULL_RELEASE_VALIDATION_WORKFLOW,
@@ -15823,7 +15823,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       ),
       timeoutForProfile(releaseChecks.jobs?.summary?.["timeout-minutes"], "stable"),
     ];
-    expect(releaseCrossOsPath).toEqual([30, 15, 90, 180, 5]);
+    expect(releaseCrossOsPath).toEqual([30, 35, 90, 180, 5]);
 
     const releaseInstall = workflowJob(RELEASE_CHECKS_WORKFLOW, "install_smoke_release_checks");
     expect(jobNeeds(releaseInstall)).toEqual(["resolve_target"]);

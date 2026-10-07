@@ -6,6 +6,7 @@ import type {
   SessionModelContextLimits,
   SessionTranscriptModelContext,
 } from "./session-history-read.types.js";
+import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
 import {
   prepareIncognitoSessionHistoryRead,
   type IncognitoSessionHistoryBinding,
@@ -27,7 +28,7 @@ export function readSessionTranscriptModelContextAsync<T>(
   signal?: AbortSignal,
   through?: TranscriptEntryAnchor,
   limits?: SessionModelContextLimits,
-  incognito?: IncognitoSessionHistoryBinding,
+  suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<T> {
   const capturedTarget = { ...target };
   const capturedAdmission = admission ? structuredClone(admission) : undefined;
@@ -94,6 +95,7 @@ export function readSessionTranscriptModelContextAsync<T>(
       }
     }
   };
+  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(target);
   if (incognito) {
     const prepared = prepareIncognitoSessionHistoryRead(incognito, target, signal);
     const contextAdmission = capturedAdmission ?? prepared.target.admission;

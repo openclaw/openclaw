@@ -12,6 +12,7 @@ import {
   redactSensitiveText,
 } from "./openclaw-runtime-io.js";
 import {
+  captureIncognitoMemoryReader,
   DREAMING_NARRATIVE_RUN_PREFIX,
   isDreamingNarrativeSessionStoreKey,
   extractAgentIdFromSessionPath,
@@ -30,7 +31,6 @@ import {
   isUsageCountedSessionTranscriptFileName,
   materializeSessionArchiveForRead,
   parseUsageCountedSessionIdFromFileName,
-  parseSqliteSessionFileMarker,
   prepareSessionEntryInWorker,
   readRestoredSessionTranscript,
   readTranscriptStatsSync,
@@ -48,6 +48,7 @@ import {
   projectSessionEntryRecord,
   renderSessionExportLines,
 } from "./session-entry-projection.js";
+import { resolveBuildSessionSqliteIdentity } from "./session-entry-source.js";
 import { classifySessionMessageOrigin } from "./session-provenance.js";
 import { resolveSessionResetRecallCutoff } from "./session-reset-recall.js";
 import {
@@ -465,19 +466,6 @@ function resolveSessionEntryParseYieldLines(opts: BuildSessionEntryOptions): num
   return SESSION_ENTRY_PARSE_YIELD_LINES;
 }
 
-function resolveBuildSessionSqliteIdentity(absPath: string, opts: BuildSessionEntryOptions) {
-  if (opts.agentId && opts.sessionId && opts.storePath) {
-    return {
-      agentId: opts.agentId,
-      sessionId: opts.sessionId,
-      ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
-      storePath: opts.storePath,
-    };
-  }
-  const marker = parseSqliteSessionFileMarker(absPath);
-  return marker && opts.sessionKey ? { ...marker, sessionKey: opts.sessionKey } : marker;
-}
-
 function sqliteSessionFileState(
   absPath: string,
   identity: { agentId: string; sessionId: string },
@@ -539,9 +527,12 @@ export async function buildSessionEntry(
     return source.memoryEntry(absPath, opts);
   }
   const identity = resolveBuildSessionSqliteIdentity(absPath, opts);
+  const incognito = identity && captureIncognitoMemoryReader(identity);
+  if (incognito) {
+    return incognito.memoryEntry(absPath, opts);
+  }
   const prepare = async () => {
-    // Archives may materialize files, observers own their callbacks, and incognito
-    // transcripts exist only in this process. Their existing local contracts stay intact.
+    // Unbound private stores retain their native owner until the atomic cutover.
     if (
       identity &&
       !opts.onTranscriptMessage &&

@@ -859,11 +859,7 @@ describe("external shared-state ownership", () => {
       expect(reads.queries).toEqual([indexedOwnershipSql]);
       reads.queries.length = 0;
       runOpenClawStateWriteTransaction(() => undefined, { env: unmarkedEnv, database: opened });
-      expect(reads.queries).toEqual([
-        indexedOwnershipSql,
-        "PRAGMA data_version",
-        indexedOwnershipSql,
-      ]);
+      expect(reads.queries).toEqual(["PRAGMA data_version", indexedOwnershipSql]);
     } finally {
       reads.restore();
     }
@@ -883,13 +879,29 @@ describe("external shared-state ownership", () => {
     };
     const { DatabaseSync } = requireNodeSqlite();
     const claimant = new DatabaseSync(opened.path);
+    const originalExec = opened.db.exec.bind(opened.db);
+    let claimedBeforeBegin = false;
+    const begin = vi.spyOn(opened.db, "exec").mockImplementation((sql) => {
+      if (sql === "BEGIN IMMEDIATE" && !claimedBeforeBegin) {
+        claimant
+          .prepare(
+            "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+          )
+          .run(STATE_SUPERVISION_KEY, JSON.stringify(ownership), ownership.claimedAt);
+        claimedBeforeBegin = true;
+      }
+      originalExec(sql);
+    });
+    const write = vi.fn();
     try {
-      claimant
-        .prepare(
-          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-        )
-        .run(STATE_SUPERVISION_KEY, JSON.stringify(ownership), ownership.claimedAt);
+      expect(() =>
+        runOpenClawStateWriteTransaction(write, { env: unmarkedEnv, database: opened }),
+      ).toThrow(OpenClawStateOwnershipError);
+      expect(claimedBeforeBegin).toBe(true);
+      expect(write).not.toHaveBeenCalled();
+      expect(opened.db.isTransaction).toBe(false);
     } finally {
+      begin.mockRestore();
       claimant.close();
     }
 
@@ -899,7 +911,6 @@ describe("external shared-state ownership", () => {
     expect(() => openOpenClawStateDatabase({ env: unmarkedEnv, database: opened })).toThrow(
       OpenClawStateOwnershipError,
     );
-    const write = vi.fn();
     expect(() => runOpenClawStateWriteTransaction(write, { env: unmarkedEnv })).toThrow(
       OpenClawStateOwnershipError,
     );

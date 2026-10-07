@@ -6,8 +6,8 @@ import { withOrderedSessionEntriesInWorker } from "../../config/sessions/session
 import {
   captureSessionEntryReadScope,
   isNativeSessionEntryRead,
-  withSessionStoreReaderInWorker,
-} from "../../config/sessions/session-entry-read-runtime.js";
+} from "../../config/sessions/session-entry-read-request.js";
+import { withSessionStoreReaderInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";

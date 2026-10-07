@@ -179,6 +179,9 @@ export function renderSidebarRegion(params: {
   callbacks: SidebarRegionCallbacks;
   layout: SidebarLayout;
   narrow: boolean;
+  /** The layout given is a narrow pane's view of the saved one; see presentNarrowSidebarLayout. */
+  sideFocusLocked?: boolean;
+  sideFocusOrigin?: () => HTMLElement | null;
   panelDefinitions?: SidebarPanelDefinition[];
   header?: TemplateResult | typeof nothing;
   primary: TemplateResult;
@@ -237,6 +240,8 @@ export function renderSidebarRegion(params: {
             .panelDefinitions=${panelDefinitions}
             .callbacks=${params.callbacks}
             .narrow=${params.narrow}
+            .sideFocusLocked=${params.sideFocusLocked === true}
+            .sideFocusOrigin=${params.sideFocusOrigin}
             .availableWidth=${params.availableWidth}
           ></openclaw-chat-sidebar-region>`
     }
@@ -333,18 +338,26 @@ export function createSidebarFullMessageLoader(
       fullMessageCaches.set(state, cache);
     }
     const maxChars = request.maxChars ?? DETAIL_FULL_MESSAGE_MAX_CHARS;
+    const pendingInput = request.messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX);
+    const sameConversation = uiConversationMatches(
+      state,
+      scope.sessionKey,
+      request.sessionKey,
+      request.agentId,
+      scope.agentId,
+    );
+    const sessionId =
+      request.sessionId ??
+      (sameConversation && !pendingInput && scope.displayedSessionId !== scope.sessionId
+        ? scope.displayedSessionId
+        : undefined);
     const cacheable =
-      !request.messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX) &&
+      !pendingInput &&
+      sameConversation &&
       scope.sessionId !== undefined &&
       scope.sessionId === scope.displayedSessionId &&
-      scope.lifecycleRevision !== undefined &&
-      uiConversationMatches(
-        state,
-        scope.sessionKey,
-        request.sessionKey,
-        request.agentId,
-        scope.agentId,
-      );
+      (sessionId === undefined || sessionId === scope.sessionId) &&
+      scope.lifecycleRevision !== undefined;
     const key = JSON.stringify([scope.sessionKey, scope.agentId, request.messageId, maxChars]);
     const cached = cacheable ? cache.messages.get(key) : undefined;
     if (cached) {
@@ -355,6 +368,7 @@ export function createSidebarFullMessageLoader(
       {
         sessionKey: request.sessionKey,
         ...(request.agentId ? { agentId: request.agentId } : {}),
+        ...(sessionId ? { sessionId } : {}),
         messageId: request.messageId,
         maxChars,
       },

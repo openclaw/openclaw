@@ -179,10 +179,10 @@ export function recordOpenClawAgentIntegrityVerification(
   pathname: string,
   env: NodeJS.ProcessEnv,
   identity: string,
-): void {
+): boolean {
   const current = statSync(pathname, { bigint: true, throwIfNoEntry: false });
   if (!current || identity !== `${current.dev}:${current.ino}`) {
-    return;
+    return false;
   }
   const dev = String(current.dev);
   const ino = String(current.ino);
@@ -211,6 +211,7 @@ export function recordOpenClawAgentIntegrityVerification(
         ),
     );
   });
+  return true;
 }
 
 /** Unclean disposal removes the proof that any surviving last closer could certify. */

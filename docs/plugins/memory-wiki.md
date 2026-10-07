@@ -295,6 +295,10 @@ includes compact `Claim:` and `Evidence:` lines when available.
 | `wiki_apply`  | narrow synthesis/metadata mutations without freeform page surgery                                                                                             |
 | `wiki_lint`   | structural checks, provenance gaps, contradictions, open questions                                                                                            |
 
+`wiki_search` has a 30-second deadline and honors turn cancellation. A timeout
+or cancellation returns a tool error rather than an empty result, and stops
+the ongoing page scan. For a known page, use `wiki_get` with its id or path.
+
 The plugin also registers a non-exclusive memory corpus supplement, so shared
 `memory_search` and `memory_get` can reach the wiki when the active memory
 plugin supports corpus selection.

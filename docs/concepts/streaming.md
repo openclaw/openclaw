@@ -260,7 +260,9 @@ Slack-only:
 - `progress` mode keeps tool progress in an editable status draft, materializes
   the status label when answer streaming is active but no tool line is
   available yet, clears the draft at completion, and sends the final answer
-  through normal delivery.
+  through normal delivery. When the parent yields to accepted subagents, the
+  same draft keeps updating until they settle; see
+  [Subagent yield handoff](/concepts/subagent-yield-handoff#progress-after-yield).
 - Plan previews use native checkboxes when `channels.telegram.richMessages`
   is `true`; otherwise they use readable HTML checklists. Completed steps are
   checked, and the active step is marked "in progress".
@@ -289,13 +291,9 @@ Slack-only:
   command exits are hidden. The same default applies on
   other shared progress-card renderers; `streaming.progress.toolProgress: true` adds
   the rolling tool log with its icons.
-- When a parent yields to accepted subagents, `progress` mode can transfer its
-  confirmed card to core. The same message keeps its checklist and receives
-  child activity and terminal updates; the final answer is separate. See
-  [Subagent yield handoff](/concepts/subagent-yield-handoff#progress-after-yield).
-- Without that handoff, `progress` mode deletes the status draft once the final
-  answer is delivered, so busy channels keep no orphaned tool log above the
-  reply. Error finals keep the draft as the record of the failed turn.
+- `progress` mode deletes the status draft once the final answer is delivered,
+  so busy channels keep no orphaned tool log above the reply. Error finals keep
+  the draft as the record of the failed turn.
 - Final media, error, and explicit-reply payloads cancel pending previews
   without flushing a new draft, then use normal delivery.
 

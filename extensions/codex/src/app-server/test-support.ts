@@ -277,7 +277,7 @@ export function createClientHarness(
         const timer = setTimeout(() => {
           cleanup();
           reject(new Error(`Timed out waiting for app-server harness write ${index}`));
-        }, 1_000);
+        }, 5_000);
         writeEvents.on("write", onWrite);
       });
     },

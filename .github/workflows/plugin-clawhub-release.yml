@@ -924,7 +924,7 @@ jobs:
     name: Seal exact ClawHub recovery manifest
     needs: [seal_clawhub_transactions, publish_plugins_clawhub]
     if: ${{ always() && inputs.dry_run != true && needs.seal_clawhub_transactions.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
       contents: read

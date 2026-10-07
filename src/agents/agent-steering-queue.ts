@@ -1,4 +1,3 @@
-/** Leases and formats completed subagent results for injection into requester turns. */
 import { isDeepStrictEqual } from "node:util";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isSystemEventStoreCurrent } from "../infra/system-event-ownership.js";
@@ -30,7 +29,6 @@ const MERGED_AGENT_STEERING_PROMPT_HEADER = [
   "",
 ].join("\n\n");
 
-/** Pending subagent completion selected for requester-session steering. */
 type AgentSteeringQueueItem = {
   runId: string;
   entry: SubagentRunRecord;
@@ -42,7 +40,6 @@ type PreparedSteeringItem = AgentSteeringQueueItem & {
   isCurrent: (entry: SubagentRunRecord | undefined) => boolean;
 };
 
-/** A batch of leased subagent completions plus the prompt to inject upstream. */
 type LeasedAgentSteeringBatch = {
   runIds: string[];
   prompt: string;
@@ -93,7 +90,6 @@ function sortPendingSteeringItems(a: AgentSteeringQueueItem, b: AgentSteeringQue
   return a.runId.localeCompare(b.runId);
 }
 
-/** List pending completion payloads that should be steered into a requester turn. */
 function listPendingAgentSteeringItemsFromSubagentRuns(params: {
   runs: ReadonlyMap<string, SubagentRunRecord>;
   requesterSessionKey: string;
@@ -430,7 +426,6 @@ export function planAgentSteeringRelease(params: {
   return { value: postimages.size, postimages };
 }
 
-/** Prepends a steering prompt to an existing user prompt when pending results exist. */
 export function prependAgentSteeringPrompt(params: {
   steeringPrompt: string;
   prompt: string;

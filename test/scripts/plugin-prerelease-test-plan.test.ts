@@ -911,6 +911,21 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
           .filter((row) => row.task === "extensions-batch" && !row.requires_bun)
           .every((row) => row.test_runtime_policy === "node"),
       ).toBe(true);
+      const fileShardRows = matrix.include.filter((row) => row.task === "extension-file-shard");
+      expect(
+        fileShardRows.every(
+          (row) => !row.requires_bun && (row.test_runtime_policy ?? "node") === "node",
+        ),
+      ).toBe(true);
+      expect(fileShardRows).toContainEqual(
+        expect.objectContaining({
+          extensions_csv: "codex",
+          vitest_config: "test/vitest/vitest.extension-database-workers.config.ts",
+          includePatterns: expect.arrayContaining([
+            "extensions/codex/src/session-catalog-native-performance.test.ts",
+          ]),
+        }),
+      );
     }
   });
 

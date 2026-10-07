@@ -9,6 +9,7 @@ import {
 import { resolveSelectedModelCredential } from "../../agents/model-auth-selected-credential.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { createPreparedAccountCatalogAccess } from "../../agents/prepared-model-runtime.catalog-auth.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
@@ -298,7 +299,9 @@ describe("models.list account service tiers", () => {
           expect(discover).toHaveBeenCalledTimes(3);
           expect(a.isCurrent()).toBe(false);
           current = false;
-          expect(readRuntime(a, "codex")).not.toHaveProperty("serviceTiers");
+          expect(() => readRuntime(a, "codex")).toThrow(
+            PreparedModelRuntimePublicationSupersededError,
+          );
         },
       );
     },

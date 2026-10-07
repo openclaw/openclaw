@@ -333,17 +333,6 @@ function readArchivePageCursor(plan: TranscriptArchivePagePlan): ArchivePageCurs
   };
 }
 
-function sameArchiveBinding(
-  left: TranscriptArchivePageBinding,
-  right: TranscriptArchivePageBinding,
-): boolean {
-  return (
-    left.sessionId === right.sessionId &&
-    left.generation === right.generation &&
-    left.sha256 === right.sha256
-  );
-}
-
 /** Select a unique run-owned archive, never the newest archive for a reused key. */
 export async function readTranscriptArchivePageInWorker(
   plan: TranscriptArchivePagePlan,
@@ -466,7 +455,12 @@ export async function readTranscriptArchivePageInWorker(
           if (result) {
             throw new Error("Multiple archived transcript generations contain this run.");
           }
-          if (expectedBinding && !sameArchiveBinding(expectedBinding, binding)) {
+          if (
+            expectedBinding &&
+            (expectedBinding.sessionId !== binding.sessionId ||
+              expectedBinding.generation !== binding.generation ||
+              expectedBinding.sha256 !== binding.sha256)
+          ) {
             throw new Error("Archived transcript identity changed.");
           }
           if (plan.verifyBinding) {

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import type { IncognitoSessionActor } from "../../config/sessions/session-incognito-actor.js";
 import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
@@ -7,7 +6,6 @@ import { resolveStateDir } from "../../config/state-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import type { SqliteWorkerCommand, SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
-import { recordContextEngineTurnOutboxSchemaCommitted } from "../../state/openclaw-agent-context-engine-turn-outbox-schema.js";
 import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseRuntime,
@@ -45,25 +43,16 @@ async function runContextEngineTurnOutboxCommand(
   };
   if (isIncognitoOpenClawAgentSqlitePath(options.path, options)) {
     // Incognito retains its sole in-memory owner until that owner is migrated as a whole.
-    let committedDb: DatabaseSync | undefined;
-    const result = await runOpenClawAgentWriteAdmission(
+    return runOpenClawAgentWriteAdmission(
       options,
       () =>
         runOpenClawAgentWriteTransaction(
-          ({ db }) => {
-            committedDb = db;
-            return executeContextEngineTurnOutboxCommand(db, command);
-          },
+          ({ db }) => executeContextEngineTurnOutboxCommand(db, command),
           options,
           { operationLabel: `context-engine.turn-outbox.${command.type}` },
         ),
       true,
     );
-    // The transaction committed its lazy DDL; later commands on this connection skip it.
-    if (committedDb) {
-      recordContextEngineTurnOutboxSchemaCommitted(committedDb);
-    }
-    return result;
   }
   // Retain the lifecycle before queuing so close cannot turn waiting work into a fresh open.
   const execution = captureOpenClawAgentDatabaseExecution(options);

@@ -1,6 +1,5 @@
 import { formatByteSize } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
@@ -31,6 +30,7 @@ import type { GatewayDiscoverOpts } from "./discover.js";
 import { isGatewayMachineOutput } from "./output-mode.js";
 import { addGatewayRestartHandoffCommands } from "./register-restart-handoff.js";
 import { addGatewayRunCommand } from "./run-command.js";
+import { normalizeStabilityBundleTarget } from "./stability-bundle-target.js";
 import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
 
 type GatewayRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
@@ -237,13 +237,6 @@ function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boo
   }
 
   return lines;
-}
-
-function normalizeStabilityBundleTarget(raw: unknown): string | null {
-  if (raw === undefined || raw === false) {
-    return null;
-  }
-  return normalizeOptionalString(raw) ?? "latest";
 }
 
 function renderStabilityBundleSummary(params: {

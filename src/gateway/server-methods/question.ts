@@ -247,7 +247,7 @@ export function createQuestionHandlers(
           }
           if (narrow) {
             authority.assertCurrent();
-            if (!sessionAccess || !prepared?.canAccess(client, "mutate", true, sessionAccess)) {
+            if (!sessionAccess || !prepared?.canAccess(client, true, sessionAccess)) {
               respond(
                 false,
                 undefined,

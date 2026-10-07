@@ -19,7 +19,6 @@ import type { BlockReplySource } from "./block-reply-source.types.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
 import { resolveReplyDispatchErrorOutcome } from "./reply-dispatch-outcome.js";
 
-/** Streaming block reply pipeline that tracks sent content and media. */
 export type BlockReplyPipeline = {
   enqueue: (payload: ReplyPayload) => void;
   flush: (options?: { force?: boolean }) => Promise<void>;

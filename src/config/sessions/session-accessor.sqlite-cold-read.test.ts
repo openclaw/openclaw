@@ -12,7 +12,10 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { createVerifiedSqliteSnapshot } from "../../infra/sqlite-snapshot.js";
-import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import {
+  runSqliteDeferredTransactionSync,
+  runSqliteImmediateTransactionSync,
+} from "../../infra/sqlite-transaction.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -40,6 +43,7 @@ import {
   findTranscriptEventInDatabase,
   loadLatestAssistantText,
   loadTranscriptEventsFromDatabase,
+  loadTranscriptEventRowsAfterSeqInDatabase,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptHeaderSync,
   readTranscriptEventAtSeqSync,
@@ -302,6 +306,31 @@ it.each(readers)(
     });
   },
 );
+
+it("joins a caller's hot read snapshot without a savepoint and observes the next foreign archive", async () => {
+  await withRace("nested-hot-read-snapshot", async (race) => {
+    const read = () =>
+      loadTranscriptEventRowsAfterSeqInDatabase(race.database, race.scope.sessionId, -1);
+    const original = read();
+    expect(original.length).toBeGreaterThan(0);
+    runSqliteDeferredTransactionSync(race.database.db, () => {
+      const exec = vi.spyOn(race.database.db, "exec");
+      try {
+        expect(read()).toEqual(original);
+        race.commitArchive();
+        expect(read()).toEqual(original);
+        expect(
+          exec.mock.calls.filter(([sql]) =>
+            /^(?:BEGIN|COMMIT|SAVEPOINT|RELEASE|ROLLBACK)\b/iu.test(sql),
+          ),
+        ).toEqual([]);
+      } finally {
+        exec.mockRestore();
+      }
+    });
+    expect(() => read()).toThrow(/cold storage/);
+  });
+});
 
 it("identifies a slow transcript matcher while retaining its hot read snapshot", async () => {
   await withOpenClawTestState({ label: "hot-read-attribution" }, async (state) => {

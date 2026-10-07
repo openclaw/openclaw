@@ -32,14 +32,12 @@ export * from "./schema/canvas.js";
 export * from "./schema/progress-card.js";
 export * from "./schema/transcripts.js";
 export {
-  SessionConversationLinkSchema,
   SessionCreatedActorSchema,
   SessionEntryArchiveReasonSchema,
   SessionPermissionModeSchema,
   SessionOwnerSchema,
   SessionToolOverridesSchema,
   type SessionCreatedActor,
-  type SessionConversationLink,
   type SessionEntryArchiveReason,
   type SessionOwner,
   type SessionPermissionMode,

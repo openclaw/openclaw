@@ -1,11 +1,17 @@
 import "./sessions-spawn-tool.mocks.test-support.js";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  bindChildSessionPublication,
+  admitChildSessionPublication,
+  readChildSessionPublication,
+} from "../../channels/message-access/child-session-publication.js";
 import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
 import { countActiveRunsForSessionFromRuns } from "../subagents/registry/subagent-registry-queries.js";
 import {
   expectRegisteredSubagentRun,
   supportedSpawnModelChoice,
 } from "../subagents/spawn/subagent-spawn.test-helpers.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 const { hoisted } = await import("./sessions-spawn-tool.mocks.test-support.js");
 let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
@@ -45,6 +51,40 @@ describe("sessions_spawn visible work receipts", () => {
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
     expect(hoisted.inProcessCreationMock).not.toHaveBeenCalled();
+  });
+
+  it("carries only host invocation intent to creation and reports the exact committed publication", async () => {
+    const key = "agent:main:main";
+    const context = {};
+    const run = { runId: "public-source", instanceId: "public-source-instance" };
+    bindChildSessionPublication(context, key, () => {});
+    admitChildSessionPublication(context, run, () => {});
+    const publication = readChildSessionPublication(run);
+    hoisted.inProcessCreationMock.mockResolvedValue({
+      key: "agent:main:dashboard:public-child",
+      sessionId: "public-child",
+      runStarted: true,
+      runId: "public-child-run",
+      publicRead: true,
+      entry: { sessionId: "public-child", updatedAt: 1 },
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: key,
+      config: { agents: { defaults: { model: "mock-provider/primary" }, entries: { main: {} } } },
+      registerRun: vi.fn(),
+      countActiveRuns: () => 0,
+    });
+    const result = await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: key, operationalRunInstance: run },
+      () => tool.execute("public-spawn", { task: "inspect", visible: true }),
+    );
+    expect(hoisted.inProcessCreationMock.mock.calls[0]?.[2]).toMatchObject({
+      childSessionPublication: publication,
+    });
+    expect(hoisted.inProcessCreationMock.mock.calls[0]?.[1]).not.toHaveProperty(
+      "childSessionPublication",
+    );
+    expect(result.details).toMatchObject({ status: "accepted", publicRead: true });
   });
 
   it("keeps visible child quotas separate for agents sharing a bare requester key", async () => {

@@ -32,8 +32,6 @@ import { isPastedTextAttachment } from "./chat-pasted-text.ts";
 import { renderChatSelectionAnnotations } from "./chat-selection-annotations.ts";
 
 const LARGE_PASTE_TEXT_THRESHOLD = 1000;
-const LARGE_PASTE_TEXT_MIME_TYPE = "text/plain";
-const LARGE_PASTE_TEXT_FILE_PREFIX = "pasted-text-";
 
 function isFileDrag(dataTransfer: DataTransfer | null): boolean {
   return Array.from(dataTransfer?.types ?? []).includes("Files");
@@ -98,43 +96,6 @@ function chatAttachmentFromFile(
   return registerChatAttachmentPayload({ attachment, dataUrl, file });
 }
 
-function handleLargeTextPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps): void {
-  if (!props.onAttachmentsChange || !uploadsEnabled(props.uploadConfig)) {
-    // Large text remains ordinary native paste instead of becoming a file.
-    return;
-  }
-  const text = e.clipboardData?.getData("text/plain");
-  if (!text || text.length <= LARGE_PASTE_TEXT_THRESHOLD) {
-    return;
-  }
-  e.preventDefault();
-  const file = new File([text], `${LARGE_PASTE_TEXT_FILE_PREFIX}${Date.now()}.txt`, {
-    type: LARGE_PASTE_TEXT_MIME_TYPE,
-  });
-  const stagedBytes = stagedAttachmentBytes(props);
-  if (admitAttachmentFiles([file], props.attachmentLimits, stagedBytes).length === 0) {
-    // The rejection toast named the file; the clipboard still holds the text.
-    return;
-  }
-  const attachment = chatAttachmentFromFile(file, encodeTextAsDataUrl(text), "paste");
-  props.onAttachmentsChange([...currentAttachments(props), attachment]);
-}
-
-/** Normalize clipboard images for the loaded composers. */
-function readChatClipboardImages(clipboard: DataTransfer | null): {
-  files: File[];
-  inline?: { file: File; dataUrl: string };
-} {
-  const files = Array.from(clipboard?.items ?? [])
-    .filter((item) => item.type.startsWith("image/"))
-    .map((item) => item.getAsFile())
-    .filter((file): file is File => file !== null);
-  const text = files.length === 0 ? clipboard?.getData("text/plain") : undefined;
-  const inline = text ? dataImageClipboardFile(text) : null;
-  return inline ? { files: [inline.file], inline } : { files };
-}
-
-/** Builds a registered chat attachment from a base64 image data URL. */
 export function chatAttachmentFromDataUrl(
   dataUrl: string,
   fileName: string,
@@ -209,13 +170,31 @@ export function handleChatAttachmentPaste(
       e.preventDefault();
       showToast({ message: uploadsDisabledMessage() });
     }
+    // Large text remains ordinary native paste instead of becoming a file.
     return;
   }
-  const { files: imageFiles, inline: pasted } = readChatClipboardImages(e.clipboardData);
+  const imageFiles = Array.from(e.clipboardData.items ?? [])
+    .filter((item) => item.type.startsWith("image/"))
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null);
+  const text = imageFiles.length === 0 ? e.clipboardData.getData("text/plain") : undefined;
+  const pasted = text ? dataImageClipboardFile(text) : null;
+  if (pasted) {
+    imageFiles.push(pasted.file);
+  }
   if (imageFiles.length === 0) {
-    if (!options.imagesOnly) {
-      handleLargeTextPaste(e, props);
+    if (options.imagesOnly || !text || text.length <= LARGE_PASTE_TEXT_THRESHOLD) {
+      return;
     }
+    e.preventDefault();
+    const file = new File([text], `pasted-text-${Date.now()}.txt`, { type: "text/plain" });
+    const stagedBytes = stagedAttachmentBytes(props);
+    if (admitAttachmentFiles([file], props.attachmentLimits, stagedBytes).length === 0) {
+      // The rejection toast named the file; the clipboard still holds the text.
+      return;
+    }
+    const attachment = chatAttachmentFromFile(file, encodeTextAsDataUrl(text), "paste");
+    props.onAttachmentsChange([...currentAttachments(props), attachment]);
     return;
   }
   e.preventDefault();

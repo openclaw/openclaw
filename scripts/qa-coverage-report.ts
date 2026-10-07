@@ -1,4 +1,3 @@
-// Qa Coverage Report script supports OpenClaw repository automation.
 import { booleanFlag, parseFlagArgs, stringFlag, stringListFlag } from "./lib/arg-utils.mts";
 
 type Options = Parameters<

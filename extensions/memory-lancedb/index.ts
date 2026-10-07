@@ -437,7 +437,6 @@ export default definePluginEntry({
             .map((r) => `- [${r.entry.id}] ${truncateUtf16Safe(r.entry.text, 60)}...`)
             .join("\n");
 
-          // Strip vector data for serialization
           const sanitizedCandidates = results.map((r) => ({
             id: r.entry.id,
             text: r.entry.text,

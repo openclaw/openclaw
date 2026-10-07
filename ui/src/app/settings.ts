@@ -249,14 +249,6 @@ function isViteDevPage(): boolean {
   return Boolean(document.querySelector('script[src*="/@vite/client"]'));
 }
 
-function formatHostWithPort(hostname: string, port: string): string {
-  // location.hostname already carries brackets for IPv6 literals; wrapping
-  // again would produce an undialable ws://[[::1]]:port default.
-  const needsBrackets = hostname.includes(":") && !hostname.startsWith("[");
-  const normalizedHost = needsBrackets ? `[${hostname}]` : hostname;
-  return `${normalizedHost}:${port}`;
-}
-
 function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const basePath = resolveControlUiPaths(location.pathname)[0];
@@ -268,8 +260,11 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   if (!isViteDevPage()) {
     return { pageUrl, effectiveUrl: pageUrl };
   }
-  const effectiveUrl = `${proto}://${formatHostWithPort(location.hostname, "18789")}`;
-  return { pageUrl, effectiveUrl };
+  // location.hostname already carries brackets for IPv6 literals; wrapping
+  // again would produce an undialable ws://[[::1]]:port default.
+  const hostname = location.hostname;
+  const host = hostname.includes(":") && !hostname.startsWith("[") ? `[${hostname}]` : hostname;
+  return { pageUrl, effectiveUrl: `${proto}://${host}:18789` };
 }
 
 /**
@@ -300,18 +295,14 @@ type PersistedSettingsSource = {
   parsed: PersistedUiSettings;
 };
 
-function parsePersistedSettings(raw: string | null): PersistedUiSettings | null {
-  if (!raw) {
-    return null;
-  }
-  return (safeParseJson(raw) as PersistedUiSettings | undefined) ?? null;
-}
-
 function readSettingsForGateway(
   storage: Storage | null,
   targetUrl: string,
 ): PersistedSettingsSource | null {
-  const scoped = parsePersistedSettings(storage?.getItem(settingsKeyForGateway(targetUrl)) ?? null);
+  const scoped = safeParseJson(storage?.getItem(settingsKeyForGateway(targetUrl)) ?? "") as
+    | PersistedUiSettings
+    | null
+    | undefined;
   const storedUrl = normalizeOptionalString(scoped?.gatewayUrl);
   if (scoped && (!storedUrl || gatewayOriginScope(storedUrl) === gatewayOriginScope(targetUrl))) {
     return {
@@ -486,6 +477,7 @@ export function loadUiPreferences(
     const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
     const customTheme = parseImportedCustomTheme(parsed.customTheme);
     const { theme, mode } = parseThemeSelection(parsed.theme, parsed.themeMode);
+    const textScale = normalizeTextScale(parsed.textScale);
     const parsedRecord = asOptionalRecord(parsed) ?? {};
     const hasSidebarEntries = Object.hasOwn(parsedRecord, "sidebarEntries");
     // One-time read of the retired route-only shape; all writes use sidebarEntries.
@@ -567,11 +559,7 @@ export function loadUiPreferences(
         defaults.showAdvancedSettings,
       ),
       pinnedAgentIds: normalizeUniqueTrimmedStringList(parsed.pinnedAgentIds),
-      textScale:
-        typeof parsed.textScale === "number" &&
-        normalizeTextScale(parsed.textScale) !== UI_APPEARANCE_DEFAULTS.textScale
-          ? normalizeTextScale(parsed.textScale)
-          : undefined,
+      textScale: textScale !== UI_APPEARANCE_DEFAULTS.textScale ? textScale : undefined,
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
       ...(parsed.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),

@@ -15,6 +15,7 @@ import {
   bindInProcessSubagentResume,
   readInProcessSubagentResume,
 } from "../../gateway/in-process-subagent-resume.js";
+import { retainInternalApprovalCommitGuard } from "../../gateway/internal-approval-authority.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../gateway/method-scopes.js";
 import type {
   GatewayAgentRunTaskOwner,
@@ -29,6 +30,7 @@ import {
   runWithOperatorToolGatewayContinuationContext,
 } from "../../gateway/server-plugin-in-process-dispatch.js";
 import type { TrustedSessionCreation } from "../../gateway/session-creation-provenance.js";
+import { isGatewayNativeApprovalMethod } from "../../infra/approval-gateway-runtime-methods.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
@@ -299,13 +301,22 @@ async function callAgentToolGatewayRequestBound<T>(
     method === "sessions.create" &&
     positional?.sessionCreation?.via === "spawn" &&
     request.agentToolCaller !== undefined;
-  const assertMutationCurrent =
+  let assertMutationCurrent =
     assertCurrent && !transfersCreatedInput
       ? composeSessionSourceAssertion([
           assertCurrent,
           captureExternalSessionCommitGuard(request.sessionMutationCommitGuard),
         ])
       : captureExternalSessionCommitGuard(request.sessionMutationCommitGuard);
+  if (
+    isGatewayNativeApprovalMethod(method) &&
+    !request.sessionMutationCommitGuard &&
+    !assertDispatchCurrent
+  ) {
+    assertMutationCurrent = retainInternalApprovalCommitGuard(
+      composeSessionSourceAssertion([assertMutationCurrent]),
+    );
+  }
   const dispatchOptions = {
     prepareDispatchCurrent: request.prepareDispatchCurrent,
     forceSyntheticClient: true,
@@ -462,6 +473,9 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
     params,
     { ...options, sessionCreation: trustedCreation },
     async (scopes) => {
+      if (trustedCreation.childSessionPublication) {
+        throw new Error("Automatic public work sessions require the live in-process Gateway.");
+      }
       const gatewayOptions = options.timeoutMs == null ? {} : { timeoutMs: options.timeoutMs };
       // The fallback is a real local Gateway request. Carry spawn policy only in
       // the signed agent-runtime identity token, never in model-authored params.

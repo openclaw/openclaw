@@ -139,7 +139,7 @@ export function registerAgentPreDispatchFailureTests() {
         [sessionKey]: {
           sessionId,
           updatedAt: Date.now() - 10_000,
-          status: "running",
+          status: "interrupted",
           abortedLastRun: true,
           restartRecoveryDeliveryRunId: runId,
           restartRecoveryDeliverySourceRunId: "interrupted-source-run",
@@ -198,7 +198,7 @@ export function registerAgentPreDispatchFailureTests() {
       expect(mocks.agentCommand).not.toHaveBeenCalled();
       expect(store[sessionKey]).toMatchObject({
         sessionId,
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
         restartRecoveryDeliverySourceRunId: "interrupted-source-run",
         mainRestartRecovery: {
@@ -227,7 +227,7 @@ export function registerAgentPreDispatchFailureTests() {
       [sessionKey]: {
         sessionId,
         updatedAt: Date.now() - 10_000,
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
         mainRestartRecovery: {
           cycleId: "cycle-1",
@@ -273,7 +273,7 @@ export function registerAgentPreDispatchFailureTests() {
       [sessionKey]: {
         sessionId,
         updatedAt: Date.now() - 10_000,
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
         mainRestartRecovery: {
           cycleId: "cycle-1",

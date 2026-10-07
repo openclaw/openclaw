@@ -17,6 +17,7 @@ import {
   getFollowupForCohort,
   withFollowupSuccessor,
 } from "../completion/session-followup-completion.js";
+import { withSubagentProgressDraft } from "../registry/subagent-progress-draft.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
   matchesSubagentRequesterSession,
@@ -642,16 +643,18 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
               }),
           ),
         );
-      delivery = followup
-        ? await withFollowupSuccessor(
-            followup.successor(settledBatch, directIdempotencyKey, () => {
-              if (!isSourceSessionEffectsAllowed()) {
-                throw new Error("Followup completion cohort changed.");
-              }
-            }),
-            dispatch,
-          )
-        : await dispatch();
+      delivery = await withSubagentProgressDraft(settledBatch, directIdempotencyKey, () =>
+        followup
+          ? withFollowupSuccessor(
+              followup.successor(settledBatch, directIdempotencyKey, () => {
+                if (!isSourceSessionEffectsAllowed()) {
+                  throw new Error("Followup completion cohort changed.");
+                }
+              }),
+              dispatch,
+            )
+          : dispatch(),
+      );
     } catch (error) {
       if (await settleRevokedBatch()) {
         return false;

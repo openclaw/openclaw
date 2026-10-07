@@ -717,9 +717,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         gatewayGeneration: UInt64) async
     {
         do {
-            guard let paramsJSON = String(bytes: paramsData, encoding: .utf8) else {
-                throw WorkerError.unavailable(reason: "node-host worker gateway request was not UTF-8")
-            }
+            let paramsJSON = String(bytes: paramsData, encoding: .utf8)!
             let data = try await self.session.request(
                 method: method,
                 paramsJSON: paramsJSON,

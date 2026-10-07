@@ -4,8 +4,6 @@ import type {
   SystemAgentWizardCancel,
   WizardAnswer,
 } from "../../../packages/gateway-protocol/src/index.js";
-// Shared server-method types define the client, context, response, and handler
-// contracts used by every gateway RPC method module.
 import type {
   ConnectParams,
   RequestFrame,
@@ -451,7 +449,6 @@ type GatewayResidentBridgeContext = {
   ) => void;
 };
 
-/** Complete runtime context available to gateway request handlers. */
 export type GatewayContextResolver = () => GatewayRequestContext | undefined;
 export type GatewayRequestContext = GatewayKernelContext &
   GatewayTransportContext &
@@ -551,7 +548,6 @@ export type GatewayRequestHandlerOptions = Omit<
   sessionAccessAuthority?: import("../session-access-authority.js").GatewaySessionAccessAuthority;
 };
 
-/** Single gateway method implementation. */
 export type GatewayRequestHandler = ((
   opts: GatewayRequestHandlerOptions,
 ) => Promise<void> | void) & {
@@ -559,5 +555,4 @@ export type GatewayRequestHandler = ((
   onReadError?: import("./prepared-read.js").GatewayReadErrorHandler;
 };
 
-/** Registry fragment keyed by gateway protocol method name. */
 export type GatewayRequestHandlers = Record<string, GatewayRequestHandler>;

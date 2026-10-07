@@ -197,16 +197,17 @@ impl<T> UpdateLifecycle<T> {
         if self.operation_in_progress {
             return ClaimedAction::None;
         }
-        if relaunch || self.action() == UpdateAction::RestartToUpdate {
+        if relaunch || self.ready.is_some() {
             self.operation_in_progress = true;
             return match self.ready.take() {
                 Some(ReadyUpdate::Deferred(deferred)) => ClaimedAction::Install(deferred),
                 Some(ReadyUpdate::Installed) | None => ClaimedAction::Restart,
             };
         }
-        match self.action() {
-            UpdateAction::OpenDownloadPage => ClaimedAction::OpenDownloadPage,
-            _ => ClaimedAction::None,
+        if self.download_available {
+            ClaimedAction::OpenDownloadPage
+        } else {
+            ClaimedAction::None
         }
     }
 
@@ -256,8 +257,8 @@ struct UpdateInfo {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ManualUpdateInfo {
-    version: String,
-    notes: Option<String>,
+    #[serde(flatten)]
+    update: UpdateInfo,
     release_url: &'static str,
 }
 
@@ -435,8 +436,7 @@ async fn run_check(app: AppHandle, manual: bool) {
             TerminalResultKind::PackageUpdateAvailable,
             AVAILABLE_MANUAL_EVENT,
             ManualUpdateInfo {
-                version: info.version,
-                notes: info.notes,
+                update: info,
                 release_url: RELEASE_URL,
             },
             &notification_body,

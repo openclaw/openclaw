@@ -1,7 +1,3 @@
-/**
- * Synchronous Amazon Bedrock provider registration. It wires Bedrock streaming,
- * model discovery, thinking policy, guardrails, and embedding integration.
- */
 import type { BedrockClient } from "@aws-sdk/client-bedrock";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -260,7 +256,6 @@ function injectBedrockCachePoints(
     cachePoint: { type: "default", ...(cacheRetention === "long" ? { ttl: "1h" } : {}) },
   };
 
-  // Inject into system prompt if missing.
   const system = payload.system as BedrockContentBlock[] | undefined;
   if (Array.isArray(system) && system.length > 0 && !hasCachePoint(system)) {
     const split = context.systemPrompt && splitSystemPromptCacheBoundary(context.systemPrompt);
@@ -275,7 +270,6 @@ function injectBedrockCachePoints(
     return;
   }
 
-  // Inject into the last user message if missing.
   // Bedrock Converse uses lowercase roles ("user" / "assistant").
   const messages = payload.messages as BedrockMessage[] | undefined;
   if (Array.isArray(messages)) {
@@ -296,7 +290,6 @@ function patchMaxThinkingEffort(payload: Record<string, unknown>): void {
   payload.additionalModelRequestFields = fields;
 }
 
-/** Register Amazon Bedrock provider, discovery catalog, stream wrappers, and embeddings. */
 export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   // Keep registration-local constants inside the function so partial module
   // initialization during test bootstrap cannot trip TDZ reads.
@@ -353,7 +346,6 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     delete (inferenceConfig as Record<string, unknown>).temperature;
   }
 
-  /** Extract the AWS region from a bedrock-runtime baseUrl. */
   function extractRegionFromBaseUrl(baseUrl: string | undefined): string | undefined {
     if (!baseUrl) {
       return undefined;
@@ -361,7 +353,6 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     return bedrockRegionRe.exec(baseUrl)?.[1];
   }
 
-  /** Resolve the AWS region for Bedrock API calls from provider-specific baseUrl. */
   function resolveBedrockRegion(
     config: { models?: { providers?: Record<string, unknown> } } | undefined,
   ): string | undefined {

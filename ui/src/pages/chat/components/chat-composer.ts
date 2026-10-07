@@ -560,21 +560,23 @@ export function renderChatComposer(props: ChatComposerProps) {
     props.onToggleRealtimeTalk && props.composerHoldToRecord !== false
       ? state.dictation
       : undefined;
-  const handleDictationPointerDown = (event: PointerEvent) => {
+  const handleDictationStart = (event?: PointerEvent) => {
     if (state.dictationError) {
       state.dictationError = null;
       requestUpdate();
     }
     const target = state.composerTextarea;
+    // Both hold and direct/mobile starts capture the draft before its preview
+    // replaces the textarea value; otherwise committing appends the speech twice.
     const selection = {
       start: target?.selectionStart ?? visibleDraft.length,
       end: target?.selectionEnd ?? visibleDraft.length,
       value: target?.value ?? visibleDraft,
     };
-    if (dictation?.handlePointerDown(event)) {
-      // Stop also emits pointerdown; only a new gesture owns a draft snapshot.
+    // Stop also emits pointerdown; only a new gesture owns a draft snapshot.
+    if (!event || dictation?.handlePointerDown(event)) {
       state.dictationSelection = selection;
-      if (target) {
+      if (event && target) {
         target.readOnly = true;
       }
     }
@@ -608,7 +610,8 @@ export function renderChatComposer(props: ChatComposerProps) {
     onToggleCamera: props.onToggleRealtimeCamera,
     microphonePicker,
     dictation,
-    onDictationPointerDown: handleDictationPointerDown,
+    onDictationPointerDown: handleDictationStart,
+    onDirectDictationStart: handleDictationStart,
     onPrimaryActionPointerDown: (event) =>
       preserveComposerFocusOnPrimaryAction(event, state.composerTextarea),
   };

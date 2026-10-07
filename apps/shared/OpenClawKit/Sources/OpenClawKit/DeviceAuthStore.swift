@@ -392,8 +392,7 @@ public enum DeviceAuthStore {
     }
 
     private static func jsonArray(_ rawJSON: String) -> [Any]? {
-        guard let data = rawJSON.data(using: .utf8) else { return nil }
-        return try? JSONSerialization.jsonObject(with: data) as? [Any]
+        try? JSONSerialization.jsonObject(with: Data(rawJSON.utf8)) as? [Any]
     }
 
     private static func decodeTokenKey(_ key: String) -> (role: String, gatewayID: String?) {
