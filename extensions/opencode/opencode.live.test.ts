@@ -29,7 +29,7 @@ async function resolveOpencodeToolLiveModel() {
   const isToolCapable = (model: (typeof provider.models)[number]) =>
     model.api === "openai-completions" &&
     Boolean(model.contextWindow) &&
-    Boolean(model.reasoning) &&
+    model.reasoning &&
     Boolean(model.compat?.supportsTools) &&
     model.input.every((kind) => kind === "text" || kind === "image");
   // Free Zen models rotate; without an explicit override, fall back to another discovered
