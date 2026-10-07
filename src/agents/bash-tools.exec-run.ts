@@ -80,6 +80,16 @@ import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context
 
 type GatewayApprovalResult = Awaited<ReturnType<typeof processGatewayAllowlist>>;
 
+// A running result proves only that the process was spawned and was alive at
+// that moment. It says nothing about progress, input waits, or a later exit.
+const BACKGROUND_EXEC_RUNNING_CAUTION =
+  "Running means the process was started and was alive when this result was written; it says nothing about progress, waiting for input, or a later exit or failure. Do not report progress from this result alone.";
+// Heartbeat visibility and routing decide at wake time whether a completion
+// turn may message the user, so a wake never guarantees the user hears back.
+const BACKGROUND_EXEC_WAKE_UNDELIVERABLE =
+  "The completion turn may not be allowed to message the user";
+const BACKGROUND_EXEC_PROMISE_CAUTION =
+  "do not promise the user updates unless you poll this session until it finishes and report the outcome yourself.";
 const BACKGROUND_EXEC_FOLLOW_UP =
   "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
 
@@ -157,10 +167,10 @@ export function createExecTool(
   } = resolveExecNotificationDefaults(defaults);
   const backgroundFollowUp =
     notifyOnExit && notifyOnExitEmptySuccess
-      ? `Completion will wake this conversation automatically. If only waiting remains, report that the job is running and end this turn; do not keep polling. ${BACKGROUND_EXEC_FOLLOW_UP}`
+      ? `Completion will wake this conversation automatically. ${BACKGROUND_EXEC_WAKE_UNDELIVERABLE}, so if only waiting remains, report that the job is running without promising to report back and end this turn; do not keep polling. ${BACKGROUND_EXEC_FOLLOW_UP}`
       : notifyOnExit
-        ? `${BACKGROUND_EXEC_FOLLOW_UP} Completion wakes this conversation on output or failure; empty successful jobs are silent (tools.exec.notifyOnExitEmptySuccess=false). Arrange continuation or collect the result before ending the turn if empty success matters.`
-        : `${BACKGROUND_EXEC_FOLLOW_UP} ${EXEC_MANUAL_COLLECTION_FOLLOW_UP}`;
+        ? `${BACKGROUND_EXEC_FOLLOW_UP} Completion wakes this conversation on output or failure; empty successful jobs are silent (tools.exec.notifyOnExitEmptySuccess=false). Arrange continuation or collect the result before ending the turn if empty success matters. ${BACKGROUND_EXEC_WAKE_UNDELIVERABLE}, so ${BACKGROUND_EXEC_PROMISE_CAUTION}`
+        : `${BACKGROUND_EXEC_FOLLOW_UP} ${EXEC_MANUAL_COLLECTION_FOLLOW_UP} Without a completion wake, ${BACKGROUND_EXEC_PROMISE_CAUTION}`;
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
@@ -720,7 +730,7 @@ export function createExecTool(
                     type: "text",
                     text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
                       run.session.pid ?? "n/a"
-                    }). ${backgroundFollowUp}`,
+                    }). ${BACKGROUND_EXEC_RUNNING_CAUTION} ${backgroundFollowUp}`,
                   },
                 ],
                 details: {
