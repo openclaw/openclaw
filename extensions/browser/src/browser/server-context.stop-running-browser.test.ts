@@ -70,4 +70,13 @@ describe("createProfileAvailability.stopRunningBrowser", () => {
       expect(chromeMocks.stopOwnedOpenClawChrome).not.toHaveBeenCalled();
     },
   );
+
+  it.each(["existing-session", "extension"] as const)(
+    "does not terminate a personal %s browser",
+    async (driver) => {
+      const { profileCtx } = createStopHarness(makeBrowserProfile({ driver }));
+      await profileCtx.stopRunningBrowser();
+      expect(chromeMocks.stopOwnedOpenClawChrome).not.toHaveBeenCalled();
+    },
+  );
 });

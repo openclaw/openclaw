@@ -538,9 +538,13 @@ describe("Sessions page typing ownership", () => {
 describe("Sessions page details", () => {
   beforeEach(() => vi.useFakeTimers());
 
-  it.each([false, true])(
-    "loads full settings for the expanded compact row (closed: %s)",
-    async (closeBeforeReply) => {
+  it.each([
+    { entry: "interactive", closeBeforeReply: false },
+    { entry: "deep-link", closeBeforeReply: false },
+    { entry: "interactive", closeBeforeReply: true },
+  ])(
+    "loads full settings for the expanded compact row ($entry, closed: $closeBeforeReply)",
+    async ({ entry, closeBeforeReply }) => {
       const row: GatewaySessionRow = {
         key: "agent:main:details",
         sessionId: "details-session",
@@ -570,13 +574,17 @@ describe("Sessions page details", () => {
       const page = await createRenderedPage(
         createContext(connection.gateway, sessions),
         sessionsResult([row], 1),
+        "active",
+        entry === "deep-link" ? row.key : null,
       );
       const listReads = request.mock.calls.filter(([method]) => method === "sessions.list").length;
-      expect(request.mock.calls.filter(([method]) => method === "sessions.describe")).toHaveLength(
-        0,
-      );
-      page.querySelector<HTMLButtonElement>(".session-details-toggle")!.click();
-      await page.updateComplete;
+      if (entry === "interactive") {
+        expect(
+          request.mock.calls.filter(([method]) => method === "sessions.describe"),
+        ).toHaveLength(0);
+        page.querySelector<HTMLButtonElement>(".session-details-toggle")!.click();
+        await page.updateComplete;
+      }
       await vi.advanceTimersByTimeAsync(0);
       expect(request.mock.calls.filter(([method]) => method === "sessions.describe")).toHaveLength(
         1,
@@ -621,29 +629,33 @@ describe("Sessions page details", () => {
       expect(page.querySelector(".session-details-panel")?.textContent).toContain(
         "claude-cli (fallback none)",
       );
-      page.querySelector<HTMLButtonElement>(".session-details-toggle")!.click();
-      await page.updateComplete;
-      page.querySelector<HTMLButtonElement>(".session-details-toggle")!.click();
-      await page.updateComplete;
-      expect(request.mock.calls.filter(([method]) => method === "sessions.describe")).toHaveLength(
-        1,
-      );
-      description = Promise.resolve({ session: { ...full, updatedAt: 2, thinkingDefault: "off" } });
-      connection.emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: { key: row.key, agentId: "main", reason: "patch" },
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      await page.updateComplete;
-      expect(request.mock.calls.filter(([method]) => method === "sessions.describe")).toHaveLength(
-        2,
-      );
-      expect(
-        page
-          .querySelector<HTMLSelectElement>(".session-details-panel select")
-          ?.options[0]?.textContent?.trim(),
-      ).toBe("Inherited: Off");
+      if (entry === "interactive") {
+        page.querySelector<HTMLButtonElement>(".session-details-toggle")!.click();
+        await page.updateComplete;
+        page.querySelector<HTMLButtonElement>(".session-details-toggle")!.click();
+        await page.updateComplete;
+        expect(
+          request.mock.calls.filter(([method]) => method === "sessions.describe"),
+        ).toHaveLength(1);
+        description = Promise.resolve({
+          session: { ...full, updatedAt: 2, thinkingDefault: "off" },
+        });
+        connection.emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: { key: row.key, agentId: "main", reason: "patch" },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await page.updateComplete;
+        expect(
+          request.mock.calls.filter(([method]) => method === "sessions.describe"),
+        ).toHaveLength(2);
+        expect(
+          page
+            .querySelector<HTMLSelectElement>(".session-details-panel select")
+            ?.options[0]?.textContent?.trim(),
+        ).toBe("Inherited: Off");
+      }
     },
   );
 });

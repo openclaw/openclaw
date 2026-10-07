@@ -229,6 +229,7 @@ it("preserves older readers and version markers when watcher provenance is first
   expect(getLastHeartbeatEvent()).toMatchObject({ status: "skipped", reason: "store-replaced" });
   const retained = await listSessionStateEventsSince(child, "main", 0, 200, database);
   expect(retained.events.map((entry) => entry.sequence)).not.toContain(event.sequence);
+  expect(await getSessionStateVersion(child, "main", database)).toBe(event.sequence);
   expect(reopened.db.prepare("PRAGMA schema_version").get()).toEqual(schemaBeforeRead);
   expect(
     reopened.db

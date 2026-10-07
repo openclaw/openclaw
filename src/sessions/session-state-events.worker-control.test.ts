@@ -280,22 +280,41 @@ describe("Session signal worker reconciliation", () => {
     expect(returned).toBe(true);
   });
 
-  it("preserves the originating committed result after logger failure without replay", async () => {
-    edge.execute.mockRejectedValueOnce(
-      Object.assign(new Error("Synthetic event failure"), {
+  it.each(["capture", "notice", "prune", "logger"] as const)(
+    "preserves the originating committed result after %s failure without replay",
+    async (failure) => {
+      const error = Object.assign(new Error("Synthetic event failure"), {
         code: "outcome-unknown",
-      }),
-    );
-    edge.warn.mockImplementationOnce(() => {
-      throw new Error("Synthetic diagnostic sink failure");
-    });
-    await expect(goalChange()).resolves.toBeUndefined();
-    expect(
-      edge.execute.mock.calls.filter(([command]) => command.type === "sessionState.record"),
-    ).toHaveLength(1);
-    expect(edge.warn).toHaveBeenCalled();
-    expect(edge.nativeTransaction).not.toHaveBeenCalled();
-  });
+      });
+      if (failure === "capture") {
+        edge.capture.mockImplementationOnce(() => {
+          throw error;
+        });
+      } else if (failure === "notice") {
+        edge.notice.mockImplementationOnce(() => {
+          throw error;
+        });
+      } else if (failure === "prune") {
+        edge.execute.mockImplementation(async (command) => {
+          if (command.type === "sessionState.prune") {
+            throw error;
+          }
+          return { row, notices: [notice] };
+        });
+      } else {
+        edge.execute.mockRejectedValueOnce(error);
+        edge.warn.mockImplementationOnce(() => {
+          throw new Error("Synthetic diagnostic sink failure");
+        });
+      }
+      await expect(goalChange()).resolves.toBeUndefined();
+      expect(
+        edge.execute.mock.calls.filter(([command]) => command.type === "sessionState.record"),
+      ).toHaveLength(failure === "capture" ? 0 : 1);
+      expect(edge.warn).toHaveBeenCalled();
+      expect(edge.nativeTransaction).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([false, true])("releases a pending prune reservation after failure=%s", async (fail) => {
     const pruning = createDeferred();

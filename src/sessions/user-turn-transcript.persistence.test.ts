@@ -461,6 +461,46 @@ describe("persistUserTurnTranscript", () => {
     },
   );
 
+  it("returns the existing user turn when the idempotency key was already persisted", async () => {
+    const dir = sessionDirs.make();
+    const target = createSqliteTranscriptTarget({ dir });
+
+    const first = await persistUserTurnTranscript({
+      ...target,
+      input: {
+        text: "hello once",
+        timestamp: 123,
+        idempotencyKey: "chat-run-1:user",
+      },
+      updateMode: "none",
+    });
+    const second = await persistUserTurnTranscript({
+      ...target,
+      input: {
+        text: "hello once replayed",
+        timestamp: 456,
+        idempotencyKey: "chat-run-1:user",
+      },
+      updateMode: "none",
+    });
+
+    expect(second?.messageId).toBe(first?.messageId);
+    expect(second?.message).toMatchObject({
+      role: "user",
+      content: "hello once",
+      timestamp: 123,
+      idempotencyKey: "chat-run-1:user",
+    });
+    await expect(readTranscriptMessages(target)).resolves.toEqual([
+      expect.objectContaining({
+        role: "user",
+        content: "hello once",
+        timestamp: 123,
+        idempotencyKey: "chat-run-1:user",
+      }),
+    ]);
+  });
+
   it("preserves transcript metadata when before_message_write replaces a user turn", async () => {
     let hookCalls = 0;
     const provenance = {

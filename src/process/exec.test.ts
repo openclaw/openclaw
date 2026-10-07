@@ -292,6 +292,30 @@ describe("runCommandWithTimeout", () => {
     ).rejects.toThrow("maxCombinedOutputBytes requires matching stdout and stderr capture modes");
   });
 
+  it("observes discarded output and stops without retaining it", async () => {
+    let observedBytes = 0;
+    const result = await runCommandWithTimeout(
+      nodeCommand("process.stdout.write('x'.repeat(1024 * 1024)); setInterval(() => {}, 1000)"),
+      {
+        onOutputChunk: (chunk, stream) => {
+          if (stream !== "stdout") {
+            return true;
+          }
+          observedBytes += chunk.byteLength;
+          return observedBytes < 32 * 1024;
+        },
+        outputCapture: { stdout: "discard", stderr: "tail" },
+        timeoutMs: 3_000,
+      },
+    );
+
+    expect(observedBytes).toBeGreaterThanOrEqual(32 * 1024);
+    expect(result.stdout).toBe("");
+    expect(result.stdoutTruncatedBytes).toBeGreaterThanOrEqual(observedBytes);
+    expect(result.outputLimitExceeded).toBe(true);
+    expect(result.termination).toBe("signal");
+  });
+
   it("handles malformed UTF-8 in a truncated head", async () => {
     const input = Buffer.from([0x61, 0xff, 0x62, 0xe2, 0x82, 0xac, 0x7a]);
     const result = await runUtf8CommandWithTimeout(
@@ -712,17 +736,27 @@ describe("package manager runtime", () => {
     },
   );
 
-  it("preserves Windows PATH casing and npm config for an explicit pnpm runtime", () => {
-    const env = { Path: "C:\\system;C:\\private", npm_config_node: "operator-choice" };
-    const result = resolveCommandEnv({
-      argv: ["C:\\private\\node.exe", "C:\\tools\\pnpm.js", "install"],
-      baseEnv: {},
-      env,
-      platform: "win32",
-    });
-    expect(result.Path).toBe("C:\\private;C:\\system");
-    expect(result.PATH).toBeUndefined();
-    expect(result.npm_config_node).toBe("operator-choice");
-    expect(env.Path).toBe("C:\\system;C:\\private");
+  it.each(["pnpm.cjs", "pnpm.js"])(
+    "preserves Windows PATH casing and npm config for an explicit %s runtime",
+    (cli) => {
+      const env = { Path: "C:\\system;C:\\private", npm_config_node: "operator-choice" };
+      const result = resolveCommandEnv({
+        argv: ["C:\\private\\node.exe", `C:\\tools\\${cli}`, "install"],
+        baseEnv: {},
+        env,
+        platform: "win32",
+      });
+      expect(result.Path).toBe("C:\\private;C:\\system");
+      expect(result.PATH).toBeUndefined();
+      expect(result.npm_config_node).toBe("operator-choice");
+      expect(env.Path).toBe("C:\\system;C:\\private");
+    },
+  );
+
+  it("keeps the caller's runtime selection for plain npm", () => {
+    const env = { PATH: "/selected/bin:/system/bin", npm_config_node: "operator-choice" };
+    const result = resolveCommandEnv({ argv: ["npm", "install"], baseEnv: {}, env });
+    expect(result.PATH).toBe(env.PATH);
+    expect(result.npm_config_node).toBe(env.npm_config_node);
   });
 });

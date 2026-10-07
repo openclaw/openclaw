@@ -843,4 +843,42 @@ describe("prepared harness source delivery", () => {
       }
     },
   );
+
+  it("keeps the runtime override authoritative across fallback preparation", async () => {
+    const { runEmbeddedAgent } = await loadSourceDeliveryHarness();
+    mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "primary" }]);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ assistantTexts: ["primary"] }),
+    );
+    useOpenAIPlatformAuthFixture();
+
+    await runEmbeddedAgent({
+      agentId: "worker",
+      sessionId: "authoritative-runtime-override",
+      workspaceDir: state.workspaceDir,
+      prompt: "hello",
+      runId: "authoritative-runtime-override",
+      timeoutMs: 30_000,
+      provider: "openai",
+      model: "gpt-5.4",
+      modelFallbacksOverride: ["custom/plugin-fallback"],
+      agentHarnessRuntimeOverride: "codex",
+    });
+
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimePluginSelections: [
+          { provider: "openai", modelId: "gpt-5.4", runtime: "codex", agentId: "worker" },
+          {
+            provider: "custom",
+            modelId: "plugin-fallback",
+            runtime: "codex",
+            agentId: "worker",
+          },
+        ],
+      }),
+      expect.any(Object),
+    );
+  });
 });
