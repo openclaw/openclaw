@@ -57,6 +57,7 @@ vi.mock("./cli-backends.js", () => ({
   resolveCliBackendConfig: isolatedCompletionMocks.resolveCliBackendConfig,
   resolveCliRuntimeCanonicalProvider: isolatedCompletionMocks.resolveCliRuntimeCanonicalProvider,
 }));
+// mock-isolation: Exercise the credential handoff without reading host auth stores.
 vi.mock("./cli-execution-auth.js", () => ({
   cliBackendAcceptsAuthProfileForwarding:
     isolatedCompletionMocks.cliBackendAcceptsAuthProfileForwarding,
