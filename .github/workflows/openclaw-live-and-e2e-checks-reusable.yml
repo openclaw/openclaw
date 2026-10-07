@@ -4644,6 +4644,9 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install Chromium for native live browser tests
+        timeout-minutes: 15
+        env:
+          PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT: "120000"
         if: steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-test'
         run: pnpm --dir ui exec playwright install --with-deps chromium
 

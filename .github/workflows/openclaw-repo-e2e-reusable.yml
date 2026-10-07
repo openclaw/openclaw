@@ -153,6 +153,9 @@ jobs:
           BUILD_PROFILE: ${{ inputs.build_profile }}
         run: node .release-harness/scripts/repo-e2e-artifacts.mts restore "$RUNNER_TEMP/repo-e2e-build" "$BUILD_PROFILE"
       - name: Install Playwright Chromium
+        timeout-minutes: 15
+        env:
+          PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT: "120000"
         run: pnpm --dir ui exec playwright install --with-deps chromium
       - name: Build sandbox image
         run: scripts/sandbox-setup.sh

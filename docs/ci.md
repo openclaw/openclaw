@@ -121,7 +121,7 @@ Windows keeps its complete explicit test inventory in five [measured project-ali
 
 Real-Gateway browser checks use [job budgets matched to their selected runner](/ci/runners#blacksmith-runner-capacity).
 
-Control UI CI installs the Chromium revision pinned by Playwright even when the browser cache misses. Current targets use the installer's `--require-playwright-chromium` mode; historical targets retain their existing installer. Browser startup diagnostics include provider, page, WebSocket, and Chromium process events to diagnose a session-readiness timeout even when it is reported only after unrelated unit work finishes.
+Control UI CI installs the Chromium revision pinned by Playwright even when the browser cache misses. Chromium setup in CI and release browser lanes has a 15-minute step budget and a two-minute download connection timeout. Native grep test prerequisites have a 10-minute setup budget; apt uses three retries and two-minute network and package-lock waits. Setup failures remain explicit failures rather than consuming the entire test job budget. Current targets use the installer's `--require-playwright-chromium` mode; historical targets retain their existing installer. Browser startup diagnostics include provider, page, WebSocket, and Chromium process events to diagnose a session-readiness timeout even when it is reported only after unrelated unit work finishes.
 
 Browser extension CI launches the installed, patched Chrome MCP dependency directly, on Node and on the pinned Bun fork.
 

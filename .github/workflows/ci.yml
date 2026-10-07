@@ -2254,7 +2254,9 @@ jobs:
 
       - &install_playwright_chromium
         name: Install Playwright Chromium
+        timeout-minutes: 15
         env:
+          PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT: "120000"
           FROZEN_TARGET: *frozen_target
         run: |
           if [[ "${COMPATIBILITY_TARGET:-false}" == "true" ]]; then
@@ -3347,14 +3349,16 @@ jobs:
         run: pnpm build qaRuntime
 
       - name: Install ripgrep for native grep tests
+        timeout-minutes: 10
         if: matrix.requires_ripgrep == true && runner.os == 'Linux'
         shell: bash
         run: |
           if command -v rg >/dev/null 2>&1; then
             exit 0
           fi
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ripgrep
+          apt_options=(-o Acquire::Retries=3 -o Acquire::http::Timeout=120 -o Acquire::https::Timeout=120 -o DPkg::Lock::Timeout=120)
+          sudo apt-get update -qq "${apt_options[@]}"
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ripgrep "${apt_options[@]}"
 
       - name: Prepare Docker sandbox image
         if: matrix.requires_sandbox_image == true && runner.os == 'Linux'
