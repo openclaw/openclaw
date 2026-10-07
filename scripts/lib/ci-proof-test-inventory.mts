@@ -4535,7 +4535,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/pages/model-providers/model-providers-page.login.test.ts",
   "ui/src/pages/model-providers/model-providers-page.order.test.ts",
   "ui/src/pages/model-providers/model-providers-page.test.ts",
-  "ui/src/pages/model-providers/model-providers-page.usage.test.ts",
   "ui/src/pages/model-providers/route.test.ts",
   "ui/src/pages/model-providers/view.test.ts",
   "ui/src/pages/new-session/composer-attachments.test.ts",
