@@ -53,7 +53,10 @@ type PluginApprovalIosPushDelivery = NonNullable<
 
 export function createPluginApprovalHandlers(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
-  opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: PluginApprovalIosPushDelivery },
+  opts?: {
+    forwarder?: ExecApprovalForwarder;
+    iosPushDelivery?: PluginApprovalIosPushDelivery;
+  },
 ): GatewayRequestHandlers {
   return {
     "plugin.approval.list": async (options) => {
@@ -151,6 +154,11 @@ export function createPluginApprovalHandlers(
         return normalized === null ? null : sanitizeExecApprovalDisplayText(normalized);
       };
       const turnSource = trustedAgentRuntime ?? p;
+      const approvalSource =
+        trustedAgentRuntime?.approvalSource &&
+        trustedAgentRuntime.approvalSource.channel === trustedAgentRuntime.turnSourceChannel
+          ? trustedAgentRuntime.approvalSource
+          : undefined;
       const request: PluginApprovalRequestPayload = {
         pluginId: trustedAgentRuntime?.approvalOwnerPluginId ?? sanitizeMeta(p.pluginId),
         title: sanitizedTitle,
@@ -179,6 +187,7 @@ export function createPluginApprovalHandlers(
           (sessionOwner?.ok ? sessionOwner.agentId : sanitizeMeta(p.agentId)),
         sessionKey,
         runId: trustedAgentRuntime?.operationalRunInstance.runId ?? null,
+        ...(approvalSource ? { approvalSource } : {}),
         turnSourceChannel: normalizeNullableString(turnSource.turnSourceChannel),
         turnSourceTo: normalizeNullableString(turnSource.turnSourceTo),
         turnSourceAccountId: normalizeNullableString(turnSource.turnSourceAccountId),

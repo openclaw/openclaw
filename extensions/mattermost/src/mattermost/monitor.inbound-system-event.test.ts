@@ -805,6 +805,12 @@ describe("mattermost inbound user posts", () => {
       GroupSpace: "team-1",
       NativeChannelId: "chan-1",
       InboundAccessAuthorized: true,
+      ApprovalSource: {
+        channel: "mattermost",
+        senderId: "user-1",
+        senderName: "alice",
+        conversationKind: "channel",
+      },
       OriginatingChannel: "mattermost",
       Provider: "mattermost",
     });

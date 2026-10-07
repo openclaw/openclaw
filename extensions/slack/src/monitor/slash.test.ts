@@ -325,10 +325,16 @@ describe("slack slash commands access groups", () => {
     });
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
-    const dispatchArg = firstDispatchArg() as {
-      ctx?: { CommandAuthorized?: boolean };
-    };
-    expect(dispatchArg?.ctx?.CommandAuthorized).toBe(true);
+    expect(firstDispatchArg().ctx).toMatchObject({
+      CommandAuthorized: true,
+      InboundAccessAuthorized: true,
+      ApprovalSource: {
+        channel: "slack",
+        senderId: "U_ATTACKER",
+        senderName: "Ada",
+        conversationKind: "direct",
+      },
+    });
   });
 
   it.each([
@@ -545,6 +551,12 @@ describe("slack slash command session metadata", () => {
       GroupSpace: "TGRID1",
       OriginatingTo: "team:TGRID1:channel:CGRID1",
       SessionKey: expect.stringContaining("team:tgrid1:user:u1"),
+      ApprovalSource: {
+        channel: "slack",
+        senderId: "U1",
+        workspaceId: "TGRID1",
+        conversationKind: "channel",
+      },
     });
   });
 

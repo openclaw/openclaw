@@ -52,6 +52,7 @@ import {
 import { hasInboundAudio } from "./inbound-media.js";
 import { normalizeMessageTimestampMs } from "./message-timestamp.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { capturePluginApprovalSource } from "./plugin-approval-source.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import {
@@ -366,6 +367,14 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
             : undefined,
         })
       : undefined);
+  const approvalSource = capturePluginApprovalSource({
+    context: sessionCtx,
+    channel: messageProvider,
+    provenance: inputProvenance,
+    isHeartbeat,
+    isRoomEvent,
+    reusesTurnRecorder: Boolean(opts?.userTurnTranscriptRecorder),
+  });
   const replyPolicyChannel =
     (replyRoute.channel as OriginatingChannelType | undefined) ??
     (messageProvider as OriginatingChannelType | undefined);
@@ -384,6 +393,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     InputProvenance: inputProvenance,
   });
   const followupRun = {
+    ...(approvalSource ? { approvalSource } : {}),
     prompt: queuedBody,
     sourceTurnId: resolveReplySourceTurnId({
       sourceTurnId,

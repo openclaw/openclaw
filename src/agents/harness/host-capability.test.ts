@@ -804,15 +804,29 @@ describe("agent harness host capability", () => {
     },
   );
 
-  it("carries native-turn closure through policy, approval registration, and decision waits", async () => {
-    const { attempt } = await admittedAttempt("run-native-approval-scope");
+  it("carries requester context and native-turn closure through policy, registration, and waits", async () => {
+    const approvalSource = {
+      channel: "slack",
+      senderId: "U123",
+      userMessageExcerpt: "Please review this image",
+      conversationKind: "direct" as const,
+    };
+    const { attempt } = await admittedAttempt("run-native-approval-scope", {
+      messageChannel: "slack",
+      currentThreadTs: "1700000001.000002",
+      approvalSource,
+    });
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
     const turn = new AbortController();
     const scopes: AbortSignal[] = [];
     const captureScope = () => {
-      scopes.push(AbortSignal.any([...(getGatewayToolCallerIdentity()?.approvalSignals ?? [])]));
+      const caller = getGatewayToolCallerIdentity();
+      expect(caller?.approvalSource).toEqual(approvalSource);
+      expect(caller?.turnSourceThreadId).toBe("1700000001.000002");
+      scopes.push(AbortSignal.any([...(caller?.approvalSignals ?? [])]));
     };
-    mockRunBefore.mockImplementationOnce(async ({ params }) => {
+    mockRunBefore.mockImplementationOnce(async ({ ctx, params }) => {
+      expect(ctx?.turnSourceThreadId).toBe("1700000001.000002");
       captureScope();
       return { blocked: false, params };
     });

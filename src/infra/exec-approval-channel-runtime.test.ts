@@ -350,24 +350,36 @@ describe("createExecApprovalChannelRuntime", () => {
     expect(mockGatewayClientRequests).toHaveBeenCalledWith("exec.approval.list", {});
   });
 
-  it("subscribes before replay and dedupes live events that overlap the pending list", async () => {
-    const replay = createDeferred<ExecApprovalRequest[]>();
+  it("subscribes before replay, dedupes live events, and retains requester context for resolution", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const approval = createPluginReplayRequest("plugin:context-replay");
+    approval.request.approvalSource = {
+      channel: "telegram",
+      senderId: "123",
+      userMessageExcerpt: "original message",
+    };
+    const delivered = createDeferred<PluginApprovalRequest>();
+    const delivery = createDeferred<Array<{ id: string }>>();
+    const finalized = createDeferred<PluginApprovalRequest>();
     let subscriber:
       | {
-          onRequested: (request: ExecApprovalRequest) => void;
-          onResolved: (resolved: never) => void;
-          shouldHandle: (request: ExecApprovalRequest) => boolean;
+          onRequested: (request: PluginApprovalRequest) => void;
+          onResolved: (resolved: PluginApprovalResolved) => void;
+          shouldHandle: (request: PluginApprovalRequest) => boolean;
         }
       | undefined;
     const unsubscribe = vi.fn();
-    const request = vi.fn(async (method: string) => {
+    const requestGateway = vi.fn(async (method: string) => {
       expect(subscriber, "internal subscriber before replay").toBeDefined();
-      return method === "exec.approval.list" ? await replay.promise : { ok: true };
+      return method === "plugin.approval.list" ? [approval] : { ok: true };
     });
-    const shouldHandle = vi.fn(() => true);
-    const deliverRequested = vi.fn(async (approval: ExecApprovalRequest) => [{ id: approval.id }]);
+    const deliverRequested = vi.fn(async (request: PluginApprovalRequest) => {
+      delivered.resolve(request);
+      return await delivery.promise;
+    });
     const gatewayRuntime: GatewayNativeApprovalRuntime = {
-      request: request as GatewayNativeApprovalRuntime["request"],
+      request: requestGateway as GatewayNativeApprovalRuntime["request"],
       requestRoute: vi.fn(),
       routeCoordinator: {} as never,
       subscribe: (nextSubscriber) => {
@@ -376,31 +388,41 @@ describe("createExecApprovalChannelRuntime", () => {
       },
     };
     const runtime = withGatewayNativeApprovalRuntime(gatewayRuntime, () =>
-      createRuntime({
-        shouldHandle,
+      createRuntime<PluginApprovalRequest, PluginApprovalResolved>({
+        eventKinds: ["plugin"],
         deliverRequested,
+        finalizeResolved: async ({ request }) => {
+          finalized.resolve(request);
+        },
       }),
     );
+    try {
+      await runtime.start();
+      expect(await delivered.promise).toMatchObject(approval);
+      expect(subscriber?.shouldHandle(approval)).toBe(true);
+      subscriber?.onRequested(approval);
+      expect(deliverRequested).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(approval));
+      subscriber?.onResolved({
+        id: approval.id,
+        decision: "deny",
+        ts: 3,
+        request: { ...approval.request, approvalSource: { channel: "telegram", senderId: "123" } },
+      });
+      delivery.resolve([{ id: approval.id }]);
+      expect(await finalized.promise).toMatchObject(approval);
 
-    await runtime.start();
-    const approval = createExecReplayRequest("overlap");
-    if (subscriber?.shouldHandle(approval)) {
-      subscriber.onRequested(approval);
+      await runtime.request("plugin.approval.list", {});
+      expect(requestGateway).toHaveBeenLastCalledWith(
+        "plugin.approval.list",
+        {},
+        { clientDisplayName: "Test Exec Approvals" },
+      );
+      expect(mockCreateOperatorApprovalsGatewayClient).not.toHaveBeenCalled();
+    } finally {
+      delivery.resolve([{ id: approval.id }]);
+      await runtime.stop();
+      await runtime.stop();
     }
-    replay.resolve([approval]);
-    await vi.waitFor(() => expect(deliverRequested).toHaveBeenCalledTimes(1));
-    expect(shouldHandle).toHaveBeenCalledTimes(1);
-
-    await runtime.request("exec.approval.list", {});
-    expect(request).toHaveBeenLastCalledWith(
-      "exec.approval.list",
-      {},
-      { clientDisplayName: "Test Exec Approvals" },
-    );
-
-    expect(mockCreateOperatorApprovalsGatewayClient).not.toHaveBeenCalled();
-    await runtime.stop();
-    await runtime.stop();
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
 

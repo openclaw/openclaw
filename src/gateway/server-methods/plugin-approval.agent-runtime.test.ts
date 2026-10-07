@@ -164,7 +164,7 @@ describe("plugin approval signed agent runtime", () => {
     });
   });
 
-  it("uses signed runtime owner and route instead of forged request metadata", async (testContext) => {
+  it("uses signed runtime owner and requester context instead of forged request metadata", async (testContext) => {
     const fixture = await createPreparedTestApprovalManager<PluginApprovalRequestPayload>(
       testContext,
       {
@@ -202,10 +202,17 @@ describe("plugin approval signed agent runtime", () => {
           approvalOwnerPluginId: "codex",
           agentId: "main",
           sessionKey: "agent:main:session-1",
-          turnSourceChannel: "telegram",
-          turnSourceTo: "chat-1",
+          turnSourceChannel: "slack",
+          turnSourceTo: "D1",
           turnSourceAccountId: "default",
-          turnSourceThreadId: "thread-1",
+          turnSourceThreadId: "reply-anchor",
+          approvalSource: {
+            channel: "slack",
+            senderId: "U123",
+            senderName: "Lightning McQueen",
+            conversationKind: "direct",
+            userMessageExcerpt: "trusted original text",
+          },
         },
       });
 
@@ -227,10 +234,22 @@ describe("plugin approval signed agent runtime", () => {
         },
         agentId: "main",
         sessionKey: "agent:main:session-1",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "chat-1",
+        turnSourceChannel: "slack",
+        turnSourceTo: "D1",
         turnSourceAccountId: "default",
-        turnSourceThreadId: "thread-1",
+        turnSourceThreadId: "reply-anchor",
+        approvalSource: {
+          channel: "slack",
+          senderId: "U123",
+          senderName: "Lightning McQueen",
+          userMessageExcerpt: "trusted original text",
+        },
+      });
+      const durablePresentation = openOpenClawStateDatabase(options)
+        .db.prepare("SELECT presentation_json FROM operator_approvals WHERE approval_id = ?")
+        .get(approvalId);
+      expect(durablePresentation).toMatchObject({
+        presentation_json: expect.not.stringContaining("trusted original text"),
       });
       expect(
         openOpenClawStateDatabase(options)

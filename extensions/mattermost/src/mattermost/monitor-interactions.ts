@@ -198,6 +198,12 @@ export function registerMattermostInteractions(params: {
           MessageSid: interactionMessageSid,
           WasMentioned: true,
           CommandAuthorized: false,
+          ApprovalSource: {
+            channel: "mattermost",
+            senderId: button.userId,
+            senderName: button.userName,
+            conversationKind: kind,
+          },
         });
         const { replyOptions, replyPipeline, tableMode, textLimit } = eventPlan.createReplyPlan();
         await core.channel.inbound.dispatch({

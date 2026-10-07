@@ -5,6 +5,7 @@ import {
   createApprovalNativeRouteReporter as createApprovalNativeRouteReporterRaw,
 } from "./approval-native-route-coordinator.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
+import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
 const approvalRouteReporters: Array<ReturnType<typeof createApprovalNativeRouteReporterRaw>> = [];
 const defaultRouteSelector = {
@@ -60,6 +61,57 @@ function approverDm(to: string) {
 }
 
 describe("createApprovalNativeRouteReporter", () => {
+  it.each(["select", "report"] as const)(
+    "keeps reviewer excerpts out of shared callbacks reached through %s",
+    async (entryPoint) => {
+      const coordinator = createApprovalNativeRouteCoordinator();
+      const shouldHandle = vi.fn(() => true);
+      const classifyRoute = vi.fn(() => "unbound" as const);
+      const reporter = coordinator.createReporter(
+        reporterOptions({ handledKinds: new Set(["plugin"]), shouldHandle, classifyRoute }),
+      );
+      const request: PluginApprovalRequest = {
+        id: `plugin:private-route-${entryPoint}`,
+        request: {
+          title: "Run report",
+          description: "Render a diff",
+          approvalSource: {
+            channel: "slack",
+            senderId: "U123",
+            userMessageExcerpt: "private original message",
+          },
+        },
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+      };
+      reporter.start();
+      try {
+        if (entryPoint === "select") {
+          reporter.selectRequest({ approvalKind: "plugin", request });
+        } else {
+          await reporter.reportDelivery({
+            approvalKind: "plugin",
+            request,
+            deliveryPlan: { targets: [], originTarget: null, notifyOriginWhenDmOnly: false },
+            deliveredTargets: [],
+          });
+        }
+        const publicRequest = {
+          ...request,
+          request: {
+            ...request.request,
+            approvalSource: { channel: "slack", senderId: "U123" },
+          },
+        };
+        expect(shouldHandle).toHaveBeenCalledWith(publicRequest);
+        expect(classifyRoute).toHaveBeenCalledWith(publicRequest);
+        expect(request.request.approvalSource?.userMessageExcerpt).toBe("private original message");
+      } finally {
+        coordinator.close();
+      }
+    },
+  );
+
   it("keeps the local approval route visible when an unbound request has multiple runtimes", () => {
     const coordinator = createApprovalNativeRouteCoordinator();
     const first = coordinator.createReporter(reporterOptions());

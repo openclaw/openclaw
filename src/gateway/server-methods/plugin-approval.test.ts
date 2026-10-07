@@ -716,6 +716,43 @@ describe("createPluginApprovalHandlers", () => {
   });
 
   describe("plugin.approval.resolve", () => {
+    it("preserves requester context in authorized lists and resolution events", async () => {
+      const source = {
+        channel: "slack",
+        senderId: "U123",
+        userMessageExcerpt: "private original message",
+      };
+      const record = manager.create(
+        { title: "Sensitive action", description: "Needs approval", approvalSource: source },
+        60_000,
+        "plugin:private",
+      );
+      await manager.register(record, 60_000);
+      const handlers = createPluginApprovalHandlers(manager);
+      const context = createApprovalContext();
+      const listOpts = createMockOptions("plugin.approval.list", {}, { context });
+      await invokeHandler(handlers, listOpts);
+      const listed = requireRecord(
+        requireArray(responseCall(listOpts.respond).result, "list")[0],
+        "approval",
+      );
+      expect(requireRecord(listed.request, "request").approvalSource).toEqual(source);
+      expect((await manager.getSnapshot(record.id))?.request.approvalSource).toEqual(source);
+
+      const resolveOpts = createMockOptions(
+        "plugin.approval.resolve",
+        { id: record.id, decision: "deny" },
+        { context },
+      );
+      await invokeHandler(handlers, resolveOpts);
+      const event = expect.objectContaining({
+        request: expect.objectContaining({
+          approvalSource: source,
+        }),
+      });
+      expect(broadcastCall(resolveOpts).payload).toEqual(event);
+    });
+
     it("rejects invalid decision", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const record = await registerApproval(manager);
@@ -727,17 +764,32 @@ describe("createPluginApprovalHandlers", () => {
       expect(expectResponseRejected(opts.respond).message).toBe("invalid decision");
     });
 
-    it("sends an iOS cleanup wake when a plugin approval resolves", async () => {
-      const handleResolved = vi.fn(async () => {});
+    it("notifies forwarding and push delivery when a plugin approval resolves", async () => {
+      const iosResolved = vi.fn(async () => {});
+      const forwardResolved = vi.fn(async () => {});
+      const webResolved = vi.fn(async () => {});
       const handlers = createPluginApprovalHandlers(manager, {
-        iosPushDelivery: { handleResolved },
+        forwarder: {
+          handleRequested: async () => false,
+          handleResolved: async () => {},
+          handlePluginApprovalResolved: forwardResolved,
+          stop: async () => {},
+        },
+        iosPushDelivery: { handleResolved: iosResolved },
       });
+      const context = createApprovalContext();
+      context.approvalWebPushDelivery = {
+        handleRequested: () => false,
+        handleResolved: webResolved,
+        handleExpired: async () => {},
+      };
       const record = await registerApproval(manager);
 
-      const opts = createMockOptions("plugin.approval.resolve", {
-        id: record.id,
-        decision: "deny",
-      });
+      const opts = createMockOptions(
+        "plugin.approval.resolve",
+        { id: record.id, decision: "deny" },
+        { context },
+      );
       await invokeHandler(handlers, opts);
 
       expect(opts.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
@@ -746,14 +798,11 @@ describe("createPluginApprovalHandlers", () => {
         payload: { id: record.id, decision: "deny" },
         options: { dropIfSlow: true },
       });
-      expect(handleResolved).toHaveBeenCalledTimes(1);
-      expect(
-        requireRecord(mockCall(handleResolved, 0, "resolved push")[0], "resolved event"),
-      ).toMatchObject({
-        id: record.id,
-        decision: "deny",
-        request: record.request,
-      });
+      for (const callback of [forwardResolved, iosResolved, webResolved]) {
+        expect(callback).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ id: record.id, decision: "deny", request: record.request }),
+        );
+      }
     });
 
     it("resolves only plugin approvals owned by the caller", async () => {

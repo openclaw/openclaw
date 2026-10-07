@@ -2,7 +2,10 @@ import type { RequestListener } from "node:http";
 import { type FetchFunction, type WebClientOptions, WebClient } from "@slack/web-api";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  createRuntimeConfigReader,
+  getRuntimeConfig,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   warn,
   computeBackoff,
@@ -588,6 +591,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
     });
     registerSlackApprovalRuntimeContext({
       app,
+      readConfig: createRuntimeConfigReader(cfg),
       config: slackCfg.execApprovals ?? {},
       resolveClient,
       identity,

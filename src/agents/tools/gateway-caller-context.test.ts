@@ -37,6 +37,29 @@ import {
 } from "./gateway-caller-context.js";
 
 describe("gateway caller context wrapper", () => {
+  it("prevents nested tools from inventing requester context", async () => {
+    const identity = { agentId: "main", sessionKey: "agent:main:slack:direct:u123" };
+    await withGatewayToolCallerIdentity(
+      {
+        ...identity,
+        operationalRunInstance: { instanceId: "slack-root", runId: "slack-root" },
+        turnSourceThreadId: "reply-anchor",
+      },
+      () =>
+        withGatewayToolCallerIdentity(
+          {
+            ...identity,
+            turnSourceThreadId: "nested-reply-anchor",
+            approvalSource: { channel: "slack", senderId: "forged-sender" },
+          },
+          () => {
+            expect(getGatewayToolCallerIdentity()?.turnSourceThreadId).toBe("reply-anchor");
+            expect(getGatewayToolCallerIdentity()?.approvalSource).toBeUndefined();
+          },
+        ),
+    );
+  });
+
   it("keeps prepared caller authority live through personal selection without synchronous source reads", async () => {
     const refusal = new Error("requesting session authority was revoked");
     let active = true;

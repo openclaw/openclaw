@@ -15,6 +15,7 @@ import {
   resolveApprovalRoutedElsewhereNoticeText,
 } from "./approval-native-route-notice.js";
 import { buildChannelApprovalNativeTargetKey } from "./approval-native-target-key.js";
+import { omitApprovalRequestMessage } from "./approval-request-projection.js";
 import type {
   ApprovalRequestInput as ApprovalRequest,
   ApprovalRequestChannelRouteClass,
@@ -438,6 +439,8 @@ function hasActiveApprovalNativeRouteRuntimeForState(
   return accountId === undefined ? matchingRuntimes.length === 1 : matchingRuntimes.length > 0;
 }
 
+// Future requester notices for remote review and terminal outcomes belong at the
+// approval lifecycle owner, retaining the admitted source account until handoff.
 async function maybeFinalizeApprovalRouteNotice(
   state: ApprovalNativeRouteCoordinatorState,
   approvalId: string,
@@ -513,14 +516,15 @@ function createApprovalNativeRouteReporterForState(
     if (state.closed || !registered || !params.handledKinds.has(payload.approvalKind)) {
       return;
     }
-    const selection = resolveApprovalRouteSelection(state, payload);
+    const request = omitApprovalRequestMessage(payload.request);
+    const selection = resolveApprovalRouteSelection(state, { ...payload, request });
     if (!selection.verdicts.has(runtimeId)) {
       return;
     }
     const entry =
       state.pendingNotices.get(payload.request.id) ??
       createPendingApprovalRouteNotice(state, {
-        request: payload.request,
+        request,
         approvalKind: payload.approvalKind,
       });
     entry.reports.set(runtimeId, {
@@ -545,20 +549,20 @@ function createApprovalNativeRouteReporterForState(
       if (state.closed || !params.handledKinds.has(payload.approvalKind)) {
         return { kind: "ineligible" };
       }
+      // Candidate route callbacks do not establish who will receive the approval.
+      const request = omitApprovalRequestMessage(payload.request);
       if (!registered) {
         try {
-          return params.shouldHandle(payload.request)
-            ? { kind: "selected" }
-            : { kind: "ineligible" };
+          return params.shouldHandle(request) ? { kind: "selected" } : { kind: "ineligible" };
         } catch (error) {
           return { kind: "selector-error", error };
         }
       }
-      const selection = resolveApprovalRouteSelection(state, payload);
+      const selection = resolveApprovalRouteSelection(state, { ...payload, request });
       const entry =
         state.pendingNotices.get(payload.request.id) ??
         createPendingApprovalRouteNotice(state, {
-          request: payload.request,
+          request,
           approvalKind: payload.approvalKind,
         });
       state.pendingNotices.set(payload.request.id, entry);

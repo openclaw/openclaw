@@ -3,6 +3,7 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { GatewayUiCommandTarget } from "../gateway/ui-command-target.types.js";
+import type { PluginApprovalSource } from "../infra/plugin-approvals.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -135,6 +136,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
    * Legacy alias for CommandBody. Falls back to Body if not set.
    */
   RawBody?: string;
+  /** Channel-owned display context for a later plugin approval, never approval authority. */
+  ApprovalSource?: PluginApprovalSource;
   /**
    * Prefer for command detection; RawBody is treated as legacy alias.
    */

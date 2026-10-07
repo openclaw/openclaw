@@ -131,6 +131,46 @@ describe("agent runtime identity token", () => {
   });
 
   it.each(["signed", "direct"] as const)(
+    "retains bounded host approval context through %s identity",
+    async (mode) => {
+      useTempHome();
+      const runtimeToken = await importRuntimeTokenModule();
+      const source = {
+        channel: "slack",
+        senderId: "U123",
+        senderName: "Lightning McQueen",
+        workspaceId: "T123",
+        conversationKind: "direct" as const,
+        userMessageExcerpt: "Please render alpha to beta",
+      };
+      const identity = await createIdentity(runtimeToken, mode, {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        ...operationalRun(),
+        approvalSource: source,
+      });
+      expect(identity?.approvalSource).toEqual(source);
+    },
+  );
+
+  it("retains Matrix sender IDs through the signed approval identity", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const senderId = `@${"a".repeat(52)}:example.org`;
+    const identity = await createIdentity(runtimeToken, "signed", {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      ...operationalRun(),
+      approvalSource: { channel: "matrix", senderId, conversationKind: "direct" },
+    });
+    expect(identity?.approvalSource).toEqual({
+      channel: "matrix",
+      senderId,
+      conversationKind: "direct",
+    });
+  });
+
+  it.each(["signed", "direct"] as const)(
     "retains a worker approval scope through delayed first %s use",
     async (mode) => {
       const runtimeToken = await importRuntimeTokenModule();
@@ -412,6 +452,16 @@ describe("agent runtime identity token", () => {
     });
     await expect(
       runtimeToken.verifyAgentRuntimeIdentityToken(withInvalidKnownField),
+    ).resolves.toBeUndefined();
+
+    const withUnboundedApprovalContext = rewriteSignedPayload(token, (payload) => {
+      payload.approvalSource = {
+        channel: "slack",
+        userMessageExcerpt: "x".repeat(321),
+      };
+    });
+    await expect(
+      runtimeToken.verifyAgentRuntimeIdentityToken(withUnboundedApprovalContext),
     ).resolves.toBeUndefined();
 
     for (const gatewayUiCommandTarget of [

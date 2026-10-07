@@ -472,6 +472,8 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
         ...identity,
         operationalRunInstance: identity.operationalRunInstance,
         approvalAuthority,
+        approvalSource:
+          params.method === "plugin.approval.request" ? identity.approvalSource : undefined,
         ...(lineageHandoff ? { executionIdentityToken: undefined } : {}),
         ...(lineageHandoff
           ? { executionLineageHandoffId: lineageHandoff.id }

@@ -9,7 +9,7 @@ const state = await setupAgentRunnerExecutionTestState();
 const { executeAgentTurn } = await import("./agent-runner-execution.js");
 
 describe("executeAgentTurn contract", () => {
-  it("returns one closed settled result with winner and fallback facts", async () => {
+  it("carries queued requester context and returns a settled result with winner and fallback facts", async () => {
     state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "done" }],
       meta: {
@@ -18,8 +18,18 @@ describe("executeAgentTurn contract", () => {
       },
     });
 
-    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+    const approvalSource = {
+      channel: "whatsapp",
+      senderId: "1234",
+      userMessageExcerpt: "Please review this image",
+    };
+    const params = createMinimalRunAgentTurnParams();
+    params.followupRun.approvalSource = approvalSource;
+    const result = await executeAgentTurn(params);
 
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ approvalSource }),
+    );
     expect(result).toMatchObject({
       runId: expect.any(String),
       outcome: {

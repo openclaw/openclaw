@@ -22,7 +22,12 @@ const approvalDeliveryCallers = [
     approvalKind: "plugin",
     source: "rpc",
     id: "plugin:approval-first-plugin-delivery",
-    request: { pluginId: "example", title: "Sensitive action", description: "Approve action" },
+    request: {
+      pluginId: "example",
+      title: "Sensitive action",
+      description: "Approve action",
+      approvalSource: { channel: "slack", senderId: "U123" },
+    },
   },
   {
     name: "plugin node policies",
@@ -51,7 +56,7 @@ function createDeliveryFixture(
   >(test, {
     approvalKind: caller.approvalKind,
   });
-  const record = manager.create(caller.request, 60_000, caller.id);
+  const record = manager.create({ ...caller.request }, 60_000, caller.id);
   const decision = createDeferredCore<ExecApprovalDecision | null>();
   // Persistence/decision custody is a separate owner; delivery still uses its real work tracker.
   vi.spyOn(manager, "registerDecisionHandoff").mockImplementation((_id, run) => ({
@@ -155,6 +160,32 @@ describe("handlePendingApprovalRequestWithDelivery", () => {
     expect(fixture.webPush).toHaveBeenCalledExactlyOnceWith(fixture.record);
     fixture.settle();
     await request;
+  });
+
+  it("preserves requester context for native and connected approval clients", async (test) => {
+    const fixture = createDeliveryFixture(test, approvalDeliveryCallers[1]);
+    const source = {
+      channel: "slack",
+      senderId: "U123",
+      userMessageExcerpt: "original message",
+    };
+    (fixture.record.request as PluginApprovalRequestPayload).approvalSource = source;
+    const recipients = new Set(["approver"]);
+    fixture.context.getApprovalClientConnIds = () => recipients;
+    const pending = fixture.start();
+    fixture.settle();
+    await pending;
+
+    const event = expect.objectContaining({
+      request: expect.objectContaining({ approvalSource: source }),
+    });
+    expect(fixture.context.approvalEvents?.publishRequested).toHaveBeenCalledWith("plugin", event);
+    expect(fixture.context.broadcastToConnIds).toHaveBeenCalledWith(
+      "plugin.approval.requested",
+      event,
+      recipients,
+      { dropIfSlow: true },
+    );
   });
 
   it.for(

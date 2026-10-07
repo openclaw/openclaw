@@ -167,6 +167,16 @@ Slack can act as a native approval client with interactive buttons and interacti
 - Plugin approval DMs use `approvals.plugin.slack` reviewers when configured for the request. An omitted default reviewer list retains `channels.slack.allowFrom`, named-account `allowFrom`, or the account default route.
 - Approver authorization is still enforced: exec-only approvers cannot approve plugin requests unless they are also plugin approvers.
 
+A plugin approval card sent to an authorized reviewer in a separate DM shows
+the requester, source, and a bounded excerpt of the original user message with
+known secret patterns redacted. Reviewers can receive this context regardless
+of the source channel, account, or workspace, including private conversations
+they cannot access. Choose reviewers who may see this limited source context.
+Origin and shared-channel cards omit the excerpt.
+
+Authorized approval clients connected over the Gateway WebSocket receive the
+same bounded request context.
+
 For Enterprise Grid org installs, the originating event's validated workspace
 is retained for the approval prompt, approver DM, button callback, and final
 message update. Approval delivery fails closed when an org-installed account

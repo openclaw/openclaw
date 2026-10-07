@@ -60,6 +60,16 @@ describe("buildPendingApprovalView", () => {
       request: {
         title: "Use protected tool",
         description: "The plugin needs operator consent.",
+        pluginId: "approval-probe",
+        toolName: "diffs",
+        approvalSource: {
+          channel: "slack",
+          senderId: "U0C5KQJEE56",
+          senderName: "Lightning McQueen",
+          workspaceId: "T123",
+          conversationKind: "direct",
+          userMessageExcerpt: "Render the alpha-to-beta diff",
+        },
         scope: { kind: "external-post", target: "github", visibility: "public" },
       },
     };
@@ -68,6 +78,9 @@ describe("buildPendingApprovalView", () => {
     const view = buildPendingApprovalView(request);
     expect(view.approvalKind).toBe("plugin");
     expect(view.scope).toEqual(request.request.scope);
+    expect(view).toMatchObject({ approvalSource: request.request.approvalSource });
+    expect(view.metadata).toContainEqual({ label: "Approval plugin", value: "approval-probe" });
+    expect(view.metadata).toContainEqual({ label: "Tool", value: "diffs" });
     expect(view.metadata).toContainEqual({ label: "Scope", value: "Post publicly to github" });
     expect(view.actions[0]?.action).toEqual({
       type: "approval",

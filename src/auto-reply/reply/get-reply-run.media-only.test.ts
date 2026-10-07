@@ -2477,7 +2477,8 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.transcriptPrompt).not.toContain("Sender:");
   });
 
-  it("captures the prepared reply policy for queued Slack runs", async () => {
+  it("captures prepared reply policy and requester context for queued Slack runs", async () => {
+    const requesterMessage = "Please review this image";
     await runPrepared({
       cfg: {
         session: {},
@@ -2485,7 +2486,7 @@ describe("runPreparedReply media-only handling", () => {
         agents: { defaults: {} },
       },
       ...turn(
-        "",
+        requesterMessage,
         {
           ThreadHistoryBody: "Earlier message in this thread",
           Provider: "slack",
@@ -2493,7 +2494,13 @@ describe("runPreparedReply media-only handling", () => {
           ChatType: "group",
           ReplyToMode: "off",
         },
-        { media: [{ path: "/tmp/input.png" }], OriginatingChannel: "slack", ReplyToId: "101.001" },
+        {
+          media: [{ path: "/tmp/input.png" }],
+          OriginatingChannel: "slack",
+          ReplyToId: "101.001",
+          InboundAccessAuthorized: true,
+          ApprovalSource: { channel: "slack", senderId: "U123", conversationKind: "channel" },
+        },
         { OriginatingChannel: undefined },
       ),
     });
@@ -2501,6 +2508,12 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireRunReplyAgentCall();
     expect(call?.followupRun.originatingReplyToId).toBe("101.001");
     expect(call?.followupRun.originatingReplyToMode).toBe("off");
+    expect(call.followupRun.approvalSource).toEqual({
+      channel: "slack",
+      senderId: "U123",
+      conversationKind: "channel",
+      userMessageExcerpt: requesterMessage,
+    });
   });
 
   it("keeps cross-channel cron reply policy independent of remembered chat type", async () => {

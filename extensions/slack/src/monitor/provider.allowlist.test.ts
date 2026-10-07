@@ -251,6 +251,7 @@ describe("slack startup user allowlist resolution", () => {
         },
       },
     });
+    setRuntimeConfigSnapshot(slackTestState.config as OpenClawConfig);
     const { channelRuntime, register } = createRuntimeContextCapture();
 
     const monitor = startSlackMonitor(monitorSlackProvider, { channelRuntime });
@@ -269,6 +270,20 @@ describe("slack startup user allowlist resolution", () => {
           }),
         }),
       );
+      const context = vi.mocked(register).mock.calls[0]?.[0].context as {
+        assertCurrent: () => void;
+        readConfig: () => OpenClawConfig;
+      };
+      vi.mocked(channelRuntime.runtimeContexts.get).mockReturnValue(context);
+      expect(context.assertCurrent).not.toThrow();
+      const currentConfig: OpenClawConfig = { channels: { slack: { enabled: false } } };
+      setRuntimeConfigSnapshot(currentConfig);
+      expect(context.readConfig()).toBe(currentConfig);
+      vi.mocked(channelRuntime.runtimeContexts.get).mockReturnValue({});
+      expect(context.assertCurrent).toThrow("Slack approval delivery is no longer authorized");
+      vi.mocked(channelRuntime.runtimeContexts.get).mockReturnValue(context);
+      monitor.controller.abort();
+      expect(context.assertCurrent).toThrow("Slack approval delivery is no longer authorized");
     } finally {
       await stopSlackMonitor(monitor);
     }

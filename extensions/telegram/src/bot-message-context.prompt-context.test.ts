@@ -138,6 +138,23 @@ const ambientRows = [
 ] as const;
 
 describe("Telegram prompt composition", () => {
+  it("binds an admitted human message to its approval source", async () => {
+    const context = await buildTelegramMessageContextForTest({
+      cfg: config(),
+      sessionRuntime: null,
+      message: message(1, "private request"),
+    });
+    expect(context?.ctxPayload).toMatchObject({
+      InboundAccessAuthorized: true,
+      ApprovalSource: {
+        channel: "telegram",
+        senderId: "1234",
+        senderName: "Pat",
+        conversationKind: "direct",
+      },
+    });
+  });
+
   it.each([
     { name: "existing plain DM", existing: true, reply: false, include: false },
     { name: "fresh DM", existing: false, reply: false, include: true },

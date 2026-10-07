@@ -5,6 +5,7 @@ import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { GatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import { findDeliveryIntentOwner } from "../infra/outbound/delivery-queue-storage.js";
+import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -49,6 +50,68 @@ function createRegistry(handlers: GatewayRequestHandlers) {
 }
 
 describe("createGatewayInstanceRuntime", () => {
+  it("keeps requester context on selected native delivery, outside shared routing callbacks", () => {
+    const runtime = createGatewayInstanceRuntime({
+      getContext: createContext,
+      getMethodRegistry: () => createRegistry({}),
+      isDispatchAvailable: () => true,
+    });
+    const request: PluginApprovalRequest = {
+      approvalKind: "plugin",
+      id: "plugin:context",
+      request: {
+        title: "Sensitive action",
+        description: "Needs approval",
+        approvalSource: {
+          channel: "telegram",
+          senderId: "123",
+          userMessageExcerpt: "original message",
+        },
+      },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    };
+    const onRequested = vi.fn();
+    const onResolved = vi.fn();
+    const shouldHandle = vi.fn(() => true);
+    const declined = {
+      shouldHandle: vi.fn(() => false),
+      onRequested: vi.fn(),
+      onResolved: vi.fn(),
+    };
+    runtime.nativeApprovals.subscribe({
+      eventKinds: new Set(["plugin"]),
+      shouldHandle,
+      onRequested,
+      onResolved,
+    });
+    runtime.nativeApprovals.subscribe({ eventKinds: new Set(["plugin"]), ...declined });
+    const routingRequest = {
+      ...request,
+      request: { ...request.request, approvalSource: { channel: "telegram", senderId: "123" } },
+    };
+    try {
+      expect(runtime.approvalEvents.publishRequested("plugin", request)).toBe(1);
+      expect(shouldHandle).toHaveBeenCalledExactlyOnceWith(routingRequest);
+      expect(declined.shouldHandle).toHaveBeenCalledExactlyOnceWith(routingRequest);
+      expect(declined.onRequested).not.toHaveBeenCalled();
+      expect(onRequested).toHaveBeenCalledExactlyOnceWith(request);
+      const resolved = {
+        id: request.id,
+        decision: "deny" as const,
+        ts: 3,
+        request: request.request,
+      };
+      runtime.approvalEvents.publishResolved("plugin", resolved);
+      const routingResolved = { ...resolved, request: routingRequest.request };
+      expect(onResolved).toHaveBeenCalledExactlyOnceWith(routingResolved);
+      expect(declined.onResolved).toHaveBeenCalledExactlyOnceWith(routingResolved);
+      expect(request.request.approvalSource?.userMessageExcerpt).toBe("original message");
+    } finally {
+      runtime.close();
+    }
+  });
+
   it.each([false, true])(
     "revalidates recovery authority across admission (dedicated principal=%s)",
     async (dedicatedPrincipal) => {

@@ -50,6 +50,17 @@ const mediaFetchMock = vi.hoisted(() =>
   vi.fn<typeof import("../media.runtime.js").fetchWithRuntimeDispatcher>(),
 );
 
+// Media fetch is mocked below; DNS must not depend on the live Slack service.
+vi.mock("node:dns/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:dns/promises")>()),
+  lookup: async (hostname: string) => {
+    if (hostname !== "files.slack.com") {
+      throw new Error(`Unexpected Slack media test hostname: ${hostname}`);
+    }
+    return [{ address: "93.184.216.34", family: 4 }];
+  },
+}));
+
 vi.mock("../media.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../media.runtime.js")>()),
   fetchWithRuntimeDispatcher: mediaFetchMock,

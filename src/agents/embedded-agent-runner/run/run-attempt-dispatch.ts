@@ -422,6 +422,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
     senderIsOwner: params.senderIsOwner,
+    approvalSource: params.approvalSource,
     approvalReviewerDeviceId: params.approvalReviewerDeviceId,
     currentChannelId: params.currentChannelId,
     chatId: params.chatId,

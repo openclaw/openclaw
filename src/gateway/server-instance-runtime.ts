@@ -12,6 +12,7 @@ import type {
   GatewayApprovalResolved,
 } from "../infra/approval-gateway-runtime.types.js";
 import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-route-coordinator.js";
+import { omitApprovalRequestMessage } from "../infra/approval-request-projection.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 // HTTP agent ingress can finish before the lazy agent.wait handler loads its recorder.
@@ -325,10 +326,14 @@ export function createGatewayInstanceRuntime(
         publish(
           kind,
           (subscriber) => subscriber.onRequested(request as GatewayApprovalRequest),
-          (subscriber) => subscriber.shouldHandle(request as GatewayApprovalRequest),
+          (subscriber) =>
+            subscriber.shouldHandle(omitApprovalRequestMessage(request as GatewayApprovalRequest)),
         ),
       publishResolved: (kind, resolved) => {
-        publish(kind, (subscriber) => subscriber.onResolved(resolved as GatewayApprovalResolved));
+        // Resolution fans out to unselected handlers too. Selected handlers retain
+        // the original request with their pending card and use it for finalization.
+        const event = omitApprovalRequestMessage(resolved as GatewayApprovalResolved);
+        publish(kind, (subscriber) => subscriber.onResolved(event));
       },
     },
     nativeApprovals: {

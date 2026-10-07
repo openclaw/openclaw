@@ -369,74 +369,82 @@ describe("createChannelNativeApprovalRuntime", () => {
     );
   });
 
-  it("sends route notices over least-privilege gateway calls", async () => {
-    const runtime = createChannelNativeApprovalRuntime({
-      label: "test/native-runtime-route-notice",
-      clientDisplayName: "Test",
-      channel: "slack",
-      channelLabel: "Slack",
-      cfg: { gateway: { auth: { token: "configured-token" } } } as never,
-      accountId: "default",
-      nativeAdapter: {
-        describeDeliveryCapabilities: () => ({
-          enabled: true,
-          preferredSurface: "approver-dm",
-          supportsOriginSurface: true,
-          supportsApproverDmSurface: true,
-          notifyOriginWhenDmOnly: true,
-        }),
-        resolveOriginTarget: async () => ({
-          to: "channel:C123",
-          threadId: "1712345678.123456",
-        }),
-        resolveApproverDmTargets: async () => [{ to: "user:owner" }],
-      },
-      isConfigured: () => true,
-      shouldHandle: () => true,
-      buildPendingContent: async () => "pending exec",
-      prepareTarget: async ({ plannedTarget }) => ({
-        dedupeKey: plannedTarget.target.to,
-        target: { chatId: plannedTarget.target.to },
-      }),
-      deliverTarget: async () => ({ chatId: "user:owner", messageId: "m1" }),
-      finalizeResolved: async () => {},
-    });
-
-    await runtime.start();
-    try {
-      await runtime.handleRequested({
-        id: "approval-route-notice",
-        request: {
-          command: "echo hi",
-          turnSourceChannel: "slack",
-          turnSourceTo: "channel:C123",
-          turnSourceAccountId: "default",
-          turnSourceThreadId: "1712345678.123456",
+  it.each(["exec", "plugin"] as const)(
+    "sends %s route notices over least-privilege gateway calls",
+    async (approvalKind) => {
+      const approvalId = `approval-route-notice-${approvalKind}`;
+      const runtime = createChannelNativeApprovalRuntime({
+        label: "test/native-runtime-route-notice",
+        clientDisplayName: "Test",
+        channel: "slack",
+        channelLabel: "Slack",
+        eventKinds: ["exec", "plugin"],
+        cfg: { gateway: { auth: { token: "configured-token" } } } as never,
+        accountId: "default",
+        nativeAdapter: {
+          describeDeliveryCapabilities: () => ({
+            enabled: true,
+            preferredSurface: "approver-dm",
+            supportsOriginSurface: true,
+            supportsApproverDmSurface: true,
+            notifyOriginWhenDmOnly: true,
+          }),
+          resolveOriginTarget: async () => ({
+            to: "channel:C123",
+            threadId: "1712345678.123456",
+          }),
+          resolveApproverDmTargets: async () => [{ to: "user:owner" }],
         },
-        createdAtMs: 0,
-        expiresAtMs: Date.now() + 60_000,
+        isConfigured: () => true,
+        shouldHandle: () => true,
+        buildPendingContent: async () => "pending exec",
+        prepareTarget: async ({ plannedTarget }) => ({
+          dedupeKey: plannedTarget.target.to,
+          target: { chatId: plannedTarget.target.to },
+        }),
+        deliverTarget: async () => ({ chatId: "user:owner", messageId: "m1" }),
+        finalizeResolved: async () => {},
       });
-    } finally {
-      await runtime.stop();
-    }
 
-    expect(hoisted.callGatewayLeastPrivilege).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: { gateway: { auth: { token: "configured-token" } } },
-        method: "send",
-        clientName: "gateway-client",
-        mode: "backend",
-        params: {
-          channel: "slack",
-          to: "channel:C123",
-          accountId: "default",
-          threadId: "1712345678.123456",
-          message: "Approval required. I sent the approval request to Slack DMs, not this chat.",
-          idempotencyKey: "approval-route-notice:approval-route-notice",
-        },
-      }),
-    );
-  });
+      await runtime.start();
+      try {
+        await runtime.handleRequested({
+          id: approvalId,
+          approvalKind,
+          request: {
+            ...(approvalKind === "exec"
+              ? { command: "echo hi" }
+              : { title: "Run report", description: "Render a diff" }),
+            turnSourceChannel: "slack",
+            turnSourceTo: "channel:C123",
+            turnSourceAccountId: "default",
+            turnSourceThreadId: "1712345678.123456",
+          },
+          createdAtMs: 0,
+          expiresAtMs: Date.now() + 60_000,
+        });
+      } finally {
+        await runtime.stop();
+      }
+
+      expect(hoisted.callGatewayLeastPrivilege).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: { gateway: { auth: { token: "configured-token" } } },
+          method: "send",
+          clientName: "gateway-client",
+          mode: "backend",
+          params: {
+            channel: "slack",
+            to: "channel:C123",
+            accountId: "default",
+            threadId: "1712345678.123456",
+            message: "Approval required. I sent the approval request to Slack DMs, not this chat.",
+            idempotencyKey: `approval-route-notice:${approvalId}`,
+          },
+        }),
+      );
+    },
+  );
 
   it("runs expiration through the shared runtime factory", async () => {
     vi.useFakeTimers();

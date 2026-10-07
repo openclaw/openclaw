@@ -151,13 +151,14 @@ export function getSlackListenerWriteClient(params: {
   listenerClient: WebClient;
   teamId?: string;
   clientOptions?: WebClientOptions;
+  assertCurrent?: () => void;
 }): WebClient | undefined {
   const token = params.listenerClient.token?.trim();
   const teamId = params.teamId?.trim().toUpperCase();
   if (!token) {
     return undefined;
   }
-  const effectScoped = captureEffectAuthority().active;
+  const effectScoped = captureEffectAuthority().active || Boolean(params.assertCurrent);
   const cached = slackListenerWriteClientCache.get(params.listenerClient);
   if (cached) {
     // Bolt pools listener clients by authorized team. Reusing one for a
@@ -178,14 +179,18 @@ export function getSlackListenerWriteClient(params: {
   // scope, but never inherit its retry policy or request deadline.
   const client = new WebClient(
     token,
-    resolveSlackWriteClientOptions({
-      ...params.clientOptions,
-      headers,
-      slackApiUrl: params.listenerClient.slackApiUrl,
-      teamId,
-      retryConfig: SLACK_WRITE_RETRY_OPTIONS,
-      timeout: 0,
-    }),
+    resolveSlackWriteClientOptions(
+      {
+        ...params.clientOptions,
+        headers,
+        slackApiUrl: params.listenerClient.slackApiUrl,
+        teamId,
+        retryConfig: SLACK_WRITE_RETRY_OPTIONS,
+        timeout: 0,
+      },
+      undefined,
+      params.assertCurrent,
+    ),
   );
   if (!effectScoped) {
     slackListenerWriteClientCache.set(params.listenerClient, { teamId, client });

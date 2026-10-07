@@ -23,6 +23,7 @@ import {
   type ApprovalNativeRouteCoordinator,
 } from "./approval-native-route-coordinator.js";
 import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
+import { omitApprovalRequestMessage } from "./approval-request-projection.js";
 import {
   resolveApprovalRequestKind,
   type ApprovalRequestInput,
@@ -558,10 +559,15 @@ function createApprovalHandlers<
   };
 
   return {
+    // Forwarding targets may be shared chats, so channel renderers receive metadata only.
     handleRequested: (request: TRequest) =>
-      stopped ? Promise.resolve(false) : trackDelivery(() => handleRequested(request)),
+      stopped
+        ? Promise.resolve(false)
+        : trackDelivery(() => handleRequested(omitApprovalRequestMessage(request))),
     handleResolved: (resolved: TResolved) =>
-      stopped ? Promise.resolve() : trackDelivery(() => handleResolved(resolved)),
+      stopped
+        ? Promise.resolve()
+        : trackDelivery(() => handleResolved(omitApprovalRequestMessage(resolved))),
     stop: () => {
       if (!stopPromise) {
         stopped = true;

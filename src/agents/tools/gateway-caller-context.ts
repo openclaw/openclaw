@@ -21,6 +21,7 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import type { PluginApprovalSource } from "../../infra/plugin-approvals.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -101,6 +102,8 @@ type GatewayToolCallerIdentity = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  /** Host-captured approval presentation; never plugin-authored request data. */
+  approvalSource?: PluginApprovalSource;
 };
 
 type GatewayToolCallerSource = {
@@ -177,6 +180,7 @@ type AdmittedGatewayToolCallerParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  approvalSource?: PluginApprovalSource;
 };
 
 function composeReceiptAuthority(
@@ -279,6 +283,7 @@ export function createAdmittedGatewayToolCallerIdentity(
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
+    approvalSource: params.approvalSource,
   };
 }
 
@@ -604,6 +609,10 @@ export async function withGatewayToolCallerIdentity<T>(
   const turnSourceAccountId =
     inheritedOwner?.turnSourceAccountId ?? identity.turnSourceAccountId?.trim();
   const turnSourceThreadId = inheritedOwner?.turnSourceThreadId ?? identity.turnSourceThreadId;
+  // Nested tools cannot replace or invent the admitted requester's context.
+  const approvalSource = inheritedOwner?.operationalRunInstance
+    ? inheritedOwner.approvalSource
+    : (inheritedOwner?.approvalSource ?? identity.approvalSource);
   const gatewayUiCommandTarget =
     inheritedOwner?.gatewayUiCommandTarget ?? identity.gatewayUiCommandTarget;
   return await gatewayToolCallerStorage.run(
@@ -650,6 +659,7 @@ export async function withGatewayToolCallerIdentity<T>(
       ...(turnSourceTo ? { turnSourceTo } : {}),
       ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
       ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
+      ...(approvalSource ? { approvalSource } : {}),
     },
     run,
   );

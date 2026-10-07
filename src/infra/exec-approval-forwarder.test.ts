@@ -23,6 +23,7 @@ import {
   stopForwarderFixtures,
 } from "./exec-approval-forwarder.test-support.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
+import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 
 const { mockLogError } = vi.hoisted(() => ({ mockLogError: vi.fn() }));
 vi.mock("../logging/subsystem.js", () => ({
@@ -314,6 +315,72 @@ describe("exec approval forwarder", () => {
     const target = requireRecord(hookParams.target, "delivery target");
     expect(target.channel).toBe("slack");
     expect(target.to).toBe("U123");
+  });
+
+  it("omits original messages before channel renderers forward plugin requests and resolutions", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
+            approvalCapability: {
+              render: {
+                plugin: {
+                  buildPendingPayload: ({ request }: { request: PluginApprovalRequest }) => ({
+                    text: JSON.stringify(request.request.approvalSource),
+                  }),
+                  buildResolvedPayload: ({ resolved }: { resolved: PluginApprovalResolved }) => ({
+                    text: JSON.stringify(resolved.request?.approvalSource),
+                  }),
+                },
+              },
+            },
+          } satisfies ChannelPlugin,
+          source: "test",
+        },
+      ]),
+    );
+    const source = {
+      channel: "slack",
+      senderId: "U123",
+      userMessageExcerpt: "original requester message",
+    };
+    const request: PluginApprovalRequest = {
+      ...baseRequest,
+      id: "plugin:forwarded-context",
+      request: { title: "Run report", description: "Needs approval", approvalSource: source },
+    };
+    const { deliver, forwarder } = createForwarder({
+      cfg: {
+        approvals: {
+          plugin: {
+            enabled: true,
+            mode: "targets",
+            targets: [{ channel: "slack", to: "channel:C123" }],
+          },
+        },
+      },
+    });
+
+    await expect(forwarder.handlePluginApprovalRequested?.(request)).resolves.toBe(true);
+    await forwarder.handlePluginApprovalResolved?.({
+      id: request.id,
+      decision: "deny",
+      ts: 2000,
+      request: request.request,
+    });
+    await forwarder.stop();
+
+    expect(deliver).toHaveBeenCalledTimes(2);
+    for (const [delivery] of deliver.mock.calls) {
+      expect(delivery).toMatchObject({
+        to: "channel:C123",
+        payloads: [{ text: JSON.stringify({ channel: "slack", senderId: "U123" }) }],
+      });
+    }
+    expect(request.request.approvalSource).toEqual(source);
+    expect(source.userMessageExcerpt).toBe("original requester message");
   });
 
   describe("telegram session target with native exec approvals configured", () => {
