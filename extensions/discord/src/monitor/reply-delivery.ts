@@ -95,7 +95,7 @@ function resolveBindingIdentity(
     return undefined;
   }
   const baseLabel = binding.label?.trim() || binding.agentId;
-  const displayName = `🤖 ${baseLabel}`.trim() || "🤖 agent";
+  const displayName = `🤖 ${baseLabel}`.trim();
   const identity: OutboundIdentity = {
     name: truncateUtf16Safe(displayName, 80),
   };

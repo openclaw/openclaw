@@ -307,6 +307,7 @@ async function runIsolatedCompletionOwned(
       agentDir: requestAgentDir,
       workspaceDir: requestedWorkspaceDir,
       preserveWorkspaceDirOnRefresh: input.workspaceDir !== undefined,
+      runtimePluginPurpose: "isolated-completion",
     },
     {
       catalogMode: "static",

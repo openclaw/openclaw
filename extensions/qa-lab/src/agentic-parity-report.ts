@@ -162,10 +162,6 @@ function formatPercent(value: number) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function isLiveProviderMode(providerMode: string | undefined) {
-  return providerMode?.startsWith("live-") === true;
-}
-
 function describeLiveUsageFailure(scenarioName: string, scenario: QaRuntimeParityScenarioReport) {
   const missing = [
     scenario.openclawTokens > 0
@@ -449,7 +445,7 @@ export function buildQaRuntimeParityReport(params: {
 }): QaRuntimeParityReport {
   const runtimePair = normalizeRuntimePair(params.summary.run?.runtimePair);
   const providerMode = params.summary.run?.providerMode;
-  const requiresLiveUsage = isLiveProviderMode(providerMode);
+  const requiresLiveUsage = providerMode?.startsWith("live-") === true;
   const driftCounts: Record<RuntimeParityDrift, number> = {
     none: 0,
     "text-only": 0,

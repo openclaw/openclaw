@@ -132,6 +132,7 @@ function createSessionPatchHandler(
       const executed = await executeSessionPatchMutations({
         client,
         context,
+        signal,
         diagnostics,
         operatorAuthority: preparingOperator,
         onCreatedSessionCommitted: request.many

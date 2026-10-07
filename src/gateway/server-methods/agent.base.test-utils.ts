@@ -33,6 +33,7 @@ import {
   expectRespondError,
   flushScheduledDispatchStep,
   mockMainSessionEntry,
+  mockSuccessfulAgentCommand,
   buildExistingMainStoreEntry,
   useTestStateDir,
   primeMainAgentRun,
@@ -205,10 +206,7 @@ describe("gateway agent handler", () => {
       persistedEntry = store[sessionKey];
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent({
       message: "hi",
@@ -271,10 +269,7 @@ describe("gateway agent handler", () => {
             [sessionKey]: { sessionId: "ops-main", updatedAt: Date.now() },
           }),
       );
-      mocks.agentCommand.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: { durationMs: 100 },
-      });
+      mockSuccessfulAgentCommand();
 
       await invokeAgent({
         message: "hi",
@@ -311,10 +306,7 @@ describe("gateway agent handler", () => {
           [sessionKey]: { sessionId: "recipient-session", updatedAt: Date.now() },
         }),
     );
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     const context = makeContext();
     const request = {
@@ -814,10 +806,7 @@ describe("gateway agent handler", () => {
       currentSessionId = admittedSessionId;
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await runMainAgent("hi", "idem-reset-before-admission");
 
@@ -1331,10 +1320,7 @@ describe("gateway agent handler", () => {
       },
     };
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent({
       message: "continue restored session",
@@ -1406,10 +1392,7 @@ describe("gateway agent handler", () => {
       providerOverride: "test",
     });
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     const context = {
       ...makeContext(),
       loadGatewayModelCatalog: vi.fn(async () => [
@@ -1474,10 +1457,7 @@ describe("gateway agent handler", () => {
       providerOverride: "test",
     });
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     const context = {
       ...makeContext(),
       loadGatewayModelCatalog: vi.fn(async () => [
@@ -1551,10 +1531,7 @@ describe("gateway agent handler", () => {
       return result;
     });
 
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await runMainAgent("test", "test-idem-acp-meta");
 
@@ -1627,10 +1604,7 @@ describe("gateway agent handler", () => {
       capturedEntry = result as Record<string, unknown>;
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await runMainAgent("test", "test-idem-stale-transcript");
 
@@ -1785,10 +1759,7 @@ describe("gateway agent handler", () => {
       capturedEntry = result as Record<string, unknown>;
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await runMainAgent("hi", "test-idem-terminal-main-fresh-marker");
 
@@ -1845,10 +1816,7 @@ describe("gateway agent handler", () => {
       capturedEntry = result as Record<string, unknown>;
       return result;
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent({
       message: "resume terminal main",
@@ -1914,10 +1882,7 @@ describe("gateway agent handler", () => {
         capturedEntry = result as Record<string, unknown>;
         return result;
       });
-      mocks.agentCommand.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: { durationMs: 100 },
-      });
+      mockSuccessfulAgentCommand();
 
       await invokeAgent({
         message: `${runKind} probe`,

@@ -54,9 +54,6 @@ function resolveAutoPresenceConfig(config?: DiscordAutoPresenceConfig) {
 }
 
 function isExhaustedUnavailableReason(reason: AuthProfileFailureReason | null): boolean {
-  if (!reason) {
-    return false;
-  }
   return (
     reason === "rate_limit" ||
     reason === "overloaded" ||

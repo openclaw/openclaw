@@ -74,7 +74,6 @@ type DeliveryProgress = {
 
 type TelegramReplyChannelData = {
   buttons?: TelegramInlineButtons;
-  pin?: boolean;
   reaction?: {
     emoji?: unknown;
     replyToId?: unknown;
@@ -681,23 +680,23 @@ async function deliverReplyPlan(
       // table rendering only applies to the rich markdown funnel.
       richTables: params.richMessages === true && params.textMode !== "html",
     });
-    const mediaList = reply?.mediaUrls?.length
+    const mediaList = reply.mediaUrls?.length
       ? reply.mediaUrls
-      : reply?.mediaUrl
+      : reply.mediaUrl
         ? [reply.mediaUrl]
         : [];
     const hasMedia = mediaList.length > 0;
-    const presentation = normalizeMessagePresentation(reply?.presentation);
-    const interactive = reply?.interactive;
+    const presentation = normalizeMessagePresentation(reply.presentation);
+    const interactive = reply.interactive;
     const resolvedReplyText =
       resolveTelegramInteractiveTextFallback({
-        text: reply?.text,
+        text: reply.text,
         interactive,
         presentation,
       }) ??
-      reply?.text ??
+      reply.text ??
       "";
-    if (reply && resolvedReplyText !== (reply.text ?? "")) {
+    if (resolvedReplyText !== (reply.text ?? "")) {
       reply = { ...reply, text: resolvedReplyText };
     }
     const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
@@ -714,7 +713,7 @@ async function deliverReplyPlan(
       continue;
     }
     if (!resolvedReplyText && !hasMedia && !reactionEmoji) {
-      if (reply?.audioAsVoice) {
+      if (reply.audioAsVoice) {
         logVerbose("telegram reply has audioAsVoice without media/text; skipping");
         continue;
       }

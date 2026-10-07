@@ -410,12 +410,6 @@ public struct OpenClawChatStreamFallback: Codable, Hashable, Sendable {
         self.runId = runId
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case source
-        case itemId
-        case runId
-    }
-
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.source = try? container.decode(String.self, forKey: .source)

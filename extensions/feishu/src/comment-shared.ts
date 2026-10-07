@@ -263,7 +263,7 @@ function parseCommentLinkedDocumentPath(pathname: string): {
   const segments = normalizeStringEntries(pathname.split("/"));
   const offset = segments[0]?.toLowerCase() === "space" ? 1 : 0;
   const kind = COMMENT_LINK_KIND_ALIASES.get(segments[offset]?.toLowerCase() ?? "");
-  const token = normalizeString(segments[offset + 1]);
+  const token = segments[offset + 1];
   if (!kind || !isReasonableFeishuLinkToken(token)) {
     return null;
   }

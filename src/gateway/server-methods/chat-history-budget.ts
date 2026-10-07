@@ -100,7 +100,7 @@ function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
   };
 }
 
-function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
+export function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
   const entry = asOptionalRecord(message) ?? {};
   const role = typeof entry.role === "string" ? entry.role : "assistant";
   const timestamp = typeof entry.timestamp === "number" ? entry.timestamp : Date.now();

@@ -131,11 +131,7 @@ private struct OverlayBackground: View {
     }
 }
 
-extension OverlayBackground: @MainActor Equatable {
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        true
-    }
-}
+extension OverlayBackground: @MainActor Equatable {}
 
 struct CloseButtonOverlay: View {
     var isVisible: Bool

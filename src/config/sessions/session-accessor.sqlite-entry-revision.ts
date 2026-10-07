@@ -4,6 +4,7 @@ import {
   getNodeSqliteKysely,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { runSqlitePinnedReadSnapshotSync } from "../../infra/sqlite-pinned-read-snapshot.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   getAdmittedSqliteSchemaFacts,
@@ -112,16 +113,17 @@ class SessionEntryRevisionConflictError extends Error {
   readonly code = "invalid_state";
 }
 
-export class SessionEntryRevisionChangedError extends SessionEntryRevisionConflictError {}
+class SessionEntryRevisionChangedError extends SessionEntryRevisionConflictError {}
 
 /** Reuse prepared facts until this connection observes a write, then compare only their predicate. */
 export function createSessionEntryRevisionGuard(
   database: DatabaseSync,
   assertSourceCurrent: () => void,
   matches: () => boolean,
+  mode: "mutation" | "read" = "mutation",
 ): () => void {
   let verified: SqliteSessionEntryRevision | undefined;
-  return () => {
+  const guard = () => {
     assertSourceCurrent();
     const before = readSessionEntryCacheValidityToken(database);
     if (verified && cacheValidityTokensEqual(verified, before)) {
@@ -156,6 +158,20 @@ export function createSessionEntryRevisionGuard(
         },
         commit: () => {},
       });
+    }
+  };
+  if (mode === "mutation") {
+    return guard;
+  }
+  return () => {
+    try {
+      guard();
+    } catch (error) {
+      if (!(error instanceof SessionEntryRevisionChangedError) || database.isTransaction) {
+        throw error;
+      }
+      // Reprepare read facts once; no snapshot outlives this check.
+      runSqlitePinnedReadSnapshotSync(database, guard);
     }
   };
 }

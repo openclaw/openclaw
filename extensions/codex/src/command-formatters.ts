@@ -1,7 +1,3 @@
-/**
- * Formats Codex command responses for safe chat display, including status,
- * lists, account summaries, and user-facing help text.
- */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerModelListResult } from "./app-server/models.js";

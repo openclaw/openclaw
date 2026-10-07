@@ -216,8 +216,8 @@ export function createTelegramPreparedSender(config: {
           ...prepared.requestParams(fallback),
           ...(html ? { parse_mode: "HTML" as const } : {}),
         };
-        const send = () =>
-          request(
+        try {
+          return await request(
             label,
             requestParams,
             (effective) =>
@@ -229,9 +229,6 @@ export function createTelegramPreparedSender(config: {
                 !isTelegramHtmlParseError(error) && !isTelegramEmptyContentError(error),
             },
           );
-        let sent;
-        try {
-          sent = await send();
         } catch (error) {
           if (!fallback || !params.drainFallback) {
             throw error;
@@ -241,7 +238,6 @@ export function createTelegramPreparedSender(config: {
           reject(error);
           return undefined;
         }
-        return sent;
       };
       const iterator = sendTelegramTextPageParts({
         page,
@@ -267,10 +263,9 @@ export function createTelegramPreparedSender(config: {
             );
             // Quote fallback rewrites context only. Keep the prepared keyboard
             // on both physical attempts and record the fields actually accepted.
-            const acceptedParams = { ...sent.acceptedParams, ...markup };
             return {
               ...sent,
-              acceptedParams,
+              acceptedParams: { ...sent.acceptedParams, ...markup },
             };
           },
         },

@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { hostname } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { probeTreeClone, readCloneFileMetadata } from "@openclaw/fs-safe/copy";
@@ -8,9 +9,9 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
-import * as backoff from "../../infra/backoff.js";
 import * as gitExec from "../../infra/git-exec.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import * as commandRunner from "../../process/exec-runner.js";
 import * as commandExec from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -26,9 +27,15 @@ import { addManagedWorktree } from "./checkout.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
 import type { WorktreeFilesystemBackend } from "./filesystem-backend.types.js";
+import { readPendingWorktrees } from "./pending-slots.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
-import { listTemplates, touchTemplate } from "./template-registry.js";
+import {
+  listTemplatesAsync,
+  markTemplateReadyAsync,
+  releaseTemplateReaderAsync,
+  retainTemplateReaderAsync,
+} from "./template-registry-async.js";
 
 vi.mock("./filesystem-backend.js", () => ({
   detectWorktreeFilesystemBackend: vi.fn(),
@@ -80,6 +87,94 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     });
   });
 
+  it("reclaims dead creation custody before concurrent creates after restart", async () => {
+    await service.create({ repoRoot: repo, name: "warm", baseRef: "HEAD" });
+    const failure = new CommandProcessCleanupError();
+    vi.mocked(backend.cloneTemplate).mockRejectedValue(failure);
+    const crashed = await Promise.allSettled(
+      Array.from({ length: 3 }, (_, index) =>
+        service.create({
+          repoRoot: repo,
+          name: `crashed-${index}`,
+          baseRef: "HEAD",
+          ownerKind: "session",
+          ownerId: `agent:main:crashed-${index}`,
+        }),
+      ),
+    );
+    expect(crashed.every((result) => result.status === "rejected")).toBe(true);
+    expect(await readPendingWorktrees(env)).toHaveLength(3);
+    const template = (await listTemplatesAsync(env))[0]!;
+    // Persist the crash boundary with the real owner's rows, then restart its database lifetime.
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const k = getNodeSqliteKysely<Pick<DB, "state_leases" | "worktree_templates">>(db);
+        const rows = executeSqliteQuerySync(
+          db,
+          k
+            .selectFrom("state_leases")
+            .selectAll()
+            .where("scope", "like", "core:managed-worktrees:%"),
+        ).rows;
+        for (const row of rows) {
+          executeSqliteQuerySync(
+            db,
+            k
+              .updateTable("state_leases")
+              .set({
+                expires_at: row.expires_at === null ? null : 0,
+                payload_json: JSON.stringify({
+                  ...JSON.parse(row.payload_json ?? "{}"),
+                  owner: { pid: 2147483647, host: hostname(), startedAt: null },
+                }),
+              })
+              .where("scope", "=", row.scope)
+              .where("lease_key", "=", row.lease_key),
+          );
+        }
+        executeSqliteQuerySync(
+          db,
+          k
+            .updateTable("worktree_templates")
+            .set({ status: "preparing" })
+            .where("id", "=", template.id),
+        );
+      },
+      { env },
+    );
+    await closeOpenClawStateDatabaseAsync();
+    service = new ManagedWorktreeService({ env, getConfig: () => ({ worktreeMaxCount: 4 }) });
+    vi.mocked(backend.cloneTemplate).mockImplementation(createCopyWorktreeBackend().cloneTemplate);
+    const completed = await Promise.all(
+      Array.from({ length: 3 }, (_, index) =>
+        service.create({
+          repoRoot: repo,
+          suggestedName: `crashed-${index}`,
+          baseRef: "HEAD",
+          ownerKind: "session",
+          ownerId: `agent:main:crashed-${index}`,
+        }),
+      ),
+    );
+    expect(completed.map(({ name }) => name).toSorted()).toEqual([
+      "crashed-0-2",
+      "crashed-1-2",
+      "crashed-2-2",
+    ]);
+    await expect(
+      service.create({ repoRoot: repo, name: "crashed-0", baseRef: "HEAD" }),
+    ).rejects.toThrow(/retained.*unused name/);
+    for (const record of completed) {
+      expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("base\n");
+    }
+    expect((await readPendingWorktrees(env)).every(({ state }) => state === "recovering")).toBe(
+      true,
+    );
+    expect(await listTemplatesAsync(env)).toEqual([
+      expect.objectContaining({ status: "ready", id: expect.not.stringMatching(template.id) }),
+    ]);
+  });
+
   it("creates an empty workspace without retaining or cloning an empty template", async () => {
     const created = await service.createEmpty({
       ownerKind: "session",
@@ -89,7 +184,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
 
     expect(await fs.readdir(created.path)).toEqual([".git"]);
     expect(await git(created.path, "status", "--porcelain")).toBe("");
-    expect(listTemplates(env)).toEqual([]);
+    expect(await listTemplatesAsync(env)).toEqual([]);
     expect(backend.cloneTemplate).not.toHaveBeenCalled();
   });
 
@@ -145,7 +240,10 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         ).rejects.toThrow();
       }
       if (mode === "invalid") {
-        await fs.writeFile(path.join(listTemplates(env)[0]!.path, "README.md"), "changed template");
+        await fs.writeFile(
+          path.join((await listTemplatesAsync(env))[0]!.path, "README.md"),
+          "changed template",
+        );
       }
       if (mode === "fallback") {
         vi.mocked(backend.cloneTemplate).mockRejectedValueOnce(new Error("clone unavailable"));
@@ -242,7 +340,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     expect(await service.listRegistryRecords()).toEqual(before);
     expect(await git(repo, "branch", "--list", "openclaw/racing")).toBe("");
     expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("/racing");
-    for (const template of listTemplates(env)) {
+    for (const template of await listTemplatesAsync(env)) {
       await expect(fs.access(path.join(template.path, "large.bin"))).rejects.toMatchObject({
         code: "ENOENT",
       });
@@ -287,7 +385,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
 
     const sourceStatus = await git(repo, "status", "--porcelain", "--untracked-files=all");
     const inspectCopy = async (checkout: string) => {
-      const template = listTemplates(env)[0]!;
+      const template = (await listTemplatesAsync(env))[0]!;
       const sourceIndex = path.resolve(
         template.path,
         await git(template.path, "rev-parse", "--git-path", "index"),
@@ -328,7 +426,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       baseRef: "HEAD",
     });
     expect((await git(first.path, "rev-parse", "--absolute-git-dir")).length).toBeGreaterThan(220);
-    const template = listTemplates(env)[0];
+    const template = (await listTemplatesAsync(env))[0];
     assert(template);
     expect(template?.status).toBe("ready");
     await fs.writeFile(path.join(repo, ".env.local"), "second\n");
@@ -355,7 +453,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         expect(copiedMetadata?.cloneId).toBe(sourceMetadata?.cloneId);
       }
     }
-    expect(listTemplates(env).map((entry) => entry.id)).toEqual([template.id]);
+    expect((await listTemplatesAsync(env)).map((entry) => entry.id)).toEqual([template.id]);
     expect(await git(repo, "status", "--porcelain", "--untracked-files=all")).toBe(sourceStatus);
     expect(await fs.readFile(path.join(second.path, "README.md"), "utf8")).toBe("base\n");
     expect(await fs.readFile(path.join(first.path, "README.md"), "utf8")).toBe(
@@ -398,7 +496,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       // replaced by comparing the tree or accepting a clean inventory alone.
       await git(repo, "commit", "--allow-empty", "-m", "new template base");
       await service.create({ repoRoot: repo, name: "seed", baseRef: "HEAD" });
-      const original = listTemplates(env)[0];
+      const original = (await listTemplatesAsync(env))[0];
       assert(original);
       const unusualName = process.platform === "win32" ? "é space.txt" : "é space\nname.txt";
       if (change === "HEAD") {
@@ -416,7 +514,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         baseRef: "HEAD",
       });
 
-      const replacement = listTemplates(env)[0];
+      const replacement = (await listTemplatesAsync(env))[0];
       assert(replacement);
       expect(replacement.id).not.toBe(original.id);
       await expect(fs.access(original.path)).rejects.toMatchObject({ code: "ENOENT" });
@@ -490,7 +588,9 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     },
   );
 
-  it("preserves an in-progress clone while garbage collection waits for allocation", async () => {
+  it("preserves an in-progress clone while garbage collection skips its pending path", async ({
+    signal,
+  }) => {
     acceleration = false;
     const existing = await service.create({ repoRoot: repo, name: "existing", baseRef: "HEAD" });
     acceleration = true;
@@ -515,17 +615,14 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         creation,
         "Creation completed without starting a clone",
       );
-      const contended = createDeferredCore();
-      const sleep = backoff.sleepWithAbort;
-      vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async (...args) => {
-        contended.resolve();
-        return await sleep(...args);
-      });
       collection = service.gc();
-      await awaitGateBeforeSettlement(
-        contended.promise,
-        collection,
-        "Collection bypassed the active allocation",
+      await racePromiseWithAbortSignal(
+        awaitGateBeforeSettlement(
+          collection,
+          creation,
+          "Creation completed before collection skipped the pending clone",
+        ),
+        signal,
       );
       expect(await fs.readFile(path.join(destination, "partial.txt"), "utf8")).toBe(
         "in-progress clone\n",
@@ -557,26 +654,27 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       expect.objectContaining({ id: created.id, snapshotRef: removed.snapshotRef }),
     ]);
     expect(await git(repo, "rev-parse", removed.snapshotRef!)).toMatch(/^[a-f0-9]+$/u);
-    expect(listTemplates(env)).toHaveLength(1);
+    expect(await listTemplatesAsync(env)).toHaveLength(1);
     allocation.mockRestore();
 
     expect((await service.gc()).snapshotsPruned).toBe(1);
     expect(await service.listRegistryRecords()).toEqual([]);
     await expect(git(repo, "show-ref", "--verify", removed.snapshotRef!)).rejects.toThrow();
-    expect(listTemplates(env)).toEqual([]);
+    expect(await listTemplatesAsync(env)).toEqual([]);
   });
 
-  it("rereads template activity after waiting for the allocation lease", async (ctx) => {
+  it("rereads template activity after waiting for its mutation lease", async (ctx) => {
     await service.create({ repoRoot: repo, name: "retained", baseRef: "HEAD" });
-    const template = listTemplates(env)[0];
+    const template = (await listTemplatesAsync(env))[0];
     assert(template);
     now += IDLE_GC_MS + 1;
     const held = createDeferredCore<stateLease.OpenClawStateLeaseContext>();
     const release = createDeferredCore();
+    const templateKey = `template:${template.cacheKey}`;
     const holder = stateLease.withOpenClawStateLease(
       {
-        scope: "core:managed-worktrees:create",
-        key: "capacity",
+        scope: "core:managed-worktrees:mutation",
+        key: templateKey,
         database: { scope: "shared", options: { env } },
         leaseMs: 60_000,
         waitMs: 0,
@@ -587,27 +685,41 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       },
     );
     const lease = await held.promise;
-    const allocationRequested = createDeferredCore();
+    const templateRequested = createDeferredCore();
     const acquireLease = stateLease.withOpenClawStateLeaseAsync;
-    const allocation = vi
-      .spyOn(stateLease, "withOpenClawStateLeaseAsync")
-      .mockImplementation((...args) => {
-        allocationRequested.resolve();
-        return acquireLease(...args);
-      });
+    vi.spyOn(stateLease, "withOpenClawStateLeaseAsync").mockImplementation((options, ...args) => {
+      if (options.scope === "core:managed-worktrees:mutation" && options.key === templateKey) {
+        templateRequested.resolve();
+      }
+      return acquireLease(options, ...args);
+    });
     const pending = service.gc();
     try {
       await racePromiseWithAbortSignal(
-        Promise.race([
-          allocationRequested.promise,
-          pending.then(() => {
-            throw new Error("Collection completed without requesting the allocation lease");
-          }),
-        ]),
+        awaitGateBeforeSettlement(
+          templateRequested.promise,
+          pending,
+          "Collection completed without requesting template custody",
+        ),
         ctx.signal,
       );
-      expect(allocation).toHaveBeenCalledTimes(1);
-      expect(touchTemplate(env, template.id, now, () => lease.assertOwned())).toBe(true);
+      const guard = () => lease.assertOwned();
+      const reader = "activity-refresh";
+      await retainTemplateReaderAsync(
+        env,
+        {
+          id: template.id,
+          key: reader,
+          owner: { pid: process.pid, host: hostname(), startedAt: null },
+          unpublish: true,
+        },
+        guard,
+      );
+      try {
+        expect(await markTemplateReadyAsync(env, template.id, now, guard)).toBe(true);
+      } finally {
+        await releaseTemplateReaderAsync(env, reader, guard);
+      }
     } finally {
       release.resolve();
       try {
@@ -617,11 +729,11 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       }
     }
     expect((await pending).removed).toEqual([]);
-    expect(listTemplates(env)).toEqual([{ ...template, lastUsedAt: now }]);
+    expect(await listTemplatesAsync(env)).toEqual([{ ...template, lastUsedAt: now }]);
     expect(await fs.readFile(path.join(template.path, "README.md"), "utf8")).toBe("base\n");
   });
 
-  it("fences revoked allocation authority when snapshot and native fallback both fail", async () => {
+  it("fences revoked creation authority when snapshot and native fallback both fail", async () => {
     vi.mocked(backend.cloneTemplate).mockRejectedValueOnce(new Error("snapshot unavailable"));
     let failedDestination: string | undefined;
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
@@ -649,7 +761,12 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       await release.promise;
     });
     await held.promise;
-    const queueCalls = vi.spyOn(gitExec, "enqueueGitRefMutation");
+    const queued = createDeferredCore();
+    const enqueue = gitExec.enqueueGitRefMutation;
+    vi.spyOn(gitExec, "enqueueGitRefMutation").mockImplementation((...args) => {
+      queued.resolve();
+      return enqueue(...args);
+    });
     const pending = service
       .create({
         repoRoot: repo,
@@ -661,24 +778,25 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         (error: unknown) => error,
       );
     try {
-      await Promise.race([
-        vi.waitFor(() => expect(queueCalls.mock.calls.length).toBe(1), { timeout: 10_000 }),
-        pending.then(() => {
-          throw new Error("Checkout ended before cleanup queued its branch deletion");
-        }),
-      ]);
+      await awaitGateBeforeSettlement(
+        queued.promise,
+        pending,
+        "Checkout ended before cleanup queued its branch deletion",
+      );
       expect(failedDestination).toBeDefined();
       expect(await git(repo, "rev-parse", branch)).toBe(originalHead);
       await expect(fs.access(failedDestination!)).rejects.toMatchObject({ code: "ENOENT" });
+      const [slot] = await readPendingWorktrees(env);
+      assert(slot);
+      expect(slot.record.path).toBe(failedDestination);
       runOpenClawStateWriteTransaction(
         ({ db }) => {
           const changed = executeSqliteQuerySync(
             db,
             getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
-              .updateTable("state_leases")
-              .set({ owner: "successor" })
-              .where("scope", "=", "core:managed-worktrees:create")
-              .where("lease_key", "=", "capacity"),
+              .deleteFrom("state_leases")
+              .where("scope", "=", "core:managed-worktrees:mutation")
+              .where("lease_key", "=", slot.record.id),
           );
           expect(changed.numAffectedRows).toBe(1n);
         },
@@ -706,7 +824,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     "restores saved edits and retains the source template (clone failure=%s)",
     async (cloneFails) => {
       const created = await service.create({ repoRoot: repo, name: "restore", baseRef: "HEAD" });
-      const template = listTemplates(env)[0];
+      const template = (await listTemplatesAsync(env))[0];
       assert(template);
       const originalCommit = await git(created.path, "rev-parse", "HEAD");
       await fs.writeFile(path.join(created.path, "README.md"), "saved edit\n");
@@ -716,7 +834,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         vi.mocked(backend.cloneTemplate).mockRejectedValueOnce(new Error("clone unavailable"));
       }
       const restored = await service.restore({ id: created.id });
-      expect(listTemplates(env).map((entry) => entry.id)).toEqual([template.id]);
+      expect((await listTemplatesAsync(env)).map((entry) => entry.id)).toEqual([template.id]);
       expect(backend.cloneTemplate).toHaveBeenCalledTimes(2);
       expect(await git(restored.path, "rev-parse", "HEAD")).toBe(originalCommit);
       expect(await git(restored.path, "symbolic-ref", "--short", "HEAD")).toBe(created.branch);
@@ -732,7 +850,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         code: "ENOENT",
       });
       const next = await service.create({ repoRoot: repo, name: "after-restore", baseRef: "HEAD" });
-      expect(listTemplates(env).map((entry) => entry.id)).toEqual([template.id]);
+      expect((await listTemplatesAsync(env)).map((entry) => entry.id)).toEqual([template.id]);
       expect(await git(next.path, "status", "--porcelain")).toBe("");
     },
   );
@@ -744,7 +862,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       name: "restore-attributes",
       baseRef: "HEAD",
     });
-    const template = listTemplates(env)[0];
+    const template = (await listTemplatesAsync(env))[0];
     assert(template);
     await fs.writeFile(path.join(created.path, ".gitattributes"), "*.md text eol=crlf\n");
     await service.remove({ id: created.id, reason: "test" });
@@ -753,7 +871,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
 
     expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("base\r\n");
     expect(await git(restored.path, "status", "--porcelain")).toBe("?? .gitattributes");
-    expect(listTemplates(env).map((entry) => entry.id)).toEqual([template.id]);
+    expect((await listTemplatesAsync(env)).map((entry) => entry.id)).toEqual([template.id]);
     expect(await fs.readFile(path.join(template.path, "README.md"), "utf8")).toBe("base\n");
   });
 

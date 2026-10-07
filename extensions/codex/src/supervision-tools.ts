@@ -911,7 +911,6 @@ function idleContinuationError(threadId: string): Error {
   );
 }
 
-/** Builds the five shipped Codex Supervisor compatibility tools. */
 export function createCodexSupervisionTools(options: CodexSupervisionToolsOptions): AnyAgentTool[] {
   const request = createPolicyGuardedRequest(options, "enabled");
   const rawTranscriptRequest = createPolicyGuardedRequest(options, "raw-transcripts");
