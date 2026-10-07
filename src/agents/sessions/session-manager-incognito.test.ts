@@ -255,7 +255,7 @@ it("settles accepted branch hydration after its retained admission closes", asyn
   }
 });
 
-it("reads full context without caller SQL and rejects a changed source after an awaited consumer", async () => {
+it("reads full context without caller SQL and retains its prefix across an awaited append", async () => {
   const target = await create("context-consumer");
   await withIncognitoSessionActor(actor, async () => {
     const manager = await SessionManager.openAsync(target);
@@ -288,11 +288,11 @@ it("reads full context without caller SQL and rejects a changed source after an 
       ]);
       expect([...retained!]).toEqual([]);
       await expect(
-        SessionManager.readSessionContextAsync(target, async () => {
+        SessionManager.readSessionContextAsync(target, async (context) => {
           await manager.appendMessageAsync(makeUserMessage("changed during consumption", 2));
-          return "stale result";
+          return [...context];
         }),
-      ).rejects.toThrow("changed during context read");
+      ).resolves.toEqual(messages);
       expect(prepare).not.toHaveBeenCalled();
       expect(exec).not.toHaveBeenCalled();
     } finally {
