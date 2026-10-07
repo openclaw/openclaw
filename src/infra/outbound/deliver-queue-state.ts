@@ -20,8 +20,9 @@ import { retireUnsentDelivery } from "./delivery-queue-ack.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
   ackDelivery,
-  type failDelivery,
+  failDelivery,
   failDeliveryAfterPlatformSend,
+  failDeliveryBeforePlatformSend,
   finalizeDeliveryFailureSettlement,
   loadPendingDelivery,
   markDeliveryPlatformOutcomeUnknown,
@@ -37,6 +38,13 @@ const log = createSubsystemLogger("outbound/deliver");
 export type QueuedPostSendState = "marked" | "acked" | "failed";
 
 export type QueuedPreSendState = "marked" | "acked";
+
+type QueuedDeliveryFailureRecorder = (
+  id: string,
+  error: string,
+  stateDir?: string,
+  expectedPlatformSendAttemptId?: string | null,
+) => Promise<void>;
 
 /** Keeps live and recovered queue transitions on the same producer claim. */
 export function createQueuedDeliveryOwner(
@@ -115,9 +123,17 @@ export function createQueuedDeliveryOwner(
       custody = "released";
       return true;
     },
-    fail(record: typeof failDelivery, error: string): Promise<void> {
+    fail(record: QueuedDeliveryFailureRecorder, error: string): Promise<void> {
       owner.signal?.throwIfAborted();
-      return record(owner.queueId, error, owner.stateDir, owner.claimId, context);
+      // Internal transitions retain captured state; caller-supplied recorders keep their public arguments.
+      const recordInState = [
+        failDelivery,
+        failDeliveryAfterPlatformSend,
+        failDeliveryBeforePlatformSend,
+      ].find((candidate) => candidate === record);
+      return recordInState
+        ? recordInState(owner.queueId, error, owner.stateDir, owner.claimId, context)
+        : record(owner.queueId, error, owner.stateDir, owner.claimId);
     },
     async retire(): Promise<void> {
       owner.signal?.throwIfAborted();
