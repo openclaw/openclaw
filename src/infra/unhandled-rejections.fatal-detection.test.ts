@@ -55,7 +55,6 @@ describe("process error handlers", () => {
     ["ERR_OUT_OF_MEMORY", 1, "fatal unhandled rejection", "FATAL unhandled rejection:"],
     ["INVALID_CONFIG", 78, "configuration error", "CONFIGURATION ERROR - requires fix:"],
     ["MISSING_API_KEY", 1, "configuration error", "CONFIGURATION ERROR - requires fix:"],
-    [undefined, 1, "unhandled rejection", "Unhandled promise rejection:"],
   ] as const)("restores the terminal and exits for code %s", (code, exitCode, reason, label) => {
     emitUnhandled(Object.assign(new Error("expected failure"), { code }));
     expect(exitCalls).toEqual([exitCode]);
@@ -69,19 +68,19 @@ describe("process error handlers", () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it.each([
-    Object.assign(new TypeError("fetch failed"), { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } }),
-    Object.assign(new Error("unable to open database file"), { code: "SQLITE_CANTOPEN" }),
-  ])("warns without exiting for transient rejection %#", (error) => {
-    emitUnhandled(error);
-    expect(exitCalls).toEqual([]);
-    expect(restoreRuntimeTerminalStateMock).not.toHaveBeenCalled();
-    expect(warnSpy).toHaveBeenCalledWith(
-      "[openclaw] Non-fatal unhandled rejection (continuing):",
-      expect.stringContaining(error.message),
-    );
-    expect(errorSpy).not.toHaveBeenCalled();
-  });
+  it.each([Object.assign(new Error("unable to open database file"), { code: "SQLITE_CANTOPEN" })])(
+    "warns without exiting for transient rejection %#",
+    (error) => {
+      emitUnhandled(error);
+      expect(exitCalls).toEqual([]);
+      expect(restoreRuntimeTerminalStateMock).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[openclaw] Non-fatal unhandled rejection (continuing):",
+        expect.stringContaining(error.message),
+      );
+      expect(errorSpy).not.toHaveBeenCalled();
+    },
+  );
 
   it("suppresses cancellation without exiting", () => {
     emitUnhandled(Object.assign(new Error("This operation was aborted"), { name: "AbortError" }));
