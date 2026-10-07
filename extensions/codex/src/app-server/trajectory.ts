@@ -35,10 +35,7 @@ export function recordCodexTrajectoryContext(
     tools?: CodexDynamicToolSpec[];
   },
 ): void {
-  if (!recorder) {
-    return;
-  }
-  recorder.recordEvent("context.compiled", {
+  recorder?.recordEvent("context.compiled", {
     systemPrompt: params.developerInstructions,
     prompt: params.prompt ?? params.attempt.prompt,
     imagesCount: params.attempt.images?.length ?? 0,

@@ -430,10 +430,7 @@ export function createGatewayChatMetadataRuntime(params: {
         generation = current;
       }
       if (!generation) {
-        if (lastError) {
-          throw lastError;
-        }
-        throw new ChatMetadataSnapshotUnavailableError();
+        throw lastError ?? new ChatMetadataSnapshotUnavailableError();
       }
       if (!authStoresCurrent(generation.facts, deps)) {
         await refresh();

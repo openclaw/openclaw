@@ -18,11 +18,9 @@ import {
   getCodexInferenceThread,
   getCodexInferenceThreadQualification,
 } from "./inference-routing.js";
-import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { attestCodexThreadToolSurface } from "./plugin-thread-attestation.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
-  mergeCodexThreadConfigs,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
 import type { CodexThread } from "./protocol.js";
@@ -30,12 +28,15 @@ import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
 import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
 import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
-import { prepareCodexThreadFinalConfigPatch } from "./thread-lifecycle-preflight.js";
+import {
+  buildCodexThreadRequestConfig,
+  prepareCodexThreadFinalConfigPatch,
+  type CodexThreadRequestContext,
+} from "./thread-lifecycle-preflight.js";
 import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
-  CodexThreadRequestContext,
   CodexThreadFinalConfigPatchResult,
 } from "./thread-lifecycle-types.js";
 import {
@@ -191,14 +192,12 @@ export async function tryReuseCodexLiveThread(
     environmentSelectionFingerprint,
     hostSystemAgentActive,
     lifecycleTiming,
-    nativeSkillIsolation,
     ringZeroActive,
     restrictedToolSurface,
     restrictedToolSurfaceInheritedMcpServerNames,
     startModelProvider,
     startModelSelection,
     throwIfAborted,
-    userMcpServersConfigPatch,
   } = options;
   const incognito = isIncognitoSessionKey(params.params.sessionKey);
 
@@ -304,9 +303,9 @@ export async function tryReuseCodexLiveThread(
       binding.connectionScope === "supervision"
         ? undefined
         : (params.params.authProfileId ?? binding.authProfileId);
-    const resumeConfig = mergeCodexThreadConfigs(
-      params.config,
-      userMcpServersConfigPatch,
+    const resumeConfig = buildCodexThreadRequestConfig(
+      params,
+      options,
       pluginAppsConfigPatch,
       prebuiltFinalConfigPatch.configPatch,
     );
@@ -318,7 +317,7 @@ export async function tryReuseCodexLiveThread(
         model: startModelSelection.model,
         modelProvider: startModelProvider,
         preserveNativeModel: binding.preserveNativeModel === true,
-        config: applyCodexNativeSkillIsolation(resumeConfig, nativeSkillIsolation),
+        config: resumeConfig,
         hostSystemAgentActive,
         restrictedToolSurfaceInheritedMcpServerNames,
       }),
@@ -336,23 +335,10 @@ export async function tryReuseCodexLiveThread(
     const liveThreadConfigFingerprint = incognito
       ? retainedThread.configFingerprint
       : fingerprintCodexThreadConfig(
-          {
-            ...resumeParams,
-            // Keep the actual loaded provider separate from caller-selected
-            // overrides so account or provider changes always invalidate reuse.
-            model: binding.preserveNativeModel
-              ? null
-              : (binding.model ?? resumeParams.model ?? null),
-            requestedModel: binding.preserveNativeModel ? null : (resumeParams.model ?? null),
-            modelProvider: binding.preserveNativeModel
-              ? null
-              : (binding.modelProvider ?? resumeParams.modelProvider ?? null),
-            requestedModelProvider: binding.preserveNativeModel
-              ? null
-              : (resumeParams.modelProvider ?? binding.modelProvider ?? null),
-          },
+          resumeParams,
           resumeAuthProfileId,
           dynamicToolsFingerprint,
+          binding,
         );
     const ephemeralPolicy = retainedThread.ephemeralPolicy;
     if (

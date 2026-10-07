@@ -78,13 +78,8 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
       return;
     }
     const windowFloor =
-      highestAcceptedUpdateId === null
-        ? Number.NEGATIVE_INFINITY
-        : highestAcceptedUpdateId - ACCEPTED_UPDATE_ID_RETENTION;
-    const persistedFloor =
-      highestPersistedAcceptedUpdateId === null
-        ? Number.NEGATIVE_INFINITY
-        : highestPersistedAcceptedUpdateId;
+      (highestAcceptedUpdateId ?? Number.NEGATIVE_INFINITY) - ACCEPTED_UPDATE_ID_RETENTION;
+    const persistedFloor = highestPersistedAcceptedUpdateId ?? Number.NEGATIVE_INFINITY;
     const pruneAtOrBelow = Math.max(persistedFloor, windowFloor);
     for (const id of acceptedUpdateIds) {
       if (id > pruneAtOrBelow) {
@@ -186,12 +181,11 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     if (typeof updateId === "number") {
       if (failedUpdateIds.has(updateId)) {
         failedUpdateIds.delete(updateId);
-      } else if (initialUpdateId !== null && updateId <= initialUpdateId) {
-        // Restored Bot API offset: suppress redelivery of already-persisted ids.
-        options.onSkip?.(`update:${updateId}`);
-        return { accepted: false, reason: "accepted-watermark" };
-      } else if (acceptedUpdateIds.has(updateId)) {
-        // Same process already accepted this exact id (completed or in-flight).
+      } else if (
+        (initialUpdateId !== null && updateId <= initialUpdateId) ||
+        acceptedUpdateIds.has(updateId)
+      ) {
+        // Suppress restored offsets and exact ids already accepted in this process.
         options.onSkip?.(`update:${updateId}`);
         return { accepted: false, reason: "accepted-watermark" };
       }

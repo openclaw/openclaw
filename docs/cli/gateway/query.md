@@ -385,6 +385,10 @@ Config defaults (optional): `gateway.remote.sshTarget`, `gateway.remote.sshIdent
 
 Low-level RPC helper.
 
+This command loads only the configuration needed to select and authenticate the
+Gateway connection. It does not validate unrelated settings or preload plugin runtimes;
+use `openclaw config validate` to check the full configuration.
+
 Use `--expect-url <url>` to bind a call to a previously observed Gateway endpoint
 without changing URL selection or authentication. The CLI compares the exact
 resolved URL before connecting and fails if the destination changed. Automation

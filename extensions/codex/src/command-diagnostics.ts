@@ -76,9 +76,14 @@ export async function handleCodexDiagnosticsFeedback(
   if (parsed.action === "cancel") {
     return { text: cancelCodexDiagnosticsFeedback(ctx, parsed.token) };
   }
-  const targets = await requireCodexDiagnosticsTargets(deps, ctx);
-  if (typeof targets === "string") {
-    return { text: targets };
+  if (!(await hasAnyCodexDiagnosticsIdentity(ctx))) {
+    return {
+      text: "Cannot send Codex diagnostics because this command did not include a stable session identity.",
+    };
+  }
+  const targets = await resolveCodexDiagnosticsTargets(deps, ctx);
+  if (targets.length === 0) {
+    return { text: NO_DIAGNOSTICS_THREAD };
   }
   if (ctx.diagnosticsUploadApproved === true) {
     return {
@@ -339,17 +344,6 @@ function consumeCodexDiagnosticsConfirmation(
   return pending;
 }
 
-async function requireCodexDiagnosticsTargets(
-  deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
-): Promise<CodexDiagnosticsTarget[] | string> {
-  if (!(await hasAnyCodexDiagnosticsIdentity(ctx))) {
-    return "Cannot send Codex diagnostics because this command did not include a stable session identity.";
-  }
-  const targets = await resolveCodexDiagnosticsTargets(deps, ctx);
-  return targets.length > 0 ? targets : NO_DIAGNOSTICS_THREAD;
-}
-
 async function hasAnyCodexDiagnosticsIdentity(ctx: PluginCommandContext): Promise<boolean> {
   if (await resolveControlTarget(ctx)) {
     return true;
@@ -425,15 +419,10 @@ function resolvePendingCodexDiagnosticsTargets(
   targets: readonly CodexDiagnosticsTarget[],
   config?: PluginCommandContext["config"],
 ): CodexDiagnosticsTarget[] {
-  const resolved: CodexDiagnosticsTarget[] = [];
-  for (const target of targets) {
+  return targets.flatMap((target) => {
     const binding = deps.bindingStore.read(target.identity);
-    if (!binding?.threadId) {
-      continue;
-    }
-    resolved.push(resolveCodexDiagnosticsTarget(target, binding, config));
-  }
-  return resolved;
+    return binding?.threadId ? [resolveCodexDiagnosticsTarget(target, binding, config)] : [];
+  });
 }
 
 function resolveCodexDiagnosticsTarget(

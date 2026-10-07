@@ -37,7 +37,7 @@ export type InlineAuthFailureReceipt = {
   };
 };
 
-export type InlineAuthFailureResult =
+type InlineAuthFailureResult =
   | { ok: true; receipt: InlineAuthFailureReceipt }
   | { ok: false; error: OpenClawStateWorkerErrorPayload };
 

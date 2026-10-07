@@ -69,34 +69,27 @@ function readMessageIdFromActionResult(
 export function resultFromExistingOperation(
   operation: ConversationDeliveryRecord,
 ): ConversationMessageDeliveryResult | undefined {
-  switch (operation.status) {
-    case "sent":
-    case "replied":
-      return {
-        deliveryStatus: "sent",
-        operation,
-        ...(operation.platformMessageId || operation.preparedMessageId
-          ? { messageId: operation.platformMessageId ?? operation.preparedMessageId }
-          : {}),
-      };
-    case "queued":
-      return {
-        deliveryStatus: "queued",
-        operation,
-        ...(operation.preparedMessageId ? { messageId: operation.preparedMessageId } : {}),
-      };
-    case "suppressed":
-      return { deliveryStatus: "suppressed", operation };
-    case "rejected":
-      throw new ConversationDeliveryRejectedError(
-        operation.rejectionError ?? "Conversation delivery was permanently rejected",
-      );
-    case "unknown":
-      return { deliveryStatus: "unknown", operation };
-    case "created":
-      return undefined;
+  if (operation.status === "created") {
+    return undefined;
   }
-  return operation.status satisfies never;
+  if (operation.status === "rejected") {
+    throw new ConversationDeliveryRejectedError(
+      operation.rejectionError ?? "Conversation delivery was permanently rejected",
+    );
+  }
+  const deliveryStatus = operation.status === "replied" ? "sent" : operation.status;
+  const platformMessageId = deliveryStatus === "sent" ? operation.platformMessageId : undefined;
+  const preparedMessageId =
+    deliveryStatus === "sent" || deliveryStatus === "queued"
+      ? operation.preparedMessageId
+      : undefined;
+  return {
+    deliveryStatus,
+    operation,
+    ...(platformMessageId || preparedMessageId
+      ? { messageId: platformMessageId ?? preparedMessageId }
+      : {}),
+  };
 }
 
 /**

@@ -98,33 +98,28 @@ export class CodexAppInventoryCache {
   read(params: RefreshParams): CodexAppInventoryCacheRead {
     const nowMs = resolveDateTimestampMs(params.nowMs);
     const entry = this.entries.get(params.key);
-    if (!entry) {
-      const refreshScheduled = params.suppressRefresh ? false : this.scheduleRefresh(params);
-      return {
-        state: "missing",
-        key: params.key,
-        revision: this.revision,
-        refreshScheduled,
-        ...(this.diagnostics.get(params.key)
-          ? { diagnostic: this.diagnostics.get(params.key) }
-          : {}),
-      };
-    }
-
-    const state: CodexAppInventoryReadState =
-      entry.invalidated || !isFutureDateTimestampMs(entry.expiresAtMs, { nowMs })
+    const state: CodexAppInventoryReadState = !entry
+      ? "missing"
+      : entry.invalidated || !isFutureDateTimestampMs(entry.expiresAtMs, { nowMs })
         ? "stale"
         : "fresh";
     const refreshScheduled =
-      state === "fresh" && !params.forceRefetch ? false : this.scheduleRefresh(params);
-    const { invalidated: _invalidated, invalidatedAppIds: _invalidatedAppIds, ...snapshot } = entry;
+      (state === "missing"
+        ? !params.suppressRefresh
+        : state === "stale" || Boolean(params.forceRefetch)) && this.scheduleRefresh(params);
+    let snapshot: CodexAppInventorySnapshot | undefined;
+    if (entry) {
+      const { invalidated: _invalidated, invalidatedAppIds: _invalidatedAppIds, ...rest } = entry;
+      snapshot = rest;
+    }
+    const diagnostic = entry ? entry.lastError : this.diagnostics.get(params.key);
     return {
       state,
       key: params.key,
-      revision: entry.revision,
-      snapshot,
+      revision: entry?.revision ?? this.revision,
+      ...(snapshot ? { snapshot } : {}),
       refreshScheduled,
-      ...(entry.lastError ? { diagnostic: entry.lastError } : {}),
+      ...(diagnostic ? { diagnostic } : {}),
     };
   }
 

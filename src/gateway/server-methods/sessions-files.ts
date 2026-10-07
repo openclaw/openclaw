@@ -143,14 +143,6 @@ function addStructuredPatchFiles(files: Map<string, TouchedFile>, changes: unkno
   }
 }
 
-function isToolCallBlockType(value: unknown): boolean {
-  if (typeof value !== "string") {
-    return false;
-  }
-  const normalized = value.toLowerCase().replace(/[_-]/g, "");
-  return normalized === "toolcall" || normalized === "tooluse";
-}
-
 function collectTouchedFilesFromMessage(message: unknown, files: Map<string, TouchedFile>) {
   const record = asOptionalObjectRecord(message);
   if (record?.role !== "assistant" || !Array.isArray(record.content)) {
@@ -158,7 +150,11 @@ function collectTouchedFilesFromMessage(message: unknown, files: Map<string, Tou
   }
   for (const blockValue of record.content) {
     const block = asOptionalObjectRecord(blockValue);
-    if (!block || !isToolCallBlockType(block.type)) {
+    if (!block || typeof block.type !== "string") {
+      continue;
+    }
+    const type = block.type.toLowerCase().replace(/[_-]/g, "");
+    if (type !== "toolcall" && type !== "tooluse") {
       continue;
     }
     const toolName = normalizeOptionalString(block.name)?.toLowerCase();
@@ -401,6 +397,14 @@ async function handleSessionFilesRead(
   try {
     const loaded = await loadSessionFiles(source, context);
     read?.assertCurrent();
+    if (
+      request.kind !== "list" &&
+      loaded.repository?.kind === "stored" &&
+      resolveRepositoryArtifactPath(request.params.path) === undefined
+    ) {
+      respondSessionFileNotFound(respond, request.params.path, "outside_session_boundary");
+      return;
+    }
     let result:
       | Awaited<ReturnType<typeof listSessionWorkspaceFiles>>
       | Awaited<ReturnType<typeof getSessionWorkspaceFile>>
@@ -426,13 +430,6 @@ async function handleSessionFilesRead(
       read?.assertCurrent();
     } else if (request.kind === "assets") {
       const repository = loaded.repository;
-      if (
-        repository?.kind === "stored" &&
-        resolveRepositoryArtifactPath(request.params.path) === undefined
-      ) {
-        respondSessionFileNotFound(respond, request.params.path, "outside_session_boundary");
-        return;
-      }
       result = await getSessionWorkspaceAssets({
         ...loaded,
         path: request.params.path,
@@ -453,13 +450,6 @@ async function handleSessionFilesRead(
       });
       read?.assertCurrent();
     } else {
-      if (
-        loaded.repository?.kind === "stored" &&
-        resolveRepositoryArtifactPath(request.params.path) === undefined
-      ) {
-        respondSessionFileNotFound(respond, request.params.path, "outside_session_boundary");
-        return;
-      }
       const query = { files: loaded.files, path: request.params.path };
       const fileResult =
         loaded.repository?.kind === "stored"

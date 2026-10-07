@@ -662,16 +662,14 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       ...(createdWorktree ? { worktree: createdWorktree } : {}),
     });
     diagnostics?.mark("handlerExit");
-    emitSessionsChanged(context, {
-      sessionKey: created.key,
-      agentId: created.agentId,
-      reason: created.resetExisting ? "new" : "create",
-    });
-    if (runStarted) {
+    for (const reason of [
+      created.resetExisting ? "new" : "create",
+      ...(runStarted ? ["send"] : []),
+    ]) {
       emitSessionsChanged(context, {
         sessionKey: created.key,
         agentId: created.agentId,
-        reason: "send",
+        reason,
       });
     }
   }),

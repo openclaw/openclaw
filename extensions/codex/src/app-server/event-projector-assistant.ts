@@ -14,7 +14,7 @@ import {
   shouldClearTerminalPresentationForNativeItem,
 } from "./event-projector-items.js";
 import { CodexSteeringAssistantSegments } from "./event-projector-steering.js";
-import { extractRawAssistantText } from "./event-projector-values.js";
+import { extractRawResponseItemText } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 import type { CodexTranscriptCheckpointEntry } from "./transcript-checkpoint.js";
 
@@ -280,7 +280,7 @@ export class CodexAssistantProjection {
       // Contributors may rewrite or erase typed text without changing its raw echo.
       return;
     }
-    const text = extractRawAssistantText(item);
+    const text = extractRawResponseItemText(item);
     if (
       text === undefined ||
       (!text &&

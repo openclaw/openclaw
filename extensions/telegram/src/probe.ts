@@ -136,6 +136,13 @@ export async function probeTelegram(
       const transport = resolveProbeTransport(token, options);
       const fetcher = transport.fetch;
       const base = `${apiBase}/bot${token}`;
+      const fetchMethod = (method: "getMe" | "getWebhookInfo", remainingBudgetMs: number) =>
+        fetchWithTimeout(
+          `${base}/${method}`,
+          { signal: abortSignal },
+          Math.max(1, Math.min(timeoutBudgetMs, remainingBudgetMs)),
+          fetcher,
+        );
       const retryDelayMs = Math.max(50, Math.min(1000, Math.floor(timeoutBudgetMs / 5)));
       const resolveRemainingBudgetMs = () => Math.max(0, deadlineMs - Date.now());
       const result: Omit<TelegramProbe, "elapsedMs"> = {
@@ -153,12 +160,7 @@ export async function probeTelegram(
           break;
         }
         try {
-          meRes = await fetchWithTimeout(
-            `${base}/getMe`,
-            { signal: abortSignal },
-            Math.max(1, Math.min(timeoutBudgetMs, remainingBudgetMs)),
-            fetcher,
-          );
+          meRes = await fetchMethod("getMe", remainingBudgetMs);
           break;
         } catch (err) {
           fetchError = err;
@@ -234,12 +236,7 @@ export async function probeTelegram(
         try {
           const webhookRemainingBudgetMs = resolveRemainingBudgetMs();
           if (webhookRemainingBudgetMs > 0) {
-            const webhookRes = await fetchWithTimeout(
-              `${base}/getWebhookInfo`,
-              { signal: abortSignal },
-              Math.max(1, Math.min(timeoutBudgetMs, webhookRemainingBudgetMs)),
-              fetcher,
-            );
+            const webhookRes = await fetchMethod("getWebhookInfo", webhookRemainingBudgetMs);
             const webhookJson = JSON.parse(
               (
                 await readTelegramDiagnosticBody(

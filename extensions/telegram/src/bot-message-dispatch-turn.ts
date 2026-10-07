@@ -16,7 +16,7 @@ import {
   beginDraftQueuedFollowup,
   cleanupDrafts,
   enqueueDraftEvent,
-  handleBeforeDeliverCancelled,
+  dropQueuedAnswerBlockRotation,
   ingestDraftLaneSegments,
   prepareQueuedAnswerBlock,
   repositionLaneForNewMessage,
@@ -147,7 +147,11 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             humanDelay: resolveHumanDelayConfig(turn.cfg, context.route.agentId),
             beforeDeliver: async (payload) => payload,
             onBeforeDeliverCancelled: (payload, info) =>
-              handleBeforeDeliverCancelled(turn, payload, info),
+              info.kind === "block"
+                ? enqueueDraftEvent(turn, async () => {
+                    dropQueuedAnswerBlockRotation(turn, payload, info.assistantMessageIndex);
+                  })
+                : undefined,
             onSkip: (payload, info) => handleReplySkip(turn, payload, info),
           },
           replyOptions: {

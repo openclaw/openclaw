@@ -22,8 +22,7 @@ import { SessionBindingError } from "./session-binding-errors.js";
 import {
   nativeSessionBindingSelection,
   nativeSessionBindingListBySession,
-  type NativeSessionBindingListing,
-  type NativeSessionBindingSelection,
+  type NativeSessionBindingReads,
 } from "./session-binding-native-selection.js";
 import {
   buildChannelAccountKey,
@@ -128,9 +127,7 @@ function resolveAdapterCapabilities(
 
 const SESSION_BINDING_ADAPTERS_KEY = Symbol.for("openclaw.sessionBinding.adapters");
 
-type NativeCapableSessionBindingAdapter = SessionBindingAdapter &
-  NativeSessionBindingSelection &
-  NativeSessionBindingListing;
+type NativeCapableSessionBindingAdapter = SessionBindingAdapter & NativeSessionBindingReads;
 
 type SessionBindingAdapterRegistration = {
   adapter: SessionBindingAdapter;
@@ -151,15 +148,12 @@ export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): v
     }),
   };
   const key = buildChannelAccountKey(normalizedAdapter);
-  const existing = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key);
-  const registrations = existing ? [...existing] : [];
   // Registrations are stacked so duplicate module graphs can temporarily
   // coexist and unregister without tearing down the active replacement.
-  registrations.push({
-    adapter,
-    normalizedAdapter,
-  });
-  ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, registrations);
+  ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, [
+    ...(ADAPTERS_BY_CHANNEL_ACCOUNT.get(key) ?? []),
+    { adapter, normalizedAdapter },
+  ]);
 }
 
 export function unregisterSessionBindingAdapter(params: {
@@ -169,22 +163,17 @@ export function unregisterSessionBindingAdapter(params: {
 }): void {
   const key = buildChannelAccountKey(params);
   const registrations = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key);
-  if (!registrations || registrations.length === 0) {
+  if (!registrations?.length) {
     return;
   }
-  const nextRegistrations = [...registrations];
-  if (params.adapter) {
-    // Remove the matching owner so a surviving duplicate graph can stay active.
-    const registrationIndex = nextRegistrations.findLastIndex(
-      (registration) => registration.adapter === params.adapter,
-    );
-    if (registrationIndex < 0) {
-      return;
-    }
-    nextRegistrations.splice(registrationIndex, 1);
-  } else {
-    nextRegistrations.pop();
+  // Remove the matching owner so a surviving duplicate graph can stay active.
+  const registrationIndex = params.adapter
+    ? registrations.findLastIndex((registration) => registration.adapter === params.adapter)
+    : registrations.length - 1;
+  if (registrationIndex < 0) {
+    return;
   }
+  const nextRegistrations = registrations.toSpliced(registrationIndex, 1);
   if (nextRegistrations.length === 0) {
     ADAPTERS_BY_CHANNEL_ACCOUNT.delete(key);
     return;
@@ -247,9 +236,9 @@ function getActiveRegisteredAdapters(
     const adapter = resolveAdapterForChannelAccount(scope);
     return adapter ? [adapter] : [];
   }
-  return [...ADAPTERS_BY_CHANNEL_ACCOUNT.values()]
-    .map((registrations) => registrations.at(-1)?.normalizedAdapter ?? null)
-    .filter((adapter): adapter is NativeCapableSessionBindingAdapter => Boolean(adapter));
+  return [...ADAPTERS_BY_CHANNEL_ACCOUNT.values()].flatMap(
+    (registrations) => registrations.at(-1)?.normalizedAdapter ?? [],
+  );
 }
 
 function dedupeBindings(records: SessionBindingRecord[]): SessionBindingRecord[] {
@@ -326,9 +315,7 @@ export function inspectSessionBindingByConversation(
   if (adapter) {
     return availableBindingInspection(
       normalized,
-      adapter.inspectByConversation
-        ? adapter.inspectByConversation(normalized)
-        : adapter.resolveByConversation(normalized),
+      (adapter.inspectByConversation || adapter.resolveByConversation).call(adapter, normalized),
     );
   }
   // A channel-owned adapter may disappear briefly during restart. That gap is not an
@@ -367,9 +354,7 @@ async function inspectSessionBindingByConversationAsync(
   const binding = adapter
     ? adapter.inspectByConversationAsync
       ? await adapter.inspectByConversationAsync(normalized)
-      : adapter.inspectByConversation
-        ? adapter.inspectByConversation(normalized)
-        : adapter.resolveByConversation(normalized)
+      : (adapter.inspectByConversation || adapter.resolveByConversation).call(adapter, normalized)
     : await inspectGenericCurrentConversationBindingAsync(normalized);
   if (
     resolveAdapterForChannelAccount(normalized) !== adapter ||
@@ -445,17 +430,10 @@ const DEFAULT_SESSION_BINDING_SERVICE: AsyncSessionBindingService = {
     const genericCapabilities = adapter
       ? null
       : getGenericCurrentConversationBindingCapabilities(normalizedConversation);
-    if (!adapter && !genericCapabilities?.bindSupported) {
+    if (adapter ? !adapter.bind : !genericCapabilities?.bindSupported) {
       throw new SessionBindingError(
-        "BINDING_ADAPTER_UNAVAILABLE",
-        `Session binding adapter unavailable for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
-        scope,
-      );
-    }
-    if (adapter && !adapter.bind) {
-      throw new SessionBindingError(
-        "BINDING_CAPABILITY_UNSUPPORTED",
-        `Session binding adapter does not support binding for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
+        adapter ? "BINDING_CAPABILITY_UNSUPPORTED" : "BINDING_ADAPTER_UNAVAILABLE",
+        `Session binding adapter ${adapter ? "does not support binding" : "unavailable"} for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
         scope,
       );
     }
@@ -492,12 +470,10 @@ const DEFAULT_SESSION_BINDING_SERVICE: AsyncSessionBindingService = {
   },
   getCapabilities: (params) => {
     const adapter = resolveAdapterForChannelAccount(params);
-    if (!adapter) {
-      return (
-        getGenericCurrentConversationBindingCapabilities(params) ?? resolveAdapterCapabilities(null)
-      );
-    }
-    return resolveAdapterCapabilities(adapter);
+    return adapter
+      ? resolveAdapterCapabilities(adapter)
+      : (getGenericCurrentConversationBindingCapabilities(params) ??
+          resolveAdapterCapabilities(null));
   },
   listBySession: (targetSessionKey) => {
     const key = targetSessionKey.trim();
@@ -582,10 +558,9 @@ const DEFAULT_SESSION_BINDING_SERVICE: AsyncSessionBindingService = {
     const removed: SessionBindingRecord[] = [];
     const adapters = getActiveRegisteredAdapters(input.scope);
     for (const adapter of adapters) {
-      if (!adapter.unbind) {
-        continue;
+      if (adapter.unbind) {
+        removed.push(...(await adapter.unbind(input)));
       }
-      removed.push(...(await adapter.unbind(input)));
     }
     if (!input.scope || adapters.length === 0) {
       removed.push(...(await unbindGenericCurrentConversationBindings(input)));

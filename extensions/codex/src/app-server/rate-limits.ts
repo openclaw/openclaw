@@ -261,12 +261,6 @@ function summarizeRateLimitUsage(
   const blockingReset =
     blockingWindow && blockingWindow.resetsAtMs > nowMs ? blockingWindow : undefined;
   const blockingPeriod = formatBlockingLimitPeriod(blockingWindowEntry, blockingEntries);
-  const blockedUntilText = blockingReset
-    ? formatAccountResetTime(blockingReset.resetsAtMs, nowMs)
-    : undefined;
-  const blockedResetRelative = blockingReset
-    ? `in ${formatRelativeDuration(blockingReset.resetsAtMs - nowMs)}`
-    : undefined;
   const blockingReason = blockingPeriod
     ? `${blockingPeriod} Codex usage limit is reached`
     : blockingSnapshot
@@ -275,9 +269,13 @@ function summarizeRateLimitUsage(
   return {
     usageLine: formatUsageLine(usageSnapshot),
     blocked: Boolean(blockingSnapshot),
-    ...(blockingReset ? { blockedUntilMs: blockingReset.resetsAtMs } : {}),
-    ...(blockedUntilText ? { blockedUntilText } : {}),
-    ...(blockedResetRelative ? { blockedResetRelative } : {}),
+    ...(blockingReset
+      ? {
+          blockedUntilMs: blockingReset.resetsAtMs,
+          blockedUntilText: formatAccountResetTime(blockingReset.resetsAtMs, nowMs),
+          blockedResetRelative: `in ${formatRelativeDuration(blockingReset.resetsAtMs - nowMs)}`,
+        }
+      : {}),
     ...(blockingPeriod ? { blockingPeriod } : {}),
     ...(blockingReason ? { blockingReason } : {}),
   };

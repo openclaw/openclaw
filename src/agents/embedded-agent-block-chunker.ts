@@ -699,6 +699,11 @@ export class EmbeddedBlockChunker {
         force ? graphemeSource.length : graphemeSource.length - 1,
       );
       const wholeEnd = findGraphemeChunkEnd(graphemeSource, 0, maxEnd, maxEnd, false);
+      if (!force && wholeEnd > 0 && buffer.length === forcedBreakIndex) {
+        // Wait for lookahead instead of turning a full chunk into a shorter
+        // prefix and a trailing fragment solely to reserve its last cluster.
+        return { index: 0 };
+      }
       return {
         index:
           wholeEnd ||

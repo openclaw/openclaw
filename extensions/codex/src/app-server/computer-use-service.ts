@@ -140,7 +140,6 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
   ownershipRoot: string;
   targetParent: string;
   targetPath: string;
-  appServerCommand?: string;
   sourceAppCandidates: readonly string[];
   copyServiceApp?: CopyServiceApp;
   inspectServiceApp?: InspectServiceApp;
@@ -289,11 +288,9 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
       await removeBackup();
     }
     return {
+      ...alreadyCurrent,
       status: initialTarget.exists ? "refreshed" : "installed",
       changed: true,
-      targetPath: params.targetPath,
-      sourcePath,
-      sourceBuild: sourceIdentity.build,
       ...(initialTarget.identity ? { previousBuild: initialTarget.identity.build } : {}),
     };
   } catch (error) {
@@ -358,12 +355,11 @@ async function readServiceAppFilesystemKey(appPath: string): Promise<string | un
     path.join(appPath, CLIENT_RELATIVE_PATH),
   ];
   const entries = await Promise.all(
-    paths.map(
-      async (entryPath) =>
-        await fs.stat(entryPath).then(
-          (stat) => `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`,
-          () => "missing",
-        ),
+    paths.map((entryPath) =>
+      fs.stat(entryPath).then(
+        (stat) => `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`,
+        () => "missing",
+      ),
     ),
   );
   return entries.join("|");
@@ -389,11 +385,7 @@ function snapshotsMatch(left: ServiceAppSnapshot, right: ServiceAppSnapshot): bo
 
 function filesystemSnapshotsMatch(left: ServiceAppSnapshot, right: ServiceAppSnapshot): boolean {
   return Boolean(
-    left.exists &&
-    right.exists &&
-    left.filesystemKey &&
-    right.filesystemKey &&
-    left.filesystemKey === right.filesystemKey,
+    left.exists && right.exists && left.filesystemKey && left.filesystemKey === right.filesystemKey,
   );
 }
 

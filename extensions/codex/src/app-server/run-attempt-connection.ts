@@ -5,7 +5,10 @@ import {
   resolveUserPath,
   type FastModeAutoProgressState,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import {
+  createNativeSessionBindingAuthority,
+  prepareNativeSessionGenerationAuthority,
+} from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { prepareAgentWorkspaceAttachments } from "openclaw/plugin-sdk/agent-workspace-runtime";
@@ -48,7 +51,6 @@ import { scopeCodexRunBindingStore } from "./session-binding-scope.js";
 import {
   createCodexSessionGenerationSupersededError,
   resolveCodexSessionBinding,
-  resolveCodexRunSessionBindingAuthority,
   sessionBindingIdentity,
   type CodexAppServerBindingIdentity,
   type CodexAppServerThreadBinding,
@@ -206,10 +208,11 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   // Only a durable session row authorizes stable-key ownership. Caller-owned
   // transcripts omit a store target, so classify them against the default store too.
   if (bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
-    const authority = await resolveCodexRunSessionBindingAuthority({
-      identity: bindingIdentity,
+    const { state: authority } = await prepareNativeSessionGenerationAuthority({
       config: params.config,
       storePath: params.sessionTarget?.storePath,
+      target: bindingIdentity,
+      createSupersededError: createCodexSessionGenerationSupersededError,
     });
     if (authority === "superseded") {
       throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);

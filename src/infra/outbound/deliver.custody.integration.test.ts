@@ -414,8 +414,8 @@ describe("retired caller delivery settlement", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const completion = await import("./delivery-completion.js");
     vi.spyOn(completion, "markDurableDeliveryQueued").mockResolvedValueOnce({ state: "queued" });
-    const reject = vi
-      .spyOn(completion, "rejectDurableDelivery")
+    const settle = vi
+      .spyOn(completion, "settleDurableDelivery")
       .mockResolvedValue({ state: "suppressed" });
     const adapter = installHeldAdapter();
     const { caller, queueIdReady, outcome } = startRetiringDelivery("replacement-owned message", {
@@ -444,7 +444,7 @@ describe("retired caller delivery settlement", () => {
       caller.abort(new Error("original caller retired"));
       adapter.release();
       expect(await outcome).toMatchObject({ error: expect.any(Error) });
-      expect(reject).not.toHaveBeenCalled();
+      expect(settle).not.toHaveBeenCalled();
       expect(adapter.send).not.toHaveBeenCalled();
       expect(getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir)).toBe(
         "pending",

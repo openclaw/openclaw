@@ -46,106 +46,188 @@ export type NativeSubmissionCallDependencies = {
 };
 type SubmissionCalls = Map<ParentState, Map<string, NativeSubagentSubmissionCall>>;
 
-export function admitSubmissionModelInput(params: {
-  state: ParentState;
-  owner: ParentOwner;
-  request: NativeModelInputRequest;
-  pendingModelSources: number;
-  preparedOwner?: ParentOwner;
-  calls: SubmissionCalls;
-  dependencies: NativeSubmissionCallDependencies;
-  isCurrent: () => boolean;
-}): void {
-  const { state, owner, request, calls, dependencies, isCurrent } = params;
-  if (!owner.modelSource || !isCurrent()) {
-    throw new Error("Codex native input has no admitted model source");
-  }
-  const receiver = dependencies.currentModelExecution(request.targetThreadId);
-  assertNativeModelInputCompatible(owner, receiver ?? owner);
-  for (const entries of calls.values()) {
-    for (const pending of entries.values()) {
-      if (pending.modelInput?.threadId === request.targetThreadId) {
-        assertNativeModelInputCompatible(owner, pending.modelInput.source.owner);
+export function createNativeSubagentSubmissionCalls(
+  calls: SubmissionCalls,
+  dependencies: NativeSubmissionCallDependencies,
+  isCurrent: (state: ParentState) => boolean,
+) {
+  function admitModelInput(
+    state: ParentState,
+    owner: ParentOwner,
+    request: NativeModelInputRequest,
+    pendingModelSources: number,
+    preparedOwner?: ParentOwner,
+  ): void {
+    if (!owner.modelSource || !isCurrent(state)) {
+      throw new Error("Codex native input has no admitted model source");
+    }
+    const receiver = dependencies.currentModelExecution(request.targetThreadId);
+    assertNativeModelInputCompatible(owner, receiver ?? owner);
+    for (const entries of calls.values()) {
+      for (const pending of entries.values()) {
+        if (pending.modelInput?.threadId === request.targetThreadId) {
+          assertNativeModelInputCompatible(owner, pending.modelInput.source.owner);
+        }
       }
     }
-  }
-  const key = `${request.turnId}\0${request.itemId}`;
-  if (owner.modelSource.hasOperatorSource && !calls.get(state)?.has(key)) {
-    const reservations = [...calls.values()].reduce(
-      (count, entries) =>
-        count +
-        [...entries.values()].filter(
-          (call) => call.modelInput?.source.owner.modelSource?.hasOperatorSource,
-        ).length,
-      0,
-    );
-    if (reservations + params.pendingModelSources >= MAX_PENDING_CHILD_ADMISSION_EVIDENCE) {
-      throw new Error("Codex pending native input admission capacity reached");
+    const key = `${request.turnId}\0${request.itemId}`;
+    if (owner.modelSource.hasOperatorSource && !calls.get(state)?.has(key)) {
+      const reservations = [...calls.values()].reduce(
+        (count, entries) =>
+          count +
+          [...entries.values()].filter(
+            (call) => call.modelInput?.source.owner.modelSource?.hasOperatorSource,
+          ).length,
+        0,
+      );
+      if (reservations + pendingModelSources >= MAX_PENDING_CHILD_ADMISSION_EVIDENCE) {
+        throw new Error("Codex pending native input admission capacity reached");
+      }
     }
-  }
-  observeSubmissionCall(
-    state,
-    request.turnId,
-    {
+    observeCall(state, request.turnId, {
       id: request.itemId,
       receiverThreadIds: [request.targetThreadId],
-    },
-    calls,
-    dependencies,
-    isCurrent,
-  );
-  const call = calls.get(state)?.get(key);
-  if (
-    !call ||
-    call.closed ||
-    call.owner !== owner ||
-    call.modelInput?.threadId !== request.targetThreadId
-  ) {
-    throw new Error("Codex native input reused an unsettled call identity");
-  }
-  if (params.preparedOwner && call.modelInput.source.owner === owner) {
-    const prepared = retainNativeModelSource(params.preparedOwner);
-    if (!prepared) {
-      throw new Error("Codex native input lost its prepared model source");
+    });
+    const call = calls.get(state)?.get(key);
+    if (
+      !call ||
+      call.closed ||
+      call.owner !== owner ||
+      call.modelInput?.threadId !== request.targetThreadId
+    ) {
+      throw new Error("Codex native input reused an unsettled call identity");
     }
-    call.modelInput.source.release();
-    call.modelInput.source = prepared;
+    if (preparedOwner && call.modelInput.source.owner === owner) {
+      const prepared = retainNativeModelSource(preparedOwner);
+      if (!prepared) {
+        throw new Error("Codex native input lost its prepared model source");
+      }
+      call.modelInput.source.release();
+      call.modelInput.source = prepared;
+    }
   }
-}
 
-export function hasPendingSubmissionModelInput(
-  calls: SubmissionCalls,
-  request: NativeModelSourceRequest,
-): boolean {
-  for (const entries of calls.values()) {
-    for (const call of entries.values()) {
-      if (
-        !call.closed &&
-        call.modelInput?.threadId === request.threadId &&
-        (call.parentTurnId === request.parentTurnId || call.parentTurnId === request.rootTurnId)
-      ) {
-        const capture = call.modelInput.source.owner.modelSource?.capture();
-        capture?.release();
-        return Boolean(capture);
+  function hasPendingModelInput(request: NativeModelSourceRequest): boolean {
+    for (const entries of calls.values()) {
+      for (const call of entries.values()) {
+        if (
+          !call.closed &&
+          call.modelInput?.threadId === request.threadId &&
+          (call.parentTurnId === request.parentTurnId || call.parentTurnId === request.rootTurnId)
+        ) {
+          const capture = call.modelInput.source.owner.modelSource?.capture();
+          capture?.release();
+          return Boolean(capture);
+        }
+      }
+    }
+    return false;
+  }
+
+  function retireReceiverModelInputs(threadId: string): void {
+    for (const entries of calls.values()) {
+      for (const call of entries.values()) {
+        if (call.modelInput?.threadId === threadId) {
+          settleSubmissionModelInput(call, false, dependencies);
+          call.closed = true;
+        }
       }
     }
   }
-  return false;
-}
 
-export function retireReceiverModelInputs(
-  calls: SubmissionCalls,
-  threadId: string,
-  dependencies: NativeSubmissionCallDependencies,
-): void {
-  for (const entries of calls.values()) {
-    for (const call of entries.values()) {
-      if (call.modelInput?.threadId === threadId) {
-        settleSubmissionModelInput(call, false, dependencies);
-        call.closed = true;
+  function observeCall(state: ParentState, turnId: string | undefined, item: JsonObject): void {
+    const callId = readString(item, "id");
+    if (!turnId || !callId || !isCurrent(state)) {
+      return;
+    }
+    const owner = dependencies.parentOwner(state, turnId);
+    if (!owner && ![...state.owners.values()].some((candidate) => !candidate.turnId)) {
+      return;
+    }
+    const entries = calls.get(state) ?? new Map<string, NativeSubagentSubmissionCall>();
+    const key = `${turnId}\0${callId}`;
+    if (entries.has(key) || (!owner && entries.size >= 32)) {
+      return;
+    }
+    const receivers = Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds : [];
+    const targets = receivers.flatMap((id) => {
+      if (typeof id !== "string") {
+        return [];
+      }
+      dependencies.prepareReceiver(state, id);
+      const predecessor = captureSubmissionPredecessor({
+        state,
+        known: dependencies.knownChildren.get(id),
+        child: dependencies.currentChild(id),
+      });
+      return predecessor ? [{ childThreadId: id, predecessor }] : [];
+    });
+    const receiver = receivers.length === 1 ? receivers[0] : undefined;
+    const source = typeof receiver === "string" ? retainNativeModelSource(owner) : undefined;
+    if (!targets.length && !source) {
+      return;
+    }
+    entries.set(key, {
+      parentTurnId: turnId,
+      callId,
+      targets,
+      owner,
+      ...(source && typeof receiver === "string"
+        ? { modelInput: { threadId: receiver, source } }
+        : {}),
+    });
+    calls.set(state, entries);
+  }
+
+  function assertModelInputCurrent(threadId: string, owner: ParentOwner): void {
+    for (const pending of calls.values()) {
+      for (const call of pending.values()) {
+        if (call.modelInput?.threadId === threadId) {
+          try {
+            assertNativeModelInputCompatible(call.modelInput.source.owner, owner);
+          } catch (error) {
+            if (call.accepted) {
+              owner.modelExecutionCancelled = true;
+            }
+            throw error;
+          }
+        }
       }
     }
   }
+
+  function acceptInteraction(
+    state: ParentState,
+    turnId: string | undefined,
+    itemId: string | undefined,
+    threadId: string,
+    accept: (owner: ParentOwner) => void,
+  ): boolean {
+    const call = calls.get(state)?.get(`${turnId ?? ""}\0${itemId ?? ""}`);
+    if (!call) {
+      return false;
+    }
+    if (call.closed || !call.modelInput) {
+      return true;
+    }
+    if (call.modelInput.threadId !== threadId) {
+      throw new Error("Codex native interaction changed its admitted target");
+    }
+    call.accepted = true;
+    accept(call.modelInput.source.owner);
+    call.closed = true;
+    settleSubmissionModelInput(call, true, dependencies);
+    return true;
+  }
+
+  return {
+    admitModelInput,
+    hasPendingModelInput,
+    retireReceiverModelInputs,
+    observeCall,
+    assertModelInputCurrent,
+    acceptInteraction,
+  };
 }
 
 export function readObservedSubmissionTurn(
@@ -163,78 +245,6 @@ export function readObservedSubmissionTurn(
   const status =
     pending?.state ?? (child?.nativeTurnId === turnId ? child.nativeTurnState : undefined);
   return status ? { id: turnId, status: status === "active" ? "inProgress" : status } : undefined;
-}
-
-export function observeSubmissionCall(
-  state: ParentState,
-  turnId: string | undefined,
-  item: JsonObject,
-  allCalls: Map<ParentState, Map<string, NativeSubagentSubmissionCall>>,
-  dependencies: NativeSubmissionCallDependencies,
-  isCurrent: () => boolean,
-): void {
-  const callId = readString(item, "id");
-  if (!turnId || !callId || !isCurrent()) {
-    return;
-  }
-  const owner = dependencies.parentOwner(state, turnId);
-  if (!owner && ![...state.owners.values()].some((candidate) => !candidate.turnId)) {
-    return;
-  }
-  const calls = allCalls.get(state) ?? new Map<string, NativeSubagentSubmissionCall>();
-  const key = `${turnId}\0${callId}`;
-  if (calls.has(key) || (!owner && calls.size >= 32)) {
-    return;
-  }
-  const receivers = Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds : [];
-  const targets = receivers.flatMap((id) => {
-    if (typeof id !== "string") {
-      return [];
-    }
-    dependencies.prepareReceiver(state, id);
-    const predecessor = captureSubmissionPredecessor({
-      state,
-      known: dependencies.knownChildren.get(id),
-      child: dependencies.currentChild(id),
-    });
-    return predecessor ? [{ childThreadId: id, predecessor }] : [];
-  });
-  const receiver = receivers.length === 1 ? receivers[0] : undefined;
-  const source = typeof receiver === "string" ? retainNativeModelSource(owner) : undefined;
-  if (!targets.length && !source) {
-    return;
-  }
-  calls.set(key, {
-    parentTurnId: turnId,
-    callId,
-    targets,
-    owner,
-    ...(source && typeof receiver === "string"
-      ? { modelInput: { threadId: receiver, source } }
-      : {}),
-  });
-  allCalls.set(state, calls);
-}
-
-export function assertSubmissionModelInputsCurrent(
-  calls: Iterable<ReadonlyMap<string, NativeSubagentSubmissionCall>>,
-  threadId: string,
-  owner: ParentOwner,
-): void {
-  for (const pending of calls) {
-    for (const call of pending.values()) {
-      if (call.modelInput?.threadId === threadId) {
-        try {
-          assertNativeModelInputCompatible(call.modelInput.source.owner, owner);
-        } catch (error) {
-          if (call.accepted) {
-            owner.modelExecutionCancelled = true;
-          }
-          throw error;
-        }
-      }
-    }
-  }
 }
 
 export function settleSubmissionModelInput(
@@ -407,31 +417,6 @@ export function pruneSubmissionCalls(
       call.completionCustody?.release();
     }
   }
-}
-
-export function acceptSubmissionModelInteraction(
-  calls: ReadonlyMap<string, NativeSubagentSubmissionCall> | undefined,
-  turnId: string | undefined,
-  itemId: string | undefined,
-  threadId: string,
-  accept: (owner: ParentOwner) => void,
-  dependencies: NativeSubmissionCallDependencies,
-): boolean {
-  const call = calls?.get(`${turnId ?? ""}\0${itemId ?? ""}`);
-  if (!call) {
-    return false;
-  }
-  if (call.closed || !call.modelInput) {
-    return true;
-  }
-  if (call.modelInput.threadId !== threadId) {
-    throw new Error("Codex native interaction changed its admitted target");
-  }
-  call.accepted = true;
-  accept(call.modelInput.source.owner);
-  call.closed = true;
-  settleSubmissionModelInput(call, true, dependencies);
-  return true;
 }
 
 export function acceptNativeSubmission(

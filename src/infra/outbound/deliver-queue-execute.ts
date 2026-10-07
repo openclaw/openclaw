@@ -61,11 +61,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
 ): Promise<OutboundDeliveryResult[]> {
   // Lease loss revokes queue mutation authority. Caller cancellation still
   // follows the normal abort cleanup path through the combined signal.
-  const throwIfProducerLeaseLost = (): void => {
-    if (producerLease?.signal.aborted) {
-      throw producerLease.signal.reason;
-    }
-  };
+  const throwIfProducerLeaseLost = (): void => producerLease?.signal.throwIfAborted();
   const payloadCount = params.preparedBatch?.sourcePayloadCount ?? params.payloads.length;
   const ownsAuditTerminal = params.deliveryQueueId === undefined;
   // Terminal evidence belongs to delivery custody, independently of audit subscribers.
@@ -131,6 +127,13 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       },
       params.deliveryQueueStateContext,
     );
+  const failAfterPlatformSend = async (
+    owner: QueuedDeliveryOwner,
+    error: string,
+  ): Promise<void> => {
+    await owner.fail(failDeliveryAfterPlatformSend, error);
+    queuedPostSendState = "failed";
+  };
   const emitTerminals = (
     terminals: Parameters<typeof emitOutboundAuditTerminals>[0]["terminals"],
   ): void => {
@@ -150,9 +153,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     }
     commitHooksRun = true;
     flushMessageSentEvents();
-    if (deliveredResults.length > 0) {
-      await runOutboundDeliveryCommitHooks(deliveredResults);
-    }
+    await runOutboundDeliveryCommitHooks(deliveredResults);
   };
   const failedTerminals = (failureStage: AuditMessageFailureStage) =>
     failedOutboundAuditTerminals({
@@ -163,6 +164,12 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     });
   const emitFailedTerminals = (failureStage: AuditMessageFailureStage) =>
     emitTerminals(() => failedTerminals(failureStage));
+  const completedTerminals = () =>
+    completedOutboundAuditTerminals({
+      payloadCount,
+      results: deliveredResults,
+      payloadOutcomes,
+    });
   const finishPermanentRejection = async (
     owner: QueuedDeliveryOwner,
     rejection: PlatformMessageNotDispatchedError,
@@ -392,8 +399,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       )
     ) {
       const error = "platform send returned no delivery identity for part of the delivery batch";
-      await queueOwner.fail(failDeliveryAfterPlatformSend, error);
-      queuedPostSendState = "failed";
+      await failAfterPlatformSend(queueOwner, error);
       throw new OutboundDeliveryError(error, {
         cause: new Error(error),
         results,
@@ -407,19 +413,8 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         flushMessageSentEvents();
         await runOutboundDeliveryCommitHooks(results);
       }
-      emitTerminals(() =>
-        failedOutcomes.length > 0
-          ? failedOutboundAuditTerminals({
-              payloadCount,
-              results,
-              payloadOutcomes,
-              failureStage: "platform_send",
-            })
-          : completedOutboundAuditTerminals({
-              payloadCount,
-              results,
-              payloadOutcomes,
-            }),
+      emitTerminals(
+        failedOutcomes.length > 0 ? () => failedTerminals("platform_send") : completedTerminals,
       );
       return results;
     }
@@ -461,6 +456,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         } else if (postSendState === "acked") {
           // Direct ack is the fallback when the post-send marker cannot be
           // written. Once the row is gone, recovery cannot run these hooks.
+          queuedPostSendState = postSendState;
           await runCommitHooksAfterAck();
           emitFailedTerminals("platform_send");
         }
@@ -476,11 +472,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         if (results.length === 0 && postSendState === "marked") {
           // The provider was invoked but returned no recipient-visible identity;
           // never convert that ambiguous platform outcome into a success receipt.
-          await queueOwner.fail(
-            failDeliveryAfterPlatformSend,
-            "platform send returned no delivery identity",
-          );
-          queuedPostSendState = "failed";
+          await failAfterPlatformSend(queueOwner, "platform send returned no delivery identity");
           // Durable custody remains with recovery. Publishing a terminal here
           // would make a later reconciliation reuse the same audit identity.
           return results;
@@ -490,11 +482,12 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             ? true
             : postSendState === "failed"
               ? false
-              : await (
-                  results.length === 0 && typeof params.completionRetention === "object"
-                    ? queueOwner.ack({ suppressCompletionReceipt: true })
-                    : queueOwner.ack()
-                )
+              : await queueOwner
+                  .ack(
+                    results.length === 0 && typeof params.completionRetention === "object"
+                      ? { suppressCompletionReceipt: true }
+                      : undefined,
+                  )
                   .then(() => true)
                   .catch(async (err: unknown) => {
                     const hasSendEvidence =
@@ -502,11 +495,10 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
                       (queuedPreSendState !== undefined && !allPayloadsSuppressed);
                     try {
                       if (hasSendEvidence) {
-                        await queueOwner.fail(
-                          failDeliveryAfterPlatformSend,
+                        await failAfterPlatformSend(
+                          queueOwner,
                           `failed to ack sent delivery: ${formatErrorMessage(err)}`,
                         );
-                        queuedPostSendState = "failed";
                       } else {
                         // Proven omission clears the handoff marker so recovery can safely retry.
                         await queueOwner.fail(
@@ -532,13 +524,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         if (acked) {
           queuedPostSendState = "acked";
           await runCommitHooksAfterAck();
-          emitTerminals(() =>
-            completedOutboundAuditTerminals({
-              payloadCount,
-              results,
-              payloadOutcomes,
-            }),
-          );
+          emitTerminals(completedTerminals);
         }
       }
     }
@@ -600,18 +586,14 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             queuedPostSendState = "failed";
           } else if (hasPlatformSendEvidence) {
             if (queuedPostSendState !== "failed") {
-              await queueOwner.fail(
-                failDeliveryAfterPlatformSend,
+              await failAfterPlatformSend(
+                queueOwner,
                 `delivery aborted after platform send: ${formatErrorMessage(err)}`,
               );
-              queuedPostSendState = "failed";
             }
           } else if (
-            await (
-              producerClaimId
-                ? queueOwner.ack({ suppressCompletionReceipt: true })
-                : queueOwner.ack()
-            )
+            await queueOwner
+              .ack(producerClaimId ? { suppressCompletionReceipt: true } : undefined)
               .then(() => true)
               .catch(() => false)
           ) {
@@ -629,8 +611,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             try {
               queuedPostSendState ??= await persistPostSendState(queueOwner);
               if (queuedPostSendState === "marked") {
-                await queueOwner.fail(failDeliveryAfterPlatformSend, formatErrorMessage(err));
-                queuedPostSendState = "failed";
+                await failAfterPlatformSend(queueOwner, formatErrorMessage(err));
               }
             } catch (persistErr: unknown) {
               // Do not convert concrete send evidence back into a generic retry.

@@ -371,7 +371,6 @@ export function createTelegramInboundMedia({
       const mediaRuntime = resolveMediaRuntime(
         ...entry.spooledReplayParticipants.map((participant) => participant.abortSignal),
       );
-      let materializedCount = 0;
       let skippedCount = 0;
       for (const { ctx, msg } of entry.messages) {
         const sourceMessageId = String(msg.message_id);
@@ -380,10 +379,11 @@ export function createTelegramInboundMedia({
         try {
           media = await resolveMedia({ ctx, maxBytes: mediaMaxBytes, ...mediaRuntime });
         } catch (error) {
-          if (mediaRuntime.abortSignal?.aborted || isDurablyRetryableInboundMediaError(error)) {
-            throw error;
-          }
-          if (!isRecoverableMediaGroupError(error)) {
+          if (
+            mediaRuntime.abortSignal?.aborted ||
+            isDurablyRetryableInboundMediaError(error) ||
+            !isRecoverableMediaGroupError(error)
+          ) {
             throw error;
           }
           // A failed attachment must not hide the rest of the album.
@@ -399,7 +399,6 @@ export function createTelegramInboundMedia({
             stickerMetadata: media.stickerMetadata,
             sourceMessageId,
           });
-          materializedCount++;
           selection.set(sourceMessageId, "include");
         } else {
           allMedia.push({
@@ -419,7 +418,7 @@ export function createTelegramInboundMedia({
           fn: () =>
             bot.api.sendMessage(
               primary.msg.chat.id,
-              `⚠️ Received ${materializedCount} of ${entry.messages.length} images — ${skippedCount} could not be fetched and ${verb} skipped.`,
+              `⚠️ Received ${allMedia.length - skippedCount} of ${entry.messages.length} images — ${skippedCount} could not be fetched and ${verb} skipped.`,
               {
                 ...buildTelegramThreadParams(entry.threadSpec),
                 reply_parameters: {

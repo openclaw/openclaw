@@ -95,6 +95,10 @@ watermark reads select the hot generation and the retained cold or hot sequence
 in one statement; hot-only readers keep their existing meaning. These query
 changes preserve schemas, stored bytes, live authority, and update behavior.
 
+Display-history readers resolve selected activity anchors by session and event ID,
+retaining the sequence fence inside the same read snapshot. These point lookups
+use the existing primary key and require no schema or data migration.
+
 Session entry writes batch their saved snapshot fields in one upsert, preserving
 per-field revision triggers and rollback.
 

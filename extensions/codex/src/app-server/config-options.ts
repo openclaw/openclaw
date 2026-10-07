@@ -137,10 +137,7 @@ export function createCodexAppServerConfig({
     const url = readNonEmptyString(config.url) ?? (transport === "unix" ? "unix://" : undefined);
     const connectionClass = inferCodexAppServerConnectionClass({ transport, url });
     const remoteWorkspaceRoot = readNonEmptyString(config.remoteWorkspaceRoot);
-    const execMode = resolveEffectiveOpenClawExecModeForCodexAppServer({
-      execMode: params.execMode,
-      execPolicy: params.execPolicy,
-    });
+    const execMode = resolveEffectiveOpenClawExecModeForCodexAppServer(params);
     // Session permission tuples delegate containment to Codex; only legacy exec policy preflights.
     if (!params.sessionPermissionMode) {
       assertCodexAppServerAllowedForOpenClawExecMode(execMode);
@@ -187,13 +184,7 @@ export function createCodexAppServerConfig({
       params.execPolicy.ask === "always";
     const forcePerCommandApprovals = params.execPolicy?.ask === "always";
     const requirementsToml = forcePerCommandApprovals
-      ? (readCodexRequirementsToml({
-          env,
-          requirementsToml: params.requirementsToml,
-          requirementsPath: params.requirementsPath,
-          readRequirementsFile: params.readRequirementsFile,
-          platform: params.platform,
-        }) ?? null)
+      ? (readCodexRequirementsToml({ ...params, env }) ?? null)
       : params.requirementsToml;
     if (
       forcePerCommandApprovals &&
@@ -209,16 +200,13 @@ export function createCodexAppServerConfig({
       explicitPolicyMode && !forceRuntimePolicy && !ignoreLegacyYoloPolicyMode
         ? undefined
         : resolveDefaultCodexAppServerPolicy({
+            ...params,
             transport,
             env,
             forceGuardian: normalizedPolicyMode === "guardian",
             forceUserReviewer: forceUserReviewer || !canUseModelBackedReviewer,
             execModeRequiringPromptingApprovals,
             requirementsToml,
-            requirementsPath: params.requirementsPath,
-            readRequirementsFile: params.readRequirementsFile,
-            platform: params.platform,
-            hostName: params.hostName,
             execModeRequiringUserReviewer: forceUserReviewer ? execMode : undefined,
           });
     const preserveExplicitAutoSandbox = forceGuardianReviewer && configuredSandbox === "read-only";
@@ -406,53 +394,48 @@ export function resolveCodexComputerUseConfig(
   const config = readCodexPluginConfig(params.pluginConfig).computerUse ?? {};
   const option = <K extends keyof CodexComputerUseConfig>(key: K) =>
     params.overrides?.[key] ?? config[key];
-  const stringOption = (key: keyof CodexComputerUseConfig, envSuffix: string) =>
+  const envOption = (key: keyof CodexComputerUseConfig) =>
+    env[`OPENCLAW_CODEX_COMPUTER_USE_${key.replace(/[A-Z]/g, "_$&").toUpperCase()}`];
+  const stringOption = (key: keyof CodexComputerUseConfig) =>
     readNonEmptyString(params.overrides?.[key]) ??
     readNonEmptyString(config[key]) ??
-    readNonEmptyString(env[`OPENCLAW_CODEX_COMPUTER_USE_${envSuffix}`]);
-  const marketplaceSource = stringOption("marketplaceSource", "MARKETPLACE_SOURCE");
-  const marketplacePath = stringOption("marketplacePath", "MARKETPLACE_PATH");
-  const marketplaceName = stringOption("marketplaceName", "MARKETPLACE_NAME");
-  const configuredPluginName = stringOption("pluginName", "PLUGIN_NAME");
-  const configuredMcpServerName = stringOption("mcpServerName", "MCP_SERVER_NAME");
-  const autoInstall =
-    option("autoInstall") ??
-    parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE_AUTO_INSTALL) ??
-    false;
-  const marketplaceDiscoveryTimeoutMs = resolvePositiveTimerTimeoutMs(
-    option("marketplaceDiscoveryTimeoutMs") ??
-      readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS),
+    readNonEmptyString(envOption(key));
+  const booleanOption = (
+    key: "autoInstall" | "healthCheckEnabled" | "strictReadiness" | "autoRepair",
+  ) => option(key) ?? parseBooleanValue(envOption(key)) ?? false;
+  const timeoutOption = (
+    key: "marketplaceDiscoveryTimeoutMs" | "liveTestTimeoutMs" | "toolCallTimeoutMs",
+    fallback: number,
+  ) => resolvePositiveTimerTimeoutMs(option(key) ?? readNumberEnv(envOption(key)), fallback);
+  const marketplaceSource = stringOption("marketplaceSource");
+  const marketplacePath = stringOption("marketplacePath");
+  const marketplaceName = stringOption("marketplaceName");
+  const configuredPluginName = stringOption("pluginName");
+  const configuredMcpServerName = stringOption("mcpServerName");
+  const autoInstall = booleanOption("autoInstall");
+  const marketplaceDiscoveryTimeoutMs = timeoutOption(
+    "marketplaceDiscoveryTimeoutMs",
     DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS,
   );
-  const liveTestTimeoutMs = resolvePositiveTimerTimeoutMs(
-    option("liveTestTimeoutMs") ??
-      readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_LIVE_TEST_TIMEOUT_MS),
+  const liveTestTimeoutMs = timeoutOption(
+    "liveTestTimeoutMs",
     DEFAULT_CODEX_COMPUTER_USE_LIVE_TEST_TIMEOUT_MS,
   );
-  const toolCallTimeoutMs = resolvePositiveTimerTimeoutMs(
-    option("toolCallTimeoutMs") ??
-      readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS),
+  const toolCallTimeoutMs = timeoutOption(
+    "toolCallTimeoutMs",
     DEFAULT_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS,
   );
   const healthCheckIntervalMinutes = normalizeComputerUseHealthCheckIntervalMinutes(
-    option("healthCheckIntervalMinutes") ??
-      readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES),
+    option("healthCheckIntervalMinutes") ?? readNumberEnv(envOption("healthCheckIntervalMinutes")),
   );
-  const healthCheckEnabled =
-    option("healthCheckEnabled") ??
-    parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_ENABLED) ??
-    false;
+  const healthCheckEnabled = booleanOption("healthCheckEnabled");
   const pluginCacheMode =
     normalizeComputerUsePluginCacheMode(params.overrides?.pluginCacheMode) ??
     config.pluginCacheMode ??
-    normalizeComputerUsePluginCacheMode(env.OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_CACHE_MODE) ??
+    normalizeComputerUsePluginCacheMode(envOption("pluginCacheMode")) ??
     "independent";
-  const strictReadiness =
-    option("strictReadiness") ??
-    parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE_STRICT_READINESS) ??
-    false;
-  const autoRepair =
-    option("autoRepair") ?? parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE_AUTO_REPAIR) ?? false;
+  const strictReadiness = booleanOption("strictReadiness");
+  const autoRepair = booleanOption("autoRepair");
   const enabled =
     option("enabled") ??
     parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE) ??

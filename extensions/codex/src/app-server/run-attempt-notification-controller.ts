@@ -154,7 +154,7 @@ export function createCodexAttemptNotificationController(
         }
         if (
           isCodexTurnAbortMarkerNotification(notification, {
-            currentPromptTexts: [turnState.codexTurnPromptText],
+            currentPromptText: turnState.codexTurnPromptText,
           })
         ) {
           state.sawCodexInterruptMarker = true;

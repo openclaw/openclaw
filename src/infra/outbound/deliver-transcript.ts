@@ -30,6 +30,11 @@ export async function mirrorDeliveredPayloads(params: {
   if (!mirrorText) {
     return;
   }
+  const warnFailure = (reason: string) =>
+    log.warn(
+      `failed to mirror outbound delivery into session transcript; channel send already succeeded: ${reason}`,
+      { channel: params.delivery.channel, to: params.delivery.to, sessionKey: mirror.sessionKey },
+    );
   // Transcript mirroring is best-effort bookkeeping after platform send.
   // Keep mirror failures non-fatal so callers do not retry an already-sent payload.
   try {
@@ -51,15 +56,9 @@ export async function mirrorDeliveredPayloads(params: {
       config: params.delivery.cfg,
     });
     if (!mirrorResult.ok) {
-      log.warn(
-        `failed to mirror outbound delivery into session transcript; channel send already succeeded: ${mirrorResult.reason}`,
-        { channel: params.delivery.channel, to: params.delivery.to, sessionKey: mirror.sessionKey },
-      );
+      warnFailure(mirrorResult.reason);
     }
   } catch (err) {
-    log.warn(
-      `failed to mirror outbound delivery into session transcript; channel send already succeeded: ${formatErrorMessage(err)}`,
-      { channel: params.delivery.channel, to: params.delivery.to, sessionKey: mirror.sessionKey },
-    );
+    warnFailure(formatErrorMessage(err));
   }
 }
