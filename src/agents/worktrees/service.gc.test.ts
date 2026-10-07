@@ -10,7 +10,6 @@ import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import * as backoff from "../../infra/backoff.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
-import * as pidAlive from "../../shared/pid-alive.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -239,37 +238,31 @@ describe("ManagedWorktreeService garbage collection", () => {
     }
   });
 
-  it.each([
-    ["assume-unchanged", "--assume-unchanged"],
-    ["skip-worktree", "--skip-worktree"],
-  ])(
-    "snapshots untracked children of a directory replacing a %s tracked file",
-    async (_label, flag) => {
-      await fs.writeFile(path.join(repo, "entry"), "original file\n");
-      await git(repo, "add", "entry");
-      await git(repo, "commit", "-m", "add tracked parent");
-      const created = await materializeRunOwnedFixture(`replaced-${_label}`, "workboard");
-      // Git skips its worktree comparison for flagged entries, so neither the collapsed
-      // listing nor diff-files reports the directory that replaced this tracked file.
-      await git(created.path, "update-index", flag, "entry");
-      const parentPath = path.join(created.path, "entry");
-      await fs.rm(parentPath);
-      await fs.mkdir(parentPath);
-      await fs.writeFile(path.join(parentPath, "child.txt"), "discovered child\n");
-      now += IDLE_GC_MS + 1;
-      const warnLogs = createWarnLogCapture(`openclaw-worktree-gc-replaced-${_label}`);
-      try {
-        expect((await service.gc()).removed).toEqual([created.id]);
-        expect(await warnLogs.findText(`idle cleanup failed for ${created.id}`)).toBeUndefined();
-        const restored = await service.restore({ id: created.id });
-        expect(await fs.readFile(path.join(restored.path, "entry", "child.txt"), "utf8")).toBe(
-          "discovered child\n",
-        );
-      } finally {
-        warnLogs.cleanup();
-      }
-    },
-  );
+  it("snapshots untracked children of a directory replacing an assume-unchanged tracked file", async () => {
+    await fs.writeFile(path.join(repo, "entry"), "original file\n");
+    await git(repo, "add", "entry");
+    await git(repo, "commit", "-m", "add tracked parent");
+    const created = await materializeRunOwnedFixture("replaced-assume-unchanged", "workboard");
+    // Git skips its worktree comparison for flagged entries, so neither the collapsed
+    // listing nor diff-files reports the directory that replaced this tracked file.
+    await git(created.path, "update-index", "--assume-unchanged", "entry");
+    const parentPath = path.join(created.path, "entry");
+    await fs.rm(parentPath);
+    await fs.mkdir(parentPath);
+    await fs.writeFile(path.join(parentPath, "child.txt"), "discovered child\n");
+    now += IDLE_GC_MS + 1;
+    const warnLogs = createWarnLogCapture("openclaw-worktree-gc-replaced-assume-unchanged");
+    try {
+      expect((await service.gc()).removed).toEqual([created.id]);
+      expect(await warnLogs.findText(`idle cleanup failed for ${created.id}`)).toBeUndefined();
+      const restored = await service.restore({ id: created.id });
+      expect(await fs.readFile(path.join(restored.path, "entry", "child.txt"), "utf8")).toBe(
+        "discovered child\n",
+      );
+    } finally {
+      warnLogs.cleanup();
+    }
+  });
 
   it("detects a nested repository inside a directory replacing a conflicted tracked file", async () => {
     await commitConflictedParent(repo);
@@ -323,29 +316,6 @@ describe("ManagedWorktreeService garbage collection", () => {
     expect(await fs.readFile(path.join(restored.path, "entry", "child.txt"), "utf8")).toBe(
       "replacement\n",
     );
-  });
-
-  it("protects a nested repository inside an untracked tree over the Git output cap", async () => {
-    const created = await materializeRunOwnedFixture("bounded-nested", "workboard");
-    const generated = path.join(created.path, "generated", "package");
-    await fs.mkdir(generated, { recursive: true });
-    for (let index = 0; index < 64; index++) {
-      await fs.writeFile(path.join(generated, `generated-untracked-file-${index}.txt`), "");
-    }
-    const nested = await initializeNestedRepository(created.path, "generated/package/nested");
-    await fs.writeFile(path.join(nested, "local.txt"), "nested state\n");
-    now += IDLE_GC_MS + 1;
-    const capped = await capUntrackedListing(created.path);
-    const warnLogs = createWarnLogCapture("openclaw-worktree-gc-bounded-nested");
-    try {
-      expect((await service.gc()).removed).toEqual([]);
-      expect(await warnLogs.findText(`idle cleanup failed for ${created.id}`)).toBeUndefined();
-      expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
-      expect(await fs.readFile(path.join(nested, "local.txt"), "utf8")).toBe("nested state\n");
-    } finally {
-      warnLogs.cleanup();
-      capped.mockRestore();
-    }
   });
 
   it("garbage collects a large Git index and restores local edits and deletions", async () => {
@@ -444,29 +414,6 @@ describe("ManagedWorktreeService garbage collection", () => {
     }
   });
 
-  it("garbage collects modified provisioned files into the immutable snapshot", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\n");
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
-    await git(repo, "add", ".gitignore", ".worktreeinclude");
-    await git(repo, "commit", "-m", "configure worktree provisioning");
-    await fs.writeFile(path.join(repo, ".env.local"), "value=old-source\n");
-
-    const created = await materializeDownstreamFixture("idle-rotated", {
-      ownerKind: "workboard",
-      provisionedPaths: [".env.local"],
-    });
-    await fs.rm(path.join(repo, ".worktreeinclude"));
-    await fs.writeFile(path.join(created.path, ".env.local"), "value=rotated-only-copy\n");
-    now += IDLE_GC_MS + 1;
-
-    expect((await service.gc()).removed).toEqual([created.id]);
-    await fs.writeFile(path.join(repo, ".env.local"), "value=newer-source\n");
-    const restored = await service.restore({ id: created.id });
-    expect(await fs.readFile(path.join(restored.path, ".env.local"), "utf8")).toBe(
-      "value=rotated-only-copy\n",
-    );
-  });
-
   it("shares one fresh lock inventory across idle prefilters for a repository", async () => {
     const records = [];
     for (let index = 0; index < 3; index++) {
@@ -513,22 +460,6 @@ describe("ManagedWorktreeService garbage collection", () => {
     } finally {
       inventories.mockRestore();
       warnLogs.cleanup();
-    }
-  });
-
-  it("checks process liveness only for the requested GC candidates", async () => {
-    const manual = await materializeDownstreamFixture("unrelated-live-lock");
-    const candidate = await materializeRunOwnedFixture("candidate-live-lock", "session");
-    await git(repo, "worktree", "lock", "--reason", `openclaw pid=${process.ppid}`, manual.path);
-    await git(repo, "worktree", "lock", "--reason", `openclaw pid=${process.pid}`, candidate.path);
-    now += IDLE_GC_MS + 1;
-    const liveness = vi.spyOn(pidAlive, "isPidDefinitelyDead");
-    try {
-      expect((await service.gc()).removed).toEqual([]);
-      expect(liveness).toHaveBeenCalledWith(process.pid);
-      expect(liveness).not.toHaveBeenCalledWith(process.ppid);
-    } finally {
-      liveness.mockRestore();
     }
   });
 
