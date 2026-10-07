@@ -43,7 +43,7 @@ import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
 export type { PackageActivationStatus } from "./package-update-activation-status.js";
 
-/** Read-only correlation; callers still need a privately registered live fence. */
+/** Reconcile completed receipts; unfinished operations still require a live fence. */
 function readPackageActivationContinuation(installKey: string) {
   const anchor = resolvePackageActivationAnchor(installKey);
   const released = readReleasedPackageActivationReceipt(installKey);
@@ -65,7 +65,7 @@ function readPackageActivationContinuation(installKey: string) {
     }
     return undefined;
   }
-  const record = openPackageActivationJournal(anchor).read();
+  const record = openPackageActivationJournal(anchor).readForAdmission(installKey);
   if (isPackageActivationComplete(anchor, record)) {
     return undefined;
   }
@@ -169,7 +169,8 @@ export function readPackageActivationReceipt(installKey: string):
   if (
     receipt.phase !== "complete" ||
     (record.intent?.kind !== "recovery-lease-identity-changed" &&
-      record.intent?.kind !== "recovery-lease-missing")
+      record.intent?.kind !== "recovery-lease-missing" &&
+      record.intent?.kind !== "receipt-device-id-changed")
   ) {
     assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
   }
@@ -193,7 +194,10 @@ export async function settlePendingPackageActivation(installKey: string) {
       ? {
           operationId: initial.descriptor.operationId,
           reason: initial.intent.kind,
-          retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
+          retained:
+            initial.phase === "superseded"
+              ? `${anchor}.superseded-${initial.descriptor.operationId}`
+              : undefined,
           detail: initial.intent.detail,
         }
       : undefined;

@@ -127,7 +127,8 @@ export function isPackageActivationComplete(
       record.intent?.kind !== "superseded-by-manual-install" &&
       record.intent?.kind !== "recovery-lease-identity-changed" &&
       record.intent?.kind !== "publication-settled-external-change" &&
-      record.intent?.kind !== "recovery-lease-missing"
+      record.intent?.kind !== "recovery-lease-missing" &&
+      record.intent?.kind !== "receipt-device-id-changed"
     ) {
       throw new Error("Package supersession fact is missing.");
     }
@@ -145,10 +146,16 @@ export function isPackageActivationComplete(
         record.descriptor.helperIdentity
     );
   }
-  if (record.phase !== "anchor-retired" || record.intent?.kind !== "unlink-helper") {
+  if (
+    record.phase !== "anchor-retired" ||
+    (record.intent?.kind !== "unlink-helper" && record.intent?.kind !== "receipt-device-id-changed")
+  ) {
     return false;
   }
-  if (record.intent.identity !== record.descriptor.helperIdentity) {
+  if (
+    record.intent.kind === "unlink-helper" &&
+    record.intent.identity !== record.descriptor.helperIdentity
+  ) {
     throw new Error("Final helper unlink identity is invalid.");
   }
   for (const file of [anchor, resolvePackageActivationHelper(anchor)]) {
@@ -162,4 +169,90 @@ export function isPackageActivationComplete(
     }
   }
   return true;
+}
+
+/** Reconcile historical completion facts only; never authorize a filesystem effect. */
+export function reconcileCompletedPackageActivationRecord(
+  anchor: string,
+  record: PackageActivationRecord,
+): PackageActivationRecord {
+  const refuse = () => {
+    throw new Error("Package publication journal does not match its installation");
+  };
+  if (process.platform !== "linux" || !["anchor-retired", "superseded"].includes(record.phase)) {
+    return refuse();
+  }
+  const sameInode = (expected: string, current: string) => {
+    if (expected.split(":")[1] !== current.split(":")[1]) {
+      refuse();
+    }
+    return current;
+  };
+  const live = record.descriptor.authority.installKey;
+  const control = resolvePackageActivationControl(anchor);
+  const journal = resolvePackageActivationJournalPath(anchor);
+  if (
+    [live, path.dirname(anchor), control, journal].some((file) => fs.realpathSync(file) !== file)
+  ) {
+    return refuse();
+  }
+  const descriptor = {
+    ...record.descriptor,
+    parentIdentity: sameInode(
+      record.descriptor.parentIdentity,
+      packageActivationIdentity(path.dirname(anchor), "parent"),
+    ),
+    journalParentIdentity: sameInode(
+      record.descriptor.journalParentIdentity,
+      privatePackageActivationIdentity(control, "control"),
+    ),
+    journalIdentity: sameInode(
+      record.descriptor.journalIdentity,
+      privatePackageActivationIdentity(journal, "journal"),
+    ),
+  };
+  if (record.phase === "superseded") {
+    const retained = `${anchor}.superseded-${descriptor.operationId}`;
+    descriptor.anchorIdentity = sameInode(
+      descriptor.anchorIdentity,
+      packageActivationIdentity(retained, true),
+    );
+    descriptor.helperIdentity = sameInode(
+      descriptor.helperIdentity,
+      packageActivationIdentity(path.join(retained, "recovery.mjs"), false),
+    );
+    descriptor.preparation = descriptor.preparation.map((entry) =>
+      entry.name === "anchor" || entry.name === "helper"
+        ? {
+            ...entry,
+            identity:
+              entry.name === "anchor" ? descriptor.anchorIdentity : descriptor.helperIdentity,
+          }
+        : entry,
+    );
+  }
+  // First prove the original final intent and retired artifacts; a phase label alone is insufficient.
+  if (!isPackageActivationComplete(anchor, { ...record, descriptor })) {
+    return refuse();
+  }
+  const expected =
+    record.intent?.kind === "unlink-helper"
+      ? descriptor[record.intent.selected].identity
+      : record.intent && "replacementIdentity" in record.intent
+        ? record.intent.replacementIdentity
+        : undefined;
+  if (!expected) {
+    return refuse();
+  }
+  const replacementIdentity = sameInode(expected, packageActivationIdentity(live, true));
+  return {
+    ...record,
+    descriptor,
+    intent: {
+      kind: "receipt-device-id-changed",
+      replacementIdentity,
+      settled: true,
+      detail: "filesystem device id changed",
+    },
+  };
 }

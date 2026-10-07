@@ -12,6 +12,7 @@ import {
   assertPackageActivationLayout,
   isPackageActivationComplete,
   packageActivationIdentity,
+  reconcileCompletedPackageActivationRecord,
   privatePackageActivationIdentity as assertPrivate,
   resolvePackageActivationAnchor,
   resolvePackageActivationControl,
@@ -118,7 +119,14 @@ export function openPackageActivationJournal(anchor: string) {
         return operation(db, transact);
       },
     );
-  const decode = (row: ActivationRow | undefined): PackageActivationRecord => {
+  const matchesInstallation = (descriptor: PackageActivationDescriptor) =>
+    descriptor.parentIdentity === parentIdentity &&
+    descriptor.journalParentIdentity === journalParentIdentity &&
+    descriptor.journalIdentity === journalIdentity;
+  const decode = (
+    row: ActivationRow | undefined,
+    completedInstallKey?: string,
+  ): PackageActivationRecord => {
     if (
       !row ||
       row.slot !== 1 ||
@@ -130,11 +138,10 @@ export function openPackageActivationJournal(anchor: string) {
     }
     const descriptor = PackageActivationDescriptorSchema.parse(JSON.parse(row.descriptor_json));
     if (
-      descriptor.parentIdentity !== parentIdentity ||
-      descriptor.journalParentIdentity !== journalParentIdentity ||
-      descriptor.journalIdentity !== journalIdentity ||
       resolvePackageActivationAnchor(descriptor.authority.installKey) !== anchor ||
-      descriptor.parentIdentity !== packageActivationIdentity(path.dirname(anchor), "parent") ||
+      packageActivationIdentity(parent, "parent") !== parentIdentity ||
+      (completedInstallKey !== undefined &&
+        descriptor.authority.installKey !== completedInstallKey) ||
       new Set(descriptor.launchers.map((entry) => entry.name)).size !== descriptor.launchers.length
     ) {
       throw new Error("Package publication journal does not match its installation");
@@ -172,13 +179,20 @@ export function openPackageActivationJournal(anchor: string) {
     ) {
       throw new Error("Package publication intent names an unknown launcher.");
     }
-    return {
+    const record = {
       revision: row.revision,
       phase: PackageActivationPhaseSchema.parse(row.phase),
       intent,
       descriptor,
       publications,
     };
+    if (!matchesInstallation(descriptor)) {
+      if (completedInstallKey === undefined) {
+        throw new Error("Package publication journal does not match its installation");
+      }
+      reconcileCompletedPackageActivationRecord(anchor, record);
+    }
+    return record;
   };
   const readRow = (db: DatabaseSync) => {
     const sizes = executeSqliteQuerySync(
@@ -226,6 +240,7 @@ export function openPackageActivationJournal(anchor: string) {
     assertCurrent: () => void,
     publications = expected.publications,
     descriptor = expected.descriptor,
+    completedInstallKey?: string,
   ): PackageActivationRecord => {
     const descriptorJsonValue = descriptorJson(descriptor);
     const intentJson = JSON.stringify(intentSchema.parse(intent));
@@ -236,7 +251,7 @@ export function openPackageActivationJournal(anchor: string) {
         () => {
           assertFiles();
           assertCurrent();
-          assertRecord(expected, decode(readRow(db)));
+          assertRecord(expected, decode(readRow(db), completedInstallKey));
           executeSqliteQuerySync(
             db,
             queries(db)
@@ -265,6 +280,26 @@ export function openPackageActivationJournal(anchor: string) {
   };
   return {
     read,
+    readForAdmission(installKey: string) {
+      const initial = withDatabase(false, (db) => decode(readRow(db), installKey));
+      if (matchesInstallation(initial.descriptor)) {
+        return initial;
+      }
+      const reconciled = reconcileCompletedPackageActivationRecord(anchor, initial);
+      const assertCompleted = () => {
+        assertFiles();
+        assertRecord(reconciled, reconcileCompletedPackageActivationRecord(anchor, initial));
+      };
+      return transition(
+        initial,
+        reconciled.phase,
+        reconciled.intent,
+        assertCompleted,
+        reconciled.publications,
+        reconciled.descriptor,
+        installKey,
+      );
+    },
     recordPreviousCopy(
       expected: PackageActivationRecord,
       previous: PackageActivationDescriptor["previous"],
@@ -324,6 +359,7 @@ export function openPackageActivationJournal(anchor: string) {
               previous.descriptor.authority.databasePath !== descriptor.authority.databasePath ||
               (previous.intent?.kind !== "recovery-lease-identity-changed" &&
                 previous.intent?.kind !== "recovery-lease-missing" &&
+                previous.intent?.kind !== "receipt-device-id-changed" &&
                 (previous.descriptor.authority.databaseIdentity !==
                   descriptor.authority.databaseIdentity ||
                   previous.descriptor.authority.parentIdentity !==
