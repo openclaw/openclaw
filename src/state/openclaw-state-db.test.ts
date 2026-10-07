@@ -3912,6 +3912,7 @@ describe("openclaw state database", () => {
         "Consolidated shared state tables (v13)",
         "Qualified historical cron creator attribution as unknown (v14)",
         "Removed redundant conversation binding target projections (v15)",
+        "Installed the durable delegated execution ownership registry (v19)",
         "Migrated shared state tables to SQLite STRICT typing (48)",
       ],
       warnings: [],
@@ -5768,6 +5769,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
         "Migrated shared state audit event ledger → versioned message lifecycle schema",
+        "Installed the durable delegated execution ownership registry (v19)",
         "Migrated shared state tables to SQLite STRICT typing (3)",
       ],
       warnings: [],
