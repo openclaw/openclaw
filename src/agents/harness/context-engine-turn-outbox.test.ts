@@ -240,9 +240,12 @@ describe("context-engine turn outbox", () => {
       message: { role: "assistant", content: "queued history update" },
       now: 3_000,
     });
-    expect(recorder.getAdmissionReceipt()).toBeUndefined();
-    release.resolve();
-    await Promise.all([recorder.waitForRuntimePersistence(), concurrent]);
+    try {
+      expect(recorder.getAdmissionReceipt()).toBeUndefined();
+    } finally {
+      release.resolve();
+      await Promise.all([recorder.waitForRuntimePersistence(), concurrent]);
+    }
     expect(recorder.getAdmissionReceipt()).toMatchObject({
       agentId: target.agentId,
       sessionId: target.sessionId,
@@ -267,9 +270,21 @@ describe("context-engine turn outbox", () => {
         sessionKeyMatches: field !== "sessionKey",
         storePathMatches: field !== "storePath",
       };
-      await expect(recorder.waitForRuntimePersistence()).rejects.toThrow(
+      const error = await recorder.waitForRuntimePersistence().then(
+        () => { throw new Error("expected admission rejection"); },
+        (rejection: unknown) => rejection,
+      );
+      expect(error).toBeInstanceOf(Error);
+      const diagnostic = (error as Error).message;
+      expect(diagnostic).toBe(
         "context-engine transcript target changed before provider dispatch " + JSON.stringify(expected),
       );
+      for (const privateValue of [
+        "synthetic-private-value", target.agentId, target.sessionId, target.sessionKey,
+        target.storePath, admission.storePath,
+      ]) {
+        expect(diagnostic).not.toContain(privateValue);
+      }
       expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
     },
   );
