@@ -10,7 +10,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/a2a/src/inbound.test.ts",
   "extensions/buzz/src/inbound.test.ts",
   "extensions/clickclack/src/inbound.mention-gating.test.ts",
-  "extensions/clickclack/src/inbound.model-loop.test.ts",
   "extensions/clickclack/src/inbound.test.ts",
   "extensions/discord/src/monitor/message-handler.context-history.test.ts",
   "extensions/irc/src/inbound.behavior.test.ts",

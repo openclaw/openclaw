@@ -311,7 +311,6 @@
 ["extensions/clickclack/src/gateway.thread-reply-window.test.ts","./access.js","4ea058cbc8181ce0445ada920e690c244a95a76b6ebec6e9da7697fb3d5d96dc",1]
 ["extensions/clickclack/src/gateway.thread-reply-window.test.ts","./inbound.js","a00286b534cd1fcbd17500d476c8e1836dcd31315e8ca068f57bc3263cce222e",1]
 ["extensions/clickclack/src/http-client.websocket-options.test.ts","./ws-runtime.js","0237a060234b263fb83131004c7feeccfdbfdb98d0564d855ce9d5a7f5630744",1]
-["extensions/clickclack/src/inbound.model-loop.test.ts","./outbound.js","c4c0f69de92112b0dc7508124ec94e8ad8956f7f33e11a0e4d7a8f1db5daaec4",1]
 ["extensions/clickclack/src/inbound.test.ts","./outbound.js","c4c0f69de92112b0dc7508124ec94e8ad8956f7f33e11a0e4d7a8f1db5daaec4",1]
 ["extensions/clickclack/src/outbound.test.ts","./accounts.js","5098b146cbdd697f7a4344c02031574631ad9cf928ebcdadace89f7b5cff90cc",1]
 ["extensions/clickclack/src/outbound.test.ts","./http-client.js","0b98ceffba387ae3fd07188e3b83520026b3b1c8d44e6fa74e182f5d5934d30e",1]
