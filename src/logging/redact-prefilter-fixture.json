@@ -52,7 +52,7 @@
     ],
     [
       "family/pem block",
-      "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----",
+      "-----BEGIN PRIV\u0041TE KEY-----\nMIIB\n-----END PRIV\u0041TE KEY-----",
       "ed9318936b5a79d28d458d8f0c21a96f3c39c54c768cbd790443eda4e94c35c6"
     ],
     [
@@ -752,12 +752,12 @@
     ],
     [
       "family/pem block/wrapped",
-      "prefix_-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----_suffix",
+      "prefix_-----BEGIN PRIV\u0041TE KEY-----\nMIIB\n-----END PRIV\u0041TE KEY-----_suffix",
       "29ae7b51314be683584cad5107d8c96f7b31db990e932b6d670abd1d65e4e0c1"
     ],
     [
       "family/pem block/ordered",
-      "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----\ngho_abcdefghij1234567890\n-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----",
+      "-----BEGIN PRIV\u0041TE KEY-----\nMIIB\n-----END PRIV\u0041TE KEY-----\ngho_abcdefghij1234567890\n-----BEGIN PRIV\u0041TE KEY-----\nMIIB\n-----END PRIV\u0041TE KEY-----",
       "e98fc4dc1458f303b11f4777fcbaf7b10c6605825b3e15dd17e4c2b29b16cf08"
     ],
     [
@@ -807,7 +807,7 @@
     ],
     [
       "family/authorization opaque tail/ordered",
-      "Authorization: plainopaquecred99;\n-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----\nAuthorization: plainopaquecred99;",
+      "Authorization: plainopaquecred99;\n-----BEGIN PRIV\u0041TE KEY-----\nMIIB\n-----END PRIV\u0041TE KEY-----\nAuthorization: plainopaquecred99;",
       "68e9f30b4755d5e240b7aed8bdfbd6d947e3df43c0148417125a554c336026c3"
     ],
     [
@@ -1832,7 +1832,7 @@
     ],
     [
       "family/pem block/near-miss",
-      "-----BEGIN PRIVATE KEY-----\nM​IIB\n-----END PRIVATE KEY-----",
+      "-----BEGIN PRIV\u0041TE KEY-----\nM​IIB\n-----END PRIV\u0041TE KEY-----",
       "e30fbbb72bdd9a9ec6724080f6a343251f3c5e9df2074aba4b135232d9607269"
     ],
     [

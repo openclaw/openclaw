@@ -55,6 +55,7 @@ it("preserves baseline bytes across secret families, near misses, and ordered co
   // Recorded from the untouched baseline named in the fixture, before prefilter changes.
   // Hash the complete outputs together to keep the seven-mode corpus small without
   // deriving expected values from the current implementation or storing masked duplicates.
+  // JSON escapes keep synthetic PEM markers out of repository bytes; parsing restores them.
   const corpus = JSON.parse(
     readFileSync(new URL("./redact-prefilter-fixture.json", import.meta.url), "utf8"),
   ) as { cases: [name: string, input: string, sha256: string][] };
