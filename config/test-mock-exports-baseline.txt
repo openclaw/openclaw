@@ -6061,7 +6061,6 @@
 ["src/commands/doctor-session-transcript-headers.test.ts","../../packages/terminal-core/src/note.js","37412184cc3282e016b1748bb2a1a99e58e75ce323b4d18573c39a596044afb9",1]
 ["src/commands/doctor-session-transcript-labels.test.ts","../../packages/terminal-core/src/note.js","37412184cc3282e016b1748bb2a1a99e58e75ce323b4d18573c39a596044afb9",1]
 ["src/commands/doctor-session-transcripts.incident.test.ts","../../packages/terminal-core/src/note.js","37412184cc3282e016b1748bb2a1a99e58e75ce323b4d18573c39a596044afb9",1]
-["src/commands/doctor-session-transcripts.missing-index.test.ts","../../packages/terminal-core/src/note.js","37412184cc3282e016b1748bb2a1a99e58e75ce323b4d18573c39a596044afb9",1]
 ["src/commands/doctor-session-transcripts.sqlite.test.ts","../../packages/terminal-core/src/note.js","76670fde754352037ee3f1cff2949e0c48732334c728d7f48a5d9d44cdbed947",1]
 ["src/commands/doctor-session-transcripts.sqlite.test.ts","../config/sessions/legacy-main-session-migration.js","d8162126f08c93b19ffd106522f5f37518c690d69625bd9f7a0100f6966ac421",1]
 ["src/commands/doctor-session-transcripts.sqlite.test.ts","../infra/state-migrations.plugin-doctor.js","40a5c6b3528c5d3b20d7a57bac8def15cc4268d46cb0e2702dbe9320c60033c5",1]
