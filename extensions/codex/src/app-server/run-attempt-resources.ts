@@ -559,6 +559,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   };
   const startupTimeoutMs = resolveCodexStartupTimeoutMs({
     timeoutMs: params.timeoutMs,
+    requestTimeoutMs: appServer.requestTimeoutMs,
     timeoutFloorMs: options.startupTimeoutFloorMs,
   });
   const requesterChannel = params.messageChannel ?? params.messageProvider;
