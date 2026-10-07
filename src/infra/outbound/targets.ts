@@ -167,15 +167,31 @@ async function resolveHeartbeatOwnerRoute(
   // configured owner on a later channel.
   const configuredOwners = concreteAllowFromEntries(params.cfg.commands?.ownerAllowFrom);
   for (const { plugin } of plugins) {
-    const configuredOwner = configuredOwners.find((ownerId) => {
-      const prefixedChannel = resolveTargetPrefixedChannel(ownerId);
-      return (
-        (!prefixedChannel || prefixedChannel === plugin.id) &&
-        isPositivelyDirectHeartbeatOwnerTarget({ plugin, to: ownerId })
-      );
-    });
+    const configuredOwner = configuredOwners
+      .map((ownerId) => {
+        const prefixedChannel = resolveTargetPrefixedChannel(ownerId);
+        const providerTarget = stripTargetProviderPrefix(
+          ownerId,
+          plugin.id,
+          ...(plugin.messaging?.targetPrefixes ?? []),
+        );
+        const routeTarget =
+          prefixedChannel === plugin.id &&
+          plugin.messaging?.directTargetStyle === "user-prefixed" &&
+          providerTarget &&
+          !/^(?:user|channel|group|thread):/iu.test(providerTarget)
+            ? `${plugin.id}:user:${providerTarget}`
+            : ownerId;
+        return { ownerId: routeTarget, prefixedChannel };
+      })
+      .find(({ ownerId, prefixedChannel }) => {
+        return (
+          (!prefixedChannel || prefixedChannel === plugin.id) &&
+          isPositivelyDirectHeartbeatOwnerTarget({ plugin, to: ownerId })
+        );
+      });
     if (configuredOwner) {
-      return buildRoute(plugin, configuredOwner);
+      return buildRoute(plugin, configuredOwner.ownerId);
     }
   }
   for (const { plugin, accountId } of plugins) {
