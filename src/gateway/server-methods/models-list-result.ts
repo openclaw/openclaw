@@ -85,15 +85,11 @@ export async function prepareModelsListResult(
     return { read: () => ({ models: [] }), isCurrent: () => true };
   }
   // A prepared owner's registry can differ from the caller's (standalone CLI, workspace
-  // generations); preparation and reads must resolve plugin facts from the owner.
-  const registry = owner.preparedPluginRegistry;
-  const prepared = await withPluginRuntimeRegistryScope(registry, () =>
+  // generations); preparation resolves plugin facts from the owner. Reads stay pure
+  // projections of those prepared facts.
+  return withPluginRuntimeRegistryScope(owner.preparedPluginRegistry, () =>
     prepareOwnedModelsListResult(owner),
   );
-  return {
-    isCurrent: prepared.isCurrent,
-    read: () => withPluginRuntimeRegistryScope(registry, prepared.read),
-  };
 }
 
 async function prepareOwnedModelsListResult({
@@ -372,7 +368,11 @@ async function prepareOwnedModelsListResult({
               pluginRegistry: preparedPluginRegistry,
             });
         const agentRuntime = selectedRuntime
-          ? projectWorkerPlacementAgentRuntime(selectedRuntime)
+          ? preparedPluginRegistry
+            ? withPluginRuntimeRegistryScope(preparedPluginRegistry, () =>
+                projectWorkerPlacementAgentRuntime(selectedRuntime),
+              )
+            : projectWorkerPlacementAgentRuntime(selectedRuntime)
           : undefined;
         const thinkingProfile =
           typeof publicEntry.reasoning !== "boolean"
