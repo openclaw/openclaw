@@ -379,6 +379,7 @@ export function transitionMainSessionRecovery(
         state = updateRecoveryState(entry, state, { reservation: undefined });
       }
       if (
+        isMainRestartRecoveryAggregateEmptyAndUnowned(entry) ||
         isMainRestartRecoveryTerminalOnly(entry) ||
         (hasCompletedMainSessionRecoveryOutcome(entry) &&
           !state?.tombstone &&
@@ -498,6 +499,9 @@ export function transitionMainSessionRecovery(
             : state.chargedAttempts,
         reservation: undefined,
       });
+      if (isMainRestartRecoveryAggregateEmptyAndUnowned(entry)) {
+        Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
+      }
       return { kind: "applied" };
     }
     case "validate_recovery": {
@@ -588,11 +592,9 @@ export function transitionMainSessionRecovery(
     }
     case "claim_foreground": {
       if (
-        (entry.sessionId === command.sessionId &&
-          isMainRestartRecoveryCandidate(entry, command.sessionKey) &&
-          isMainRestartRecoveryTerminalOnly(entry)) ||
-        (entry.sessionId === command.sessionId &&
-          isMainRestartRecoveryCandidate(entry, command.sessionKey) &&
+        entry.sessionId === command.sessionId &&
+        isMainRestartRecoveryCandidate(entry, command.sessionKey) &&
+        (isMainRestartRecoveryTerminalOnly(entry) ||
           isMainRestartRecoveryAggregateEmptyAndUnowned(entry))
       ) {
         Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));

@@ -222,31 +222,35 @@ describe("agent command restart recovery ownership", () => {
     );
   });
 
-  it("resumes requester settle from a persisted healthy empty recovery aggregate", async () => {
-    const target = createTarget();
-    await write(target, {
-      status: "done",
-      abortedLastRun: false,
-      restartRecoveryRuns: undefined,
-      mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
-    });
+  it.each([undefined, "done"] as const)(
+    "resumes requester settle from persisted empty recovery (status=%s)",
+    async (status) => {
+      const target = createTarget();
+      await write(target, {
+        status,
+        abortedLastRun: false,
+        restartRecoveryRuns: undefined,
+        mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+      });
 
-    const requesterResult = "The completed subagent result reached the requester.";
-    const run = vi.fn(async () => requesterResult);
-    await expect(
-      execute(target, {
-        opts: {
-          runId: "settle-turn",
-          inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
-        } as AgentCommandOpts,
-        run,
-      }),
-    ).resolves.toBe(requesterResult);
+      const requesterResult = "The completed subagent result reached the requester.";
+      const run = vi.fn(async () => requesterResult);
+      await expect(
+        execute(target, {
+          opts: {
+            runId: "settle-turn",
+            inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+          } as AgentCommandOpts,
+          run,
+        }),
+      ).resolves.toBe(requesterResult);
 
-    expect(run).toHaveBeenCalledOnce();
-    expect(read(target)).toMatchObject({ status: "done", abortedLastRun: false });
-    expect(read(target)?.mainRestartRecovery).toBeUndefined();
-  });
+      expect(run).toHaveBeenCalledOnce();
+      expect(read(target)?.status).toBe(status);
+      expect(read(target)?.abortedLastRun).toBe(false);
+      expect(read(target)?.mainRestartRecovery).toBeUndefined();
+    },
+  );
 
   it("preserves persisted interrupted recovery custody during requester settle", async () => {
     const base = createTarget();

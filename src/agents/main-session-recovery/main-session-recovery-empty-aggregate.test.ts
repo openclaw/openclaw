@@ -3,6 +3,7 @@ import type {
   InternalSessionEntry as SessionEntry,
   MainRestartRecoveryState,
 } from "../../config/sessions.js";
+import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lifecycle.js";
 import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
 
 const sessionKey = "agent:main:main";
@@ -15,7 +16,6 @@ function entry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
     sessionId: "session-1",
     updatedAt: 100,
-    status: "done",
     abortedLastRun: false,
     mainRestartRecovery: recoveryState(),
     ...overrides,
@@ -23,7 +23,7 @@ function entry(overrides: Partial<SessionEntry> = {}): SessionEntry {
 }
 function claimForeground(
   session: SessionEntry,
-  options: { sessionId?: string; sessionKey?: string } = {},
+  options: { sessionId?: string; sessionKey?: string; runId?: string } = {},
 ) {
   return transitionMainSessionRecovery(session, {
     kind: "claim_foreground",
@@ -32,6 +32,7 @@ function claimForeground(
     sessionId: options.sessionId ?? "session-1",
     sessionKey: options.sessionKey ?? sessionKey,
     claimId: "foreground-1",
+    runId: options.runId,
   });
 }
 
@@ -66,6 +67,11 @@ const ownershipControls: Array<{
   },
   { label: "a tombstone", state: { tombstone: { reason: "exhausted" } } },
   {
+    label: "a recovery run",
+    state: {},
+    entry: { restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-1" }] },
+  },
+  {
     label: "a pending delivery run",
     state: {},
     entry: { restartRecoveryDeliveryRunId: "delivery-1" },
@@ -78,6 +84,85 @@ const ownershipControls: Array<{
 ];
 
 describe("empty main session recovery aggregate", () => {
+  it("clears the last cancelled reservation after a foreground turn settles", () => {
+    const session = entry({ abortedLastRun: true });
+    const reserved = transitionMainSessionRecovery(session, {
+      kind: "prepare_attempt",
+      attempt: 1,
+      executionIdentity: { state: "disabled" },
+      lifecycleGeneration: "generation-1",
+      now: 100,
+      observation: { sessionId: session.sessionId, cycleId: "cycle-1", revision: 1 },
+      runId: "recovery-1",
+    });
+    if (reserved.kind !== "reserved") {
+      throw new Error("expected recovery reservation");
+    }
+    expect(claimForeground(session, { runId: "foreground-run" }).kind).toBe("foreground_claimed");
+    // Foreground preparation admits the turn without consuming the recovery reservation.
+    session.abortedLastRun = false;
+    const settled = projectMainSessionRecoveryLifecycle({
+      currentLifecycleGeneration: "generation-1",
+      entry: session,
+      event: {
+        runId: "foreground-run",
+        lifecycleGeneration: "generation-1",
+        data: { phase: "end" },
+      },
+      snapshotPatch: { status: "done", abortedLastRun: false },
+    });
+    if (settled.action !== "apply") {
+      throw new Error("expected foreground settlement");
+    }
+    Object.assign(session, settled.patch);
+    expect(session.mainRestartRecovery?.foregroundClaims).toBeUndefined();
+    expect(session.restartRecoveryRuns).toBeUndefined();
+    expect(session.mainRestartRecovery?.reservation?.runId).toBe("recovery-1");
+
+    expect(
+      transitionMainSessionRecovery(session, {
+        kind: "cancel_reservation",
+        reservation: reserved.reservation,
+      }),
+    ).toEqual({ kind: "applied" });
+    expect(session.mainRestartRecovery).toBeUndefined();
+    expect(session.restartRecoveryTerminalRunIds).toContain("foreground-run");
+  });
+
+  it("keeps an interrupted cycle recoverable after cancelling its first reservation", () => {
+    const reservation = { attempt: 1, lifecycleGeneration: "generation-1", runId: "recovery-1" };
+    const session = entry({
+      abortedLastRun: true,
+      mainRestartRecovery: recoveryState({ chargedAttempts: 1, reservation }),
+    });
+    expect(
+      transitionMainSessionRecovery(session, {
+        kind: "cancel_reservation",
+        reservation: { ...reservation, sessionId: session.sessionId, cycleId: "cycle-1" },
+      }),
+    ).toEqual({ kind: "applied" });
+    expect(session.mainRestartRecovery).toMatchObject({ chargedAttempts: 0 });
+    expect(session.mainRestartRecovery?.reservation).toBeUndefined();
+    expect(session.abortedLastRun).toBe(true);
+  });
+
+  it.each([false, true])("reconciles existing empty residue (interrupted=%s)", (interrupted) => {
+    const session = entry({ abortedLastRun: interrupted });
+    expect(
+      transitionMainSessionRecovery(session, {
+        kind: "observe",
+        cycleId: "unused",
+        lifecycleGeneration: "generation-1",
+        sessionKey,
+      }),
+    ).toMatchObject({
+      kind: "observed",
+      view: { status: interrupted ? "recoverable" : "inactive" },
+    });
+    expect(Boolean(session.mainRestartRecovery)).toBe(interrupted);
+    expect(session.abortedLastRun).toBe(interrupted);
+  });
+
   it("clears an uncharged empty aggregate before healthy foreground admission", () => {
     const session = entry({ restartRecoveryRuns: undefined });
 
