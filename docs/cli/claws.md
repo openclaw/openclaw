@@ -237,11 +237,14 @@ Skills and plugins use exact ClawHub versions:
 
 The dry run uses the existing skill and plugin preflight paths to resolve the
 exact artifact, integrity, and any ClawHub trust warning before consent. The
-warning remains visible in the integrity-bound plan. Each requirement is shown
-as satisfied, missing-installable, conflicting, or setup-required. The exact
-plan consent approves missing installs; OpenClaw completes those canonical
-plugin actions before creating the agent or workspace. Apply reuses matching
-artifacts and records whether the Claw introduced or referenced each resource.
+warning remains visible in the integrity-bound plan. Claw-managed plugins check
+release trust even when published by OpenClaw: blocked releases stop Add, while
+Review requires a separate plugin risk acknowledgement with capability consent.
+Each requirement is shown as satisfied, missing-installable, conflicting, or
+setup-required. The exact plan consent approves missing installs; OpenClaw
+completes those canonical plugin actions before creating the agent or workspace.
+Apply reuses matching artifacts and records whether the Claw introduced or
+referenced each resource.
 Plugins remain process-wide OpenClaw capabilities rather than per-agent
 installations.
 

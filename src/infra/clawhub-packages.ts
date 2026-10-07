@@ -124,6 +124,10 @@ export type ClawHubPackageSecurityResponse = {
   release?: {
     id?: string | null;
     version?: string | null;
+    artifactKind?: string | null;
+    artifactSha256?: string | null;
+    npmIntegrity?: string | null;
+    npmShasum?: string | null;
   } | null;
   overview: string;
   verdict?: string;
@@ -295,6 +299,12 @@ function parseOptionalSecurityRelease(value: unknown): ClawHubPackageSecurityRes
   }
   if (version !== undefined) {
     result.version = version;
+  }
+  for (const field of ["artifactKind", "artifactSha256", "npmIntegrity", "npmShasum"] as const) {
+    const parsed = readClawHubStringField(value, field, "security release");
+    if (parsed !== undefined) {
+      result[field] = parsed;
+    }
   }
   return result;
 }

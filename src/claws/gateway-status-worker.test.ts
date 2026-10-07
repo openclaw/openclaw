@@ -4,7 +4,6 @@ const mocked = vi.hoisted(() => ({
   readInventory: vi.fn(),
   readStatus: vi.fn(),
   listMcpServers: vi.fn(),
-  clearInstallRecords: vi.fn(),
   loadInstallRecords: vi.fn(),
   assertCurrent: vi.fn(),
 }));
@@ -13,7 +12,6 @@ vi.mock("./inventory-read.js", () => ({ readClawInventory: mocked.readInventory 
 vi.mock("./lifecycle-status.js", () => ({ readClawStatus: mocked.readStatus }));
 vi.mock("../config/mcp-config.js", () => ({ listConfiguredMcpServers: mocked.listMcpServers }));
 vi.mock("../plugins/installed-plugin-index-record-reader.js", () => ({
-  clearLoadInstalledPluginIndexInstallRecordsCache: mocked.clearInstallRecords,
   loadInstalledPluginIndexInstallRecords: mocked.loadInstallRecords,
 }));
 vi.mock("../state/openclaw-state-worker-context.js", () => ({
@@ -91,7 +89,7 @@ describe("Gateway Claw status", () => {
     expect(mocked.assertCurrent).toHaveBeenCalledTimes(3);
   });
 
-  it("resolves plugins through the cached async install-record owner", async () => {
+  it("resolves plugins from read-only install records", async () => {
     mocked.readInventory.mockResolvedValue({
       ...emptyInventory,
       packages: [{ agentId: "docs", kind: "plugin", ref: "@openclaw/lobster" }],
@@ -119,45 +117,6 @@ describe("Gateway Claw status", () => {
       env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
       artifactPreservingReadOnly: true,
     });
-    expect(mocked.clearInstallRecords).toHaveBeenCalledOnce();
-    expect(mocked.clearInstallRecords.mock.invocationCallOrder[0]).toBeLessThan(
-      mocked.loadInstallRecords.mock.invocationCallOrder[0]!,
-    );
-  });
-
-  it("observes plugin index changes written outside this Gateway on the next status read", async () => {
-    mocked.readInventory.mockResolvedValue({
-      ...emptyInventory,
-      packages: [{ agentId: "docs", kind: "plugin", ref: "@openclaw/lobster" }],
-    });
-    let persistedVersion = "1.0.0";
-    let cachedRecords:
-      | Record<string, { clawhubPackage: string; resolvedVersion: string }>
-      | undefined;
-    mocked.clearInstallRecords.mockImplementation(() => {
-      cachedRecords = undefined;
-    });
-    mocked.loadInstallRecords.mockImplementation(async () => {
-      cachedRecords ??= {
-        lobster: { clawhubPackage: "@openclaw/lobster", resolvedVersion: persistedVersion },
-      };
-      return cachedRecords;
-    });
-    const observed: string[] = [];
-    mocked.readStatus.mockImplementation(async (_target, options) => {
-      const plugin = await options.packageDeps.resolvePlugin({
-        clawhubPackage: "@openclaw/lobster",
-      });
-      observed.push(plugin.status === "found" ? plugin.installedVersion : plugin.status);
-      return { records: [] };
-    });
-
-    await readClawStatusForGateway({ config: {} });
-    persistedVersion = "2.0.0";
-    await readClawStatusForGateway({ config: {} });
-
-    expect(observed).toEqual(["1.0.0", "2.0.0"]);
-    expect(mocked.clearInstallRecords).toHaveBeenCalledTimes(2);
   });
 
   it("treats an unavailable live cron inventory as attention, not health", async () => {

@@ -536,6 +536,7 @@ describe("skills-clawhub", () => {
     if (!result.ok) {
       throw new Error(result.error);
     }
+    expect(result.warning).toBeUndefined();
 
     expectInstallPackageSourceDir("/tmp/extracted-skill");
     expect(installPolicyInput()).toMatchObject({

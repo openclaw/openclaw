@@ -483,7 +483,7 @@ describe("ClawHub plugin catalog client", () => {
           },
         },
         security: {
-          overview: "Exact release passed ClawHub security review.",
+          overview: "No security analysis has been recorded yet.",
           verdict: "review",
           securityAuditUrl: "https://example.com/alice/plugins/memory-plus/security-audit",
           trust: {
@@ -527,7 +527,7 @@ describe("ClawHub plugin catalog client", () => {
       },
       downloadability: { status: "unknown" },
       metadata: { manifest: "available", readme: "available", security: "available" },
-      trust: { disposition: "clean", pending: false, stale: false },
+      trust: { disposition: "review-required", pending: false, stale: false },
       createdAt: 100,
       updatedAt: 300,
       readme: "# Memory Plus\n\nLong-term memory.",
@@ -564,10 +564,10 @@ describe("ClawHub plugin catalog client", () => {
         scanStatus: "clean",
       },
       security: {
-        status: "clean",
+        status: "review",
         verdict: "review",
         auditUrl: "https://example.com/alice/plugins/memory-plus/security-audit",
-        summary: "Exact release passed ClawHub security review.",
+        summary: "No security analysis has been recorded yet.",
       },
     });
     expect(detail.uiCapabilities).toEqual(expected);

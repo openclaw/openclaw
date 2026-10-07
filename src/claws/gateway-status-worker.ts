@@ -1,10 +1,8 @@
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronJob } from "../cron/types.js";
-import {
-  clearLoadInstalledPluginIndexInstallRecordsCache,
-  loadInstalledPluginIndexInstallRecords,
-} from "../plugins/installed-plugin-index-record-reader.js";
+import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-record-reader.js";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { resolveInstalledClawHubPlugin } from "../plugins/plugin-install-preflight.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -35,10 +33,8 @@ export async function readClawStatusRecordsForGateway(input: {
     sourceMcpServers = listed.mcpServers;
   }
 
-  if (inventory.packages.some((pkg) => pkg.kind === "plugin")) {
-    clearLoadInstalledPluginIndexInstallRecordsCache();
-  }
-
+  // Keep this read fresh without invalidating another status request's pending plugin facts.
+  await using pluginCache = createPluginCache();
   const status = await readClawStatus(input.target, {
     path,
     env: context.environment,
@@ -52,12 +48,14 @@ export async function readClawStatusRecordsForGateway(input: {
         await resolveInstalledClawHubPlugin({
           clawhubPackage,
           loadInstallRecords: async () =>
-            await loadInstalledPluginIndexInstallRecords({
-              filePath: path,
-              stateDir: resolveOpenClawStateDirForDatabasePath(path),
-              env: context.environment,
-              artifactPreservingReadOnly: true,
-            }),
+            await withPluginCache(pluginCache, () =>
+              loadInstalledPluginIndexInstallRecords({
+                filePath: path,
+                stateDir: resolveOpenClawStateDirForDatabasePath(path),
+                env: context.environment,
+                artifactPreservingReadOnly: true,
+              }),
+            ),
         }),
     },
   });

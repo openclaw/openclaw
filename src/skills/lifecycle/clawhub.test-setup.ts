@@ -91,7 +91,7 @@ export function resetClawHubSkillTestMocks(workspaceDir: string): void {
         version: item.version,
         displayName: "Agent Receipt",
         ...(item.ownerHandle ? { publisherHandle: item.ownerHandle } : {}),
-        overview: "No security analysis has been recorded yet.",
+        overview: "No security concerns found in this fixture release.",
         securityAuditUrl: `https://clawhub.ai/${item.ownerHandle ?? "openclaw"}/skills/${item.slug}/security-audit?version=${item.version}`,
         security: {
           status: "clean",

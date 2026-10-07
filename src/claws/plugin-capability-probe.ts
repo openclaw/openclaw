@@ -128,6 +128,7 @@ export async function probeClawPluginArtifact(
   const request = {
     spec: `clawhub:${pkg.ref}@${pkg.version}`,
     dryRun: true,
+    requireClawHubTrust: true,
     config: deps.config,
     onPluginArtifactInspect: async (artifact: {
       pluginId: string;

@@ -862,6 +862,7 @@ export async function installPluginFromClawHub(
       env?: RuntimeVersionEnv;
       confirmOnUpdate?: boolean;
       confirmInstall?: (warning?: string) => boolean | Promise<boolean>;
+      requireClawHubTrust?: boolean;
     },
 ): Promise<
   | ({
@@ -958,17 +959,18 @@ export async function installPluginFromClawHub(
     baseUrl: params.baseUrl,
     logger: params.logger,
   });
-  const trustResult = officialClawHubPackage
-    ? null
-    : await checkClawHubPackageTrust({
-        subject: { kind: "plugin", packageName: canonicalPackageName },
-        version: versionState.version,
-        baseUrl: params.baseUrl,
-        token: params.token,
-        timeoutMs: params.timeoutMs,
-        logger: params.logger,
-        mode: params.mode,
-      });
+  const trustResult =
+    officialClawHubPackage && !params.requireClawHubTrust
+      ? null
+      : await checkClawHubPackageTrust({
+          subject: { kind: "plugin", packageName: canonicalPackageName },
+          version: versionState.version,
+          baseUrl: params.baseUrl,
+          token: params.token,
+          timeoutMs: params.timeoutMs,
+          logger: params.logger,
+          mode: params.mode,
+        });
   if (trustResult && !trustResult.ok) {
     return trustResult;
   }

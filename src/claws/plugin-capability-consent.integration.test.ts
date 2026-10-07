@@ -165,6 +165,7 @@ async function createPluginClawFixture(
       package: { name, displayName: "Diffs", family: "code-plugin" },
       release: { version },
       overview: "Plugin security review",
+      verdict: scanStatus === "clean" ? "clean" : "review",
       securityAuditUrl: `https://clawhub.ai/plugins/${name}/security-audit?version=${version}`,
       trust: {
         scanStatus,

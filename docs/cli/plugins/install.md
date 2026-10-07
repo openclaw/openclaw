@@ -197,7 +197,7 @@ If a plugin you published on ClawHub is hidden or blocked by a registry scan, us
 
 ### ClawHub security audit
 
-Community ClawHub installs check the selected release's trust record before downloading. OpenClaw prints the outcome, exact audit overview, and details link. A Review outcome is informational and installation continues. If ClawHub disables download or returns a blocking moderation outcome, OpenClaw refuses the release. Official ClawHub packages and bundled OpenClaw plugin sources bypass this release-trust check.
+Community ClawHub installs check the selected release's trust record before downloading. OpenClaw prints the outcome, exact audit overview, and details link. A Review outcome is informational and installation continues. If ClawHub disables download or returns a blocking moderation outcome, OpenClaw refuses the release. Direct official ClawHub plugin installs and bundled OpenClaw plugin sources bypass this release-trust check. When a Claw installs a plugin, the Claw flow checks release trust for official packages too and requires separate acknowledgement for Review outcomes.
 
 ### Hook packs and npm specs
 

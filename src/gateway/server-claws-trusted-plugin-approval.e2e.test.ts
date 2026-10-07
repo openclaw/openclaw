@@ -145,6 +145,7 @@ describe("Claw-managed official plugin approvals (real Gateway)", () => {
       package: { name: packageName, displayName: "Lobster", family: "code-plugin" },
       release: { version },
       overview: "Synthetic official plugin fixture",
+      verdict: "clean",
       securityAuditUrl: `https://clawhub.ai/plugins/${packageName}/security-audit?version=${version}`,
       trust: {
         scanStatus: "clean",

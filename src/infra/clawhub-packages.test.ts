@@ -11,7 +11,14 @@ import {
 const packageSelector = { name: "@openclaw/diagnostics-otel", version: "2026.3.22" };
 const securityReport = {
   package: { name: packageSelector.name, displayName: "Diagnostics", family: "code-plugin" },
-  release: { releaseId: "rel_demo", version: packageSelector.version },
+  release: {
+    releaseId: "rel_demo",
+    version: packageSelector.version,
+    artifactKind: "npm-pack",
+    artifactSha256: "a".repeat(64),
+    npmIntegrity: "sha512-proof",
+    npmShasum: "abc",
+  },
   overview: "The plugin uses privileged local APIs.\n\nReview those capabilities.",
   securityAuditUrl:
     "https://clawhub.ai/plugins/@openclaw/diagnostics-otel/security-audit?version=2026.3.22",
@@ -158,7 +165,14 @@ describe("clawhub packages", () => {
       }),
     ).resolves.toEqual({
       ...securityReport,
-      release: { id: "rel_demo", version: "2026.3.22" },
+      release: {
+        id: "rel_demo",
+        version: "2026.3.22",
+        artifactKind: "npm-pack",
+        artifactSha256: "a".repeat(64),
+        npmIntegrity: "sha512-proof",
+        npmShasum: "abc",
+      },
     });
     expect(new URL(requestedUrl).pathname).toBe(
       "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22/security",

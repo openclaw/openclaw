@@ -446,6 +446,13 @@ export async function withResolvedClawHubSource<T>(
   const trust = await checkClawHubPackageTrust({
     subject: { kind: "claw", packageName },
     version,
+    expectedClawArtifact: {
+      sha256: expectedSha256,
+      npmIntegrity: resolvedArtifact.npmIntegrity,
+      ...(resolvedArtifact.npmShasum !== undefined
+        ? { npmShasum: resolvedArtifact.npmShasum }
+        : {}),
+    },
     baseUrl: params.baseUrl,
     token: params.token,
     timeoutMs: params.timeoutMs,
@@ -483,7 +490,8 @@ export async function withResolvedClawHubSource<T>(
       download.artifact !== "clawpack" ||
       download.sha256Hex !== expectedSha256 ||
       download.npmIntegrity !== resolvedArtifact.npmIntegrity ||
-      (resolvedArtifact.npmShasum && download.npmShasum !== resolvedArtifact.npmShasum)
+      (resolvedArtifact.npmShasum !== undefined &&
+        download.npmShasum !== resolvedArtifact.npmShasum)
     ) {
       throw new ClawHubSourceError(
         "clawhub_artifact_integrity_mismatch",

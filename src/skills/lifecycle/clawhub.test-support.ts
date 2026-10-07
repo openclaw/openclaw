@@ -262,7 +262,7 @@ function mockSkillSecurityVerdict(item: ClawHubSkillSecurityVerdictItem) {
     items: [
       {
         ...item,
-        overview: item.overview ?? "No security analysis has been recorded yet.",
+        overview: item.overview ?? "No security concerns found in this fixture release.",
         securityAuditUrl:
           item.securityAuditUrl ??
           `${item.skillUrl ?? `https://clawhub.ai/${item.publisherHandle ?? "openclaw"}/skills/${item.requestedSlug}`}/security-audit?version=${item.requestedVersion}`,

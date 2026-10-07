@@ -233,6 +233,7 @@ type ManagedPluginSourceInstallParams = {
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   requireCapabilityConsent?: boolean;
+  requireClawHubTrust?: boolean;
   applyRuntime?: PluginLifecycleRuntimeApply;
   deferRuntime?: PluginInstallRuntimeDeferral;
   beforePersistentApply?: () => void;
@@ -246,7 +247,12 @@ type ManagedPluginSourceInstallParams = {
 
 export type ManagedPluginInstallOptions = Omit<
   ManagedPluginSourceInstallParams,
-  "request" | "snapshot" | "acknowledgeCapabilities" | "enable" | "requireCapabilityConsent"
+  | "request"
+  | "snapshot"
+  | "acknowledgeCapabilities"
+  | "enable"
+  | "requireCapabilityConsent"
+  | "requireClawHubTrust"
 > & {
   /** The enclosing Claw coordinator owns its package lease and adoption record. */
   clawManaged?: boolean;
@@ -597,6 +603,7 @@ async function installResolvedManagedPluginSource(
         ...(request.expectedIntegrity ? { expectedIntegrity: request.expectedIntegrity } : {}),
         ...(request.confirmInstall ? { confirmInstall: request.confirmInstall } : {}),
         ...(params.requireCapabilityConsent ? { confirmOnUpdate: true } : {}),
+        ...(params.requireClawHubTrust ? { requireClawHubTrust: true } : {}),
       }),
       {
         expectedPluginId: request.expectedPluginId,
