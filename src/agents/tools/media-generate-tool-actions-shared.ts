@@ -37,8 +37,8 @@ export function createMediaGenerateExecute(params: {
     signal?: AbortSignal,
   ) => Promise<MediaGenerateActionResult>;
 }): AnyAgentTool["execute"] {
-  return async (_toolCallId, rawArgs, signal) => {
-    const args = rawArgs as Record<string, unknown>;
+  return async (_toolCallId, rawArgs: Record<string, unknown>, signal) => {
+    const args = rawArgs;
     const action = resolveGenerateAction(args);
     const options = params.options;
     if (action === "list") {
