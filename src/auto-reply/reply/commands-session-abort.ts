@@ -4,6 +4,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveAbortCutoffFromContext, shouldPersistAbortCutoff } from "./abort-cutoff.js";
 import { abortSessionRunTargetWithOutcome, stopSubagentsForRequester } from "./abort-operation.js";
 import { setAbortMemory } from "./abort-primitives.js";
@@ -53,6 +54,7 @@ async function applyAbortTarget(
   params: Parameters<CommandHandler>[0],
   abortTarget: AbortTarget,
   clearQueues = false,
+  acceptedRetirements?: Promise<void>[],
 ) {
   const {
     sessionStore,
@@ -91,7 +93,13 @@ async function applyAbortTarget(
     key: abortTarget.key,
     sessionId: abortTarget.sessionId,
   });
-  await abortOutcome.retirement;
+  if (abortOutcome.aborted && abortOutcome.retirement && acceptedRetirements) {
+    // Accepted parent cleanup joins after selected descendants have been signalled.
+    void abortOutcome.retirement.catch(() => {});
+    acceptedRetirements.push(abortOutcome.retirement);
+  } else {
+    await abortOutcome.retirement;
+  }
   if (abortOutcome.active && !abortOutcome.aborted) {
     return abortOutcome;
   }
@@ -114,14 +122,16 @@ export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
   async (params) => {
     const abortTarget = resolveAbortTarget(params);
     let abortOutcome = { active: false, aborted: false };
+    const acceptedRetirements: Promise<void>[] = [];
+    const failures: unknown[] = [];
     // Capture child generations before signalling the parent; cleanup must not discover
     // a replacement conversation's children after the original publisher finishes.
-    const { stopped, failed } = await stopSubagentsForRequester({
+    const subagents = await stopSubagentsForRequester({
       cfg: params.cfg,
       requesterSessionKey: abortTarget.key ?? params.sessionKey,
       requesterAgentId: params.agentId,
       beforeKill: async () => {
-        abortOutcome = await applyAbortTarget(params, abortTarget, true);
+        abortOutcome = await applyAbortTarget(params, abortTarget, true, acceptedRetirements);
 
         const hookEvent = createInternalHookEvent(
           "command",
@@ -137,8 +147,23 @@ export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
         await triggerInternalHook(hookEvent);
         return true;
       },
+    }).catch((error: unknown) => {
+      failures.push(error);
+      return undefined;
     });
-
+    await Promise.all(
+      acceptedRetirements.map((retirement) =>
+        retirement.catch((error: unknown) => {
+          failures.push(error);
+        }),
+      ),
+    );
+    if (subagents === undefined || failures.length > 0) {
+      throw failures.length === 1
+        ? failures[0]
+        : new AggregateError(failures, failures.map(formatErrorMessage).join("; "));
+    }
+    const { stopped, failed } = subagents;
     const rejectionReason =
       abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
     return commandReply(formatAbortReplyText(stopped, rejectionReason, failed));

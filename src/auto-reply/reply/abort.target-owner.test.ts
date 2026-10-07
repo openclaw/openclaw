@@ -12,10 +12,20 @@ import {
 } from "../../agents/bash-process-registry.js";
 import { createLazyExecTool } from "../../agents/lazy-exec-tool.js";
 import {
+  addSubagentRunForTests,
+  getSubagentRunByChildSessionKey,
+  releaseSubagentRun,
+} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { getRuntimeConfig } from "../../config/config.js";
+import {
   loadSessionEntry,
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
+import {
+  publishSystemEventStoreConfig,
+  resolvePhysicalSessionStorePath,
+} from "../../config/sessions/session-store-path.js";
 import {
   captureExecRequestOwners,
   withExecRequestTurn,
@@ -174,6 +184,8 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
           : undefined;
       const releaseWriter = createDeferred();
       let writer: Promise<unknown> | undefined;
+      let child: ReturnType<typeof createReplyOperation> | undefined;
+      const childRunId = `cleanup-child-${pathKind}`;
       // Native callbacks can load the lazy tool outside its construction's async context.
       const callback = new AsyncResource("channel-exec-callback");
       try {
@@ -241,6 +253,46 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
         expect(ordinaryCommand.exited).toBe(false);
         expect(independentService.exited).toBe(false);
 
+        if (phase === "cleanup-error") {
+          const childKey = `agent:main:subagent:${childRunId}`;
+          const childSessionId = `session-${childRunId}`;
+          await replaceSessionEntry(
+            { storePath: state.storePath, sessionKey: childKey },
+            { sessionId: childSessionId, updatedAt: Date.now() },
+          );
+          publishSystemEventStoreConfig(state.cfg);
+          const controllerStorePath = resolvePhysicalSessionStorePath(
+            { sessionKey, agentId: "main" },
+            state.cfg,
+          );
+          await addSubagentRunForTests({
+            runId: childRunId,
+            childSessionKey: childKey,
+            childAgentId: "main",
+            requesterSessionKey: sessionKey,
+            requesterAgentId: "main",
+            requesterDisplayKey: sessionKey,
+            requesterStorePath: controllerStorePath,
+            controllerSessionKey: sessionKey,
+            controllerStorePath,
+            task: "selected child survives no accepted Stop",
+            cleanup: "keep",
+            expectsCompletionMessage: false,
+          });
+          child = createReplyOperation({
+            agentId: "main",
+            sessionKey: childKey,
+            sessionId: childSessionId,
+            resetTriggered: false,
+          });
+          child.attachBackend({
+            kind: "embedded",
+            runId: childRunId,
+            isStreaming: () => true,
+            cancel: () => child?.complete(),
+          });
+          child.setPhase("running");
+        }
         // Denied and stale channel dispatch must leave the real command untouched.
         await (pathKind === "fast"
           ? tryFastAbortFromMessage({
@@ -261,6 +313,7 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
               ),
         ).rejects.toThrow("selected session changed");
         expect(ordinaryCommand.cancellationRequested).not.toBe(true);
+        expect(child?.abortSignal.aborted).not.toBe(true);
         if (pathKind === "fast" && phase === "backend-error") {
           const writerEntered = createDeferred();
           writer = patchSessionEntry({
@@ -301,6 +354,13 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
               : { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } },
           );
         }
+        if (child) {
+          expect(child.abortSignal.aborted).toBe(true);
+          expect(child.result).toMatchObject({ kind: "aborted", code: "aborted_by_user" });
+          expect((await getSubagentRunByChildSessionKey(child.key))?.endedReason).toBe(
+            "subagent-killed",
+          );
+        }
         expect(ordinaryCommand).toMatchObject({ exited: true, exitReason: "manual-cancel" });
         expect(ordinaryCommand.finalizationFailed === true).toBe(phase === "cleanup-error");
         expect(independentService.exited).toBe(false);
@@ -320,6 +380,11 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
         operation.complete();
         callback.emitDestroy();
         cleanupFailure?.mockRestore();
+        child?.complete();
+        if (phase === "cleanup-error") {
+          await releaseSubagentRun(childRunId);
+          publishSystemEventStoreConfig(getRuntimeConfig());
+        }
         for (const command of commands) {
           getProcessSupervisor().cancel(command.id, "manual-cancel");
         }
