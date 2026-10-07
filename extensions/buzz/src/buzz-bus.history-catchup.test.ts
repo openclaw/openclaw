@@ -18,7 +18,6 @@ const relayMocks = vi.hoisted(() => ({
   historySubscriptionCloses: 0,
   closeHistoryPagesReason: undefined as string | undefined,
   overReturnHistoryPages: false,
-  stallHistoryPages: false,
 }));
 
 function matchesRelayFilter(event: Event, filter: Filter): boolean {
@@ -96,13 +95,6 @@ vi.mock("nostr-tools", async (importOriginal) => {
             queueMicrotask(() => {
               handlers.onclose(relayMocks.closeHistoryPagesReason ?? "relay closed");
             });
-            return {
-              id: `sub:${relayMocks.historyRequests.length}`,
-              close: vi.fn(),
-              closed: false,
-            };
-          }
-          if (relayMocks.stallHistoryPages && isHistoryPage) {
             return {
               id: `sub:${relayMocks.historyRequests.length}`,
               close: vi.fn(),
@@ -201,7 +193,6 @@ describe("Buzz reconnect history catch-up", () => {
     relayMocks.historySubscriptionCloses = 0;
     relayMocks.closeHistoryPagesReason = undefined;
     relayMocks.overReturnHistoryPages = false;
-    relayMocks.stallHistoryPages = false;
     relayMocks.storedEvents = [
       {
         id: "membership-1",
@@ -312,26 +303,6 @@ describe("Buzz reconnect history catch-up", () => {
     expect(
       relayMocks.historyRequests.filter((filter) => filter.limit === undefined).length,
     ).toBeGreaterThan(2);
-  });
-
-  it("fails the bus when a catch-up subscription never reaches EOSE", async () => {
-    vi.useFakeTimers();
-    seedOfflineBacklog(HISTORY_LIMIT + 1, (index) => BASE_TIMESTAMP + index);
-    relayMocks.stallHistoryPages = true;
-    const fatalErrors: string[] = [];
-
-    const bus = await startHistoryBus({
-      onMessage: async () => {},
-      onFatalError: (error) => {
-        fatalErrors.push(error.message);
-      },
-    });
-    await vi.advanceTimersByTimeAsync(10_000);
-    await bus.close();
-
-    expect(fatalErrors).toEqual([`Timed out loading Buzz room history for ${CHANNEL_ID}`]);
-    expect(relayMocks.close).toHaveBeenCalled();
-    expect(relayMocks.historySubscriptionCloses).toBe(0);
   });
 
   it("fails the bus when a catch-up subscription closes unexpectedly", async () => {

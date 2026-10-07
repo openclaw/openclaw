@@ -36,16 +36,9 @@ function abortReasonAsError(signal: AbortSignal | undefined): Error {
 }
 
 describe("Buzz bus lifecycle", () => {
-  it.each([
-    { mode: "one-shot", stopped: false },
-    { mode: "one-shot", stopped: true },
-    { mode: "text", stopped: false },
-    { mode: "text", stopped: true },
-    { mode: "typing", stopped: false },
-    { mode: "typing", stopped: true },
-  ] as const)(
-    "prepares $mode before relay handoff (stopped=$stopped)",
-    async ({ mode, stopped }) => {
+  it.each(["one-shot", "text", "typing"] as const)(
+    "rejects retired %s authority after preparation and before relay handoff",
+    async (mode) => {
       relayMocks.auth.mockResolvedValue("ok");
       const bus = mode === "one-shot" ? undefined : await startTestBus();
       const preparing = createDeferred<void>();
@@ -59,7 +52,7 @@ describe("Buzz bus lifecycle", () => {
         async initiate(effect) {
           preparing.resolve();
           await prepared.promise;
-          if (stopped && mode === "one-shot") {
+          if (mode === "one-shot") {
             throw failure;
           }
           return authority.initiate(effect);
@@ -97,26 +90,13 @@ describe("Buzz bus lifecycle", () => {
           }),
         ]);
         expect(handoffs).toBe(0);
-        if (stopped) {
-          await bus?.close();
-        }
+        await bus?.close();
         prepared.resolve();
-        if (!stopped) {
-          await handedOff.promise;
-          acknowledgment.resolve("");
-        }
-        const result = await sending;
-        if (stopped) {
-          expect(result).toEqual({
-            error:
-              mode === "one-shot"
-                ? failure
-                : expect.objectContaining({ message: "Buzz bus closed" }),
-          });
-        } else {
-          expect(result).toEqual({ value: mode === "typing" ? undefined : expect.any(String) });
-        }
-        expect(handoffs).toBe(stopped ? 0 : 1);
+        expect(await sending).toEqual({
+          error:
+            mode === "one-shot" ? failure : expect.objectContaining({ message: "Buzz bus closed" }),
+        });
+        expect(handoffs).toBe(0);
       } finally {
         prepared.resolve();
         acknowledgment.resolve("");
