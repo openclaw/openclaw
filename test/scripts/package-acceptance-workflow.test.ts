@@ -7,9 +7,11 @@ import {
   copyFileSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   renameSync,
   symlinkSync,
@@ -8691,7 +8693,7 @@ test "$package_manager" = "pnpm@12.1.0"
     const bin = join(root, "bin");
     mkdirSync(bin);
     const prefix = join(root, "openclaw-npm12-prefix");
-    mkdirSync(prefix);
+    makeNativeCleanupPrefix(prefix);
     writeFileSync(join(prefix, "sentinel"), "candidate");
     const statePath = join(root, "state.json");
     const account = "occln_123456_1";
@@ -8820,6 +8822,7 @@ done(99);
         "EXPECTED_PACKAGE_SOURCE_SHA",
         "EXPECTED_PACKAGE_VERSION",
         "HOME",
+        "ORIGINAL_NPM_PREFIX",
         "PATH",
         "RUNNER_TEMP",
       ]);
@@ -8872,6 +8875,223 @@ done(99);
         .every((call: { args: string[] }) => call.args.length === 1),
     ).toBe(true);
   });
+
+  function makeNativeCleanupPrefix(prefix: string) {
+    const packageRoot = join(prefix, "lib/node_modules/openclaw");
+    mkdirSync(join(prefix, "bin"), { recursive: true });
+    mkdirSync(join(packageRoot, "dist"), { recursive: true });
+    writeFileSync(
+      join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.9.8" }),
+    );
+    writeFileSync(
+      join(packageRoot, "dist/build-info.json"),
+      JSON.stringify({ commit: "a".repeat(40) }),
+    );
+    const launcher = join(packageRoot, "openclaw.mjs");
+    writeFileSync(launcher, "#!/usr/bin/env node\n");
+    chmodSync(launcher, 0o755);
+    symlinkSync(launcher, join(prefix, "bin/openclaw"));
+    return launcher;
+  }
+
+  it.each([
+    "success",
+    "relative",
+    "external",
+    "wrong",
+    "absent",
+    "not-symlink",
+    "dangling",
+    "nonregular",
+    "nonexecutable",
+    "link-drift",
+    "launcher-drift",
+    "mode-drift",
+  ])("relocates only the native cleanup CLI link: %s", (scenario) => {
+    const source = readFileSync("scripts/e2e/retained-runtime-cleanup-native.sh", "utf8");
+    const program = source.match(
+      /relocate_cli_link\(\) \{\n {2}python3 - "\$@" <<'PY'\n([\s\S]*?)\nPY\n\}/u,
+    )?.[1];
+    if (!program) {
+      throw new Error("Missing native CLI relocation owner");
+    }
+    const root = tempDirs.make("native-cleanup-link-");
+    const prefix = join(root, "old");
+    const staged = join(root, "new");
+    const launcher = makeNativeCleanupPrefix(prefix);
+    const link = join(prefix, "bin/openclaw");
+    const otherLink = join(prefix, "bin/other");
+    symlinkSync("../lib/node_modules/openclaw/package.json", otherLink);
+    const before = lstatSync(launcher);
+    const beforeOther = lstatSync(otherLink);
+    if (["relative", "external", "wrong", "absent", "not-symlink"].includes(scenario)) {
+      unlinkSync(link);
+      if (scenario === "not-symlink") {
+        writeFileSync(link, "not a link");
+      } else if (scenario !== "absent") {
+        symlinkSync(
+          scenario === "relative"
+            ? "../lib/node_modules/openclaw/openclaw.mjs"
+            : scenario === "external"
+              ? "/external/openclaw.mjs"
+              : join(prefix, "wrong.mjs"),
+          link,
+        );
+      }
+    }
+    if (["dangling", "nonregular"].includes(scenario)) {
+      unlinkSync(launcher);
+      if (scenario === "nonregular") {
+        mkdirSync(launcher);
+      }
+    }
+    if (scenario === "nonexecutable") {
+      chmodSync(launcher, 0o644);
+    }
+    const invoke = (phase: string, binding?: string) =>
+      spawnSync(
+        "python3",
+        ["-c", program, phase, prefix, staged, ...(binding === undefined ? [] : [binding])],
+        {
+          encoding: "utf8",
+          timeout: 5_000,
+          env: {
+            ...process.env,
+            EXPECTED_PACKAGE_SOURCE_SHA: "a".repeat(40),
+            EXPECTED_PACKAGE_VERSION: "2026.9.8",
+          },
+        },
+      );
+    const bound = invoke("bind");
+    expect(bound.error).toBeUndefined();
+    if (!["success", "link-drift", "launcher-drift", "mode-drift"].includes(scenario)) {
+      expect(bound.status).not.toBe(0);
+      expect(bound.stderr).not.toContain(root);
+      expect(existsSync(prefix)).toBe(true);
+      expect(existsSync(staged)).toBe(false);
+      return;
+    }
+    expect(bound.status, bound.stderr).toBe(0);
+    renameSync(prefix, staged);
+    const stagedLink = join(staged, "bin/openclaw");
+    const stagedLauncher = join(staged, "lib/node_modules/openclaw/openclaw.mjs");
+    if (scenario === "link-drift") {
+      renameSync(stagedLink, join(staged, "bin/old-link"));
+      symlinkSync(launcher, stagedLink);
+    }
+    if (scenario === "launcher-drift") {
+      writeFileSync(stagedLauncher, "different launcher\n");
+    }
+    if (scenario === "mode-drift") {
+      chmodSync(stagedLauncher, 0o700);
+    }
+    const published = invoke("publish", bound.stdout.trim());
+    expect(published.error).toBeUndefined();
+    expect(published.stderr).not.toContain(root);
+    if (scenario !== "success") {
+      expect(published.status).not.toBe(0);
+      expect(readlinkSync(stagedLink)).toBe(launcher);
+    } else {
+      expect(published.status, published.stderr).toBe(0);
+      expect(readlinkSync(stagedLink)).toBe(stagedLauncher);
+      const after = lstatSync(stagedLauncher);
+      for (const field of ["dev", "ino", "mode", "uid", "gid", "size"] as const) {
+        expect(after[field]).toBe(before[field]);
+      }
+      expect(readFileSync(stagedLauncher, "utf8")).toBe("#!/usr/bin/env node\n");
+      expect(published.stdout).not.toContain(root);
+    }
+    expect(readlinkSync(join(staged, "bin/other"))).toBe(
+      "../lib/node_modules/openclaw/package.json",
+    );
+    expect(lstatSync(join(staged, "bin/other")).ino).toBe(beforeOther.ino);
+    expect(
+      readdirSync(join(staged, "bin")).some((name) => name.startsWith(".openclaw-link.")),
+    ).toBe(false);
+  });
+
+  it.each(["success", "old-absolute", "inaccessible", "missing-cli", "non-symlink"])(
+    "bounds native cleanup staged access: %s",
+    (scenario) => {
+      const source = readFileSync("scripts/e2e/retained-runtime-cleanup-native.sh", "utf8");
+      const program = source.match(/python3 - "\$prefix" <<'PY'\n([\s\S]*?)\nPY/u)?.[1];
+      if (!program) {
+        throw new Error("Missing fixed package access projection");
+      }
+      const root = tempDirs.make("native-cleanup-access-");
+      const old = join(root, "old");
+      const staged = join(root, "new");
+      makeNativeCleanupPrefix(old);
+      renameSync(old, staged);
+      const cli = join(staged, "bin/openclaw");
+      if (scenario !== "old-absolute") {
+        unlinkSync(cli);
+        if (scenario === "non-symlink") {
+          writeFileSync(cli, "not a link");
+        } else if (scenario !== "missing-cli") {
+          symlinkSync(join(staged, "lib/node_modules/openclaw/openclaw.mjs"), cli);
+        }
+      }
+      const result = spawnSync(
+        "python3",
+        [
+          "-c",
+          String.raw`
+import os, pathlib, sys
+program, root, old, scenario = sys.argv[1:]
+access = os.access
+def checked_access(path, mode):
+    if pathlib.Path(path) == pathlib.Path(root) / "bin/openclaw":
+        assert scenario != "old-absolute", "retired target must not be followed"
+        if scenario == "inaccessible":
+            return False
+    return access(path, mode)
+os.access = checked_access
+os.environ["ORIGINAL_NPM_PREFIX"] = old
+sys.argv = ["access", root]
+exec(compile(program, "<fixed-package-access>", "exec"))
+`,
+          program,
+          staged,
+          old,
+          scenario,
+        ],
+        { encoding: "utf8", timeout: 5_000 },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(scenario === "success" ? 0 : 1);
+      expect(result.stdout + result.stderr).not.toContain(root);
+      expect(result.stderr).not.toContain("retired target must not be followed");
+      const rows = JSON.parse(result.stdout.replace("native-cleanup package access: ", ""));
+      expect(rows).toHaveLength(7);
+      expect(rows.map((row: { component: string }) => row.component)).toEqual([
+        "prefix",
+        "bin",
+        "cli",
+        "lib",
+        "node_modules",
+        "package",
+        "launcher",
+      ]);
+      const observedCli = rows[2];
+      if (scenario === "old-absolute") {
+        expect(observedCli).toMatchObject({
+          linkKind: "old-native-absolute",
+          access: "not-followed",
+        });
+      }
+      if (scenario === "inaccessible") {
+        expect(observedCli).toMatchObject({ readable: false, executable: false });
+      }
+      if (scenario === "missing-cli") {
+        expect(observedCli.error).toBe("absent");
+      }
+      if (scenario === "non-symlink") {
+        expect(observedCli.kind).toBe("regular");
+      }
+    },
+  );
 
   it("keeps native cleanup ownership locals alive during Bash 5 errexit", () => {
     const source = readFileSync("scripts/e2e/retained-runtime-cleanup-native.sh", "utf8");

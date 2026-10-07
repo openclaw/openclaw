@@ -8,6 +8,96 @@ set -euo pipefail
 # Run only in an ephemeral, non-container Linux acceptance job, after npm install.
 # The shell owns the fixture: short-lived probes exit before the installed Doctor runs.
 fail() { echo "Native retained-runtime cleanup: $*" >&2; exit 1; }
+relocate_cli_link() {
+  python3 - "$@" <<'PY'
+import hashlib, json, os, pathlib, stat, sys, tempfile
+
+def require(value, reason):
+    if not value:
+        raise SystemExit("native-cleanup launcher: " + reason)
+
+def identity(value):
+    return [value.st_dev, value.st_ino, value.st_size, value.st_mode, value.st_uid, value.st_gid]
+
+def read_regular(path, limit):
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
+        before = os.fstat(stream.fileno())
+        require(stat.S_ISREG(before.st_mode), "nonregular file")
+        data = stream.read(limit + 1)
+        require(len(data) <= limit, "file exceeds bound")
+        require(identity(before) == identity(os.fstat(stream.fileno())), "file identity drift")
+    require(identity(before) == identity(os.lstat(path)), "file identity drift")
+    return data, identity(before)
+
+def observe(root, expected_target):
+    for relative in (".", "bin", "lib", "lib/node_modules", "lib/node_modules/openclaw"):
+        require(stat.S_ISDIR(os.lstat(root / relative).st_mode), "package directory is not physical")
+    link = root / "bin/openclaw"
+    try:
+        value = os.lstat(link)
+    except FileNotFoundError:
+        raise SystemExit("native-cleanup launcher: CLI link absent")
+    require(stat.S_ISLNK(value.st_mode), "CLI is not a symlink")
+    require(os.readlink(link) == str(expected_target), "unexpected CLI link")
+    launcher = root / "lib/node_modules/openclaw/openclaw.mjs"
+    try:
+        target_mode = os.lstat(launcher).st_mode
+    except FileNotFoundError:
+        raise SystemExit("native-cleanup launcher: dangling launcher target")
+    require(stat.S_ISREG(target_mode), "launcher is not regular")
+    require(os.access(launcher, os.X_OK), "launcher is not executable")
+    data, target_identity = read_regular(launcher, 4 * 1024 * 1024)
+    require(identity(value) == identity(os.lstat(link)), "CLI link identity drift")
+    return {"link": identity(value), "launcher": target_identity, "sha256": hashlib.sha256(data).hexdigest()}
+
+def main():
+    phase, old, new = sys.argv[1:4]
+    old, new = pathlib.Path(old), pathlib.Path(new)
+    require(old.is_absolute() and new.is_absolute() and old != new, "invalid relocation endpoints")
+    old_target = old / "lib/node_modules/openclaw/openclaw.mjs"
+    if phase == "bind":
+        binding = observe(old, old_target)
+        package, _ = read_regular(old / "lib/node_modules/openclaw/package.json", 1024 * 1024)
+        build, _ = read_regular(old / "lib/node_modules/openclaw/dist/build-info.json", 1024 * 1024)
+        package, build = json.loads(package), json.loads(build)
+        require(isinstance(package, dict) and isinstance(build, dict), "candidate identity is malformed")
+        require(package.get("name") == "openclaw" and package.get("version") == os.environ["EXPECTED_PACKAGE_VERSION"]
+                and build.get("commit") == os.environ["EXPECTED_PACKAGE_SOURCE_SHA"], "candidate identity mismatch")
+        print(json.dumps(binding))
+        return
+    require(phase == "publish" and len(sys.argv) == 5, "invalid relocation phase")
+    binding = json.loads(sys.argv[4])
+    # The old absolute target is dangling after mv; inspect the new launcher directly.
+    require(observe(new, old_target) == binding, "relocated CLI or launcher identity drift")
+    link = new / "bin/openclaw"
+    target = new / "lib/node_modules/openclaw/openclaw.mjs"
+    fd, temporary = tempfile.mkstemp(prefix=".openclaw-link.", dir=link.parent)
+    os.close(fd)
+    os.unlink(temporary)
+    try:
+        os.symlink(target, temporary)
+        os.lchown(temporary, binding["link"][4], binding["link"][5])
+        require(os.lstat(temporary).st_mode == binding["link"][3], "CLI link mode changed")
+        require(observe(new, old_target) == binding, "CLI changed before publication")
+        os.replace(temporary, link)
+        after = observe(new, target)
+        require(after["launcher"] == binding["launcher"] and after["sha256"] == binding["sha256"]
+                and after["link"][3:] == binding["link"][3:], "published CLI identity mismatch")
+    finally:
+        if os.path.lexists(temporary):
+            os.unlink(temporary)
+    print("native-cleanup launcher: exact native absolute link relocated; launcher identity preserved")
+
+try:
+    main()
+except FileNotFoundError:
+    raise SystemExit("native-cleanup launcher: required link or launcher absent")
+except PermissionError:
+    raise SystemExit("native-cleanup launcher: required link or launcher inaccessible")
+except (OSError, ValueError, KeyError, TypeError):
+    raise SystemExit("native-cleanup launcher: invalid binding or filesystem operation refused")
+PY
+}
 run_isolated_account() {
   [[ "$(uname -s)" == Linux && "$(id -u)" == 0 && "${GITHUB_ACTIONS:-}" == true && "${RUNNER_OS:-}" == Linux ]] || fail "isolated account requires the hosted Linux administrator"
   grep -Eq '^ID="?ubuntu"?$' /etc/os-release || fail "isolated account requires Ubuntu"
@@ -20,7 +110,7 @@ run_isolated_account() {
   done
   local account="occln_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}" prefix scratch scratch_identity system_tmp
   local account_created=false creation_uncertain=false runuser_settled=true uid="" gid="" passwd_record="" group_record=""
-  local fixture_source prefix_identity node_path node_dir result
+  local fixture_source prefix_identity node_path node_dir result cli_binding
   prefix="$(realpath "$1")"
   [[ -d "$1" && ! -L "$1" && "$prefix" == "$(realpath "$RUNNER_TEMP")/openclaw-npm12-prefix" && "$(stat -c %u "$prefix")" == "$RUNNER_UID" ]] || fail "prefix is not the completed task installation"
   fixture_source="$(realpath "${BASH_SOURCE[0]}")"
@@ -103,9 +193,11 @@ run_isolated_account() {
   install -d -m 700 -o "$uid" -g "$gid" "$scratch/home" "$scratch/tmp"
   install -m 550 -o root -g "$gid" "$fixture_source" "$scratch/fixture.sh"
   [[ "$(sha256sum "$scratch/fixture.sh" | cut -d ' ' -f 1)" == "$EXPECTED_FIXTURE_SHA256" ]] || fail "staged fixture digest mismatch"
+  cli_binding="$(relocate_cli_link bind "$prefix" "$scratch/prefix")"
   prefix_identity="$(stat -c '%d:%i' "$prefix")"
   mv -- "$prefix" "$scratch/prefix"
   [[ "$(stat -c '%d:%i' "$scratch/prefix")" == "$prefix_identity" ]] || fail "staged prefix identity changed"
+  relocate_cli_link publish "$prefix" "$scratch/prefix" "$cli_binding"
   cd /
   runuser_settled=false
   # Positional parameters belong to the isolated child shell, not this root wrapper.
@@ -131,6 +223,7 @@ run_isolated_account() {
   if runuser -u "$account" -- env -i PATH="$node_dir:/usr/sbin:/usr/bin:/sbin:/bin" \
     HOME="$scratch/home" RUNNER_TEMP="$scratch/tmp" \
     EXPECTED_INSPECTOR_UID="$uid" \
+    ORIGINAL_NPM_PREFIX="$prefix" \
     EXPECTED_PACKAGE_SOURCE_SHA="$EXPECTED_PACKAGE_SOURCE_SHA" EXPECTED_PACKAGE_VERSION="$EXPECTED_PACKAGE_VERSION" \
     /bin/bash "$scratch/fixture.sh" "$scratch/prefix"; then
     result=0
@@ -153,7 +246,43 @@ fi
 prefix="$(realpath "$1")"
 package_root="$prefix/lib/node_modules/openclaw"
 cli="$prefix/bin/openclaw"
-[[ -x "$cli" ]] || fail "installed CLI is missing"
+python3 - "$prefix" <<'PY'
+import json, os, pathlib, stat, sys
+root = pathlib.Path(sys.argv[1])
+old = os.environ.get("ORIGINAL_NPM_PREFIX")
+rows = []
+for label, relative in (("prefix", "."), ("bin", "bin"), ("cli", "bin/openclaw"),
+                        ("lib", "lib"), ("node_modules", "lib/node_modules"),
+                        ("package", "lib/node_modules/openclaw"), ("launcher", "lib/node_modules/openclaw/openclaw.mjs")):
+    path = root / relative
+    row = {"component": label}
+    try:
+        value = os.lstat(path)
+        kind = "symlink" if stat.S_ISLNK(value.st_mode) else "directory" if stat.S_ISDIR(value.st_mode) else "regular" if stat.S_ISREG(value.st_mode) else "other"
+        row.update(kind=kind, uid=value.st_uid, gid=value.st_gid, mode=oct(stat.S_IMODE(value.st_mode)))
+        if kind == "symlink":
+            link = os.readlink(path)
+            if len(link.encode()) > 4096:
+                raise ValueError("link exceeds bound")
+            row["linkKind"] = "new-native-absolute" if link == str(root / "lib/node_modules/openclaw/openclaw.mjs") else "old-native-absolute" if old and link == str(pathlib.Path(old) / "lib/node_modules/openclaw/openclaw.mjs") else "contained-relative" if not os.path.isabs(link) and os.path.commonpath((root, os.path.normpath(path.parent / link))) == str(root) else "unexpected"
+            # Never follow the retired absolute target, including during diagnostics.
+            if row["linkKind"] != "new-native-absolute":
+                row["access"] = "not-followed"
+                rows.append(row)
+                continue
+        row.update(readable=os.access(path, os.R_OK), executable=os.access(path, os.X_OK))
+        row["traversable"] = os.access(path, os.X_OK) if kind == "directory" else None
+    except OSError as error:
+        row.update(error="absent" if error.errno == 2 else "inaccessible" if error.errno in (1, 13) else "filesystem-error", errno=error.errno)
+    except ValueError:
+        row["error"] = "invalid-link"
+    rows.append(row)
+print("native-cleanup package access: " + json.dumps(rows))
+cli = next(row for row in rows if row["component"] == "cli")
+if cli.get("linkKind") != "new-native-absolute" or not cli.get("executable") or not cli.get("readable"):
+    raise SystemExit("Native retained-runtime cleanup: staged CLI link or access refused")
+PY
+[[ -x "$cli" ]] || fail "staged CLI became inaccessible"
 python3 - "$prefix" "$(command -v node)" <<'PY'
 import os, pathlib, sys
 root = pathlib.Path(sys.argv[1]).resolve(strict=True)
