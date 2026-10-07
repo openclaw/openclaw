@@ -377,6 +377,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/session-fork.test.ts",
   "src/auto-reply/reply/dispatch-acp.test.ts",
   "src/auto-reply/reply/session.test.ts",
+  "src/auto-reply/reply/session.worktree-reset.test.ts",
   "src/agents/worktrees/empty-source.test.ts",
   "src/agents/worktrees/pending-slots.worker.test.ts",
   "src/agents/worktrees/registry-read.test.ts",
