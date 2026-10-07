@@ -45,7 +45,10 @@ describe("runDuckDuckGoSearch User-Agent", () => {
   });
 
   it("sends an honest, plugin-identifying User-Agent instead of a spoofed browser UA", async () => {
-    await runDuckDuckGoSearch({ query: "OpenClaw DuckDuckGo request identity", cacheTtlMinutes: 0 });
+    await runDuckDuckGoSearch({
+      query: "OpenClaw DuckDuckGo request identity",
+      cacheTtlMinutes: 0,
+    });
 
     expect(endpointMockState.calls).toHaveLength(1);
     const headers = new Headers(endpointMockState.calls[0]?.init?.headers);
