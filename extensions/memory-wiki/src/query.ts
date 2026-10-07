@@ -535,7 +535,7 @@ function buildDigestCandidatePaths(params: {
         buildDigestPageSearchText(page, claims),
       );
       if (
-        !metadataLower.includes(queryLower) &&
+        !lineMatchesQuery(metadataLower, queryLower, queryTokens) &&
         !(
           params.mode === "route-question" &&
           hasRouteQuestionMatch(buildRouteQuestionFields(page), queryLower)
@@ -621,8 +621,8 @@ function scorePage(params: {
     queryTokens,
     mode,
   });
-  // Digest candidates use metadata only. Live pages also admit distributed token
-  // matches and score their body, without changing the digest prefilter's recall.
+  // Digest candidates admit phrase and distributed token matches in metadata.
+  // Live pages also match and score their body text.
   if (!("raw" in page)) {
     return score;
   }
