@@ -55,6 +55,15 @@ vi.mock("openclaw/plugin-sdk/delivery-queue-runtime", () => ({
   drainPendingDeliveries: deliveryQueueMocks.drainPendingDeliveries,
 }));
 
+const systemEventMocks = vi.hoisted(() => ({
+  enqueueSystemEvent: vi.fn((_text: string, _options: unknown) => true),
+}));
+
+vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>()),
+  enqueueSystemEvent: systemEventMocks.enqueueSystemEvent,
+}));
+
 installWebAutoReplyTestHomeHooks();
 
 function requireOnMessage(
@@ -470,6 +479,30 @@ describe("web auto-reply connection", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("posts a system event only when monitoring stops, not on retried closes", async () => {
+    systemEventMocks.enqueueSystemEvent.mockClear();
+    const scripted = createScriptedWebListenerFactory();
+    const { run } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory: scripted.listenerFactory,
+      sleep: vi.fn(async () => {}),
+      reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
+    });
+
+    await waitForScriptedListeners(scripted, 1);
+    scripted.resolveClose(0, { status: 499, isLoggedOut: false, error: "watchdog-timeout" });
+    await waitForScriptedListeners(scripted, 2);
+    expect(systemEventMocks.enqueueSystemEvent).not.toHaveBeenCalled();
+
+    scripted.resolveClose(1, { status: 401, isLoggedOut: true, error: "logged out" });
+    await run;
+
+    expect(systemEventMocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    expect(systemEventMocks.enqueueSystemEvent.mock.calls[0]?.[0]).toBe(
+      "WhatsApp gateway disconnected (status 401)",
+    );
   });
 
   it("treats status 440 as non-retryable and stops without retrying", async () => {
