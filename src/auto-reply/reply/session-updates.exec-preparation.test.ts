@@ -63,6 +63,11 @@ function prepare(root: string, config: OpenClawConfig, assertCurrent?: () => voi
     sessionKey: "agent:main:exec-preparation",
     workspaceDir: path.join(root, "workspace"),
     isFirstTurnInSession: false,
+    sessionEntry: {
+      sessionId: "skill-exec",
+      updatedAt: 1,
+      skillsSnapshot: { prompt: "", skills: [] },
+    },
     assertCurrent,
   });
 }
@@ -142,10 +147,11 @@ it.each([false, true])(
 it("prepares current sandbox and approval skill eligibility without caller-thread SQL", async () => {
   const root = tempDirs.make("openclaw-skill-exec-");
   const source = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-  for (const [security, sandboxMode, canExec] of [
-    ["full", "off", true],
-    ["full", undefined, false],
-    ["deny", "off", false],
+  const approvals = vi.spyOn(approvalStore, "loadExecApprovalsReadOnlyAsync");
+  for (const [security, sandboxMode, canExec, approvalReads] of [
+    ["full", "off", true, 1],
+    ["full", undefined, false, 0],
+    ["deny", "off", false, 1],
   ] as const) {
     writeExecApprovalsConfigRow({ db: source.db, file: { version: 1, defaults: { security } } });
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
@@ -153,6 +159,7 @@ it("prepares current sandbox and approval skill eligibility without caller-threa
       { agentId: "main", sessionKey: "agent:main:exec-preparation" },
       { sessionId: "skill-exec", updatedAt: 1, sandboxMode },
     );
+    approvals.mockClear();
     const calls = observeMainThreadSql();
     const pending = prepare(root, {
       agents: { defaults: { sandbox: { mode: "all" } } },
@@ -160,6 +167,7 @@ it("prepares current sandbox and approval skill eligibility without caller-threa
     });
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-foreign-skill-exec-"));
     await pending;
+    expect(approvals).toHaveBeenCalledTimes(approvalReads);
     expect(
       vi.mocked(resolveReusableWorkspaceSkillSnapshot).mock.lastCall?.[0].resolveEligibility?.(),
     ).toMatchObject({ nodeSkills: { canExec, node: "build-node" } });

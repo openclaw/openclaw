@@ -13,7 +13,6 @@ import {
 } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import { setSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import {
   registerSqliteCacheExitClose,
@@ -140,7 +139,10 @@ export function acquireAuthProfileReadDatabase(
   }
   let db: DatabaseSync;
   try {
-    db = openNodeSqliteDatabase(resolvedPath, { readOnly: true });
+    db = openNodeSqliteDatabase(resolvedPath, {
+      readOnly: true,
+      timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+    });
   } catch {
     return isMissingDatabasePath(resolvedPath) ? { status: "missing" } : { status: "unreadable" };
   }
@@ -153,7 +155,6 @@ export function acquireAuthProfileReadDatabase(
     enableNodeSqliteKyselyStatementCache(db);
     // The pooled reader bypasses canonical agent DB bootstrap, but it shares
     // the same busy policy and validates the process-stable schema on open.
-    setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
     readable = readSqliteUserVersion(db) <= OPENCLAW_AGENT_SCHEMA_VERSION;
   } catch {
     // Invalid readers are disposed below, where native close failures propagate.
