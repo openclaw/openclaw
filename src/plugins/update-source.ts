@@ -539,42 +539,33 @@ export function resolveClawHubUpdateSpecs(params: {
   });
 }
 
-/** Only a catalog-declared alternate may satisfy an implicit core-matched ClawHub target. */
-export async function resolveClawHubNpmUpdateFallback(params: {
-  officialInstall?: ReturnType<
+/** Only a catalog-declared alternate may satisfy an implicit exact ClawHub target. */
+export function resolveClawHubNpmUpdateFallback(
+  officialInstall: ReturnType<
     typeof officialInstallRecords.resolveTrustedSourceLinkedOfficialClawHubInstall
-  >;
-  clawhubSpecs?: { installSpec?: string; recordSpec?: string };
-  versionBoundToCore?: boolean;
-  updateChannel?: UpdateChannel;
-  coreVersion?: string;
-}) {
-  const spec = params.officialInstall?.npmSpec;
+  >,
+  clawhubSpecs: { installSpec?: string; recordSpec?: string } | undefined,
+) {
+  const { npmSpec, expectedIntegrity } = officialInstall ?? {};
+  const target = parseClawHubPluginSpec(clawhubSpecs?.installSpec ?? "");
   if (
-    !spec ||
-    !params.versionBoundToCore ||
-    params.updateChannel !== "stable" ||
-    params.clawhubSpecs?.installSpec === params.clawhubSpecs?.recordSpec
+    !npmSpec ||
+    clawhubSpecs?.installSpec === clawhubSpecs?.recordSpec ||
+    !target?.version ||
+    !isExactSemverVersion(target.version)
   ) {
     return undefined;
   }
-  const specs = await resolveNpmInstallSpecsForUpdateChannel({
-    spec,
-    updateChannel: params.updateChannel,
-    officialPackageName: resolveNpmSpecPackageName(spec),
-    coreVersion: params.coreVersion,
-    versionBoundToCore: true,
-  });
-  const targetVersion = normalizeExactSemverVersion(
-    parseClawHubPluginSpec(params.clawhubSpecs?.installSpec ?? "")?.version,
-  );
-  if (!targetVersion || resolveExactNpmSpecVersion(specs.installSpec) !== targetVersion) {
+  const installSpec = resolveDefaultNpmSpec(npmSpec)
+    ? `${resolveNpmSpecPackageName(npmSpec)}@${target.version}`
+    : npmSpec;
+  if (resolveExactNpmSpecVersion(installSpec) !== target.version) {
     return undefined;
   }
   return {
-    ...specs,
-    expectedIntegrity:
-      specs.installSpec === spec ? params.officialInstall?.expectedIntegrity : undefined,
+    installSpec,
+    recordSpec: npmSpec,
+    expectedIntegrity: installSpec === npmSpec ? expectedIntegrity : undefined,
   };
 }
 

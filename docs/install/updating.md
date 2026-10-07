@@ -364,9 +364,7 @@ Unfinished plugin migrations retain their settings and state inputs while
 the package. A verified replacement can be installed before its remaining data
 migration completes; pending migration still guards runtime activation. Explicit
 `config unset plugins.entries.<id>` can remove that entry, with the normal config
-backup preserved. Doctor and startup restore a missing package directory such as
-`extensions/codex` from its matching verified `.openclaw-install-backups` copy
-before retrying a registry download.
+backup preserved. Removing the entry does not settle its pending data migration.
 
 Failures to install core, repair required configuration or state, or start the
 updated Gateway remain update failures, except for the service-definition refusals

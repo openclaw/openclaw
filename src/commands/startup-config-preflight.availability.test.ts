@@ -12,13 +12,11 @@ import {
   listActiveDegradedPlugins,
   setActiveDegradedPlugins,
 } from "../plugins/runtime-degraded-state.js";
-import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { readConfigPreflightSnapshot } from "./config-preflight-snapshot.js";
-import { refreshStartupPluginQuarantine } from "./doctor-config-preflight-plugin-verification.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
@@ -27,101 +25,6 @@ afterEach(() => {
   recordStartupMigrationWarnings([]);
   closeOpenClawStateDatabaseForTest();
 });
-
-it.each(["npm", "clawhub", "wrong-package", "revoked"] as const)(
-  "restores only a verified missing plugin backup at startup (%s)",
-  async (source) => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        const pluginId = "backup-recovery-fixture";
-        const packageName = `@example/${pluginId}`;
-        const stateDir = path.join(home, ".openclaw");
-        const configPath = path.join(stateDir, "openclaw.json");
-        const installPath = path.join(stateDir, "extensions", pluginId);
-        const backupPath = path.join(
-          path.dirname(installPath),
-          ".openclaw-install-backups",
-          `${pluginId}-00000000-0000-4000-8000-000000000000`,
-        );
-        await fs.mkdir(backupPath, { recursive: true });
-        const fixture = createColdPluginFixture({
-          rootDir: backupPath,
-          pluginId,
-          packageName: source === "wrong-package" ? "@example/unrelated" : packageName,
-          packageVersion: "1.0.0",
-        });
-        const config = {
-          gateway: { mode: "local" as const, auth: { mode: "none" as const } },
-          plugins: { allow: [pluginId], entries: { [pluginId]: { enabled: true } } },
-          meta: { migrations: { webhookListeners: true as const } },
-        };
-        const configBytes = `${JSON.stringify(config)}\n`;
-        await fs.writeFile(configPath, configBytes);
-        await seedInstalledPluginIndex(
-          {
-            [pluginId]: {
-              ...(source === "npm"
-                ? { source: "npm" as const, spec: `${packageName}@1.0.0` }
-                : {
-                    source: "clawhub" as const,
-                    spec: `clawhub:${packageName}@1.0.0`,
-                    clawhubPackage: packageName,
-                  }),
-              version: "1.0.0",
-              installPath,
-            },
-          },
-          { config },
-        );
-
-        if (source === "revoked") {
-          let authorityLive = true;
-          await expect(
-            refreshStartupPluginQuarantine({
-              cfg: config,
-              env: process.env,
-              assertCurrent: () => {
-                if (!authorityLive) {
-                  throw new Error("startup authority revoked");
-                }
-              },
-              beforePersistentEffect: async () => {
-                authorityLive = false;
-              },
-            }),
-          ).rejects.toThrow("startup authority revoked");
-          expect(fsSync.existsSync(installPath)).toBe(false);
-          expect(fsSync.existsSync(backupPath)).toBe(true);
-          expect(await fs.readFile(configPath, "utf8")).toBe(configBytes);
-          return;
-        }
-
-        const ready = await runStartupConfigPreflight({ gateway: true, observe: false });
-
-        expect(ready.snapshot.valid).toBe(true);
-        expect(await fs.readFile(configPath, "utf8")).toBe(configBytes);
-        expect(fsSync.existsSync(backupPath)).toBe(true);
-        expect(fsSync.existsSync(fixture.runtimeMarker)).toBe(false);
-        if (source === "wrong-package") {
-          expect(fsSync.existsSync(installPath)).toBe(false);
-          expect(listActiveDegradedPlugins()).toMatchObject([
-            { pluginId, diagnostic: { reason: "missing-package-dir" } },
-          ]);
-          expect(readStartupMigrationWarning()).toContain("openclaw update repair");
-        } else {
-          expect(await fs.readFile(path.join(installPath, "index.cjs"), "utf8")).toBe(
-            await fs.readFile(fixture.runtimeSource, "utf8"),
-          );
-          expect(listActiveDegradedPlugins()).toEqual([]);
-          expect(ready.pluginMetadataSnapshot?.byPluginId.get(pluginId)).toMatchObject({
-            rootDir: installPath,
-            packageVersion: "1.0.0",
-          });
-        }
-      });
-    });
-  },
-);
 
 it("admits an unavailable plugin while leaving legacy state for Doctor", async () => {
   await withDoctorConfigPreflightHome(async (home) => {

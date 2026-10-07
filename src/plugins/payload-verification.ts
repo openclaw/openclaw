@@ -6,19 +6,13 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { pathExists } from "../infra/fs-safe.js";
-import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { resolveUserPath } from "../utils.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
-import {
-  loadPluginManifest,
-  resolvePackageExtensionEntries,
-  type PackageManifest,
-} from "./manifest.js";
+import { resolvePackageExtensionEntries, type PackageManifest } from "./manifest.js";
 import {
   resolveTrustedSourceLinkedOfficialClawHubInstall,
   resolveTrustedSourceLinkedOfficialNpmInstall,
@@ -43,141 +37,6 @@ export type PluginPayloadSmokeResult = {
 };
 
 const TRACKED_SOURCES: ReadonlySet<string> = new Set(["npm", "clawhub", "git", "marketplace"]);
-
-type PluginInstallBackupRecoveryResult = {
-  restored: Array<{ pluginId: string; backupPath: string }>;
-  failures: Array<{ pluginId: string; error: string }>;
-};
-
-/** Restores missing recorded packages without consuming their verified install backups. */
-export async function restoreMissingPluginInstallBackups(params: {
-  records: Record<string, PluginInstallRecord>;
-  env: NodeJS.ProcessEnv;
-  assertCurrent: () => void;
-  beforePersistentEffect?: () => void | Promise<void>;
-}): Promise<PluginInstallBackupRecoveryResult> {
-  const { records, ...options } = params;
-  const result: PluginInstallBackupRecoveryResult = { restored: [], failures: [] };
-  for (const [pluginId, record] of Object.entries(records)) {
-    const recovery = await restoreMissingPluginInstallBackup({ ...options, pluginId, record });
-    if (recovery.backupPath) {
-      result.restored.push({ pluginId, backupPath: recovery.backupPath });
-    } else if (recovery.error) {
-      result.failures.push({ pluginId, error: recovery.error });
-    }
-  }
-  return result;
-}
-
-async function restoreMissingPluginInstallBackup(
-  params: Omit<Parameters<typeof restoreMissingPluginInstallBackups>[0], "records"> & {
-    pluginId: string;
-    record: PluginInstallRecord;
-  },
-): Promise<{ backupPath?: string; error?: string }> {
-  const rawInstallPath = normalizeOptionalString(params.record.installPath);
-  if (!TRACKED_SOURCES.has(params.record.source) || !rawInstallPath) {
-    return {};
-  }
-  const installPath = resolveUserPath(rawInstallPath, params.env);
-  let lastError: string | undefined;
-  try {
-    if (await fs.lstat(installPath).catch(() => null)) {
-      return {};
-    }
-    const backupRoot = path.join(path.dirname(installPath), ".openclaw-install-backups");
-    const rootStat = await fs.lstat(backupRoot).catch(() => null);
-    if (!rootStat?.isDirectory() || rootStat.isSymbolicLink()) {
-      return {};
-    }
-    const prefix = `${path.basename(installPath)}-`;
-    const backups = (await fs.readdir(backupRoot, { withFileTypes: true }))
-      .filter(
-        (entry) =>
-          entry.isDirectory() &&
-          entry.name.startsWith(prefix) &&
-          /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/iu.test(entry.name.slice(prefix.length)),
-      )
-      .toSorted((left, right) => left.name.localeCompare(right.name));
-    if (backups.length === 0) {
-      return {};
-    }
-    const packageNames: Array<string | undefined> = [
-      params.record.resolvedName,
-      params.record.clawhubPackage,
-    ].filter((name) => name !== undefined);
-    for (const spec of [params.record.spec, params.record.resolvedSpec]) {
-      if (spec === undefined) {
-        continue;
-      }
-      if (params.record.source === "clawhub") {
-        packageNames.push(parseClawHubPluginSpec(spec)?.name ?? parseRegistryNpmSpec(spec)?.name);
-      } else if (
-        params.record.source === "npm" &&
-        !params.record.artifactKind &&
-        !params.record.sourcePath
-      ) {
-        packageNames.push(parseRegistryNpmSpec(spec)?.name);
-      }
-    }
-    const { installPackageDir } = await import("../infra/install-package-dir.js");
-    for (const backup of backups) {
-      const backupPath = path.join(backupRoot, backup.name);
-      const result = await installPackageDir({
-        sourceDir: backupPath,
-        targetDir: installPath,
-        mode: "install",
-        hasDeps: false,
-        timeoutMs: 0,
-        copyErrorPrefix: "Failed to restore plugin backup",
-        depsLogMessage: "",
-        beforePersistentApply: params.assertCurrent,
-        authorizeMutation: async () => {
-          await params.beforePersistentEffect?.();
-          params.assertCurrent();
-          if (await fs.lstat(installPath).catch(() => null)) {
-            throw new Error(`Install path appeared during backup recovery: ${installPath}`);
-          }
-        },
-        afterInstall: async (stagedPath) => {
-          const manifest = loadPluginManifest(stagedPath);
-          const payload = await readPackagePayloadManifest(stagedPath);
-          const version = params.record.version ?? params.record.resolvedVersion;
-          if (
-            !manifest.ok ||
-            manifest.manifest.id !== params.pluginId ||
-            payload.status !== "present" ||
-            !payload.manifest.name ||
-            packageNames.some((name) => name !== payload.manifest.name) ||
-            !version ||
-            payload.manifest.version !== version
-          ) {
-            return {
-              ok: false,
-              error: `Backup ${backupPath} does not match the recorded plugin identity and version.`,
-            };
-          }
-          const smoke = await runPluginPayloadSmokeCheck({
-            records: { [params.pluginId]: { ...params.record, installPath: stagedPath } },
-            env: params.env,
-          });
-          return smoke.failures.length
-            ? { ok: false, error: smoke.failures.map((failure) => failure.detail).join("; ") }
-            : { ok: true };
-        },
-      });
-      params.assertCurrent();
-      if (result.ok) {
-        return { backupPath };
-      }
-      lastError = result.error;
-    }
-  } catch (error) {
-    params.assertCurrent();
-    lastError = error instanceof Error ? error.message : String(error);
-  }
-  return lastError ? { error: lastError } : {};
-}
 
 export type MissingPluginInstallPayload = {
   pluginId: string;

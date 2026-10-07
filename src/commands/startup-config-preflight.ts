@@ -215,18 +215,7 @@ async function prepareStartupConfig(
       cfg: read.snapshot.sourceConfig,
       env,
       measure,
-      assertCurrent: assertLeaseCurrent,
-      beforePersistentEffect: async () => {
-        await beforeStatePreparation(read.snapshot);
-        assertPreflightConfigUnchanged(read.snapshot, (await readSnapshot()).snapshot);
-        assertLeaseCurrent();
-      },
     });
-    if (verification.restoredPluginIds?.length) {
-      const refreshed = await readSnapshot();
-      assertPreflightConfigUnchanged(read.snapshot, refreshed.snapshot);
-      read = refreshed;
-    }
     setActiveDegradedPlugins(verification.quarantinedPlugins);
     recordStartupMigrationWarnings([
       ...readStartupStateWarnings(env),

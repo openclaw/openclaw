@@ -261,13 +261,10 @@ async function runInstalledPluginUpdate(
         : record.source === "clawhub"
           ? clawhubSpecs?.installSpec
           : record.spec;
-    const officialNpmFallback = await resolveClawHubNpmUpdateFallback({
-      officialInstall: trustedOfficialClawHubInstall,
+    const officialNpmFallback = resolveClawHubNpmUpdateFallback(
+      trustedOfficialClawHubInstall,
       clawhubSpecs,
-      updateChannel,
-      coreVersion: params.coreVersion,
-      versionBoundToCore: params.versionBoundPluginIds?.has(pluginId),
-    });
+    );
     let npmMetadata: Parameters<typeof installPluginFromNpmSpec>[0]["npmMetadata"] =
       npmSpecs?.npmResolution && effectiveSpec
         ? { spec: effectiveSpec, metadata: npmSpecs.npmResolution }

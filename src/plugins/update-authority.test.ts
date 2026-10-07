@@ -25,16 +25,17 @@ afterEach(() => {
 });
 
 describe("plugin update authority", () => {
-  it.each(["untrusted", "blocked", "integrity", "catalog-behind"] as const)(
+  it.each(["untrusted", "blocked", "integrity", "catalog-behind", "newer-pin"] as const)(
     "does not use npm to bypass a ClawHub %s refusal",
     async (reason) => {
       await withOpenClawTestState(
         { label: "update-source-authority", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
         async (state) => {
           const installPath = state.statePath("extensions", "codex");
+          const installedVersion = reason === "newer-pin" ? "2026.9.9" : "2026.9.7";
           await state.writeJson("extensions/codex/package.json", {
             name: "@openclaw/codex",
-            version: "2026.9.7",
+            version: installedVersion,
             openclaw: { extensions: ["./index.js"] },
           });
           const payload = "export default function register() {}\n";
@@ -45,13 +46,16 @@ describe("plugin update authority", () => {
               installs: {
                 codex: {
                   source: "clawhub" as const,
-                  spec: "clawhub:@openclaw/codex",
+                  spec:
+                    reason === "newer-pin"
+                      ? "clawhub:@openclaw/codex@2026.9.9"
+                      : "clawhub:@openclaw/codex",
                   clawhubPackage: "@openclaw/codex",
                   clawhubChannel: "official" as const,
                   clawhubUrl:
                     reason === "untrusted" ? "https://registry.example" : "https://clawhub.ai",
                   installPath,
-                  version: "2026.9.7",
+                  version: installedVersion,
                 },
               },
             },
@@ -71,12 +75,12 @@ describe("plugin update authority", () => {
           vi.spyOn(clawhub, "installPluginFromClawHub").mockResolvedValue({
             ok: false,
             code:
-              reason === "untrusted" || reason === "catalog-behind"
+              reason === "untrusted" || reason === "catalog-behind" || reason === "newer-pin"
                 ? "version_not_found"
                 : reason === "blocked"
                   ? "clawhub_download_blocked"
                   : "archive_integrity_mismatch",
-            version: "2026.9.8",
+            version: reason === "newer-pin" ? "2026.9.9" : "2026.9.8",
             error: reason,
           });
           const npm = vi
@@ -90,6 +94,11 @@ describe("plugin update authority", () => {
             retainOnUnavailable: true,
           });
           expect(npm).not.toHaveBeenCalled();
+          if (reason === "newer-pin") {
+            expect(clawhub.installPluginFromClawHub).toHaveBeenCalledWith(
+              expect.objectContaining({ spec: "clawhub:@openclaw/codex@2026.9.9" }),
+            );
+          }
           if (reason === "catalog-behind") {
             expect(clawhub.installPluginFromClawHub).toHaveBeenCalledWith(
               expect.objectContaining({

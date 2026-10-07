@@ -8,7 +8,6 @@ import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.rost
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import type { BundledProviderPolicySurface } from "../../../plugins/provider-policy-surface.js";
-import { createColdPluginFixture } from "../../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { VERSION } from "../../../version.js";
@@ -132,79 +131,6 @@ describe("configured plugin cohort availability", () => {
   beforeAll(async () => {
     await import("./missing-configured-plugin-install.js");
   });
-
-  it.each(["verified", "wrong-id", "wrong-version", "missing-entry"] as const)(
-    "%s backup recovery preserves the backup and verifies it before publishing",
-    async (scenario) => {
-      const root = tempDirs.make("openclaw-plugin-backup-repair-");
-      const installPath = path.join(root, "demo");
-      const backup = path.join(
-        root,
-        ".openclaw-install-backups",
-        "demo-00000000-0000-4000-8000-000000000000",
-      );
-      fs.mkdirSync(backup, { recursive: true });
-      createColdPluginFixture({
-        rootDir: backup,
-        pluginId: scenario === "wrong-id" ? "another-plugin" : "demo",
-        packageVersion: scenario === "wrong-version" ? "0.9.0" : "1.0.0",
-        packageName: "@example/demo",
-      });
-      if (scenario === "missing-entry") {
-        fs.rmSync(path.join(backup, "index.cjs"));
-      }
-      const records = {
-        demo: {
-          source: "npm" as const,
-          spec: "@example/demo@1.0.0",
-          version: "1.0.0",
-          resolvedName: "@example/demo",
-          installPath,
-        },
-      };
-      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-      mocks.loadManifestMetadataSnapshot.mockImplementation(() =>
-        createPluginMetadataSnapshotFixture({
-          plugins: fs.existsSync(installPath)
-            ? [{ id: "demo", origin: "global", rootDir: installPath, packageVersion: "1.0.0" }]
-            : [],
-        }),
-      );
-      mocks.updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
-        config,
-        changed: false,
-        outcomes: [{ pluginId: "demo", status: "error", message: "Registry unavailable" }],
-      }));
-      const { repairMissingConfiguredPluginInstalls } =
-        await import("./missing-configured-plugin-install.js");
-      const result = await repairMissingConfiguredPluginInstalls({
-        cfg: { plugins: { entries: { demo: { enabled: true } } } },
-        env: testEnv,
-      });
-
-      expect(fs.existsSync(backup)).toBe(true);
-      if (scenario !== "verified") {
-        expect(fs.existsSync(installPath)).toBe(false);
-        expect(result.repairedPluginIds).toBeUndefined();
-        expect(result.warnings).toContainEqual(expect.stringContaining("Could not restore plugin"));
-        expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledOnce();
-        return;
-      }
-      expect(fs.existsSync(path.join(installPath, "index.cjs"))).toBe(true);
-      expect(fs.readFileSync(path.join(installPath, "package.json"), "utf8")).toBe(
-        fs.readFileSync(path.join(backup, "package.json"), "utf8"),
-      );
-      expect(result.repairedPluginIds).toEqual(["demo"]);
-      expect(result.records).toEqual(records);
-      expect(result.warnings).toEqual([]);
-      expect(result.changes).toContain(
-        `Restored installed plugin "demo" from verified backup ${backup}.`,
-      );
-      expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
-      expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
-      expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
-    },
-  );
 
   it("refreshes a stale ClawHub Codex runtime using its declared official catalog source", async () => {
     const actualCatalog = await vi.importActual<

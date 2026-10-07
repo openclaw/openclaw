@@ -40,77 +40,78 @@ afterEach(async () => {
 });
 
 describe("plugin update publication authority", () => {
-  it("retains a runnable plugin during registry lag and installs its matching npm release", async () => {
-    await withOpenClawTestState(
-      { label: "registry-lag", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
-      async (state) => {
-        const packageName = "@openclaw/codex";
-        const versions = await packPlugins(state.path("packages"), [
-          { packageName, pluginId: "codex", version: "2026.9.7" },
-          { packageName, pluginId: "codex", version: "2026.9.8" },
-        ]);
-        const requests: string[] = [];
-        const clawhub = http.createServer((request, response) => {
-          const pathname = decodeURIComponent(new URL(request.url!, "http://localhost").pathname);
-          requests.push(pathname);
-          if (pathname === `/api/v1/packages/${packageName}`) {
-            response.writeHead(200, { "content-type": "application/json" });
-            response.end(
-              JSON.stringify({
-                package: {
-                  name: packageName,
-                  family: "code-plugin",
-                  channel: "official",
-                  isOfficial: true,
-                  latestVersion: "2026.9.7",
-                  tags: { latest: "2026.9.7" },
-                },
-              }),
-            );
-          } else {
-            response.writeHead(404);
-            response.end("Version not found");
+  it.each([false, true])(
+    "handles ClawHub lag with matching npm release available: %s",
+    async (published) => {
+      await withOpenClawTestState(
+        { label: "registry-lag", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+        async (state) => {
+          const packageName = "@openclaw/codex";
+          const versions = await packPlugins(state.path("packages"), [
+            { packageName, pluginId: "codex", version: "2026.9.7" },
+            { packageName, pluginId: "codex", version: "2026.9.8" },
+          ]);
+          const requests: string[] = [];
+          const clawhub = http.createServer((request, response) => {
+            const pathname = decodeURIComponent(new URL(request.url!, "http://localhost").pathname);
+            requests.push(pathname);
+            if (pathname === `/api/v1/packages/${packageName}`) {
+              response.writeHead(200, { "content-type": "application/json" });
+              response.end(
+                JSON.stringify({
+                  package: {
+                    name: packageName,
+                    family: "code-plugin",
+                    channel: "official",
+                    isOfficial: true,
+                    latestVersion: "2026.9.7",
+                    tags: { latest: "2026.9.7" },
+                  },
+                }),
+              );
+            } else {
+              response.writeHead(404);
+              response.end("Version not found");
+            }
+          });
+          await new Promise<void>((resolve) => {
+            clawhub.listen(0, "127.0.0.1", resolve);
+          });
+          servers.push(clawhub);
+          const address = clawhub.address();
+          if (!address || typeof address === "string") {
+            throw new Error("ClawHub fixture has no loopback port");
           }
-        });
-        await new Promise<void>((resolve) => {
-          clawhub.listen(0, "127.0.0.1", resolve);
-        });
-        servers.push(clawhub);
-        const address = clawhub.address();
-        if (!address || typeof address === "string") {
-          throw new Error("ClawHub fixture has no loopback port");
-        }
-        vi.stubEnv("OPENCLAW_CLAWHUB_URL", `http://127.0.0.1:${address.port}`);
-        const extensionsDir = state.statePath("extensions");
-        const installPath = path.join(extensionsDir, "codex");
-        await fs.cp(
-          path.join(state.path("packages"), `package-${packageName}-2026.9.7`),
-          installPath,
-          { recursive: true },
-        );
-        const oldPayload = await fs.readFile(path.join(installPath, "dist/index.js"));
-        const config: OpenClawConfig = {
-          plugins: {
-            entries: { codex: { enabled: true, config: { preserved: true } } },
-            // Shipped spec-only official records inherit the configured registry URL.
-            installs: {
-              codex: {
-                source: "clawhub",
-                spec: `clawhub:${packageName}`,
-                installPath,
-                version: "2026.9.7",
+          vi.stubEnv("OPENCLAW_CLAWHUB_URL", `http://127.0.0.1:${address.port}`);
+          const extensionsDir = state.statePath("extensions");
+          const installPath = path.join(extensionsDir, "codex");
+          await fs.cp(
+            path.join(state.path("packages"), `package-${packageName}-2026.9.7`),
+            installPath,
+            { recursive: true },
+          );
+          const oldPayload = await fs.readFile(path.join(installPath, "dist/index.js"));
+          const config: OpenClawConfig = {
+            plugins: {
+              entries: { codex: { enabled: true, config: { preserved: true } } },
+              // Shipped spec-only official records inherit the configured registry URL.
+              installs: {
+                codex: {
+                  source: "clawhub",
+                  spec: `clawhub:${packageName}`,
+                  installPath,
+                  version: "2026.9.7",
+                },
               },
             },
-          },
-        };
-        const roots = {
-          stateDir: state.stateDir,
-          extensionsDir,
-          npmDir: state.statePath("npm"),
-          gitDir: state.statePath("git"),
-        };
-        await withPluginInstallRoots(roots, async () => {
-          for (const published of [false, true]) {
+          };
+          const roots = {
+            stateDir: state.stateDir,
+            extensionsDir,
+            npmDir: state.statePath("npm"),
+            gitDir: state.statePath("git"),
+          };
+          await withPluginInstallRoots(roots, async () => {
             const registry = await startStaticRegistry(
               [
                 {
@@ -155,12 +156,12 @@ describe("plugin update publication authority", () => {
                 oldPayload,
               );
             }
-          }
-        });
-        expect(requests).toContain(`/api/v1/packages/${packageName}/versions/2026.9.8`);
-      },
-    );
-  });
+          });
+          expect(requests).toContain(`/api/v1/packages/${packageName}/versions/2026.9.8`);
+        },
+      );
+    },
+  );
 
   it.each(["commit", "rollback"] as const)(
     "keeps retained settlement bound to its initiating updater with %s first",

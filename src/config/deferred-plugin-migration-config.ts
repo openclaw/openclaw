@@ -126,21 +126,17 @@ function restorePath(source: unknown, candidate: unknown, segments: readonly str
   return next;
 }
 
-function isExplicitPluginEntryRemoval(params: {
-  pluginId: string;
-  retainedPath: readonly string[];
-  nextConfig: OpenClawConfig;
-  unsetPaths?: readonly (readonly string[])[];
-}): boolean {
-  const entryPath = ["plugins", "entries", params.pluginId];
-  return (
-    entryPath.every((segment, index) => params.retainedPath[index] === segment) &&
-    params.unsetPaths?.some(
-      (path) =>
-        path.length === entryPath.length &&
-        path.every((segment, index) => segment === entryPath[index]),
-    ) === true &&
-    readPathValue(params.nextConfig, entryPath) === undefined
+function retainedPluginPaths(
+  pending: DeferredPluginMigration,
+  nextConfig: OpenClawConfig,
+  unsetPaths?: readonly (readonly string[])[],
+): readonly string[][] {
+  const entryPath = ["plugins", "entries", pending.pluginId];
+  const entryRemoved =
+    unsetPaths?.some((path) => isDeepStrictEqual(path, entryPath)) &&
+    readPathValue(nextConfig, entryPath) === undefined;
+  return (pending.configPaths ?? []).filter(
+    (path) => !entryRemoved || !entryPath.every((segment, index) => path[index] === segment),
   );
 }
 
@@ -153,10 +149,7 @@ export function assertDeferredPluginMigrationConfigEditAllowed(params: {
   unsetPaths?: readonly (readonly string[])[];
 }): void {
   for (const pending of params.pending) {
-    for (const retainedPath of pending.configPaths ?? []) {
-      if (isExplicitPluginEntryRemoval({ ...params, pluginId: pending.pluginId, retainedPath })) {
-        continue;
-      }
+    for (const retainedPath of retainedPluginPaths(pending, params.nextConfig, params.unsetPaths)) {
       const intersects = params.editedPaths.some(
         (editedPath) =>
           retainedPath.every((segment, index) => editedPath[index] === segment) ||
@@ -197,16 +190,8 @@ export function preserveDeferredPluginMigrationConfig(params: {
   }
   let next: unknown = params.nextConfig;
   for (const pending of params.pending) {
-    for (const path of pending.configPaths ?? []) {
-      if (
-        path.length > 0 &&
-        !isExplicitPluginEntryRemoval({
-          pluginId: pending.pluginId,
-          retainedPath: path,
-          nextConfig,
-          unsetPaths,
-        })
-      ) {
+    for (const path of retainedPluginPaths(pending, nextConfig, unsetPaths)) {
+      if (path.length > 0) {
         next = restorePath(params.sourceConfig, next, path);
       }
     }
