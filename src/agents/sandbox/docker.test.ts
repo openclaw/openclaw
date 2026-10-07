@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
+import { toSandboxProvisioningError } from "./provisioning-error.js";
 
 type SpawnCall = {
   command: string;
@@ -21,6 +22,10 @@ const spawnState = vi.hoisted(() => ({
   podmanClientVersion: "podman version 5.0.0\n",
   podmanVersionExitCode: 0,
   executionError: undefined as Error | undefined,
+  cancelCommand: "",
+  cancelMode: "result",
+  cancelController: undefined as AbortController | undefined,
+  cancelReason: undefined as Error | undefined,
   transportFailure: false,
   transportExitCode: 0,
   plainExitWithoutStderr: false,
@@ -30,6 +35,19 @@ const spawnState = vi.hoisted(() => ({
 async function spawnDockerProcess(commandAndArgs: string[]) {
   const [command = "", ...args] = commandAndArgs;
   spawnState.calls.push({ command, args });
+  if (args[0] === spawnState.cancelCommand) {
+    spawnState.cancelController?.abort(spawnState.cancelReason);
+    if (spawnState.cancelMode === "throw") {
+      throw new Error("synthetic process cancellation");
+    }
+    return {
+      failed: true,
+      isCanceled: true,
+      exitCode: undefined,
+      stdout: Buffer.from("synthetic-private-output"),
+      stderr: Buffer.from("synthetic-private-output"),
+    };
+  }
   if (spawnState.executionError) {
     throw spawnState.executionError;
   }
@@ -143,6 +161,10 @@ beforeEach(() => {
   spawnState.podmanClientVersion = "podman version 5.0.0\n";
   spawnState.podmanVersionExitCode = 0;
   spawnState.executionError = undefined;
+  spawnState.cancelCommand = "";
+  spawnState.cancelMode = "result";
+  spawnState.cancelController = undefined;
+  spawnState.cancelReason = undefined;
   spawnState.transportFailure = false;
   spawnState.transportExitCode = 0;
   spawnState.plainExitWithoutStderr = false;
@@ -152,6 +174,62 @@ beforeEach(() => {
 describe("resolvePodmanSandboxRuntimeInfo", () => {
   beforeEach(() => {
     spawnState.infoAvailable.podman = true;
+  });
+
+  it.each([
+    { command: "info", probe: "info", mode: "throw" },
+    { command: "info", probe: "info", mode: "result" },
+    { command: "system", probe: "system connection list", mode: "throw" },
+    { command: "system", probe: "system connection list", mode: "result" },
+    { command: "machine", probe: "machine list", mode: "throw" },
+    { command: "machine", probe: "machine list", mode: "result" },
+    { command: "--version", probe: "--version", mode: "throw" },
+    { command: "--version", probe: "--version", mode: "result" },
+  ])(
+    "attributes the $probe probe timeout through provisioning ($mode)",
+    async ({ command, probe, mode }) => {
+      const controller = new AbortController();
+      const reason = new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+      spawnState.cancelCommand = command;
+      spawnState.cancelMode = mode;
+      spawnState.cancelController = controller;
+      spawnState.cancelReason = reason;
+      spawnState.podmanInfo = "true\ttrue\t\t5.0.0\n";
+      spawnState.podmanConnections = JSON.stringify([
+        {
+          Name: "machine",
+          URI: "ssh://core@127.0.0.1:60000/synthetic-private-socket",
+          Default: true,
+        },
+      ]);
+      try {
+        await withEnvAsync({ CONTAINER_CONNECTION: "machine", CONTAINER_HOST: "" }, async () => {
+          const error = await resolvePodmanSandboxRuntimeInfo().catch((caught: unknown) => caught);
+          expect(error).toMatchObject({
+            name: "TimeoutError",
+            message: `Podman ${probe} probe timed out after 5000 ms`,
+            cause: reason,
+          });
+          if (error instanceof Error) {
+            expect(error.cause).toBe(reason);
+          }
+          const provisioning = toSandboxProvisioningError(error, "podman");
+          expect(provisioning.code).toBe("sandbox_provisioning");
+          expect(provisioning.message).toContain(`Podman ${probe} probe timed out after 5000 ms`);
+          expect(provisioning.cause).toBe(error);
+          expect(provisioning.message).not.toContain("synthetic-private");
+        });
+      } finally {
+        timeout.mockRestore();
+      }
+    },
+  );
+
+  it("does not attribute an unrelated TimeoutError to the probe deadline", async () => {
+    const error = new DOMException("unrelated timeout", "TimeoutError");
+    spawnState.executionError = error;
+    await expect(resolvePodmanSandboxRuntimeInfo()).rejects.toBe(error);
   });
 
   it.each([false])("allows Podman Machine connections (rootless=%s)", async (rootless) => {
@@ -443,6 +521,24 @@ describe("ensureContainerImage", () => {
 });
 
 describe("execDockerRaw", () => {
+  it.each(["throw", "result"])(
+    "keeps ordinary cancellation distinct from timeout (%s)",
+    async (mode) => {
+      const controller = new AbortController();
+      const reason = new Error("synthetic-private-cancellation");
+      spawnState.cancelCommand = "create";
+      spawnState.cancelMode = mode;
+      spawnState.cancelController = controller;
+      spawnState.cancelReason = reason;
+      const error = await execDockerRaw(["create", "--env", "TOKEN=synthetic-private-argument"], {
+        signal: controller.signal,
+        allowFailure: true,
+      }).catch((caught: unknown) => caught);
+      expect(error).toMatchObject({ name: "AbortError", message: "Aborted" });
+      expect(error).not.toHaveProperty("cause");
+    },
+  );
+
   it("preserves canonical wrapper execution errors", async () => {
     spawnState.executionError = new Error("docker execution failed");
 

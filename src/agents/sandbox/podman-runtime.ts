@@ -75,6 +75,35 @@ function assertPodmanVersionAtLeast(
   );
 }
 
+async function execPodmanProbe(
+  probe: "info" | "system connection list" | "machine list" | "--version",
+  args: string[],
+) {
+  const signal = AbortSignal.timeout(SANDBOX_ENGINE_PROBE_TIMEOUT_MS);
+  try {
+    return await execContainer(PODMAN_SANDBOX_ENGINE, args, {
+      allowFailure: true,
+      signal,
+    });
+  } catch (error) {
+    if (
+      signal.aborted &&
+      error === signal.reason &&
+      error instanceof Error &&
+      error.name === "TimeoutError"
+    ) {
+      // Use a fixed probe label, never connection arguments or process output.
+      throw Object.assign(
+        new Error(`Podman ${probe} probe timed out after ${SANDBOX_ENGINE_PROBE_TIMEOUT_MS} ms`, {
+          cause: error,
+        }),
+        { name: "TimeoutError" },
+      );
+    }
+    throw error;
+  }
+}
+
 async function isPodmanMachineConnection(params: {
   selectedName: string;
   uri: string;
@@ -93,14 +122,7 @@ async function isPodmanMachineConnection(params: {
   if (uri.protocol !== "ssh:" || !loopback || !uri.port || !uri.username) {
     return false;
   }
-  const result = await execContainer(
-    PODMAN_SANDBOX_ENGINE,
-    ["machine", "list", "--format", "json"],
-    {
-      allowFailure: true,
-      signal: AbortSignal.timeout(SANDBOX_ENGINE_PROBE_TIMEOUT_MS),
-    },
-  );
+  const result = await execPodmanProbe("machine list", ["machine", "list", "--format", "json"]);
   if (result.code !== 0) {
     return false;
   }
@@ -148,14 +170,13 @@ async function assertSupportedPodmanConnection(remoteSocketPath: string): Promis
   machine: boolean;
   target: SandboxContainerEngineTarget;
 }> {
-  const result = await execContainer(
-    PODMAN_SANDBOX_ENGINE,
-    ["system", "connection", "list", "--format", "json"],
-    {
-      allowFailure: true,
-      signal: AbortSignal.timeout(SANDBOX_ENGINE_PROBE_TIMEOUT_MS),
-    },
-  );
+  const result = await execPodmanProbe("system connection list", [
+    "system",
+    "connection",
+    "list",
+    "--format",
+    "json",
+  ]);
   if (result.code !== 0) {
     const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
     throw new Error(`Failed to inspect the active Podman connection: ${detail}`);
@@ -177,10 +198,7 @@ async function assertSupportedPodmanConnection(remoteSocketPath: string): Promis
   if (configuredUri !== undefined && configuredName) {
     // Podman 4.8 switched to connection-first; older clients use HOST presence.
     // `info` reports the server version, which cannot decide client-side selection.
-    const client = await execContainer(PODMAN_SANDBOX_ENGINE, ["--version"], {
-      allowFailure: true,
-      signal: AbortSignal.timeout(SANDBOX_ENGINE_PROBE_TIMEOUT_MS),
-    });
+    const client = await execPodmanProbe("--version", ["--version"]);
     const version = /^podman(?:-remote)?(?:\.exe)? version (\d+)\.(\d+)\.\d+(?:[-+]\S+)?$/u.exec(
       client.stdout.trim(),
     );
@@ -249,18 +267,11 @@ async function assertSupportedPodmanConnection(remoteSocketPath: string): Promis
 }
 
 export async function resolvePodmanSandboxRuntimeInfo(): Promise<PodmanSandboxRuntimeInfo> {
-  const result = await execContainer(
-    PODMAN_SANDBOX_ENGINE,
-    [
-      "info",
-      "--format",
-      "{{.Host.Security.Rootless}}\t{{.Host.ServiceIsRemote}}\t{{.Host.RemoteSocket.Path}}\t{{.Version.Version}}",
-    ],
-    {
-      allowFailure: true,
-      signal: AbortSignal.timeout(SANDBOX_ENGINE_PROBE_TIMEOUT_MS),
-    },
-  );
+  const result = await execPodmanProbe("info", [
+    "info",
+    "--format",
+    "{{.Host.Security.Rootless}}\t{{.Host.ServiceIsRemote}}\t{{.Host.RemoteSocket.Path}}\t{{.Version.Version}}",
+  ]);
   if (result.code !== 0) {
     const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
     throw new Error(`Failed to inspect Podman user namespace mode: ${detail}`);

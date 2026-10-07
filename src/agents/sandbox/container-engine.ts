@@ -46,6 +46,14 @@ function missingContainerEngineMessage(engine: SandboxContainerEngine): string {
   return 'Sandbox mode requires Podman, but the "podman" command was not found in PATH. Install Podman (and ensure "podman" is available), choose another sandbox backend, or set `agents.defaults.sandbox.mode=off` to disable sandboxing.';
 }
 
+function containerCommandAbortError(signal?: AbortSignal): Error {
+  const reason: unknown = signal?.reason;
+  if (reason instanceof Error && reason.name === "TimeoutError") {
+    return reason;
+  }
+  return createAbortError("Aborted");
+}
+
 export async function execContainerRaw(
   engine: SandboxContainerEngine,
   args: string[],
@@ -63,7 +71,7 @@ export async function execContainerRaw(
     });
   } catch (error) {
     if (opts?.signal?.aborted) {
-      throw createAbortError("Aborted");
+      throw containerCommandAbortError(opts?.signal);
     }
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw Object.assign(new Error(missingContainerEngineMessage(engine)), {
@@ -74,7 +82,7 @@ export async function execContainerRaw(
     throw error;
   }
   if (opts?.signal?.aborted || result.isCanceled) {
-    throw createAbortError("Aborted");
+    throw containerCommandAbortError(opts?.signal);
   }
   if (result.failed && !isPlainCommandExitFailure(result)) {
     if (result.code === "ENOENT") {
