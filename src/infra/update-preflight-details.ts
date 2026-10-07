@@ -36,7 +36,7 @@ export const UPDATE_PREFLIGHT_DETAILS = {
   "target-git-metadata":
     "The Git target manifest or revision could not be inspected. Check Git remote access and the selected ref, then retry openclaw update; a dry-run does not fetch missing objects.",
   "target-git-cache-stale":
-    "The cached Git target differs from the current remote target. A dry-run leaves local refs unchanged, so the target remains unresolved. A real openclaw update will fetch and validate the current remote target.",
+    "The selected Git target is not fully available in the local checkout. A dry-run leaves local refs and objects unchanged, so the target remains unresolved. A real openclaw update will fetch and validate the selected target.",
   "inside-gateway-process-tree":
     "The update is running inside the Gateway process tree. Use the Gateway update action for a managed handoff, or run openclaw update from a terminal outside the Gateway process tree.",
   "inside-gateway-service":
