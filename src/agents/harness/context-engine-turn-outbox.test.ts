@@ -201,6 +201,77 @@ describe("context-engine turn outbox", () => {
     console.info("admission-lifecycle-equality", JSON.stringify({ scenario: kind, agentId: admission?.agentId === target.agentId, sessionId: admission?.sessionId === target.sessionId, sessionKey: admission?.sessionKey === target.sessionKey, storePath: admission?.storePath === resolveSessionTranscriptDatabasePath(target) }));
   });
 
+  it("preserves canonical identity with prior history and an outstanding transcript write", async () => {
+    const { target: supplied, current, database } = await createTranscript("pending-history");
+    const target = await resolveAgentRunSessionTarget({
+      ...supplied,
+      sessionKey: supplied.sessionKey.toUpperCase(),
+      config: {},
+      missingSessionKey: "resolve-existing",
+      sessionTarget: { ...supplied, sessionKey: supplied.sessionKey.toUpperCase() },
+    });
+    expect(target.sessionKey).toBe(supplied.sessionKey);
+    const message = { role: "user" as const, content: "next input", timestamp: 2_000 };
+    const recorder = createUserTurnTranscriptRecorder({ message, target: async () => undefined });
+    const lease = createLease(createEngine(async () => ({ status: "committed" })));
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const writer = runOpenClawAgentWriteAdmission(
+      { agentId: database.agentId, path: database.path },
+      async () => {
+        entered.resolve();
+        await release.promise;
+        const appended = await appendTranscriptMessage(target, {
+          message,
+          parentId: current.messageId,
+          now: 2_000,
+        });
+        if (!appended?.anchor) {
+          throw new Error("expected runtime admission anchor");
+        }
+        recorder.markRuntimePersisted(message, appended.anchor, { appended: true });
+      },
+    );
+    recorder.markRuntimePersistencePending(writer);
+    await entered.promise;
+    try {
+      await drainPendingContextEngineTurnsBeforeRun({ lease, recorder, sessionTarget: target });
+      expect(recorder.getAdmissionReceipt()).toBeUndefined();
+    } finally {
+      release.resolve();
+    }
+    await recorder.waitForRuntimePersistence();
+    expect(recorder.getAdmissionReceipt()).toMatchObject({
+      agentId: target.agentId,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      storePath: database.path,
+    });
+    expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
+  });
+
+  it.each(["agentId", "sessionId", "sessionKey", "storePath"] as const)(
+    "reports only equality booleans when delayed admission rejects %s",
+    async (field) => {
+      const { target, admission } = await createTranscript("diagnostic-turn");
+      const message = { role: "user" as const, content: "current", timestamp: 1_000 };
+      const recorder = createUserTurnTranscriptRecorder({ message, target: async () => undefined });
+      const lease = createLease(createEngine(async () => ({ status: "committed" })));
+      await drainPendingContextEngineTurnsBeforeRun({ lease, recorder, sessionTarget: target });
+      recorder.markRuntimePersisted(message, { ...admission, [field]: "synthetic-private-value" });
+      const expected = {
+        agentIdMatches: field !== "agentId",
+        sessionIdMatches: field !== "sessionId",
+        sessionKeyMatches: field !== "sessionKey",
+        storePathMatches: field !== "storePath",
+      };
+      await expect(recorder.waitForRuntimePersistence()).rejects.toThrow(
+        "context-engine transcript target changed before provider dispatch " + JSON.stringify(expected),
+      );
+      expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
+    },
+  );
+
   it("retries only transcript failures that can make progress", () => {
     expect(isRetryableContextEngineTurnReadFailure("projection-unavailable")).toBe(true);
     expect(isRetryableContextEngineTurnReadFailure("too-large")).toBe(false);
