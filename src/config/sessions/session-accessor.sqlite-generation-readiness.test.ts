@@ -8,6 +8,7 @@ import {
 import {
   resolveMemoryAudienceFromEntry,
   assertMemoryAudienceCurrent,
+  prepareMemoryAudienceRead,
 } from "../../plugins/memory-audience.js";
 import { bindMemoryProvider } from "../../plugins/memory-provider-adapter.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -197,6 +198,138 @@ it.for(["metadata", "replacement"] as const)(
         signal.removeEventListener("abort", onAbort);
         releasedGeneration.release();
         generation.release();
+        grant.release();
+        await provider.close();
+      }
+    });
+  },
+);
+
+it.for(["metadata", "reset"] as const)(
+  "waits on a parent %s publication before a retained child audience reaches the provider",
+  async (kind, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const parentScope = {
+        agentId: "main",
+        storePath: database.path,
+        sessionKey: "agent:main:generation-parent",
+      };
+      const childScope = { ...parentScope, sessionKey: "agent:main:subagent:generation-child" };
+      const parent = {
+        sessionId: "b1234567-1234-1234-1234-123456789abc",
+        chatType: "direct" as const,
+        lifecycleRevision: "parent-lifecycle",
+        updatedAt: 1,
+      };
+      const child = {
+        sessionId: "c1234567-1234-1234-1234-123456789abc",
+        lifecycleRevision: "child-lifecycle",
+        spawnedBy: parentScope.sessionKey,
+        spawnedBySessionId: parent.sessionId,
+        spawnedBySenderIsOwner: true,
+        parentSessionLifecycleRevision: parent.lifecycleRevision,
+        updatedAt: 1,
+      };
+      replaceSessionEntrySync(parentScope, parent);
+      replaceSessionEntrySync(childScope, child);
+      // The child's audience is minted through the real lineage walk and leases its parent.
+      const grant = await resolveMemoryAudienceFromEntry(
+        { ...childScope, sessionId: child.sessionId, senderIsOwner: false },
+        child,
+      );
+      if (grant.status !== "granted") {
+        throw new Error(grant.reason);
+      }
+      const health = vi.fn(async () => ({ status: "ready" as const }));
+      const provider = bindMemoryProvider(
+        {
+          capabilities: {
+            sources: ["memory"],
+            pagination: false,
+            candidates: [],
+            projectFilter: false,
+          },
+          health,
+          search: async () => ({ hits: [] }),
+          get: async () => ({ status: "not_found" }),
+          close: async () => {},
+        },
+        "test",
+        {
+          authority: {
+            kind: "session",
+            sessionKey: childScope.sessionKey,
+            sandboxed: false,
+            audience: grant.audience,
+          },
+          assertCurrent: () => {},
+        },
+      );
+      const committed = createDeferred();
+      const release = createDeferred();
+      const onAbort = () => release.resolve();
+      signal.addEventListener("abort", onAbort, { once: true });
+      delivery.afterResult = async () => {
+        committed.resolve();
+        await release.promise;
+      };
+      // Hold the parent publication mid-flight; a reset keeps the session id but changes its revision.
+      const reset = applySessionEntryExactReplacements({
+        ...parentScope,
+        sessionKeys: [parentScope.sessionKey],
+        requireWriteSuccess: true,
+        update: () => ({
+          result: undefined,
+          replacements: [
+            {
+              sessionKey: parentScope.sessionKey,
+              entry: {
+                ...parent,
+                label: "parent-metadata",
+                lifecycleRevision:
+                  kind === "reset" ? "parent-reset-lifecycle" : parent.lifecycleRevision,
+                updatedAt: 2,
+              },
+            },
+          ],
+        }),
+      });
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            committed.promise,
+            reset,
+            "parent reset did not reach publication",
+          ),
+          signal,
+        );
+        // The child audience waits on its parent's admitted publication instead of failing.
+        const waiting = prepareMemoryAudienceRead(grant.audience)?.then(
+          () => "current",
+          (error: unknown) => error,
+        );
+        expect(waiting).toBeInstanceOf(Promise);
+        const providerRead = provider.health().catch((error: unknown) => error);
+        expect(health).not.toHaveBeenCalled();
+        release.resolve();
+        await withinTest(reset, signal);
+        if (kind === "reset") {
+          expect(await waiting).toBeInstanceOf(Error);
+          expect(await providerRead).toBeInstanceOf(Error);
+          expect(health).not.toHaveBeenCalled();
+          expect(() => assertMemoryAudienceCurrent(grant.audience)).toThrow("no longer current");
+        } else {
+          await expect(waiting).resolves.toBe("current");
+          await expect(providerRead).resolves.toEqual({ status: "ready" });
+          expect(health).toHaveBeenCalledTimes(1);
+          assertMemoryAudienceCurrent(grant.audience);
+        }
+      } finally {
+        release.resolve();
+        delivery.afterResult = undefined;
+        await Promise.allSettled([reset]);
+        signal.removeEventListener("abort", onAbort);
         grant.release();
         await provider.close();
       }
