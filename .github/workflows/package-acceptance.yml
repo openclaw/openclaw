@@ -1355,7 +1355,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/e2e/retained-runtime-cleanup-native.sh "$RUNNER_TEMP/openclaw-npm12-prefix"
+          fixture="$PWD/scripts/e2e/retained-runtime-cleanup-native.sh"
+          fixture_sha="$(sha256sum "$fixture" | cut -d ' ' -f 1)"
+          sudo -n -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+            GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_OS="$RUNNER_OS" \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+            RUNNER_UID="$(id -u)" RUNNER_TEMP="$RUNNER_TEMP" NODE_BINARY="$(command -v node)" \
+            EXPECTED_FIXTURE_SHA256="$fixture_sha" \
+            EXPECTED_PACKAGE_SOURCE_SHA="$EXPECTED_PACKAGE_SOURCE_SHA" EXPECTED_PACKAGE_VERSION="$EXPECTED_PACKAGE_VERSION" \
+            /bin/bash "$fixture" --isolated-account "$RUNNER_TEMP/openclaw-npm12-prefix"
 
   docker_acceptance:
     name: Docker product acceptance (artifact-only)

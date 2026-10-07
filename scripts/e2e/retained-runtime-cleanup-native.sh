@@ -8,7 +8,132 @@ set -euo pipefail
 # Run only in an ephemeral, non-container Linux acceptance job, after npm install.
 # The shell owns the fixture: short-lived probes exit before the installed Doctor runs.
 fail() { echo "Native retained-runtime cleanup: $*" >&2; exit 1; }
+run_isolated_account() {
+  [[ "$(uname -s)" == Linux && "$(id -u)" == 0 && "${GITHUB_ACTIONS:-}" == true && "${RUNNER_OS:-}" == Linux ]] || fail "isolated account requires the hosted Linux administrator"
+  grep -Eq '^ID="?ubuntu"?$' /etc/os-release || fail "isolated account requires Ubuntu"
+  [[ $# -eq 1 && ${GITHUB_RUN_ID:-} =~ ^[0-9]{1,15}$ && ${GITHUB_RUN_ATTEMPT:-} =~ ^[0-9]{1,3}$ ]] || fail "invalid isolated run identity"
+  [[ ${RUNNER_UID:-} =~ ^[0-9]+$ && "$RUNNER_UID" -ne 0 ]] || fail "invalid original runner UID"
+  [[ ${EXPECTED_FIXTURE_SHA256:-} =~ ^[0-9a-f]{64}$ ]] || fail "missing fixture digest"
+  local tool
+  for tool in useradd runuser userdel groupdel getent install stat realpath sha256sum python3; do
+    command -v "$tool" >/dev/null || fail "missing isolation capability: $tool"
+  done
+  local account="occln_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}" prefix scratch scratch_identity
+  local account_created=false creation_uncertain=false runuser_settled=true uid="" gid="" passwd_record="" group_record=""
+  local fixture_source prefix_identity node_path node_dir result
+  prefix="$(realpath "$1")"
+  [[ -d "$1" && ! -L "$1" && "$prefix" == "$(realpath "$RUNNER_TEMP")/openclaw-npm12-prefix" && "$(stat -c %u "$prefix")" == "$RUNNER_UID" ]] || fail "prefix is not the completed task installation"
+  fixture_source="$(realpath "${BASH_SOURCE[0]}")"
+  [[ "$(sha256sum "$fixture_source" | cut -d ' ' -f 1)" == "$EXPECTED_FIXTURE_SHA256" ]] || fail "fixture digest mismatch"
+  node_path="$(realpath "${NODE_BINARY:?Node binary is required}")"
+  [[ -f "$node_path" && -x "$node_path" && "${node_path##*/}" == node ]] || fail "invalid installed Node runtime"
+  node_dir="${node_path%/*}"
+  local kind status
+  for kind in passwd group; do
+    if getent "$kind" "$account" >/dev/null; then
+      fail "isolated account identity already exists"
+    else
+      status=$?
+      [[ "$status" == 2 ]] || fail "account lookup failed"
+    fi
+  done
+  scratch="$(mktemp -d "$RUNNER_TEMP/openclaw-native-account-XXXXXX")"
+  scratch_identity="$(stat -c '%d:%i:%u:%g' "$scratch")"
+  # The EXIT trap invokes this while the account's local state remains in scope.
+  # shellcheck disable=SC2329
+  cleanup_account() {
+    local original=$? cleanup_result=0 current lookup_status
+    trap - EXIT
+    if [[ "$creation_uncertain" == true || "$runuser_settled" != true || -L "$scratch" || "$(stat -c '%d:%i:%u:%g' "$scratch" 2>/dev/null || true)" != "$scratch_identity" ]]; then
+      echo "native-cleanup isolation: unresolved ownership; account and scratch retained" >&2
+      exit "$((original == 0 ? 1 : original))"
+    fi
+    if [[ "$account_created" == true ]]; then
+      if [[ "$(getent passwd "$account" || true)" != "$passwd_record" || "$(getent group "$account" || true)" != "$group_record" ]]; then
+        echo "native-cleanup isolation: account identity changed; scratch retained" >&2
+        exit "$((original == 0 ? 1 : original))"
+      fi
+      # Nonforce deletion refuses a busy UID before any candidate files are removed.
+      if ! userdel "$account"; then
+        echo "native-cleanup isolation: account busy or deletion refused; scratch retained" >&2
+        exit "$((original == 0 ? 1 : original))"
+      fi
+      if current="$(getent group "$account")"; then
+        if [[ "$current" != "$group_record" ]] || ! groupdel "$account"; then
+          echo "native-cleanup isolation: group cleanup refused; scratch retained" >&2
+          exit "$((original == 0 ? 1 : original))"
+        fi
+      else
+        lookup_status=$?
+        if [[ "$lookup_status" != 2 ]]; then
+          echo "native-cleanup isolation: group lookup failed; scratch retained" >&2
+          exit "$((original == 0 ? 1 : original))"
+        fi
+      fi
+    fi
+    rm -rf --one-file-system -- "$scratch" || cleanup_result=1
+    if [[ "$original" -ne 0 ]]; then
+      exit "$original"
+    fi
+    exit "$cleanup_result"
+  }
+  trap cleanup_account EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  creation_uncertain=true
+  useradd --system --user-group --no-create-home --home-dir "$scratch/home" \
+    --shell /usr/sbin/nologin --password '!' "$account"
+  account_created=true
+  creation_uncertain=false
+  passwd_record="$(getent passwd "$account")"
+  group_record="$(getent group "$account")"
+  IFS=: read -r _ _ uid gid _ _ _ <<< "$passwd_record"
+  [[ "$uid" =~ ^[0-9]+$ && "$gid" =~ ^[0-9]+$ && "$uid" -ne 0 && "$uid" != "$RUNNER_UID" && "$gid" -ne 0 ]] || fail "isolated account UID/GID was not fresh"
+  [[ "$(id -G "$account")" == "$gid" && "$group_record" == "$account:x:$gid:" ]] || fail "isolated account has unexpected groups"
+  [[ "$passwd_record" == "$account:x:$uid:$gid::$scratch/home:/usr/sbin/nologin" ]] || fail "isolated account identity mismatch"
+  [[ "$(getent shadow "$account" | cut -d: -f2)" == '!' ]] || fail "isolated account is not locked"
+  chgrp "$gid" "$scratch"
+  scratch_identity="$(stat -c '%d:%i:%u:%g' "$scratch")"
+  chmod 750 "$scratch"
+  install -d -m 700 -o "$uid" -g "$gid" "$scratch/home" "$scratch/tmp"
+  install -m 550 -o root -g "$gid" "$fixture_source" "$scratch/fixture.sh"
+  [[ "$(sha256sum "$scratch/fixture.sh" | cut -d ' ' -f 1)" == "$EXPECTED_FIXTURE_SHA256" ]] || fail "staged fixture digest mismatch"
+  prefix_identity="$(stat -c '%d:%i' "$prefix")"
+  mv -- "$prefix" "$scratch/prefix"
+  [[ "$(stat -c '%d:%i' "$scratch/prefix")" == "$prefix_identity" ]] || fail "staged prefix identity changed"
+  cd /
+  runuser_settled=false
+  # Positional parameters belong to the isolated child shell, not this root wrapper.
+  # shellcheck disable=SC2016
+  if runuser -u "$account" -- env -i PATH=/usr/bin:/bin \
+    /bin/sh -c 'test -x "$1" && test -r "$2" && test -x "$3"' \
+    -- "$scratch" "$scratch/fixture.sh" "$node_path"; then
+    runuser_settled=true
+  else
+    result=$?
+    runuser_settled=true
+    echo "native-cleanup isolation: account cannot access staged fixture/runtime" >&2
+    exit "$result"
+  fi
+  runuser_settled=false
+  if runuser -u "$account" -- env -i PATH="$node_dir:/usr/sbin:/usr/bin:/sbin:/bin" \
+    HOME="$scratch/home" RUNNER_TEMP="$scratch/tmp" \
+    EXPECTED_INSPECTOR_UID="$uid" \
+    EXPECTED_PACKAGE_SOURCE_SHA="$EXPECTED_PACKAGE_SOURCE_SHA" EXPECTED_PACKAGE_VERSION="$EXPECTED_PACKAGE_VERSION" \
+    /bin/bash "$scratch/fixture.sh" "$scratch/prefix"; then
+    result=0
+  else
+    result=$?
+  fi
+  runuser_settled=true
+  exit "$result"
+}
+if [[ ${1:-} == --isolated-account ]]; then
+  shift
+  run_isolated_account "$@"
+fi
 [[ "$(uname -s)" == Linux && "$EUID" -ne 0 ]] || fail "requires a non-root Linux host"
+[[ -z ${EXPECTED_INSPECTOR_UID:-} || "$EUID" == "$EXPECTED_INSPECTOR_UID" ]] || fail "isolated inspector UID changed"
 [[ $# -eq 1 ]] || fail "usage: $0 <installed-npm-prefix>"
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
 : "${EXPECTED_PACKAGE_SOURCE_SHA:?expected source SHA is required}"
@@ -17,6 +142,21 @@ prefix="$(realpath "$1")"
 package_root="$prefix/lib/node_modules/openclaw"
 cli="$prefix/bin/openclaw"
 [[ -x "$cli" ]] || fail "installed CLI is missing"
+python3 - "$prefix" "$(command -v node)" <<'PY'
+import os, pathlib, sys
+root = pathlib.Path(sys.argv[1]).resolve(strict=True)
+node = pathlib.Path(sys.argv[2]).resolve(strict=True)
+if not node.is_file() or not os.access(node, os.R_OK | os.X_OK):
+    raise SystemExit("Isolated fixture cannot access the selected Node runtime")
+for directory, dirs, files in os.walk(root, followlinks=False):
+    for path in [pathlib.Path(directory), *(pathlib.Path(directory) / name for name in dirs + files)]:
+        target = path.resolve(strict=True)
+        if target != root and root not in target.parents:
+            raise SystemExit("Installed prefix has an external symlink target")
+        mode = os.R_OK | (os.X_OK if target.is_dir() else 0)
+        if not os.access(target, mode):
+            raise SystemExit("Isolated fixture cannot read the installed prefix")
+PY
 
 assert_host() {
   python3 - <<'PY'

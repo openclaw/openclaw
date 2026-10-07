@@ -10,6 +10,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   symlinkSync,
   unlinkSync,
@@ -8587,9 +8588,11 @@ test "$package_manager" = "pnpm@12.1.0"
       EXPECTED_PACKAGE_SOURCE_SHA: "${{ needs.resolve_package.outputs.package_source_sha }}",
       EXPECTED_PACKAGE_VERSION: "${{ needs.resolve_package.outputs.package_version }}",
     });
+    expect(cleanup.run).toContain("sudo -n -- /usr/bin/env -i");
     expect(cleanup.run).toContain(
-      'bash scripts/e2e/retained-runtime-cleanup-native.sh "$RUNNER_TEMP/openclaw-npm12-prefix"',
+      '/bin/bash "$fixture" --isolated-account "$RUNNER_TEMP/openclaw-npm12-prefix"',
     );
+    expect(cleanup.run).not.toMatch(/sudo -[A-Za-z]*E|preserve-env/u);
     const profiles = workflowChoiceOptions(
       readWorkflow(PACKAGE_ACCEPTANCE_WORKFLOW).on?.workflow_dispatch?.inputs?.suite_profile,
     );
@@ -8618,6 +8621,190 @@ test "$package_manager" = "pnpm@12.1.0"
       include_release_path_suites: "false",
       telegram_enabled: "false",
     });
+  });
+
+  it.each([
+    ["success", 0, false],
+    ["capability-refusal", 1, false],
+    ["existing-user", 1, false],
+    ["existing-group", 1, false],
+    ["partial-creation", 1, true],
+    ["staging-failure", 1, false],
+    ["inaccessible-parent", 1, false],
+    ["group-lookup-error", 1, true],
+    ["child-failure", 42, false],
+    ["busy-account", 1, true],
+    ["failed-child-busy-account", 42, true],
+    ["scratch-drift", 1, true],
+    ["account-drift", 1, true],
+  ])("owns native cleanup account disposal: %s", (scenario, expectedStatus, retained) => {
+    const root = tempDirs.make("native-cleanup-account-");
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const prefix = join(root, "openclaw-npm12-prefix");
+    mkdirSync(prefix);
+    writeFileSync(join(prefix, "sentinel"), "candidate");
+    const statePath = join(root, "state.json");
+    const account = "occln_123456_1";
+    writeFileSync(statePath, JSON.stringify({ scenario, account, calls: [], runnerUid: 1001 }));
+    const mock = join(bin, "mock");
+    writeFileSync(
+      mock,
+      `#!${process.execPath}\n` +
+        String.raw`
+const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
+const file = process.env.ISOLATION_TEST_STATE;
+const state = JSON.parse(fs.readFileSync(file, "utf8"));
+const tool = path.basename(process.argv[1]), args = process.argv.slice(2);
+state.calls.push({tool,args});
+const done = (status = 0, output = "") => {fs.writeFileSync(file, JSON.stringify(state)); process.stdout.write(output); process.exit(status);};
+const record = () => state.account + ":x:" + (state.changedAccount ? 42425 : 42424) + ":42424::" + state.scratch + "/home:/usr/sbin/nologin";
+if (tool === "uname") done(0, state.scenario === "capability-refusal" ? "Darwin\n" : "Linux\n");
+if (tool === "grep") done();
+if (tool === "id") done(0,args[0] === "-u" ? "0\n" : "42424\n");
+if (tool === "realpath") done(0,fs.realpathSync(args[0]) + "\n");
+if (tool === "sha256sum") done(0,crypto.createHash("sha256").update(fs.readFileSync(args[0])).digest("hex") + "  " + args[0] + "\n");
+if (tool === "stat") {
+  const p = args.at(-1), s = fs.statSync(p), format = args[1];
+  const uid = p.endsWith("/openclaw-npm12-prefix") ? 1001 : 0;
+  const ino = s.ino + (state.drift ? 1 : 0);
+  done(0,format === "%u" ? uid + "\n" : format === "%d:%i" ? s.dev + ":" + ino + "\n" : s.dev + ":" + ino + ":0:" + (state.chgrp ? 42424 : 0) + "\n");
+}
+if (tool === "getent") {
+  if (args[0] === "group" && state.deletedUser && state.scenario === "group-lookup-error") done(3);
+  if (args[0] === "passwd") done(state.user || state.scenario === "existing-user" ? 0 : 2, state.user ? record() + "\n" : state.scenario === "existing-user" ? "existing\n" : "");
+  if (args[0] === "group") done(state.group || state.scenario === "existing-group" ? 0 : 2, state.group ? state.account + ":x:42424:\n" : state.scenario === "existing-group" ? "existing\n" : "");
+  if (args[0] === "shadow") done(state.user ? 0 : 2, state.account + ":!:::::::\n");
+  done(2);
+}
+if (tool === "useradd") {
+  state.user = state.group = true;
+  state.scratch = path.dirname(args[args.indexOf("--home-dir") + 1]);
+  done(state.scenario === "partial-creation" ? 1 : 0);
+}
+if (tool === "chgrp") {state.chgrp = true; done();}
+if (tool === "install") {
+  if (state.scenario === "staging-failure") done(1);
+  if (args[0] === "-d") {for (const p of args.slice(-2)) fs.mkdirSync(p);}
+  else fs.copyFileSync(args.at(-2), args.at(-1));
+  done();
+}
+if (tool === "runuser") {
+  if (args.includes("/bin/sh")) {
+    state.accessProbe = args;
+    done(state.scenario === "inaccessible-parent" ? 1 : 0);
+  }
+  state.childSettled = true;
+  state.runuserArgs = args;
+  state.drift = state.scenario === "scratch-drift";
+  state.changedAccount = state.scenario === "account-drift";
+  done(state.scenario.includes("child") ? 42 : 0);
+}
+if (tool === "userdel") {
+  if (args.length !== 1 || args[0] !== state.account) done(99);
+  if (state.scenario.includes("busy-account")) done(8);
+  state.user = false; state.deletedUser = true; done();
+}
+if (tool === "groupdel") {state.group = false; done();}
+if (tool === "rm") {
+  if (state.user || args.at(-1) !== state.scratch) done(99);
+  fs.rmSync(state.scratch,{recursive:true}); state.removed = true; done();
+}
+done(99);
+`,
+    );
+    chmodSync(mock, 0o755);
+    for (const tool of [
+      "uname",
+      "grep",
+      "id",
+      "realpath",
+      "sha256sum",
+      "stat",
+      "getent",
+      "useradd",
+      "chgrp",
+      "install",
+      "runuser",
+      "userdel",
+      "groupdel",
+      "rm",
+    ]) {
+      symlinkSync(mock, join(bin, tool));
+    }
+    const fixture = resolve("scripts/e2e/retained-runtime-cleanup-native.sh");
+    const result = spawnSync("/bin/bash", [fixture, "--isolated-account", prefix], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: {
+        PATH: bin + ":/usr/bin:/bin",
+        ISOLATION_TEST_STATE: statePath,
+        GITHUB_ACTIONS: "true",
+        RUNNER_OS: "Linux",
+        GITHUB_RUN_ID: "123456",
+        GITHUB_RUN_ATTEMPT: "1",
+        RUNNER_UID: "1001",
+        RUNNER_TEMP: root,
+        NODE_BINARY: process.execPath,
+        EXPECTED_FIXTURE_SHA256: createHash("sha256").update(readFileSync(fixture)).digest("hex"),
+        EXPECTED_PACKAGE_SOURCE_SHA: "a".repeat(40),
+        EXPECTED_PACKAGE_VERSION: "2026.9.8",
+      },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(expectedStatus);
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    expect(state.scratch ? existsSync(state.scratch) : false).toBe(retained);
+    if (state.runuserArgs) {
+      expect(state.runuserArgs.slice(0, 5)).toEqual(["-u", account, "--", "env", "-i"]);
+      const environment = state.runuserArgs.slice(5, state.runuserArgs.indexOf("/bin/bash"));
+      expect(environment.map((entry: string) => entry.split("=", 1)[0]).toSorted()).toEqual([
+        "EXPECTED_INSPECTOR_UID",
+        "EXPECTED_PACKAGE_SOURCE_SHA",
+        "EXPECTED_PACKAGE_VERSION",
+        "HOME",
+        "PATH",
+        "RUNNER_TEMP",
+      ]);
+      expect(state.childSettled).toBe(true);
+      expect(state.accessProbe).toEqual([
+        "-u",
+        account,
+        "--",
+        "env",
+        "-i",
+        "PATH=/usr/bin:/bin",
+        "/bin/sh",
+        "-c",
+        'test -x "$1" && test -r "$2" && test -x "$3"',
+        "--",
+        state.scratch,
+        join(state.scratch, "fixture.sh"),
+        realpathSync(process.execPath),
+      ]);
+    }
+    if (scenario === "inaccessible-parent") {
+      expect(state.accessProbe).toBeDefined();
+      expect(state.runuserArgs).toBeUndefined();
+      expect(state.removed).toBe(true);
+    }
+    if (scenario === "group-lookup-error") {
+      expect(state.calls.some((call: { tool: string }) => call.tool === "groupdel")).toBe(false);
+      expect(state.removed).not.toBe(true);
+    }
+    if (retained) {
+      expect(state.removed).not.toBe(true);
+    }
+    if (scenario === "success" || scenario === "child-failure") {
+      expect(state.user).toBe(false);
+      expect(state.group).toBe(false);
+      expect(state.removed).toBe(true);
+    }
+    expect(
+      state.calls
+        .filter((call: { tool: string }) => call.tool === "userdel")
+        .every((call: { args: string[] }) => call.args.length === 1),
+    ).toBe(true);
   });
 
   it.each([
