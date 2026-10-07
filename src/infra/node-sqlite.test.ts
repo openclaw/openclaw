@@ -22,16 +22,13 @@ async function loadNodeSqliteWithVersion(version: string, extensionLoadingOmitte
     this: DatabaseSync,
     sql,
   ) {
-    if (sql === "SELECT sqlite_version() AS version") {
-      return {
-        get: () => ({ version }),
-      } as unknown as StatementSync;
-    }
     if (
-      extensionLoadingOmitted !== undefined &&
-      sql === "SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted"
+      sql ===
+      "SELECT sqlite_version() AS version, sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted"
     ) {
-      return { get: () => ({ omitted: extensionLoadingOmitted }) } as unknown as StatementSync;
+      return {
+        get: () => ({ version, omitted: extensionLoadingOmitted ?? 0 }),
+      } as unknown as StatementSync;
     }
     return originalPrepare.call(this, sql);
   });
@@ -215,6 +212,7 @@ describe("node SQLite safety", () => {
         await loadNodeSqliteWithVersion(version);
       expect(() => requireNodeSqlite()).not.toThrow();
       const queries = prepare.mock.calls.length;
+      expect(queries).toBe(1);
       expect(supportsNodeSqliteJsonb()).toBe(jsonb);
       expect(supportsNodeSqliteJsonb()).toBe(jsonb);
       expect(prepare.mock.calls).toHaveLength(queries);
