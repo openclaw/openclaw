@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { bindMemoryProvider } from "./memory-provider-adapter.js";
 import type { MemoryProviderHandle } from "./memory-provider-types.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
+import { createPluginRecord } from "./status.test-helpers.js";
+import { createPluginToolFactoryContext } from "./tool-factory-context.js";
+import { bindPluginToolCallbacks } from "./tool-factory-runtime.js";
 
 vi.mock("../config/sessions/session-delivery-generation.js", async () => {
   const { fakeSessionGenerationModule } = await import("./memory-audience.test-support.js");
@@ -18,6 +23,7 @@ import {
   delegateMemoryAudience,
   isHostMemoryAudience,
   type MemoryAudienceResolution,
+  prepareMemoryAudienceRead,
   resolveMemoryAudienceFromEntry,
 } from "./memory-audience.js";
 import { fakeSessionOwner, type FakeSessionRow } from "./memory-audience.test-support.js";
@@ -405,3 +411,187 @@ describe("memory audience delegation", () => {
     ).rejects.toThrow("requires a session for the same agent");
   });
 });
+
+describe("memory audience publication readiness", () => {
+  it("observes a child publication when its parent rejects preparation", async () => {
+    const root = rootEntry();
+    const rootGrant = await grantAt(ROOT_KEY, root, true);
+    fakeSessionOwner.rows.set(CHILD_KEY, childEntry(root));
+    const grant = await delegateMemoryAudience(rootGrant.audience, {
+      sessionKey: CHILD_KEY,
+      storePath: STORE_PATH,
+    });
+    let rejectPublication!: (error: Error) => void;
+    fakeSessionOwner.publications.set(
+      CHILD_KEY,
+      new Promise<void>((_, reject) => {
+        rejectPublication = reject;
+      }),
+    );
+    rootGrant.release();
+    try {
+      expect(() => prepareMemoryAudienceRead(grant.audience)).toThrow("released by its owner");
+      rejectPublication(new Error("Synthetic rejected child publication"));
+      // Drain the rejection turn: Vitest must see no unhandled publication failure.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    } finally {
+      fakeSessionOwner.publications.delete(CHILD_KEY);
+      grant.release();
+    }
+  });
+
+  it.each(["metadata", "reset", "release", "abort"] as const)(
+    "joins a parent publication and handles %s before provider I/O",
+    async (change) => {
+      const root = rootEntry();
+      const rootGrant = await grantAt(ROOT_KEY, root, true);
+      const child = childEntry(root);
+      fakeSessionOwner.rows.set(CHILD_KEY, child);
+      const grant = await delegateMemoryAudience(rootGrant.audience, {
+        sessionKey: CHILD_KEY,
+        storePath: STORE_PATH,
+      });
+      let settle!: () => void;
+      const publication = new Promise<void>((resolve) => {
+        settle = resolve;
+      });
+      fakeSessionOwner.pendingKeys.add(ROOT_KEY);
+      fakeSessionOwner.publications.set(ROOT_KEY, publication);
+      const controller = new AbortController();
+      const native = provider();
+      const bound = bindMemoryProvider(native, "test", {
+        authority: {
+          kind: "session",
+          sessionKey: CHILD_KEY,
+          sandboxed: false,
+          audience: grant.audience,
+        },
+        assertCurrent: () => {},
+        signal: controller.signal,
+      });
+      const result = bound.health();
+      const observed = result.catch((error: unknown) => error);
+      try {
+        expect(native.health).not.toHaveBeenCalled();
+        expect(() => assertMemoryAudienceCurrent(grant.audience)).toThrow(
+          "currency is unavailable",
+        );
+        if (change === "reset") {
+          fakeSessionOwner.rows.set(ROOT_KEY, rootEntry());
+        }
+        if (change === "release") {
+          grant.release();
+        }
+        if (change === "abort") {
+          controller.abort();
+          expect(await observed).toBeInstanceOf(Error);
+        }
+        fakeSessionOwner.pendingKeys.delete(ROOT_KEY);
+        fakeSessionOwner.publications.delete(ROOT_KEY);
+        settle();
+        if (change === "metadata") {
+          await expect(result).resolves.toMatchObject({ status: "ready" });
+          expect(native.health).toHaveBeenCalledOnce();
+          expect(prepareMemoryAudienceRead(grant.audience)).toBeUndefined();
+        } else {
+          expect(await observed).toBeInstanceOf(Error);
+          expect(native.health).not.toHaveBeenCalled();
+        }
+      } finally {
+        fakeSessionOwner.pendingKeys.delete(ROOT_KEY);
+        fakeSessionOwner.publications.delete(ROOT_KEY);
+        settle();
+        await observed;
+        await bound.close();
+        grant.release();
+        rootGrant.release();
+      }
+    },
+  );
+});
+
+it.each(["memory", "other", "reset", "abort"] as const)(
+  "prepares %s tool execution at the host boundary",
+  async (kind) => {
+    const grant = await grantAt(ROOT_KEY, rootEntry(), true);
+    const builder = createTestPluginRegistry(createPluginRuntimeMock());
+    const record = createPluginRecord({ id: "probe", contracts: { tools: ["probe"] } });
+    builder.registry.plugins.push(record);
+    builder.registry.memoryCapabilities.push({
+      pluginId: kind === "other" ? "other" : "probe",
+      capability: {},
+      memorySlotSelected: true,
+    });
+    builder
+      .createApi(record, { config: {}, registrationMode: "full" })
+      .registerTool(() => null, { name: "probe" });
+    const entry = builder.registry.tools[0]!;
+    const context = createPluginToolFactoryContext({
+      entry,
+      registry: builder.registry,
+      context: {
+        sessionKey: ROOT_KEY,
+        memoryAudience: grant.audience,
+        assertMemoryAudienceCurrent: () => assertMemoryAudienceCurrent(grant.audience),
+      },
+    });
+    const execute = vi.fn(async () => ({ content: [], details: {} }));
+    const tool = bindPluginToolCallbacks(
+      entry,
+      builder.registry,
+      {
+        name: "probe",
+        label: "probe",
+        description: "probe",
+        parameters: { type: "object", properties: {} },
+        execute,
+      },
+      context.assertInvocationCurrent,
+      context.memoryAudience,
+    );
+    let settle!: () => void;
+    fakeSessionOwner.publications.set(
+      ROOT_KEY,
+      new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+    );
+    fakeSessionOwner.pendingKeys.add(ROOT_KEY);
+    const controller = new AbortController();
+    const result = tool.execute("call", {}, controller.signal);
+    const observed = result.catch((error: unknown) => error);
+    try {
+      if (kind === "other") {
+        await result;
+        expect(execute).toHaveBeenCalledOnce();
+      } else {
+        expect(execute).not.toHaveBeenCalled();
+      }
+      if (kind === "reset") {
+        fakeSessionOwner.rows.set(ROOT_KEY, rootEntry());
+      }
+      if (kind === "abort") {
+        controller.abort();
+        expect(await observed).toBeInstanceOf(Error);
+      }
+      fakeSessionOwner.pendingKeys.delete(ROOT_KEY);
+      fakeSessionOwner.publications.delete(ROOT_KEY);
+      settle();
+      if (kind === "reset" || kind === "abort") {
+        expect(await observed).toBeInstanceOf(Error);
+        expect(execute).not.toHaveBeenCalled();
+      } else {
+        await result;
+        expect(execute).toHaveBeenCalledOnce();
+      }
+    } finally {
+      fakeSessionOwner.pendingKeys.delete(ROOT_KEY);
+      fakeSessionOwner.publications.delete(ROOT_KEY);
+      settle();
+      await observed;
+      grant.release();
+    }
+  },
+);

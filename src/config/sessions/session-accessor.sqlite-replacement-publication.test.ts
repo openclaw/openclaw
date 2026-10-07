@@ -134,6 +134,10 @@ it.each([
       category: "before",
     };
     writeSessionEntry(database, sessionKey, original);
+    addSessionMember(
+      { agentId: "main", storePath: database.path, sessionKey },
+      { identityId: "member", addedBy: "owner", addedAt: 1 },
+    );
     const identity = readOpenClawAgentDatabaseIdentity(database).identity;
     if (typeof identity !== "string") {
       throw new Error("Expected durable fixture");
@@ -594,7 +598,7 @@ it.each(["alias membership", "metadata only"] as const)(
 );
 
 it.each([false, true])(
-  "invalidates rehomed membership while preserving newer native metadata (%s)",
+  "publishes rehomed membership while preserving newer native metadata (%s)",
   async (newerNative) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -655,7 +659,14 @@ it.each([false, true])(
         expect(
           listSessionMembersInDatabase(database, sessionKey).map((member) => member.identityId),
         ).toEqual(["alias-member", "target-member"]);
-        expect(sharing.readCurrent()).toBeUndefined();
+        expect(sharing.readCurrent()).toEqual(
+          newerNative
+            ? undefined
+            : {
+                entry: projectSessionSharingEntry(entry),
+                membership: new Set(["alias-member", "target-member"]),
+              },
+        );
       } finally {
         delivery.afterResult = undefined;
         sharing.release();

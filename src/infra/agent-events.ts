@@ -213,12 +213,17 @@ export function isAgentEventLifecycleGenerationCurrent(lifecycleGeneration: stri
 export function registerAgentEventLifecycleRotationHandler(
   key: string,
   handler: (lifecycleGeneration: string) => void,
-): void {
+): () => void {
   const state = getAgentEventState();
   const handlers =
     state.lifecycleRotationHandlers ??
     (state.lifecycleRotationHandlers = new Map<string, (lifecycleGeneration: string) => void>());
   handlers.set(key, handler);
+  return () => {
+    if (handlers.get(key) === handler) {
+      handlers.delete(key);
+    }
+  };
 }
 
 /** Rejects work that no longer belongs to the active gateway lifecycle. */

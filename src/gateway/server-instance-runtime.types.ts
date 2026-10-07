@@ -51,6 +51,8 @@ export type GatewayRecoveryTypingParams = {
 };
 
 export type GatewayRecoveryRuntime = {
+  /** Healthy boots are ready synchronously; safe mode returns its owner's pause deadline. */
+  prepareRestartRecovery: (signal?: AbortSignal) => Promise<number | undefined> | undefined;
   dispatchSessionMethod: <T = unknown>(
     method: GatewayRecoverySessionMethod,
     params: unknown,

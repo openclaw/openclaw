@@ -13,7 +13,6 @@ import { loadTranscriptEvents } from "../config/sessions/session-transcript-even
 import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
 import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import { hasSessionTranscriptMessage } from "../config/sessions/session-transcript-message-presence.js";
-import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import {
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
@@ -572,7 +571,7 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
     ).rejects.toThrow("Incognito session grants must remain synchronous");
   });
 
-  it.each(["unchanged", "revoke", "abort", "write", "release"] as const)(
+  it.each(["unchanged", "revoke", "abort", "append", "release"] as const)(
     "revalidates async model context consumers after %s and joins their lifetime",
     async (mode) => {
       const { actor, env } = fixture;
@@ -621,25 +620,22 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
         admission.signal,
       );
       const settled =
-        mode === "unchanged"
-          ? expect(work).resolves.toEqual(
-              expect.arrayContaining([
-                expect.objectContaining({
-                  message: expect.objectContaining({
-                    content: [{ type: "text", text: "private context before consumer" }],
-                  }),
-                }),
-              ]),
-            )
-          : mode === "write"
-            ? expect(work).rejects.toBeInstanceOf(SessionTranscriptReadFenceError)
-            : expect(work).rejects.toThrow(
-                mode === "release"
-                  ? "reference is released"
-                  : mode === "abort"
-                    ? "context admission revoked"
-                    : "context grant revoked",
-              );
+        mode === "unchanged" || mode === "append"
+          ? expect(work).resolves.toMatchObject([
+              { type: "session" },
+              {
+                message: {
+                  content: [{ type: "text", text: "private context before consumer" }],
+                },
+              },
+            ])
+          : expect(work).rejects.toThrow(
+              mode === "release"
+                ? "reference is released"
+                : mode === "abort"
+                  ? "context admission revoked"
+                  : "context grant revoked",
+            );
       let releasing: Promise<void> | undefined;
       let released = false;
       try {
@@ -652,7 +648,7 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
           revoked = true;
         } else if (mode === "abort") {
           admission.abort(new Error("context admission revoked"));
-        } else if (mode === "write") {
+        } else if (mode === "append") {
           await append(session, "context changed while consumer awaited");
         } else if (mode === "release") {
           releasing = borrowed.release().then(() => {
