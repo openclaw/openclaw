@@ -9,6 +9,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveXaiCatalogEntry } from "../model-definitions.js";
 import { isXaiGrokReleaseAtLeast } from "../model-id.js";
 import { applyXaiRuntimeModelCompat } from "../runtime-model-compat.js";
+import type { XaiSearchNetworkPolicy } from "./tool-config-shared.js";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
 const XAI_CITATION_MAX_COUNT = 20;
@@ -94,6 +95,7 @@ export async function requestXaiResponsesTool<T>(
   params: Parameters<typeof buildXaiResponsesToolBody>[0] & {
     apiKey: string;
     endpoint: string;
+    networkPolicy?: XaiSearchNetworkPolicy;
     timeoutSeconds: number;
     errorLabel: string;
     signal?: AbortSignal;
@@ -103,6 +105,7 @@ export async function requestXaiResponsesTool<T>(
   return await postTrustedWebToolsJson(
     {
       url: params.endpoint,
+      ...(params.networkPolicy === "selfHosted" ? { selfHostedBaseUrl: params.endpoint } : {}),
       timeoutSeconds: params.timeoutSeconds,
       apiKey: params.apiKey,
       ...(params.signal ? { signal: params.signal } : {}),

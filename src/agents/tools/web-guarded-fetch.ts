@@ -7,7 +7,9 @@ import {
   withTrustedEnvProxyGuardedFetchMode,
 } from "../../infra/net/fetch-guard.js";
 import {
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
+  SsrFBlockedError,
   type SsrFPolicy,
 } from "../../infra/net/ssrf.js";
 import { readPositiveIntegerParam } from "./common.js";
@@ -80,6 +82,32 @@ export async function withTrustedWebToolsEndpoint<T>(
       ...params,
       policy: trustedPolicy,
       useEnvProxy: true,
+    },
+    run,
+  );
+}
+
+/** Trusts one configured origin without delegating DNS or redirect trust to a proxy. */
+export async function withOriginScopedSelfHostedWebToolsEndpoint<T>(
+  params: WebToolEndpointFetchOptions & { selfHostedBaseUrl: string },
+  run: (result: { response: Response; finalUrl: string }) => Promise<T>,
+): Promise<T> {
+  const { selfHostedBaseUrl, ...options } = params;
+  const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(selfHostedBaseUrl);
+  if (!policy || new URL(options.url).origin !== new URL(selfHostedBaseUrl).origin) {
+    throw new SsrFBlockedError("Blocked: request leaves the configured endpoint origin");
+  }
+  return await withWebToolsNetworkGuard(
+    {
+      ...options,
+      policy,
+      requireSameOriginRedirects: true,
+      pinDns: true,
+      // Explicit direct routing prevents ambient/managed proxies from resolving
+      // the trusted hostname again instead of using the validated DNS snapshot.
+      useEnvProxy: true,
+      dispatcherPolicy: { mode: "direct" },
+      resolveDispatcherPolicy: undefined,
     },
     run,
   );

@@ -434,6 +434,11 @@ metadata destinations remain blocked. Codex Hosted Search is the exception:
 its bounded worker delegates network access to Codex app-server's hosted
 `web_search` tool.
 
+Grok `web_search` and `x_search` can explicitly trust a private compatible proxy
+with plugin-local `networkPolicy: "selfHosted"`. This opt-in is scoped to the
+configured base URL's exact origin and blocks cross-origin redirects; the
+default remains `"strict"`. See [Grok base URL overrides](/tools/grok-search#base-url-overrides).
+
 This automatic allowance does not apply to arbitrary `web_fetch` URLs. For
 `web_fetch`, enable `tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange` and
 `tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange` explicitly only when your

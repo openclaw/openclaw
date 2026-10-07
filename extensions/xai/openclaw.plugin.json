@@ -237,6 +237,10 @@
       "label": "Inline Citations",
       "help": "Include inline markdown citations in Grok responses."
     },
+    "webSearch.networkPolicy": {
+      "label": "Grok Search Network Policy",
+      "help": "Defaults to strict. selfHosted explicitly trusts only the configured base URL origin for private-network access, with pinned DNS and same-origin redirects."
+    },
     "codeExecution.enabled": {
       "label": "Enable Code Execution",
       "help": "Expose code_execution on active xAI models; true opts in when the active provider is known non-xAI, false disables, and missing provider fails closed. Requires xAI auth; xAI bills $5/1,000 calls plus model tokens."
@@ -256,6 +260,10 @@
     "xSearch.inlineCitations": {
       "label": "X Search Inline Citations",
       "help": "Keep inline markdown citations from xAI in x_search responses when available."
+    },
+    "xSearch.networkPolicy": {
+      "label": "X Search Network Policy",
+      "help": "Defaults to strict, independently of webSearch.networkPolicy. selfHosted trusts only the effective base URL origin, with pinned DNS and same-origin redirects."
     },
     "xSearch.maxTurns": {
       "label": "X Search Max Turns",
@@ -371,6 +379,11 @@
           },
           "inlineCitations": {
             "type": "boolean"
+          },
+          "networkPolicy": {
+            "type": "string",
+            "enum": ["strict", "selfHosted"],
+            "default": "strict"
           }
         }
       },
@@ -392,6 +405,11 @@
           },
           "maxTurns": {
             "type": "number"
+          },
+          "networkPolicy": {
+            "type": "string",
+            "enum": ["strict", "selfHosted"],
+            "default": "strict"
           },
           "timeoutSeconds": {
             "type": "number"
