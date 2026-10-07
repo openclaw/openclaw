@@ -1236,7 +1236,6 @@ jobs:
         id: defining_workflow
         env:
           JOB_CONTEXT: ${{ toJSON(job) }}
-          RESOLVED_TOOLING_SHA: ${{ needs.resolve_package.outputs.tooling_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1247,14 +1246,28 @@ jobs:
           const job = JSON.parse(process.env.JOB_CONTEXT ?? "null");
           if (job === null || typeof job !== "object" || Array.isArray(job) ||
               job.workflow_repository !== "openclaw/openclaw" ||
-              typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha) ||
-              job.workflow_sha !== process.env.RESOLVED_TOOLING_SHA) {
-            throw new Error("Package tooling must match the workflow defining this job.");
+              typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
+            throw new Error("Package tooling must identify the official defining workflow.");
           }
           if (!process.env.GITHUB_OUTPUT) {
             throw new Error("GITHUB_OUTPUT is required");
           }
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `workflow_sha=${job.workflow_sha}\n`);
+          NODE
+
+      - name: Verify package resolver tooling consistency
+        env:
+          DEFINING_WORKFLOW_SHA: ${{ steps.defining_workflow.outputs.workflow_sha }}
+          RESOLVED_TOOLING_SHA: ${{ needs.resolve_package.outputs.tooling_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const definingSha = process.env.DEFINING_WORKFLOW_SHA;
+          if (!/^[0-9a-f]{40}$/u.test(definingSha ?? "") ||
+              definingSha !== process.env.RESOLVED_TOOLING_SHA) {
+            throw new Error("Package resolver tooling differs from the defining workflow.");
+          }
           NODE
 
       - name: Checkout package workflow ref

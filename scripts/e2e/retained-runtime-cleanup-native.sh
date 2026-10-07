@@ -18,7 +18,7 @@ run_isolated_account() {
   for tool in useradd runuser userdel groupdel getent install stat realpath sha256sum python3; do
     command -v "$tool" >/dev/null || fail "missing isolation capability: $tool"
   done
-  local account="occln_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}" prefix scratch scratch_identity
+  local account="occln_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}" prefix scratch scratch_identity system_tmp
   local account_created=false creation_uncertain=false runuser_settled=true uid="" gid="" passwd_record="" group_record=""
   local fixture_source prefix_identity node_path node_dir result
   prefix="$(realpath "$1")"
@@ -37,13 +37,15 @@ run_isolated_account() {
       [[ "$status" == 2 ]] || fail "account lookup failed"
     fi
   done
-  scratch="$(mktemp -d "$RUNNER_TEMP/openclaw-native-account-XXXXXX")"
+  system_tmp="$(realpath /tmp)"
+  [[ -d "$system_tmp" && ! -L "$system_tmp" && "$(stat -c '%u:%a' "$system_tmp")" == '0:1777' ]] || fail "system temp is not root-owned, sticky and world-traversable"
+  scratch="$(mktemp -d "$system_tmp/openclaw-native-account-XXXXXX")"
   scratch_identity="$(stat -c '%d:%i:%u:%g' "$scratch")"
   # The EXIT trap invokes this while the account's local state remains in scope.
   # shellcheck disable=SC2329
   cleanup_account() {
     local original=$? cleanup_result=0 current lookup_status
-    trap - EXIT
+    trap - ERR EXIT
     if [[ "$creation_uncertain" == true || "$runuser_settled" != true || -L "$scratch" || "$(stat -c '%d:%i:%u:%g' "$scratch" 2>/dev/null || true)" != "$scratch_identity" ]]; then
       echo "native-cleanup isolation: unresolved ownership; account and scratch retained" >&2
       exit "$((original == 0 ? 1 : original))"
@@ -78,8 +80,11 @@ run_isolated_account() {
     exit "$cleanup_result"
   }
   trap cleanup_account EXIT
+  # Exit before Bash 5 unwinds the ownership locals on an unhandled command failure.
+  trap 'exit $?' ERR
   trap 'exit 130' INT
   trap 'exit 143' TERM
+  [[ "$(stat -c %d "$prefix")" == "$(stat -c %d "$scratch")" ]] || fail "system temp and task prefix are on different filesystems"
   creation_uncertain=true
   useradd --system --user-group --no-create-home --home-dir "$scratch/home" \
     --shell /usr/sbin/nologin --password '!' "$account"
@@ -106,7 +111,14 @@ run_isolated_account() {
   # Positional parameters belong to the isolated child shell, not this root wrapper.
   # shellcheck disable=SC2016
   if runuser -u "$account" -- env -i PATH=/usr/bin:/bin \
-    /bin/sh -c 'test -x "$1" && test -r "$2" && test -x "$3"' \
+    /bin/sh -c '
+      test -x "$1" || { echo "native-cleanup access: scratch-traversal failed" >&2; exit 1; }
+      echo "native-cleanup access: scratch-traversal passed"
+      test -r "$2" || { echo "native-cleanup access: fixture-readability failed" >&2; exit 1; }
+      echo "native-cleanup access: fixture-readability passed"
+      test -x "$3" || { echo "native-cleanup access: selected-runtime-executability failed" >&2; exit 1; }
+      echo "native-cleanup access: selected-runtime-executability passed"
+    ' \
     -- "$scratch" "$scratch/fixture.sh" "$node_path"; then
     runuser_settled=true
   else
