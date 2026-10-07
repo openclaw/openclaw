@@ -36,7 +36,7 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
       throw gatewayMocks.constructorError;
     }
     if (gatewayMocks.actualGatewayClient) {
-      const client = new gatewayMocks.actualGatewayClient(params);
+      const client = new gatewayMocks.actualGatewayClient({ ...params, deviceIdentity: null });
       gatewayMocks.actualClients.push(client);
       return client;
     }
