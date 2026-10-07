@@ -12,7 +12,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolvePreparedRunAdmission } from "../agents/admitted-run-context.js";
 import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.policy.js";
-import { bindCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -29,6 +28,7 @@ import {
 } from "./delegated-execution-ownership.js";
 import { DelegatedExecutionDeniedError } from "./delegated-execution-run-admission.js";
 import { mintTrustedHumanFallbackAuthority } from "./trusted-human-fallback-authority.js";
+import { createTrustedHumanIngressFixture } from "./trusted-human-fallback-authority.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -82,12 +82,15 @@ function seedLock(params: { delegationRef: string; lineageRef: string }) {
   return openRegistry();
 }
 
-function mintFallback(delegationRef: string) {
-  const ingress = {};
-  bindCommandOwnerAuthority(ingress, { isCurrent: () => true });
+async function mintFallback(delegationRef: string) {
+  const fixture = await createTrustedHumanIngressFixture();
+  const admissionEvidence = fixture.evidence();
+  if (!admissionEvidence) {
+    throw new Error("fixture did not bind channel admission evidence");
+  }
   return mintTrustedHumanFallbackAuthority({
-    ingressContext: ingress,
-    ingress: { ingressRef: "channel:test", ownerRef: "owner:test" },
+    ingressContext: fixture.context,
+    admissionEvidence,
     delegationRef,
     intent: "fallback",
     authorityRef: "authority:real-path",
@@ -162,7 +165,7 @@ describe("real Host path — agent execution admission", () => {
 
   it("allows the exact lineage once a trusted human fallback is authorized", async () => {
     seedLock({ delegationRef: "delegation:rp-6", lineageRef: "lineage:rp-6" });
-    const authority = mintFallback("delegation:rp-6");
+    const authority = await mintFallback("delegation:rp-6");
     authorizeTrustedHumanFallback({
       delegationRef: "delegation:rp-6",
       authority,
@@ -182,7 +185,7 @@ describe("real Host path — agent execution admission", () => {
     seedLock({ delegationRef: "delegation:rp-9", lineageRef: "lineage:rp-9" });
     authorizeTrustedHumanFallback({
       delegationRef: "delegation:rp-9",
-      authority: mintFallback("delegation:rp-9"),
+      authority: await mintFallback("delegation:rp-9"),
       options: stateOptions(),
     });
     // FALLBACK_AUTHORIZED alone is not sufficient: the execution must carry the

@@ -1,14 +1,23 @@
+import {
+  captureCommandOwnerAssertion,
+  getCommandOwnerAuthority,
+} from "../auto-reply/command-owner-authority.js";
 /**
  * Trusted human fallback authority for delegated execution ownership.
  *
- * Authority is a Host capability, not a claim. It is minted only from an
- * ingress context that carries a live CommandOwnerAuthority assertion
- * (`captureCommandOwnerAssertion`), is branded with a module-private Symbol,
- * and re-checks liveness on every use. Model output, tool arguments, and
- * plugin-supplied objects cannot produce or replay it.
+ * Authority is a Host capability, not a claim. It is minted only from a Host
+ * ingress context that carries (a) an opaque ChannelAdmissionEvidence bound to
+ * that exact context by the Host ingress runtime and (b) a live
+ * CommandOwnerAuthority assertion. The capability is branded with a
+ * module-private Symbol and re-checks both proofs on every use. Model output,
+ * tool arguments, plugin-supplied objects, and caller-supplied identifier
+ * strings cannot produce or replay it.
  */
-import { captureCommandOwnerAssertion } from "../auto-reply/command-owner-authority.js";
-import { getCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
+import {
+  compareChannelAdmissionParticipants,
+  readChannelContextAdmissionEvidence,
+  type ChannelAdmissionEvidence,
+} from "../channels/message-access/admission-evidence.js";
 
 export const TRUSTED_HUMAN_FALLBACK_INTENTS = ["fallback", "revoke"] as const;
 export type TrustedHumanFallbackIntent = (typeof TRUSTED_HUMAN_FALLBACK_INTENTS)[number];
@@ -19,8 +28,6 @@ type AuthorityInner = Readonly<{
   delegationRef: string;
   intent: TrustedHumanFallbackIntent;
   authorityRef: string;
-  ownerRef: string;
-  ingressRef: string;
   assertCurrent: () => void;
 }>;
 
@@ -42,8 +49,6 @@ class TrustedHumanFallbackCapability {
   readonly delegationRef = (): string => this.#inner.delegationRef;
   readonly intent = (): TrustedHumanFallbackIntent => this.#inner.intent;
   readonly authorityRef = (): string => this.#inner.authorityRef;
-  readonly ownerRef = (): string => this.#inner.ownerRef;
-  readonly ingressRef = (): string => this.#inner.ingressRef;
   readonly assertCurrent = (): void => this.#inner.assertCurrent();
 }
 
@@ -65,41 +70,59 @@ export type TrustedHumanFallbackAuthority = Readonly<{
   assertCurrent: () => void;
 }>;
 
-export type TrustedHumanIngress = Readonly<{
-  ingressRef: string;
-  ownerRef: string;
-}>;
+/** The exact ingress context that carries live owner authority and evidence. */
+export type TrustedHumanIngressContext = object;
 
 /**
- * Mints authority only while the Host ingress still holds a live command-owner
- * assertion. A caller without that capability cannot mint anything.
+ * Mints authority only from a Host ingress context that carries both a live
+ * command-owner authority and the opaque channel admission evidence bound to
+ * that same context. Caller-supplied identifier strings are never accepted in
+ * place of that evidence.
  */
 export function mintTrustedHumanFallbackAuthority(params: {
-  ingressContext: object;
-  ingress: TrustedHumanIngress;
+  ingressContext: TrustedHumanIngressContext;
+  /** Opaque Host-derived evidence; structurally identical copies are refused. */
+  admissionEvidence: ChannelAdmissionEvidence;
   delegationRef: string;
   intent: TrustedHumanFallbackIntent;
   authorityRef: string;
 }): TrustedHumanFallbackAuthority {
+  const boundEvidence = readChannelContextAdmissionEvidence(params.ingressContext);
+  if (boundEvidence === undefined || boundEvidence !== params.admissionEvidence) {
+    throw new TrustedHumanFallbackAuthorityError(
+      "missing-host-authority",
+      "trusted human fallback requires Host channel admission evidence bound to this ingress context",
+    );
+  }
+  if (compareChannelAdmissionParticipants([boundEvidence]) !== "same") {
+    throw new TrustedHumanFallbackAuthorityError(
+      "missing-host-authority",
+      "trusted human fallback requires valid Host ingress evidence",
+    );
+  }
   if (!getCommandOwnerAuthority(params.ingressContext)) {
     throw new TrustedHumanFallbackAuthorityError(
       "missing-host-authority",
       "trusted human fallback requires a live Host command-owner authority",
     );
   }
-  const assertCurrent = captureCommandOwnerAssertion(params.ingressContext);
-  if (!assertCurrent) {
+  const assertOwnerCurrent = captureCommandOwnerAssertion(params.ingressContext);
+  if (!assertOwnerCurrent) {
     throw new TrustedHumanFallbackAuthorityError(
       "missing-host-authority",
       "trusted human fallback requires a live Host command-owner authority",
     );
   }
+  const assertCurrent = (): void => {
+    assertOwnerCurrent();
+    if (compareChannelAdmissionParticipants([boundEvidence]) !== "same") {
+      throw new Error("Host ingress evidence is no longer current; send a new request.");
+    }
+  };
   const capability = new TrustedHumanFallbackCapability({
     delegationRef: params.delegationRef,
     intent: params.intent,
     authorityRef: params.authorityRef,
-    ownerRef: params.ingress.ownerRef,
-    ingressRef: params.ingress.ingressRef,
     assertCurrent,
   });
   const branded: Record<symbol, unknown> = {};

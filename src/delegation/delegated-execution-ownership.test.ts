@@ -9,7 +9,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { bindCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -42,6 +41,7 @@ import {
   mintTrustedHumanFallbackAuthority,
   requireTrustedHumanFallbackAuthority,
 } from "./trusted-human-fallback-authority.js";
+import { createTrustedHumanIngressFixture } from "./trusted-human-fallback-authority.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -63,23 +63,27 @@ function openRegistry(): { db: DatabaseSync } {
   return { db: opened.db };
 }
 
-/** A Host ingress that still holds a live command-owner capability. */
-function hostIngress(options: { current?: () => boolean } = {}) {
-  const context = {};
-  const current = options.current ?? (() => true);
-  bindCommandOwnerAuthority(context, { isCurrent: current });
-  return context;
-}
+type IngressFixture = Awaited<ReturnType<typeof createTrustedHumanIngressFixture>>;
 
-function mintFallback(params: {
+/**
+ * Mints from a real Host ingress context: the production resolution path binds
+ * opaque channel admission evidence and a live command-owner authority to the
+ * same context. Caller-supplied identifier strings are never accepted.
+ */
+async function mintFallback(params: {
   delegationRef: string;
   intent: "fallback" | "revoke";
-  ingressContext?: object;
+  fixture?: IngressFixture;
   authorityRef?: string;
 }) {
+  const fixture = params.fixture ?? (await createTrustedHumanIngressFixture());
+  const admissionEvidence = fixture.evidence();
+  if (!admissionEvidence) {
+    throw new Error("fixture did not bind channel admission evidence");
+  }
   return mintTrustedHumanFallbackAuthority({
-    ingressContext: params.ingressContext ?? hostIngress(),
-    ingress: { ingressRef: "channel:test", ownerRef: "owner:test" },
+    ingressContext: fixture.context,
+    admissionEvidence,
     delegationRef: params.delegationRef,
     intent: params.intent,
     authorityRef: params.authorityRef ?? "authority:test",
@@ -238,9 +242,9 @@ describe("delegated execution ownership — execution guards", () => {
 });
 
 describe("delegated execution ownership — trusted human authority", () => {
-  it("accepts an exact trusted-human fallback bound to this delegation_ref", () => {
+  it("accepts an exact trusted-human fallback bound to this delegation_ref", async () => {
     acquire({ delegationRef: "delegation:20" });
-    const authority = mintFallback({ delegationRef: "delegation:20", intent: "fallback" });
+    const authority = await mintFallback({ delegationRef: "delegation:20", intent: "fallback" });
     const record = authorizeTrustedHumanFallback({
       delegationRef: "delegation:20",
       authority,
@@ -258,9 +262,9 @@ describe("delegated execution ownership — trusted human authority", () => {
     expect(admitAgentExecution({ db, delegationRef: "delegation:20" }).allowed).toBe(false);
   });
 
-  it("accepts an exact trusted-human revoke and releases the lock", () => {
+  it("accepts an exact trusted-human revoke and releases the lock", async () => {
     acquire({ delegationRef: "delegation:21" });
-    const authority = mintFallback({ delegationRef: "delegation:21", intent: "revoke" });
+    const authority = await mintFallback({ delegationRef: "delegation:21", intent: "revoke" });
     const record = revokeDelegatedExecutionOwnership({
       delegationRef: "delegation:21",
       authority,
@@ -301,10 +305,10 @@ describe("delegated execution ownership — trusted human authority", () => {
     ).toThrow(/Host capability/);
   });
 
-  it("refuses authority bound to a different delegation_ref", () => {
+  it("refuses authority bound to a different delegation_ref", async () => {
     acquire({ delegationRef: "delegation:24" });
     acquire({ delegationRef: "delegation:25" });
-    const authority = mintFallback({ delegationRef: "delegation:24", intent: "fallback" });
+    const authority = await mintFallback({ delegationRef: "delegation:24", intent: "fallback" });
     expect(() =>
       authorizeTrustedHumanFallback({
         delegationRef: "delegation:25",
@@ -314,15 +318,15 @@ describe("delegated execution ownership — trusted human authority", () => {
     ).toThrow(/does not bind this delegation_ref/);
   });
 
-  it("refuses stale human authority that is no longer current", () => {
+  it("refuses stale human authority that is no longer current", async () => {
     acquire({ delegationRef: "delegation:26" });
-    let current = true;
-    const authority = mintFallback({
+    const fixture = await createTrustedHumanIngressFixture();
+    const authority = await mintFallback({
       delegationRef: "delegation:26",
       intent: "fallback",
-      ingressContext: hostIngress({ current: () => current }),
+      fixture,
     });
-    current = false;
+    fixture.retire();
     expect(() =>
       authorizeTrustedHumanFallback({
         delegationRef: "delegation:26",
@@ -332,10 +336,19 @@ describe("delegated execution ownership — trusted human authority", () => {
     ).toThrow(/no longer current|changed/);
   });
 
-  it("refuses to mint authority without a Host capability", () => {
+  it("refuses to mint authority without Host ingress evidence and owner authority", async () => {
+    const fixture = await createTrustedHumanIngressFixture();
+    const admissionEvidence = fixture.evidence();
+    expect(admissionEvidence).toBeDefined();
     expect(() =>
-      mintFallback({ delegationRef: "delegation:27", intent: "fallback", ingressContext: {} }),
-    ).toThrow(/live Host command-owner authority/);
+      mintTrustedHumanFallbackAuthority({
+        ingressContext: {},
+        admissionEvidence: admissionEvidence!,
+        delegationRef: "delegation:27",
+        intent: "fallback",
+        authorityRef: "authority:test",
+      }),
+    ).toThrow(/bound to this ingress context/);
     expect(() =>
       requireTrustedHumanFallbackAuthority({
         authority: { delegationRef: "delegation:27", intent: "fallback" },
@@ -415,12 +428,13 @@ describe("delegated execution ownership — release discipline", () => {
 });
 
 describe("delegated execution ownership — concurrency (CAS)", () => {
-  it("refuses a stale transition as a typed conflict", () => {
+  it("refuses a stale transition as a typed conflict", async () => {
     acquire({ delegationRef: "delegation:40" });
+    const authority = await mintFallback({ delegationRef: "delegation:40", intent: "fallback" });
     expect(() =>
       authorizeTrustedHumanFallback({
         delegationRef: "delegation:40",
-        authority: mintFallback({ delegationRef: "delegation:40", intent: "fallback" }),
+        authority,
         options: stateOptions(),
       }),
     ).not.toThrow();
