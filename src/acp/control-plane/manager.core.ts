@@ -270,6 +270,8 @@ export class AcpSessionManager {
     agentId?: string;
     key: string;
     value: string;
+    /** Automatic replay of an inherited thinking level the adapter may not represent. */
+    tolerateRejectedThinking?: boolean;
   }): Promise<AcpSessionRuntimeOptions> {
     const target = resolveAcpSessionTarget(params);
     const { key, value } = validateRuntimeConfigOptionInput(params.key, params.value);
@@ -281,6 +283,7 @@ export class AcpSessionManager {
         ...target,
         key,
         value,
+        ...(params.tolerateRejectedThinking ? { tolerateRejectedThinking: true } : {}),
         ...this.runtimeOptionCommandServices(isCurrentActor),
       });
     });

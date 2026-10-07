@@ -93,7 +93,7 @@ function isUnsupportedOptionalTimeoutConfigRejection(key: string, error: unknown
   );
 }
 
-function isRejectedThinkingConfigOption(key: string, error: unknown): boolean {
+export function isRejectedThinkingConfigOption(key: string, error: unknown): boolean {
   if (!isThinkingConfigKey(key)) {
     return false;
   }
