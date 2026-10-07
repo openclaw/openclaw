@@ -3,6 +3,12 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import {
+  establishDelegatedExecutionOwnership,
+  type DelegateOwnerHandoff,
+} from "../../delegation/delegated-execution-establishment.js";
+import { runWithDelegatedExecutionLineage } from "../../delegation/delegated-execution-scope.js";
+import { readHostDelegationIntent } from "../../delegation/host-delegation-intent.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
@@ -561,12 +567,28 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     };
   };
 
-  // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
-  if (
+  // Host delegation gate.
+  //
+  // A Host-minted delegation binding means the Host decided this turn belongs
+  // to a delegate owner, independently of whether that owner's plugin/handler
+  // is currently loaded. The Host establishes delegated ownership —
+  // delegation_ref, canonical lineage_ref, durable DELEGATED_LOCKED, and the
+  // Host execution context binding — BEFORE it attempts the owner handoff. A
+  // missing plugin, a missing handler, or a throwing delegate therefore keeps
+  // the lock and cannot reopen ordinary execution.
+  const hostDelegationIntent = readHostDelegationIntent(params.hostDelegationIntent);
+  const canAttemptBeforeDispatchOwner =
     state.allowInboundHandlers &&
     runtimeTakeoverHooksAllowed(params.replyOptions?.admittedSessionSettings) &&
-    hookRunner?.hasHooks("before_dispatch")
-  ) {
+    hookRunner?.hasHooks("before_dispatch") === true;
+  let beforeDispatchHandled: { text: string | undefined } | undefined;
+  const attemptBeforeDispatchOwnerHandoff = async (): Promise<DelegateOwnerHandoff> => {
+    if (!canAttemptBeforeDispatchOwner || !hookRunner) {
+      return {
+        kind: "owner-unavailable",
+        reason: "no before_dispatch owner handler is available",
+      };
+    }
     // This outer lookup key is resolved from the routed context; fields inside
     // sessionStoreEntry.entry cannot redirect hook or requester lineage.
     const beforeDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
@@ -623,31 +645,72 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       }),
     );
     if (beforeDispatchResult?.handled) {
-      const text = beforeDispatchResult.text;
-      let queuedFinal = false;
-      let routedFinalCount = 0;
-      if (text && !state.suppressDelivery) {
-        const handledReply = await sendFinalPayload(
-          { text },
-          {
-            abortSignal: getPreDispatchAbortSignal(),
-            deliveryId: "before-dispatch",
-          },
-        );
-        queuedFinal = handledReply.queuedFinal;
-        routedFinalCount += handledReply.routedFinalCount;
-      }
-      const counts = dispatcher.getQueuedCounts();
-      counts.final += routedFinalCount;
-      recordProcessed("completed", { reason: "before_dispatch_handled" });
-      markIdle("message_completed");
+      beforeDispatchHandled = { text: beforeDispatchResult.text };
+      return { kind: "owner-available" };
+    }
+    return {
+      kind: "owner-unavailable",
+      reason: "before_dispatch owner did not claim the turn",
+    };
+  };
+
+  if (hostDelegationIntent) {
+    const establishment = await runWithDelegatedExecutionLineage(
+      hostDelegationIntent.lineageRef,
+      () =>
+        establishDelegatedExecutionOwnership({
+          intent: hostDelegationIntent,
+          context: state,
+          delegate: () => attemptBeforeDispatchOwnerHandoff(),
+        }),
+    );
+    if (establishment.handoff !== "owner-available") {
+      // Hard invariant: ordinary OpenClaw execution must not proceed. Delegated
+      // ownership stays DELEGATED_LOCKED with the owner recorded unavailable.
+      recordProcessed("error", {
+        reason: "delegated_owner_unavailable",
+        error: establishment.handoff,
+      });
+      markIdle("message_error");
       commitInboundDedupeIfClaimed();
       completeDispatchReplyOperation();
       return {
         status: "complete" as const,
-        result: attachSourceReplyDeliveryMode({ queuedFinal, counts }),
+        result: attachSourceReplyDeliveryMode({
+          queuedFinal: false,
+          counts: dispatcher.getQueuedCounts(),
+        }),
       };
     }
+  } else if (canAttemptBeforeDispatchOwner) {
+    await attemptBeforeDispatchOwnerHandoff();
+  }
+
+  if (beforeDispatchHandled) {
+    const text = beforeDispatchHandled.text;
+    let queuedFinal = false;
+    let routedFinalCount = 0;
+    if (text && !state.suppressDelivery) {
+      const handledReply = await sendFinalPayload(
+        { text },
+        {
+          abortSignal: getPreDispatchAbortSignal(),
+          deliveryId: "before-dispatch",
+        },
+      );
+      queuedFinal = handledReply.queuedFinal;
+      routedFinalCount += handledReply.routedFinalCount;
+    }
+    const counts = dispatcher.getQueuedCounts();
+    counts.final += routedFinalCount;
+    recordProcessed("completed", { reason: "before_dispatch_handled" });
+    markIdle("message_completed");
+    commitInboundDedupeIfClaimed();
+    completeDispatchReplyOperation();
+    return {
+      status: "complete" as const,
+      result: attachSourceReplyDeliveryMode({ queuedFinal, counts }),
+    };
   }
 
   const restrictedRuntimeRefusal = await maybeRefuseRestrictedRuntimeTakeover({

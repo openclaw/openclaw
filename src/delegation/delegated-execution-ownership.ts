@@ -294,7 +294,11 @@ export function recordDelegateOwnerUnavailable(
 export function recordDelegateOwnerAvailable(
   params: DelegateHandoffParams,
 ): DelegatedExecutionOwnershipRecord {
-  if (!params.delegateGoalRef) {
+  // The delegate goal identity is attached when the delegate owner has one. It
+  // is never overloaded: a supplied delegate_goal_ref must stay distinct from
+  // the Host delegation_ref, and an absent one is recorded as no goal yet.
+  const delegateGoalRef = params.delegateGoalRef ?? null;
+  if (delegateGoalRef !== null && delegateGoalRef === params.delegationRef) {
     throw new DelegatedExecutionOwnershipRefusedError(
       "invalid-transition",
       "delegate owner handoff requires a distinct delegate_goal_ref",
@@ -314,7 +318,7 @@ export function recordDelegateOwnerAvailable(
         next: {
           state: "DELEGATED_LOCKED",
           ownerState: "available",
-          delegateGoalRef: params.delegateGoalRef,
+          delegateGoalRef,
           authorityRef: current.authorityRef,
           lastEvent: "DELEGATE_OWNER_AVAILABLE",
           releaseEvent: null,

@@ -8,6 +8,8 @@
  * keys, and tool arguments can never produce it, and unrelated runs that merely
  * share a user, agent, workspace, Gateway, or session stay DIRECT.
  */
+import { readCurrentDelegatedExecutionLineage } from "./delegated-execution-scope.js";
+
 const DELEGATED_EXECUTION_LINEAGE = Symbol("openclaw.delegatedExecutionLineage");
 
 /** Binds the delegated task lineage an execution belongs to. Host-only by construction. */
@@ -71,7 +73,12 @@ export function resolveDelegatedExecutionFallbackAuthority(
   return undefined;
 }
 
-/** First proven lineage across the contexts one execution may legitimately carry. */
+/**
+ * First proven lineage across the contexts one execution may legitimately
+ * carry, then the Host-owned delegated execution scope the execution is running
+ * inside. A Host context binding wins over the ambient scope; unrelated
+ * execution that has neither stays DIRECT.
+ */
 export function resolveDelegatedExecutionLineage(
   contexts: readonly (unknown | undefined)[],
 ): string | undefined {
@@ -81,5 +88,5 @@ export function resolveDelegatedExecutionLineage(
       return lineageRef;
     }
   }
-  return undefined;
+  return readCurrentDelegatedExecutionLineage();
 }

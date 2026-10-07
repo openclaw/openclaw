@@ -1,5 +1,6 @@
 // Shared type contracts for dispatch-from-config runtime execution.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { HostDelegationIntent } from "../../delegation/host-delegation-intent.js";
 import type { SessionWorkerPlacementContext } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -44,6 +45,12 @@ export type DispatchFromConfigParams = {
   sessionWorkerPlacementContext?: SessionWorkerPlacementContext;
   /** @deprecated Always enabled in the Gateway; remove in the next Plugin SDK major. */
   usePublishedModelRuntime?: boolean;
+  /**
+   * Host-minted delegation binding. Only the Host can produce one; a caller
+   * cannot forge it with model output, plugin arguments, or arbitrary strings.
+   * When present, delegated ownership is established before any owner handoff.
+   */
+  hostDelegationIntent?: HostDelegationIntent;
 };
 
 export type DispatchReplyFromConfig = (
