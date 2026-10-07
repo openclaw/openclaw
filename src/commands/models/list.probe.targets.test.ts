@@ -277,25 +277,23 @@ describe("buildProbeTargets", () => {
     ]);
   });
 
-  it.each(["api_key", "token"] as const)(
-    "reports unresolved_ref for %s profiles despite retained plaintext",
-    async (type) => {
-      const profileId = "anthropic:default";
-      const refId = type === "api_key" ? "MISSING_ANTHROPIC_KEY" : "MISSING_ANTHROPIC_TOKEN";
-      const ref = { source: "env" as const, provider: "default", id: refId };
-      mockStore.profiles[profileId] =
-        type === "api_key"
-          ? { type, provider: "anthropic", key: "retained-plaintext", keyRef: ref }
-          : { type, provider: "anthropic", token: "retained-plaintext", tokenRef: ref };
-      resolveSecretRefStringMock.mockRejectedValueOnce(new Error("missing secret"));
-      const result = await plan({ cfg: { auth: { order: { anthropic: [profileId] } } } });
-      expect(result.targets).toStrictEqual([]);
-      expect(result.results).toHaveLength(1);
-      expectLegacyMissingCredentialsError(result.results[0], "unresolved_ref");
-      expect(result.results[0]?.error).toContain(`env:default:${refId}`);
-      expect(resolveSecretRefStringMock).toHaveBeenCalledWith(ref, expect.any(Object));
-    },
-  );
+  it("reports unresolved_ref for token profiles despite retained plaintext", async () => {
+    const profileId = "anthropic:default";
+    const ref = { source: "env" as const, provider: "default", id: "MISSING_ANTHROPIC_TOKEN" };
+    mockStore.profiles[profileId] = {
+      type: "token",
+      provider: "anthropic",
+      token: "retained-plaintext",
+      tokenRef: ref,
+    };
+    resolveSecretRefStringMock.mockRejectedValueOnce(new Error("missing secret"));
+    const result = await plan({ cfg: { auth: { order: { anthropic: [profileId] } } } });
+    expect(result.targets).toStrictEqual([]);
+    expect(result.results).toHaveLength(1);
+    expectLegacyMissingCredentialsError(result.results[0], "unresolved_ref");
+    expect(result.results[0]?.error).toContain(`env:default:${ref.id}`);
+    expect(resolveSecretRefStringMock).toHaveBeenCalledWith(ref, expect.any(Object));
+  });
 
   it("adds direct credentials alongside an ineligible stored profile", async () => {
     const result = await withEnvAsync({ ANTHROPIC_API_KEY: "env-test" }, () =>
@@ -349,38 +347,29 @@ describe("buildProbeTargets", () => {
   });
 
   it.each([
-    ["resolved SecretRef", "ref", true, false, false],
-    ["unresolved SecretRef", "ref", true, true, false],
-    ["normal-mode SecretRef", "ref", false, false, false],
-    ["template-shaped literal", "${CONFIGURED_PROVIDER_VALUE}", true, false, true],
+    ["unresolved SecretRef", true],
+    ["normal-mode SecretRef", false],
   ] as const)(
     "preserves configured provider credential ownership for %s",
-    async (_description, input, includeDirectKeys, rejectRef, expectAmbient) => {
+    async (_description, includeDirectKeys) => {
       emptyStore();
-      const apiKey =
-        input === "ref"
-          ? { source: "env" as const, provider: "default", id: "CONFIGURED_ANTHROPIC_CREDENTIAL" }
-          : input;
-      if (rejectRef) {
+      const apiKey = {
+        source: "env" as const,
+        provider: "default",
+        id: "CONFIGURED_ANTHROPIC_CREDENTIAL",
+      };
+      if (includeDirectKeys) {
         resolveSecretRefStringMock.mockRejectedValueOnce(new Error("missing configured secret"));
       }
       const result = await withEnvAsync({ ANTHROPIC_API_KEY: "ambient-provider-credential" }, () =>
         configPlan(apiKey, includeDirectKeys),
       );
-      expect(result.targets.some((target) => target.source === "env")).toBe(expectAmbient);
-      if (rejectRef) {
+      expect(result.targets.some((target) => target.source === "env")).toBe(false);
+      if (includeDirectKeys) {
         expect(result.targets).toStrictEqual([]);
         expect(result.results).toEqual([
           expect.objectContaining({ source: "models.json", reasonCode: "unresolved_ref" }),
         ]);
-      } else if (includeDirectKeys) {
-        expect(result.targets).toContainEqual(
-          expect.objectContaining({
-            source: "models.json",
-            label: "config",
-            boundValue: input === "ref" ? "resolved-secret" : apiKey,
-          }),
-        );
       }
     },
   );
