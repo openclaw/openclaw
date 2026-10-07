@@ -628,6 +628,11 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
           (entry: MatrixEntry) => entry.chunk_id === "package-update-openai",
         ),
       ).toMatchObject({ timeout_minutes: 160 });
+      expect(
+        plan.dockerE2e.matrix.include.find(
+          (entry: MatrixEntry) => entry.chunk_id === "package-update-migrations",
+        ),
+      ).toMatchObject({ timeout_minutes: 150 });
       expect(plan.liveModels.matrix.include.map((entry: MatrixEntry) => entry.providers)).toEqual(
         liveModelProviders,
       );

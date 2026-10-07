@@ -32,7 +32,11 @@ const DOCKER_E2E_CHUNKS = [
   {
     chunk_id: "package-update-migrations",
     label: "package/update migrations",
-    timeout_minutes: 60,
+    // Full candidates run four published-upgrade-survivor baselines plus
+    // update-channel-switch; all are weight-3 npm lanes, so they serialize at limit 5.
+    // Hosted passes measured 766-911s and 484-1632s per lane: 15m + 4 x 28m + 10m
+    // setup/artifacts = 137m, round to 150m. At 60m, 3 of 6 full candidates cancelled.
+    timeout_minutes: 150,
     profiles: "beta minimum stable full",
   },
   {
