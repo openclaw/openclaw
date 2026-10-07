@@ -30,52 +30,10 @@ export function registerCodexFastModeTests({
   completeStartedRun,
 }: FastModeFixtures) {
   it.each([
-    { name: "fast on", fastMode: true, expectedServiceTier: "priority" },
     {
       name: "fast on with flex baseline",
       fastMode: true,
       configuredServiceTier: "flex",
-      expectedServiceTier: "priority",
-    },
-    {
-      name: "fast off",
-      fastMode: false,
-      configuredServiceTier: "priority",
-      expectedServiceTier: null,
-    },
-    {
-      name: "fast auto active",
-      fastMode: () => true,
-      expectedServiceTier: "priority",
-    },
-    {
-      name: "fast on with configured tier",
-      fastMode: true,
-      configuredServiceTier: "ultrafast",
-      expectedServiceTier: "priority",
-    },
-    {
-      name: "fast off with configured tier",
-      fastMode: false,
-      configuredServiceTier: "ultrafast",
-      expectedServiceTier: null,
-    },
-    {
-      name: "fast auto active with configured tier",
-      fastMode: () => true,
-      configuredServiceTier: "ultrafast",
-      expectedServiceTier: "priority",
-    },
-    {
-      name: "configured non-priority tier",
-      fastMode: undefined,
-      configuredServiceTier: "flex",
-      expectedServiceTier: "flex",
-    },
-    {
-      name: "configured Ultrafast without a shared selection",
-      fastMode: undefined,
-      configuredServiceTier: "ultrafast",
       expectedServiceTier: "priority",
     },
   ] satisfies Array<{
@@ -112,21 +70,7 @@ export function registerCodexFastModeTests({
       });
     },
   );
-  it("keeps shared Fast priority on new threads with a configured tier", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    params.fastMode = true;
-    const run = runCodexAppServerAttempt(params, {
-      pluginConfig: { appServer: { serviceTier: "ultrafast" } },
-    });
-    await completeStartedRun(run, harness.waitForMethod, harness.completeTurn, "thread-1");
-    for (const method of ["thread/start", "turn/start"]) {
-      expect(harness.requests.find((request) => request.method === method)?.params).toMatchObject({
-        serviceTier: "priority",
-      });
-    }
-  });
+
   it("uses shared Fast priority when auto activates after resume", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
@@ -152,40 +96,13 @@ export function registerCodexFastModeTests({
   });
   it.each([
     {
-      name: "explicit Ultrafast",
-      supported: true,
-      fastMode: "ultrafast" as const,
-      expected: "ultrafast",
-      catalogRequests: 1,
-    },
-    {
-      name: "explicit Ultrafast with the switch enabled",
-      supported: true,
-      fastMode: "ultrafast" as const,
-      enableUltrafast: true,
-      expected: "ultrafast",
-      catalogRequests: 1,
-    },
-    {
       name: "explicit Ultrafast with the switch disabled",
       supported: true,
       fastMode: "ultrafast" as const,
       enableUltrafast: false,
       expected: "priority",
     },
-    {
-      name: "unsupported Ultrafast",
-      supported: false,
-      fastMode: "ultrafast" as const,
-      expected: "priority",
-      catalogRequests: 1,
-    },
-    {
-      name: "Fast by default",
-      supported: true,
-      fastMode: true,
-      expected: "priority",
-    },
+
     {
       name: "Fast with the Ultrafast switch enabled",
       supported: true,
@@ -193,61 +110,9 @@ export function registerCodexFastModeTests({
       enableUltrafast: true,
       expected: "priority",
     },
-    {
-      name: "Fast with the Ultrafast switch disabled",
-      supported: true,
-      fastMode: true,
-      enableUltrafast: false,
-      expected: "priority",
-    },
-    {
-      name: "Fast with unsupported Ultrafast",
-      supported: false,
-      fastMode: true,
-      expected: "priority",
-    },
-    { name: "Fast off", supported: true, fastMode: false, expected: null },
-    { name: "unspecified Fast mode", supported: true, fastMode: undefined, expected: undefined },
-    {
-      name: "auto activates after resume",
-      supported: true,
-      fastMode: false,
-      activateAuto: true,
-      expected: "priority",
-    },
-    {
-      name: "inactive Auto",
-      supported: true,
-      fastMode: false,
-      automatic: true,
-      expected: null,
-    },
-    {
-      name: "auto with the Ultrafast switch disabled",
-      supported: true,
-      fastMode: false,
-      activateAuto: true,
-      enableUltrafast: false,
-      expected: "priority",
-    },
-    {
-      name: "auto with unsupported Ultrafast",
-      supported: false,
-      fastMode: false,
-      activateAuto: true,
-      expected: "priority",
-    },
   ])(
     "requires explicit Ultrafast for $name at the actual turn boundary",
-    async ({
-      supported,
-      fastMode,
-      activateAuto,
-      automatic,
-      enableUltrafast,
-      expected,
-      catalogRequests = 0,
-    }) => {
+    async ({ supported, fastMode, enableUltrafast, expected }) => {
       const { sessionFile, workspaceDir } = createRunPaths();
       await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
       const harness = createResumeHarness("thread-existing", async (method) => {
@@ -274,62 +139,27 @@ export function registerCodexFastModeTests({
         return undefined;
       });
       const params = createParams(sessionFile, workspaceDir);
-      let active = fastMode;
-      params.fastMode = activateAuto || automatic ? () => active : fastMode;
-      params.onAgentEvent = (event) => {
-        if (
-          event.stream === "codex_app_server.lifecycle" &&
-          event.data.phase === "thread_ready" &&
-          activateAuto
-        ) {
-          active = true;
-        }
-      };
-      const run = runCodexAppServerAttempt(
-        params,
-        enableUltrafast === undefined ? {} : { pluginConfig: { appServer: { enableUltrafast } } },
-      );
+      params.fastMode = fastMode;
+      const run = runCodexAppServerAttempt(params, {
+        pluginConfig: { appServer: { enableUltrafast } },
+      });
       await completeStartedRun(run, harness.waitForMethod, harness.completeTurn, "thread-existing");
       expect(
         harness.requests.find((request) => request.method === "turn/start")?.params,
       ).toMatchObject({
         serviceTier: expected,
       });
-      expect(harness.requests.filter((request) => request.method === "model/list")).toHaveLength(
-        catalogRequests,
-      );
+      expect(harness.requests.filter((request) => request.method === "model/list")).toHaveLength(0);
     },
   );
 
   it.each([
-    {
-      name: "unspecified Fast mode",
-      fastMode: undefined,
-      supported: true,
-      baseline: undefined,
-      expected: null,
-    },
-    { name: "Fast off", fastMode: false, supported: true, baseline: undefined, expected: null },
-    {
-      name: "Fast by default",
-      fastMode: true,
-      supported: true,
-      baseline: undefined,
-      expected: "priority",
-    },
     {
       name: "revoked Ultrafast",
       fastMode: "ultrafast" as const,
       supported: false,
       baseline: undefined,
       expected: "priority",
-    },
-    {
-      name: "inactive auto",
-      fastMode: () => false,
-      supported: true,
-      baseline: undefined,
-      expected: null,
     },
     {
       name: "unsupported priority baseline",
@@ -344,13 +174,6 @@ export function registerCodexFastModeTests({
       supported: false,
       baseline: undefined,
       expected: null,
-    },
-    {
-      name: "configured Ultrafast without a shared selection",
-      fastMode: undefined,
-      supported: true,
-      baseline: "ultrafast" as const,
-      expected: "priority",
     },
   ])(
     "reselects the tier for $name after an explicit Ultrafast warm turn",

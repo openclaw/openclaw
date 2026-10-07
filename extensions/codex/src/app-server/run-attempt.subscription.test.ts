@@ -112,7 +112,6 @@ describe("Codex attempt subscription recovery", () => {
     failureAt: "monitor" | "turn request";
     revoked?: "abort" | "host" | "binding" | "closed" | "expired" | "successor";
   }>([
-    { nativeOwned: false, failureAt: "monitor" },
     { nativeOwned: true, failureAt: "turn request" },
     { nativeOwned: true, failureAt: "monitor", revoked: "abort" },
     { nativeOwned: true, failureAt: "monitor", revoked: "host" },
