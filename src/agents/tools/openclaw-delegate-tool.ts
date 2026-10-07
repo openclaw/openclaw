@@ -140,23 +140,26 @@ export function createOpenClawDelegateToolsForRun(
       const result = await withGatewayToolCallerIdentity(caller, () =>
         runOutsidePreparedModelRuntimePluginGenerationScope(() =>
           runOutsidePluginRuntimeGenerationScope(() =>
-        callInProcessGatewayTool<OpenClawDelegateResult>(
-          "openclaw.chat",
-          {
-            sessionId,
-            message,
-            delegation: {
-              agentId: options.sessionAgentId,
-              ...(sessionKey ? { sessionKey } : {}),
-              ...(options.agentChannel ? { turnSourceChannel: options.agentChannel } : {}),
-              ...(turnSourceTo ? { turnSourceTo } : {}),
-              ...(options.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
-              ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
-            },
-          },
-          // Match the established human-interaction budget. The outer CLI owner
-          // retains its separate grace for post-decision completion.
-          { timeoutMs: DEFAULT_ASK_USER_TIMEOUT_SECONDS * 1_000 },
+            callInProcessGatewayTool<OpenClawDelegateResult>(
+              "openclaw.chat",
+              {
+                sessionId,
+                message,
+                delegation: {
+                  agentId: options.sessionAgentId,
+                  ...(sessionKey ? { sessionKey } : {}),
+                  ...(options.agentChannel ? { turnSourceChannel: options.agentChannel } : {}),
+                  ...(turnSourceTo ? { turnSourceTo } : {}),
+                  ...(options.agentAccountId
+                    ? { turnSourceAccountId: options.agentAccountId }
+                    : {}),
+                  ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
+                },
+              },
+              // Match the established human-interaction budget. The outer CLI owner
+              // retains its separate grace for post-decision completion.
+              { timeoutMs: DEFAULT_ASK_USER_TIMEOUT_SECONDS * 1_000 },
+            ),
           ),
         ),
       );
