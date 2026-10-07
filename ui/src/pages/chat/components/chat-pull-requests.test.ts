@@ -12,6 +12,7 @@ import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../../../ap
 import type { ChatCiDetailsElement } from "./chat-ci-details.ts";
 import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
 import {
+  chatBranchId,
   chatPullRequestId,
   dismissChatPullRequest,
   listDismissedChatPullRequests,
@@ -572,6 +573,59 @@ describe("renderChatPullRequests", () => {
   });
 });
 
+describe("branch row dismissal", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.append(container);
+  });
+
+  afterEach(() => {
+    container.remove();
+  });
+
+  it("hides the branch row and its idle publish offer once dismissed", () => {
+    const onDismissBranch = vi.fn();
+    const props = {
+      pullRequests: [],
+      branch: sessionBranch(),
+      status: "ready" as const,
+      onDismiss: () => {},
+      onDismissBranch,
+      publication: publication({
+        canPublishPersonal: false,
+        options: {
+          shared: { source: "system-configured", accountId: 1, login: "system-bot" },
+          personal: null,
+          pendingPersonal: null,
+          latestShared: null,
+        },
+      }),
+    };
+    render(renderChatPullRequests(props), container);
+    container.querySelector<HTMLButtonElement>(".chat-pr__dismiss")?.click();
+    expect(onDismissBranch).toHaveBeenCalledWith(sessionBranch());
+
+    render(renderChatPullRequests({ ...props, branchDismissed: true }), container);
+    expect(container.querySelector(".chat-pr")).toBeNull();
+  });
+
+  it("keeps PR chips visible when only the branch row is dismissed", () => {
+    render(
+      renderChatPullRequests({
+        pullRequests: [pullRequest()],
+        branch: sessionBranch(),
+        branchDismissed: true,
+        status: "ready",
+        onDismiss: () => {},
+      }),
+      container,
+    );
+    expect(container.querySelector(".chat-pr")?.getAttribute("data-state")).toBe("open");
+  });
+});
+
 describe("dismissed pull request storage", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", window.localStorage);
@@ -588,7 +642,7 @@ describe("dismissed pull request storage", () => {
       false,
     );
 
-    const ids = dismissChatPullRequest("agent:main:main", chip);
+    const ids = dismissChatPullRequest("agent:main:main", chatPullRequestId(chip));
 
     expect(ids.has(chatPullRequestId(chip))).toBe(true);
     expect(listDismissedChatPullRequests("agent:main:main").has(chatPullRequestId(chip))).toBe(
@@ -600,10 +654,22 @@ describe("dismissed pull request storage", () => {
   it("drops the oldest sessions once the store limit is reached", () => {
     const chip = pullRequest();
     for (let index = 0; index < 21; index += 1) {
-      dismissChatPullRequest(`agent:main:${index}`, chip);
+      dismissChatPullRequest(`agent:main:${index}`, chatPullRequestId(chip));
     }
     expect(listDismissedChatPullRequests("agent:main:0").size).toBe(0);
     expect(listDismissedChatPullRequests("agent:main:20").size).toBe(1);
+  });
+
+  it("keeps branches that differ only in case distinct", () => {
+    const ids = dismissChatPullRequest(
+      "agent:main:main",
+      chatBranchId(sessionBranch({ owner: "OpenClaw", branch: "Feature" })),
+    );
+
+    expect(ids.has(chatBranchId(sessionBranch({ owner: "openclaw", branch: "Feature" })))).toBe(
+      true,
+    );
+    expect(ids.has(chatBranchId(sessionBranch({ branch: "feature" })))).toBe(false);
   });
 
   it("ignores malformed stored payloads", () => {

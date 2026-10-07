@@ -9,14 +9,13 @@ import type { WorktreeAllocationGuard } from "./allocation.js";
 import { withManagedWorktreeGit } from "./checkout-policy.js";
 import { WorktreeRemovalContentionError } from "./errors.js";
 import type { WorktreeEvictionReason } from "./git-worktree-operations.js";
-import { readRegistryWorktrees } from "./registry-read.js";
+import { prepareWorktreeRegistryGuard, readRegistryWorktrees } from "./registry-read.js";
 import {
   createWorktreeRemovalClaimsGuard,
-  getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
   updateRegistryWorktree,
 } from "./registry.js";
-import { withWorktreeRunEnd } from "./run-end-lifecycle.js";
+import { captureWorktreeRunEndContext, withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import {
   abortWorktreeRemoval,
   claimWorktreeRemoval,
@@ -63,19 +62,12 @@ async function evictAcceptedWorktree(
     predicates: [...(authority.predicates ?? []), { kind: "binding", record }],
   };
   let assertClaims = createWorktreeRemovalClaimsGuard(env, [record.id], token);
+  const assertBinding = await prepareWorktreeRegistryGuard(captureWorktreeRunEndContext(env), {
+    predicates: [{ kind: "binding", record }],
+  });
   const assertCurrent = () => {
     guard.commitGuard();
-    const current = getRegistryWorktree(env, record.id);
-    if (
-      !current ||
-      current.removedAt !== undefined ||
-      current.path !== record.path ||
-      current.repoRoot !== record.repoRoot ||
-      current.createdAt !== record.createdAt ||
-      current.lastActiveAt !== record.lastActiveAt
-    ) {
-      throw new Error("Worktree changed before capacity eviction; retry allocation");
-    }
+    assertBinding();
     assertClaims();
   };
   await claimWorktreeRemoval(env, {

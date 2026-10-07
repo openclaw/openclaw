@@ -214,6 +214,7 @@ describe("late exact requester recovery", () => {
       throw new Error("unexpected recovery dispatch");
     };
     const unregister = registerGatewayRecoveryRuntime({
+      prepareRestartRecovery: unused,
       dispatchSessionMethod: unused,
       dispatchAgent: unused,
       waitForAgent: unused,

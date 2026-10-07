@@ -349,6 +349,9 @@ function probeOwnership(
       timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
       env: {
         ...process.env,
+        // Discovery runs no tests; keep scheduling stable across subprocesses
+        // instead of comparing different snapshots of the host's current load.
+        CI: "1",
         OPENCLAW_VITEST_INCLUDE_FILE: options.include ? includeFile : "",
         OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: options.skipRealGateway ? "1" : "",
       },

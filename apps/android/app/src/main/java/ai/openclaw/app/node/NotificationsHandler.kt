@@ -72,21 +72,10 @@ class NotificationsHandler internal constructor(
     // command contract rather than Android-specific PendingIntent labels.
     val action =
       when (actionRaw) {
-        "open" -> {
-          NotificationActionKind.Open
-        }
-
-        "dismiss" -> {
-          NotificationActionKind.Dismiss
-        }
-
-        "reply" -> {
-          NotificationActionKind.Reply
-        }
-
-        else -> {
-          return nodeInvokeError("INVALID_REQUEST", "action must be open|dismiss|reply")
-        }
+        "open" -> NotificationActionKind.Open
+        "dismiss" -> NotificationActionKind.Dismiss
+        "reply" -> NotificationActionKind.Reply
+        else -> return nodeInvokeError("INVALID_REQUEST", "action must be open|dismiss|reply")
       }
     val replyText = params.nonBlankString("replyText")
     if (action == NotificationActionKind.Reply && replyText.isNullOrBlank()) {
@@ -132,11 +121,6 @@ class NotificationsHandler internal constructor(
       put("enabled", JsonPrimitive(snapshot.enabled))
       put("connected", JsonPrimitive(snapshot.connected))
       put("count", JsonPrimitive(snapshot.notifications.size))
-      put(
-        "notifications",
-        JsonArray(
-          snapshot.notifications.map { entry -> entry.toJsonObject() },
-        ),
-      )
+      put("notifications", JsonArray(snapshot.notifications.map { it.toJsonObject() }))
     }.toString()
 }

@@ -5,6 +5,7 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { createRef } from "lit/directives/ref.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { terminalFontFamily } from "../../app/terminal-font.ts";
 import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
@@ -26,6 +27,7 @@ import {
   type TerminalPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
 import type { TerminalGatewayClient, TerminalSessionInfo } from "./terminal-connection.ts";
+import { updateTerminalFont } from "./terminal-fonts.ts";
 import { renderTerminalPanelViewport } from "./terminal-panel-chrome.ts";
 import { TerminalPanelSessionController } from "./terminal-panel-session-controller.ts";
 import {
@@ -59,10 +61,12 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
 
   constructor() {
     super();
-    new SubscriptionsController(this).watchStore(
-      () => this.context?.config,
-      () => this.terminalPanelUploadController.syncPolicy(),
-    );
+    new SubscriptionsController(this)
+      .watchStore(
+        () => this.context?.config,
+        () => this.terminalPanelUploadController.syncPolicy(),
+      )
+      .watchStore(() => this.context?.theme);
   }
   /** Gateway client used for terminal.* RPCs; null until connected. */
   @property({ attribute: false }) client: TerminalGatewayClient | null = null;
@@ -123,6 +127,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
     setError: (message) => this.terminalSessions.setError(message),
     requestUpdate: () => this.requestUpdate(),
   });
+  get terminalFontFamily(): string {
+    return terminalFontFamily(this.context?.theme.settings.terminalFontFamily);
+  }
+
   createTerminalController = createIsolatedGhosttyTerminal;
   catalogReadyTimeoutMs = CATALOG_TERMINAL_READY_TIMEOUT_MS;
   private readonly terminalSessions = new TerminalPanelSessionController(this);
@@ -199,6 +207,9 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
     }
     if (changed.has("client") || changed.has("available")) {
       this.terminalSessions.scheduleLifecycleSync();
+    }
+    for (const tab of this.terminalSessions.tabs) {
+      updateTerminalFont(tab.controller, this.terminalFontFamily);
     }
     if (changed.has("themeMode")) {
       updateTerminalSessionTheme(this.terminalSessions.tabs, this.themeMode);

@@ -93,6 +93,11 @@ compaction, but cannot run manual `/compact`.
 /compact Focus on the API design decisions
 ```
 
+If a turn is active, `/compact` gives it up to 60 seconds to finish before
+cancelling it and waiting up to 15 more seconds for it to stop. When cancellation
+succeeds, the command's reply asks you to resend the interrupted request, including
+when the run is still stopping and compaction cannot proceed.
+
 Client-side compaction in the built-in OpenClaw runtime passes focus to both older-history and split-turn-prefix summaries. The host limits operator-provided focus to 800 Unicode code points and escapes it as prompt data before adding it to model requests.
 
 Client-side manual compaction uses `agents.defaults.compaction.keepRecentTokens` (default: 20,000) as its cut-point budget and keeps that recent tail in rebuilt context.
@@ -149,6 +154,8 @@ This works with local models too, for example a second Ollama model dedicated to
 ```
 
 When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain.
+
+Preflight compaction also uses that chain when the primary auth profile is already in cooldown. Each candidate must pass auth admission before summarization; a healthy fallback can compact the session without waiting for the primary cooldown to expire.
 
 In safeguard mode, provider timeouts and rate limits from built-in summarization remain eligible for that chain, except a summary deadline or an HTTP 408 or 504, which commits the compaction without a summary instead (see [Auto-compaction](#auto-compaction)). Caller cancellation and failed safeguard quality checks do not trigger a model switch.
 

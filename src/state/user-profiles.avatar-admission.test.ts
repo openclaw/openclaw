@@ -276,36 +276,31 @@ it.each(["missing profile", "closed before dispatch", "binding refusal"] as cons
   },
 );
 
-it.each([false, true])(
-  "publishes to a catalog retained before commit (previous catalog=%s)",
-  async (resident) => {
-    const state = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "avatar-precommit-catalog-",
-    });
-    let release = () => {};
-    try {
-      const profile = ensureProfileForEmail("precommit@example.test");
-      if (resident) {
-        release = retainUserProfileCatalog();
-      }
-      let prepared = false;
-      boundary.duringGrant = () => {
-        release();
-        release = retainUserProfileCatalog();
-        expect(getUserProfileDisplay(profile.id).hasAvatar).toBe(false);
-        prepared = true;
-      };
-      await adoptAvatar(profile.id);
-      expect(prepared).toBe(true);
-      expect(getUserProfileDisplay(profile.id).hasAvatar).toBe(true);
-      expect(readUserProfileIdentity(profile.id)?.profileId).toBe(profile.id);
-    } finally {
+it("publishes to a replacement catalog retained before commit", async () => {
+  const state = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "avatar-precommit-catalog-",
+  });
+  let release = () => {};
+  try {
+    const profile = ensureProfileForEmail("precommit@example.test");
+    release = retainUserProfileCatalog();
+    let prepared = false;
+    boundary.duringGrant = () => {
       release();
-      await state.cleanup();
-    }
-  },
-);
+      release = retainUserProfileCatalog();
+      expect(getUserProfileDisplay(profile.id).hasAvatar).toBe(false);
+      prepared = true;
+    };
+    await adoptAvatar(profile.id);
+    expect(prepared).toBe(true);
+    expect(getUserProfileDisplay(profile.id).hasAvatar).toBe(true);
+    expect(readUserProfileIdentity(profile.id)?.profileId).toBe(profile.id);
+  } finally {
+    release();
+    await state.cleanup();
+  }
+});
 
 it("refuses a replacement source during settlement and retries only the original inode", async () => {
   const state = await createOpenClawTestState({

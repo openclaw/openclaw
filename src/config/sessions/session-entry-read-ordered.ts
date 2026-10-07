@@ -81,6 +81,9 @@ export async function withOrderedSessionEntriesInWorker<T>(
         );
         let changed = false;
         const unsubscribe = sessionChanges.subscribeFacts((change) => {
+          if (!("all" in change) && change.scope === "acp") {
+            return;
+          }
           const scope = "all" in change ? change.scope : change;
           if (typeof scope === "string") {
             // Registry topology can invalidate discovery; presentation-only buses

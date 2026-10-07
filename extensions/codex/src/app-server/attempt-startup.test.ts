@@ -344,6 +344,7 @@ describe("startCodexAttemptThread", () => {
     expect(readHarnessRequestMethods(first)).toEqual([
       "initialize",
       "account/login/start",
+      "skills/list",
       "config/read",
       "configRequirements/read",
       "account/read",
@@ -352,6 +353,7 @@ describe("startCodexAttemptThread", () => {
       [
         "initialize",
         "account/login/start",
+        "skills/list",
         "config/read",
         "configRequirements/read",
         "thread/start",
@@ -359,6 +361,7 @@ describe("startCodexAttemptThread", () => {
       [
         "initialize",
         "account/login/start",
+        "skills/list",
         "config/read",
         "configRequirements/read",
         "account/read",
@@ -422,6 +425,7 @@ describe("startCodexAttemptThread", () => {
       expect(readHarnessRequestMethods(second)).toEqual([
         "initialize",
         "account/login/start",
+        "skills/list",
         "config/read",
         "configRequirements/read",
         "account/read",
@@ -572,6 +576,7 @@ describe("startCodexAttemptThread", () => {
     expect(continued.client).toBe(harness.client);
     expect(continued.thread.threadId).toBe(previous.thread.threadId);
     expect(readHarnessMessages(harness.writes.slice(before)).map(({ method }) => method)).toEqual([
+      "skills/list",
       "config/read",
       "configRequirements/read",
     ]);

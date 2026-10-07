@@ -77,13 +77,14 @@ describe("unconfigured web search tool surface", () => {
   });
 
   it.each([
-    { source: false, provider: "test-search-auth", configured: false },
-    { source: true, provider: "unrelated-provider", configured: false },
-    { source: true, provider: "test-search-auth", configured: true },
-    { source: undefined, provider: "test-search-auth", configured: false },
+    { prepared: true, source: false, provider: "test-search-auth", configured: false },
+    { prepared: true, source: true, provider: "unrelated-provider", configured: false },
+    { prepared: true, source: true, provider: "test-search-auth", configured: true },
+    { prepared: true, source: undefined, provider: "test-search-auth", configured: true },
+    { prepared: false, source: undefined, provider: "test-search-auth", configured: false },
   ])(
-    "uses source=$source for $provider during async construction",
-    async ({ source: authProfileStoreSource, provider, configured }) => {
+    "uses prepared=$prepared and source=$source for $provider during async construction",
+    async ({ prepared, source: authProfileStoreSource, provider, configured }) => {
       const agentDir = tempDirs.make("openclaw-search-source-");
       replaceRuntimeAuthProfileStoreSnapshots([
         {
@@ -96,6 +97,9 @@ describe("unconfigured web search tool surface", () => {
           }),
         },
       ]);
+      if (!prepared) {
+        clearRuntimeAuthProfileStoreSnapshots();
+      }
       resolveProviders.mockReturnValue([
         {
           ...createWebSearchTestProvider({
@@ -123,7 +127,7 @@ describe("unconfigured web search tool surface", () => {
       // Source presence still requires a matching provider credential.
       expect(tools.some((tool) => tool.name === "web_search")).toBe(configured);
       expect(onWebSearchConfiguration).toHaveBeenCalledExactlyOnceWith(configured);
-      if (authProfileStoreSource === undefined) {
+      if (authProfileStoreSource === undefined && !prepared) {
         expect(sourceProbe).toHaveBeenCalledExactlyOnceWith(agentDir);
       } else {
         expect(sourceProbe).not.toHaveBeenCalled();

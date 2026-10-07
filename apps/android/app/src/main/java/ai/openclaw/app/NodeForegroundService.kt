@@ -107,17 +107,9 @@ class NodeForegroundService : Service() {
       voiceCaptureMode = state.mode
       val title =
         when {
-          state.connection.isConnected && state.mode == VoiceCaptureMode.TalkMode -> {
-            nativeString("OpenClaw Node · Talk")
-          }
-
-          state.connection.isConnected -> {
-            nativeString("OpenClaw Node · Connected")
-          }
-
-          else -> {
-            nativeString("OpenClaw Node")
-          }
+          state.connection.isConnected && state.mode == VoiceCaptureMode.TalkMode -> nativeString("OpenClaw Node · Talk")
+          state.connection.isConnected -> nativeString("OpenClaw Node · Connected")
+          else -> nativeString("OpenClaw Node")
         }
       val displayStatus = gatewayConnectionStatusForDisplay(state.connection.statusText)
       val text =
@@ -264,8 +256,7 @@ class NodeForegroundService : Service() {
 
     fun start(context: Context) {
       if (!(context.applicationContext as NodeApp).nodeServiceStartAllowed) return
-      val intent = Intent(context, NodeForegroundService::class.java)
-      context.startForegroundService(intent)
+      context.startForegroundService(Intent(context, NodeForegroundService::class.java))
     }
 
     fun stop(context: Context) {
@@ -280,8 +271,7 @@ class NodeForegroundService : Service() {
     ): () -> Boolean =
       (context.applicationContext as NodeApp).updateNodeServiceIntent(allowStart = true) {
         if (startNow) {
-          val intent = Intent(context, NodeForegroundService::class.java).setAction(ACTION_RESUME)
-          context.startForegroundService(intent)
+          context.startForegroundService(Intent(context, NodeForegroundService::class.java).setAction(ACTION_RESUME))
         }
       }
 
@@ -308,20 +298,10 @@ internal fun foregroundServiceTypes(
   voiceMode: VoiceCaptureMode,
   backgroundLocationActive: Boolean,
 ): Int {
-  val base = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-  val voiceTypes =
-    when (voiceMode) {
-      VoiceCaptureMode.Off -> base
-
-      VoiceCaptureMode.ManualMic,
-      VoiceCaptureMode.TalkMode,
-      -> base or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-    }
-  return if (backgroundLocationActive) {
-    voiceTypes or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-  } else {
-    voiceTypes
-  }
+  var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+  if (voiceMode != VoiceCaptureMode.Off) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+  if (backgroundLocationActive) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+  return types
 }
 
 internal fun backgroundLocationNotificationSuffix(active: Boolean): String =
@@ -348,14 +328,10 @@ internal fun voiceNotificationSuffix(
     }
 
     VoiceCaptureMode.ManualMic -> {
-      if (manualMicEnabled) {
-        if (manualMicListening) {
-          nativeString(" · Mic: Listening")
-        } else {
-          nativeString(" · Mic: Pending")
-        }
-      } else {
-        ""
+      when {
+        !manualMicEnabled -> ""
+        manualMicListening -> nativeString(" · Mic: Listening")
+        else -> nativeString(" · Mic: Pending")
       }
     }
 

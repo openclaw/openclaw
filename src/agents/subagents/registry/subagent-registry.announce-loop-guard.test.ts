@@ -113,6 +113,7 @@ describe("announce loop guard (#18264)", () => {
   async function hydrateAndActivateRegistry() {
     await registry.initSubagentRegistry();
     const recoveryRuntime = {
+      prepareRestartRecovery: () => undefined,
       dispatchAgent: vi.fn(),
       waitForAgent: vi.fn(async () => ({ status: "pending" })),
       sendRecoveryNotice: vi.fn(),

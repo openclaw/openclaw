@@ -149,6 +149,8 @@ export type ConfigProps = {
   setSessionCatalogHidden: (catalogId: string, hidden: boolean) => void;
   openLinksExternally: boolean;
   setOpenLinksExternally: (enabled: boolean) => void;
+  terminalFontFamily?: string;
+  setTerminalFontFamily: (value: string | undefined) => void;
   chatMessageMaxWidth?: string;
   setChatMessageMaxWidth: (value: string | undefined) => void;
   chatShowTaskProgress: boolean;

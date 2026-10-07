@@ -434,6 +434,8 @@ openclaw models auth list|add|login|paste-api-key|paste-token|setup-token|order
 
     Results rank by: image support, then tool latency, then context size, then parameter count. In a TTY, checked results prompt an interactive fallback selection. Non-interactive mode needs `--yes` to accept defaults.
 
+    A probed scan replaces `agents.defaults.model.fallbacks` even without `--set-default`; the flag additionally sets the primary. Use `--no-probe` to inspect candidates without writing config.
+
   </Accordion>
 </AccordionGroup>
 

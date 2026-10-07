@@ -115,9 +115,7 @@ private object DeviceNotificationStore {
   fun replace(entries: List<DeviceNotificationEntry>) {
     synchronized(lock) {
       byKey.clear()
-      for (entry in entries) {
-        byKey[entry.key] = entry
-      }
+      entries.associateByTo(byKey, DeviceNotificationEntry::key)
     }
   }
 
@@ -146,20 +144,17 @@ private object DeviceNotificationStore {
   fun snapshot(
     enabled: Boolean,
     appPackageName: String,
-  ): DeviceNotificationSnapshot {
-    val (isConnected, entries) =
-      synchronized(lock) {
-        connected to
+  ): DeviceNotificationSnapshot =
+    synchronized(lock) {
+      DeviceNotificationSnapshot(
+        enabled = enabled,
+        connected = connected,
+        notifications =
           byKey.values
             .filter { isGatewayVisibleNotification(appPackageName, it.packageName) }
-            .sortedByDescending { it.postTimeMs }
-      }
-    return DeviceNotificationSnapshot(
-      enabled = enabled,
-      connected = isConnected,
-      notifications = entries,
-    )
-  }
+            .sortedByDescending { it.postTimeMs },
+      )
+    }
 }
 
 class DeviceNotificationListenerService : NotificationListenerService() {

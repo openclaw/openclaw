@@ -8,19 +8,21 @@ import { resolveStateDir } from "../state-dir.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
+import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import {
   hasSessionMemberInDatabase,
   listSessionMembersInDatabase,
+  readSessionMembersInDatabase,
   type SessionMember,
+  type SessionMembersSnapshot,
 } from "./session-sharing-store.kernel.js";
 import { projectionLane } from "./session-transcript-worker-resources.js";
-import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 function readSessionMembers<T>(
   scope: SessionAccessScope,
   fallback: T,
-  operation: (database: Pick<OpenClawAgentDatabase, "db">, sessionKey: string) => T,
+  operation: (database: Pick<OpenClawAgentDatabase, "agentId" | "db">, sessionKey: string) => T,
 ): T {
   const resolved = resolveSqliteScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
@@ -34,10 +36,10 @@ export function listSessionMembers(scope: SessionAccessScope): SessionMember[] {
   return readSessionMembers(scope, [], listSessionMembersInDatabase);
 }
 
-/** Full membership evidence shares the existing read-only agent database worker. */
-export async function listSessionMembersInWorker(
+/** Current management metadata and evidence share the projection worker's read snapshot. */
+export async function readSessionMembersInWorker(
   input: SessionCollaborationScope,
-): Promise<SessionMember[]> {
+): Promise<SessionMembersSnapshot> {
   const env = { ...(input.env ?? process.env) };
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const resolved = resolveSqliteScope({ ...input, env });
@@ -59,12 +61,17 @@ export async function listSessionMembersInWorker(
   }
   if (isIncognitoOpenClawAgentSqlitePath(databasePath, options)) {
     // Incognito SQLite exists only in this process and keeps its native owner.
-    return listSessionMembers({ ...input, env });
+    return readSessionMembers(
+      { ...input, env },
+      { entry: undefined, members: [] },
+      readSessionMembersInDatabase,
+    );
   }
-  return await withSessionHistoryWorkerDatabase(
-    options,
-    (owner) => owner.readMembers({ sessionKey: resolved.sessionKey, env }),
-    projectionLane,
+  return await withSessionStoreReaderInWorker(
+    { agentId: options.agentId, storePath: databasePath, env },
+    ({ reader, continuation }) =>
+      reader.readMembers({ sessionKey: resolved.sessionKey, env, continuation }),
+    { backing: true, dataOnly: true, lane: projectionLane },
   );
 }
 

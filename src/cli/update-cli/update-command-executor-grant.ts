@@ -190,7 +190,7 @@ export function resolveUpdateCommandChildBinding(
     spawner.version === 3 ||
     (spawner.key !== original.key &&
       (!spawner.key.startsWith(childPrefix) || spawner.owner !== runId)) ||
-    process.ppid !== spawner.executor.pid ||
+    (process.platform !== "win32" && process.ppid !== spawner.executor.pid) ||
     !(grant.originalChildKey ?? grant.childKey).startsWith(
       `${spawner.key}/.openclaw-update-child-`,
     ) ||

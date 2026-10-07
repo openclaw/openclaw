@@ -1,6 +1,7 @@
 import {
   hasSessionProjectionAcceptedFinal,
   isSessionProjectionErrorMessage,
+  readAssistantStreamSegmentIdentity,
   readSessionMessageIdentity,
   reduceSessionProjectionRunEvent,
 } from "@openclaw/gateway-client/browser";
@@ -45,6 +46,7 @@ import {
 } from "./stream-reconciliation.ts";
 import {
   discardStreamSegmentIndexes,
+  prunePersistedCurrentAssistantItem,
   reconcilePersistedAssistantStream,
 } from "./stream-segment-pruning.ts";
 import {
@@ -62,6 +64,13 @@ function isPendingLocalChatRun(state: ChatState, runId: string): boolean {
 function normalizeAbortedAssistantMessage(message: unknown): Record<string, unknown> | null {
   const candidate = asRecord(message);
   return candidate?.role === "assistant" && Array.isArray(candidate.content) ? candidate : null;
+}
+
+function hasPersistedAssistantItem(state: ChatState, runId: string, itemId: string): boolean {
+  return state.chatMessages.some((message) => {
+    const identity = readAssistantStreamSegmentIdentity(message);
+    return identity?.itemId === itemId && (!identity.runId || identity.runId === runId);
+  });
 }
 
 function formatGatewayErrorDetail(payload: ChatEventPayload): string | null {
@@ -395,7 +404,31 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       !isSilentReplyStream(next) &&
       !isAssistantHeartbeatAckForDisplay(payload.message)
     ) {
+      const itemStartOffset =
+        Number.isInteger(payload.itemStartOffset) &&
+        (payload.itemStartOffset ?? -1) >= 0 &&
+        (payload.itemStartOffset ?? Number.POSITIVE_INFINITY) <= next.length
+          ? payload.itemStartOffset
+          : undefined;
+      if (payload.itemId !== undefined) {
+        state.chatStreamItemId = payload.itemId;
+        state.chatStreamItemStartOffset = itemStartOffset;
+      } else {
+        state.chatStreamItemId = undefined;
+        state.chatStreamItemStartOffset = undefined;
+      }
       state.chatStream = next;
+      if (
+        payload.runId &&
+        payload.itemId &&
+        itemStartOffset !== undefined &&
+        hasPersistedAssistantItem(state, payload.runId, payload.itemId)
+      ) {
+        prunePersistedCurrentAssistantItem(state, {
+          runId: payload.runId,
+          itemId: payload.itemId,
+        });
+      }
       reconcilePersistedAssistantStream(state);
     }
   } else if (payload.state === "final") {

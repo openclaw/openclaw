@@ -954,6 +954,15 @@ existing restart delivery and continuation behavior.
 start for <channel>… Start a channel manually with: openclaw gateway call
 channels.start --params '{"channel":"<id>"}'`
 
+  Safe mode also pauses main-session restart recovery. Interrupted entries and
+  transcripts stay unchanged: the pause does not charge an attempt, settle a
+  turn, send a notice, or tombstone a session. The recovery log names the pause
+  and the breaker window end. Once the full window drains, the same healthy
+  process automatically re-arms its existing recovery scheduler and resumes the
+  interrupted work once, using the original startup cutoff and ownership checks.
+  A new unclean boot extends the pause; shutdown or lifecycle replacement cancels
+  the pending re-arm. No manual retry or extra Gateway restart is required.
+
   Operator recovery SOP:
 
   1. Confirm the gateway process is up (`openclaw gateway status` / LaunchAgent

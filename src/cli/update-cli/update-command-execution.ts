@@ -414,6 +414,7 @@ export async function executeMutableUpdate(
     const validation = await validateUpdateCandidateWithProgress(
       {
         root,
+        sourcePackageRoot: params.root,
         config: snapshot.config,
         env,
         assertCurrent: assertExecutionCurrent,

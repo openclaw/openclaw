@@ -13,6 +13,7 @@ import {
 import * as sessionReads from "../../../config/sessions/session-entry-read-runtime.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
+import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
@@ -165,22 +166,26 @@ it.each([
       await awaitGateBeforeSettlement(entered.promise, outcome, "Final admission was not reached");
       calls.expectIdle();
       if (change === "policy" || change === "metadata" || change === "malformed") {
-        const foreign = new DatabaseSync(
-          resolveOpenClawAgentSqlitePath({ agentId: "policy", env: state.env }),
+        // Setup starts worker maintenance; share its writer lane without publishing the mutation.
+        await runOpenClawAgentWriteAdmission(
+          { agentId: "policy", env: state.env },
+          ({ canonicalPath }) => {
+            const foreign = new DatabaseSync(canonicalPath);
+            try {
+              foreign
+                .prepare(
+                  change === "policy"
+                    ? "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.sandboxMode') WHERE session_key = ?"
+                    : change === "metadata"
+                      ? "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', 'renamed') WHERE session_key = ?"
+                      : "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.sessionId', 42) WHERE session_key = ?",
+                )
+                .run(policyKey);
+            } finally {
+              foreign.close();
+            }
+          },
         );
-        try {
-          foreign
-            .prepare(
-              change === "policy"
-                ? "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.sandboxMode') WHERE session_key = ?"
-                : change === "metadata"
-                  ? "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', 'renamed') WHERE session_key = ?"
-                  : "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.sessionId', 42) WHERE session_key = ?",
-            )
-            .run(policyKey);
-        } finally {
-          foreign.close();
-        }
         calls.clear();
       } else if (change === "route") {
         await operation.bindToolAuthorityRouteAsync({

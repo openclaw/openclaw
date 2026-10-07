@@ -172,7 +172,7 @@ export async function resolveReadyNativeModelCatalogEntry(params: {
       normalizeProviderId(variant.provider) === normalizeProviderId(provider) &&
       variant.id === modelId,
   );
-  const host = await decisions.evaluateEntry(entry, variants, harness.id);
+  const host = decisions.evaluateEntry(entry, variants, harness.id);
   const evaluation = decisions.evaluateNative(entry, host, harness.id);
   const runtime = resolveCatalogDecisionRuntime({
     cfg: snapshot.config,

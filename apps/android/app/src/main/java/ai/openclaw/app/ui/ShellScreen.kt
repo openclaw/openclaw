@@ -24,6 +24,7 @@ import ai.openclaw.app.ui.design.AgentAvatarSource
 import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawEmptyState
+import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
@@ -36,6 +37,7 @@ import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
 import ai.openclaw.app.ui.design.agentAvatarSource
+import ai.openclaw.app.ui.design.statusColors
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -110,9 +112,6 @@ internal enum class Tab {
   Dashboard,
 }
 
-private val shellContentInsets: WindowInsets
-  @Composable get() = WindowInsets.safeDrawing
-
 private val overviewListRowMinHeight = 54.dp
 private const val overviewRecentSessionLimit = 50
 private const val overviewRecentSessionVisibleLimit = 3
@@ -153,6 +152,10 @@ fun ShellScreen(
       val closeSidebar: () -> Unit = {
         if (!permanentSidebar) drawerScope.launch { sidebarDrawerState.close() }
       }
+      val openChat: () -> Unit = {
+        nav.selectTab(Tab.Chat)
+        closeSidebar()
+      }
       val requestedHomeDestination by viewModel.requestedHomeDestination.collectAsState()
       val runtimeInitialized by viewModel.runtimeInitialized.collectAsState()
       val gatewayAgents by viewModel.gatewayAgents.collectAsState()
@@ -169,8 +172,7 @@ fun ShellScreen(
         nav.selectTab(
           when (destination) {
             HomeDestination.Connect -> Tab.Overview
-            HomeDestination.Chat -> Tab.Chat
-            HomeDestination.Voice -> Tab.Chat
+            HomeDestination.Chat, HomeDestination.Voice -> Tab.Chat
             HomeDestination.Settings -> Tab.Settings
           },
         )
@@ -216,22 +218,14 @@ fun ShellScreen(
       val activeSidebarDestination =
         when (nav.activeTab) {
           Tab.Settings -> SidebarDestination.entries.firstOrNull { it.settingsRoute == nav.settingsRoute } ?: SidebarDestination.Settings
-          Tab.Overview -> SidebarDestination.Work
-          Tab.Chat -> SidebarDestination.Home
-          Tab.Sessions -> SidebarDestination.Threads
-          else -> null
+          else -> SidebarDestination.entries.firstOrNull { it.tab == nav.activeTab }
         }
       val selectSidebarDestination: (SidebarDestination) -> Unit = { destination ->
         val route = destination.settingsRoute
         if (route != null) {
           nav.openSettingsRoute(route)
         } else {
-          when (destination) {
-            SidebarDestination.Work -> nav.selectTab(Tab.Overview)
-            SidebarDestination.Home -> nav.selectTab(Tab.Chat)
-            SidebarDestination.Threads -> nav.selectTab(Tab.Sessions)
-            else -> error("Missing sidebar route for $destination")
-          }
+          nav.selectTab(destination.tab ?: error("Missing sidebar route for $destination"))
         }
         closeSidebar()
       }
@@ -260,30 +254,23 @@ fun ShellScreen(
               onDragActiveChange = { sidebarRowDragging = it },
               onNewSession = {
                 viewModel.startNewChat(worktree = false)
-                nav.selectTab(Tab.Chat)
-                closeSidebar()
+                openChat()
               },
               onSelectAgent = { agentId ->
                 viewModel.selectChatAgent(agentId)
-                nav.selectTab(Tab.Chat)
-                closeSidebar()
+                openChat()
               },
               onSelectSession = { session ->
                 viewModel.switchChatSession(session.key, session.ownerAgentId)
-                nav.selectTab(Tab.Chat)
-                closeSidebar()
+                openChat()
               },
               onSelectCatalogSession = { session ->
                 viewModel.continueSessionCatalogEntry(session) { continued ->
-                  if (continued) {
-                    nav.selectTab(Tab.Chat)
-                    closeSidebar()
-                  }
+                  if (continued) openChat()
                 }
               },
               onCreateCatalogSession = { catalogId ->
-                nav.selectTab(Tab.Chat)
-                closeSidebar()
+                openChat()
                 viewModel.createSessionCatalogEntry(catalogId)
               },
               onSelectDestination = selectSidebarDestination,
@@ -504,7 +491,7 @@ private fun OverviewScreen(
 
   ClawScaffold(
     contentPadding = PaddingValues(horizontal = ClawTheme.spacing.sm, vertical = ClawTheme.spacing.xxs),
-    contentWindowInsets = shellContentInsets,
+    contentWindowInsets = WindowInsets.safeDrawing,
   ) {
     Box(modifier = Modifier.fillMaxSize()) {
       LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs), contentPadding = PaddingValues(bottom = 6.dp)) {
@@ -537,24 +524,21 @@ private fun OverviewScreen(
             sessionCount = overviewSessionCount,
             cronJobCount = cronStatus.jobs,
             onOpenChat = { onSelectTab(Tab.Chat) },
-            onOpenVoice = { onSelectTab(Tab.Chat) },
             onOpenAgent = { onOpenSettingsRoute(SettingsRoute.Agents) },
             onOpenGateway = { onOpenSettingsRoute(SettingsRoute.Gateway) },
           )
         }
 
         item {
-          OverviewMetricList(
-            cards = metricCards,
-            onOpen = { card ->
-              val route = card.settingsRoute
-              if (route == null) {
-                onSelectTab(card.tab)
-              } else {
-                onOpenSettingsRoute(route)
-              }
-            },
-          )
+          ClawListPanel(items = metricCards) { card ->
+            OverviewMetricRow(
+              card = card,
+              onClick = {
+                val route = card.settingsRoute
+                if (route == null) onSelectTab(card.tab) else onOpenSettingsRoute(route)
+              },
+            )
+          }
         }
 
         item {
@@ -573,13 +557,17 @@ private fun OverviewScreen(
           }
         } else {
           item {
-            RecentSessionList(
-              rows = visibleRecentRows,
-              onOpen = { sessionKey, ownerAgentId ->
-                viewModel.switchChatSession(sessionKey, ownerAgentId)
-                onSelectTab(Tab.Chat)
-              },
-            )
+            ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
+              ClawSeparatedColumn(items = visibleRecentRows, dividerColor = ClawTheme.colors.border.copy(alpha = 0.48f)) { row ->
+                RecentSessionRowContent(
+                  row = row,
+                  onClick = {
+                    viewModel.switchChatSession(row.key, row.ownerAgentId)
+                    onSelectTab(Tab.Chat)
+                  },
+                )
+              }
+            }
           }
         }
 
@@ -634,13 +622,7 @@ private fun OverviewStatusPill(
   onClick: () -> Unit,
 ) {
   val colors = ClawTheme.colors
-  val (dotColor, backgroundColor) =
-    when (status.status) {
-      ClawStatus.Success -> colors.success to colors.successSoft
-      ClawStatus.Warning -> colors.warning to colors.warningSoft
-      ClawStatus.Danger -> colors.danger to colors.dangerSoft
-      ClawStatus.Neutral -> colors.textSubtle to colors.surfaceRaised
-    }
+  val (dotColor, backgroundColor) = colors.statusColors(status.status, neutral = colors.textSubtle)
   Surface(
     onClick = onClick,
     modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget),
@@ -671,7 +653,6 @@ private fun OverviewPrimaryPanel(
   sessionCount: Int,
   cronJobCount: Int,
   onOpenChat: () -> Unit,
-  onOpenVoice: () -> Unit,
   onOpenAgent: () -> Unit,
   onOpenGateway: () -> Unit,
 ) {
@@ -695,7 +676,7 @@ private fun OverviewPrimaryPanel(
       }
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
         ClawPrimaryButton(text = nativeString("Chat"), icon = Icons.Outlined.ChatBubbleOutline, onClick = onOpenChat, modifier = Modifier.weight(1f))
-        ClawSecondaryButton(text = nativeString("Talk"), icon = Icons.Outlined.MicNone, onClick = onOpenVoice, modifier = Modifier.weight(1f))
+        ClawSecondaryButton(text = nativeString("Talk"), icon = Icons.Outlined.MicNone, onClick = onOpenChat, modifier = Modifier.weight(1f))
       }
       if (!isConnected) {
         ClawSecondaryButton(text = nativeString("Reconnect gateway"), icon = SettingsRoute.Gateway.icon, onClick = onOpenGateway, modifier = Modifier.fillMaxWidth())
@@ -744,27 +725,11 @@ private fun OverviewStateChip(
 }
 
 @Composable
-private fun OverviewMetricList(
-  cards: List<OverviewMetricCardSpec>,
-  onOpen: (OverviewMetricCardSpec) -> Unit,
-) {
-  ClawListPanel(items = cards) { card ->
-    OverviewMetricRow(card = card, onClick = { onOpen(card) })
-  }
-}
-
-@Composable
 private fun OverviewMetricRow(
   card: OverviewMetricCardSpec,
   onClick: () -> Unit,
 ) {
-  val tint =
-    when (card.status) {
-      ClawStatus.Success -> ClawTheme.colors.success
-      ClawStatus.Warning -> ClawTheme.colors.warning
-      ClawStatus.Danger -> ClawTheme.colors.danger
-      ClawStatus.Neutral -> ClawTheme.colors.textMuted
-    }
+  val tint = ClawTheme.colors.statusColors(card.status).first
   ClawListItem(
     title = card.title,
     subtitle = card.subtitle,
@@ -862,11 +827,9 @@ internal fun overviewHeaderRoute(attentionRows: List<HomeAttentionRow>): Setting
 
 internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<ChatSessionEntry> =
   sessions
-    .sortedWith(compareByDescending<ChatSessionEntry> { it.overviewRecentSessionRecencyMs() }.thenBy { it.key })
+    .sortedWith(compareByDescending<ChatSessionEntry> { it.lastActivityAt ?: it.updatedAtMs ?: Long.MIN_VALUE }.thenBy { it.key })
     .distinctBy(ChatSessionEntry::key)
     .take(overviewRecentSessionLimit)
-
-private fun ChatSessionEntry.overviewRecentSessionRecencyMs(): Long = lastActivityAt ?: updatedAtMs ?: Long.MIN_VALUE
 
 internal data class OverviewMetricCardSpec(
   val title: String,
@@ -898,12 +861,7 @@ internal fun overviewMetricCardSpecs(
           else -> nativeString("No highlighted items")
         },
       icon = Icons.Default.Favorite,
-      status =
-        when {
-          !isConnected -> ClawStatus.Neutral
-          hasAttention -> ClawStatus.Warning
-          else -> ClawStatus.Success
-        },
+      status = overviewHeaderState(isConnected, hasAttention).status,
       tab = Tab.Settings,
       settingsRoute = SettingsRoute.Gateway,
     ),
@@ -983,12 +941,8 @@ private fun overviewAgent(
   agents: List<GatewayAgentSummary>,
   defaultAgentId: String?,
 ): GatewayAgentSummary? {
-  val defaultId = defaultAgentId?.trim().orEmpty()
-  return if (defaultId.isBlank()) {
-    agents.firstOrNull()
-  } else {
-    agents.firstOrNull { it.id == defaultId } ?: agents.firstOrNull()
-  }
+  val defaultId = defaultAgentId?.trim()?.takeIf(String::isNotEmpty)
+  return defaultId?.let { id -> agents.firstOrNull { it.id == id } } ?: agents.firstOrNull()
 }
 
 internal fun overviewAgentActivityText(
@@ -997,23 +951,17 @@ internal fun overviewAgentActivityText(
   sessionCount: Int,
   cronJobCount: Int,
   statusText: String,
-): String {
-  if (!isConnected) return statusText
-  if (pendingRunCount > 0) {
-    return if (pendingRunCount == 1) {
-      nativeString("Working · 1 active run")
-    } else {
-      nativeString("Working · \$pendingRunCount active runs", pendingRunCount)
-    }
-  }
-  return when {
+): String =
+  when {
+    !isConnected -> statusText
+    pendingRunCount == 1 -> nativeString("Working · 1 active run")
+    pendingRunCount > 1 -> nativeString("Working · \$pendingRunCount active runs", pendingRunCount)
     sessionCount == 1 -> nativeString("Monitoring · 1 thread")
     sessionCount > 1 -> nativeString("Monitoring · \$sessionCount threads", sessionCount)
     cronJobCount == 1 -> nativeString("Monitoring · 1 scheduled job")
     cronJobCount > 1 -> nativeString("Monitoring · \$cronJobCount scheduled jobs", cronJobCount)
     else -> statusText
   }
-}
 
 private fun agentInitials(name: String): String =
   name
@@ -1221,27 +1169,8 @@ internal fun stableOverviewRecentRows(
 }
 
 @Composable
-private fun RecentSessionList(
-  rows: List<RecentSessionListItem>,
-  onOpen: (String, String?) -> Unit,
-) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
-    ClawSeparatedColumn(items = rows, dividerColor = ClawTheme.colors.border.copy(alpha = 0.48f)) { row ->
-      RecentSessionRowContent(
-        title = row.title,
-        source = row.source,
-        metadata = row.metadata,
-        onClick = { onOpen(row.key, row.ownerAgentId) },
-      )
-    }
-  }
-}
-
-@Composable
 private fun RecentSessionRowContent(
-  title: String,
-  source: String,
-  metadata: String,
+  row: RecentSessionListItem,
   onClick: () -> Unit,
 ) {
   Surface(color = Color.Transparent, contentColor = ClawTheme.colors.text) {
@@ -1256,21 +1185,17 @@ private fun RecentSessionRowContent(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      Surface(
-        modifier = Modifier.size(30.dp),
-        shape = CircleShape,
+      ClawIconBadge(
+        icon = Icons.Outlined.ChatBubbleOutline,
+        size = 30.dp,
         color = ClawTheme.colors.canvas,
-        border = BorderStroke(1.dp, ClawTheme.colors.border.copy(alpha = 0.7f)),
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.text)
-        }
-      }
+        borderColor = ClawTheme.colors.border.copy(alpha = 0.7f),
+      )
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(text = source, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = row.source, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
-      Text(text = metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+      Text(text = row.metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = nativeString("Open thread"),
@@ -1369,7 +1294,7 @@ private fun SettingsShellScreen(
 
   ClawScaffold(
     contentPadding = PaddingValues(horizontal = ClawTheme.spacing.sm, vertical = ClawTheme.spacing.xxs),
-    contentWindowInsets = shellContentInsets,
+    contentWindowInsets = WindowInsets.safeDrawing,
   ) {
     LazyColumn(
       modifier = Modifier.fillMaxSize(),

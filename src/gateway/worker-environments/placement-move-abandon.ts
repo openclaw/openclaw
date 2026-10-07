@@ -66,8 +66,10 @@ export function createWorkerPlacementMoveAbandonment(
       }
     });
 
-  const validateAbandonSource = (request: WorkerPlacementMoveRequest): void => {
-    const current = placements.get(request.sessionId);
+  const validateAbandonSource = (
+    request: WorkerPlacementMoveRequest,
+    current: WorkerDispatchPlacement | undefined,
+  ): void => {
     if (
       (current?.state !== "active" && !isForceAbandonedWorkerPlacement(current)) ||
       current.generation !== request.source.generation ||
@@ -156,12 +158,15 @@ export function createWorkerPlacementMoveAbandonment(
     if (failed?.state !== "failed") {
       throw new Error(`Session ${request.sessionKey} abandonment did not fence its remote owner`);
     }
-    const local = placements.completeAbandonedPlacementMoveSourceToLocal({
-      operationId: intent.operationId,
-      sessionId: intent.sessionId,
-      expectedGeneration: failed.generation,
-      expectedRecoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
-    });
+    const local = await placements.completeAbandonedPlacementMoveSourceToLocal(
+      {
+        operationId: intent.operationId,
+        sessionId: intent.sessionId,
+        expectedGeneration: failed.generation,
+        expectedRecoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
+      },
+      { assertCurrent: authorize },
+    );
     if (local.state !== "local") {
       throw new Error(`Session ${request.sessionKey} abandonment did not finish on the Gateway`);
     }

@@ -287,6 +287,12 @@ blocking work. Put same-database predicates in the worker transaction. The
 released `withOpenClawAgentDatabaseAsync` retains native admission for arbitrary
 synchronous SDK guards, including its post-integrity, pre-repair checkpoint.
 
+Transcript assertion composition preserves prepared source checks independently
+of opaque SDK callbacks. Cold restoration can recheck those prepared components
+and their stored predicates while retaining the full synchronous assertion for
+native commit. Custom SDK assertion wrappers are not executed in restoration
+worker grants; existing writer adapter selection remains unchanged.
+
 ### Memory runtime replacement
 
 Memory runtimes may implement `prepareReload({ retireRuntime, retiringEmbeddingProviders })`

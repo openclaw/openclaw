@@ -12,6 +12,37 @@ import type {
   PreparedNativeModelSelection,
 } from "./prepared-model-runtime.types.js";
 
+export function createPreparedNativeCatalogDiscoveryTracker(params: {
+  startupProviders: ReadonlySet<string>;
+  normalizeProvider: (provider: string) => string;
+}) {
+  let completed = false;
+  let rows: readonly ModelCatalogEntry[] | undefined;
+  let providers: string[] = [];
+  return {
+    get completed() {
+      return completed;
+    },
+    get rows() {
+      return rows;
+    },
+    get providers() {
+      return providers;
+    },
+    onCompleted(nextRows: readonly ModelCatalogEntry[]) {
+      completed = true;
+      rows = nextRows;
+      providers = [
+        ...new Set(
+          nextRows
+            .map((entry) => params.normalizeProvider(entry.provider))
+            .filter((provider) => !params.startupProviders.has(provider)),
+        ),
+      ];
+    },
+  };
+}
+
 function createPreparedNativeCatalogInventory(params: {
   completed: boolean;
   rawCatalog: ModelCatalogSnapshot;

@@ -22,6 +22,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
+import { captureWorktreeMutationHeartbeat } from "./allocation.test-support.js";
 import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import { addManagedWorktree } from "./checkout.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
@@ -734,6 +735,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
   });
 
   it("fences revoked creation authority when snapshot and native fallback both fail", async () => {
+    const revokeCheckout = captureWorktreeMutationHeartbeat();
     vi.mocked(backend.cloneTemplate).mockRejectedValueOnce(new Error("snapshot unavailable"));
     let failedDestination: string | undefined;
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
@@ -786,22 +788,12 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       expect(failedDestination).toBeDefined();
       expect(await git(repo, "rev-parse", branch)).toBe(originalHead);
       await expect(fs.access(failedDestination!)).rejects.toMatchObject({ code: "ENOENT" });
-      const [slot] = await readPendingWorktrees(env);
+      const slot = (await readPendingWorktrees(env)).find(
+        ({ record }) => record.path === failedDestination,
+      );
       assert(slot);
       expect(slot.record.path).toBe(failedDestination);
-      runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          const changed = executeSqliteQuerySync(
-            db,
-            getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
-              .deleteFrom("state_leases")
-              .where("scope", "=", "core:managed-worktrees:mutation")
-              .where("lease_key", "=", slot.record.id),
-          );
-          expect(changed.numAffectedRows).toBe(1n);
-        },
-        { env },
-      );
+      await revokeCheckout(slot.record.id);
       release.resolve();
       await holder;
       const error = await pending;

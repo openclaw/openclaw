@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { getPreparedRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles.js";
 import { getRuntimeAuthProfileStoreMetadataRevision } from "../../agents/auth-profiles/runtime-snapshots.js";
@@ -54,7 +55,7 @@ import type {
   PreparedModelsListRequest,
 } from "./models-list-context.js";
 
-type PreparedAgentMetadata = PreparedChatMetadataProjection["agent"];
+type PreparedAgentMetadata = PreparedChatMetadataProjection["agent"] & { revision: string };
 
 type PreparedProjection<T> = { read: () => T; isCurrent: () => boolean };
 
@@ -78,7 +79,11 @@ const CHAT_METADATA_CACHE_MAX_ENTRIES = 64;
 export function createGatewayChatMetadataRuntime(params: {
   getConfig: () => OpenClawConfig;
   getContext: () => GatewayModelCatalogContext;
-  onChanged?: (change: { modelCatalogChanged: boolean; authChanged: boolean }) => void;
+  onChanged?: (change: {
+    modelCatalogChanged: boolean;
+    authChanged: boolean;
+    commandsChanged?: false;
+  }) => void;
   log: {
     warn: (message: string) => void;
   };
@@ -128,6 +133,9 @@ export function createGatewayChatMetadataRuntime(params: {
         !facts ||
         !generationFactsMatch(previous, facts, "catalog"),
       authChanged: !previous || !facts || !generationFactsMatch(previous, facts, "auth"),
+      ...(previous && facts && generationFactsMatch(previous, facts, "commands")
+        ? { commandsChanged: false as const }
+        : {}),
     });
   };
   let refreshTail: Promise<void> = Promise.resolve();
@@ -260,10 +268,14 @@ export function createGatewayChatMetadataRuntime(params: {
             `chat metadata continuing without text commands for ${agentId}: ${formatErrorMessage(error)}`,
           );
         }
+        const swarmEnabled = resolveSwarmConfig(generation.facts.config, agentId).enabled;
         return {
           ...agent,
           ...(commands !== undefined ? { commands } : {}),
-          swarmEnabled: resolveSwarmConfig(generation.facts.config, agentId).enabled,
+          swarmEnabled,
+          revision: createHash("sha256")
+            .update(JSON.stringify({ commands, swarmEnabled }))
+            .digest("base64url"),
         };
       })().catch((error: unknown) => {
         if (generation.agentsById.get(agentId) === preparing) {
@@ -490,7 +502,13 @@ export function createGatewayChatMetadataRuntime(params: {
           isCurrent: agent.owner.isCurrent,
           read: () => {
             draft?.assertCurrent();
-            return { commands: agent.commands, swarmEnabled: agent.swarmEnabled };
+            return {
+              ...(readParams.ifRevision === agent.revision
+                ? { unchanged: true as const }
+                : { commands: agent.commands }),
+              swarmEnabled: agent.swarmEnabled,
+              revision: agent.revision,
+            };
           },
         };
       }

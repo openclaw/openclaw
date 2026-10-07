@@ -4,7 +4,7 @@ import * as fences from "../../packages/markdown-core/src/fences.js";
 import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import { EmbeddedBlockChunker, type BlockChunkMetadata } from "./embedded-agent-block-chunker.js";
 import { agentProcessTestEntrypoints } from "./process-runtime.test-support.js";
 
 function drainChunks(chunker: EmbeddedBlockChunker, force = false) {
@@ -22,6 +22,89 @@ function expectChunksWithinLength(chunks: string[], maxLength: number) {
 }
 
 describe("EmbeddedBlockChunker", () => {
+  it("emits a whole leading grapheme that exactly fills the hard cap", () => {
+    const cluster = `e${"\u0301".repeat(1199)}`;
+    const chunker = new EmbeddedBlockChunker({ minChars: 800, maxChars: 1200 });
+    chunker.append(cluster);
+    expect(drainChunks(chunker)).toEqual([cluster]);
+    expect(chunker.bufferedText).toBe("");
+
+    chunker.append("done");
+    expect(drainChunks(chunker)).toEqual([]);
+    expect(drainChunks(chunker, true)).toEqual(["done"]);
+    expect(chunker.consumedLength).toBe(cluster.length + 4);
+  });
+
+  it.each([
+    { name: "family emoji", prefixLength: 1195, cluster: "👨‍👩‍👧‍👦" },
+    { name: "accented character", prefixLength: 1199, cluster: "e\u0301" },
+    { name: "flag", prefixLength: 1198, cluster: "🇨🇦" },
+    { name: "skin tone", prefixLength: 1198, cluster: "👋🏽" },
+  ])("keeps a fitting $name intact at the normal streaming cap", ({ prefixLength, cluster }) => {
+    const source = `${"x".repeat(prefixLength)}${cluster}done`;
+    const boundaries = new Set(
+      Array.from(
+        new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(source),
+        (segment) => segment.index,
+      ),
+    );
+    boundaries.add(source.length);
+
+    // Cover complete terminal output and provider-like deltas, including a
+    // delta ending at the cap before the rest of its grapheme has arrived.
+    for (const deltaSize of [source.length, 17, 1]) {
+      for (const force of [false, true]) {
+        const chunker = new EmbeddedBlockChunker({ minChars: 800, maxChars: 1200 });
+        const chunks: string[] = [];
+        const metadata: BlockChunkMetadata[] = [];
+        const emit = (chunk: string, options?: BlockChunkMetadata) => {
+          chunks.push(chunk);
+          if (options) {
+            metadata.push(options);
+          }
+        };
+        for (let offset = 0; offset < source.length; offset += deltaSize) {
+          chunker.append(source.slice(offset, offset + deltaSize));
+          if (!force) {
+            chunker.drain({ force: false, emit });
+          }
+        }
+        chunker.drain({ force: true, emit });
+
+        expect(chunks.join("")).toBe(source);
+        expectChunksWithinLength(chunks, 1200);
+        expect(chunks.filter((chunk) => chunk.includes(cluster))).toHaveLength(1);
+        expect(metadata.map((entry) => entry.sourceText).join("")).toBe(source);
+        expect(metadata.every((entry) => boundaries.has(entry.sourceEnd))).toBe(true);
+        expect(metadata.map((entry) => entry.sourceStart)).toEqual([
+          0,
+          ...metadata.slice(0, -1).map((entry) => entry.sourceEnd),
+        ]);
+        expect(chunker.consumedLength).toBe(source.length);
+        expect(chunker.bufferedText).toBe("");
+      }
+    }
+  });
+
+  it.each([
+    { name: "ASCII", text: "x".repeat(1207), maxChars: 1200 },
+    { name: "a grapheme larger than the hard cap", text: "👨‍👩‍👧‍👦done", maxChars: 8 },
+  ])("retains progress and the hard cap for $name", ({ text, maxChars }) => {
+    const chunker = new EmbeddedBlockChunker({ minChars: 1, maxChars });
+    const chunks: string[] = [];
+    for (const character of text) {
+      chunker.append(character);
+      chunks.push(...drainChunks(chunker));
+    }
+    chunks.push(...drainChunks(chunker, true));
+
+    expect(chunks.join("")).toBe(text);
+    expectChunksWithinLength(chunks, maxChars);
+    expect(chunks).not.toContain("");
+    expect(chunker.consumedLength).toBe(text.length);
+    expect(chunker.bufferedText).toBe("");
+  });
+
   it.each([
     { breakPreference: "paragraph", suffix: "ready\n\nTail", expected: "First line is ready" },
     { breakPreference: "newline", suffix: "ready\nTail", expected: "First line is ready" },

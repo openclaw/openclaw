@@ -276,41 +276,25 @@ internal fun CronEditorDraftState.reconcileRestoredAction(
   // Preserve pending only when the restored runtime still owns this Save.
   val retainedSaveState =
     when (actionState) {
-      is GatewayCronActionState.Running -> {
-        actionState.id == jobId && actionState.action == GatewayCronAction.Save
-      }
-
-      is GatewayCronActionState.Notice -> {
-        actionState.id == jobId
-      }
-
-      GatewayCronActionState.Idle -> {
-        false
-      }
+      is GatewayCronActionState.Running -> actionState.id == jobId && actionState.action == GatewayCronAction.Save
+      is GatewayCronActionState.Notice -> actionState.id == jobId
+      GatewayCronActionState.Idle -> false
     }
   return if (isConnected && retainedSaveState) this else saveAborted()
 }
 
-internal enum class GatewayCronRunSkipReason {
-  NotDue,
-  AlreadyRunning,
-  RestartRecoveryPending,
-  InvalidSpec,
-  Stopped,
+internal enum class GatewayCronRunSkipReason(
+  val messageText: NativeText,
+) {
+  NotDue(nativeText("Automation is not due yet.")),
+  AlreadyRunning(nativeText("Automation is already running.")),
+  RestartRecoveryPending(nativeText("Gateway restart recovery is still in progress.")),
+  InvalidSpec(nativeText("Automation has an invalid configuration.")),
+  Stopped(nativeText("Cron scheduler is stopped.")),
   ;
 
   val message: String
     get() = messageText.resolveNativeText()
-
-  val messageText: NativeText
-    get() =
-      when (this) {
-        NotDue -> nativeText("Automation is not due yet.")
-        AlreadyRunning -> nativeText("Automation is already running.")
-        RestartRecoveryPending -> nativeText("Gateway restart recovery is still in progress.")
-        InvalidSpec -> nativeText("Automation has an invalid configuration.")
-        Stopped -> nativeText("Cron scheduler is stopped.")
-      }
 }
 
 internal sealed interface GatewayCronRunOutcome {

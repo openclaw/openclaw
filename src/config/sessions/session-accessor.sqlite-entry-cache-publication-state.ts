@@ -63,6 +63,7 @@ export function recordCommittedSessionEntryPublication(
   database: SessionEntryCacheDatabase | string,
   sessionKey: string,
   entry: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined,
+  before?: PendingSessionEntryPublication,
 ): void {
   const identity =
     typeof database === "string" ? database : findOpenClawAgentDatabaseIdentity(database)?.identity;
@@ -71,6 +72,9 @@ export function recordCommittedSessionEntryPublication(
   }
   for (const pending of pendingSessionEntryPublications.get(`file:${identity}\0${sessionKey}`) ??
     []) {
+    if (pending === before) {
+      break;
+    }
     pending.superseded.set(
       sessionKey,
       entry
@@ -116,6 +120,19 @@ export function recordCommittedSessionOwnerPublication(
       pending.ownerChanges.set(sessionKey, structuredClone(change));
     }
   }
+}
+
+/** Commit receipts remain current only until their stored fields are superseded. */
+export function readCurrentSessionEntryProjection(
+  owner: PendingSessionEntryPublication,
+  replacement: SessionEntryReplacementPublication | undefined,
+  sessionKey: string,
+) {
+  return !owner.superseded.has(sessionKey) &&
+    !owner.metadataSuperseded.has(sessionKey) &&
+    !owner.projectionSuperseded.has(sessionKey)
+    ? replacement?.projection?.get(sessionKey)
+    : undefined;
 }
 
 export function applyPendingSessionEntryOwnerChanges(

@@ -24,7 +24,11 @@ import {
 import { resolveStoredCredentialReadOnlyAvailability } from "../auth-profiles/read-only-availability.js";
 import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
+import {
+  isProfileInCooldown,
+  resolveProfilesUnavailableReason,
+} from "../auth-profiles/usage-state.js";
+import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { resolveProviderDirectAuthPlanningEvidence } from "../model-auth-env.js";
 import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
 import {
@@ -102,6 +106,29 @@ function hasAuthoredProviderRoute(
     (configuredModel?.headers && Object.keys(configuredModel.headers).length > 0) ||
     (configuredModel?.params && Object.keys(configuredModel.params).length > 0) ||
     hasRequestCompatOverrides(configuredModel?.compat),
+  );
+}
+
+function createAuthProfileCooldownError(
+  params: PrepareAgentRuntimeAuthPlanParams,
+  profileId: string,
+): FailoverError {
+  const reason =
+    (params.authProfileStore &&
+      resolveProfilesUnavailableReason({
+        store: params.authProfileStore,
+        profileIds: [profileId],
+      })) ??
+    "unknown";
+  return new FailoverError(
+    `Auth profile "${profileId}" is temporarily unavailable for ${params.provider}/${params.modelId}.`,
+    {
+      reason,
+      status: resolveFailoverStatus(reason),
+      provider: params.provider,
+      model: params.modelId,
+      profileId,
+    },
   );
 }
 
@@ -251,8 +278,9 @@ function resolvePreparedProviderEntryApiKeyProfileReference(
     );
   }
   if (isProfileInCooldown(params.store, reference.profileId, undefined, params.modelId)) {
-    throw new Error(
-      `Auth profile "${reference.profileId}" is temporarily unavailable for ${params.provider}/${params.modelId}.`,
+    throw createAuthProfileCooldownError(
+      { ...params, authProfileStore: params.store },
+      reference.profileId,
     );
   }
   return reference;
@@ -568,9 +596,7 @@ export function prepareAgentRuntimeAuth(
     });
     if (sourceDecision.kind === "rejected") {
       if (sourceDecision.reason === "all-cooldown" && sourceDecision.source) {
-        throw new Error(
-          `Auth profile "${sourceDecision.source.profileId}" is temporarily unavailable for ${params.provider}/${params.modelId}.`,
-        );
+        throw createAuthProfileCooldownError(params, sourceDecision.source.profileId);
       }
       throw new Error(sourceDecision.message);
     }
@@ -649,9 +675,7 @@ export function prepareAgentRuntimeAuth(
       routeAuthDecision.reason === "all-cooldown" &&
       routeAuthDecision.source
     ) {
-      throw new Error(
-        `Auth profile "${routeAuthDecision.source.profileId}" is temporarily unavailable for ${params.provider}/${params.modelId}.`,
-      );
+      throw createAuthProfileCooldownError(params, routeAuthDecision.source.profileId);
     }
     throw new Error(routeAuthDecision.message);
   }

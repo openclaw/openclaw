@@ -1040,53 +1040,49 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
   );
 
-  it.each(["bun-compatible", "dual"] as const)(
-    "admits transcript retention within its canonical embedded-run envelopes under %s",
-    (policy) => {
-      const sibling = "src/agents/embedded-agent-runner/run/abortable.test.ts";
-      const includePatterns = [transcriptLifecycleTarget, sibling];
-      const mixed = { configs: [embeddedRunConfig], includePatterns };
-      expect(resolveCiTestRuntimeSelections(mixed, policy)).toEqual([
-        policy === "dual" ? { runtime: "node" } : { runtime: "node", includePatterns: [sibling] },
-        { runtime: "bun", includePatterns: [transcriptLifecycleTarget] },
-      ]);
-      expect(ciTestShardRequiresBun(mixed, policy)).toBe(true);
-      expect(
-        resolveCiTestRuntimeSelections(
-          { configs: [embeddedRunConfig], includePatterns: [transcriptLifecycleTarget] },
-          policy,
-        ),
-      ).toEqual([
-        ...(policy === "dual" ? [{ runtime: "node" }] : []),
-        { runtime: "bun", includePatterns: [transcriptLifecycleTarget] },
-      ]);
-      expect(
-        resolveCiTestRuntimeSelections({ targets: [transcriptLifecycleTarget] }, policy),
-      ).toEqual(
-        policy === "dual" ? [{ runtime: "node" }, { runtime: "bun" }] : [{ runtime: "bun" }],
-      );
-      expect(resolveCiTestRuntimeSelections({ targets: [sibling] }, policy)).toEqual([
+  it.each([
+    {
+      config: embeddedRunConfig,
+      targets: [
+        transcriptLifecycleTarget,
+        "src/agents/embedded-agent-runner/run/abortable.test.ts",
+      ],
+      otherOwner: "src/agents/isolated-completion.resources.test.ts",
+    },
+    {
+      config: "test/vitest/vitest.cli.config.ts",
+      targets: [
+        "src/cli/update-cli/update-command-mutable-signals.test.ts",
+        "src/cli/daemon-cli/probe.test.ts",
+      ],
+      otherOwner: "src/cli/cli-process-child.test-helpers.test.ts",
+    },
+  ])("admits the complete $config owner without changing adjacent ownership", (row) => {
+    for (const policy of ["node", "bun-compatible", "dual"] as const) {
+      const expected =
+        policy === "node"
+          ? [{ runtime: "node" }]
+          : policy === "dual"
+            ? [{ runtime: "node" }, { runtime: "bun" }]
+            : [{ runtime: "bun" }];
+      for (const selection of [
+        { configs: [row.config] },
+        { configs: [row.config], includePatterns: row.targets },
+        { configs: [row.config], includePatterns: ["**/*.test.ts"] },
+        { targets: row.targets },
+        ...row.targets.map((target) => ({ targets: [target] })),
+      ]) {
+        expect(resolveCiTestRuntimeSelections(selection, policy)).toEqual(expected);
+        expect(ciTestShardRequiresBun(selection, policy)).toBe(policy !== "node");
+        expect(
+          resolveCiTestRuntimeSelections({ ...selection, vitestArgs: ["--shard=1/2"] }, policy),
+        ).toEqual([{ runtime: "node" }]);
+      }
+      expect(resolveCiTestRuntimeSelections({ targets: [row.otherOwner] }, policy)).toEqual([
         { runtime: "node" },
       ]);
-      const full = resolveCiTestRuntimeSelections({ configs: [embeddedRunConfig] }, policy);
-      expect(full).toEqual([
-        policy === "dual"
-          ? { runtime: "node" }
-          : { runtime: "node", includePatterns: expect.arrayContaining([sibling]) },
-        { runtime: "bun", includePatterns: [transcriptLifecycleTarget] },
-      ]);
-      if (policy === "bun-compatible") {
-        expect(full[0]?.includePatterns).not.toContain(transcriptLifecycleTarget);
-        expect(full[0]?.includePatterns).not.toContain(
-          "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
-        );
-        expect(full[0]?.includePatterns).not.toContain(
-          "src/agents/embedded-agent-runner/run/runtime-resolution.test.ts",
-        );
-      }
-      expect(resolveCiTestRuntimeSelections(mixed, "node")).toEqual([{ runtime: "node" }]);
-    },
-  );
+    }
+  });
 
   it.each([
     { policy: "node", expected: [{ runtime: "node" }] },
@@ -1278,16 +1274,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "src/cli/update-cli/update-command-migrated.test.ts",
       ],
       sibling: "src/cli/update-cli/update-command-candidate-exit.test.ts",
-      glob: "**/*.test.ts",
-    },
-    {
-      config: "test/vitest/vitest.cli.config.ts",
-      dir: "src/cli",
-      targets: [
-        "src/cli/update-cli/update-command-mutable-signals.test.ts",
-        "src/cli/update-cli/update-command-rollback-executor.test.ts",
-      ],
-      sibling: "src/cli/update-cli/update-command-service-command.process.test.ts",
       glob: "**/*.test.ts",
     },
     {

@@ -158,7 +158,6 @@ describe("sessions.dispatch device targets", () => {
   });
 
   registerNativeDeviceDispatchTests({
-    makeTempDir: (prefix) => tempDirs.make(prefix),
     connectedNode,
     pairedNode,
     useDeviceSession,

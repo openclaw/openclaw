@@ -431,6 +431,13 @@ export async function readSessionConversationBindingAsync(
   scope: SessionTranscriptReadScope,
   conversationRef: string,
 ) {
+  const incognito = captureIncognitoSessionHistoryBinding(scope);
+  if (incognito) {
+    return readIncognitoSessionHistory(incognito, scope, (target) => ({
+      type: "session.history.conversation-binding",
+      input: { ...target, conversationRef },
+    }));
+  }
   const target = captureHistoryReadScope(scope);
   const { readSessionHistoryPageInWorker } =
     await import("../config/sessions/session-history-worker-runtime.js");

@@ -256,6 +256,10 @@ visible. **Older messages** opens earlier pages without automatic refresh;
 with visible omission notices. The initial conversation and social metadata
 work without JavaScript.
 
+Public reads wait for current sharing facts when a session changes during the
+request. If the page changes while it is being prepared, the reader can return a
+temporary-unavailable response; retrying reads the current publication.
+
 ### Revocation and older links
 
 **Disable public access** stops anonymous reads through the normal thread URL.

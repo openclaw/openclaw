@@ -12,6 +12,7 @@ import {
   isNativeSessionEntryRead,
 } from "../../config/sessions/session-entry-read-request.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
@@ -68,6 +69,29 @@ export function prepareSteeringDelivery(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
   });
+  const binding = captureIncognitoSessionBinding(scope);
+  if (binding) {
+    const claim = binding.actor.sessions.captureCurrent(scope.sessionKey);
+    const assertActorCurrent = () => {
+      params.assertCurrent();
+      binding.admissionSignal?.throwIfAborted();
+      binding.actor.assertReadable();
+      claim.assertCurrent();
+      assertEntry(binding.actor.sessions.readSteering(scope.sessionKey));
+    };
+    return {
+      prepareCurrent: async () => {
+        assertActorCurrent();
+        if (isToolAuthorityReadCaptureActive()) {
+          recordPreparedToolAuthorityRead({
+            reads: [],
+            assertPrepared: assertActorCurrent,
+            assertLegacyCurrent: assertActorCurrent,
+          });
+        }
+      },
+    };
+  }
   if (isNativeSessionEntryRead(scope, agentId)) {
     const storePath = isIncognitoSessionKey(scope.sessionKey)
       ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: params.agentId, env: scope.env })

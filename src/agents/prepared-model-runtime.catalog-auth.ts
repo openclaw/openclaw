@@ -4,7 +4,11 @@ import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
-import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
+import {
+  resolveAgentCredentialMapFromStore,
+  resolveUsableAgentCredentialModes,
+} from "./agent-auth-credentials.js";
+import { prepareAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
 import { withPreparedAuthStorePathForDisplay } from "./auth-profiles/paths.js";
 import { mergeAuthProfileStores } from "./auth-profiles/persisted.js";
 import { removeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
@@ -468,6 +472,10 @@ export async function loadScopedModelCatalogAuth(
 /** Rechecks CLI backend logins on demand and publishes only a changed result. */
 export function createNativeLoginRecheck(
   owner: PreparedModelCatalogAuthOwner,
+  params: {
+    agentFacts: Pick<PreparedModelRuntimeCatalogAccessParams["agentFacts"], "input" | "env">;
+    retirementSignal: AbortSignal;
+  },
   eligibleProviders: readonly string[],
   publish: (auth: PreparedModelCatalogAuth) => void,
 ): () => void {
@@ -477,19 +485,64 @@ export function createNativeLoginRecheck(
     (provider) => owners.cliBackends.has(provider) && refs.has(provider),
   );
   let checkedAt = Date.now();
+  let pending = false;
+  const recheck = async () => {
+    owner.assertCurrent();
+    await using _ = {
+      [Symbol.asyncDispose]: retainPreparedPluginGeneration(owner.pluginGeneration),
+    };
+    const { input, env } = params.agentFacts;
+    const signal = AbortSignal.any([params.retirementSignal, AbortSignal.timeout(180_000)]);
+    await withPluginRuntimeGenerationScope(
+      {
+        metadataSnapshot: owner.pluginGeneration.pluginMetadataSnapshot,
+        pluginRegistry: owner.pluginGeneration.pluginRegistry,
+      },
+      async () => {
+        const credentials = await prepareAmbientAgentCredentialsForDiscovery({
+          config: input.config,
+          env,
+          workspaceDir: input.workspaceDir,
+          authoritativeSyntheticAuthProviderRefs: providerIds,
+          syntheticAuthProviderRefs: providerIds,
+          preparationOwner: {},
+          signal,
+        });
+        signal.throwIfAborted();
+        owner.assertCurrent();
+        const current = owner.readAuth();
+        // Native availability changes independently of stored profiles; reuse their current owner.
+        Object.assign(
+          credentials,
+          resolveAgentCredentialMapFromStore(current.authStore, { config: input.config }),
+        );
+        const auth = replacePreparedModelCatalogAuth(
+          current,
+          {
+            authStore: current.authStore,
+            credentials,
+            authModes: resolveUsableAgentCredentialModes(credentials),
+          },
+          (provider) => providerIds.includes(owner.normalizeProvider(provider)),
+        );
+        owner.assertCurrent();
+        if (!isDeepStrictEqual(current.authModes, auth.authModes)) {
+          publish(auth);
+        }
+      },
+    );
+  };
   return () => {
     const now = Date.now();
-    if (!providerIds.length || now - checkedAt < NATIVE_LOGIN_RECHECK_MS) {
+    if (pending || !providerIds.length || now - checkedAt < NATIVE_LOGIN_RECHECK_MS) {
       return;
     }
     checkedAt = now;
-    void refreshScopedModelCatalogAuth(owner, { providerIds })
-      .then((auth) => {
-        const current = owner.readAuth().authModes;
-        if (providerIds.some((provider) => current[provider] !== auth.authModes[provider])) {
-          publish(auth);
-        }
-      })
-      .catch(() => undefined);
+    pending = true;
+    void recheck()
+      .catch(() => undefined)
+      .finally(() => {
+        pending = false;
+      });
   };
 }

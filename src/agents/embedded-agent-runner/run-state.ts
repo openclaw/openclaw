@@ -25,6 +25,10 @@ import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-ac
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OperationalRunInstanceRef } from "../admitted-run-context.js";
 import type { ReplyExpectation } from "../reply-completion.js";
+import {
+  clearActiveRunSessionIndex,
+  normalizeSessionFileRegistryKey,
+} from "./runs.session-index.js";
 
 export type EmbeddedAgentQueueHandle = {
   kind?: "embedded";
@@ -362,6 +366,22 @@ export const RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS =
 export const ACTIVE_EMBEDDED_RUN_SNAPSHOTS = embeddedRunState.snapshots;
 export const ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY = embeddedRunState.sessionIdsByKey;
 export const ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE = embeddedRunState.sessionIdsByFile;
+
+export function setActiveEmbeddedRunSessionIndexes(
+  sessionId: string,
+  sessionKey?: string,
+  sessionFile?: string,
+): void {
+  for (const [index, key] of [
+    [ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY, sessionKey?.trim()],
+    [ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE, normalizeSessionFileRegistryKey(sessionFile)],
+  ] as const) {
+    clearActiveRunSessionIndex(index, sessionId);
+    if (key) {
+      index.set(key, sessionId);
+    }
+  }
+}
 export const ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID = embeddedRunState.abandonedRunsBySessionId;
 export const ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY =
   embeddedRunState.abandonedRunSessionIdsByKey;

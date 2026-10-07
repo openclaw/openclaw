@@ -9,15 +9,7 @@ internal fun isLoopbackGatewayHost(
   rawHost: String?,
   allowEmulatorBridgeAlias: Boolean = isAndroidEmulatorRuntime(),
 ): Boolean {
-  var host =
-    rawHost
-      ?.trim()
-      ?.lowercase(Locale.US)
-      ?.trim('[', ']')
-      .orEmpty()
-  if (host.endsWith(".")) {
-    host = host.dropLast(1)
-  }
+  val host = normalizePolicyHost(rawHost)
   val zoneIndex = host.indexOf('%')
   // Scoped IPv6 literals are not stable origin identifiers; reject them for
   // loopback trust instead of guessing which interface the zone names.
@@ -53,15 +45,7 @@ internal fun isLocalCleartextGatewayHost(
   rawHost: String?,
   allowEmulatorBridgeAlias: Boolean = isAndroidEmulatorRuntime(),
 ): Boolean {
-  var host =
-    rawHost
-      ?.trim()
-      ?.lowercase(Locale.US)
-      ?.trim('[', ']')
-      .orEmpty()
-  if (host.endsWith(".")) {
-    host = host.dropLast(1)
-  }
+  var host = normalizePolicyHost(rawHost)
   if (host.isEmpty()) return false
   if (isLoopbackGatewayHost(host, allowEmulatorBridgeAlias = allowEmulatorBridgeAlias)) return true
   if (isMdnsLocalHostname(host)) return true
@@ -88,21 +72,20 @@ internal fun isLocalCleartextGatewayHost(
   if (!host.contains(':') || !host.all(::isIpv6LiteralChar)) return false
 
   val address = runCatching { InetAddress.getByName(host) }.getOrNull() ?: return false
-  return when {
-    address.isLinkLocalAddress -> {
-      true
-    }
-
-    address.isSiteLocalAddress -> {
-      true
-    }
-
-    else -> {
+  return address.isLinkLocalAddress || address.isSiteLocalAddress ||
+    run {
       val bytes = address.address
       bytes.size == 16 && (bytes[0].toInt() and 0xfe) == 0xfc
     }
-  }
 }
+
+private fun normalizePolicyHost(rawHost: String?): String =
+  rawHost
+    ?.trim()
+    ?.lowercase(Locale.US)
+    ?.trim('[', ']')
+    .orEmpty()
+    .removeSuffix(".")
 
 private fun isAndroidEmulatorRuntime(): Boolean {
   val fingerprint = Build.FINGERPRINT?.lowercase(Locale.US).orEmpty()

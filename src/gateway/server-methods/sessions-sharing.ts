@@ -15,9 +15,8 @@ import {
 import { addSessionMember, removeSessionMember } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
-import { listSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
+import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
 import type { SessionMember as StoredSessionMember } from "../../config/sessions/session-sharing-store.kernel.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
@@ -186,34 +185,27 @@ function createSessionMembersListHandler(
       const profiles = await measureSessionCollaborationPhase(`${method}.profiles`, () =>
         listProfiles(),
       );
-      const evidenceMembers = (
-        await measureSessionCollaborationPhase(`${method}.evidence`, () =>
-          listSessionMembersInWorker({
-            agentId: managed.agentId,
-            sessionKey: managed.storeKey,
-            storePath: managed.storePath,
-          }),
-        )
-      ).map(projectSessionMemberEvidence);
       do {
         await measureSessionCollaborationPhase(`${method}.projection`, () =>
           Promise.resolve(projection.prepareSelection()),
         );
       } while (projection.needsSelectionPreparation());
-      const entry = await readSessionEntryReadOnlyInWorker(
-        {
-          agentId: managed.agentId,
-          sessionKey: managed.storeKey,
-          storePath: managed.storePath,
-          projection: "list",
-        },
-        access.assertCurrent,
+      const { entry, members: storedMembers } = await measureSessionCollaborationPhase(
+        `${method}.evidence`,
+        () =>
+          readSessionMembersInWorker({
+            agentId: managed.agentId,
+            sessionKey: managed.storeKey,
+            storePath: managed.storePath,
+          }),
       );
+      access.assertCurrent();
       if (!entry) {
         throw new Error("session changed before sharing read");
       }
       const currentCfg = context.getRuntimeConfig();
       const { target, role } = access.current(entry);
+      const evidenceMembers = storedMembers.map(projectSessionMemberEvidence);
       const publicShareGrant = resolveSessionPublicShare(entry);
       const actor = actorIdentity(client);
       const members = evidenceAware

@@ -62,13 +62,15 @@ export function captureAgentDatabaseCloseFence(
 
 export { matchesAgentDatabaseReadCandidatePath };
 
-registerAgentDatabaseReaderCloser(async (candidates) => {
+registerAgentDatabaseReaderCloser(async (candidates, retainedPaths) => {
   const results = await Promise.allSettled(
     [...new Set([...resources.active, ...resources.closing.keys()])]
-      .filter((resource) =>
-        candidates.some((candidate) =>
-          matchesAgentDatabaseReadCandidatePath(candidate, resource.path),
-        ),
+      .filter(
+        (resource) =>
+          !retainedPaths?.has(path.resolve(resource.path)) &&
+          candidates.some((candidate) =>
+            matchesAgentDatabaseReadCandidatePath(candidate, resource.path),
+          ),
       )
       .map((resource) => closeAgentDatabaseResource(resource)),
   );

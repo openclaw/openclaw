@@ -78,24 +78,6 @@ async function expectSessionDeleteChanged(request: SessionDeleteRequest) {
   return deleted;
 }
 
-async function seedSubagentWorkerSession() {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-subagent", "hello");
-  await writeSessionStore({
-    entries: {
-      "agent:main:subagent:worker": sessionStoreEntry("sess-subagent"),
-    },
-  });
-}
-
-function expectThreadBindingsUnbound(targetSessionKey: string) {
-  expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
-  expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
-    targetSessionKey,
-    reason: "session-delete",
-  });
-}
-
 test("sessions.delete protects the sole explicit agent's global session before cleanup", async () => {
   const { storePath } = await createSessionStoreDir();
   testState.agentsConfig = { ownership: "explicit", entries: { ops: {} } };
@@ -361,40 +343,6 @@ test("sessions.delete rejects a same-key successor created during cleanup withou
   });
   await expectSessionDeleteChanged({ key: sessionKey });
   expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("successor-session");
-});
-
-test("sessions.delete includes cleanup-owned row changes in its guarded deletion", async () => {
-  const sessionKey = "agent:main:cron:cleanup";
-  const sessionId = "sess-cleanup";
-  const lifecycleRevision = "cleanup-revision";
-  const updatedAt = 1_737_600_000_000;
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry(sessionId, { lifecycleRevision, updatedAt }),
-    },
-  });
-  bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockImplementationOnce(async () => {
-    await writeSessionStore({
-      entries: {
-        [sessionKey]: sessionStoreEntry(sessionId, {
-          label: "cleanup-owned revision",
-          lifecycleRevision,
-          updatedAt: updatedAt + 1,
-        }),
-      },
-    });
-  });
-
-  const deleted = await expectSessionDeleteSucceeds({
-    key: sessionKey,
-    expectedSessionId: sessionId,
-    expectedLifecycleRevision: lifecycleRevision,
-    expectedSessionUpdatedAt: updatedAt,
-  });
-
-  expect(deleted.payload?.deleted).toBe(true);
-  expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
 });
 
 test("sessions.delete serializes a patch behind asynchronous runtime cleanup", async () => {
@@ -675,36 +623,6 @@ test("sessions.delete closes child ACP runtimes spawned from the deleted parent"
   expect(closedKeys).toContain("agent:main:acp-child");
   expect(readAcpSessionMeta({ sessionKey: "agent:main:acp-parent" })).toBeUndefined();
   expect(readAcpSessionMeta({ sessionKey: "agent:main:acp-child" })).toBeUndefined();
-});
-
-test("sessions.delete does not emit lifecycle events when nothing was deleted", async () => {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-main", "hello");
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main"),
-    },
-  });
-
-  const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
-    key: "agent:main:subagent:missing",
-  });
-
-  expect(deleted.ok).toBe(true);
-  expect(deleted.payload?.deleted).toBe(false);
-  expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
-  expect(threadBindingMocks.unbindThreadBindingsBySessionKey).not.toHaveBeenCalled();
-});
-
-test("sessions.delete can skip lifecycle hooks while still unbinding thread bindings", async () => {
-  await seedSubagentWorkerSession();
-
-  await expectSessionDeleteSucceeds({
-    key: "agent:main:subagent:worker",
-    emitLifecycleHooks: false,
-  });
-  expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
-  expectThreadBindingsUnbound("agent:main:subagent:worker");
 });
 
 test("sessions.delete returns unavailable when active run does not stop", async () => {

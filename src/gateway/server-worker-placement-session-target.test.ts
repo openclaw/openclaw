@@ -267,7 +267,7 @@ test("rejects stale repository selection and refreshes the accepted checkpoint a
     const sessionRuntime = {
       resolveGatewaySessionStoreTargetWithStore,
       resolveCanonicalSessionEntryFromStoreKeys,
-      managedWorktrees: { findLiveByOwner: () => undefined },
+      managedWorktrees: { findLiveByOwner: async () => undefined },
     };
     const select = () =>
       resolveWorkerPlacementSessionTarget({
@@ -412,7 +412,7 @@ test("resolves consecutive placement workspaces without decoding unrelated sessi
             resolveGatewaySessionStoreTargetWithStore,
             resolveCanonicalSessionEntryFromStoreKeys,
             managedWorktrees: {
-              findLiveByOwner: (_kind, ownerId) => ({
+              findLiveByOwner: async (_kind, ownerId) => ({
                 id: ownerId,
                 ownerId,
                 path: `/synthetic/${ownerId}`,
@@ -503,7 +503,7 @@ test.each([
           resolveGatewaySessionStoreTargetWithStore,
           resolveCanonicalSessionEntryFromStoreKeys,
           managedWorktrees: {
-            findLiveByOwner: (_kind, ownerId) => ({
+            findLiveByOwner: async (_kind, ownerId) => ({
               id: "recovery-worktree",
               ownerId,
               path: "/synthetic/recovery",

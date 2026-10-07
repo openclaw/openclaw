@@ -414,7 +414,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   ...[
     "src/agents/worktrees/empty-source.test.ts",
     "src/agents/worktrees/service.remove-lease.test.ts",
-    "src/agents/worktrees/service.snapshot-index.test.ts",
     "src/agents/worktrees/service.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
@@ -1165,15 +1164,18 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["src/plugin-state/plugin-state.worker.ts"],
   },
   {
-    testFile: "src/plugin-sdk/session-transcript-runtime.catalog.test.ts",
+    testFile: "src/plugin-sdk/session-transcript-runtime.test.ts",
     watchGlobs: [
       "src/config/sessions/session-cold-storage-worker.ts",
       "src/config/sessions/session-transcript-reconcile.worker.ts",
     ],
   },
   {
-    testFile: "src/plugin-sdk/session-transcript-runtime.read-fence.test.ts",
-    watchGlobs: ["src/config/sessions/session-transcript-reconcile.worker.ts"],
+    testFile: "src/plugin-sdk/session-transcript-runtime.guarded.test.ts",
+    watchGlobs: [
+      "src/config/sessions/session-cold-storage-worker.ts",
+      "src/config/sessions/session-transcript-reconcile.worker.ts",
+    ],
   },
   ...[
     "src/plugin-state/plugin-blob-store.readonly.test.ts",

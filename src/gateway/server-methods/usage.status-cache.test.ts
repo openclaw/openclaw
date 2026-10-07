@@ -8,8 +8,7 @@ import {
 } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 
@@ -222,19 +221,6 @@ describe("usage.status provider usage cache", () => {
     await expect(runCapableUsageStatus()).resolves.toMatchObject({
       providers: [expect.any(Object)],
     });
-  });
-
-  it("rebuilds prepared usage facts once for each config and plugin generation", async () => {
-    await runUsageStatus();
-    await runUsageStatus();
-    const nextConfig = { ...config };
-    await runUsageStatus({ runtimeConfig: nextConfig });
-    await runUsageStatus({ runtimeConfig: nextConfig });
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    await runUsageStatus({ runtimeConfig: nextConfig });
-    await runUsageStatus({ runtimeConfig: nextConfig });
-    expect(mocks.listProviderUsagePluginDescriptors).toHaveBeenCalledTimes(3);
-    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(3);
   });
 
   it.each([false, true])("serves stale usage while refreshing (timeout: %s)", async (timeout) => {

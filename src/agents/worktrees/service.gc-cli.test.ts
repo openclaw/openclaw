@@ -22,11 +22,11 @@ import { formatWorktreeGcResult } from "./gc-result.js";
 import { requireGit } from "./git.js";
 import { insertRegistryWorktreeInDatabase } from "./registry-run-end.worker.js";
 import {
-  getRegistryWorktree,
   deleteRegistryWorktree,
   insertRegistryWorktree,
   updateRegistryWorktree,
 } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
 import { resolveRepository } from "./service-preparation.js";
 import { IDLE_GC_MS, SNAPSHOT_RETENTION_MS, ManagedWorktreeService } from "./service.js";
@@ -364,7 +364,7 @@ it.each(["gitdir", "checkout"])(
       ownerId: "agent:main:projection",
       names: ["projection"],
     });
-    deleteRegistryWorktree(env, record!.id);
+    await deleteRegistryWorktree(env, record!.id);
     record!.id = randomUUID();
     await insertRegistryWorktree(env, record!);
     await bindFixtureRepository(env, repo, [record!.id]);

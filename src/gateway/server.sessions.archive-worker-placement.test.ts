@@ -11,6 +11,7 @@ import {
   placementReader,
   workerPlacement,
 } from "./server.sessions.archive-lifecycle.test-support.js";
+import { disposeSessionReadContexts } from "./session-read-contexts.test-support.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -64,6 +65,7 @@ afterEach(async () => {
     await cleanup();
   }
   pendingArchiveCleanups.clear();
+  await disposeSessionReadContexts();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });

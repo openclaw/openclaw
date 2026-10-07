@@ -6,6 +6,7 @@ import android.Manifest
 import android.content.ContentProviderOperation
 import android.content.ContentResolver
 import android.content.Context
+import android.database.Cursor
 import android.provider.ContactsContract
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -192,8 +193,30 @@ private object SystemContactsDataSource : ContactsDataSource {
     contactId: Long,
     fallbackDisplayName: String,
   ): ContactRecord {
-    val nameRow = loadNameRow(resolver, contactId)
-    val organization = loadOrganization(resolver, contactId)
+    val nameRow =
+      loadContactData(
+        resolver,
+        contactId,
+        ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE,
+        arrayOf(
+          ContactsContract.CommonDataKinds.StructuredName.GIVEN_NAME,
+          ContactsContract.CommonDataKinds.StructuredName.FAMILY_NAME,
+          ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME,
+        ),
+      ) { cursor ->
+        NameRow(
+          givenName = cursor.getString(0)?.trim()?.ifEmpty { null },
+          familyName = cursor.getString(1)?.trim()?.ifEmpty { null },
+          displayName = cursor.getString(2)?.trim()?.ifEmpty { null },
+        )
+      } ?: NameRow(givenName = null, familyName = null, displayName = null)
+    val organization =
+      loadContactData(
+        resolver,
+        contactId,
+        ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE,
+        arrayOf(ContactsContract.CommonDataKinds.Organization.COMPANY),
+      ) { it.getString(0)?.trim()?.ifEmpty { null } }
     val phones =
       queryContactValues(
         resolver = resolver,
@@ -233,54 +256,23 @@ private object SystemContactsDataSource : ContactsDataSource {
     val displayName: String?,
   )
 
-  private fun loadNameRow(
+  private inline fun <T> loadContactData(
     resolver: ContentResolver,
     contactId: Long,
-  ): NameRow {
-    val projection =
-      arrayOf(
-        ContactsContract.CommonDataKinds.StructuredName.GIVEN_NAME,
-        ContactsContract.CommonDataKinds.StructuredName.FAMILY_NAME,
-        ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME,
-      )
+    mimeType: String,
+    projection: Array<String>,
+    read: (Cursor) -> T,
+  ): T? =
     resolver
       .query(
         ContactsContract.Data.CONTENT_URI,
         projection,
         "${ContactsContract.Data.CONTACT_ID}=? AND ${ContactsContract.Data.MIMETYPE}=?",
-        arrayOf(
-          contactId.toString(),
-          ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE,
-        ),
+        arrayOf(contactId.toString(), mimeType),
         null,
       ).use { cursor ->
-        if (cursor == null || !cursor.moveToFirst()) {
-          return NameRow(givenName = null, familyName = null, displayName = null)
-        }
-        val given = cursor.getString(0)?.trim()?.ifEmpty { null }
-        val family = cursor.getString(1)?.trim()?.ifEmpty { null }
-        val display = cursor.getString(2)?.trim()?.ifEmpty { null }
-        return NameRow(givenName = given, familyName = family, displayName = display)
+        if (cursor != null && cursor.moveToFirst()) read(cursor) else null
       }
-  }
-
-  private fun loadOrganization(
-    resolver: ContentResolver,
-    contactId: Long,
-  ): String? {
-    val projection = arrayOf(ContactsContract.CommonDataKinds.Organization.COMPANY)
-    resolver
-      .query(
-        ContactsContract.Data.CONTENT_URI,
-        projection,
-        "${ContactsContract.Data.CONTACT_ID}=? AND ${ContactsContract.Data.MIMETYPE}=?",
-        arrayOf(contactId.toString(), ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE),
-        null,
-      ).use { cursor ->
-        if (cursor == null || !cursor.moveToFirst()) return null
-        return cursor.getString(0)?.trim()?.ifEmpty { null }
-      }
-  }
 
   private fun queryContactValues(
     resolver: ContentResolver,

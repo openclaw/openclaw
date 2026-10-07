@@ -134,6 +134,7 @@ async function runLabelAttempts(
         cfg: params.cfg,
       });
       const completion = await runIsolatedCompletion({
+        purpose: "conversation-label",
         config: params.cfg,
         provider: selection.runtimeProvider ?? selection.provider,
         model: selection.modelId,

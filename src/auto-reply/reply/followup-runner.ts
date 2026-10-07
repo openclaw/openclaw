@@ -113,13 +113,11 @@ export function createFollowupRunner(
   const executeFollowup = async (queued: FollowupRun): Promise<void> => {
     let disposition: FollowupDrainDisposition = { kind: "retry", error: undefined };
     let operation: ReplyOperation | undefined;
-    let admittedRunId: string | undefined;
     let admittedTurn: AdmittedFollowupTurn | undefined;
     let terminalPayloads: ReplyPayload[] = [];
     let progressContinuation: ProgressContinuationCapability | undefined;
     const admissionNotices: ReplyPayload[] = [];
     let completion: QueuedFollowupReplyBatch["completion"] = { kind: "completed" };
-    let queuedFollowupAdmitted = false;
     const initiallyAborted = isFollowupRunAborted(queued);
     const endDeliveryCorrelations = initiallyAborted
       ? []
@@ -160,9 +158,7 @@ export function createFollowupRunner(
       }
       const turn: AdmittedFollowupTurn = admission.turn;
       admittedTurn = turn;
-      admittedRunId = turn.runId;
       operation = turn.operation;
-      queuedFollowupAdmitted = true;
       const execution = await executeFollowupTurn({
         turn,
         defaults,
@@ -294,7 +290,7 @@ export function createFollowupRunner(
         }
       }
       try {
-        if (queuedFollowupAdmitted) {
+        if (admittedTurn) {
           await settleQueuedFollowupPresentation(defaults.opts?.onQueuedFollowupSettled);
         }
       } finally {
@@ -312,8 +308,8 @@ export function createFollowupRunner(
       if (disposition.kind === "consumed") {
         completeFollowupRunLifecycle(queued);
       }
-      if (disposition.kind !== "deferred" && admittedRunId) {
-        clearAgentRunContext(admittedRunId);
+      if (disposition.kind !== "deferred" && admittedTurn?.runId) {
+        clearAgentRunContext(admittedTurn.runId);
       }
       operation?.complete();
       defaults.typing.markRunComplete();

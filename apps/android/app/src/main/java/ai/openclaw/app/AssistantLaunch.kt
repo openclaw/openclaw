@@ -75,12 +75,8 @@ internal val SHARED_AUDIO_DOCUMENT_MIME_TYPES =
  */
 fun parseHomeDestinationIntent(intent: Intent?): HomeDestination? {
   val action = intent?.action ?: return null
-  return when {
-    // Debug-only shortcut keeps E2E navigation out of release builds.
-    BuildConfig.DEBUG && action == actionOpenVoiceE2e -> HomeDestination.Voice
-
-    else -> null
-  }
+  // Debug-only shortcut keeps E2E navigation out of release builds.
+  return if (BuildConfig.DEBUG && action == actionOpenVoiceE2e) HomeDestination.Voice else null
 }
 
 /**
@@ -88,28 +84,17 @@ fun parseHomeDestinationIntent(intent: Intent?): HomeDestination? {
  */
 fun parseAssistantLaunchIntent(intent: Intent?): AssistantLaunchRequest? {
   val action = intent?.action ?: return null
-  return when (action) {
-    Intent.ACTION_ASSIST -> {
-      AssistantLaunchRequest(
-        source = "assist",
-        prompt = null,
-        autoSend = false,
-      )
+  val source =
+    when (action) {
+      Intent.ACTION_ASSIST -> "assist"
+      actionAskOpenClaw -> "app_action"
+      else -> return null
     }
-
-    actionAskOpenClaw -> {
-      val prompt = intent.getStringExtra(extraAssistantPrompt)?.trim()?.ifEmpty { null }
-      AssistantLaunchRequest(
-        source = "app_action",
-        prompt = prompt,
-        autoSend = false,
-      )
-    }
-
-    else -> {
-      null
-    }
-  }
+  return AssistantLaunchRequest(
+    source = source,
+    prompt = if (action == actionAskOpenClaw) intent.getStringExtra(extraAssistantPrompt)?.trim()?.ifEmpty { null } else null,
+    autoSend = false,
+  )
 }
 
 /** Parses Android Sharesheet metadata without opening or reading shared payload bytes. */
@@ -150,7 +135,7 @@ fun parseShareLaunchIntent(
       .distinct()
   val fallbackMimeType =
     normalizeSharedAttachmentMimeType(intent.type)
-      ?.takeIf(::isStageableSharedAttachmentMimeType)
+      ?.takeIf { sharedAttachmentKindForMimeType(it) != null }
   val resolved = mutableListOf<SharedAttachment>()
   var droppedCount = 0
   for ((index, uri) in validUris.withIndex()) {
@@ -166,7 +151,7 @@ fun parseShareLaunchIntent(
       }
     val mimeType = providerMimeType ?: fallbackMimeType
     val kind = sharedAttachmentKindForMimeType(mimeType)
-    if (!isStageableSharedAttachmentMimeType(mimeType) || kind == null) {
+    if (kind == null) {
       droppedCount += 1
       continue
     }
@@ -182,6 +167,8 @@ fun parseShareLaunchIntent(
 
 internal fun sharedAttachmentKindForMimeType(mimeType: String?): SharedAttachmentKind? {
   val normalized = normalizeSharedAttachmentMimeType(mimeType) ?: return null
+  // Image pickers may supply image/*; other media must name a concrete type.
+  if (normalized.endsWith("/*") && !normalized.startsWith("image/")) return null
   return when {
     normalized.startsWith("image/") -> SharedAttachmentKind.Image
     normalized.startsWith("audio/") -> SharedAttachmentKind.Audio
@@ -189,12 +176,6 @@ internal fun sharedAttachmentKindForMimeType(mimeType: String?): SharedAttachmen
     normalized in SHARED_ATTACHMENT_MIME_ALLOWLIST -> SharedAttachmentKind.Document
     else -> null
   }
-}
-
-internal fun isStageableSharedAttachmentMimeType(mimeType: String?): Boolean {
-  val normalized = normalizeSharedAttachmentMimeType(mimeType) ?: return false
-  val kind = sharedAttachmentKindForMimeType(normalized) ?: return false
-  return kind == SharedAttachmentKind.Image || !normalized.endsWith("/*")
 }
 
 internal fun normalizeSharedAttachmentMimeType(mimeType: String?): String? =

@@ -148,7 +148,12 @@ export async function withSessionEntryReadOnlyInWorker<T>(
       owner.assertCurrent();
       return value;
     },
-    { backing: true, dataOnly: true, logical: { assertCurrent: assertCallerCurrent, onReadError } },
+    {
+      backing: true,
+      lane: projectionLane,
+      dataOnly: true,
+      logical: { assertCurrent: assertCallerCurrent, onReadError },
+    },
   );
 }
 
@@ -366,6 +371,7 @@ export async function withSessionEntriesFromStoresInWorker<T>(
     return withOrderedSessionEntriesInWorker(inputs, consume, {
       readStore: (input, read) =>
         withSessionStoreReaderInWorker(input, read, {
+          lane: projectionLane,
           prepareSource: options.prepareSource?.bind(options, input),
         }),
       onReadAdmitted: options.onReadAdmitted,
@@ -447,7 +453,7 @@ export async function withSessionEntriesFromStoreInWorker<T>(
       assertCurrent();
       return consume({ result, database, assertCurrent });
     },
-    { backing: input.projection === "list", dataOnly, prepareSource },
+    { backing: input.projection === "list", lane: projectionLane, dataOnly, prepareSource },
   );
 }
 
@@ -695,7 +701,7 @@ export async function withSessionStoreReaderInWorker<T>(
             assertFinalCurrent();
             return value;
           }),
-        { lane: lane ?? (input.projection === "sharing" ? projectionLane : undefined) },
+        { lane },
       );
     }
     // Only returned data may be refused after cleanup; synchronous consumers can already publish.

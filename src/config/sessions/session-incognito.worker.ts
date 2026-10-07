@@ -100,6 +100,18 @@ export function createIncognitoSessionWorker(
           sessionKey,
           revision: sessionRevisions.get(sessionKey) ?? 0,
           capability: entry ? projectSessionEntryCapabilityFacts(entry) : undefined,
+          steering: entry
+            ? {
+                sessionId: entry.sessionId,
+                updatedAt: entry.updatedAt,
+                status: entry.status,
+                restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
+                restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
+                restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
+                restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
+                restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
+              }
+            : undefined,
           sharing: entry
             ? {
                 entry: projectSessionSharingEntry(entry),

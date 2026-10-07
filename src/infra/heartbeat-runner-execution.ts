@@ -508,7 +508,6 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       preflight,
       canRelayToUser,
       scheduledTasks,
-      heartbeatScratchContent: preflight.heartbeatScratchContent,
       useHeartbeatResponseTool,
     });
   let heartbeatRunPrompt = resolveRunPrompt(useHeartbeatResponseToolPrompt);

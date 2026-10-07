@@ -1,9 +1,10 @@
-import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
+import { SqliteWorkerError, type SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
+import { captureWorktreeRegistryMutation } from "./run-end-lifecycle.js";
 import type { WorktreeRunLeaseRowInput } from "./run-lease-store.kernel.js";
 
 export async function admitWorktreeRunLeaseRowAsync(
@@ -54,7 +55,19 @@ async function runLeaseCommand(
   assertCurrent?: () => void,
 ): Promise<void> {
   let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
+  let mutation: ReturnType<typeof captureWorktreeRegistryMutation> | undefined;
+  let failure: { error: unknown } | undefined;
+  const ids =
+    command.type === "worktrees.reapRunLeases"
+      ? command.input.scopes.map((scope) => scope.slice("worktree-run:".length))
+      : [command.input.worktreeId];
   try {
+    mutation = captureWorktreeRegistryMutation(
+      context,
+      ids.map((id) => ({ id, fields: ["leases"] })),
+      { settlement: command.type === "worktrees.releaseRunLease" },
+    );
+    const retainedMutation = mutation;
     const { runOpenClawStateWorkerOperation } =
       await import("../../state/openclaw-state-worker-store.js");
     await runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
@@ -62,16 +75,34 @@ async function runLeaseCommand(
         settled = operation.settled;
         return {
           nativeLocations: [context.admission.databasePath],
-          admission: createSqliteWorkerOperationAdmission((_request, grant) => {
+          admission: createSqliteWorkerOperationAdmission((request, grant) => {
+            if (request.stage === "transaction") {
+              retainedMutation.observeTransaction();
+            }
             context.admission.assertCurrent();
-            assertCurrent?.();
+            retainedMutation.assertAuthority(() => assertCurrent?.());
             grant();
           }),
         };
       },
     });
-  } finally {
-    // A rejected delivery can precede failed native cleanup; it does not authorize compensation.
-    onSettlement?.((await settled)?.kind ?? "not-entered");
+  } catch (error) {
+    failure = { error };
+  }
+  // A rejected delivery can precede failed native cleanup; it does not authorize compensation.
+  const outcome = (await settled)?.kind ?? "not-entered";
+  mutation?.settle(outcome === "unknown");
+  onSettlement?.(outcome);
+  if (outcome === "unknown") {
+    throw Object.assign(
+      new SqliteWorkerError(
+        "Worktree run lease outcome is unknown; custody retained",
+        "outcome-unknown",
+      ),
+      { cause: failure?.error },
+    );
+  }
+  if (failure) {
+    throw failure.error;
   }
 }

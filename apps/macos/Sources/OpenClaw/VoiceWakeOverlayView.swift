@@ -97,10 +97,7 @@ struct VoiceWakeOverlayView: View {
                 onHover: { self.closeHovering = $0 },
                 onClose: { self.controller.cancelEditingAndDismiss() })
         }
-        .padding(.top, self.controller.closeOverflow)
-        .padding(.leading, self.controller.closeOverflow)
-        .padding(.trailing, self.controller.closeOverflow)
-        .padding(.bottom, self.controller.closeOverflow)
+        .padding(self.controller.closeOverflow)
         .onAppear {
             self.updateFocusState(visible: self.controller.model.isVisible, editing: self.controller.model.isEditing)
         }

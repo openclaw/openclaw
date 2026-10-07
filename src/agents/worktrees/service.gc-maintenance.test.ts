@@ -11,11 +11,8 @@ import {
 import { repairWorktreePackIndex } from "./git-maintenance.js";
 import { requireGit } from "./git.js";
 import * as registryReads from "./registry-read.js";
-import {
-  deleteRegistryWorktree,
-  insertRegistryWorktree,
-  listRegistryWorktrees,
-} from "./registry.js";
+import { deleteRegistryWorktree, insertRegistryWorktree } from "./registry.js";
+import { listRegistryWorktrees } from "./registry.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixtures,
@@ -38,10 +35,10 @@ beforeAll(async () => {
   await registryReads.readWorktreeCleanupState(env);
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   for (const record of listRegistryWorktrees(env)) {
-    deleteRegistryWorktree(env, record.id);
+    await deleteRegistryWorktree(env, record.id);
   }
 });
 

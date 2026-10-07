@@ -75,9 +75,10 @@ export function closeAuthProfileReadPool(scope?: AuthProfileReadPoolCloseScope):
   }
 }
 
-registerAgentDatabaseReaderCloser((candidates) => {
+registerAgentDatabaseReaderCloser((candidates, retainedPaths) => {
   for (const pathname of authProfileReadDatabases.keys()) {
     if (
+      !retainedPaths?.has(pathname) &&
       candidates.some((candidate) => matchesAgentDatabaseReadCandidatePath(candidate, pathname))
     ) {
       closeAuthProfileReadDatabase(pathname);
