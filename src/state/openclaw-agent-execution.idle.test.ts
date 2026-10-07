@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -187,7 +188,9 @@ it("keeps a reborrow live while another idle executor is being evicted", async (
   }
   const evicting = createDeferredCore();
   const entered = createDeferredCore();
-  opened[0].close.mockImplementationOnce(() => {
+  const first = opened[0];
+  assert(first);
+  first.close.mockImplementationOnce(() => {
     entered.resolve();
     return evicting.promise;
   });
@@ -208,11 +211,13 @@ it("retains failed eviction custody without retaining a fifth idle executor", as
   for (const agentId of ["first", "second", "third", "fourth"]) {
     await use(agentId);
   }
-  opened[0].close.mockRejectedValueOnce(new Error("synthetic cleanup failure"));
+  const first = opened[0];
+  assert(first);
+  first.close.mockRejectedValueOnce(new Error("synthetic cleanup failure"));
   await use("fifth");
   expect(closedAgents()).toEqual(["first", "fifth"]);
   await use("sixth");
-  expect(opened[0].close).toHaveBeenCalledTimes(2);
+  expect(first.close).toHaveBeenCalledTimes(2);
   expect(closedAgents()).toEqual(["first", "fifth"]);
 });
 
@@ -227,7 +232,9 @@ it.each(["removal", "rename", "agent path", "session path"] as const)(
     if (change === "removal" || change === "rename") {
       config.agents!.entries = { second: {}, ...(change === "rename" ? { renamed: {} } : {}) };
     } else if (change === "agent path") {
-      config.agents!.entries!.first.agentDir = path.join(env.OPENCLAW_STATE_DIR!, "relocated");
+      const first = config.agents!.entries!.first;
+      assert(first);
+      first.agentDir = path.join(env.OPENCLAW_STATE_DIR!, "relocated");
     } else {
       config.session = {
         store: path.join(env.OPENCLAW_STATE_DIR!, "relocated", "{agentId}.sqlite"),
