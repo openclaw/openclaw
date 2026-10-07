@@ -3,7 +3,6 @@ import {
   buildSkillSnapshot,
   resolveSkillsPrompt,
 } from "../../skills/loading/workspace-skill-prompt.js";
-import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
@@ -13,10 +12,7 @@ import { prepareInstalledSkillCatalog } from "../installed-skill-runtime.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { isToolExecutionAllowed } from "../tool-policy-shared.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
-import {
-  mapSandboxSkillEntriesForPrompt,
-  resolveSandboxSkillRuntimeInputs,
-} from "./sandbox-skills.js";
+import { prepareRuntimeSkillEntries } from "./skills-prompt.js";
 
 /** Prepares readable skills and owns environment rollback until the caller takes custody. */
 export async function prepareEmbeddedSkills(params: {
@@ -60,32 +56,23 @@ export async function prepareEmbeddedSkills(params: {
     skillsPromptWorkspaceDir,
     skillsSnapshot: preparedSnapshot,
     skillsWorkspaceDir,
-    workspaceOnly,
-  } = resolveSandboxSkillRuntimeInputs({
+    shouldLoadSkillEntries,
+    skillEntries,
+    loadSkillEntries,
+    preserveEntryOrder,
+    mapEntries,
+  } = await prepareRuntimeSkillEntries({
     sandbox: params.sandbox,
     skillsAnchorWorkspace: params.attempt.bootstrapWorkspaceDir ?? params.effectiveWorkspace,
     skillsSnapshot: params.attempt.skillsSnapshot,
+    assertCurrent: params.assertCurrent,
+    config: params.attempt.config,
+    agentId: params.sessionAgentId,
+    executionWorkspaceDir: params.effectiveWorkspace,
   });
-  const { shouldLoadSkillEntries, skillEntries, loadSkillEntries, preserveEntryOrder } =
-    await resolveEmbeddedRunSkillEntries({
-      assertCurrent: params.assertCurrent,
-      workspaceDir: skillsWorkspaceDir,
-      config: params.attempt.config,
-      agentId: params.sessionAgentId,
-      eligibility: skillsEligibility,
-      skillsSnapshot: preparedSnapshot,
-      // Sandbox fallbacks stay inside their sandbox skill workspace;
-      // host execution skills are not mounted there.
-      ...(params.sandbox?.enabled === true
-        ? {}
-        : { executionWorkspaceDir: params.effectiveWorkspace }),
-      workspaceOnly,
-    });
   let restoreSkillEnv = () => {};
   try {
-    const mapPromptEntries = (entries: typeof skillEntries | undefined) =>
-      mapSandboxSkillEntriesForPrompt({ entries, skillsWorkspaceDir, skillsPromptWorkspaceDir });
-    const promptSkillEntries = mapPromptEntries(shouldLoadSkillEntries ? skillEntries : undefined);
+    const promptSkillEntries = mapEntries(shouldLoadSkillEntries ? skillEntries : undefined);
     const skillsSnapshot =
       preparedSnapshot ??
       (await buildSkillSnapshot(skillsPromptWorkspaceDir, {
@@ -101,7 +88,7 @@ export async function prepareEmbeddedSkills(params: {
       contextTokenBudget: params.attempt.contextTokenBudget,
       skillsSnapshot,
       entries: promptSkillEntries,
-      loadEntries: async () => mapPromptEntries(await loadSkillEntries()) ?? [],
+      loadEntries: async () => mapEntries(await loadSkillEntries()) ?? [],
       config: params.attempt.config,
       workspaceDir: skillsPromptWorkspaceDir,
       agentId: params.sessionAgentId,

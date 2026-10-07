@@ -141,40 +141,31 @@ export function buildThreadingToolContext(params: {
   const provider = normalizeChatChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
   // Fallback for unrecognized/plugin channels (e.g., iMessage before plugin registry init)
   const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
-  if (!threading?.buildToolContext) {
-    return {
-      currentChannelId: normalizeOptionalString(originTo),
-      currentChannelProvider: provider ?? (rawProvider as ChannelId),
-      currentMessageId,
-      currentSourceTurnId,
-      replyToMode: sessionCtx.ReplyToMode,
-      hasRepliedRef,
-    };
-  }
-  const context =
-    threading.buildToolContext({
-      cfg: config,
-      accountId: sessionCtx.AccountId,
-      context: {
-        Channel: originProvider,
-        From: sessionCtx.From,
-        To: originTo,
-        ChatType: sessionCtx.ChatType,
-        CurrentMessageId: currentMessageId,
-        ReplyToMode: sessionCtx.ReplyToMode,
-        ReplyToId: sessionCtx.ReplyToId,
-        ReplyToIdFull: sessionCtx.ReplyToIdFull,
-        ThreadLabel: sessionCtx.ThreadLabel,
-        MessageThreadId: sessionCtx.MessageThreadId,
-        TransportThreadId: sessionCtx.TransportThreadId,
-        NativeChannelId: sessionCtx.NativeChannelId,
-      },
-      hasRepliedRef,
-    }) ?? {};
+  const context: InternalChannelThreadingToolContext = threading?.buildToolContext
+    ? (threading.buildToolContext({
+        cfg: config,
+        accountId: sessionCtx.AccountId,
+        context: {
+          Channel: originProvider,
+          From: sessionCtx.From,
+          To: originTo,
+          ChatType: sessionCtx.ChatType,
+          CurrentMessageId: currentMessageId,
+          ReplyToMode: sessionCtx.ReplyToMode,
+          ReplyToId: sessionCtx.ReplyToId,
+          ReplyToIdFull: sessionCtx.ReplyToIdFull,
+          ThreadLabel: sessionCtx.ThreadLabel,
+          MessageThreadId: sessionCtx.MessageThreadId,
+          TransportThreadId: sessionCtx.TransportThreadId,
+          NativeChannelId: sessionCtx.NativeChannelId,
+        },
+        hasRepliedRef,
+      }) ?? {})
+    : { currentChannelId: normalizeOptionalString(originTo), hasRepliedRef };
   const hasAdapterCurrentMessageId = Object.hasOwn(context, "currentMessageId");
   return {
     ...context,
-    currentChannelProvider: provider!, // guaranteed non-null since threading exists
+    currentChannelProvider: provider ?? (rawProvider as ChannelId),
     // Some providers expose only thread resources as reply targets; explicit
     // `undefined` means the adapter rejected the generic message-id fallback.
     currentMessageId: hasAdapterCurrentMessageId ? context.currentMessageId : currentMessageId,

@@ -195,15 +195,13 @@ async function routeReplyOperation(
     transformReplyPayload,
   });
   if (normalization.kind === "suppress") {
-    if (normalization.reason === "channel_transform") {
-      return {
-        ok: true,
-        delivered: false,
-        suppressed: true,
-        reason: normalization.reason,
-      };
-    }
-    return { ok: true, delivered: false };
+    return {
+      ok: true,
+      delivered: false,
+      ...(normalization.reason === "channel_transform"
+        ? { suppressed: true, reason: normalization.reason }
+        : {}),
+    };
   }
   const normalized = normalization.payload;
   const externalPayload: ReplyPayload = {
@@ -409,11 +407,7 @@ async function routeReplyOperation(
     }
     const results = send.status === "sent" ? send.results : [];
     const delivery = summarizeVisibleRouteReplyDelivery(results);
-    return {
-      ok: true,
-      delivered: delivery.delivered,
-      messageId: delivery.messageId,
-    };
+    return { ok: true, ...delivery };
   } catch (err) {
     const message = formatErrorMessage(err);
     return {

@@ -80,11 +80,11 @@ function formatSystemEventTimestamp(ts: number, cfg: OpenClawConfig) {
   if (zone.mode === "utc") {
     return formatUtcTimestamp(date, { displaySeconds: true });
   }
-  if (zone.mode === "local") {
-    return formatZonedTimestamp(date, { displaySeconds: true }) ?? "unknown-time";
-  }
   return (
-    formatZonedTimestamp(date, { timeZone: zone.timeZone, displaySeconds: true }) ?? "unknown-time"
+    formatZonedTimestamp(date, {
+      ...(zone.mode === "iana" ? { timeZone: zone.timeZone } : {}),
+      displaySeconds: true,
+    }) ?? "unknown-time"
   );
 }
 

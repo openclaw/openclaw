@@ -1563,7 +1563,7 @@ src/auto-reply/command-turn-context.ts	1
 src/auto-reply/heartbeat-filter.ts	2
 src/auto-reply/heartbeat-tool-response.ts	2
 src/auto-reply/reply.directive.directive-behavior.e2e-mocks.ts	1
-src/auto-reply/reply/acp-reset-target.ts	2
+src/auto-reply/reply/acp-reset-target.ts	1
 src/auto-reply/reply/agent-lifecycle-terminal.ts	2
 src/auto-reply/reply/agent-runner-event-handler.ts	1
 src/auto-reply/reply/agent-runner-execution.ts	1
@@ -1582,7 +1582,6 @@ src/auto-reply/reply/commands-mcp.ts	2
 src/auto-reply/reply/commands-plugin.ts	1
 src/auto-reply/reply/commands-plugins.ts	1
 src/auto-reply/reply/commands-private-route.ts	1
-src/auto-reply/reply/commands-reset-hooks.ts	3
 src/auto-reply/reply/commands-reset.ts	1
 src/auto-reply/reply/commands-subagents/action-log.ts	1
 src/auto-reply/reply/config-mutations.ts	1

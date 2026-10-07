@@ -14,12 +14,12 @@ import {
   type NormalizeReplySkipReason,
 } from "../../auto-reply/reply/normalize-reply.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
-import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
+import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.js";
 import {
   filterMessagingToolMediaDuplicates,
   hasEnabledDeliveryOperation,
   resolveMessagingToolPayloadDedupe,
-} from "../../auto-reply/reply/reply-payloads-dedupe.runtime.js";
+} from "../../auto-reply/reply/reply-payloads-dedupe.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
 import { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";

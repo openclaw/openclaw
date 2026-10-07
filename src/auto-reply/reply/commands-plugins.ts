@@ -62,7 +62,7 @@ function formatPluginsList(report: PluginStatusReport): string {
   }
 
   const loaded = report.plugins.filter((plugin) => plugin.status === "loaded").length;
-  const lines = [
+  return [
     `🔌 Plugins (${loaded}/${report.plugins.length} loaded)`,
     ...report.plugins.map((plugin) => {
       const format = plugin.bundleFormat
@@ -72,8 +72,7 @@ function formatPluginsList(report: PluginStatusReport): string {
         !plugin.name || plugin.name === plugin.id ? plugin.id : `${plugin.name} (${plugin.id})`;
       return `- ${label} [${plugin.status}] ${format}`;
     }),
-  ];
-  return lines.join("\n");
+  ].join("\n");
 }
 
 function hasGatewayAdminScope(params: Parameters<CommandHandler>[0]): boolean {
@@ -269,11 +268,11 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
           error,
           `/plugins enable ${plugin.id}`,
         );
-        if (consentError) {
-          return commandReply(`⚠️ ${consentError}`);
-        }
-        if (error instanceof AutoReplyConfigMutationError) {
-          return commandReply(`⚠️ ${error.message}`);
+        const message =
+          consentError ||
+          (error instanceof AutoReplyConfigMutationError ? error.message : undefined);
+        if (message !== undefined) {
+          return commandReply(`⚠️ ${message}`);
         }
         throw error;
       }

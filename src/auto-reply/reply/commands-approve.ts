@@ -203,42 +203,35 @@ export async function handleApproveCommandFromContext(
           }
         : {};
     const clientDisplayName = `Chat approval (${resolvedBy})`;
-    if (approvalKind !== "system-agent") {
-      await resolveApprovalOverGateway({
+    if (approvalKind === "system-agent") {
+      // Canonical resolution denies an approval addressed with the wrong owner,
+      // so confirm the owner before submitting the decision.
+      const isSystemAgentApproval = await isPendingSystemAgentApprovalOverGateway({
         cfg: params.cfg,
         approvalId: parsed.id,
-        decision: parsed.decision,
-        ...reviewer,
-        resolveMethod: approvalKind,
         clientDisplayName,
       });
-      return;
-    }
-    // Canonical resolution denies an approval addressed with the wrong owner,
-    // so confirm the owner before submitting the decision.
-    const isSystemAgentApproval = await isPendingSystemAgentApprovalOverGateway({
-      cfg: params.cfg,
-      approvalId: parsed.id,
-      clientDisplayName,
-    });
-    if (!isSystemAgentApproval) {
-      throw new Error("unknown or expired approval id");
-    }
-    if (systemAgentNeedsOwner) {
-      try {
-        params.command.assertOwnerCurrent?.();
-      } catch {
-        throw new Error("your owner authority changed; send /approve again");
+      if (!isSystemAgentApproval) {
+        throw new Error("unknown or expired approval id");
+      }
+      if (systemAgentNeedsOwner) {
+        try {
+          params.command.assertOwnerCurrent?.();
+        } catch {
+          throw new Error("your owner authority changed; send /approve again");
+        }
       }
     }
-    await resolveApprovalOverGateway({
+    const request = {
       cfg: params.cfg,
       approvalId: parsed.id,
       decision: parsed.decision,
       ...reviewer,
-      approvalKind,
       clientDisplayName,
-    });
+    };
+    await (approvalKind === "system-agent"
+      ? resolveApprovalOverGateway({ ...request, approvalKind })
+      : resolveApprovalOverGateway({ ...request, resolveMethod: approvalKind }));
   };
 
   const systemAgentRefusedForOwner =

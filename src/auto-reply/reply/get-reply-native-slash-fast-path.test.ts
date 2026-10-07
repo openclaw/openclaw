@@ -33,7 +33,8 @@ vi.mock("../../agents/model-runtime-choice.js", () => ({
   })),
 }));
 
-vi.mock("./commands.runtime.js", () => ({
+vi.mock("./commands.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./commands.js")>()),
   handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
 }));
 

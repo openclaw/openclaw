@@ -141,8 +141,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     sessionStore,
     sessionKey,
     storePath,
-  } = params;
-  const {
     resolvedVerboseLevel,
     resolvedReasoningLevel,
     resolvedElevatedLevel,
@@ -175,9 +173,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   // - plain user_request without lifecycle: deliberately detach from the
   //   source/active-lane signal so a superseded parent abort does not cancel a
   //   still-valid queued user turn.
-  const hasQueuedOwnershipLifecycle = Boolean(opts?.turnAdoptionLifecycle);
   const queuedFollowupAbortSignal =
-    hasQueuedOwnershipLifecycle || inboundEventKind === "room_event"
+    opts?.turnAdoptionLifecycle || inboundEventKind === "room_event"
       ? (opts?.queuedFollowupAbortSignal ??
         opts?.turnAdoptionLifecycle?.abortSignal ??
         opts?.abortSignal)
@@ -378,7 +375,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   if (queuedToolsAllow && queuedToolIntersections) {
     attachToolAllowlistIntersection(queuedToolsAllow, queuedToolIntersections);
   }
-  const admittedSessionSettings = opts?.admittedSessionSettings;
+  const admittedSessionSettings =
+    opts?.admittedSessionSettings ?? preparedSessionState.sessionEntry;
   const groupTurn = getGroupThreadTurn();
   const personalBootstrapEligible = isSessionPersonalBootstrapTurn({
     ...ctx,
@@ -494,14 +492,10 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       cwd:
         normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedCwd) ??
         resolveAgentRunCwd(cfg, agentId),
-      permissionMode: admittedSessionSettings
-        ? admittedSessionSettings.permissionMode
-        : preparedSessionState.sessionEntry?.permissionMode,
+      permissionMode: admittedSessionSettings?.permissionMode,
       sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
       config: cfg,
-      toolOverrides: admittedSessionSettings
-        ? admittedSessionSettings.toolOverrides
-        : preparedSessionState.sessionEntry?.toolOverrides,
+      toolOverrides: admittedSessionSettings?.toolOverrides,
       skillsSnapshot,
       provider,
       model,

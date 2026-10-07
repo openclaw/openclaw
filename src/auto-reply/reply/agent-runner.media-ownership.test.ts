@@ -116,7 +116,8 @@ describe("runReplyAgent media delivery ownership", () => {
               }
             }
             expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-            expect(createReplyMediaContextRuntimeMock).not.toHaveBeenCalled();
+            // The shared spy includes initial preparation; execution must reuse that context.
+            expect(createReplyMediaContextRuntimeMock).toHaveBeenCalledOnce();
           } finally {
             await drainGlobalSingletonLifecycleState();
           }

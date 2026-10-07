@@ -225,13 +225,15 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   }
   const allowedThinkingCatalog = modelState.allowedModelCatalog ?? [];
   let thinkingCatalog = allowedThinkingCatalog.length > 0 ? allowedThinkingCatalog : undefined;
-  let thinkingSelection = resolveThinkingSelectionForModel({
-    provider,
-    model,
-    level: resolvedThinkLevel,
-    catalog: thinkingCatalog,
-    agentRuntime: thinkingRuntime,
-  });
+  const resolveCurrentThinkingSelection = () =>
+    resolveThinkingSelectionForModel({
+      provider,
+      model,
+      level: resolvedThinkLevel,
+      catalog: thinkingCatalog,
+      agentRuntime: thinkingRuntime,
+    });
+  let thinkingSelection = resolveCurrentThinkingSelection();
   const shouldHydrateThinkingCatalog =
     !thinkingSelection.supported ||
     (resolvedThinkLevel !== "off" &&
@@ -244,13 +246,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     thinkingCatalog = await traceRunPhase("reply.resolve_thinking_catalog", () =>
       modelState.resolveThinkingCatalog({ provider, model }),
     );
-    thinkingSelection = resolveThinkingSelectionForModel({
-      provider,
-      model,
-      level: resolvedThinkLevel,
-      catalog: thinkingCatalog,
-      agentRuntime: thinkingRuntime,
-    });
+    thinkingSelection = resolveCurrentThinkingSelection();
   }
   if (!thinkingSelection.supported) {
     const explicitThink =

@@ -8,13 +8,11 @@ import {
 import { toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
 import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
 import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
+import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
-import {
-  resolveConversationBindingChannelFromMessage,
-  resolveConversationBindingThreadIdFromMessage,
-} from "../conversation-binding-input.js";
+import { resolveConversationBindingChannelFromMessage } from "../conversation-binding-input.js";
 
 export const COMMAND = "/acp";
 const ACP_SPAWN_USAGE =
@@ -103,24 +101,7 @@ function readOptionValue(params: { tokens: string[]; index: number; flags: reado
 }
 
 function normalizeAcpOptionToken(raw: string): string {
-  const token = raw.trim();
-  if (!token || token.startsWith("--")) {
-    return token;
-  }
-  const dashPrefix = token.match(ACP_UNICODE_DASH_PREFIX_RE)?.[0];
-  if (!dashPrefix) {
-    return token;
-  }
-  return `--${token.slice(dashPrefix.length)}`;
-}
-
-function resolveDefaultSpawnThreadMode(params: HandleCommandsParams): AcpSpawnThreadMode {
-  const channel = resolveConversationBindingChannelFromMessage(params.ctx, params.command.channel);
-  if (!supportsAutomaticThreadBindingSpawn(channel)) {
-    return "off";
-  }
-  const currentThreadId = resolveConversationBindingThreadIdFromMessage(params.ctx);
-  return currentThreadId ? "here" : "auto";
+  return raw.trim().replace(ACP_UNICODE_DASH_PREFIX_RE, "--");
 }
 
 export function parseSpawnInput(
@@ -129,7 +110,11 @@ export function parseSpawnInput(
 ): Result<ParsedSpawnInput, string> {
   const normalizedTokens = tokens.map(normalizeAcpOptionToken);
   let mode: AcpRuntimeSessionMode = "persistent";
-  let thread = resolveDefaultSpawnThreadMode(params);
+  const channel = resolveConversationBindingChannelFromMessage(params.ctx, params.command.channel);
+  let thread: AcpSpawnThreadMode = "off";
+  if (supportsAutomaticThreadBindingSpawn(channel)) {
+    thread = stringifyRouteThreadId(params.ctx.MessageThreadId) ? "here" : "auto";
+  }
   let sawThreadOption = false;
   let bind: AcpSpawnBindMode = "off";
   let cwd: string | undefined;
@@ -362,10 +347,7 @@ export function formatRuntimeOptionsText(options: AcpSessionRuntimeOptions): str
     typeof options.timeoutSeconds === "number" ? `timeoutSeconds=${options.timeoutSeconds}` : null,
     extras ? `extras={${extras}}` : null,
   ].filter(Boolean);
-  if (parts.length === 0) {
-    return "(none)";
-  }
-  return parts.join(", ");
+  return parts.join(", ") || "(none)";
 }
 
 export function formatAcpCapabilitiesText(controls: string[]): string {
@@ -381,11 +363,9 @@ export function resolveCommandRequestId(params: HandleCommandsParams): string {
     params.ctx.MessageSid ??
     params.ctx.MessageSidFirst ??
     params.ctx.MessageSidLast;
-  if (typeof value === "string") {
-    const normalizedValue = normalizeOptionalString(value);
-    if (normalizedValue) {
-      return normalizedValue;
-    }
+  const normalizedValue = normalizeOptionalString(value);
+  if (normalizedValue) {
+    return normalizedValue;
   }
   if (typeof value === "number" || typeof value === "bigint") {
     return String(value);

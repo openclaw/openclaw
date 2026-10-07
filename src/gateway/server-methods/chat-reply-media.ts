@@ -304,7 +304,7 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(
     }
     const assertCurrent = captureChannelReadAuthority();
     const { createReplyMediaPathNormalizer } =
-      await import("../../auto-reply/reply/reply-media-paths.runtime.js");
+      await import("../../auto-reply/reply/reply-media-paths.js");
     assertCurrent?.();
     const workspaceOnly = resolveWebchatReplyWorkspaceOnly(params);
     const normalizeMediaPaths = createReplyMediaPathNormalizer({

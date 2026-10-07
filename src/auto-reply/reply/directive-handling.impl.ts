@@ -562,6 +562,7 @@ export async function handleDirectiveOnly(
   }
 
   const parts: string[] = [];
+  const addSystemAck = (message: string) => parts.push(prefixSystemMessage(message));
   if (directives.clearThinkLevel) {
     parts.push("Thinking level reset to default.");
   } else if (directives.hasThinkDirective && directives.thinkLevel) {
@@ -572,31 +573,29 @@ export async function handleDirectiveOnly(
     );
   }
   if (directives.clearFastMode) {
-    parts.push(prefixSystemMessage("Fast mode reset to default."));
+    addSystemAck("Fast mode reset to default.");
   } else if (directives.hasFastDirective && directives.fastMode !== undefined) {
-    parts.push(prefixSystemMessage(formatFastModeConfirmation(directives.fastMode)));
+    addSystemAck(formatFastModeConfirmation(directives.fastMode));
   }
   if (directives.hasVerboseDirective && directives.verboseLevel) {
     const message = allowPrivilegedPersistence
       ? DIRECTIVE_ACK_MESSAGES.verbose[directives.verboseLevel]
       : "Verbose logging set for the current reply only.";
-    parts.push(prefixSystemMessage(message));
+    addSystemAck(message);
   }
   if (directives.hasTraceDirective && directives.traceLevel) {
-    parts.push(prefixSystemMessage(DIRECTIVE_ACK_MESSAGES.trace[directives.traceLevel]));
+    addSystemAck(DIRECTIVE_ACK_MESSAGES.trace[directives.traceLevel]);
   }
   if (directives.hasVerboseDirective && directives.verboseLevel && !allowPrivilegedPersistence) {
-    parts.push(
-      prefixSystemMessage(
-        "Verbose defaults require operator.admin for gateway callers; skipped persistence.",
-      ),
+    addSystemAck(
+      "Verbose defaults require operator.admin for gateway callers; skipped persistence.",
     );
   }
   if (directives.hasReasoningDirective && directives.reasoningLevel) {
-    parts.push(prefixSystemMessage(DIRECTIVE_ACK_MESSAGES.reasoning[directives.reasoningLevel]));
+    addSystemAck(DIRECTIVE_ACK_MESSAGES.reasoning[directives.reasoningLevel]);
   }
   if (directives.hasElevatedDirective && directives.elevatedLevel) {
-    parts.push(prefixSystemMessage(DIRECTIVE_ACK_MESSAGES.elevated[directives.elevatedLevel]));
+    addSystemAck(DIRECTIVE_ACK_MESSAGES.elevated[directives.elevatedLevel]);
     if (shouldHintDirectRuntime) {
       parts.push(ELEVATED_RUNTIME_HINT);
     }
@@ -619,7 +618,7 @@ export async function handleDirectiveOnly(
         const message = label
           ? `${label} (${execParts.join(", ")}).`
           : "Exec defaults require operator.admin for gateway callers; skipped persistence.";
-        parts.push(prefixSystemMessage(message));
+        addSystemAck(message);
       }
     }
   }
@@ -653,18 +652,18 @@ export async function handleDirectiveOnly(
     );
   }
   if (directives.hasQueueDirective && directives.queueMode) {
-    parts.push(prefixSystemMessage(`Queue mode set to ${directives.queueMode}.`));
+    addSystemAck(`Queue mode set to ${directives.queueMode}.`);
   } else if (directives.hasQueueDirective && directives.queueReset) {
-    parts.push(prefixSystemMessage("Queue mode reset to default."));
+    addSystemAck("Queue mode reset to default.");
   }
   if (directives.hasQueueDirective && typeof directives.debounceMs === "number") {
-    parts.push(prefixSystemMessage(`Queue debounce set to ${directives.debounceMs}ms.`));
+    addSystemAck(`Queue debounce set to ${directives.debounceMs}ms.`);
   }
   if (directives.hasQueueDirective && typeof directives.cap === "number") {
-    parts.push(prefixSystemMessage(`Queue cap set to ${directives.cap}.`));
+    addSystemAck(`Queue cap set to ${directives.cap}.`);
   }
   if (directives.hasQueueDirective && directives.dropPolicy) {
-    parts.push(prefixSystemMessage(`Queue drop set to ${directives.dropPolicy}.`));
+    addSystemAck(`Queue drop set to ${directives.dropPolicy}.`);
   }
   if (fastModeChanged && !params.persistenceState) {
     const nextFastMode = directives.clearFastMode ? fastModeState.mode : sessionEntry.fastMode;

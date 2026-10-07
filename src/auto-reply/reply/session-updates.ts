@@ -99,6 +99,14 @@ async function persistSkillSnapshot(params: {
   return { entry: persistedEntry ?? undefined, updated: Boolean(persistedEntry) && updated };
 }
 
+function readSkillSnapshotState(entry: SessionEntry | undefined) {
+  return {
+    sessionEntry: entry,
+    skillsSnapshot: entry?.skillsSnapshot,
+    systemSent: entry?.systemSent ?? false,
+  };
+}
+
 export async function ensureSkillSnapshot(params: {
   agentId: string;
   sessionEntry?: SessionEntry;
@@ -124,11 +132,7 @@ export async function ensureSkillSnapshot(params: {
   if (isFastTestRuntimeEnv()) {
     // In fast unit-test runs we skip filesystem scanning, watchers, and session-store writes.
     // Dedicated skills tests cover snapshot generation behavior.
-    return {
-      sessionEntry: params.sessionEntry,
-      skillsSnapshot: params.sessionEntry?.skillsSnapshot,
-      systemSent: params.sessionEntry?.systemSent ?? false,
-    };
+    return readSkillSnapshotState(params.sessionEntry);
   }
 
   const {
@@ -215,11 +219,7 @@ export async function ensureSkillSnapshot(params: {
       skillsSnapshot: skillSnapshot,
     });
     if (!updated) {
-      return {
-        sessionEntry: persistedEntry,
-        skillsSnapshot: persistedEntry?.skillsSnapshot,
-        systemSent: persistedEntry?.systemSent ?? false,
-      };
+      return readSkillSnapshotState(persistedEntry);
     }
     nextEntry = persistedEntry;
     systemSent = persistedEntry?.systemSent ?? systemSent;
@@ -249,11 +249,7 @@ export async function ensureSkillSnapshot(params: {
       skillsSnapshot,
     });
     if (!updated) {
-      return {
-        sessionEntry: persistedEntry,
-        skillsSnapshot: persistedEntry?.skillsSnapshot,
-        systemSent: persistedEntry?.systemSent ?? false,
-      };
+      return readSkillSnapshotState(persistedEntry);
     }
     nextEntry = persistedEntry;
   }
@@ -274,11 +270,7 @@ export async function ensureSkillSnapshot(params: {
       current?.sessionId !== expectedSession?.sessionId ||
       current?.lifecycleRevision !== expectedSession?.lifecycleRevision
     ) {
-      return {
-        sessionEntry: current,
-        skillsSnapshot: current?.skillsSnapshot,
-        systemSent: current?.systemSent ?? false,
-      };
+      return readSkillSnapshotState(current);
     }
     nextEntry = current;
     systemSent = current?.systemSent ?? false;

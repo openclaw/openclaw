@@ -32,7 +32,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { runReplyAgent } from "./agent-runner.js";
+import { runReplyAgent } from "./agent-runner-run.js";
 import {
   createTestFollowupRun,
   installAgentRunnerMemoryFixture,
