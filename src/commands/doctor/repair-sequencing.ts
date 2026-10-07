@@ -165,13 +165,15 @@ export async function runDoctorRepairSequence(params: {
     }
   };
 
-  const initialChannelRepairs = await runWithCurrentPluginMetadata(() =>
-    collectChannelDoctorRepairMutations({
-      cfg: state.candidate,
-      doctorFixCommand: params.doctorFixCommand,
-      env,
-    }),
-  );
+  const collectCurrentChannelRepairs = () =>
+    runWithCurrentPluginMetadata(() =>
+      collectChannelDoctorRepairMutations({
+        cfg: state.candidate,
+        doctorFixCommand: params.doctorFixCommand,
+        env,
+      }),
+    );
+  const initialChannelRepairs = await collectCurrentChannelRepairs();
   for (const mutation of initialChannelRepairs) {
     applyMutation(mutation);
   }
@@ -301,13 +303,7 @@ export async function runDoctorRepairSequence(params: {
       for (const mutation of channelCompatibilityMutations) {
         applyMutation(mutation);
       }
-      const channelRepairs = await runWithCurrentPluginMetadata(() =>
-        collectChannelDoctorRepairMutations({
-          cfg: state.candidate,
-          doctorFixCommand: params.doctorFixCommand,
-          env,
-        }),
-      );
+      const channelRepairs = await collectCurrentChannelRepairs();
       for (const mutation of channelRepairs) {
         applyMutation(mutation);
       }

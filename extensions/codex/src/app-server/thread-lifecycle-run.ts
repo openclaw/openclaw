@@ -140,6 +140,7 @@ export async function startOrResumeThread(
         threadId,
         assertCurrent,
         withCurrent: authority.withCurrent,
+        signal: params.signal,
       });
     if (binding?.pendingSupervisionBranch) {
       const requestContext = await prepareRequestContext();

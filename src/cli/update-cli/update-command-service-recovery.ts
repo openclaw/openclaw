@@ -416,10 +416,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     }
     await checkOriginal();
     const service = resolveGatewayService();
-    let expectedService: Pick<
-      PreManagedServiceStop,
-      "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
-    > = original?.service ?? before;
+    let expectedService: OriginalManagedServiceRuntime["service"] = original?.service ?? before;
     const readCurrentService = async () => {
       assertCurrent();
       const state = await readGatewayServiceStateForUpdate(service, serviceEnv, params.timeoutMs, {

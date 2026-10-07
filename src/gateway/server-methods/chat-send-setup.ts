@@ -56,7 +56,7 @@ export async function prepareAndAdmitChatSend(
   const withCurrent = sessionMutationAuthorization?.withCurrent;
   const assertCurrentAsync = async () =>
     withCurrent ? withCurrent(() => assertCurrent?.()) : assertCurrent?.();
-  const normalizedRequest = normalizeChatSendRequest({
+  const normalization = normalizeChatSendRequest({
     params,
     client,
     ...(options?.trustedSystemInput ? { trustedSystemInput: true } : {}),
@@ -65,6 +65,7 @@ export async function prepareAndAdmitChatSend(
       ? { providerReviewAcknowledgment: options.providerReviewAcknowledgment }
       : {}),
   });
+  const normalizedRequest = normalization instanceof Promise ? await normalization : normalization;
   if (!normalizedRequest.ok) {
     respond(
       false,
@@ -76,6 +77,14 @@ export async function prepareAndAdmitChatSend(
       ),
     );
     return undefined;
+  }
+  if (normalizedRequest.value.goalOperation) {
+    try {
+      assertCurrent?.();
+    } catch (error) {
+      respondChatSendAdmissionError(error, respond);
+      return undefined;
+    }
   }
   const loadedSession = await prepareChatSendSession({
     request: normalizedRequest.value,

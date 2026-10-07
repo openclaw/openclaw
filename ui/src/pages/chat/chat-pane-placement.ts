@@ -272,18 +272,11 @@ export function resolveChatPanePlacement(params: {
   const reclaiming = params.reclaimingKey === params.row?.key;
   const restarting = params.restartingKey === params.row?.key;
   const action = resolveCloudWorkerStopAction(params.row?.placement);
-  const moveAccess = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.move",
-    requiredScope: "operator.write",
-  });
-  const reclaimAccess = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.reclaim",
-    requiredScope: "operator.write",
-  });
-  const restartAccess = readSessionMethodAccess(params.gatewaySnapshot, {
-    method: "sessions.dispatch",
-    requiredScope: "operator.write",
-  });
+  const readWriteAccess = (method: string) =>
+    readSessionMethodAccess(params.gatewaySnapshot, { method, requiredScope: "operator.write" });
+  const moveAccess = readWriteAccess("sessions.move");
+  const reclaimAccess = readWriteAccess("sessions.reclaim");
+  const restartAccess = readWriteAccess("sessions.dispatch");
   const placementState = params.row?.placement?.state;
   const dispatchRequired = repositorySessionNeedsWorker(params.row);
   const recoveryAction =

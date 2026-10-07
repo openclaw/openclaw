@@ -23,6 +23,7 @@ import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawIconBadge
+import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawSecondaryButton
@@ -135,8 +136,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
@@ -1078,7 +1077,7 @@ private fun OnboardingIntroScreen(
 
 @Composable
 private fun WelcomeChecklist() {
-  SoftPanel {
+  ClawPanel(contentPadding = PaddingValues(18.dp), color = ClawTheme.colors.surfaceRaised) {
     Column(verticalArrangement = Arrangement.spacedBy(13.dp)) {
       WelcomeChecklistRow(icon = Icons.Default.Link, text = nativeString("Connect to your Gateway"))
       WelcomeChecklistRow(icon = Icons.Default.Security, text = nativeString("Choose device permissions"))
@@ -1100,7 +1099,7 @@ private fun WelcomeChecklistRow(
 
 @Composable
 private fun SecurityNotice() {
-  SoftPanel {
+  ClawPanel(contentPadding = PaddingValues(18.dp), color = ClawTheme.colors.surfaceRaised) {
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
       Icon(imageVector = Icons.Default.ErrorOutline, contentDescription = null, modifier = Modifier.size(24.dp), tint = ClawTheme.colors.warning)
       Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1112,21 +1111,6 @@ private fun SecurityNotice() {
         )
       }
     }
-  }
-}
-
-@Composable
-private fun SoftPanel(
-  content: @Composable ColumnScope.() -> Unit,
-) {
-  Surface(
-    modifier = Modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(ClawTheme.radii.panel),
-    color = ClawTheme.colors.surfaceRaised,
-    contentColor = ClawTheme.colors.text,
-    border = BorderStroke(1.dp, ClawTheme.colors.border),
-  ) {
-    Column(modifier = Modifier.padding(18.dp), content = content)
   }
 }
 
@@ -3057,28 +3041,21 @@ private fun rememberPermissionState(
   var requestJob by remember { mutableStateOf<Job?>(null) }
   var requestError by remember { mutableStateOf<NativeText?>(null) }
 
-  DisposableEffect(lifecycleOwner, context) {
-    val observer =
-      LifecycleEventObserver { _, event ->
-        if (event == Lifecycle.Event.ON_RESUME) {
-          microphoneGranted = context.hasPermission(Manifest.permission.RECORD_AUDIO)
-          cameraPermissionGranted = context.hasPermission(Manifest.permission.CAMERA)
-          locationPermissionGranted = hasLocationPermission(context)
-          cameraGranted = cameraGranted && cameraPermissionGranted
-          locationGranted = locationGranted && locationPermissionGranted
-          photosGranted = hasPhotoReadPermission(context)
-          contactsGranted = requiredContactPermissions.all { context.hasPermission(it) }
-          calendarGranted = requiredCalendarPermissions.all { context.hasPermission(it) }
-          notificationsGranted = Build.VERSION.SDK_INT < 33 || context.hasPermission(Manifest.permission.POST_NOTIFICATIONS)
-          notificationListenerGranted = DeviceNotificationListenerService.isAccessEnabled(context)
-          motionGranted = !motionAvailable || context.hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)
-          smsReadGranted = context.hasPermission(Manifest.permission.READ_SMS)
-          smsSendGranted = context.hasPermission(Manifest.permission.SEND_SMS)
-          callLogGranted = !callLogAvailable || context.hasPermission(Manifest.permission.READ_CALL_LOG)
-        }
-      }
-    lifecycleOwner.lifecycle.addObserver(observer)
-    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  RefreshOnResume(lifecycleOwner, context) {
+    microphoneGranted = context.hasPermission(Manifest.permission.RECORD_AUDIO)
+    cameraPermissionGranted = context.hasPermission(Manifest.permission.CAMERA)
+    locationPermissionGranted = hasLocationPermission(context)
+    cameraGranted = cameraGranted && cameraPermissionGranted
+    locationGranted = locationGranted && locationPermissionGranted
+    photosGranted = hasPhotoReadPermission(context)
+    contactsGranted = requiredContactPermissions.all { context.hasPermission(it) }
+    calendarGranted = requiredCalendarPermissions.all { context.hasPermission(it) }
+    notificationsGranted = Build.VERSION.SDK_INT < 33 || context.hasPermission(Manifest.permission.POST_NOTIFICATIONS)
+    notificationListenerGranted = DeviceNotificationListenerService.isAccessEnabled(context)
+    motionGranted = !motionAvailable || context.hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)
+    smsReadGranted = context.hasPermission(Manifest.permission.READ_SMS)
+    smsSendGranted = context.hasPermission(Manifest.permission.SEND_SMS)
+    callLogGranted = !callLogAvailable || context.hasPermission(Manifest.permission.READ_CALL_LOG)
   }
 
   fun applyPermissionResult(

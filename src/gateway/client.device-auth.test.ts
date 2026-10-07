@@ -64,6 +64,7 @@ beforeEach(() => {
 function host(origin: boolean, readOnly = false, explicit = true) {
   const client = new GatewayClient({
     url: "wss://gateway.example.test",
+    deviceIdentity: null,
     ...(origin ? { deviceAuthScope: "wss://gateway.example.test" } : {}),
     ...(explicit ? { token: "fixture-shared-auth" } : {}),
     ...(readOnly ? { sharedStateMode: "read-only" } : {}),

@@ -1,4 +1,5 @@
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import type { ConversationAuthority } from "./conversation-authority.types.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import type { SessionEntryPatchOperation } from "./session-entry-patch-operation.js";
@@ -17,8 +18,10 @@ export type SessionEntryPatchSelection =
 export type SessionEntryPatchGuard = {
   /** Storage reads prepare before submission; grants consume the prepared host authority. */
   source?: SessionSourceAssertion;
-  /** Retained host authority only: these assertions must not query SQLite. */
+  /** Retained host authority; same-store predicates belong in the worker transaction. */
   assertCurrent?: () => void;
+  /** Same-store route authority is reread inside the worker's write transaction. */
+  conversation?: ConversationAuthority;
   cliHistory?: {
     sessionId: string;
     admission?: UserTurnTranscriptAdmissionReceipt;
@@ -44,6 +47,7 @@ export type SessionEntryPatchCommit = {
   providerReviewMutation?: boolean;
   shouldCommitIf?: SessionEntryPatchGuard["shouldCommitIf"];
   cliHistory?: SessionEntryPatchGuard["cliHistory"];
+  conversation?: SessionEntryPatchGuard["conversation"];
   sources?: SessionSourcePredicate[];
 };
 

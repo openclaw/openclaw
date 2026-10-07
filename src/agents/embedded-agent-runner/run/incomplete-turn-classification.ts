@@ -201,25 +201,16 @@ export function shouldApplyNonVisibleTurnRetryGuard(params: {
   // These guards use provider output structure, never user or assistant prose.
   return (
     params.executionContract === "strict-agentic" ||
-    isIncompleteTurnRecoverySupportedProviderModel(params) ||
+    isStrictAgenticSupportedProviderModel(params) ||
+    (GEMINI_INCOMPLETE_TURN_PROVIDER_IDS.has(
+      normalizeLowercaseStringOrEmpty(params.provider ?? ""),
+    ) &&
+      GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(
+        stripProviderPrefix(typeof params.modelId === "string" ? params.modelId : ""),
+      )) ||
     RETRY_GUARD_MODEL_APIS.has(normalizeLowercaseStringOrEmpty(params.modelApi ?? "")) ||
     isOllamaIncompleteTurnProvider(params.provider)
   );
-}
-
-function isIncompleteTurnRecoverySupportedProviderModel(params: {
-  provider?: string;
-  modelId?: string;
-}): boolean {
-  if (isStrictAgenticSupportedProviderModel(params)) {
-    return true;
-  }
-  const provider = normalizeLowercaseStringOrEmpty(params.provider ?? "");
-  if (!GEMINI_INCOMPLETE_TURN_PROVIDER_IDS.has(provider)) {
-    return false;
-  }
-  const modelId = typeof params.modelId === "string" ? params.modelId : "";
-  return GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(stripProviderPrefix(modelId));
 }
 
 export function classifyAssistantTurn(params: {

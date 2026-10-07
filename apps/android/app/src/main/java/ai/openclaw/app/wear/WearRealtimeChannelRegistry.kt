@@ -192,7 +192,7 @@ internal class WearRealtimeChannelRegistry(
         try {
           // The Watch starts capture after the start RPC; do not consume its PCM before that claim owns this path.
           if (!connection.activation.await()) return@launch
-          while (isKnown(connection)) {
+          while (lifecycleMutex.withLock { isKnownLocked(connection) }) {
             val frame = WearRealtimeAudioFraming.read(resources.input) ?: break
             if (frame.type != WearRealtimeAudioFrameType.INPUT_PCM) break
             val owner =
@@ -434,8 +434,6 @@ internal class WearRealtimeChannelRegistry(
       if (expired) connection.retire(transport)
     }
   }
-
-  private suspend fun isKnown(item: Connection): Boolean = lifecycleMutex.withLock { isKnownLocked(item) }
 
   private fun isKnownLocked(item: Connection): Boolean =
     connections[item.channel.nodeId] === item ||

@@ -45,17 +45,29 @@ const DISCORD_VOICE_UPLOAD_SSRF_POLICY: SsrFPolicy = {
   allowIpv6UniqueLocalRange: true,
 };
 
-async function runFfmpegToOutput(params: {
-  outputPath: string;
-  buildArgs: (tempPath: string) => string[];
-}): Promise<void> {
-  const rootDir = path.dirname(params.outputPath);
+async function runFfmpegToOutput(
+  inputPath: string,
+  outputPath: string,
+  outputArgs: string[],
+): Promise<void> {
+  const rootDir = path.dirname(outputPath);
   await fs.mkdir(rootDir, { recursive: true });
   await writeExternalFileWithinRoot({
     rootDir,
-    path: path.basename(params.outputPath),
+    path: path.basename(outputPath),
     write: async (tempPath) => {
-      await runFfmpeg(params.buildArgs(tempPath));
+      await runFfmpeg([
+        "-y",
+        "-i",
+        inputPath,
+        "-vn",
+        "-sn",
+        "-dn",
+        "-t",
+        String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
+        ...outputArgs,
+        tempPath,
+      ]);
     },
   });
 }
@@ -100,28 +112,16 @@ async function generateWaveformFromPcm(filePath: string): Promise<string> {
   const tempPcm = path.join(tempDir, `waveform-${crypto.randomUUID()}.raw`);
 
   try {
-    await runFfmpegToOutput({
-      outputPath: tempPcm,
-      buildArgs: (outputPath) => [
-        "-y",
-        "-i",
-        filePath,
-        "-vn",
-        "-sn",
-        "-dn",
-        "-t",
-        String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
-        "-f",
-        "s16le",
-        "-acodec",
-        "pcm_s16le",
-        "-ac",
-        "1",
-        "-ar",
-        "8000",
-        outputPath,
-      ],
-    });
+    await runFfmpegToOutput(filePath, tempPcm, [
+      "-f",
+      "s16le",
+      "-acodec",
+      "pcm_s16le",
+      "-ac",
+      "1",
+      "-ar",
+      "8000",
+    ]);
 
     const pcmData = await fs.readFile(tempPcm);
     const samples = new Int16Array(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength / 2);
@@ -131,12 +131,11 @@ async function generateWaveformFromPcm(filePath: string): Promise<string> {
 
     for (let i = 0; i < WAVEFORM_SAMPLES && i * step < samples.length; i++) {
       let sum = 0;
-      let count = 0;
-      for (let j = 0; j < step && i * step + j < samples.length; j++) {
+      const count = Math.min(step, samples.length - i * step);
+      for (let j = 0; j < count; j++) {
         sum += Math.abs(expectDefined(samples.at(i * step + j), "bounded PCM waveform sample"));
-        count++;
       }
-      const avg = count > 0 ? sum / count : 0;
+      const avg = sum / count;
       // Normalize to 0-255 (16-bit signed max is 32767)
       const normalized = Math.min(255, Math.round((avg / 32767) * 255));
       waveform[i] = normalized;
@@ -200,28 +199,16 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
   const tempDir = resolvePreferredOpenClawTmpDir();
   const outputPath = path.join(tempDir, `voice-${crypto.randomUUID()}.ogg`);
 
-  await runFfmpegToOutput({
-    outputPath,
-    buildArgs: (tempPath) => [
-      "-y",
-      "-i",
-      filePath,
-      "-vn",
-      "-sn",
-      "-dn",
-      "-t",
-      String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
-      "-ar",
-      String(DISCORD_OPUS_SAMPLE_RATE_HZ),
-      "-c:a",
-      "libopus",
-      "-b:a",
-      "64k",
-      "-f",
-      "ogg",
-      tempPath,
-    ],
-  });
+  await runFfmpegToOutput(filePath, outputPath, [
+    "-ar",
+    String(DISCORD_OPUS_SAMPLE_RATE_HZ),
+    "-c:a",
+    "libopus",
+    "-b:a",
+    "64k",
+    "-f",
+    "ogg",
+  ]);
 
   return { path: outputPath, cleanup: true };
 }
@@ -379,8 +366,7 @@ export async function sendDiscordVoiceMessage(
 
   // RequestClient auto-converts "files" bodies to multipart/form-data, but Discord's
   // /attachments endpoint expects JSON, so this path uses a guarded raw HTTP call.
-  const botToken = token;
-  if (!botToken) {
+  if (!token) {
     throw new Error("Discord bot token is required for voice message upload");
   }
   const { upload_filename } = await request(async () => {
@@ -388,7 +374,7 @@ export async function sendDiscordVoiceMessage(
       rest,
       endpointRuntime,
       channelId,
-      botToken,
+      botToken: token,
       filename,
       fileSize,
     });
@@ -406,9 +392,7 @@ export async function sendDiscordVoiceMessage(
     return attachment;
   }, "voice-upload");
 
-  const flags = silent
-    ? DISCORD_VOICE_MESSAGE_FLAG | SUPPRESS_NOTIFICATIONS_FLAG
-    : DISCORD_VOICE_MESSAGE_FLAG;
+  const flags = DISCORD_VOICE_MESSAGE_FLAG | (silent ? SUPPRESS_NOTIFICATIONS_FLAG : 0);
   const messagePayload = {
     flags,
     nonce: createDiscordMessageNonce(),
@@ -427,7 +411,7 @@ export async function sendDiscordVoiceMessage(
 
   let messageCreateMayHaveCommitted = false;
   try {
-    return (await request(
+    return await request(
       async () => {
         await onPlatformSendDispatch?.();
         assertPlatformSendAuthorized?.();
@@ -442,7 +426,7 @@ export async function sendDiscordVoiceMessage(
       },
       "voice-message",
       { safety: "nonce-protected-create" },
-    )) as { id: string; channel_id: string };
+    );
   } catch (error) {
     // Only this final request can commit a message; upload/preflight failures cannot.
     if (messageCreateMayHaveCommitted) {

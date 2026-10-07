@@ -8,7 +8,6 @@ import { attachModelProviderRuntimePluginHandle } from "../../plugins/provider-h
 import { extractModelCompat } from "../../plugins/provider-model-compat.js";
 import { transformProviderSystemPrompt } from "../../plugins/provider-runtime.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
@@ -27,10 +26,6 @@ import {
   resolveBootstrapContextForRun,
   resolveContextInjectionMode,
 } from "../bootstrap-files.js";
-import {
-  resolveChannelMessageToolHints,
-  resolveChannelReactionGuidance,
-} from "../channel-tools.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { formatDateStamp, resolveUserTimezone } from "../date-time.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
@@ -42,7 +37,7 @@ import {
 } from "../model-auth.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
-import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
+import { resolveRuntimeChannelPromptContext } from "../runtime-capabilities.js";
 import {
   buildAgentRuntimePlan,
   resolvePreparedProviderRuntimeHandle,
@@ -116,14 +111,11 @@ export async function buildPreparedCompactionRuntime(
   let restoreSkillEnv: (() => void) | undefined;
   let bundleMcpRuntime: Awaited<ReturnType<typeof createBundleMcpToolRuntime>> | undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
-  let toolRuntimesDisposed = false;
-  let skillEnvironmentRestored = false;
   const disposeToolRuntimes = async () => {
-    if (toolRuntimesDisposed) {
-      return;
-    }
-    toolRuntimesDisposed = true;
-    for (const runtime of [bundleMcpRuntime, bundleLspRuntime]) {
+    const runtimes = [bundleMcpRuntime, bundleLspRuntime];
+    bundleMcpRuntime = undefined;
+    bundleLspRuntime = undefined;
+    for (const runtime of runtimes) {
       try {
         await runtime?.dispose();
       } catch {
@@ -132,11 +124,9 @@ export async function buildPreparedCompactionRuntime(
     }
   };
   const restoreSkillEnvironment = () => {
-    if (skillEnvironmentRestored) {
-      return;
-    }
-    skillEnvironmentRestored = true;
-    restoreSkillEnv?.();
+    const restore = restoreSkillEnv;
+    restoreSkillEnv = undefined;
+    restore?.();
   };
   onCleanupReady({ disposeToolRuntimes, restoreSkillEnvironment });
 
@@ -347,16 +337,24 @@ export async function buildPreparedCompactionRuntime(
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
     };
-    const normalizableToolProjection = filterProviderNormalizableTools(toolsRaw);
-    await logRuntimeToolSchemaQuarantine({
-      ...toolDiagnosticContext,
-      diagnostics: normalizableToolProjection.diagnostics,
-      tools: toolsRaw,
-    });
-    const tools = runtimePlan.tools.normalize(
-      [...normalizableToolProjection.tools],
-      runtimePlanModelContext,
-    );
+    const normalizeToolSchemas = async (
+      sourceTools: typeof toolsRaw,
+      source: "core" | "bundle",
+    ) => {
+      const projection = filterProviderNormalizableTools(sourceTools);
+      // Core preparation reports healthy empty sets; absent bundles remain untouched.
+      if (source === "core" || projection.diagnostics.length > 0) {
+        await logRuntimeToolSchemaQuarantine({
+          ...toolDiagnosticContext,
+          diagnostics: projection.diagnostics,
+          tools: sourceTools,
+        });
+      }
+      return source === "core" || sourceTools.length > 0
+        ? runtimePlan.tools.normalize([...projection.tools], runtimePlanModelContext)
+        : sourceTools;
+    };
+    const tools = await normalizeToolSchemas(toolsRaw, "core");
     bundleMcpRuntime = toolsEnabled
       ? await createBundleMcpToolRuntime({
           workspaceDir: effectiveWorkspace,
@@ -382,21 +380,7 @@ export async function buildPreparedCompactionRuntime(
       conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
-    const normalizableBundledToolProjection = filterProviderNormalizableTools(filteredBundledTools);
-    if (normalizableBundledToolProjection.diagnostics.length > 0) {
-      await logRuntimeToolSchemaQuarantine({
-        ...toolDiagnosticContext,
-        diagnostics: normalizableBundledToolProjection.diagnostics,
-        tools: filteredBundledTools,
-      });
-    }
-    const normalizedBundledTools =
-      filteredBundledTools.length > 0
-        ? runtimePlan.tools.normalize(
-            [...normalizableBundledToolProjection.tools],
-            runtimePlanModelContext,
-          )
-        : filteredBundledTools;
+    const normalizedBundledTools = await normalizeToolSchemas(filteredBundledTools, "bundle");
     const projectedEffectiveTools = [...tools, ...normalizedBundledTools];
     const toolSchemaProjection = filterRuntimeCompatibleTools(projectedEffectiveTools);
     await logRuntimeToolSchemaQuarantine({
@@ -415,27 +399,12 @@ export async function buildPreparedCompactionRuntime(
     const promptAllowedToolNames = collectAllowedToolNames({ tools: promptTools });
     runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
     const machineName = await getMachineDisplayName();
-    const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
-    const runtimeCapabilities = collectRuntimeChannelCapabilities({
-      cfg: params.config,
-      channel: runtimeChannel,
-      accountId: params.agentAccountId,
-    });
-    const reactionGuidance =
-      runtimeChannel && params.config
-        ? resolveChannelReactionGuidance({
-            cfg: params.config,
-            channel: runtimeChannel,
-            accountId: params.agentAccountId,
-          })
-        : undefined;
-    const messageToolHints = runtimeChannel
-      ? resolveChannelMessageToolHints({
-          cfg: params.config,
-          channel: runtimeChannel,
-          accountId: params.agentAccountId,
-        })
-      : undefined;
+    const { runtimeChannel, runtimeCapabilities, reactionGuidance, messageToolHints } =
+      resolveRuntimeChannelPromptContext({
+        cfg: params.config,
+        channel: params.messageChannel ?? params.messageProvider,
+        accountId: params.agentAccountId,
+      });
 
     const runtimeInfo = {
       agentId: sessionAgentId,

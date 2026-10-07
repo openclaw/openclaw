@@ -15,7 +15,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import { createQueuedDeliveryOwner } from "./deliver-queue-state.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { drainMatrixReconnect } from "./deliver.queue-integration.test-support.js";

@@ -60,45 +60,20 @@ private object SystemCallLogDataSource : CallLogDataSource {
         CallLog.Calls.TYPE,
       )
 
-    val selections = mutableListOf<String>()
-    val selectionArgs = mutableListOf<String>()
+    val filters =
+      listOfNotNull(
+        request.cachedName?.let { buildCallLogCachedNameLikeSelection() to buildCallLogLikeArg(it) },
+        request.number?.let { buildCallLogNumberLikeSelection() to buildCallLogLikeArg(it) },
+        request.dateStart?.let { "${CallLog.Calls.DATE} >= ?" to it.toString() },
+        request.dateEnd?.let { "${CallLog.Calls.DATE} <= ?" to it.toString() },
+        // Compatible with the old date parameter (exact match) when neither range bound is present.
+        request.date?.takeIf { request.dateStart == null && request.dateEnd == null }?.let { "${CallLog.Calls.DATE} = ?" to it.toString() },
+        request.duration?.let { "${CallLog.Calls.DURATION} = ?" to it.toString() },
+        request.type?.let { "${CallLog.Calls.TYPE} = ?" to it.toString() },
+      ).takeIf { it.isNotEmpty() }
 
-    request.cachedName?.let {
-      selections.add(buildCallLogCachedNameLikeSelection())
-      selectionArgs.add(buildCallLogLikeArg(it))
-    }
-
-    request.number?.let {
-      selections.add(buildCallLogNumberLikeSelection())
-      selectionArgs.add(buildCallLogLikeArg(it))
-    }
-
-    if (request.dateStart != null) {
-      selections.add("${CallLog.Calls.DATE} >= ?")
-      selectionArgs.add(request.dateStart.toString())
-    }
-    if (request.dateEnd != null) {
-      selections.add("${CallLog.Calls.DATE} <= ?")
-      selectionArgs.add(request.dateEnd.toString())
-    }
-    if (request.dateStart == null && request.dateEnd == null && request.date != null) {
-      // Compatible with the old date parameter (exact match)
-      selections.add("${CallLog.Calls.DATE} = ?")
-      selectionArgs.add(request.date.toString())
-    }
-
-    request.duration?.let {
-      selections.add("${CallLog.Calls.DURATION} = ?")
-      selectionArgs.add(it.toString())
-    }
-
-    request.type?.let {
-      selections.add("${CallLog.Calls.TYPE} = ?")
-      selectionArgs.add(it.toString())
-    }
-
-    val selection = if (selections.isNotEmpty()) selections.joinToString(" AND ") else null
-    val selectionArgsArray = if (selectionArgs.isNotEmpty()) selectionArgs.toTypedArray() else null
+    val selection = filters?.joinToString(" AND ") { it.first }
+    val selectionArgsArray = filters?.map { it.second }?.toTypedArray()
 
     val sortOrder = "${CallLog.Calls.DATE} DESC"
 

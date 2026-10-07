@@ -524,21 +524,11 @@ internal fun formatDeviceList(
   values: List<String>,
   kind: DeviceListKind,
 ): String? =
-  when (values.size) {
-    0 -> {
-      null
-    }
-
-    1 -> {
-      values.first()
-    }
-
-    else -> {
-      when (kind) {
-        DeviceListKind.Role -> nativeString("\${values.size} roles", values.size)
-        DeviceListKind.Scope -> nativeString("\${values.size} scopes", values.size)
-      }
-    }
+  when {
+    values.isEmpty() -> null
+    values.size == 1 -> values.first()
+    kind == DeviceListKind.Role -> nativeString("\${values.size} roles", values.size)
+    else -> nativeString("\${values.size} scopes", values.size)
   }
 
 internal fun relativeDeviceTime(

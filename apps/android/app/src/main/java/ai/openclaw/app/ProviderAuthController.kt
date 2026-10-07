@@ -115,9 +115,7 @@ internal class ProviderAuthController(
           publish { it.copy(signInActive = false) }
           throw err
         }
-      if (closed) {
-        closeWizard(id)
-      } else if (sessionId == id && cancelRequested) {
+      if (closed || (sessionId == id && cancelRequested)) {
         val result = closeWizard(id)
         if (result != null) finish(id, terminalResult(result))
       } else if (sessionId == id) {

@@ -694,7 +694,7 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private setLocale(locale: Locale | undefined) {
     if (locale === undefined) {
-      this.resetLocale();
+      this.resetSyncedPref("locale");
       return;
     }
     this.settings = patchSettings({ locale });
@@ -718,7 +718,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   private setFont(key: "fontUi" | "fontChat", font: TypefaceId | undefined) {
     const preference = this.currentSyncedPref(key);
     if (preference.overridden && font === preference.resetValue) {
-      this.resetSyncedAppearancePref(key);
+      this.resetSyncedPref(key);
     } else {
       this.applySettings({ [key]: font });
     }
@@ -740,27 +740,22 @@ export class ConfigPage extends OpenClawLightDomElement {
       : runtimeConfig.canPatch !== false;
   }
 
-  private resetLocale() {
-    this.settings = resetServerUiPref(
-      "locale",
-      this.currentSyncedPref("locale"),
-      this.context.gateway.connection.gatewayUrl,
-    );
-    if (isSupportedLocale(this.settings.locale)) {
-      void i18n.setLocale(this.settings.locale);
-    } else {
-      void i18n.useSystemLocale();
-    }
-  }
-
-  private resetSyncedAppearancePref(key: Exclude<ResettableServerUiPrefKey, "locale">) {
+  private resetSyncedPref(key: ResettableServerUiPrefKey) {
     this.settings = resetServerUiPref(
       key,
       this.currentSyncedPref(key),
       this.context.gateway.connection.gatewayUrl,
       this.context.gateway.snapshot?.selfUser?.id,
     );
-    this.context.theme.refresh();
+    if (key === "locale") {
+      if (isSupportedLocale(this.settings.locale)) {
+        void i18n.setLocale(this.settings.locale);
+      } else {
+        void i18n.useSystemLocale();
+      }
+    } else {
+      this.context.theme.refresh();
+    }
   }
 
   private setTheme(theme: ThemeName) {
@@ -768,7 +763,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     const reset = preference.overridden && theme === preference.resetValue;
     this.customThemeImportOwner.recordActivation(reset ? null : theme);
     if (reset) {
-      this.resetSyncedAppearancePref("theme");
+      this.resetSyncedPref("theme");
     } else {
       this.applySettings({}, theme);
     }
@@ -777,7 +772,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   private setThemeMode(mode: ThemeMode) {
     const preference = this.currentSyncedPref("themeMode");
     if (preference.overridden && mode === preference.resetValue) {
-      this.resetSyncedAppearancePref("themeMode");
+      this.resetSyncedPref("themeMode");
     } else {
       this.context.theme.setMode(mode);
     }
@@ -891,6 +886,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.context.overlays.snapshot.updateStatusRefreshing ||
       !hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null);
     const props: ConfigProps = {
+      onAppearanceChange: (patch) => this.applySettings(patch),
       raw: configState.configRaw,
       originalRaw: configState.configRawOriginal,
       valid: configState.configValid,
@@ -966,9 +962,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       setTheme: (theme) => this.setTheme(theme),
       setThemeMode: (mode) => this.setThemeMode(mode),
       setAccent: (accent) =>
-        accent === undefined
-          ? this.resetSyncedAppearancePref("accent")
-          : this.applySettings({ accent }),
+        accent === undefined ? this.resetSyncedPref("accent") : this.applySettings({ accent }),
       hasCustomTheme: Boolean(this.settings.customTheme),
       customThemeLabel: this.settings.customTheme?.label ?? null,
       customThemeSourceUrl: this.settings.customTheme?.sourceUrl ?? null,
@@ -990,7 +984,6 @@ export class ConfigPage extends OpenClawLightDomElement {
         }),
       sidebarLiveActivity:
         this.settings.sidebarLiveActivity ?? UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
-      setSidebarLiveActivity: (enabled) => this.applySettings({ sidebarLiveActivity: enabled }),
       hiddenSessionCatalogIds: this.hiddenSessionCatalogIds,
       hiddenSessionCatalogLabels:
         this.hiddenSessionCatalogLabelsTask.status === TaskStatus.COMPLETE
@@ -1026,12 +1019,9 @@ export class ConfigPage extends OpenClawLightDomElement {
           });
       },
       lobsterPetVisits: this.settings.lobsterPetVisits ?? UI_APPEARANCE_DEFAULTS.lobsterPetVisits,
-      setLobsterPetVisits: (enabled) => this.applySettings({ lobsterPetVisits: enabled }),
       sessionDeleteConfirm:
         this.settings.sessionDeleteConfirm ?? UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm,
-      setSessionDeleteConfirm: (enabled) => this.applySettings({ sessionDeleteConfirm: enabled }),
       lobsterPetSounds: this.settings.lobsterPetSounds ?? UI_APPEARANCE_DEFAULTS.lobsterPetSounds,
-      setLobsterPetSounds: (enabled) => this.applySettings({ lobsterPetSounds: enabled }),
       lobsterdexHref: pathForRoute("lobsterdex", this.context.basePath),
       onOpenLobsterdex: () => this.context.navigate("lobsterdex"),
       chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),
@@ -1039,7 +1029,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       chatSendShortcutProvenance: chatSendShortcutPref.provenance,
       chatSendShortcutResetValue:
         chatSendShortcutPref.resetValue ?? UI_APPEARANCE_DEFAULTS.chatSendShortcut,
-      setChatSendShortcut: (value) => this.applySettings({ chatSendShortcut: value }),
       chatFollowUpMode: this.settings.chatFollowUpMode,
       chatFollowUpModeOverridden: chatFollowUpModePref.overridden,
       chatFollowUpModeProvenance: chatFollowUpModePref.provenance,
@@ -1048,8 +1037,7 @@ export class ConfigPage extends OpenClawLightDomElement {
             configNeedsApply: configState.configNeedsApply,
           })
         : undefined,
-      setChatFollowUpMode: (value) => this.applySettings({ chatFollowUpMode: value }),
-      resetChatFollowUpMode: () => this.resetSyncedAppearancePref("chatFollowUpMode"),
+      resetChatFollowUpMode: () => this.resetSyncedPref("chatFollowUpMode"),
       catalogOpenTarget: normalizeCatalogOpenTarget(this.settings.catalogOpenTarget),
       pluginsHref: pathForRoute("plugin-settings", this.context.basePath),
       installedSessionSourcePluginIds:
@@ -1057,13 +1045,11 @@ export class ConfigPage extends OpenClawLightDomElement {
           ? this.sessionSourcePluginsTask.value
           : null,
       sessionSourcePluginsLoading: this.sessionSourcePluginsTask.status === TaskStatus.PENDING,
-      setCatalogOpenTarget: (value) => this.applySettings({ catalogOpenTarget: value }),
       microphone: {
         ...this.mediaDevices.microphone,
         selectedDeviceId: this.settings.realtimeTalkInputDeviceId ?? "",
       },
       composerHoldToRecord: this.settings.composerHoldToRecord !== false,
-      setComposerHoldToRecord: (enabled) => this.applySettings({ composerHoldToRecord: enabled }),
       onMicrophoneRefresh: () => void this.refreshMediaDevices("microphone", true),
       onMicrophoneSelect: (deviceId) =>
         this.applySettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined }),

@@ -345,20 +345,28 @@ over the WebSocket or enter the diagnostics export. Worker isolates are excluded
 **Take snapshots in a quiet window.** A 3 GB heap snapshot can block the main
 thread for tens of seconds. V8 may need roughly twice the heap's memory while
 capturing; sufficient memory and disk headroom remain the operator's responsibility.
-The RPC refuses heaps above 6 GiB, overlapping captures, and another capture within
-60 seconds of a native attempt finishing. These admission guards do not impose a
+The RPC refuses heaps above 6 GiB, overlapping CPU/heap captures, and another snapshot within
+60 seconds of a native attempt finishing. It also shares the profiling RPCs' refusal
+of known debuggers, profiling flags, coverage, and active Node tracing. These admission guards do not impose a
 hard duration, output-size, or memory limit: synchronous `writeHeapSnapshot()`
 cannot be interrupted by a timeout, disconnection, or shutdown once started.
 A client timeout does not mean capture stopped; inspect the host directory before
-retrying. Failed captures remove partial files when possible; `cleanupFailed`
-reports whether removal failed.
+retrying. After capture, the diagnostic owner disables the heap profiler and
+disconnects its inspector session, releasing V8's object-ID map and object-move
+tracking so later garbage collections do not keep paying snapshot tracking costs.
+Failed captures remove partial files when possible; `cleanupFailed`
+reports whether profiler cleanup or file removal failed.
 
 Snapshots are **unredacted** and can contain credentials, prompts, and private
 messages. Keep them on the host, review any transfer separately, and delete them
 manually after analysis. Successful snapshots are retained until removed; there
 is no automatic snapshot collection or retention job.
 
-Capture two points in the same process, then compare them from a source checkout:
+RPC snapshots reset object IDs after each capture. Inspect their retaining paths
+individually; do not correlate their object IDs or use them as inputs to the
+identity-based diff below. For an identity-based comparison, capture two points
+through the same continuously attached debugger on an isolated analysis process,
+then compare them from a source checkout:
 
 ```bash
 node scripts/heap-snapshot-diff.mjs before.heapsnapshot after.heapsnapshot
@@ -370,7 +378,7 @@ and analyzes snapshots sequentially, but still needs memory proportional to the
 object graph; run large diffs on a separate analysis host with enough memory.
 Weak and shortcut edges are excluded. Class totals count nested instances of the
 same class once; totals across different classes can overlap. Object IDs match
-only within the same isolate/process. Use Chrome DevTools for interactive retaining
+only while the same isolate's object-ID map remains active. Use Chrome DevTools for interactive retaining
 paths and V8-specific weak/ephemeron semantics; the script is a strong-edge graph
 summary. `--json` produces machine-readable output. Treat diff output as sensitive
 too: it contains unredacted heap names.
@@ -381,7 +389,7 @@ object in the later snapshot. A shortest root path shows reachability;
 the separate dominator chain identifies exclusive retention in that graph.
 
 From a built source checkout, an isolated synthetic workload can collect a
-comparable pair without connecting to an existing Gateway:
+pair of standalone RPC snapshots without connecting to an existing Gateway:
 
 ```bash
 node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90

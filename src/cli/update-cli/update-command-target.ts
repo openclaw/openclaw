@@ -161,6 +161,10 @@ export async function resolveUpdateCommandTarget(
       let managedServiceRoot = prepared.servicePlan?.serviceRoot;
       let packageManager: ResolvedGlobalInstallTarget["manager"] | undefined;
       const preflightSteps: UpdateStepResult[] = [];
+      const warn = (message: string) =>
+        opts.json
+          ? defaultRuntime.error(`Warning: ${message}`)
+          : defaultRuntime.log(theme.warn(message));
       const recordPreflightStep = (result: UpdateStepResult) => {
         if (!opts.run) {
           preflightSteps.push(result);
@@ -171,21 +175,18 @@ export async function resolveUpdateCommandTarget(
         }
       };
       const resolveMode = async (): Promise<UpdateRunResult["mode"]> => {
-        if (updateInstallKind === "git") {
-          return "git";
-        }
-        if (packageManager) {
-          return packageManager;
-        }
         // Policy/config refusals can precede target preparation. Inspect their owner too.
-        return (
-          await resolveUpdateInstallSurface({
-            root,
-            installKind,
-            timeoutMs: updateStepTimeoutMs,
-            runCommand: runCommandWithTimeout,
-          })
-        ).mode;
+        return updateInstallKind === "git"
+          ? "git"
+          : packageManager ||
+              (
+                await resolveUpdateInstallSurface({
+                  root,
+                  installKind,
+                  timeoutMs: updateStepTimeoutMs,
+                  runCommand: runCommandWithTimeout,
+                })
+              ).mode;
       };
       const refuseUpdate: RefuseUpdate = async (reason, message, failureFacts, recoverySteps) => {
         const report = {
@@ -469,11 +470,7 @@ export async function resolveUpdateCommandTarget(
             purpose: "global package update",
           });
           if (diskWarning) {
-            if (opts.json) {
-              defaultRuntime.error(`Warning: ${diskWarning}`);
-            } else {
-              defaultRuntime.log(theme.warn(diskWarning));
-            }
+            warn(diskWarning);
             opts.run?.executorFence?.assertCurrent();
             recordPreflightStep({
               name: "disk-space-preflight",
@@ -627,11 +624,7 @@ export async function resolveUpdateCommandTarget(
           return undefined;
         }
         for (const warning of snapshot.warnings ?? []) {
-          if (opts.json) {
-            defaultRuntime.error(`Warning: ${warning}`);
-          } else {
-            defaultRuntime.log(theme.warn(warning));
-          }
+          warn(warning);
         }
       }
 

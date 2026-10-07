@@ -201,7 +201,7 @@ describe("native profile-bound input admission", () => {
       let request: ReturnType<typeof fixture.send> | undefined;
       try {
         if (boundary === "reservation") {
-          const normalized = normalizeChatSendRequest({
+          const normalized = await normalizeChatSendRequest({
             params: fixture.params,
             client: fixture.client,
           });

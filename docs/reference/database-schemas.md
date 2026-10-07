@@ -58,6 +58,12 @@ changes require a new ownership read. Transactions, pinned snapshots, and dynami
 authorizers keep querying the metadata. This changes no schema, stored bytes, or
 update behavior.
 
+The shared-state content-version marker uses the same admitted read revision.
+Unchanged reads reuse its successful result; foreign commits, local writes,
+rollback, schema changes, and connection disposal invalidate reuse. Transactions,
+pinned snapshots, and authorizer-controlled reads still query the marker. Version
+validation and upgrade or downgrade behavior are unchanged.
+
 Registry discovery reuses successful migration checks for the admitted schema
 generation. The minute retention sweep reads deletion history in a worker and
 shares one matcher across its agent stores; live deletion status and lifecycle

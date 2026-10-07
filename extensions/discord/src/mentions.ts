@@ -69,9 +69,6 @@ function rewritePlainTextMentions(
     mentionAliases?: DiscordMentionAliasesConfig | null;
   },
 ): string {
-  if (!text.includes("@")) {
-    return text;
-  }
   return text.replace(
     MENTION_CANDIDATE_PATTERN,
     (match: string, prefix: string, handle: string) => {

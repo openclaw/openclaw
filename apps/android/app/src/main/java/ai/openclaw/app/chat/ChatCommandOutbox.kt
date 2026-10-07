@@ -588,9 +588,6 @@ internal interface ChatOutboxDao {
   @Query("SELECT * FROM outbox_attachments WHERE commandId IN (:commandIds) ORDER BY position ASC")
   suspend fun attachmentsForCommands(commandIds: List<String>): List<OutboxAttachmentEntity>
 
-  @Query("SELECT * FROM outbox_attachments WHERE commandId = :commandId ORDER BY position ASC")
-  suspend fun attachmentsForCommand(commandId: String): List<OutboxAttachmentEntity>
-
   @Query("SELECT bytes FROM outbox_attachment_chunks WHERE attachmentId = :attachmentId ORDER BY chunkIndex ASC")
   suspend fun chunksForAttachment(attachmentId: String): List<ByteArray>
 
@@ -782,7 +779,7 @@ class RoomChatCommandOutbox internal constructor(
   override suspend fun loadAttachments(id: String): List<LoadedOutboxAttachment> {
     val database = openDatabase()
     val dao = database.outboxDao()
-    return dao.attachmentsForCommand(id).map { row ->
+    return dao.attachmentsForCommands(listOf(id)).map { row ->
       val chunks = dao.chunksForAttachment(row.id)
       val bytes = ByteArray(chunks.sumOf { it.size })
       var offset = 0
@@ -1478,12 +1475,8 @@ class RoomChatCommandOutbox internal constructor(
       statement.bindInt(1, epoch)
       if (lastActiveLeafEntryId == null) statement.bindNull(2) else statement.bindText(2, lastActiveLeafEntryId)
       statement.bindScope(gatewayId, scope, startIndex = 3)
-      if (expectedRevision == null) {
-        statement.bindNull(6)
-        statement.bindNull(7)
-      } else {
-        statement.bindInt(6, expectedRevision)
-        statement.bindInt(7, expectedRevision)
+      for (index in 6..7) {
+        if (expectedRevision == null) statement.bindNull(index) else statement.bindInt(index, expectedRevision)
       }
       statement.step()
     }

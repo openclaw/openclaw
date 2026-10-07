@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import { generateKeyPairSync } from "node:crypto";
 import type { ProxylineOptions } from "@openclaw/proxyline";
 // Gateway client tests cover WebSocket protocol negotiation, auth persistence,
 // proxy bypass setup, command dispatch, reconnect, and error handling.
@@ -15,14 +14,16 @@ import {
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../../packages/gateway-protocol/src/index.js";
-import {
-  signDevicePayload as signDevicePayloadWithKey,
-  type DeviceIdentity,
-} from "../infra/device-identity.js";
+import { signDevicePayload as signDevicePayloadWithKey } from "../infra/device-identity.js";
 import { stopMockedProxylineHandles } from "../infra/net/proxy/proxyline.test-support.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { GatewayClientOptions } from "./client.js";
-import { createAuthFailureMessage, firstMockArg, waitForFast } from "./client.test-support.js";
+import {
+  createAuthFailureMessage,
+  createClientTestIdentity,
+  firstMockArg,
+  waitForFast,
+} from "./client.test-support.js";
 
 type MockLoggingConfig = {
   redactPatterns?: string[];
@@ -208,6 +209,12 @@ type GatewayClientInstance = InstanceType<GatewayClientModule["GatewayClient"]>;
 let GatewayClient: GatewayClientModule["GatewayClient"];
 let isGatewayConnectAssemblyError: GatewayClientModule["isGatewayConnectAssemblyError"];
 
+const defaultIdentity = createClientTestIdentity("fixture-client-device");
+
+function createClient(options: GatewayClientOptions): GatewayClientInstance {
+  return new GatewayClient({ deviceIdentity: defaultIdentity, ...options });
+}
+
 async function loadGatewayClientModule() {
   vi.resetModules();
   ({ GatewayClient, isGatewayConnectAssemblyError } = await import("./client.js"));
@@ -240,15 +247,9 @@ function createClientWithIdentity(
   onClose: (code: number, reason: string) => void,
   overrides: Partial<ConstructorParameters<typeof GatewayClient>[0]> = {},
 ) {
-  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-  const identity: DeviceIdentity = {
-    deviceId,
-    privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }),
-    publicKeyPem: publicKey.export({ type: "spki", format: "pem" }),
-  };
-  return new GatewayClient({
+  return createClient({
     url: "ws://127.0.0.1:18789",
-    deviceIdentity: identity,
+    deviceIdentity: createClientTestIdentity(deviceId),
     onClose,
     ...overrides,
   });
@@ -332,7 +333,7 @@ describe("GatewayClient security checks", () => {
       process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
     }
     const onConnectError = vi.fn();
-    const client = new GatewayClient({ url, onConnectError });
+    const client = createClient({ url, onConnectError });
 
     expect(client.start()).toBeUndefined();
     expect(wsInstances).toHaveLength(allowed ? 1 : 0);
@@ -354,7 +355,7 @@ describe("GatewayClient security checks", () => {
     process.env.OPENCLAW_PROXY_LOOPBACK_MODE = "proxy";
     process.env.HTTP_PROXY = "http://127.0.0.1:3128";
     const onConnectError = vi.fn();
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       onConnectError,
     });
@@ -388,7 +389,7 @@ describe("GatewayClient security checks", () => {
         policy?.({ url: "wss://external.example/", surface: "websocket" }),
       );
     });
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       onConnectError,
     });
@@ -413,7 +414,7 @@ describe("GatewayClient security checks", () => {
       loopbackMode: "block",
     });
     const onConnectError = vi.fn();
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       onConnectError,
     });
@@ -434,7 +435,7 @@ describe("GatewayClient request errors", () => {
     wsInstances.length = 0;
     const onClose = vi.fn();
     const onConnectError = vi.fn();
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       deviceIdentity: null,
       onClose,
@@ -566,7 +567,7 @@ describe("GatewayClient close handling", () => {
     const onClose = vi.fn();
     const onConnectError = vi.fn();
     const onHelloOk = vi.fn();
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       deviceIdentity: null,
       token: "shared-token",
@@ -641,7 +642,7 @@ describe("GatewayClient close handling", () => {
     vi.useFakeTimers();
     const onClose = vi.fn();
     const onConnectError = vi.fn();
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       deviceIdentity: null,
       token: "shared-token",
@@ -709,7 +710,7 @@ describe("GatewayClient close handling", () => {
   it("does not force-terminate a socket that closes during stop", async () => {
     vi.useFakeTimers();
     const onClose = vi.fn();
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       onClose,
     });
@@ -728,7 +729,7 @@ describe("GatewayClient close handling", () => {
 
   it("waits for a lingering socket to terminate in stopAndWait", async () => {
     vi.useFakeTimers();
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
     });
 
@@ -765,7 +766,7 @@ describe("GatewayClient message dispatch", () => {
     const onEvent = vi.fn(() => {
       throw new Error("event callback failed");
     });
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       deviceIdentity: null,
       onEvent,
@@ -940,7 +941,7 @@ describe("GatewayClient connect auth payload", () => {
   it.each(protocolCompatibilityCases)(
     "advertises the protocol compatibility range for $name",
     async ({ options, expectedMinProtocol, expectedMaxProtocol }) => {
-      const client = new GatewayClient({
+      const client = createClient({
         url: "ws://127.0.0.1:18789",
         deviceIdentity: null,
         ...options,
@@ -958,7 +959,7 @@ describe("GatewayClient connect auth payload", () => {
     "pauses $name after a permanent protocol mismatch",
     async ({ options }) => {
       const onReconnectPaused = vi.fn();
-      const client = new GatewayClient({
+      const client = createClient({
         url: "ws://127.0.0.1:18789",
         deviceIdentity: null,
         onReconnectPaused,
@@ -1385,7 +1386,7 @@ describe("GatewayClient connect auth payload", () => {
     try {
       const onClose = vi.fn();
       const onConnectError = vi.fn();
-      client = new GatewayClient({
+      client = createClient({
         url: "ws://127.0.0.1:18789",
         token: "shared-token",
         deviceIdentity: {
@@ -1424,7 +1425,7 @@ describe("GatewayClient connect auth payload", () => {
     const onConnectError = vi.fn(() => {
       throw new Error("connect callback failed");
     });
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       deviceIdentity: null,
       onConnectError,
@@ -1454,7 +1455,7 @@ describe("GatewayClient connect auth payload", () => {
       throw new Error("hello callback failed");
     });
     const onConnectError = vi.fn();
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       deviceIdentity: null,
       onHelloOk,
@@ -1882,7 +1883,7 @@ describe("GatewayClient connect auth payload", () => {
   );
 
   it("retries without approval runtime token when a gateway rejects the auth field", async () => {
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-token",
       approvalRuntimeToken: "runtime-token",
@@ -1919,7 +1920,7 @@ describe("GatewayClient connect auth payload", () => {
 
   it("fails closed when a gateway rejects the required agent runtime identity auth field", async () => {
     const onConnectError = vi.fn();
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-token",
       agentRuntimeIdentityToken: "identity-token",
@@ -1956,7 +1957,7 @@ describe("GatewayClient connect auth payload", () => {
   });
 
   it("waits for socket open before sending connect after an early challenge", () => {
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-token",
     });
@@ -1972,7 +1973,7 @@ describe("GatewayClient connect auth payload", () => {
 
   it("reports a transport close while the connect request is pending", async () => {
     const onConnectError = vi.fn();
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-token",
       onConnectError,
@@ -1989,7 +1990,7 @@ describe("GatewayClient connect auth payload", () => {
 
   it("logs stopped connect handshakes at debug level during teardown", async () => {
     const onConnectError = vi.fn();
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-token",
       onConnectError,
@@ -2045,7 +2046,7 @@ describe("GatewayClient connect auth payload", () => {
       if (redactionOff) {
         readLoggingConfigMock.mockReturnValue({ redactSensitive: "off" });
       }
-      const client = new GatewayClient({
+      const client = createClient({
         url: edge ? "wss://gateway.example" : "ws://127.0.0.1:18789",
         ...(edge
           ? { edgeAuthHeaders: { "X-Edge-Auth": "test-secret" } }
@@ -2079,7 +2080,7 @@ describe("GatewayClient connect auth payload", () => {
     { label: "bootstrap token", stored: undefined, bootstrapToken: "stale-bootstrap-token" },
   ])("prefers explicit shared password over $label", ({ stored, bootstrapToken }) => {
     loadDeviceAuthTokenMock.mockReturnValue(stored);
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       password: "shared-password", // pragma: allowlist secret
       bootstrapToken,
@@ -2152,7 +2153,7 @@ describe("GatewayClient connect auth payload", () => {
       ...process.env,
       OPENCLAW_STATE_DIR: "/tmp/openclaw-client-service-state",
     } as NodeJS.ProcessEnv;
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       env,
     });
@@ -2179,7 +2180,7 @@ describe("GatewayClient connect auth payload", () => {
 
   it("uses bootstrap token when no shared or device token is available", () => {
     loadDeviceAuthTokenMock.mockReturnValue(undefined);
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       bootstrapToken: "bootstrap-token",
     });
@@ -2227,7 +2228,7 @@ describe("GatewayClient connect auth payload", () => {
   it("prefers a paired bootstrap token once, then reconnects with stored device auth", async () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stale-device-token" });
     const onHelloOk = vi.fn();
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-token",
       bootstrapToken: "bootstrap-token",
@@ -2264,7 +2265,7 @@ describe("GatewayClient connect auth payload", () => {
       token: "stored-device-token",
       scopes: ["operator.read"],
     });
-    const client = new GatewayClient({ url: "ws://127.0.0.1:18789", token: "shared-token" });
+    const client = createClient({ url: "ws://127.0.0.1:18789", token: "shared-token" });
     const { ws: firstWs, connect } = await startClientAndConnect({ client });
     expect(connect.params?.auth?.token).toBe("shared-token");
     expect(connect.params?.auth?.deviceToken).toBeUndefined();
@@ -2301,7 +2302,7 @@ describe("GatewayClient connect auth payload", () => {
     async ({ details, options, message }) => {
       loadDeviceAuthTokenMock.mockReturnValue(null);
       const onReconnectPaused = vi.fn();
-      const client = new GatewayClient({
+      const client = createClient({
         url: "ws://127.0.0.1:18789",
         onReconnectPaused,
         ...options,
@@ -2325,7 +2326,7 @@ describe("GatewayClient connect auth payload", () => {
   it("reports AUTH_RATE_LIMITED before pausing reconnect on the following close", async () => {
     const onConnectError = vi.fn();
     const onReconnectPaused = vi.fn();
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-token",
       onConnectError,
@@ -2372,7 +2373,7 @@ describe("GatewayClient connect auth payload", () => {
       throw new Error("paused callback failed");
     });
     const onClose = vi.fn();
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-token",
       onReconnectPaused,
@@ -2412,7 +2413,7 @@ describe("GatewayClient connect auth payload", () => {
   it("keeps reconnecting on PAIRING_REQUIRED when retry hints keep reconnect active", async () => {
     vi.useFakeTimers();
     const onReconnectPaused = vi.fn();
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       bootstrapToken: "setup-bootstrap-token",
       role: "node",
@@ -2448,7 +2449,7 @@ describe("GatewayClient connect auth payload", () => {
         scopes: ["operator.read"],
       });
       const onReconnectPaused = vi.fn();
-      const client = new GatewayClient({ url: "ws://127.0.0.1:18789", env, onReconnectPaused });
+      const client = createClient({ url: "ws://127.0.0.1:18789", env, onReconnectPaused });
       const { ws: firstWs, connect } = await startClientAndConnect({ client });
       expect(connect.params?.auth).toEqual({ deviceToken: "stored-device-token" });
       await expectNoReconnectAfterConnectFailure({
@@ -2478,7 +2479,7 @@ describe("GatewayClient connect auth payload", () => {
       scopes: ["operator.read"],
     });
     const onReconnectPaused = vi.fn();
-    const client = new GatewayClient({
+    const client = createClient({
       url: "ws://127.0.0.1:18789",
       onReconnectPaused,
     });
@@ -2501,7 +2502,7 @@ describe("GatewayClient connect auth payload", () => {
 
   it("does not auto-reconnect on token mismatch when retry is not trusted", async () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
-    const client = new GatewayClient({
+    const client = createClient({
       url: "wss://gateway.example.com:18789",
       token: "shared-token",
     });

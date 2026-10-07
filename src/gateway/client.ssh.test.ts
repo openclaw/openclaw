@@ -125,6 +125,7 @@ it("keeps route-bound credentials and TLS identity when the local listener chang
     fixture.onStart = started.resolve;
     const client = new GatewayClient({
       url: `wss://${host}:18789/gateway/ws?profile=work`,
+      deviceIdentity: null,
       deviceAuthScope,
       sshTunnel: { ...route, identity },
     });
@@ -166,6 +167,7 @@ it("joins a canceled pending tunnel before stopping without opening the Gateway 
   const onConnectError = vi.fn();
   const client = new GatewayClient({
     url: "ws://127.0.0.1:18789",
+    deviceIdentity: null,
     deviceAuthScope,
     sshTunnel: route,
     onConnectError,
@@ -200,6 +202,7 @@ it("rejects a reconnect as soon as the SSH child exits and never reuses its rele
   const beforeConnect = vi.fn();
   const client = new GatewayClient({
     url: "ws://127.0.0.1:18789",
+    deviceIdentity: null,
     deviceAuthScope,
     sshTunnel: route,
     hostDeps: { beforeConnect },
@@ -230,6 +233,7 @@ it("settles SSH teardown and close notification even when the error callback thr
   const closed = createDeferred();
   const client = new GatewayClient({
     url: "ws://127.0.0.1:18789",
+    deviceIdentity: null,
     deviceAuthScope,
     sshTunnel: route,
     hostDeps: {

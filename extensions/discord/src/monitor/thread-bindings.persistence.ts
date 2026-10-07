@@ -13,26 +13,14 @@ import {
   setBindingRecord,
   type ThreadBindingPersistence,
 } from "./thread-bindings.state.js";
-import type {
-  PersistedThreadBindingRecord,
-  ThreadBindingManager,
-  ThreadBindingRecord,
-} from "./thread-bindings.types.js";
+import type { ThreadBindingManager, ThreadBindingRecord } from "./thread-bindings.types.js";
 
 export function shouldPersistAnyBindingState(): boolean {
-  for (const value of PERSIST_BY_ACCOUNT_ID.values()) {
-    if (value) {
-      return true;
-    }
-  }
-  return false;
+  return [...PERSIST_BY_ACCOUNT_ID.values()].some(Boolean);
 }
 
 export function shouldPersistBindingMutations(): boolean {
-  if (shouldPersistAnyBindingState()) {
-    return true;
-  }
-  return THREAD_BINDINGS_STATE.loadedPersistentBindings;
+  return shouldPersistAnyBindingState() || THREAD_BINDINGS_STATE.loadedPersistentBindings;
 }
 
 export function snapshotThreadBindingJson(value: unknown): unknown {
@@ -40,7 +28,7 @@ export function snapshotThreadBindingJson(value: unknown): unknown {
   return serialized ? JSON.parse(serialized) : undefined;
 }
 
-function toPersistedBindingRecord(record: ThreadBindingRecord): PersistedThreadBindingRecord {
+function toPersistedBindingRecord(record: ThreadBindingRecord): ThreadBindingRecord {
   return (
     normalizePersistedBinding(record.threadId, snapshotThreadBindingJson(record)) ?? { ...record }
   );
@@ -144,7 +132,7 @@ export async function commitBindingRecord(params: {
     };
     THREAD_BINDINGS_STATE.activePersistence = active;
     try {
-      const store = getDiscordRuntime().state.openKeyedStore<PersistedThreadBindingRecord>({
+      const store = getDiscordRuntime().state.openKeyedStore<ThreadBindingRecord>({
         namespace: THREAD_BINDINGS_NAMESPACE,
         maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
       });

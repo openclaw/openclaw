@@ -41,11 +41,7 @@ import {
   resolveExactNpmSpecVersion,
   resolveNpmSpecPackageName,
 } from "../../plugins/update-source.js";
-import {
-  isClawHubTrustSkippedOutcome,
-  type PluginUpdateIntegrityDriftParams,
-  type PluginUpdateOutcome,
-} from "../../plugins/update.js";
+import { isClawHubTrustSkippedOutcome, type PluginUpdateOutcome } from "../../plugins/update.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { resolvePluginCapabilityConsentCliOptions } from "../plugin-capability-consent.js";
@@ -63,13 +59,11 @@ import {
 export type { PostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 
 function formatMissingPluginPayloadReason(entry: MissingPluginInstallPayload): string {
-  if (entry.reason === "missing-install-path") {
-    return "installPath is missing";
-  }
-  if (entry.reason === "missing-package-json") {
-    return `package.json is missing under ${entry.installPath}`;
-  }
-  return `package directory is missing: ${entry.installPath}`;
+  return entry.reason === "missing-install-path"
+    ? "installPath is missing"
+    : entry.reason === "missing-package-json"
+      ? `package.json is missing under ${entry.installPath}`
+      : `package directory is missing: ${entry.installPath}`;
 }
 
 function isDisabledAfterFailureOutcome(outcome: PluginUpdateOutcome): boolean {
@@ -181,8 +175,12 @@ async function updatePluginsAfterCoreUpdateWithLease(
   });
   const integrityDrifts: PostCorePluginUpdateResult["integrityDrifts"] = [];
   const pluginUpdateOutcomes: PluginUpdateOutcome[] = [];
-  const collectPluginOutcome = (outcome: PluginUpdateOutcome) => {
-    if (outcome.status === "skipped" && outcome.code === "plugin-operator-managed") {
+  const collectPluginOutcome = (
+    outcome: PluginUpdateOutcome,
+    phase: "cohort" | "convergence" = "cohort",
+  ) => {
+    const fromCohort = phase === "cohort";
+    if (fromCohort && outcome.status === "skipped" && outcome.code === "plugin-operator-managed") {
       warnings.push({
         pluginId: outcome.pluginId,
         source: outcome.rootDir,
@@ -191,21 +189,25 @@ async function updatePluginsAfterCoreUpdateWithLease(
         guidance: outcome.guidance,
       });
     }
+    pluginUpdateOutcomes.push(outcome);
     if (outcome.status !== "error" && !isActionableSkippedPostUpdateOutcome(outcome)) {
-      pluginUpdateOutcomes.push(outcome);
       return;
     }
     const includeWarningInReason =
-      params.json || !outcome.warning || !loggedPluginWarnings.has(stripAnsi(outcome.warning));
+      fromCohort &&
+      (params.json || !outcome.warning || !loggedPluginWarnings.has(stripAnsi(outcome.warning)));
     const warning = createPluginUpdateWarning({
-      ...(outcome.pluginId && outcome.pluginId !== "unknown" ? { pluginId: outcome.pluginId } : {}),
+      ...(!fromCohort || (outcome.pluginId && outcome.pluginId !== "unknown")
+        ? { pluginId: outcome.pluginId }
+        : {}),
       reason:
         outcome.warning && includeWarningInReason
           ? `${outcome.warning}\n${outcome.message}`
           : outcome.message,
     });
-    pluginUpdateOutcomes.push(outcome);
-    warnings.push(warning);
+    if (fromCohort || !warnings.some((entry) => entry.pluginId === warning.pluginId)) {
+      warnings.push(warning);
+    }
   };
   const collectMissingPayloadOutcome = (entry: MissingPluginInstallPayload) => {
     const warning = createPluginUpdateWarning({
@@ -219,19 +221,6 @@ async function updatePluginsAfterCoreUpdateWithLease(
       status: "error",
       message: warning.message,
     });
-  };
-
-  const onPluginIntegrityDrift = async (drift: PluginUpdateIntegrityDriftParams) => {
-    integrityDrifts.push({
-      pluginId: drift.pluginId,
-      spec: drift.spec,
-      expectedIntegrity: drift.expectedIntegrity,
-      actualIntegrity: drift.actualIntegrity,
-      ...(drift.resolvedSpec ? { resolvedSpec: drift.resolvedSpec } : {}),
-      ...(drift.resolvedVersion ? { resolvedVersion: drift.resolvedVersion } : {}),
-      action: "aborted",
-    });
-    return false;
   };
 
   const externalizedBundledPluginBridges = await listPersistedBundledPluginLocationBridges({
@@ -249,7 +238,18 @@ async function updatePluginsAfterCoreUpdateWithLease(
     externalizedBundledPluginBridges,
     beforePersistentEffect: params.assertCurrent,
     logger: pluginLogger,
-    onIntegrityDrift: onPluginIntegrityDrift,
+    onIntegrityDrift: async (drift) => {
+      integrityDrifts.push({
+        pluginId: drift.pluginId,
+        spec: drift.spec,
+        expectedIntegrity: drift.expectedIntegrity,
+        actualIntegrity: drift.actualIntegrity,
+        ...(drift.resolvedSpec ? { resolvedSpec: drift.resolvedSpec } : {}),
+        ...(drift.resolvedVersion ? { resolvedVersion: drift.resolvedVersion } : {}),
+        action: "aborted",
+      });
+      return false;
+    },
     ...capabilityConsent,
   });
   params.assertCurrent?.();
@@ -339,17 +339,9 @@ async function updatePluginsAfterCoreUpdateWithLease(
   ];
   warnings.push(...convergenceWarnings, ...(convergence.notices ?? []));
   for (const outcome of convergenceOutcomes) {
-    pluginUpdateOutcomes.push(outcome);
-    if (outcome.status === "error" || isActionableSkippedPostUpdateOutcome(outcome)) {
-      const warning = createPluginUpdateWarning({
-        pluginId: outcome.pluginId,
-        reason: outcome.message,
-      });
-      if (!warnings.some((entry) => entry.pluginId === warning.pluginId)) {
-        warnings.push(warning);
-      }
-    }
+    collectPluginOutcome(outcome, "convergence");
   }
+
   // Repair already persisted this authoritative map; the commit below must not
   // restore the pre-convergence records and discard successful repairs.
   pluginConfig = withPluginInstallRecords(convergence.config, convergence.installRecords);
@@ -400,9 +392,7 @@ async function updatePluginsAfterCoreUpdateWithLease(
       getLogger().warn(message);
     }
   }
-  if (convergence.changes.length > 0 || convergence.configChanges.length > 0) {
-    pluginsChanged = true;
-  }
+  pluginsChanged ||= convergence.changes.length > 0 || convergence.configChanges.length > 0;
 
   if (pluginsChanged) {
     const nextInstallRecords = pluginConfig.plugins?.installs ?? {};
@@ -556,12 +546,8 @@ async function updatePluginsAfterCoreUpdateWithLease(
     return result;
   }
 
-  const summarizeList = (list: string[]) => {
-    if (list.length <= 6) {
-      return list.join(", ");
-    }
-    return `${list.slice(0, 6).join(", ")} +${list.length - 6} more`;
-  };
+  const summarizeList = (list: string[]) =>
+    list.length <= 6 ? list.join(", ") : `${list.slice(0, 6).join(", ")} +${list.length - 6} more`;
 
   for (const [label, plugins] of [
     ["Switched to bundled plugins", cohort.sync.summary.switchedToBundled],

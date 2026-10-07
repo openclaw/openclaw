@@ -160,18 +160,12 @@ public actor GatewayChannelActor {
         self.task?.cancel(with: .goingAway, reason: nil)
         self.task = nil
 
-        self.failPending(NSError(
-            domain: "Gateway",
-            code: 0,
-            userInfo: [NSLocalizedDescriptionKey: "gateway channel shutdown"]))
+        self.failPending(Self.failure(0, "gateway channel shutdown"))
 
         let waiters = self.connectWaiters
         self.connectWaiters.removeAll()
         for waiter in waiters.values {
-            waiter.resume(throwing: NSError(
-                domain: "Gateway",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "gateway channel shutdown"]))
+            waiter.resume(throwing: Self.failure(0, "gateway channel shutdown"))
         }
     }
 
@@ -239,10 +233,7 @@ public actor GatewayChannelActor {
     public func connect() async throws {
         try Task.checkCancellation()
         guard self.shouldReconnect else {
-            throw NSError(
-                domain: "Gateway",
-                code: 6,
-                userInfo: [NSLocalizedDescriptionKey: "gateway channel is shut down"])
+            throw Self.failure(6, "gateway channel is shut down")
         }
         if let disconnectError { throw disconnectError }
         if self.connected, self.task?.state == .running {
@@ -313,10 +304,7 @@ public actor GatewayChannelActor {
         if self.connected {
             if self.task?.state == .running { return }
             let staleGeneration = self.connectionGeneration
-            let staleError = NSError(
-                domain: "Gateway",
-                code: 7,
-                userInfo: [NSLocalizedDescriptionKey: "gateway socket stopped before reconnect"])
+            let staleError = Self.failure(7, "gateway socket stopped before reconnect")
             // URLSession may publish a terminal task state before its receive
             // failure callback reaches this actor. Retire that generation first
             // so pending requests and native input lifecycle cleanup cannot leak
@@ -841,10 +829,7 @@ extension GatewayChannelActor {
                 minimumProbeProtocol: gatewayIntValue(details["minimumProbeProtocol"]?.value))
         }
         guard let payload = res.payload else {
-            throw NSError(
-                domain: "Gateway",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "connect failed (missing payload)"])
+            throw Self.failure(1, "connect failed (missing payload)")
         }
         let payloadData = try self.encoder.encode(payload)
         let ok = try decoder.decode(HelloOk.self, from: payloadData)
@@ -1039,10 +1024,7 @@ extension GatewayChannelActor {
                     await self.pushHandler?(
                         .seqGap(expected: last + 1, received: seq),
                         connectionGeneration)
-                    let error = NSError(
-                        domain: "Gateway",
-                        code: 8,
-                        userInfo: [NSLocalizedDescriptionKey: "gateway event sequence gap"])
+                    let error = Self.failure(8, "gateway event sequence gap")
                     await self.transitionToDisconnected(
                         reason: error.localizedDescription,
                         error: error,
@@ -1054,10 +1036,7 @@ extension GatewayChannelActor {
             }
             if evt.event == "tick" { self.lastTick = Date() }
             guard let projected = self.liveTextProjection.project(evt) else {
-                let error = NSError(
-                    domain: "Gateway",
-                    code: 8,
-                    userInfo: [NSLocalizedDescriptionKey: "gateway live text baseline missing"])
+                let error = Self.failure(8, "gateway live text baseline missing")
                 await self.transitionToDisconnected(
                     reason: error.localizedDescription,
                     error: error,
@@ -1107,10 +1086,7 @@ extension GatewayChannelActor {
             try self.ensureCurrentConnectAttempt(attemptID, task: task)
             guard let data = self.decodeMessageData(msg) else { continue }
             guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else {
-                throw NSError(
-                    domain: "Gateway",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "connect failed (invalid response)"])
+                throw Self.failure(1, "connect failed (invalid response)")
             }
             if case let .res(res) = frame, res.id == reqId {
                 return res
@@ -1155,10 +1131,7 @@ extension GatewayChannelActor {
                 let delta = Date().timeIntervalSince(last) * 1000
                 if delta > tolerance {
                     self.logger.error("gateway tick missed; reconnecting")
-                    let error = NSError(
-                        domain: "Gateway",
-                        code: 4,
-                        userInfo: [NSLocalizedDescriptionKey: "gateway tick missed; reconnecting"])
+                    let error = Self.failure(4, "gateway tick missed; reconnecting")
                     await self.transitionToDisconnected(
                         reason: error.localizedDescription,
                         error: error,
@@ -1278,10 +1251,7 @@ extension GatewayChannelActor {
               let task = self.task,
               task.state == .running
         else {
-            throw NSError(
-                domain: "Gateway",
-                code: 5,
-                userInfo: [NSLocalizedDescriptionKey: "gateway socket unavailable"])
+            throw Self.failure(5, "gateway socket unavailable")
         }
         return try await self.request(
             method: method,
@@ -1347,11 +1317,7 @@ extension GatewayChannelActor {
                             guard await self.sleepUnlessCancelled(
                                 nanoseconds: UInt64(effectiveTimeout * 1_000_000))
                             else { return }
-                            let error = NSError(
-                                domain: "Gateway",
-                                code: 5,
-                                userInfo: [NSLocalizedDescriptionKey:
-                                    "gateway request timed out after \(Int(effectiveTimeout))ms"])
+                            let error = Self.failure(5, "gateway request timed out after \(Int(effectiveTimeout))ms")
                             await self.finishRequest(id: payload.id, result: .failure(error))
                         }
                     }
@@ -1445,10 +1411,7 @@ extension GatewayChannelActor {
         try Task.checkCancellation()
         let payload = try self.encodeRequest(method: method, params: params, kind: "send")
         guard let task = self.task else {
-            throw NSError(
-                domain: "Gateway",
-                code: 5,
-                userInfo: [NSLocalizedDescriptionKey: "gateway socket unavailable"])
+            throw Self.failure(5, "gateway socket unavailable")
         }
         do {
             try Task.checkCancellation()
@@ -1464,6 +1427,10 @@ extension GatewayChannelActor {
                 shouldReconnect: true)
             throw wrapped
         }
+    }
+
+    private nonisolated static func failure(_ code: Int, _ message: String) -> NSError {
+        NSError(domain: "Gateway", code: code, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
     /// Wrap low-level URLSession/WebSocket errors with context so UI can surface them.

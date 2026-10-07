@@ -1,5 +1,6 @@
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
@@ -71,16 +72,21 @@ type CodexLiveThreadReleaseParams = {
   threadId: string;
   assertCurrent?: () => void;
   withCurrent?: (write: () => void) => Promise<void>;
+  signal?: AbortSignal;
 };
 
 /** Preserves the caller's abort reason across thread ownership transitions. */
 export function throwIfCodexThreadLifecycleAborted(signal?: AbortSignal): void {
-  if (!signal?.aborted) {
-    return;
+  if (signal?.aborted) {
+    throw codexThreadLifecycleAbortError(signal);
   }
+}
+
+// Converts an aborted lifecycle signal into the error its caller observes.
+function codexThreadLifecycleAbortError(signal: AbortSignal): Error {
   const reason = signal.reason;
   if (reason instanceof Error) {
-    throw reason;
+    return reason;
   }
   const error = new Error(
     typeof reason === "string" && reason.length > 0
@@ -88,7 +94,7 @@ export function throwIfCodexThreadLifecycleAborted(signal?: AbortSignal): void {
       : "codex app-server thread lifecycle aborted",
   );
   error.name = "AbortError";
-  throw error;
+  return error;
 }
 
 /** Releases consumed subscription ownership or retires an unsafe client. */
@@ -175,7 +181,15 @@ export async function releaseCodexBoundLiveThread(
     });
   } finally {
     // Rejection must free the lane so the claimed run can still be stopped.
-    await previous?.release(!isCodexAppServerLiveThreadClaimed(client, options.threadId));
+    const retiredExit = previous?.release(
+      !isCodexAppServerLiveThreadClaimed(client, options.threadId),
+    );
+    // Writer handoff waits for the retired owner to exit, but other leases can
+    // keep it alive indefinitely. This runs under the thread queue and binding
+    // lease, so cancellation must end the wait without proceeding to a write.
+    if (retiredExit) {
+      await racePromiseWithAbortSignal(retiredExit, options.signal, codexThreadLifecycleAbortError);
+    }
   }
 }
 

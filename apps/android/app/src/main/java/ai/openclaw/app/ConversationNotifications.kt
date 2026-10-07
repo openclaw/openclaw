@@ -363,7 +363,23 @@ internal class ConversationReplyNotifier(
       if (!canPostNotifications()) return@synchronized false
       val generation = checkNotNull(publicationGeneration(target, PendingIntent.FLAG_CANCEL_CURRENT))
       try {
-        post(target, buildAssistantReplyNotification(target, text, generation))
+        val contentIntent = contentPendingIntent(target)
+        val assistant = assistantPerson()
+        val style =
+          NotificationCompat
+            .MessagingStyle(Person.Builder().setName(nativeString("You")).build())
+            .setConversationTitle(nativeString("OpenClaw"))
+            .setGroupConversation(false)
+            .addMessage(text, System.currentTimeMillis(), assistant)
+        post(
+          target,
+          baseBuilder(target, contentIntent, generation)
+            .setStyle(style)
+            .setContentText(text)
+            .addPerson(assistant)
+            .addAction(replyAction(target, generation))
+            .build(),
+        )
         true
       } catch (err: Throwable) {
         // Cancel only this token: cancelling an obsolete token can remove its replacement's lookup key.
@@ -434,27 +450,6 @@ internal class ConversationReplyNotifier(
         .setData("$notificationIntentScheme://$notificationIntentAuthority/generation/${target.conversationDigest}".toUri()),
       flags or PendingIntent.FLAG_IMMUTABLE,
     )
-
-  private fun buildAssistantReplyNotification(
-    target: ConversationNotificationTarget,
-    assistantText: String,
-    generation: PendingIntent,
-  ): Notification {
-    val contentIntent = contentPendingIntent(target)
-    val assistant = assistantPerson()
-    val style =
-      NotificationCompat
-        .MessagingStyle(Person.Builder().setName(nativeString("You")).build())
-        .setConversationTitle(nativeString("OpenClaw"))
-        .setGroupConversation(false)
-        .addMessage(assistantText, System.currentTimeMillis(), assistant)
-    return baseBuilder(target, contentIntent, generation)
-      .setStyle(style)
-      .setContentText(assistantText)
-      .addPerson(assistant)
-      .addAction(replyAction(target, generation))
-      .build()
-  }
 
   private fun baseBuilder(
     target: ConversationNotificationTarget,

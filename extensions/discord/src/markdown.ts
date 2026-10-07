@@ -54,10 +54,8 @@ function markdownSemanticSignature(root: PositionedMarkdownNode): string {
     }
     const { node } = event;
     const redundantStrong = event.parentStrong && node.type === "strong";
-    const fields = Object.fromEntries(
-      Object.entries(node).filter(([key]) => key !== "children" && key !== "position"),
-    );
-    const children = node.children ?? [];
+    const { children: childNodes, position: _position, ...fields } = node;
+    const children = childNodes ?? [];
     if (!redundantStrong) {
       parts.push(`(${JSON.stringify(fields)}`);
       pending.push({ node, parentStrong: event.parentStrong, exiting: true });
@@ -230,12 +228,9 @@ function normalizeDiscordBold(markdown: string): string {
   ].toSorted((left, right) => left.start - right.start);
   const editsBySpan = new Map<number, Array<(typeof edits)[number]>>();
   for (const edit of edits) {
-    const spanEdits = editsBySpan.get(edit.spanId);
-    if (spanEdits) {
-      spanEdits.push(edit);
-    } else {
-      editsBySpan.set(edit.spanId, [edit]);
-    }
+    const spanEdits = editsBySpan.get(edit.spanId) ?? [];
+    spanEdits.push(edit);
+    editsBySpan.set(edit.spanId, spanEdits);
   }
   const renderEdits = (selectedEdits: typeof edits, start = 0, end = markdown.length) => {
     let cursor = start;

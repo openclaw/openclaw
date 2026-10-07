@@ -159,9 +159,13 @@ internal fun loadSizedImageAttachment(
   uri: Uri,
 ): PendingAttachment {
   val fileName = normalizeAttachmentFileName(sharedAttachmentFileName(resolver, uri))
-  val bitmap =
-    decodeScaledBitmap(resolver, uri, maxDimension = CHAT_ATTACHMENT_MAX_WIDTH)
+  val oriented =
+    decodeOrientedBitmap(CHAT_ATTACHMENT_MAX_WIDTH, Bitmap.Config.ARGB_8888) { resolver.openInputStream(uri) }
       ?: throw IllegalStateException("unsupported attachment")
+  val bitmap =
+    oriented.scaleToMaxDimension(CHAT_ATTACHMENT_MAX_WIDTH).also { scaled ->
+      if (scaled !== oriented) oriented.recycle()
+    }
   val maxBytes = (CHAT_IMAGE_MAX_BASE64_CHARS / 4) * 3
   // Reuse the node JPEG limiter so chat attachments and node photo payloads
   // stay within the same gateway frame budget.
@@ -251,17 +255,6 @@ internal fun normalizeAttachmentFileName(raw: String): String {
   if (trimmed.isEmpty()) return "image.jpg"
   val stem = trimmed.substringBeforeLast('.', missingDelimiterValue = trimmed).ifEmpty { "image" }
   return "$stem.jpg"
-}
-
-private fun decodeScaledBitmap(
-  resolver: ContentResolver,
-  uri: Uri,
-  maxDimension: Int,
-): Bitmap? {
-  val oriented = decodeOrientedBitmap(maxDimension, Bitmap.Config.ARGB_8888) { resolver.openInputStream(uri) } ?: return null
-  return oriented.scaleToMaxDimension(maxDimension).also { scaled ->
-    if (scaled !== oriented) oriented.recycle()
-  }
 }
 
 private fun decodeOrientedBitmap(

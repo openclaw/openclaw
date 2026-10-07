@@ -365,15 +365,18 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     if (conversationAttemptAuthority) {
       // Conversation delivery was not stable-shipped before route fingerprints. An unfinished
       // legacy intent cannot be rebound safely after upgrade, so missing authority fails closed.
-      if (!conversationAttemptAuthority.routeFingerprint || !params.onDeliveryAttempt) {
+      if (
+        !conversationAttemptAuthority.routeFingerprint ||
+        (!params.onDeliveryAttempt && !params.withDirectAdapterHandoff)
+      ) {
         throw new PlatformMessageNotDispatchedError(
           "Conversation delivery is missing its current route authorization",
           { cause: undefined, retryable: false },
         );
       }
-      // One durable attempt admits its bounded adapter fanout/retries. A later queue or recovery
-      // attempt rechecks from the serialized fingerprint; in-flight revocation is not promised.
-      await params.onDeliveryAttempt();
+      // Released callbacks retain their attempt boundary. Bundled conversations also fence each
+      // concrete platform invocation after asynchronous preparation through the handoff owner.
+      await params.onDeliveryAttempt?.();
       throwIfProducerLeaseLost();
     }
     const results = await deliverOutboundPayloadsCore(wrappedParams);

@@ -77,6 +77,7 @@ type MessageSendParams = Pick<
   | "completionRetention"
   | "requireUnknownSendReconciliation"
   | "onDeliveryAttempt"
+  | "withDirectAdapterHandoff"
   | "onDeliveryResult"
   | "onPlatformSendDispatch"
   | "assertDirectAdapterHandoff"
@@ -370,6 +371,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
         completionRetention: params.completionRetention,
         ...(params.onDeliveryIntent ? { onDeliveryIntent: params.onDeliveryIntent } : {}),
         ...(params.onDeliveryAttempt ? { onDeliveryAttempt: params.onDeliveryAttempt } : {}),
+        withDirectAdapterHandoff: params.withDirectAdapterHandoff,
         ...(params.onDeliveryResult ? { onDeliveryResult: params.onDeliveryResult } : {}),
         ...(params.onPlatformSendDispatch
           ? { onPlatformSendDispatch: params.onPlatformSendDispatch }

@@ -919,15 +919,9 @@ class GatewaySession(
     paramsJson: String?,
     timeoutMs: Long,
     withEnqueue: (() -> Unit) -> Unit = { it() },
-  ): RpcResult {
-    val params =
-      if (paramsJson.isNullOrBlank()) {
-        null
-      } else {
-        json.parseToJsonElement(paramsJson)
-      }
-    return conn.request(method, params, timeoutMs, guardRequestEnqueue(conn, withEnqueue))
-  }
+  ): RpcResult = conn.request(method, parseRequestParams(paramsJson), timeoutMs, guardRequestEnqueue(conn, withEnqueue))
+
+  private fun parseRequestParams(paramsJson: String?): JsonElement? = paramsJson?.takeUnless(String::isBlank)?.let(json::parseToJsonElement)
 
   private fun guardRequestEnqueue(
     conn: Connection,
@@ -954,13 +948,7 @@ class GatewaySession(
     onError: (ErrorShape) -> Unit = {},
   ) {
     val conn = readyConnection(expectedEndpointStableId) ?: throw IllegalStateException("not connected")
-    val params =
-      if (paramsJson.isNullOrBlank()) {
-        null
-      } else {
-        json.parseToJsonElement(paramsJson)
-      }
-    conn.sendRequestFrame(method, params, timeoutMs, guardRequestEnqueue(conn, withEnqueue), onError)
+    conn.sendRequestFrame(method, parseRequestParams(paramsJson), timeoutMs, guardRequestEnqueue(conn, withEnqueue), onError)
   }
 
   private data class TicketedMediaRequest(
@@ -1282,7 +1270,6 @@ class GatewaySession(
       }
     }
 
-    @OptIn(DelicateCoroutinesApi::class)
     suspend fun sendRequestFrame(
       method: String,
       params: JsonElement?,
@@ -1299,26 +1286,23 @@ class GatewaySession(
         throw err
       }
       // Queued callbacks still owe a terminal result when teardown cancels their owner.
-      // ATOMIC starts the waiter; NonCancellable preserves accepted replies and failPending().
-      connectionScope.launch(Dispatchers.IO, start = CoroutineStart.ATOMIC) {
-        withContext(NonCancellable) {
-          try {
-            val response =
-              try {
-                withTimeout(timeoutMs) { deferred.await() }
-              } catch (_: TimeoutCancellationException) {
-                onError(ErrorShape("UNAVAILABLE", "request timeout"))
-                return@withContext
-              } catch (err: GatewayRequestOutcomeUnknown) {
-                onError(ErrorShape("UNAVAILABLE", err.message ?: "request outcome unknown"))
-                return@withContext
-              }
-            if (!response.ok) {
-              onError(response.error ?: ErrorShape("UNAVAILABLE", "request failed"))
+      launchDrainingWork {
+        try {
+          val response =
+            try {
+              withTimeout(timeoutMs) { deferred.await() }
+            } catch (_: TimeoutCancellationException) {
+              onError(ErrorShape("UNAVAILABLE", "request timeout"))
+              return@launchDrainingWork
+            } catch (err: GatewayRequestOutcomeUnknown) {
+              onError(ErrorShape("UNAVAILABLE", err.message ?: "request outcome unknown"))
+              return@launchDrainingWork
             }
-          } finally {
-            pending.remove(id)
+          if (!response.ok) {
+            onError(response.error ?: ErrorShape("UNAVAILABLE", "request failed"))
           }
+        } finally {
+          pending.remove(id)
         }
       }
     }
@@ -1402,29 +1386,30 @@ class GatewaySession(
     }
 
     @OptIn(DelicateCoroutinesApi::class)
-    private fun retireIngressRequests() {
-      if (ingressAuthorization == null || !ingressRetirementStarted.compareAndSet(false, true)) return
+    private fun launchDrainingWork(block: suspend CoroutineScope.() -> Unit) {
+      // ATOMIC enters cleanup even after cancellation; NonCancellable drains accepted work.
       connectionScope.launch(Dispatchers.IO, start = CoroutineStart.ATOMIC) {
-        withContext(NonCancellable) {
-          // Dispatcher ownership ends when headers are delivered. Keep calls
-          // through body consumption so an already playing stream is retired too.
-          ingressCalls.forEach { it.cancel() }
-          client.connectionPool.evictAll()
-        }
+        withContext(NonCancellable, block)
       }
     }
 
-    @OptIn(DelicateCoroutinesApi::class)
+    private fun retireIngressRequests() {
+      if (ingressAuthorization == null || !ingressRetirementStarted.compareAndSet(false, true)) return
+      launchDrainingWork {
+        // Dispatcher ownership ends when headers are delivered. Keep calls
+        // through body consumption so an already playing stream is retired too.
+        ingressCalls.forEach { it.cancel() }
+        client.connectionPool.evictAll()
+      }
+    }
+
     private fun cancelSocket(socket: WebSocket?) {
       if (socket == null || !socketCancellationStarted.compareAndSet(false, true)) return
       // Callbacks can retire a connection reentrantly under notificationLock. Keep physical
       // cancellation off that thread; this one owned child still drains in joinOwnedWork().
-      connectionScope.launch(Dispatchers.IO, start = CoroutineStart.ATOMIC) {
-        withContext(NonCancellable) { socket.cancel() }
-      }
+      launchDrainingWork { socket.cancel() }
     }
 
-    @OptIn(DelicateCoroutinesApi::class)
     private fun finishTransport(
       message: String,
       connectError: Throwable,
@@ -1434,32 +1419,25 @@ class GatewaySession(
       retireIngressRequests()
       incomingMessages.close()
       // Completion handlers run synchronously and cannot own app-level disconnect cleanup.
-      connectionScope.launch(Dispatchers.IO, start = CoroutineStart.ATOMIC) {
-        // Preserve accepted-frame ordering even if the parent scope is cancelled during failure.
-        withContext(NonCancellable) {
-          try {
-            messagePumpJob.join()
-            if (connectResponseAccepted.get()) {
-              connectHandshakeJob?.join()
-            } else {
-              connectChallengeDeferred.completeExceptionally(connectError)
-            }
-            synchronized(notificationLock) {
-              if (shouldNotify && currentConnection === this@Connection && desired === target) onDisconnected(message)
-            }
-          } finally {
-            finalizeTransport(connectError)
+      launchDrainingWork {
+        try {
+          messagePumpJob.join()
+          if (connectResponseAccepted.get()) {
+            connectHandshakeJob?.join()
+          } else {
+            connectChallengeDeferred.completeExceptionally(connectError)
+          }
+          synchronized(notificationLock) {
+            if (shouldNotify && currentConnection === this@Connection && desired === target) onDisconnected(message)
+          }
+        } finally {
+          connectDeferred.completeExceptionally(connectError)
+          synchronized(lifecycleLock) {
+            transportFinished = true
+            socket = null
+            if (!socketCreationPending) closedDeferred.complete(Unit)
           }
         }
-      }
-    }
-
-    private fun finalizeTransport(connectError: Throwable) {
-      connectDeferred.completeExceptionally(connectError)
-      synchronized(lifecycleLock) {
-        transportFinished = true
-        socket = null
-        if (!socketCreationPending) closedDeferred.complete(Unit)
       }
     }
 
@@ -1668,8 +1646,7 @@ class GatewaySession(
 
     private fun shouldPersistBootstrapHandoffTokens(authSource: GatewayConnectAuthSource): Boolean {
       if (authSource != GatewayConnectAuthSource.BOOTSTRAP_TOKEN) return false
-      if (isLocalCleartextGatewayHost(target.endpoint.host)) return true
-      return target.tls != null
+      return isLocalCleartextGatewayHost(target.endpoint.host) || target.tls != null
     }
 
     private fun filteredBootstrapHandoffScopes(
@@ -2320,24 +2297,10 @@ class GatewaySession(
         host
       }
     if (resolvedHost.isEmpty()) return trimmed.ifBlank { null }
-    return buildCanvasUrl(
-      host = resolvedHost,
-      scheme = if (isTlsConnection) "https" else scheme,
-      port = if (usesFallbackHost || isTlsConnection) endpoint.port else port,
-      suffix = suffix,
-    )
-  }
-
-  private fun buildCanvasUrl(
-    host: String,
-    scheme: String,
-    port: Int,
-    suffix: String,
-  ): String {
-    val loweredScheme = scheme.lowercase()
-    val formattedHost = formatGatewayAuthorityHost(host)
-    val portSuffix = if ((loweredScheme == "https" && port == 443) || (loweredScheme == "http" && port == 80)) "" else ":$port"
-    return "$loweredScheme://$formattedHost$portSuffix$suffix"
+    val resolvedScheme = (if (isTlsConnection) "https" else scheme).lowercase()
+    val resolvedPort = if (usesFallbackHost || isTlsConnection) endpoint.port else port
+    val portSuffix = if ((resolvedScheme == "https" && resolvedPort == 443) || (resolvedScheme == "http" && resolvedPort == 80)) "" else ":$resolvedPort"
+    return "$resolvedScheme://${formatGatewayAuthorityHost(resolvedHost)}$portSuffix$suffix"
   }
 
   private fun buildUrlSuffix(uri: java.net.URI?): String {
@@ -2366,25 +2329,11 @@ class GatewaySession(
     val authBootstrapToken = if (authToken == null) explicitBootstrapToken else null
     val authSource =
       when {
-        authDeviceToken != null || (explicitGatewayToken == null && authToken != null) -> {
-          GatewayConnectAuthSource.DEVICE_TOKEN
-        }
-
-        authToken != null -> {
-          GatewayConnectAuthSource.SHARED_TOKEN
-        }
-
-        authBootstrapToken != null -> {
-          GatewayConnectAuthSource.BOOTSTRAP_TOKEN
-        }
-
-        explicitPassword != null -> {
-          GatewayConnectAuthSource.PASSWORD
-        }
-
-        else -> {
-          GatewayConnectAuthSource.NONE
-        }
+        authDeviceToken != null || (explicitGatewayToken == null && authToken != null) -> GatewayConnectAuthSource.DEVICE_TOKEN
+        authToken != null -> GatewayConnectAuthSource.SHARED_TOKEN
+        authBootstrapToken != null -> GatewayConnectAuthSource.BOOTSTRAP_TOKEN
+        explicitPassword != null -> GatewayConnectAuthSource.PASSWORD
+        else -> GatewayConnectAuthSource.NONE
       }
     return SelectedConnectAuth(
       authToken = authToken,
@@ -2458,12 +2407,10 @@ internal fun gatewayNetworkConnectError(
         canRetryWithDeviceToken = false,
         recommendedNextStep = null,
         reason =
-          if (waitingForCleanup) {
-            "transport-cleanup"
-          } else if (timedOut) {
-            "timeout"
-          } else {
-            "unreachable"
+          when {
+            waitingForCleanup -> "transport-cleanup"
+            timedOut -> "timeout"
+            else -> "unreachable"
           },
         retryable = true,
       ),

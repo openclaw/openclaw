@@ -45,7 +45,7 @@ export type SessionRowChange =
       sessionKey: string;
       agentId?: string;
       storePath?: string;
-      scope?: "automation" | "runtime" | "session-entry" | "acp";
+      scope?: "automation" | "runtime" | "session-entry" | "acp" | "transcript";
       /** Category uncertainty cannot change identity or lineage; other storage outcomes can. */
       factsInvalidated?: true | "category";
       /** Omission is a metadata notification; storage owners publish their changed facts. */

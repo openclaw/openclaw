@@ -471,11 +471,7 @@ extension SettingsProTab {
             self.setupStatusText = String(localized: "Failed: host required")
             return
         }
-        guard self.manualPortIsValid else {
-            self.setupStatusText = String(localized: "Failed: invalid port")
-            return
-        }
-        guard let port = self.resolvedManualPort(host: host) else {
+        guard self.manualPortIsValid, let port = self.resolvedManualPort(host: host) else {
             self.setupStatusText = String(localized: "Failed: invalid port")
             return
         }
@@ -613,48 +609,28 @@ extension SettingsProTab {
             })
     }
 
-    var gatewayTokenBinding: Binding<String> {
+    func gatewayCredentialBinding(
+        _ field: WritableKeyPath<GatewayConnectionController.ManualAuthOverride.Fields, String>) -> Binding<String>
+    {
         Binding(
-            get: { self.gatewayAuthFields.token },
-            set: { self.persistGatewayToken($0) })
-    }
-
-    var gatewayPasswordBinding: Binding<String> {
-        Binding(
-            get: { self.gatewayAuthFields.password },
-            set: { self.persistGatewayPassword($0) })
+            get: { self.gatewayAuthFields[keyPath: field] },
+            set: { value in
+                self.gatewayAuthFields[keyPath: field] = value
+                guard !self.suppressCredentialPersist else { return }
+                self.gatewayAuthFields.persist(
+                    instanceId: self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines),
+                    targetStableID: self.gatewayCredentialTargetStableID)
+            })
     }
 
     var manualHostBinding: Binding<String> {
         Binding(
             get: { self.manualGatewayHost },
             set: { value in
-                let previousStableID = self.currentManualGatewayStableID
-                self.manualGatewayContextPath = nil
-                self.manualGatewayHost = value
-                if GatewayStableIdentifier.key(previousStableID) !=
-                    GatewayStableIdentifier.key(self.currentManualGatewayStableID)
-                {
-                    self.gatewayAuthFields = .init()
+                self.updateManualTarget {
+                    self.manualGatewayHost = value
                 }
             })
-    }
-
-    func persistGatewayToken(_ value: String) {
-        self.gatewayAuthFields.token = value
-        self.persistGatewayCredentials(for: self.gatewayCredentialTargetStableID)
-    }
-
-    func persistGatewayPassword(_ value: String) {
-        self.gatewayAuthFields.password = value
-        self.persistGatewayCredentials(for: self.gatewayCredentialTargetStableID)
-    }
-
-    private func persistGatewayCredentials(for stableID: String?) {
-        guard !self.suppressCredentialPersist else { return }
-        self.gatewayAuthFields.persist(
-            instanceId: self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines),
-            targetStableID: stableID)
     }
 
     func title(for route: SettingsRoute) -> String {
@@ -688,17 +664,23 @@ extension SettingsProTab {
         Binding(
             get: { self.manualGatewayPortText },
             set: { newValue in
-                let previousStableID = self.currentManualGatewayStableID
-                self.manualGatewayContextPath = nil
-                let filtered = newValue.filter(\.isNumber)
-                self.manualGatewayPortText = filtered
-                self.manualGatewayPort = Int(filtered) ?? 0
-                if GatewayStableIdentifier.key(previousStableID) !=
-                    GatewayStableIdentifier.key(self.currentManualGatewayStableID)
-                {
-                    self.gatewayAuthFields = .init()
+                self.updateManualTarget {
+                    let filtered = newValue.filter(\.isNumber)
+                    self.manualGatewayPortText = filtered
+                    self.manualGatewayPort = Int(filtered) ?? 0
                 }
             })
+    }
+
+    private func updateManualTarget(_ update: () -> Void) {
+        let previousStableID = self.currentManualGatewayStableID
+        self.manualGatewayContextPath = nil
+        update()
+        if GatewayStableIdentifier.key(previousStableID) !=
+            GatewayStableIdentifier.key(self.currentManualGatewayStableID)
+        {
+            self.gatewayAuthFields = .init()
+        }
     }
 
     var manualPortIsValid: Bool {

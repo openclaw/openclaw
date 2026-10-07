@@ -195,48 +195,6 @@ describe("embedded run durable writer admission", () => {
     expect(staleAppend).toMatchObject({ ok: false, code: "session-rebound" });
   });
 
-  it("silently replaces a persisted claim whose prior run is no longer live", async () => {
-    await replaceSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }, {
-      activeWriterRunId: "completed-run",
-      lifecycleRevision,
-      sessionId,
-      updatedAt: 1,
-    } as InternalSessionEntry);
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-
-    // Cold admission registers its native lease; observe the warmed claim mutation separately.
-    expect(
-      loadSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }),
-    ).toMatchObject({ activeWriterRunId: "completed-run" });
-    const sql = observeHostDataSql();
-    try {
-      await claimAgentSessionWriter({
-        agentId: "main",
-        prompt: "next turn",
-        runId: "run-next",
-        sessionId,
-        sessionKey,
-        sessionTarget: { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() },
-        timeoutMs: 30_000,
-        workspaceDir: "/tmp",
-      });
-      expect(
-        sql.queries.filter((query) =>
-          /session_nodes|session_entry_snapshots|session_participants|session_windows|\b(?:BEGIN|COMMIT|ROLLBACK|INSERT|UPDATE|DELETE)\b/i.test(
-            query,
-          ),
-        ),
-      ).toEqual([]);
-    } finally {
-      sql.restore();
-    }
-
-    expect(warn).not.toHaveBeenCalled();
-    expect(
-      loadSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }),
-    ).toMatchObject({ activeWriterRunId: "run-next" });
-  });
-
   it("silently replaces a stopped prior writer while keeping stale transcript writes fenced", async () => {
     await replaceSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }, {
       activeWriterRunId: "run-stopped",

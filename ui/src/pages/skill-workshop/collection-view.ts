@@ -198,17 +198,12 @@ function renderReader(props: SkillWorkshopProps) {
     </div>`;
   }
   if (selection.status === "error") {
-    return html`
-      <div class="sw-collection__state" role="alert">
-        <p class="sw-empty__title">
-          ${t("skillWorkshop.collection.readErrorTitle", { name: selection.name })}
-        </p>
-        <p class="sw-empty__sub">${selection.error}</p>
-        <button type="button" class="sw-btn" @click=${props.onRetryInstalled}>
-          ${t("pluginsPage.tryAgain")}
-        </button>
-      </div>
-    `;
+    return renderCollectionState({
+      title: t("skillWorkshop.collection.readErrorTitle", { name: selection.name }),
+      body: selection.error,
+      role: "alert",
+      action: { label: t("pluginsPage.tryAgain"), onClick: props.onRetryInstalled },
+    });
   }
 
   const skill = props.installedSkills.find((entry) => entry.name === selection.name);
@@ -287,10 +282,11 @@ function renderReader(props: SkillWorkshopProps) {
 function renderCollectionState(params: {
   title: string;
   body: string;
+  role?: "alert";
   action?: { label: string; onClick: () => void };
 }) {
   return html`
-    <div class="sw-collection__state">
+    <div class="sw-collection__state" role=${params.role ?? nothing}>
       <p class="sw-empty__title">${params.title}</p>
       <p class="sw-empty__sub">${params.body}</p>
       ${

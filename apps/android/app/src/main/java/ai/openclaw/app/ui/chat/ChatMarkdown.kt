@@ -784,14 +784,9 @@ private class DisclosureTokenizer {
     }
 
     lines.forEachIndexed { lineIndex, line ->
-      rawHtmlContext?.let { context ->
+      (rawHtmlContext ?: RawHtmlContext.opening(line))?.let { context ->
         appendSourceLine(line, lineIndex)
-        if (context.closes(line)) rawHtmlContext = null
-        return@forEachIndexed
-      }
-      RawHtmlContext.opening(line)?.let { context ->
-        appendSourceLine(line, lineIndex)
-        if (!context.closes(line)) rawHtmlContext = context
+        rawHtmlContext = context.takeUnless { it.closes(line) }
         return@forEachIndexed
       }
       val tags = tags(line)
@@ -828,15 +823,11 @@ private class DisclosureTokenizer {
           TagKind.UNSUPPORTED_DETAILS_CLOSE,
           -> {
             val frame = balanceStack.removeLastOrNull()
-            if (frame == null) {
-              appendLiteral(tag.raw)
-            } else {
+            if (frame?.isStructural == true && tag.kind == TagKind.DETAILS_CLOSE) {
               flushSource()
-              if (frame.isStructural && tag.kind == TagKind.DETAILS_CLOSE) {
-                tokens += DisclosureToken.Close
-              } else {
-                appendLiteral(tag.raw)
-              }
+              tokens += DisclosureToken.Close
+            } else {
+              appendLiteral(tag.raw)
             }
           }
 

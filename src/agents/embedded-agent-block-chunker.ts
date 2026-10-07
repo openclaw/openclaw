@@ -52,6 +52,8 @@ export type BlockChunkMetadata = {
 
 type BlockChunkDrain = {
   force: boolean;
+  /** Only for cumulative previews that replace previously emitted text. */
+  mutablePreview?: boolean;
   emit: (chunk: string, options?: BlockChunkMetadata) => void;
 };
 
@@ -438,6 +440,7 @@ export class EmbeddedBlockChunker {
         force && remainingLength <= maxChars
           ? this.#pickPreferredBreakIndex(view, unsafe, chunking, false, 1, start, openFence)
           : this.#pickBreakIndex(
+              params,
               view,
               spans,
               chunking,
@@ -445,7 +448,6 @@ export class EmbeddedBlockChunker {
               start,
               maxChars - reopenPrefix.length,
               openFence,
-              params.force,
             );
       if (breakResult.index <= 0) {
         if (force) {
@@ -604,6 +606,7 @@ export class EmbeddedBlockChunker {
   }
 
   #pickBreakIndex(
+    { force, mutablePreview }: BlockChunkDrain,
     buffer: string,
     spans: BreakSpans,
     chunking: BlockReplyChunking,
@@ -611,7 +614,6 @@ export class EmbeddedBlockChunker {
     offset = 0,
     maxCharsOverride?: number,
     openFence?: FenceSpan,
-    force = false,
   ): BreakResult {
     const minChars = Math.max(1, Math.floor(minCharsOverride ?? chunking.minChars));
     const maxChars = Math.max(1, Math.floor(maxCharsOverride ?? chunking.maxChars));
@@ -689,17 +691,14 @@ export class EmbeddedBlockChunker {
           fenceSplit: { closeFenceLine, reopenFenceLine, fence },
         };
       }
-      // A streamed trailing cluster can still gain a combining mark or ZWJ
-      // continuation in the next delta. Keep it pending until a following
-      // cluster or final drain establishes the boundary.
+      // Trailing clusters can gain combining marks or ZWJ continuations.
+      // Permanent replies wait for lookahead; cumulative previews can revise them.
+      const waitForBoundary = !force && !mutablePreview;
       const graphemeSource =
         !force && /[\uD800-\uDBFF]$/u.test(buffer) ? buffer.slice(0, -1) : buffer;
-      const maxEnd = Math.min(
-        forcedBreakIndex,
-        force ? graphemeSource.length : graphemeSource.length - 1,
-      );
+      const maxEnd = Math.min(forcedBreakIndex, graphemeSource.length - (waitForBoundary ? 1 : 0));
       const wholeEnd = findGraphemeChunkEnd(graphemeSource, 0, maxEnd, maxEnd, false);
-      if (!force && wholeEnd > 0 && buffer.length === forcedBreakIndex) {
+      if (waitForBoundary && wholeEnd > 0 && buffer.length === forcedBreakIndex) {
         // Wait for lookahead instead of turning a full chunk into a shorter
         // prefix and a trailing fragment solely to reserve its last cluster.
         return { index: 0 };

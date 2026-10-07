@@ -113,9 +113,10 @@ async function handleSessionGoalMutation(
     const identity = {
       operationId: request.operationId,
       issuedAtMs: request.issuedAtMs,
-      requestFingerprint: fingerprintSessionGoalRequest({ method, ...request }),
+      requestFingerprint: await fingerprintSessionGoalRequest({ method, ...request }),
       goalId: request.goalId,
     };
+    assertCurrent();
     if (request.action === "resume") {
       const { handleSessionGoalResumeChat } = await import("./chat-send-handler.js");
       await handleSessionGoalResumeChat(

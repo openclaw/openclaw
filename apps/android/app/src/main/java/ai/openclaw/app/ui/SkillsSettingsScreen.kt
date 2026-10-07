@@ -140,12 +140,7 @@ internal fun SkillsSettingsScreen(
     when (selectedTab) {
       SkillsTab.Installed -> {
         SettingsSummaryContent(skillsState, isConnected, nativeString("Connect the gateway to load skills.")) { summary ->
-          SkillsOverviewPanel(
-            installedCount = summary.skills.size,
-            readyCount = summary.skills.count(::skillReady),
-            needsSetupCount = summary.skills.count(::skillNeedsSetup),
-            disabledCount = summary.skills.count { it.disabled },
-          )
+          SkillsOverviewPanel(summary.skills)
           InstalledSkillsPane(
             skills = skills,
             visibleSkills = visibleSkills,
@@ -236,21 +231,16 @@ private data class SkillReadinessSegment(
 )
 
 @Composable
-private fun SkillsOverviewPanel(
-  installedCount: Int,
-  readyCount: Int,
-  needsSetupCount: Int,
-  disabledCount: Int,
-) {
+private fun SkillsOverviewPanel(skills: List<GatewaySkillSummary>) {
   val segments =
     listOf(
-      SkillReadinessSegment(nativeString("Ready"), readyCount, ClawTheme.colors.success),
-      SkillReadinessSegment(nativeString("Needs Setup"), needsSetupCount, ClawTheme.colors.warning),
-      SkillReadinessSegment(nativeString("Off"), disabledCount, ClawTheme.colors.textSubtle),
+      SkillReadinessSegment(nativeString("Ready"), skills.count(::skillReady), ClawTheme.colors.success),
+      SkillReadinessSegment(nativeString("Needs Setup"), skills.count(::skillNeedsSetup), ClawTheme.colors.warning),
+      SkillReadinessSegment(nativeString("Off"), skills.count { it.disabled }, ClawTheme.colors.textSubtle),
     )
   ClawPanel(contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
     Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-      Text(text = installedCount.toString(), style = ClawTheme.type.display, color = ClawTheme.colors.text)
+      Text(text = skills.size.toString(), style = ClawTheme.type.display, color = ClawTheme.colors.text)
       Text(text = nativeString("Installed"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
     }
     Row(

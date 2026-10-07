@@ -847,17 +847,10 @@ class TalkModeManager internal constructor(
     event: String,
     payloadJson: String?,
   ) {
-    if (event == "config.changed") {
-      invalidateConfig()
-      return
-    }
-    if (event == "talk.event") {
-      handleRealtimeTalkEvent(payloadJson)
-      return
-    }
-    if (event == "talk.voice.change") {
-      handleRealtimeVoiceChange(payloadJson)
-      return
+    when (event) {
+      "config.changed" -> return invalidateConfig()
+      "talk.event" -> return handleRealtimeTalkEvent(payloadJson)
+      "talk.voice.change" -> return handleRealtimeVoiceChange(payloadJson)
     }
     if (ttsOnAllResponses) {
       Log.d(tag, "gateway event: $event")

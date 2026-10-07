@@ -127,7 +127,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   const backfill = createSessionRowProjectionBackfill({
     ready: ensureMaterialized,
     read: (id) => rows.get(id),
-    current: (row) => !topologyDirty && archive.isCurrentMaterialization(row) && isCurrent(row),
+    current: (row) => !topologyDirty && records.ready(row) && isCurrent(row),
     publish: (row, fields) => revisions.publishTranscript(row, fields, cfg, metadata.current),
   });
   const archive = createSessionRowProjectionArchive({
@@ -137,7 +137,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     config: () => cfg,
     context: () => metadata.current,
     referenced,
-    enqueue: (id, change) => backfill.enqueue(id, change),
+    invalidateTranscript: backfill.remove,
     release(id) {
       transcriptUpdates.remove(id);
       backfill.remove(id);
@@ -216,11 +216,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   }
   function enqueue(row: records.Row | undefined) {
     if (row) {
-      const id = records.identity(row);
-      dirty.add(id);
-      if (!isCold(row)) {
-        backfill.enqueue(id);
-      }
+      dirty.add(records.identity(row));
     }
   }
   const markStoredRow = createSessionRowPublication({
@@ -357,7 +353,12 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
         matching,
         scope,
         stores,
-        publish: (row) => markStoredRow(row, change, prepared),
+        publish: (row) => {
+          if (change.scope === "transcript" || change.factsInvalidated === true) {
+            backfill.remove(records.identity(row));
+          }
+          markStoredRow(row, change, prepared);
+        },
       });
     }
     // Dirty keys retain failed background work for the next reader.
@@ -423,6 +424,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       materializedSequence: ++materializedCount,
       ...metadata.materializedRevisions,
     });
+    if (!isIncognitoSessionKey(row.key) && records.ready(row)) {
+      backfill.prepare(row, databaseFacts);
+    }
     revisions.materialized(row, previousBoard);
     return true;
   }
@@ -462,11 +466,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     acquireEntry,
     materialize,
     forgetBackfill: backfill.remove,
-    retainArchived(row) {
-      // Exact preparation participates in the archive owner's existing bounded cache.
-      archive.describe(row);
-      backfill.enqueue(records.identity(row));
-    },
+    retainArchived: (row) => archive.describe(row),
   });
   function needsMaterialization() {
     return (
@@ -483,6 +483,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     matching,
     mark,
     read: (id) => rows.get(id),
+    invalidate: backfill.remove,
     refresh(id) {
       const row = rows.get(id);
       if (!row || (isCold(row) && !row.pendingDatabaseFacts)) {
@@ -493,7 +494,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       revisions.publishFacts(row);
       records.invalidateDatabaseFacts(row);
       dirty.add(id);
-      backfill.enqueue(id);
       void ensureMaterialized().catch(() => {});
     },
   });

@@ -1,20 +1,25 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
+import { withAgentDatabaseCloseFence } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import {
   listConversations,
   registerConversationAddresses,
-  resolveConversation,
+  readConversation,
   resolveCurrentSessionPrimaryConversation,
+  withConversationAuthority,
 } from "./conversation-registry.js";
 import {
   commitReplySessionInitialization,
@@ -94,7 +99,7 @@ describe("conversation registry", () => {
 
     const peerA = conversations.find((entry) => entry.target === "reef:peer-a");
     expect(peerA).toBeDefined();
-    expect(resolveConversation({ agentId: "main", storePath }, peerA!.conversationRef)).toEqual(
+    expect(await readConversation({ agentId: "main", storePath }, peerA!.conversationRef)).toEqual(
       peerA,
     );
   });
@@ -110,7 +115,7 @@ describe("conversation registry", () => {
       label: "@peer-a's agent",
     });
     expect(identity).toBeDefined();
-    registerConversationAddresses({ agentId: "main", storePath }, [identity!], 100);
+    await registerConversationAddresses({ agentId: "main", storePath }, [identity!], 100);
 
     const [conversation] = await listConversations(
       { agentId: "main", storePath },
@@ -126,12 +131,133 @@ describe("conversation registry", () => {
     expect(conversation?.sessionId).toBeUndefined();
     expect(conversation?.sessionKey).toBeUndefined();
     expect(conversation?.role).toBeUndefined();
-    expect(resolveConversation({ agentId: "main", storePath }, identity!.conversationRef)).toEqual(
-      conversation,
+    expect(
+      await readConversation({ agentId: "main", storePath }, identity!.conversationRef),
+    ).toEqual(conversation);
+
+    const second = buildConversationIdentity({
+      channel: "reef",
+      accountId: "default",
+      kind: "direct",
+      peerId: "peer-b",
+      deliveryTarget: "reef:peer-b",
+    });
+    const label = "last\u0000literal\\u0000";
+    await registerConversationAddresses(
+      { agentId: "main", storePath },
+      [identity!, second!, { ...identity!, label, nativeDirectUserId: undefined }],
+      200,
     );
+    const updated = await readConversation(
+      { agentId: "main", storePath },
+      identity!.conversationRef,
+    );
+    expect(updated).toMatchObject({ label, firstSeenAt: 100, lastSeenAt: 200 });
+    expect(updated?.nativeDirectUserId).toBeUndefined();
+    expect(
+      await readConversation({ agentId: "main", storePath }, second!.conversationRef),
+    ).toMatchObject({
+      target: "reef:peer-b",
+      firstSeenAt: 200,
+      lastSeenAt: 200,
+    });
   });
 
-  it("rejects an empty conversation reference instead of widening the lookup", () => {
+  it.each(["registration", "authority"] as const)(
+    "releases %s resources when a queued database target is replaced",
+    async (operation) => {
+      const databasePath = path.join(tempDir, "registry.sqlite");
+      fs.writeFileSync(databasePath, "");
+      const scope = {
+        agentId: "main",
+        databaseAgentId: "main",
+        storePath: databasePath,
+        env: { OPENCLAW_STATE_DIR: tempDir },
+      };
+      const entered = createDeferred();
+      const release = createDeferred();
+      const held = runOpenClawAgentWorkerWrite(
+        { agentId: "main", path: databasePath, env: scope.env },
+        async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      );
+      let pending: Promise<unknown> | undefined;
+      try {
+        await awaitGateBeforeSettlement(entered.promise, held, "Writer did not acquire its lane");
+        const identity = buildConversationIdentity({
+          channel: "reef",
+          kind: "direct",
+          peerId: "peer-a",
+          deliveryTarget: "reef:peer-a",
+        });
+        expect(identity).not.toBeNull();
+        pending =
+          operation === "registration"
+            ? registerConversationAddresses(scope, [identity!])
+            : withConversationAuthority(
+                scope,
+                { conversationRef: identity!.conversationRef },
+                () => {
+                  throw new Error("A replaced target must not grant conversation authority");
+                },
+              );
+        const rejected = expect(pending).rejects.toThrow(
+          "Agent database target changed before write admission",
+        );
+        fs.renameSync(databasePath, `${databasePath}.previous`);
+        fs.writeFileSync(databasePath, "");
+        release.resolve();
+        await rejected;
+        await held;
+        await withAgentDatabaseCloseFence({ path: databasePath }, async (resources) => {
+          expect(resources).toEqual([]);
+        });
+      } finally {
+        release.resolve();
+        await Promise.allSettled([held, pending]);
+      }
+    },
+  );
+
+  it.each(["registration", "authority"] as const)(
+    "does not retain %s resources when input capture fails",
+    async (operation) => {
+      const databasePath = path.join(tempDir, "registry.sqlite");
+      const scope = {
+        agentId: "main",
+        databaseAgentId: "main",
+        storePath: databasePath,
+        env: { OPENCLAW_STATE_DIR: tempDir },
+      };
+      const failure = new Error("Synthetic conversation input capture failure");
+      const identity = {
+        get conversationRef(): string {
+          throw failure;
+        },
+        channel: "reef",
+        accountId: "default",
+        kind: "direct" as const,
+        peerId: "peer-a",
+        deliveryTarget: "reef:peer-a",
+      };
+      await expect(
+        Promise.resolve().then(() =>
+          operation === "registration"
+            ? registerConversationAddresses(scope, [identity])
+            : withConversationAuthority(scope, identity, () => {
+                throw new Error("Uncaptured input must not grant conversation authority");
+              }),
+        ),
+      ).rejects.toBe(failure);
+      await withAgentDatabaseCloseFence({ path: databasePath }, async (resources) => {
+        expect(resources).toEqual([]);
+      });
+    },
+  );
+
+  it("rejects an empty conversation reference instead of widening the lookup", async () => {
     const identity = buildConversationIdentity({
       channel: "reef",
       accountId: "default",
@@ -141,12 +267,12 @@ describe("conversation registry", () => {
       nativeDirectUserId: "peer-b",
       label: "@peer-b's agent",
     });
-    registerConversationAddresses({ agentId: "main", storePath }, [identity!], 100);
+    await registerConversationAddresses({ agentId: "main", storePath }, [identity!], 100);
 
     for (const conversationRef of ["", "   "]) {
-      expect(() => resolveConversation({ agentId: "main", storePath }, conversationRef)).toThrow(
-        /Invalid conversationRef/,
-      );
+      await expect(
+        readConversation({ agentId: "main", storePath }, conversationRef),
+      ).rejects.toThrow(/Invalid conversationRef/);
     }
   });
 
@@ -196,7 +322,7 @@ describe("conversation registry", () => {
         sessionKey: "agent:main:discord:channel:another",
       }),
     ).toBeUndefined();
-    expect(resolveConversation({ agentId: "main", storePath }, conversationRef)).toMatchObject({
+    expect(await readConversation({ agentId: "main", storePath }, conversationRef)).toMatchObject({
       peerId: "canonical-ops",
       observedFromSession: true,
       routeContextObserved: true,
@@ -212,7 +338,10 @@ describe("conversation registry", () => {
     expect(
       (await listConversations(scope)).filter((conversation) => conversation.role === "primary"),
     ).toEqual([expect.objectContaining({ conversationRef, peerId: "canonical-ops" })]);
-    const afterCurrentWrite = resolveConversation({ agentId: "main", storePath }, conversationRef);
+    const afterCurrentWrite = await readConversation(
+      { agentId: "main", storePath },
+      conversationRef,
+    );
     expect(afterCurrentWrite).toMatchObject({
       routeContextObserved: true,
       routeContext: { guildId: "guild-a" },
@@ -239,7 +368,9 @@ describe("conversation registry", () => {
     await closeOpenClawAgentDatabasesAsync(tempDir);
     closeOpenClawAgentDatabasesForTest();
 
-    expect(resolveConversation({ agentId: "main", storePath }, conversationRef)).not.toMatchObject({
+    expect(
+      await readConversation({ agentId: "main", storePath }, conversationRef),
+    ).not.toMatchObject({
       routeContextObserved: true,
     });
     expect(
@@ -250,7 +381,9 @@ describe("conversation registry", () => {
       label: "after older writer",
       updatedAt: afterCurrentWrite!.lastSeenAt + 1,
     });
-    expect(resolveConversation({ agentId: "main", storePath }, conversationRef)).not.toMatchObject({
+    expect(
+      await readConversation({ agentId: "main", storePath }, conversationRef),
+    ).not.toMatchObject({
       routeContextObserved: true,
     });
   });
@@ -427,7 +560,7 @@ describe("conversation registry", () => {
     });
     expect(freshIdentity).toBeDefined();
     const freshAt = Date.now() + 1_000;
-    registerConversationAddresses({ agentId: "main", storePath }, [freshIdentity!], freshAt);
+    await registerConversationAddresses({ agentId: "main", storePath }, [freshIdentity!], freshAt);
 
     expect(
       await listConversations({ agentId: "main", storePath }, { channel: "reef", limit: 1 }),
@@ -513,7 +646,10 @@ describe("conversation registry", () => {
     });
 
     expect(
-      resolveConversation({ agentId: "main", storePath }, historical?.conversationRef ?? "missing"),
+      await readConversation(
+        { agentId: "main", storePath },
+        historical?.conversationRef ?? "missing",
+      ),
     ).toMatchObject({
       conversationRef: historical?.conversationRef,
       sessionId: "current-session",
@@ -545,13 +681,13 @@ describe("conversation registry", () => {
     ).toBeUndefined();
 
     expect(
-      resolveConversation({ agentId: "main", storePath }, linked?.conversationRef ?? "missing"),
+      await readConversation({ agentId: "main", storePath }, linked?.conversationRef ?? "missing"),
     ).toMatchObject({
       conversationRef: linked?.conversationRef,
       target: "reef:peer-a",
     });
     expect(
-      resolveConversation({ agentId: "main", storePath }, linked?.conversationRef ?? "missing"),
+      await readConversation({ agentId: "main", storePath }, linked?.conversationRef ?? "missing"),
     ).not.toMatchObject({ sessionId: expect.any(String), sessionKey: expect.any(String) });
   });
 });

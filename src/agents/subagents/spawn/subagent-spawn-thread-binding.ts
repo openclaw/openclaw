@@ -4,7 +4,10 @@ import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { prepareSpawnThreadBinding } from "../../spawn-plan.js";
 import { buildSpawnThreadBinding } from "./spawn-thread-binding.js";
-import { getSessionBindingService } from "./subagent-spawn.runtime.js";
+import {
+  getSessionBindingService,
+  listSessionBindingsBySessionAsync,
+} from "./subagent-spawn.runtime.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 export async function bindThreadForSubagentSpawn(params: {
@@ -23,11 +26,14 @@ export async function bindThreadForSubagentSpawn(params: {
       error: string;
     }
 > {
-  const prepared = prepareSpawnThreadBinding({
+  const prepared = await prepareSpawnThreadBinding({
     cfg: params.cfg,
     kind: "subagent",
     mode: params.mode,
-    bindingService: getSessionBindingService(),
+    bindingService: {
+      ...getSessionBindingService(),
+      listBySession: listSessionBindingsBySessionAsync,
+    },
     requesterSessionKey: params.requesterSessionKey,
     channel: params.requester.channel,
     accountId: params.requester.accountId,

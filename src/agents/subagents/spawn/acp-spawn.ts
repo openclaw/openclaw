@@ -18,6 +18,7 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveEventSessionRoutingPolicy } from "../../../infra/event-session-routing.js";
 import {
   getSessionBindingService,
+  listSessionBindingsBySessionAsync,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -273,13 +274,14 @@ export async function spawnAcpDirect(
   const subagentStore = resolveSubagentCapabilityStore(parentSessionKey, {
     cfg,
   });
-  const requesterState = resolveAcpSpawnRequesterState({
+  const requesterState = await resolveAcpSpawnRequesterState({
     cfg,
     parentSessionKey,
     requesterAgentId,
     targetAgentId,
     ctx,
   });
+  ctx.assertActive?.();
   const ownership = resolveSubagentSpawnOwnership({
     cfg,
     agentSessionKey: ctx.agentSessionKey,
@@ -386,17 +388,21 @@ export async function spawnAcpDirect(
 
   let preparedBinding: PreparedSpawnThreadBinding | null = null;
   if (requestThreadBinding) {
-    const prepared = prepareSpawnThreadBinding({
+    const prepared = await prepareSpawnThreadBinding({
       cfg,
       kind: "acp",
       mode: spawnMode,
-      bindingService: getSessionBindingService(),
+      bindingService: {
+        ...getSessionBindingService(),
+        listBySession: listSessionBindingsBySessionAsync,
+      },
       channel: requesterState.origin?.channel,
       accountId: requesterState.origin?.accountId,
       to: requesterState.origin?.to,
       threadId: requesterState.origin?.threadId,
       groupId: ctx.agentGroupId,
     });
+    ctx.assertActive?.();
     if (!prepared.ok) {
       return {
         status: "error",

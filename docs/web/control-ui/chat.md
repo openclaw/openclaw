@@ -354,6 +354,8 @@ On wide desktop panes, a compact rail of horizontal marks sits in the transcript
 Session dashboards follow the selected conversation's agent, including when multiple agents each use a `global` session. Split panes keep their owners separate; panes showing the same agent and conversation share dashboard updates.
 
 Automatic session titles describe the topic or intended task in your first message.
+The naming model is asked for a plain-text label of that message, not of injected
+harness or project instructions, and not a copy of the input's JSON wrapper.
 They are generated separately from the agent's work, so a title is not a completion
 status or a report of tool access. Existing titles and manual names are left
 unchanged; click a title to rename it.

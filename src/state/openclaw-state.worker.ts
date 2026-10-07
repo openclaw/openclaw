@@ -271,12 +271,14 @@ function createSharedStateWorkerBackend(
           });
         } finally {
           // An existing-only actor may acquire its first writable handle through this owner.
-          const database = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(
-            context.databasePath,
-          );
-          if (!nativeDatabase && database) {
-            borrow = retainOpenClawStateDatabase(database);
-            nativeDatabase = database;
+          if (!nativeDatabase) {
+            const database = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(
+              context.databasePath,
+            );
+            if (database) {
+              borrow = retainOpenClawStateDatabase(database);
+              nativeDatabase = database;
+            }
           }
         }
       }
