@@ -22,6 +22,7 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
     command.type === "operatorApprovals.listCronGrants" ||
     command.type === "operatorApprovals.validateCronGrant" ||
     command.type === "acpSessions.metadata" ||
+    command.type === "sessionRows.sharedFacts" ||
     command.type === "githubPublication.knownPullRequestUrls" ||
     command.type === "githubRepository.knownPullRequestUrls" ||
     command.type === "workers.placementProjection"
@@ -265,6 +266,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
         (input.entry?.sessionStartedAt === undefined ? 0 : 8),
       bytes,
     );
+  }
+  if (command.type === "sessionRows.sharedFacts") {
+    return bytes + Buffer.byteLength(JSON.stringify(command.entries), "utf8");
   }
   if (command.type === "capture.readOnlyEvents") {
     return bytes + Buffer.byteLength(command.sessionId, "utf8") + 8;

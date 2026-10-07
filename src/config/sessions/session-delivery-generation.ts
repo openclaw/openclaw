@@ -164,6 +164,7 @@ async function prepareSessionGenerationLease(
     }
     if (
       change.scope === "automation" ||
+      change.scope === "acp" ||
       change.sessionKey !== generation.sessionKey ||
       (change.agentId && change.agentId !== generation.agentId) ||
       !change.storePath ||

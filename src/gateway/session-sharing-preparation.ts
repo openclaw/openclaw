@@ -239,6 +239,7 @@ export async function prepareSessionMutationFacts(
     }
     if (
       change.scope === "automation" ||
+      change.scope === "acp" ||
       (change.agentId && change.agentId !== agentId && !change.storePath) ||
       ![...initialStoreKeys, ...(facts?.target?.storeKeys ?? [])].includes(change.sessionKey)
     ) {
