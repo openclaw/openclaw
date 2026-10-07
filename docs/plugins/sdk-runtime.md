@@ -492,3 +492,21 @@ for provider selection, lifecycle, failure handling, limits, and diagnostics.
 <a id="api-runtime-tasks" />
 
 The former Tasks runtime is no longer available. See [removed Tasks and TaskFlow APIs](/plugins/sdk-migration/removed-surfaces#tasks-and-taskflow-apis-removed) for native-owner alternatives.
+
+## Explicit Doctor recovery actions
+
+`PluginDoctorStateMigration.recoverLegacyState` is an optional operator-only action;
+startup and automatic migration never invoke it. The host supplies the exact action,
+IDs and reason, plus current offline authority. The plugin validates its own eligibility
+and writes through `context.openPluginStateRetainedStore`, available only to trusted
+owners under the host's offline repair authority. `context.lookupPluginStateRetainedEntry`
+provides non-creating inspection of that owner's retained receipts during ordinary
+Doctor detection. Retained receipts have no TTL or count eviction. Recovery does not
+certify readiness itself: the normal migration owner must inspect the resulting state
+and settle every remaining required obligation before completion is recorded.
+
+A retained recovery receipt can change how an existing row is interpreted without
+changing the SQLite schema. The recovery owner must document which core and plugin
+readers honor the receipt, how backups preserve receipt and source together, and
+whether an older reader can replay retired work. Numeric schema compatibility alone
+does not certify that recovery contract.

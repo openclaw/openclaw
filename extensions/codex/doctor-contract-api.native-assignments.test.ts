@@ -84,6 +84,17 @@ function doctorParams() {
   const stateDir = tempDirs.make("openclaw-codex-native-upgrade-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const context: PluginDoctorStateMigrationContext = {
+    lookupPluginStateRetainedEntry: <T>(namespace: string, key: string) =>
+      createPluginStateKeyedStoreForTests<T>("codex", {
+        namespace,
+        retention: "retained",
+        env,
+      }).lookup(key),
+    openPluginStateRetainedStore: <T>(
+      options: Parameters<
+        NonNullable<PluginDoctorStateMigrationContext["openPluginStateRetainedStore"]>
+      >[0],
+    ) => createPluginStateKeyedStoreForTests<T>("codex", { ...options, env }),
     openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
       return createPluginStateKeyedStoreForTests<T>("codex", {
         ...options,
@@ -105,6 +116,7 @@ function interceptImportCommit(
   beforeCommit: () => Promise<void>,
 ): PluginDoctorStateMigrationContext {
   return {
+    ...context,
     openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
       const store = context.openPluginStateKeyedStore<T>(options);
       const withCurrent = store.withCurrent;
@@ -435,6 +447,222 @@ describe("Codex native Task assignment upgrade", () => {
       await expect(fixture.store.lookup(bindingKey)).resolves.toEqual(fixture.stored);
       expect(getSessionEntry(fixture.sessionScope)).toEqual(session);
       expect(fixture.rows()).toEqual(rows);
+    },
+  );
+
+  it("retires only selected terminal obligations without delivery and prevents replay after ownership returns", async () => {
+    const fixture = await createFixture();
+    const owner = {
+      ...fixture.owner,
+      connectionFingerprint: codexNativeSubagentHistoryConnectionFingerprint({
+        ...binding,
+        appServerRuntimeFingerprint: "restored-original",
+      })!,
+    };
+    const ids = ["obsolete-a", "obsolete-b", "obsolete-c"];
+    for (const id of ids) {
+      fixture.seed({
+        id,
+        runId: `codex-thread:${id}`,
+        owner,
+        status: "succeeded",
+        result: "Retained historical result",
+      });
+    }
+    const rows = fixture.rows();
+    const migration = registeredMigration();
+    expect((await migration.migrateLegacyState(fixture.params)).warnings).toHaveLength(3);
+    const request = {
+      action: "retire-without-delivery",
+      ids,
+      reason: "Operator no longer requires these obsolete results",
+    };
+    const params = { ...fixture.params, assertCurrent() {} };
+    const retire = migration.recoverLegacyState;
+    assert(retire, "Registered Codex Doctor recovery action is required");
+    expect((await retire(params, request)).warnings).toEqual([]);
+    expect((await retire(params, request)).changes).toEqual([]);
+    const receipts = await fixture.params.context.openPluginStateRetainedStore!<unknown>({
+      namespace: "codex-legacy-native-task-retirement",
+      retention: "retained",
+    }).entries();
+    expect(receipts).toHaveLength(1);
+    const receipt = receipts[0];
+    assert(receipt, "Native retirement must retain its receipt");
+    expect(receipt.expiresAt).toBeUndefined();
+    expect(receipt.value).toMatchObject({
+      disposition: "retired-without-delivery",
+      reason: request.reason,
+      tasks: ids.map((taskId) => ({ taskId, runId: `codex-thread:${taskId}`, owner })),
+    });
+    expect(await migration.detectLegacyState(fixture.params)).toBeNull();
+    expect((await migration.migrateLegacyState(fixture.params)).warnings).toEqual([]);
+    // A later original-account reconnection must not turn an administrative retirement
+    // into an import, recovery assignment, or delivery acknowledgement.
+    await fixture.store.register(bindingKey, {
+      ...fixture.stored,
+      binding: { ...binding, appServerRuntimeFingerprint: "restored-original" },
+    });
+    const restored = await fixture.store.lookup(bindingKey);
+    expect((await migration.migrateLegacyState(fixture.params)).warnings).toEqual([]);
+    await expect(fixture.store.lookup(bindingKey)).resolves.toEqual(restored);
+    expect(fixture.rows()).toEqual(rows);
+  });
+
+  it.each(["active", "delivered", "unknown", "duplicate", "owner", "imported"] as const)(
+    "refuses %s retirement without a receipt or historical mutation",
+    async (kind) => {
+      const fixture = await createFixture();
+      fixture.seed({
+        id: "selected",
+        runId: "codex-thread:selected",
+        owner: kind === "owner" ? undefined : fixture.owner,
+        status: kind === "active" ? "running" : "succeeded",
+        deliveryStatus: kind === "delivered" ? "delivered" : "pending",
+        result: "Preserved result",
+      });
+      if (kind === "duplicate") {
+        fixture.seed({
+          id: "other",
+          runId: "codex-thread:selected",
+          owner: fixture.owner,
+          status: "succeeded",
+          result: "Other record",
+        });
+      }
+      if (kind === "imported") {
+        await fixture.store.register(bindingKey, {
+          ...fixture.stored,
+          nativeSubagentTaskImport: { version: 1, taskIds: ["selected"] },
+        });
+      }
+      const rows = fixture.rows();
+      const before = await fixture.store.lookup(bindingKey);
+      const retire = registeredMigration().recoverLegacyState;
+      assert(retire);
+      await expect(
+        retire(
+          { ...fixture.params, assertCurrent() {} },
+          {
+            action: "retire-without-delivery",
+            ids: [kind === "unknown" ? "missing" : "selected"],
+            reason: "Explicit operator retirement",
+          },
+        ),
+      ).rejects.toThrow(/not a uniquely owned|recovery ownership/);
+      await expect(
+        fixture.params.context.openPluginStateRetainedStore!<unknown>({
+          namespace: "codex-legacy-native-task-retirement",
+          retention: "retained",
+        }).entries(),
+      ).resolves.toEqual([]);
+      await expect(fixture.store.lookup(bindingKey)).resolves.toEqual(before);
+      expect(fixture.rows()).toEqual(rows);
+    },
+  );
+
+  it("does not write retirement after offline authority expires during inspection", async () => {
+    const fixture = await createFixture();
+    fixture.seed({
+      id: "selected",
+      runId: "codex-thread:selected",
+      owner: fixture.owner,
+      status: "succeeded",
+      result: "Retained result",
+    });
+    const controller = new AbortController();
+    const open = fixture.params.context.openPluginStateRetainedStore!;
+    const context: PluginDoctorStateMigrationContext = {
+      ...fixture.params.context,
+      openPluginStateRetainedStore<T>(options: Parameters<typeof open>[0]) {
+        const store = open<T>(options);
+        const observe = store.observe!;
+        return {
+          ...store,
+          async observe(key) {
+            const observed = await observe(key);
+            controller.abort(new Error("offline authority expired"));
+            return observed;
+          },
+        };
+      },
+    };
+    const retire = registeredMigration().recoverLegacyState;
+    assert(retire);
+    await expect(
+      retire(
+        { ...fixture.params, context, assertCurrent: () => controller.signal.throwIfAborted() },
+        {
+          action: "retire-without-delivery",
+          ids: ["selected"],
+          reason: "Explicit operator retirement",
+        },
+      ),
+    ).rejects.toThrow("offline authority expired");
+    await expect(
+      open<unknown>({
+        namespace: "codex-legacy-native-task-retirement",
+        retention: "retained",
+      }).entries(),
+    ).resolves.toEqual([]);
+    await expect(fixture.store.lookup(bindingKey)).resolves.toEqual(fixture.stored);
+  });
+
+  it.each(["result", "delivery", "missing", "database"] as const)(
+    "refuses a changed retired %s source instead of importing it",
+    async (change) => {
+      const fixture = await createFixture();
+      fixture.seed({
+        id: "selected",
+        runId: "codex-thread:selected",
+        owner: fixture.owner,
+        status: "succeeded",
+        result: "Original retained result",
+      });
+      const migration = registeredMigration();
+      assert(migration.recoverLegacyState);
+      await migration.recoverLegacyState(
+        { ...fixture.params, assertCurrent() {} },
+        {
+          action: "retire-without-delivery",
+          ids: ["selected"],
+          reason: "Explicit operator retirement",
+        },
+      );
+      const { db } = openOpenClawStateDatabase({ env: fixture.params.env });
+      if (change === "result") {
+        db.prepare("UPDATE task_runs SET terminal_summary = ? WHERE task_id = ?").run(
+          "Changed source",
+          "selected",
+        );
+      } else if (change === "delivery") {
+        db.prepare("UPDATE task_runs SET delivery_status = ? WHERE task_id = ?").run(
+          "delivered",
+          "selected",
+        );
+      } else if (change === "database") {
+        await fs.rename(
+          path.join(fixture.params.stateDir, "state", "openclaw.sqlite"),
+          path.join(fixture.params.stateDir, "state", "retained-source.sqlite"),
+        );
+      } else {
+        db.prepare("DELETE FROM task_runs WHERE task_id = ?").run("selected");
+      }
+      try {
+        await expect(migration.migrateLegacyState(fixture.params)).rejects.toThrow(
+          /changed|missing/,
+        );
+      } finally {
+        if (change === "database") {
+          // Native worker settlement still owns the original database identity.
+          // Restore the fault-injected source before reading bindings or cleanup.
+          await fs.rename(
+            path.join(fixture.params.stateDir, "state", "retained-source.sqlite"),
+            path.join(fixture.params.stateDir, "state", "openclaw.sqlite"),
+          );
+        }
+      }
+      await expect(fixture.store.lookup(bindingKey)).resolves.toEqual(fixture.stored);
     },
   );
 

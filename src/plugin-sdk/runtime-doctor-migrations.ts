@@ -61,6 +61,8 @@ export type {
   PluginDoctorMigrationBackupResource,
   PluginDoctorMigrationBackupWarning,
   PluginDoctorStateMigration,
+  PluginDoctorRecoveryRequest,
+  PluginDoctorStateRecoveryInput,
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-module.js";
 export {

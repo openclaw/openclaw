@@ -437,6 +437,25 @@ export function createPluginDoctorStateMigrationContext(params: {
     context.channelIngressQueues = buildChannelIngressQueueAccess(params.channelIngress);
   }
   if (params.trustedForDurableStores) {
+    context.lookupPluginStateRetainedEntry = <T>(namespace: string, key: string) =>
+      createPluginStateKeyedStore<T>(pluginId, { namespace, retention: "retained", env }).lookup(
+        key,
+      );
+  }
+  if (params.trustedForDurableStores && params.repairAuthority) {
+    const authority = params.repairAuthority;
+    context.openPluginStateRetainedStore = <T>(
+      options: Parameters<
+        NonNullable<PluginDoctorStateMigrationContext["openPluginStateRetainedStore"]>
+      >[0],
+    ) => {
+      authority.assertCurrent();
+      return createPluginStateKeyedStore<T>(pluginId, { ...options, env }, () =>
+        authority.assertCurrent(),
+      );
+    };
+  }
+  if (params.trustedForDurableStores) {
     context.inspectCronJobs = async () => {
       params.repairAuthority?.assertCurrent();
       const { inspectCronJobsForDoctor } = await import("../commands/doctor/cron/store-repair.js");
