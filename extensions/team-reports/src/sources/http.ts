@@ -25,19 +25,21 @@ export async function wait(
   label: string,
 ): Promise<void> {
   // Node timers overflow above 2^31-1; chunk long reset delays without polling the API.
-  const deadline = Date.now() + ms;
+  // Budget is monotonic: sleepWithAbort consumes setTimeout, so a wall-clock jump
+  // (NTP step, sleep/resume) must not truncate or stretch the remaining wait.
+  const deadline = performance.now() + ms;
   do {
     checkAbort(signal, label);
     try {
       await sleepWithAbort(
-        Math.min(Math.max(1, deadline - Date.now()), MAX_TIMER_TIMEOUT_MS),
+        Math.min(Math.max(1, deadline - performance.now()), MAX_TIMER_TIMEOUT_MS),
         signal,
       );
     } catch (error) {
       checkAbort(signal, label);
       throw error;
     }
-  } while (Date.now() < deadline);
+  } while (performance.now() < deadline);
   checkAbort(signal, label);
 }
 
