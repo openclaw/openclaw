@@ -425,14 +425,14 @@ export function createPluginReloadCleanup({
       pluginIds: ReadonlySet<string>,
       signal: AbortSignal,
       reportStatus: (status: GatewayPluginReloadStatus) => void,
-      assertCurrent: () => void,
+      checkpoint: () => Promise<void>,
     ) => {
       // Sidecars release their capability consumers before finite work and callbacks drain.
       await drainRetainedWork(pluginIds, signal, reportStatus, {
         includeConsumers: true,
         includeCalls: true,
       });
-      assertCurrent();
+      await checkpoint();
       if (retainedWorkQueued) {
         recordWarning("Plugin replacement waited for retained work to finish.");
       }
