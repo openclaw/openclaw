@@ -63,8 +63,9 @@ type RegistryProviderSources = Record<
 >;
 
 function captureProviderSource(
-  provider: ProviderModelCatalog,
-  source: "static" | "composed" | "authored",
+  ...[provider, source]:
+    | [provider: RegistryProviderSources[string], source: "authored"]
+    | [provider: ProviderModelCatalog, source: "static" | "composed"]
 ): RegistryProviderSources[string] {
   return {
     ...(source === "authored"
@@ -520,10 +521,9 @@ export class ModelRegistry {
         }
         // Generated catalogs supply inventory, never request authority. Record the
         // source before merging so their headers cannot replace an authored row's.
-        sourceProviders[providerName] = captureProviderSource(
-          providerConfig,
-          generated ? "static" : "authored",
-        );
+        sourceProviders[providerName] = generated
+          ? captureProviderSource(providerConfig, "static")
+          : captureProviderSource(providerConfig, "authored");
       }
 
       const pluginCatalogErrors: string[] = [];

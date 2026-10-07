@@ -26,7 +26,7 @@ import type { AgentMessage } from "../runtime/index.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
 import { AgentSessionBase } from "./agent-session-base.js";
 import type { PromptOptions } from "./agent-session-types.js";
-import { formatNoModelSelectedMessage } from "./auth-guidance.js";
+import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.js";
 import {
   createCompactionRequestBudget,
   takePromptCompactionRequestBudget,
@@ -307,7 +307,15 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       }
 
       if (!this.sessionModelRegistry.hasConfiguredAuth(this.model)) {
-        throw this.unavailableModelAuthError(this.model);
+        const isOAuth = this.sessionModelRegistry.isUsingOAuth(this.model);
+        if (isOAuth) {
+          throw new Error(
+            `Authentication failed for "${this.model.provider}". ` +
+              `Credentials may have expired or network is unavailable. ` +
+              `Run '/login ${this.model.provider}' to re-authenticate.`,
+          );
+        }
+        throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
       }
 
       // Check if we need to compact before sending (catches aborted responses).
@@ -585,7 +593,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     const notifyAgent = this.agent.admitSteeringMessage(message);
     return () => {
       const errors: unknown[] = [];
-      notifyListeners([() => this.emitQueueUpdate(), notifyAgent], undefined, (error) =>
+      notifyListeners([() => this.emitQueueUpdate(), () => notifyAgent()], undefined, (error) =>
         errors.push(error),
       );
       if (errors.length === 1) {

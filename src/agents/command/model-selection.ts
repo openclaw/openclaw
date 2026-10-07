@@ -212,7 +212,10 @@ export async function resolveEmbeddedModelSelection(params: {
     }
   }
 
-  let storedModelOverrideSource = hasStoredOverride ? sessionEntry?.modelOverrideSource : undefined;
+  let storedModelOverrideSource =
+    hasStoredOverride && sessionEntry?.modelOverrideSource !== "default"
+      ? sessionEntry?.modelOverrideSource
+      : undefined;
   let hasStoredAutoFallbackProvenance =
     hasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
   const hasLegacyAutoFallbackOverrideWithoutOrigin =

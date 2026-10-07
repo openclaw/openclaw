@@ -230,10 +230,10 @@ export function bindSqliteWorkerBackend(
         ),
       };
     }
-    if (
-      command.type === "session.transcript.branch" ||
-      command.type === "session.transcript.replaceSuffix"
-    ) {
+    if (command.type === "session.transcript.branch") {
+      return { ok: true, value: executeSessionMaintenance(command, scope, context) };
+    }
+    if (command.type === "session.transcript.replaceSuffix") {
       return { ok: true, value: executeSessionMaintenance(command, scope, context) };
     }
     if (command.type === "session.transcript.rewrite") {
