@@ -76,8 +76,8 @@ function collectTelegramAllowFromLists(
       holder: group,
       key: "allowFrom",
     });
-    for (const [topicId, value] of Object.entries(asObjectRecord(group.topics) ?? {})) {
-      const topic = asObjectRecord(value);
+    for (const [topicId, topicValue] of Object.entries(asObjectRecord(group.topics) ?? {})) {
+      const topic = asObjectRecord(topicValue);
       if (!topic) {
         continue;
       }

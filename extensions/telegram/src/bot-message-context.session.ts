@@ -320,13 +320,13 @@ export async function buildTelegramInboundContextPayload(params: {
   });
   const shouldIncludeGroupSupplementalContext = (
     kind: "quote" | "forwarded",
-    senderId?: string,
+    contextSenderId?: string,
   ): boolean => {
     if (!isGroup) {
       return true;
     }
     const senderAllowed = effectiveGroupAllow?.hasEntries
-      ? isSenderIdAllowed(effectiveGroupAllow, senderId, true)
+      ? isSenderIdAllowed(effectiveGroupAllow, contextSenderId, true)
       : true;
     return evaluateSupplementalContextVisibility({
       mode: contextVisibilityMode,

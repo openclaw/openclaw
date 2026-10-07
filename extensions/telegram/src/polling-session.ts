@@ -355,7 +355,7 @@ export class TelegramPollingSession {
     let restartRequested = false;
     let stopTimedOut = false;
     let forceCycleTimer: ReturnType<typeof setTimeout> | undefined;
-    const { promise: forceCyclePromise, resolve: forceCycleResolve } = createDeferred<void>();
+    const { promise: forceCyclePromise, resolve: forceCycleResolve } = createDeferred();
     const unsubscribe = worker.onMessage((message) => {
       const ackSpooledUpdate: NonNullable<typeof worker.ackSpooledUpdate> = (requestId, result) => {
         try {

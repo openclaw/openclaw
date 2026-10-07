@@ -60,13 +60,13 @@ export function createTelegramEventBindings({
   const { authorizeTelegramEventSender, resolveTelegramEventAuthorizationContext } = authorization;
   const { processMessageWithReplyChain, resolveCachedMessageThreadSpec } = message;
   const resolveAuthorizedEventContext = async (
-    params: Parameters<typeof resolveTelegramEventAuthorizationContext>[0] & {
+    eventParams: Parameters<typeof resolveTelegramEventAuthorizationContext>[0] & {
       senderId: string;
       chatTitle?: string;
     },
   ) => {
-    const context = await resolveTelegramEventAuthorizationContext(params);
-    return (await authorizeTelegramEventSender({ ...params, mode: "reaction", context }))
+    const context = await resolveTelegramEventAuthorizationContext(eventParams);
+    return (await authorizeTelegramEventSender({ ...eventParams, mode: "reaction", context }))
       ? context
       : undefined;
   };

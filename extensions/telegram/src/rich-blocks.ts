@@ -270,7 +270,7 @@ function splitParagraphs(ir: MarkdownIR, start: number, end: number): InputRichB
   if (end <= start) {
     return [];
   }
-  const text = ir.text.slice(start, end);
+  const sourceText = ir.text.slice(start, end);
   const paragraphs: InputRichBlockParagraph[] = [];
   const pushParagraph = (rangeStart: number, rangeEnd: number) => {
     // Trim the range so style/link offsets stay aligned with the source.
@@ -290,7 +290,7 @@ function splitParagraphs(ir: MarkdownIR, start: number, end: number): InputRichB
   const blankLine = /\n[ \t]*\n+/g;
   let last = 0;
   let match: RegExpExecArray | null;
-  while ((match = blankLine.exec(text)) !== null) {
+  while ((match = blankLine.exec(sourceText)) !== null) {
     pushParagraph(start + last, start + match.index);
     last = match.index + match[0].length;
   }
