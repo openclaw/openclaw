@@ -56,6 +56,7 @@ import {
 export type LegacySessionRecord = {
   entry: SessionEntry;
   sessionKey: string;
+  preserveCurrentSession?: boolean;
   transcriptPath?: string;
   transcriptDependencies: string[];
   recovery?: { complete: boolean; repaired: boolean; events: number; sqliteEvents?: number };
