@@ -170,19 +170,24 @@ describe("embedded provider dispatch admission", () => {
           dispose: vi.fn(async () => undefined),
         };
         const prepared =
-          field === "matching"
-            ? target
+          field === "matching" || field === "agentId"
+            ? { ...target }
             : {
                 ...target,
                 [field]:
                   field === "storePath"
-                    ? path.join(state.agentDir("other"), "openclaw-agent.sqlite")
+                    ? path.join(state.workspaceDir, "alternate", "openclaw-agent.sqlite")
                     : field === "agentId"
                       ? "other"
                       : `synthetic-other-${field}`,
               };
         await drainPendingContextEngineTurnsBeforeRun({ lease, recorder, sessionTarget: prepared });
         expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
+        // Deliberate mutation probes the retained callback, not a reachable producer defect.
+        // A conflicting agent/store pair is correctly rejected earlier during preparation.
+        if (field === "agentId") {
+          prepared.agentId = "other";
+        }
         streamMocks.streamSimple.mockImplementation((model) =>
           createAssistantResultStream(createAssistant(model, [{ type: "text", text: "done" }])),
         );
