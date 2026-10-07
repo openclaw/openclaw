@@ -40,7 +40,8 @@ vi.mock("./chat.js", () => ({
   },
 }));
 
-vi.mock("./chat-abort-handler.js", () => ({
+vi.mock("./chat-abort-handler.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./chat-abort-handler.js")>()),
   handleChatAbortRequestWithLifecycle: (...args: unknown[]) => chatAbortMock(...args),
 }));
 

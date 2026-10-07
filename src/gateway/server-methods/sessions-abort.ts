@@ -45,7 +45,10 @@ import { withGatewaySessionEntry } from "../session-utils-store.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { resolveChatAbortRequester } from "./chat-abort-authorization.js";
 import { abortControlledSubagents, descendantAbortError } from "./chat-abort-descendants.js";
-import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
+import {
+  handleChatAbortRequestWithLifecycle,
+  withAbortStateContentionGuard,
+} from "./chat-abort-handler.js";
 import { abortQueuedCollectorSession } from "./chat-abort-runtime.js";
 import type { ChatSessionEmbeddedAbortOutcome } from "./chat-abort-runtime.types.js";
 import { abortedPartialPersistenceError } from "./chat-aborted-partial.js";
@@ -156,7 +159,7 @@ function sessionAbortResult(abortedRunId: string | null, aborted: boolean, warni
 }
 
 export const sessionAbortHandlers: GatewayRequestHandlers = {
-  "sessions.abort": async (options) => {
+  "sessions.abort": withAbortStateContentionGuard(async (options) => {
     const { params, respond, context, client, sessionMutationAuthorization } = options;
     const authority = readGatewayRequestMutationAuthority(options);
     const requester = resolveChatAbortRequester(client, sessionMutationAuthorization);
@@ -687,5 +690,5 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         reason: "abort",
       });
     }
-  },
+  }),
 };
