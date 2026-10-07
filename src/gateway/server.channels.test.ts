@@ -20,9 +20,13 @@ const createStubChannelPlugin = (params: {
   ...createChannelTestPluginBase({
     id: params.id,
     label: params.label,
-    config: { isConfigured: async () => false },
+    config: {
+      isConfigured: async () => false,
+      inspectAccount: (_cfg, accountId) => ({ accountId, configured: false, ...params.summary }),
+    },
   }),
   status: {
+    defaultRuntime: { accountId: "default", ...params.summary },
     buildChannelSummary: async () => ({
       configured: false,
       ...params.summary,
