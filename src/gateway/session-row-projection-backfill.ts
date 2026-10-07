@@ -90,10 +90,19 @@ export function createSessionRowProjectionBackfill(params: {
           },
         });
         // Metadata can rematerialize the row without changing its transcript revision.
-        await params.ready();
-        const live = params.read(id);
-        if (!interrupted && shouldCommit() && live && params.current(live)) {
-          params.publish(row, fields);
+        for (;;) {
+          if (interrupted) {
+            break;
+          }
+          await params.ready();
+          if (!shouldCommit()) {
+            break;
+          }
+          const live = params.read(id);
+          if (live && params.current(live)) {
+            params.publish(row, fields);
+            break;
+          }
         }
       } catch {
         // A later owner publication retries optional fields; do not spin on a cold/error row.
@@ -129,11 +138,10 @@ export function createSessionRowProjectionBackfill(params: {
       const id = identity(row);
       const next = revision(row, facts);
       const previous = revisions.get(id);
-      if (isDeepStrictEqual(previous, next)) {
-        return;
+      if (!isDeepStrictEqual(previous, next)) {
+        revisions.set(id, next);
+        queued.add(id);
       }
-      revisions.set(id, next);
-      queued.add(id);
       if (started) {
         start();
       }

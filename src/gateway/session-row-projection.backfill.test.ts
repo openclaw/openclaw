@@ -436,12 +436,14 @@ it("fences superseded and disposed background catalog reads", async () => {
   });
 });
 
-it("continues backfill queued as the previous batch settles", async () => {
-  vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields").mockResolvedValue({});
-  const rows = new Map<string, EntryRow>(
-    ["first", "second"].map((key) => {
-      const entry = { sessionId: key, updatedAt: 1 };
-      return [
+it.for(["ready", "readiness failure", "metadata during readiness"])(
+  "continues backfill as the previous batch settles (%s)",
+  async (mode, { signal }) => {
+    const reads = vi
+      .spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields")
+      .mockResolvedValue({});
+    const rows = new Map<string, EntryRow>(
+      ["first", "second"].map((key) => [
         key,
         {
           ...create({
@@ -449,33 +451,68 @@ it("continues backfill queued as the previous batch settles", async () => {
             agentId: "main",
             storeTarget: { agentId: "main", storePath: "unused" },
           }),
-          entry,
+          entry: { sessionId: key, updatedAt: 1 },
         },
-      ];
-    }),
-  );
-  const published: string[] = [];
-  const backfill = createSessionRowProjectionBackfill({
-    ready: async () => {},
-    read: (id) => [...rows.values()].find((row) => identity(row) === id),
-    current: () => true,
-    publish(row) {
-      published.push(row.key);
-      if (row.key === "first") {
-        queueMicrotask(() => backfill.prepare(rows.get("second")!, undefined));
+      ]),
+    );
+    const published: string[] = [];
+    const paused = createDeferredCore(),
+      resume = createDeferredCore();
+    const completed = createDeferredCore();
+    let rejectNext = mode === "readiness failure",
+      dirtyNext = mode === "metadata during readiness";
+    let materialized = true;
+    const backfill = createSessionRowProjectionBackfill({
+      ready: async () => {
+        if (rejectNext) {
+          rejectNext = false;
+          paused.resolve();
+          throw new Error("Row facts temporarily unavailable");
+        }
+        if (dirtyNext && reads.mock.calls.length > 0) {
+          dirtyNext = false;
+          queueMicrotask(() => {
+            materialized = false;
+            paused.resolve();
+          });
+        } else if (!materialized) {
+          await resume.promise;
+        }
+      },
+      read: (id) => [...rows.values()].find((row) => identity(row) === id),
+      current: () => materialized,
+      publish(row) {
+        published.push(row.key);
+        if (row.key === "first") {
+          queueMicrotask(() => backfill.prepare(rows.get("second")!, undefined));
+        } else {
+          completed.resolve();
+        }
+      },
+    });
+    try {
+      backfill.start();
+      backfill.prepare(rows.get("first")!, undefined);
+      if (mode !== "ready") {
+        await withinTest(paused.promise, signal);
+        await nextTurn();
+        const row = rows.get("first")!;
+        row.entry = { ...row.entry, displayName: "Renamed while waiting" };
+        materialized = true;
+        backfill.prepare(row, undefined);
+        resume.resolve();
+        await nextTurn();
+        expect(published).toContain("first");
       }
-    },
-  });
-  try {
-    backfill.start();
-    await nextTurn();
-    expect(published).toEqual([]);
-    backfill.prepare(rows.get("first")!, undefined);
-    await vi.waitFor(() => expect(published).toEqual(["first", "second"]));
-  } finally {
-    backfill.dispose();
-  }
-});
+      await withinTest(completed.promise, signal);
+      expect(published).toEqual(["first", "second"]);
+      expect(reads).toHaveBeenCalledTimes(2);
+    } finally {
+      resume.resolve();
+      backfill.dispose();
+    }
+  },
+);
 
 it("preserves a stored fallback model without requiring a terminal transcript", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
