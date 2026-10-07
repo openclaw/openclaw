@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { extractToolPayload } from "openclaw/plugin-sdk/tool-payload";
 import { afterEach, describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import {
@@ -11,6 +13,7 @@ import {
 import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { recentOutboundSummary } from "./suite-runtime-transport.js";
+import { projectQaToolActivity } from "./tool-activity.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -53,6 +56,79 @@ function runTelegramStreamingFinalScenario(params: {
           text,
         });
       }
+    },
+  });
+}
+
+function runFanoutScenario(
+  options: {
+    receipt?: "missing" | "failed" | "unlinked" | "same-child" | "wrong-label";
+    reply?: string;
+  } = {},
+) {
+  return runLoadedScenarioFlow("subagent-fanout-synthesis", {
+    api: {
+      env: {
+        providerMode: "live-frontier",
+      },
+      readSessionToolActivity: async (_env: unknown, sessionKey: string) => {
+        const attempt = sessionKey.split(":")[3];
+        const messages = ["alpha", "beta"].flatMap((worker) => {
+          const isBeta = worker === "beta";
+          const callId = `spawn-${worker}`;
+          const call = {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: callId,
+                name: "sessions_spawn",
+                arguments: {
+                  label:
+                    options.receipt === "wrong-label" && isBeta
+                      ? "unrelated"
+                      : `qa-fanout-${worker}-${attempt}`,
+                  cleanup: "delete",
+                },
+              },
+            ],
+          };
+          const result = {
+            role: "toolResult",
+            toolName: "sessions_spawn",
+            toolCallId: options.receipt === "unlinked" && isBeta ? "unrelated" : callId,
+            isError: options.receipt === "failed" && isBeta,
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: options.receipt === "failed" && isBeta ? "error" : "accepted",
+                  childSessionKey: `agent:qa:subagent:${options.receipt === "same-child" ? "alpha" : worker}`,
+                }),
+              },
+            ],
+          };
+          return options.receipt === "missing" && isBeta ? [call] : [call, result];
+        });
+        return projectQaToolActivity(messages);
+      },
+      startAgentRun: async () => ({ runId: "parent-run" }),
+      waitForAgentHistoryReply: async (
+        _env: unknown,
+        _sessionKey: string,
+        matches: (text: string) => boolean,
+      ) => {
+        const text = options.reply ?? "subagent-1: ok\nsubagent-2: ok";
+        if (!matches(text)) {
+          throw new Error("parent synthesis missing");
+        }
+        return { text };
+      },
+      // Delete-cleanup retires these rows after the requester has consumed both results.
+      readNativeQaSubagentRuns: async () => [],
+      extractQaToolPayload: extractToolPayload,
+      normalizeLowercaseStringOrEmpty,
+      formatErrorMessage: (error: Error) => error.message,
     },
   });
 }
@@ -305,26 +381,23 @@ describe("qa scenario catalog channel contracts", () => {
     expect(matrixProgress.execution.isolationReason).toContain("streaming progress configuration");
   });
 
-  it("uses public parent history and native delivery records before accepting fanout", () => {
-    const scenario = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
-    const flow = JSON.stringify(scenario.execution.flow);
-
-    expect(flow).toContain('"call":"startAgentRun"');
-    expect(flow).not.toContain('"call":"runAgentPrompt"');
-    expect(flow).not.toContain("taskTracking");
-    expect(flow).toContain('"saveAs":"parentOutbound"');
-    expect(flow).toContain("waitForAgentHistoryReply");
-    expect(flow).not.toContain('"call":"waitForOutboundMessage"');
-    expect(flow).not.toContain("childCompletionMarker");
-    expect(flow).toContain("readNativeQaSubagentRuns(env, sessionKey)");
-    expect(flow).toContain("run.requesterSessionKey === sessionKey");
-    expect(flow).toContain("run?.execution.status === 'terminal'");
-    expect(flow).toContain("run.execution.outcome?.status === 'ok'");
-    expect(flow).toContain("run.delivery?.status === 'delivered'");
-    expect(flow).not.toContain("readRawQaSessionStore");
-    expect(flow).not.toContain("readSessionTranscriptSummary");
-    expect(flow).not.toContain('"value":"subagent-1: ok\\nsubagent-2: ok"');
+  it("accepts synthesized fanout after delete-cleanup retires native child rows", async () => {
+    await expect(runFanoutScenario()).resolves.toMatchObject({ status: "pass" });
   });
+
+  it.each(["missing", "failed", "unlinked", "same-child", "wrong-label"] as const)(
+    "rejects %s spawn evidence despite matching parent synthesis",
+    async (receipt) => {
+      await expect(runFanoutScenario({ receipt })).rejects.toThrow("test condition was not met");
+    },
+  );
+
+  it.each(["subagent-1: ok", "still waiting: subagent-1: ok\nsubagent-2: ok"])(
+    "rejects incomplete parent synthesis %j despite accepted spawns",
+    async (reply) => {
+      await expect(runFanoutScenario({ reply })).rejects.toThrow("parent synthesis missing");
+    },
+  );
 
   it("settles terminal-reply scenarios from native run facts instead of sleeps", () => {
     const scenario = requireFlowScenario(readQaScenarioById("subagent-completion-direct-fallback"));
