@@ -97,18 +97,30 @@ describe("ManagedWorktreeService allocation and orphan preservation", () => {
     ).toHaveLength(1);
   });
 
-  it.each(["clean", "dirty"] as const)(
-    "rejects a changed base when reusing a %s card worktree and preserves its contents",
-    async (state) => {
+  it.each([
+    { ownerKind: "workboard", state: "clean", rejectsChangedBase: true },
+    { ownerKind: "workboard", state: "dirty", rejectsChangedBase: true },
+    { ownerKind: "session", state: "dirty", rejectsChangedBase: false },
+    { ownerKind: "manual", state: "dirty", rejectsChangedBase: false },
+    { ownerKind: undefined, state: "dirty", rejectsChangedBase: false },
+  ] as const)(
+    "preserves a $state checkout when ownerKind=$ownerKind requests another base",
+    async ({ ownerKind, state, rejectsChangedBase }) => {
       const baseRef = await git(repo, "rev-parse", "HEAD");
       const request = {
         repoRoot: repo,
-        name: "card-worktree",
+        name: "owned-worktree",
         baseRef,
-        ownerKind: "workboard" as const,
-        ownerId: "card-1",
+        ownerKind,
+        ownerId: "owner-1",
       };
       const created = await service.create(request);
+      const retained = { record: created, materialized: false };
+      if (!rejectsChangedBase) {
+        await expect(service.createWithOutcome({ ...request, baseRef: "main" })).resolves.toEqual(
+          retained,
+        );
+      }
       await fs.writeFile(path.join(repo, "README.md"), "new base\n");
       await git(repo, "commit", "-am", "advance source");
       const requestedBase = await git(repo, "rev-parse", "HEAD");
@@ -117,9 +129,14 @@ describe("ManagedWorktreeService allocation and orphan preservation", () => {
         await fs.writeFile(path.join(created.path, "draft.txt"), "unfinished work\n");
       }
 
-      await expect(service.create({ ...request, baseRef: requestedBase })).rejects.toThrow(
-        `already uses base ref ${baseRef}; requested ${requestedBase}`,
-      );
+      const reuse = service.createWithOutcome({ ...request, baseRef: requestedBase });
+      if (rejectsChangedBase) {
+        await expect(reuse).rejects.toThrow(
+          `already uses base ref ${baseRef}; requested ${requestedBase}`,
+        );
+      } else {
+        await expect(reuse).resolves.toEqual(retained);
+      }
 
       expect(await git(created.path, "rev-parse", "HEAD")).toBe(baseRef);
       expect(await git(created.path, "branch", "--show-current")).toBe(created.branch);
@@ -132,14 +149,10 @@ describe("ManagedWorktreeService allocation and orphan preservation", () => {
         );
       }
       expect(await service.listRegistryRecords()).toEqual([created]);
-      await expect(service.createWithOutcome(request)).resolves.toEqual({
-        record: created,
-        materialized: false,
-      });
-      await expect(service.createWithOutcome({ ...request, baseRef: undefined })).resolves.toEqual({
-        record: created,
-        materialized: false,
-      });
+      await expect(service.createWithOutcome(request)).resolves.toEqual(retained);
+      await expect(service.createWithOutcome({ ...request, baseRef: undefined })).resolves.toEqual(
+        retained,
+      );
     },
   );
 

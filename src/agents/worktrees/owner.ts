@@ -10,7 +10,7 @@ export function assertOwnerWorktreeReuse(
       `worktree owner ${params.ownerKind ?? "manual"} ${params.ownerId} is already bound to another repository`,
     );
   }
-  if (params.baseRef && params.baseRef !== record.baseRef) {
+  if (record.ownerKind === "workboard" && params.baseRef && params.baseRef !== record.baseRef) {
     throw new Error(
       `worktree ${record.name} already uses base ref ${record.baseRef}; requested ${params.baseRef}. Existing checkout preserved; use a new owner and name for a different base.`,
     );
