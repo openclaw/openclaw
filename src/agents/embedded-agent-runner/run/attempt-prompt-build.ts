@@ -313,7 +313,10 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     effectivePrompt = `${effectivePrompt}\n\n${promptBuildAppendContext}`;
     log.debug(`hooks: appended context to prompt (${promptBuildAppendContext.length} chars)`);
   }
-  if (routePromptBuildContextThroughRuntimeCarrier && (promptBuildPrependContext || promptBuildAppendContext)) {
+  if (
+    routePromptBuildContextThroughRuntimeCarrier &&
+    (promptBuildPrependContext || promptBuildAppendContext)
+  ) {
     log.debug(
       `hooks: routing prompt-build context through the runtime-context carrier ` +
         `(${(promptBuildPrependContext?.length ?? 0) + (promptBuildAppendContext?.length ?? 0)} chars)`,
@@ -547,8 +550,8 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   const promptBuildContext =
     input.appendOnlyRuntimeContext === true && input.prompt.effectiveTranscriptPrompt.trim()
       ? [input.prompt.promptBuildPrependContext, input.prompt.promptBuildAppendContext]
-        .filter((value): value is string => Boolean(value?.trim()))
-        .join("\n\n") || undefined
+          .filter((value): value is string => Boolean(value?.trim()))
+          .join("\n\n") || undefined
       : undefined;
   const eventFragments: RuntimeContextFragment[] = [
     ...(promptBuildContext
