@@ -9723,7 +9723,6 @@
 ["src/process/background-work.test.ts","../logging/diagnostic-runtime.js","3005d9447dc22400dda2144b032ad7501a9cb7972627fc9a168b58643fd04d82",1]
 ["src/process/child-process-tree.reaping.test.ts","./kill-tree.js","883637170b915a6ed10435001c6b849d92ff07f0a4d1efdf3ab0950d962d05e1",1]
 ["src/process/command-queue.cancellation.test.ts","../logging/diagnostic-runtime.js","3005d9447dc22400dda2144b032ad7501a9cb7972627fc9a168b58643fd04d82",1]
-["src/process/command-queue.scoped-lanes.test.ts","../logging/diagnostic-runtime.js","6c9e2b3bbfd25f2179f554baf2b47c02239acb7349c73a7c223448e793c7da9e",1]
 ["src/process/command-queue.test.ts","../logging/diagnostic-runtime.js","2b7d5762be674e97f23093502ddc42a38aa2ac36c8772847893e47836bb8fc73",1]
 ["src/process/exec-runner.timeout.test.ts","./exec-spawn.js","208b03f9e00d6fe0154669db21ec2bb590b321964e0108341a535a039a3c59d1",1]
 ["src/process/exec-scope-settlement.test.ts","../shared/pid-alive.js","7d761c2d1911e4468fbd4bcfb7cd04484b7c483da96aebe9090178ab7b723055",1]

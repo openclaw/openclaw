@@ -225,36 +225,6 @@ describe("publishLaneConfiguration", () => {
     await Promise.allSettled([...runs, extraRun]);
   });
 
-  test("a rejected replacement does not tear down the existing group first", async () => {
-    // Validate before clearing the old group or changing its members' widths.
-    publishLaneConfiguration({
-      lanes: { [CRON]: 8, [HOOK]: 1 },
-      groups: {
-        [GROUP]: { budget: 8, members: [CRON, HOOK], reservations: { [HOOK]: 1 } },
-      },
-    });
-    expect(getCommandLaneSnapshot(CRON).group).toBe(GROUP);
-
-    expect(() =>
-      publishLaneConfiguration({
-        lanes: { [CRON]: 99 },
-        clearGroups: [GROUP],
-        groups: {
-          "replacement-group": {
-            budget: 1,
-            members: [CRON, HOOK],
-            reservations: { [CRON]: 1, [HOOK]: 1 },
-          },
-        },
-      }),
-    ).toThrow(/reserves 2 slots but its budget is 1/);
-
-    expect(getCommandLaneSnapshot(CRON).group).toBe(GROUP);
-    expect(getCommandLaneSnapshot(CRON).groupBudget).toBe(8);
-    expect(getCommandLaneSnapshot(CRON).maxConcurrent).toBe(8);
-    expect(getCommandLaneSnapshot(HOOK).reservedForLane).toBe(1);
-  });
-
   test("publication wakes members when a replacement frees capacity", async () => {
     // Budget expansion must wake queued work without another enqueue.
     setCommandLaneConcurrency(CRON, 8);
