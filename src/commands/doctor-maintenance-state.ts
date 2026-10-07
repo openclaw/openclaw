@@ -13,7 +13,11 @@ import {
   getOpenClawDatabaseMaintenanceScope,
   type OpenClawDatabaseMaintenanceScope,
 } from "../state/openclaw-state-db-async-lifecycle.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  closeOpenClawStateDatabaseByPathAsync,
+  isOpenClawStateDatabaseOpen,
+} from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { assertDoctorAgentLeaseAdmission } from "./doctor-agent-lease-refusal.js";
@@ -92,11 +96,16 @@ export async function createDoctorMaintenanceState(options: {
     try {
       acquired.assertCurrent(options.assertCurrent);
       // Preflight can leave the ordinary shared-state WAL scheduler attached to
-      // a cached handle. Doctor owns the store exclusively now, so drain that
-      // optional runtime maintenance before opening any Doctor-scoped handles.
-      await acquired.run(() =>
-        closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(selectedEnv)),
-      );
+      // a cached handle. Retire only that native cache owner; its close stops
+      // the scheduler, while unrelated readers sharing this state database
+      // retain their own lifecycle instead of being invalidated by Doctor
+      // admission.
+      await acquired.run(async () => {
+        const databasePath = resolveOpenClawStateSqlitePath(selectedEnv);
+        if (isOpenClawStateDatabaseOpen(databasePath)) {
+          closeOpenClawStateDatabaseByPath(databasePath);
+        }
+      });
       acquired.assertCurrent(options.assertCurrent);
       resourcesParent = getOpenClawDatabaseMaintenanceScope();
       resources = createOpenClawDatabaseMaintenanceScope({

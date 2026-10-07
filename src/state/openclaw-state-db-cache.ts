@@ -574,10 +574,14 @@ export function closeOpenClawStateDatabaseByPath(
   pathname: string,
   options?: OpenClawStateDatabaseCloseOptions,
 ): boolean {
+  const resolvedPath = path.resolve(pathname);
   return retireOpenClawStateDatabaseHandles(
-    resolveDatabasePath({ path: pathname }),
+    resolvedPath,
     options,
-    asyncResources.identity(pathname),
+    // A known cached owner already identifies the exact handle. Avoid opening
+    // a read-admission worker solely to re-resolve its identity before Doctor
+    // retires inherited runtime maintenance.
+    cachedDatabases.has(resolvedPath) ? undefined : asyncResources.identity(pathname),
   );
 }
 
