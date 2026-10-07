@@ -5,7 +5,7 @@ import Testing
 @testable import OpenClaw
 
 @MainActor
-private final class RecordingGatewaySpeechSynthesizer: TalkGatewaySpeechSynthesizing {
+final class RecordingGatewaySpeechSynthesizer: TalkGatewaySpeechSynthesizing {
     let audio: TalkGatewaySpeechAudio
     private(set) var requests: [TalkGatewaySpeechRequest] = []
 
@@ -43,7 +43,7 @@ private final class SuspendedGatewaySpeechSynthesizer: TalkGatewaySpeechSynthesi
 }
 
 @MainActor
-private final class RecordingBufferedAudioPlayer: TalkBufferedAudioPlaying {
+final class RecordingBufferedAudioPlayer: TalkBufferedAudioPlaying {
     private(set) var payloads: [Data] = []
 
     func play(data: Data) async -> StreamingPlaybackResult {
