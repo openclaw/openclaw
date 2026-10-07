@@ -84,7 +84,6 @@ export function bindPluginToolCallbacks(
   const callbacks = {
     execute: async (...args: Parameters<AnyAgentTool["execute"]>) => {
       const [toolCallId, params, signal, onUpdate] = args;
-      signal?.throwIfAborted();
       const pending =
         memoryAudience &&
         resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.pluginId ===
