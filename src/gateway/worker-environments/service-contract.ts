@@ -9,7 +9,7 @@ import type {
   WorkerDesktopObserveResult as ProtocolWorkerDesktopObserveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
-import type { SessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
+import type { RequiredSessionPlacementAdmission } from "../../agents/session-placement-admission.types.js";
 import type {
   WorkerDesktopApp,
   WorkerMachineOption,
@@ -256,7 +256,7 @@ export type WorkerPlacementReclaimSourceCheck = ((
 // runtime (it reaches agents/plugins and closes an import cycle through core).
 export type WorkerPlacementDispatchContract = {
   /** Server-owned placement under existing session creation/run authority, not manual dispatch. */
-  withRequiredSession?: SessionPlacementAdmissionProvider["withRequiredSession"];
+  withRequiredSession?: RequiredSessionPlacementAdmission;
   getPendingDeviceDispatchCount?(deviceId: string, excludeSessionId?: string): number;
   /** @deprecated Await getAdmittedDeviceSessionCountsAsync; retained through the next Plugin SDK major. */
   getAdmittedDeviceSessionCounts?(excludeSessionId?: string): ReadonlyMap<string, number>;
