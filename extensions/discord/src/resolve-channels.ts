@@ -2,7 +2,11 @@ import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS, DiscordApiError, fetchDiscord } fr
 import { isDiscordThreadChannelType } from "./channel-type.js";
 import { listGuilds } from "./guilds.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
-import { filterDiscordGuilds, resolveDiscordAllowlistToken } from "./resolve-allowlist-common.js";
+import {
+  filterDiscordGuilds,
+  parseDiscordAllowlistInput,
+  resolveDiscordAllowlistToken,
+} from "./resolve-allowlist-common.js";
 
 type DiscordChannelSummary = {
   id: string;
@@ -30,47 +34,6 @@ export type DiscordChannelResolution = {
   archived?: boolean;
   note?: string;
 };
-
-function parseDiscordChannelInput(raw: string): {
-  guild?: string;
-  channel?: string;
-  channelId?: string;
-  guildId?: string;
-  guildOnly?: boolean;
-} {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return {};
-  }
-  const mention = trimmed.match(/^<#(\d+)>$/);
-  if (mention) {
-    return { channelId: mention[1] };
-  }
-  const channelPrefix = trimmed.match(/^(?:channel:|discord:)?(\d+)$/i);
-  if (channelPrefix) {
-    return { channelId: channelPrefix[1] };
-  }
-  const guildPrefix = trimmed.match(/^(?:guild:|server:)?(\d+)$/i);
-  if (guildPrefix) {
-    return { guildId: guildPrefix[1], guildOnly: true };
-  }
-  const split = trimmed.includes("/") ? trimmed.split("/") : trimmed.split("#");
-  if (split.length >= 2) {
-    const guild = split[0]?.trim();
-    const channel = split.slice(1).join("#").trim();
-    if (!channel) {
-      return guild ? { guild: guild.trim(), guildOnly: true } : {};
-    }
-    if (guild && /^\d+$/.test(guild)) {
-      if (/^\d+$/.test(channel)) {
-        return { guildId: guild, channelId: channel };
-      }
-      return { guildId: guild, channel };
-    }
-    return { guild, channel };
-  }
-  return { guild: trimmed, guildOnly: true };
-}
 
 async function listGuildChannels(
   token: string,
@@ -137,9 +100,6 @@ async function fetchChannel(
 }
 
 function preferActiveMatch(candidates: DiscordChannelSummary[]): DiscordChannelSummary | undefined {
-  if (candidates.length === 0) {
-    return undefined;
-  }
   const scored = candidates.map((channel) => {
     const isThread = isDiscordThreadChannelType(channel.type);
     const archived = Boolean(channel.archived);
@@ -206,7 +166,7 @@ export async function resolveDiscordChannelAllowlist(params: {
   }
 
   const resolveEntry = async (input: string): Promise<DiscordChannelResolution> => {
-    const parsed = parseDiscordChannelInput(input);
+    const parsed = parseDiscordAllowlistInput(input, "channel");
     const unresolved = { input, resolved: false };
     if (parsed.guildOnly) {
       const guild = filterDiscordGuilds(guilds, {
@@ -221,8 +181,8 @@ export async function resolveDiscordChannelAllowlist(params: {
       };
     }
 
-    if (parsed.channelId) {
-      const channelId = parsed.channelId;
+    if (parsed.id) {
+      const channelId = parsed.id;
       const result = await fetchChannel(token, fetcher, channelId);
       if (result.status === "found") {
         const channel = result.channel;
@@ -256,13 +216,13 @@ export async function resolveDiscordChannelAllowlist(params: {
     const guild = guildScoped
       ? filterDiscordGuilds(guilds, { guildId: parsed.guildId, guildName: parsed.guild })[0]
       : undefined;
-    const channelName = guildScoped ? parsed.channel?.trim() : input.trim().replace(/^#/, "");
+    const channelName = guildScoped ? parsed.name?.trim() : input.trim().replace(/^#/, "");
     if (guildScoped && (!guild || !channelName)) {
       return {
         ...unresolved,
         guildId: parsed.guildId,
         guildName: parsed.guild,
-        channelName: channelName ?? parsed.channel,
+        channelName: channelName ?? parsed.name,
       };
     }
     if (!channelName) {
@@ -295,7 +255,7 @@ export async function resolveDiscordChannelAllowlist(params: {
           ...unresolved,
           guildId: guild.id,
           guildName: guild.name,
-          channelName: parsed.channel,
+          channelName: parsed.name,
           note: `channel not found in guild ${guild.name}`,
         }
       : { ...unresolved, channelName };

@@ -91,24 +91,21 @@ export async function handleDiscordPresenceAction(
     activities.push(activity);
   }
 
-  const presenceData: UpdatePresenceData = {
+  gateway.updatePresence({
     since: null,
     activities,
     status,
     afk: false,
-  };
-
-  gateway.updatePresence(presenceData);
+  });
 
   return jsonResult({
     ok: true,
     status,
-    activities: activities.map((a) =>
-      Object.assign(
-        { type: a.type, name: a.name },
-        a.url ? { url: a.url } : {},
-        a.state ? { state: a.state } : {},
-      ),
-    ),
+    activities: activities.map((a) => ({
+      type: a.type,
+      name: a.name,
+      ...(a.url ? { url: a.url } : {}),
+      ...(a.state ? { state: a.state } : {}),
+    })),
   });
 }

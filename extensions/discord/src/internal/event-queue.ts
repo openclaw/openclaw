@@ -78,11 +78,6 @@ export class DiscordEventQueue {
   }
 
   private takeNextJob(): DiscordEventQueueJob | undefined {
-    if (this.queueHead >= this.queue.length) {
-      this.queue.length = 0;
-      this.queueHead = 0;
-      return undefined;
-    }
     const job = this.queue[this.queueHead];
     this.queueHead += 1;
     if (this.queueHead >= this.queue.length) {

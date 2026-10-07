@@ -42,10 +42,8 @@ export function normalizeDiscordOutboundTarget(
     };
   }
   if (/^\d+$/.test(trimmed)) {
-    if (allowFromContainsDiscordUserId(allowFrom, trimmed)) {
-      return { ok: true, to: `user:${trimmed}` };
-    }
-    return { ok: true, to: `channel:${trimmed}` };
+    const kind = allowFromContainsDiscordUserId(allowFrom, trimmed) ? "user" : "channel";
+    return { ok: true, to: `${kind}:${trimmed}` };
   }
   return { ok: true, to: trimmed };
 }

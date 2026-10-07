@@ -14,17 +14,13 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import { isDiscordMutableAllowEntry } from "./security-doctor.js";
 
-function isWildcardEntry(value: unknown): boolean {
-  return String(value).trim() === "*";
-}
-
 function hasNarrowMemberRestriction(
   guild: DiscordGuildEntry,
   channel?: DiscordGuildChannelConfig,
 ): boolean {
   const users = channel?.users ?? guild.users ?? [];
   const roles = channel?.roles ?? guild.roles ?? [];
-  if ([...users, ...roles].some((entry) => isWildcardEntry(entry))) {
+  if ([...users, ...roles].some((entry) => String(entry).trim() === "*")) {
     return false;
   }
   return users.length > 0 || roles.length > 0;

@@ -65,17 +65,9 @@ function resolveDiscordChannelKey(
 function buildDiscordPolicyTree(guilds: DiscordConfig["guilds"]): ScopeTree {
   const scopes: ScopeTree["scopes"] = {};
   for (const [guildKey, guild] of Object.entries(guilds ?? {})) {
-    scopes[guildScopeKey(guildKey)] = {
-      requireMention: guild.requireMention,
-      tools: guild.tools,
-      toolsBySender: guild.toolsBySender,
-    };
+    scopes[guildScopeKey(guildKey)] = guild;
     for (const [channelKey, channel] of Object.entries(guild.channels ?? {})) {
-      scopes[channelScopeKey(guildKey, channelKey)] = {
-        requireMention: channel.requireMention,
-        tools: channel.tools,
-        toolsBySender: channel.toolsBySender,
-      };
+      scopes[channelScopeKey(guildKey, channelKey)] = channel;
     }
   }
   return { scopes };

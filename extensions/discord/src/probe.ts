@@ -106,14 +106,6 @@ export async function fetchDiscordApplicationSummary(
   };
 }
 
-function getResolvedFetch(fetcher: typeof fetch): typeof fetch {
-  const fetchImpl = resolveFetch(fetcher);
-  if (!fetchImpl) {
-    throw new Error("fetch is not available");
-  }
-  return fetchImpl;
-}
-
 async function readDiscordProbeGetMeJson(
   response: Response,
   timeoutMs: number,
@@ -163,11 +155,15 @@ export async function probeDiscord(
       try {
         const getMeUrl = `${endpoint?.descriptor.restApiBaseUrl ?? DISCORD_API_BASE}/users/@me`;
         const getMeDeadlineMs = Date.now() + timeoutMs;
+        const fetchImpl = resolveFetch(fetcher);
+        if (!fetchImpl) {
+          throw new Error("fetch is not available");
+        }
         res = await fetchWithTimeout(
           getMeUrl,
           { headers: { Authorization: `Bot ${normalized}` } },
           timeoutMs,
-          getResolvedFetch(fetcher),
+          fetchImpl,
         );
         if (!res.ok) {
           return { ...result, status: res.status, error: `getMe failed (${res.status})` };

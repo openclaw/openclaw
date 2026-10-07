@@ -21,6 +21,17 @@ const MIN_INTERVAL_MS = 5_000;
 const MIN_UPDATE_INTERVAL_MS = 1_000;
 
 type DiscordAutoPresenceState = "healthy" | "degraded" | "exhausted";
+type DiscordPresenceConfig = Pick<
+  DiscordAccountConfig,
+  "autoPresence" | "activity" | "status" | "activityType" | "activityUrl"
+>;
+const EXHAUSTED_REASONS = new Set<AuthProfileFailureReason>([
+  "rate_limit",
+  "overloaded",
+  "billing",
+  "auth",
+  "auth_permanent",
+]);
 
 type PresenceGateway = {
   isConnected: boolean;
@@ -53,16 +64,6 @@ function resolveAutoPresenceConfig(config?: DiscordAutoPresenceConfig) {
   };
 }
 
-function isExhaustedUnavailableReason(reason: AuthProfileFailureReason | null): boolean {
-  return (
-    reason === "rate_limit" ||
-    reason === "overloaded" ||
-    reason === "billing" ||
-    reason === "auth" ||
-    reason === "auth_permanent"
-  );
-}
-
 function resolveAuthAvailability(params: {
   store: AuthProfileStore;
   now: number;
@@ -87,14 +88,13 @@ function resolveAuthAvailability(params: {
     now: params.now,
   });
 
-  return isExhaustedUnavailableReason(unavailableReason) ? "exhausted" : "degraded";
+  return unavailableReason !== null && EXHAUSTED_REASONS.has(unavailableReason)
+    ? "exhausted"
+    : "degraded";
 }
 
 function resolveDiscordAutoPresenceUpdate(params: {
-  discordConfig: Pick<
-    DiscordAccountConfig,
-    "autoPresence" | "activity" | "status" | "activityType" | "activityUrl"
-  >;
+  discordConfig: DiscordPresenceConfig;
   authStore: AuthProfileStore;
   gatewayConnected: boolean;
   now: number;
@@ -139,10 +139,7 @@ type DiscordAutoPresenceController = {
 export function createDiscordAutoPresenceController(params: {
   scheduler: PluginServiceSchedulerV1;
   accountId: string;
-  discordConfig: Pick<
-    DiscordAccountConfig,
-    "autoPresence" | "activity" | "status" | "activityType" | "activityUrl"
-  >;
+  discordConfig: DiscordPresenceConfig;
   gateway: PresenceGateway;
   loadAuthStore?: () => AuthProfileStore;
   log?: (message: string) => void;

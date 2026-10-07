@@ -33,11 +33,7 @@ export class DiscordVoiceMembershipTracker {
   ) {}
 
   activate(entry: VoiceSessionEntry, botUserId?: string): void {
-    const voiceStates = listDiscordVoiceParticipantStates({
-      client: this.client,
-      guildId: entry.guildId,
-      channelId: entry.channelId,
-    });
+    const voiceStates = this.listStates(entry);
     if (!voiceStates) {
       return;
     }
@@ -116,12 +112,7 @@ export class DiscordVoiceMembershipTracker {
 
   countHumanParticipants(entry: VoiceSessionEntry, botUserId?: string): number {
     const state = this.states.get(entry);
-    const voiceStates =
-      listDiscordVoiceParticipantStates({
-        client: this.client,
-        guildId: entry.guildId,
-        channelId: entry.channelId,
-      }) ?? [];
+    const voiceStates = this.listStates(entry) ?? [];
     return countDiscordVoiceHumanParticipants({
       states: voiceStates,
       botUserId: state?.botUserId ?? botUserId,
@@ -135,11 +126,7 @@ export class DiscordVoiceMembershipTracker {
     if (!state?.active || !normalizedUserId || normalizedUserId === state.botUserId) {
       return;
     }
-    const voiceStates = listDiscordVoiceParticipantStates({
-      client: this.client,
-      guildId: entry.guildId,
-      channelId: entry.channelId,
-    });
+    const voiceStates = this.listStates(entry);
     if (voiceStates?.some((voiceState) => voiceState.user_id?.trim() === normalizedUserId)) {
       return;
     }
@@ -248,12 +235,7 @@ export class DiscordVoiceMembershipTracker {
     botUserId?: string,
     additionalUserIds?: ReadonlySet<string>,
   ) {
-    const states =
-      listDiscordVoiceParticipantStates({
-        client: this.client,
-        guildId: entry.guildId,
-        channelId: entry.channelId,
-      }) ?? [];
+    const states = this.listStates(entry) ?? [];
     return collectDiscordVoiceParticipants({
       states,
       botUserId,
@@ -269,5 +251,13 @@ export class DiscordVoiceMembershipTracker {
       ...(lines.length > 0 ? lines : ["- none"]),
       "Keep this as live presence context. Do not respond to this event on its own.",
     ].join("\n");
+  }
+
+  private listStates(entry: VoiceSessionEntry): APIVoiceState[] | null {
+    return listDiscordVoiceParticipantStates({
+      client: this.client,
+      guildId: entry.guildId,
+      channelId: entry.channelId,
+    });
   }
 }

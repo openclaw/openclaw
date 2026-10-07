@@ -221,12 +221,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
             const resolved = await (
               await loadDiscordTargetResolverModule()
             ).resolveDiscordTarget(input, { cfg, accountId }, defaultKind ? { defaultKind } : {});
-            if (!resolved) {
-              return null;
-            }
             // Shared directory lookup owns mutable names. Fallback may only return
             // a canonical Discord snowflake, never an unresolved channel/user name.
-            if (!looksLikeDiscordTargetId(resolved.normalized)) {
+            if (!resolved || !looksLikeDiscordTargetId(resolved.normalized)) {
               return null;
             }
             if (
@@ -363,28 +360,18 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
               channelId: parsedTarget?.kind === "channel" ? parsedTarget.id : undefined,
             },
           };
+          const permissionError = (text: string) => ({
+            details,
+            lines: [{ text, tone: "error" as const }],
+          });
           if (!parsedTarget || parsedTarget.kind !== "channel") {
-            return {
-              details,
-              lines: [
-                {
-                  text: "Permissions: Target looks like a DM user; pass channel:<id> to audit channel permissions.",
-                  tone: "error",
-                },
-              ],
-            };
+            return permissionError(
+              "Permissions: Target looks like a DM user; pass channel:<id> to audit channel permissions.",
+            );
           }
           const token = account.token?.trim();
           if (!token) {
-            return {
-              details,
-              lines: [
-                {
-                  text: "Permissions: Discord bot token missing for permission audit.",
-                  tone: "error",
-                },
-              ],
-            };
+            return permissionError("Permissions: Discord bot token missing for permission audit.");
           }
           const statusCfg: OpenClawConfig = {
             channels: {
@@ -440,10 +427,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
           } catch (err) {
             const message = formatErrorMessage(err);
             details.permissions = { channelId: parsedTarget.id, error: message };
-            return {
-              details,
-              lines: [{ text: `Permissions: ${message}`, tone: "error" }],
-            };
+            return permissionError(`Permissions: ${message}`);
           }
         },
         auditAccount: async ({ account, timeoutMs, cfg }) => {
