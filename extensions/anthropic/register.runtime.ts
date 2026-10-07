@@ -18,6 +18,7 @@ import {
   type ProviderPlugin,
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeHaiku55ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
@@ -150,7 +151,9 @@ function resolveAnthropicModelCost(modelId: string) {
   // their discovered cost instead of inheriting a different version's pricing.
   const normalized = resolveClaudeModelIdentity({ id: modelId }).replace(/-\d{8}$/, "");
   const id = CLAUDE_MODEL_ID_ALIASES.get(normalized) ?? normalized;
-  return manifest.modelCatalog.providers.anthropic.models.find((model) => model.id === id)?.cost;
+  return manifest.modelCatalog.providers.anthropic.models.find((model) => model.id === id)?.cost
+    ? resolveAnthropicManifestModel(id)?.cost
+    : undefined;
 }
 
 function resolveAnthropic4xForwardCompatModel(
@@ -341,6 +344,7 @@ function isAnthropicMandatoryClaude5Model(modelId: string): boolean {
 function isAnthropicExact1MClaude5Model(modelId: string): boolean {
   return (
     isAnthropicMandatoryClaude5Model(modelId) ||
+    resolveClaudeHaiku55ModelIdentity({ id: modelId }) !== undefined ||
     resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined ||
     resolveClaudeOpus5ModelIdentity({ id: modelId }) !== undefined
   );
@@ -445,7 +449,9 @@ function normalizeAnthropicResolvedModel(
     const preview = isAnthropicMythosPreviewModel(contractModelId);
     const mandatory = requiresClaudeMandatoryAdaptiveThinking({ id: contractModelId });
     const remapsMinimal =
-      mandatory || resolveClaudeSonnet55ModelIdentity({ id: contractModelId }) !== undefined;
+      mandatory ||
+      resolveClaudeSonnet55ModelIdentity({ id: contractModelId }) !== undefined ||
+      resolveClaudeHaiku55ModelIdentity({ id: contractModelId }) !== undefined;
     if (
       current?.max === undefined ||
       (!preview &&

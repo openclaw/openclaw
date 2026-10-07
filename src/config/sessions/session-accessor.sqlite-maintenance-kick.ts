@@ -500,10 +500,10 @@ async function runPendingMaintenance(
       }
       return age.nextAt;
     };
-    const noEntryChanges = plan.archived === 0 && plan.entryRemovals.length === 0;
-    const empty = noEntryChanges && plan.stateDeletePlans.length === 0;
-    const verifiedNextAt = noEntryChanges ? await readAge(true) : undefined;
-    if (!empty) {
+    const noChanges = plan.archived === 0 && plan.entryRemovals.length === 0;
+    const noFinalization = noChanges && plan.stateDeletePlans.length === 0;
+    const verifiedNextAt = noChanges ? await readAge(true) : undefined;
+    if (!noFinalization) {
       await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(owner.scope, [plan], {
         isCurrent,
       });
@@ -513,7 +513,8 @@ async function runPendingMaintenance(
     activeSessionKeys = [];
     if (isCurrent() && owner.generation === generation) {
       assertInputsCurrent();
-      nextMaintenanceAt = empty ? verifiedNextAt : await readAge(false);
+      // Empty finalization has no yield; the verified receipt also owns this deadline.
+      nextMaintenanceAt = noFinalization ? verifiedNextAt : await readAge(false);
       if (owner.ageChanges.size > 0) {
         planningChanged = true;
         throw new SqliteReclamationInputsChangedError(

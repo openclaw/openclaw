@@ -63,6 +63,18 @@ export function applySessionEntryPatchInDatabase(
     fresh = params.readSnapshot(database);
     assertLifecycleTargetSnapshotUnchanged(params.prepared, fresh, params.operationLabel);
   }
+  return writeSessionEntryPatchInDatabase(database, { ...params, fresh });
+}
+
+/** Apply a patch evaluated against rows read in this same synchronous transaction. */
+export function writeSessionEntryPatchInDatabase(
+  database: OpenClawAgentDatabase,
+  params: Pick<
+    Parameters<typeof applySessionEntryPatchInDatabase>[1],
+    "sessionKey" | "writeBase" | "next" | "options"
+  > & { fresh: SqliteLifecycleTargetSnapshot },
+): { entry: SessionEntry; identity?: SessionEntryIdentityChange } {
+  const { fresh } = params;
   params.options.assertCommitAllowed?.();
   const conversation = params.options.workerGuard?.conversation;
   if (conversation) {
