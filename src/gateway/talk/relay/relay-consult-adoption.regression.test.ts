@@ -18,8 +18,8 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import { controlBridge, controlContext } from "../client-gateway-control.test-support.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
-import { createTalkRealtimeRelaySession, flushTalkRealtimeRelayVoiceWrites } from "./index.js";
-import { closeRelaySession } from "./operations.js";
+import { closeRelaySession, flushTalkRealtimeRelayVoiceWrites } from "./operations.js";
+import { createTalkRealtimeRelaySession } from "./session-create.js";
 import { relaySessions, type RelaySession } from "./state.js";
 
 const connId = "relay-adoption-test-client";

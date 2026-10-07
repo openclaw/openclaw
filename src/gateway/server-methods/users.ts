@@ -152,18 +152,20 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      let syncError: unknown;
       if (client.authenticatedGitHubIdentitySync) {
         try {
           await client.authenticatedGitHubIdentitySync();
-        } catch {
+        } catch (error) {
           // A previously attached immutable profile stays usable; unresolved aliases stay hidden.
+          syncError = error;
         }
       }
       const profile = await prepareAuthenticatedProfile(options);
       profile.assertCurrent();
       const profileId = profile.profileId;
       if (!profileId) {
-        respond(false, undefined, authenticatedProfileUnavailableError());
+        respond(false, undefined, authenticatedProfileUnavailableError(syncError));
         return;
       }
       respond(true, { profile: getUserProfileListItem(profileId) });

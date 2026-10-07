@@ -668,7 +668,10 @@ export async function createOpenClawCodingToolsInternalAsync(
 export function createOpenClawCodingTools(
   options?: Omit<
     OpenClawCodingToolsOptions,
-    "sessionReadScopeKey" | "onProgressCardPlanSaved" | "authProfileStoreSource"
+    | "sessionReadScopeKey"
+    | "onProgressCardPlanSaved"
+    | "authProfileStoreSource"
+    | "onWebSearchConfiguration"
   >,
 ): AnyAgentTool[] {
   return createOpenClawCodingToolsInternal(options);
@@ -678,7 +681,10 @@ export function createOpenClawCodingTools(
 export function createOpenClawCodingToolsAsync(
   options?: Omit<
     OpenClawCodingToolsOptions,
-    "sessionReadScopeKey" | "onProgressCardPlanSaved" | "authProfileStoreSource"
+    | "sessionReadScopeKey"
+    | "onProgressCardPlanSaved"
+    | "authProfileStoreSource"
+    | "onWebSearchConfiguration"
   >,
 ): Promise<AnyAgentTool[]> {
   return createOpenClawCodingToolsInternalAsync(options);

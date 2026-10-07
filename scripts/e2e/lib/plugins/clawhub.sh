@@ -49,11 +49,7 @@ run_plugins_clawhub_scenario() {
       fi
       unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
       clawhub_fixture_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-clawhub-fixture.XXXXXX")"
-      local fixture_status=0
-      start_clawhub_fixture_server "$clawhub_fixture_dir" || fixture_status="$?"
-      if [[ "$fixture_status" -ne 0 ]]; then
-        return "$fixture_status"
-      fi
+      start_clawhub_fixture_server "$clawhub_fixture_dir" || return "$?"
     fi
 
     CLAWHUB_PLUGIN_SPEC="${OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC:-$clawhub_default_plugin_spec}"

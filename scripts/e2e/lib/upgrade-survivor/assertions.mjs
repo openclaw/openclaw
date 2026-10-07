@@ -1,7 +1,6 @@
 import assertStrict from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-// Assertions for upgrade-survivor E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";

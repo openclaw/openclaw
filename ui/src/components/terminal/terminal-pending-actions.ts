@@ -1,17 +1,35 @@
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { TerminalPanelToggleDetail } from "../panel-toggle-contract.ts";
-import type { TerminalPanelAction } from "./terminal-panel-session-types.ts";
+import type { TerminalGatewayClient } from "./terminal-connection.ts";
+import { disposeTerminalController } from "./terminal-controller-lifecycle.ts";
+import type {
+  TerminalPanelAction,
+  TerminalPanelError,
+  TerminalPanelSessionTab,
+  TerminalPanelSessionControllerState,
+} from "./terminal-panel-session-types.ts";
 import {
   loadPersistedTerminalActions,
   persistTerminalActions,
 } from "./terminal-session-storage.ts";
 import type { TerminalTaskQueue } from "./terminal-task-queue.ts";
 
+type TerminalHandoff = {
+  kind: "handoff";
+  tab: TerminalPanelSessionTab;
+  client: TerminalGatewayClient | null;
+  error: TerminalPanelError | null;
+};
+type QueuedTerminalAction = TerminalPanelAction | TerminalHandoff;
+
 export type TerminalIntentHost = {
   bootQueue: Pick<TerminalTaskQueue, "enqueue">;
   currentGeneration: () => number;
   canRun: () => boolean;
   attach: (sessionId: string, agentOwned: boolean, cancelIntent: () => void) => Promise<boolean>;
+  client: () => TerminalGatewayClient | null;
+  present: (tab: TerminalPanelSessionTab) => void;
+  showError: (text: string) => void;
   open: (
     catalog: CatalogSessionKey | undefined,
     agentId: string | null,
@@ -36,7 +54,7 @@ export type TerminalIntentHost = {
  * Hosts bind while connected; the most recent binding executes.
  */
 export class TerminalIntentQueue {
-  private readonly actions: TerminalPanelAction[];
+  private readonly actions: QueuedTerminalAction[];
   private refreshPending = false;
   private refreshTimedOut = false;
   private refreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -56,7 +74,7 @@ export class TerminalIntentQueue {
    * its terminals unmounted resumes exactly like a freshly loaded one.
    */
   private rehydrate(): void {
-    if (!this.persistent) {
+    if (!this.persistent || this.actions.some((action) => action.kind === "handoff")) {
       return;
     }
     const persisted = loadPersistedTerminalActions();
@@ -73,7 +91,25 @@ export class TerminalIntentQueue {
 
   private persist(): void {
     if (this.persistent) {
-      persistTerminalActions(this.actions);
+      persistTerminalActions(
+        this.actions.flatMap((action): TerminalPanelAction[] => {
+          if (action.kind !== "handoff") {
+            return [action];
+          }
+          // Only live PTYs can be restored after a document reload. Diagnostic
+          // emulators belong to this document and never become dead attach intents.
+          const tab = action.tab;
+          return tab.status === "exited"
+            ? []
+            : [
+                {
+                  kind: "attach",
+                  sessionId: tab.gatewaySessionId,
+                  agentOwned: tab.agentOwned ?? false,
+                },
+              ];
+        }),
+      );
     }
   }
 
@@ -115,6 +151,29 @@ export class TerminalIntentQueue {
     return this.refreshPending && !this.refreshTimedOut && this.actions.length > 0;
   }
 
+  refreshBeforeReconnect(
+    host: TerminalIntentHost,
+    isConnected: () => boolean,
+    restore?: () => void,
+  ): void {
+    const generation = host.currentGeneration();
+    this.beginRefreshFence(host, generation);
+    restore?.();
+    const release = () => {
+      if (generation !== host.currentGeneration() || !isConnected()) {
+        return;
+      }
+      this.releaseRefreshFence(host);
+    };
+    void import("../../app/sw-refresh.runtime.ts")
+      .then(({ refreshControlUiServiceWorker }) => refreshControlUiServiceWorker())
+      .then((replacementActivated) => {
+        if (!replacementActivated) {
+          release();
+        }
+      }, release);
+  }
+
   beginRefreshFence(host: TerminalIntentHost, generation: number): void {
     this.refreshPending = true;
     this.fenceHost = host;
@@ -144,6 +203,41 @@ export class TerminalIntentQueue {
     this.clearRefreshFailure();
   }
 
+  canHandoff(source: Pick<TerminalPanelSessionControllerState, "booting" | "tabs">): boolean {
+    return (
+      !source.booting &&
+      !this.fenced &&
+      !this.hasActions &&
+      !source.tabs.some((tab) => tab.status === "connecting")
+    );
+  }
+
+  /** Transfers view ownership before the destination binds, active tab last. */
+  queueHandoff(
+    source: Pick<TerminalPanelSessionControllerState, "tabs" | "activeId" | "error">,
+    client: TerminalGatewayClient | null,
+  ): TerminalPanelSessionTab[] {
+    const tabs = source.tabs.toSorted(
+      (a, b) => Number(a.id === source.activeId) - Number(b.id === source.activeId),
+    );
+    for (let index = this.actions.length - 1; index >= 0; index -= 1) {
+      if (this.actions[index]?.kind === "restore") {
+        this.actions.splice(index, 1);
+      }
+    }
+    this.actions.push(
+      ...tabs.map((tab, index): TerminalHandoff => ({
+        kind: "handoff",
+        tab,
+        client,
+        error: index === tabs.length - 1 ? source.error : null,
+      })),
+    );
+    this.persist();
+    // The queue owns retained emulators; only live views follow source teardown.
+    return source.tabs.filter((tab) => tab.status !== "exited");
+  }
+
   async queue(
     action: TerminalPanelAction,
     options: { deferUntilHostChange?: boolean } = {},
@@ -161,7 +255,7 @@ export class TerminalIntentQueue {
     const key = JSON.stringify(action);
     if (
       !(action.kind === "restore" && explicitIntentPending) &&
-      !this.actions.some((pending) => JSON.stringify(pending) === key)
+      !this.actions.some((pending) => pending.kind !== "handoff" && JSON.stringify(pending) === key)
     ) {
       this.actions.push(action);
       changed = true;
@@ -209,6 +303,7 @@ export class TerminalIntentQueue {
     } finally {
       this.drainScheduled = false;
       const current = this.host;
+      current?.requestUpdate();
       if (this.actions.length > 0 && current && this.canRun(current)) {
         void this.drain();
       } else if (this.actions.length === 0 && current && !current.hasTabs()) {
@@ -217,7 +312,7 @@ export class TerminalIntentQueue {
     }
   }
 
-  private retireAction(action: TerminalPanelAction): void {
+  private retireAction(action: QueuedTerminalAction): void {
     const index = this.actions.indexOf(action);
     if (index !== -1) {
       this.actions.splice(index, 1);
@@ -231,7 +326,11 @@ export class TerminalIntentQueue {
     if (this.host !== host) {
       return;
     }
-    this.actions.splice(0);
+    for (const action of this.actions.splice(0)) {
+      if (action.kind === "handoff" && action.tab.status === "exited") {
+        disposeTerminalController(action.tab.controller, action.tab.host);
+      }
+    }
     this.persist();
     host.setBooting(false);
     this.clearRefreshFailure();
@@ -243,9 +342,33 @@ export class TerminalIntentQueue {
 
   private async execute(
     host: TerminalIntentHost,
-    action: TerminalPanelAction,
+    action: QueuedTerminalAction,
     cancelIntent: () => void,
   ): Promise<boolean | "cancelled-restore"> {
+    if (action.kind === "handoff") {
+      const { tab, client, error } = action;
+      if (client !== host.client()) {
+        if (tab.status === "exited") {
+          disposeTerminalController(tab.controller, tab.host);
+        }
+        return true;
+      }
+      const generation = host.currentGeneration();
+      if (tab.status === "exited") {
+        // Publish ownership synchronously: closing the destination must never
+        // dispose a view both as a pending handoff and as an adopted tab.
+        this.retireAction(action);
+        host.present(tab);
+      } else if (
+        !(await host.attach(tab.gatewaySessionId, tab.agentOwned ?? false, cancelIntent))
+      ) {
+        return false;
+      }
+      if (error && this.canRun(host) && generation === host.currentGeneration()) {
+        host.showError(error.text);
+      }
+      return true;
+    }
     if (action.kind === "attach") {
       return host.attach(action.sessionId, action.agentOwned, cancelIntent);
     }

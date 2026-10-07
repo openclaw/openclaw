@@ -510,18 +510,3 @@ export function emitSessionsChanged(
   next.timer.unref?.();
   startPendingSessionChange(next, captureSessionChange(context, payload, scope, key));
 }
-
-export function emitSessionArchived(
-  context: SessionChangeContext,
-  sessionKey: string | undefined,
-  agentId?: string,
-): void {
-  if (!sessionKey) {
-    return;
-  }
-  emitSessionsChanged(context, {
-    sessionKey,
-    ...(agentId ? { agentId } : {}),
-    reason: "archive",
-  });
-}

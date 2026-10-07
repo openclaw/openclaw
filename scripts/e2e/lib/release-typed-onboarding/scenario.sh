@@ -19,7 +19,7 @@ export npm_config_audit=false
 export OPENAI_API_KEY="sk-openclaw-release-typed-onboarding"
 
 PORT="18789"
-MOCK_PORT="44190"
+MOCK_PORT="0"
 SUCCESS_MARKER="OPENCLAW_E2E_OK_TYPED_ONBOARDING"
 scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-typed-onboarding.XXXXXX")"
 LOG_DIR="$scenario_tmp/logs"
@@ -112,7 +112,7 @@ entry="$(openclaw_e2e_package_entrypoint "$package_root")"
 openclaw_e2e_enable_openclaw_cli_timeout
 
 mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" "$OPENAI_LOG")"
-openclaw_e2e_wait_mock_openai "$MOCK_PORT"
+MOCK_PORT="$(openclaw_e2e_wait_mock_openai "$MOCK_PORT" 80 400 "" "$mock_pid" "$OPENAI_LOG")"
 echo "Mock OpenAI provider is ready."
 
 input_fifo_dir="$(mktemp -d "$scenario_tmp/input.XXXXXX")"
