@@ -299,15 +299,17 @@ it.skipIf(process.platform === "win32")(
                 JSON.parse(await readFile("dist/build-info.json", "utf8")),
               );
               expect(typeof buildId).toBe("string");
-              const deviceIdentity = loadOrCreateDeviceIdentity({
-                path: instance.state.path("proof-device.sqlite"),
-              });
               const connect = (controlUi: boolean) =>
                 acquireGatewayTestClient(
                   {
                     url: instance.url,
                     token: instance.gatewayToken,
-                    deviceIdentity,
+                    // A non-inline observer must not rotate the interrupted device credential.
+                    deviceIdentity: loadOrCreateDeviceIdentity({
+                      path: instance.state.path(
+                        controlUi ? "proof-device.sqlite" : "observer-device.sqlite",
+                      ),
+                    }),
                     origin: controlUi ? `http://127.0.0.1:${instance.port}` : undefined,
                     clientName: controlUi ? GATEWAY_CLIENT_IDS.CONTROL_UI : GATEWAY_CLIENT_IDS.TEST,
                     clientBuildId: controlUi && typeof buildId === "string" ? buildId : undefined,
