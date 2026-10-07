@@ -96,9 +96,9 @@ describe("live model error helpers", () => {
         "404 The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access.",
       ),
     ).toBe(true);
-    expect(
-      isModelNotFoundErrorMessage("The model does not exist or you do not have access"),
-    ).toBe(true);
+    expect(isModelNotFoundErrorMessage("The model does not exist or you do not have access")).toBe(
+      true,
+    );
     expect(
       isProviderWideModelNotFoundErrorMessage("The model does not exist or you do not have access"),
     ).toBe(false);
