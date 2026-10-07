@@ -27,7 +27,10 @@ import type {
   MigrationMessages,
   MigrationLogger,
 } from "../infra/state-migrations.types.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
+import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -51,6 +54,9 @@ export function createDoctorPluginMigrationPreparation(params: {
   doctorOnlyStateMigrations: boolean;
   log?: MigrationLogger;
 }) {
+  const shouldDeferInstallation = () =>
+    Boolean(resolveUpdateRehearsalRoot(params.env())) ||
+    shouldDeferConfiguredPluginInstallRepair(params.env());
   const previousById = new Map<string, DeferredPluginMigration>();
   let deferred: readonly DeferredPluginMigration[] = [];
   let expectedPending: readonly DeferredPluginMigration[] = [];
@@ -123,7 +129,7 @@ export function createDoctorPluginMigrationPreparation(params: {
         cfg: snapshot.sourceConfig,
         env: params.env(),
         retainedPluginIds: [...previousById.keys()],
-        deferInstallation: shouldDeferConfiguredPluginInstallRepair(params.env()),
+        deferInstallation: shouldDeferInstallation(),
       });
       learn(availability);
       deferred = availability.pending.map(retain);
@@ -278,7 +284,7 @@ export function createDoctorPluginMigrationPreparation(params: {
         return false;
       }
       const unavailableIds = new Set(deferred.map((plugin) => plugin.pluginId));
-      const installationDeferred = shouldDeferConfiguredPluginInstallRepair(params.env());
+      const installationDeferred = shouldDeferInstallation();
       const sourceConfig =
         sourceSnapshot?.sourceConfigBeforeMigrations ?? sourceSnapshot?.sourceConfig;
       const settlements: NonNullable<DeferredPluginMigrationRecordInput["settlements"]>[number][] =
@@ -304,7 +310,18 @@ export function createDoctorPluginMigrationPreparation(params: {
               });
               return true;
             }
-            if (!plugin.requiresStateMigration && !plugin.requiresDoctorInspection) {
+            // Empty settings do not fulfill an explicit request to install or repair a plugin.
+            const explicitlyEnabled =
+              sourceConfig.plugins?.entries?.[plugin.pluginId]?.enabled === true &&
+              passesManifestOwnerBasePolicy({
+                plugin: { id: plugin.pluginId },
+                normalizedConfig: normalizePluginsConfig(sourceConfig.plugins),
+              });
+            if (
+              !explicitlyEnabled &&
+              !plugin.requiresStateMigration &&
+              !plugin.requiresDoctorInspection
+            ) {
               settlements.push({
                 pluginId: plugin.pluginId,
                 status: "completed",

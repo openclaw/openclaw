@@ -619,6 +619,9 @@ its migration completes and no old plugin settings remain to transfer. Stored
 plugin data is kept; these outcomes do not enable plugins or widen allowlists.
 Legacy fields excluded from validation remain protected even when their value is
 an empty object or array; their owner must interpret or remove them.
+An explicitly enabled plugin that passes activation policy keeps its package
+obligation until it becomes available, even when it has no custom settings.
+Update rehearsals leave unavailable-owner settlement to live update finalization.
 
 If retained settings or an explicit state/inspection requirement remain, Doctor
 keeps the obligation pending and names the plugin to install or enable. A retired

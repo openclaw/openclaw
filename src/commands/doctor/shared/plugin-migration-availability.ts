@@ -226,8 +226,8 @@ export async function inspectPluginMigrationAvailability(params: {
             inspectionRequiredPluginIds: inspectionRequiredPluginIds.toSorted(),
             statelessPluginIds,
             runtimePluginAliases,
-            unavailablePluginIds,
-            replacementPluginIds,
+            // The updating parent still owns package availability until convergence resumes.
+            ...(!params.deferInstallation ? { unavailablePluginIds, replacementPluginIds } : {}),
           };
         },
         { config: params.cfg, env },
