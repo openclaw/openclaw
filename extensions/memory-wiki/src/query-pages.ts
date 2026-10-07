@@ -16,10 +16,21 @@ import {
 
 const QUERY_PAGE_READ_CONCURRENCY = 16;
 
+/**
+ * Pages a scan reads between two checkpoints. At each checkpoint the worker asks the host
+ * whether to go on; it stops when another task is waiting for its shared compute permit
+ * or its worker, so that task waits for one segment rather than the whole scan.
+ */
+const WIKI_SCAN_CHECKPOINT_PAGES = 64;
+
+/** The host's checkpoint reply that ends a scan task early; the host resubmits the rest. */
+export const WIKI_SCAN_YIELD = "yield";
+
 /** Serializable sandbox scope for bridge pages; `null` admits every page. */
 export type WikiPageVisibility = { scopedAgentId: string };
 
-type WikiPageReadScope = {
+/** A scan's scope as callers pass it to the reader pool. */
+export type WikiPageReadScope = {
   rootDir: string;
   /** Explicit page paths; the whole vault when absent. */
   relativePaths?: string[];
@@ -28,21 +39,31 @@ type WikiPageReadScope = {
   visibility: WikiPageVisibility | null;
 };
 
-export type WikiPageReadTask = WikiPageReadScope &
-  (
-    | { select: "search"; query: string; mode: WikiSearchMode; maxResults: number }
-    | { select: "lookup"; lookup: string }
-    | { select: "page" }
-  );
+/** What a lookup resolves on: the page's path and id. */
+export type WikiPageKey = Pick<QueryableWikiPage, "relativePath" | "id">;
 
+/** One read: list the vault, or read, parse and project an explicit list of pages. */
+export type WikiPageReadTask =
+  | { select: "list"; rootDir: string; excludePaths?: string[] }
+  | ({ rootDir: string; relativePaths: string[]; visibility: WikiPageVisibility | null } & (
+      | { select: "search"; query: string; mode: WikiSearchMode; maxResults: number }
+      | { select: "keys" }
+      | { select: "page" }
+    ));
+
+/** `readPages` counts the leading pages read before a checkpoint stopped the task. */
 export type WikiPageReadResult =
-  | { select: "search"; results: WikiSearchResult[] }
-  | { select: "lookup"; page: QueryableWikiPage | null }
+  | { select: "list"; relativePaths: string[] }
+  | { select: "search"; results: WikiSearchResult[]; readPages: number }
+  | { select: "keys"; keys: WikiPageKey[]; readPages: number }
   | { select: "page"; page: QueryableWikiPage | null }
   | { select: "refused"; code: FsSafeError["code"]; message: string };
 
 /** Cancellation checkpoint: an `AbortSignal`, or the pool task control in the worker. */
 type WikiPageReadCancellation = Pick<AbortSignal, "throwIfAborted">;
+
+/** Called between scan segments; resolves true when the scan should stop and return. */
+type WikiPageReadYield = () => Promise<boolean>;
 
 export function normalizeLookupKey(value: string): string {
   const normalized = value.trim().replace(/\\/g, "/");
@@ -54,6 +75,14 @@ async function listWikiMarkdownFiles(rootDir: string): Promise<string[]> {
     WIKI_PAGE_GROUPS.map(({ dir }) => listMemoryWikiPagePaths(rootDir, dir)),
   );
   return files.flat().toSorted((left, right) => left.localeCompare(right));
+}
+
+export function excludeWikiPagePaths(relativePaths: string[], excludePaths?: string[]): string[] {
+  if (!excludePaths?.length) {
+    return relativePaths;
+  }
+  const excluded = new Set(excludePaths);
+  return relativePaths.filter((relativePath) => !excluded.has(relativePath));
 }
 
 /** Read and parse pages in listing order, keeping only each page's projection. */
@@ -119,9 +148,10 @@ function isWikiPageVisible(page: QueryableWikiPage, visibility: WikiPageVisibili
   );
 }
 
-function resolveQueryableWikiPageByLookup<
-  Page extends Pick<QueryableWikiPage, "relativePath" | "id">,
->(pages: Page[], lookup: string): Page | null {
+export function resolveQueryableWikiPageByLookup<Page extends WikiPageKey>(
+  pages: Page[],
+  lookup: string,
+): Page | null {
   const key = normalizeLookupKey(lookup);
   const withExtension = key.endsWith(".md") ? key : `${key}.md`;
   return (
@@ -140,59 +170,80 @@ type WikiPageReadSelection<Task extends WikiPageReadTask> = Extract<
 >;
 
 /**
- * Read, parse and score pages for one query task. Each page is projected as it is
- * read (a scoring result, a lookup key, or the one requested page), so a whole-vault
- * read retains no page text or parse; boundary refusals propagate as `FsSafeError`,
- * and the cancellation checkpoint stops the scan between pages.
+ * List the vault, or read, parse and score pages for one query task. Each page is
+ * projected as it is read (a scoring result, a lookup key, or the one requested page),
+ * so a read retains no page text or parse; boundary refusals propagate as
+ * `FsSafeError`, and the cancellation checkpoint stops the read between pages. A search
+ * or key read asks `shouldYield` between segments and returns early when it says so.
  */
 export function readWikiPagesTask<Task extends WikiPageReadTask>(
   task: Task,
   signal?: WikiPageReadCancellation,
+  shouldYield?: WikiPageReadYield,
 ): Promise<WikiPageReadSelection<Task>> {
   // SAFETY: Every branch below returns the variant named by the task's `select`.
-  return runWikiPageReadTask(task, signal) as Promise<WikiPageReadSelection<Task>>;
+  return runWikiPageReadTask(task, signal, shouldYield) as Promise<WikiPageReadSelection<Task>>;
 }
 
 async function runWikiPageReadTask(
   task: WikiPageReadTask,
   signal?: WikiPageReadCancellation,
+  shouldYield?: WikiPageReadYield,
 ): Promise<Exclude<WikiPageReadResult, { select: "refused" }>> {
   signal?.throwIfAborted();
-  let relativePaths = task.relativePaths ?? (await listWikiMarkdownFiles(task.rootDir));
-  if (task.excludePaths?.length) {
-    const excluded = new Set(task.excludePaths);
-    relativePaths = relativePaths.filter((relativePath) => !excluded.has(relativePath));
+  if (task.select === "list") {
+    const files = await listWikiMarkdownFiles(task.rootDir);
+    return { select: "list", relativePaths: excludeWikiPagePaths(files, task.excludePaths) };
   }
+  const { relativePaths } = task;
   const visible = (page: QueryableWikiPage) =>
     isWikiPageVisible(page, task.visibility) ? page : null;
-  const readPage = async (relativePath: string) =>
-    (await readQueryableWikiPagesByPaths(task.rootDir, [relativePath], visible, signal))[0] ?? null;
-  if (task.select === "search") {
-    const results = await readQueryableWikiPagesByPaths(
-      task.rootDir,
-      relativePaths,
-      (page) => {
-        if (!visible(page)) {
-          return null;
-        }
-        const result = toWikiSearchResult(page, task.query, task.mode);
-        return result.score > 0 ? result : null;
-      },
-      signal,
-    );
-    return { select: "search", results: sortWikiSearchResults(results).slice(0, task.maxResults) };
+  if (task.select === "search" || task.select === "keys") {
+    let results: WikiSearchResult[] = [];
+    const keys: WikiPageKey[] = [];
+    let readPages = 0;
+    while (readPages < relativePaths.length) {
+      if (readPages > 0 && shouldYield && (await shouldYield())) {
+        break;
+      }
+      const segment = relativePaths.slice(readPages, readPages + WIKI_SCAN_CHECKPOINT_PAGES);
+      if (task.select === "search") {
+        const found = await readQueryableWikiPagesByPaths(
+          task.rootDir,
+          segment,
+          (page) => {
+            if (!visible(page)) {
+              return null;
+            }
+            const result = toWikiSearchResult(page, task.query, task.mode);
+            return result.score > 0 ? result : null;
+          },
+          signal,
+        );
+        // A stable sort of the running top followed by the segment keeps ties in listing
+        // order, as one whole-list sort does, and a page cut here already trails
+        // maxResults better pages.
+        results = sortWikiSearchResults([...results, ...found]).slice(0, task.maxResults);
+      } else {
+        const found = await readQueryableWikiPagesByPaths(
+          task.rootDir,
+          segment,
+          (page) => (visible(page) ? { relativePath: page.relativePath, id: page.id } : null),
+          signal,
+        );
+        keys.push(...found);
+      }
+      readPages += segment.length;
+    }
+    return task.select === "search"
+      ? { select: "search", results, readPages }
+      : { select: "keys", keys, readPages };
   }
-  if (task.select === "lookup") {
-    // Resolve on keys first; the matched page is read again so only it is retained.
-    const keys = await readQueryableWikiPagesByPaths(
-      task.rootDir,
-      relativePaths,
-      (page) => (visible(page) ? { relativePath: page.relativePath, id: page.id } : null),
-      signal,
-    );
-    const match = resolveQueryableWikiPageByLookup(keys, task.lookup);
-    return { select: "lookup", page: match ? await readPage(match.relativePath) : null };
-  }
-  const [relativePath] = relativePaths;
-  return { select: "page", page: relativePath ? await readPage(relativePath) : null };
+  const pages = await readQueryableWikiPagesByPaths(
+    task.rootDir,
+    relativePaths.slice(0, 1),
+    visible,
+    signal,
+  );
+  return { select: "page", page: pages[0] ?? null };
 }

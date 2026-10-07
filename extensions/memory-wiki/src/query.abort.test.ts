@@ -35,10 +35,12 @@ it("stops parsing vault pages after cancellation during a scan", async () => {
     controller.abort(new Error("Turn cancelled"));
     return page;
   });
+  const { relativePaths } = await readWikiPagesTask({ select: "list", rootDir });
   await expect(
     readWikiPagesTask(
       {
         rootDir,
+        relativePaths,
         visibility: null,
         select: "search",
         query: "absent multi term",
@@ -56,8 +58,8 @@ it("rejects a whole-vault search through the pool's cancellation of its dispatch
   const controller = new AbortController();
   const reason = new Error("Turn cancelled");
   const dispatched = queryReader.readMemoryWikiPages;
-  let pending: Promise<unknown> | undefined;
-  // Abort only once the search has handed its whole-vault task to the pool. The pool
+  let pending: ReturnType<typeof dispatched> | undefined;
+  // Abort only once the search has handed its first task (the vault listing) to the pool. The pool
   // has not served a task yet in this file, so the task is queued while its worker
   // starts; the rejection must come from that queued task, not from a host check.
   const read = vi.spyOn(queryReader, "readMemoryWikiPages").mockImplementation((task, options) => {

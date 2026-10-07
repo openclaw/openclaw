@@ -306,8 +306,11 @@ The page scan itself (reading, parsing and scoring every page when the compiled
 digest cannot narrow the search, resolving `wiki_get` basename and id lookups,
 and `wiki_apply` metadata updates) runs in a plugin-owned pool of two worker
 threads, so the gateway event loop stays responsive while a large vault is
-scanned; a third concurrent scan waits for a free worker. The pool adds no
-deadline of its own: `wiki_search` keeps its 30-second deadline and turn
+scanned. Every 64 pages a scan checks whether another task is waiting for its
+shared compute slot or its worker, such as `memory_search` retrieval on a small
+host or a third concurrent scan, and if so hands it over and resumes afterwards
+instead of making it wait for the whole scan. The pool adds no deadline of its
+own: `wiki_search` keeps its 30-second deadline and turn
 cancellation, and CLI, RPC and lookup scans run to completion as before.
 Single-page reads (`wiki_get` by exact path or claim id) stay on the calling
 thread and never wait behind a scan.

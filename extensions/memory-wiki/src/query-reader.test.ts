@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
 import * as wikiLinks from "./markdown-links.js";
 import { renderWikiMarkdown } from "./markdown.js";
+import * as queryPages from "./query-pages.js";
 import { readWikiPagesTask } from "./query-pages.js";
 import * as queryReader from "./query-reader.js";
 import { closeMemoryWikiQueryReader, readMemoryWikiPages } from "./query-reader.js";
@@ -13,6 +14,11 @@ import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
+
+// The in-thread reference reads the whole vault: list it, then read every listed page.
+async function listVault(rootDir: string) {
+  return (await readWikiPagesTask({ select: "list", rootDir })).relativePaths;
+}
 
 afterEach(() => {
   __setFsSafeTestHooksForTest(undefined);
@@ -106,6 +112,7 @@ describe("memory wiki query reader", () => {
           (
             await readWikiPagesTask({
               rootDir,
+              relativePaths: await listVault(rootDir),
               visibility: null,
               select: "search",
               query: search.query,
@@ -120,35 +127,41 @@ describe("memory wiki query reader", () => {
 
         expect(JSON.stringify(results)).toBe(JSON.stringify(reference));
       }
-      for (const lookup of ["sources/page-4.md", "page-4", "source.page-4", "entity.keeper"]) {
+      const lookups = {
+        "sources/page-4.md": "sources/page-4.md",
+        "page-4": "sources/page-4.md",
+        "source.page-4": "sources/page-4.md",
+        "entity.keeper": "entities/keeper.md",
+      };
+      for (const [lookup, relativePath] of Object.entries(lookups)) {
         const reference = (
-          await readWikiPagesTask({ rootDir, visibility: null, select: "lookup", lookup })
+          await readWikiPagesTask({
+            rootDir,
+            visibility: null,
+            select: "page",
+            relativePaths: [relativePath],
+          })
         ).page;
         const result = await getMemoryWikiPage({ config, lookup, lineCount: 5 });
-        expect(result?.path).toBe(reference?.relativePath);
+        expect(result?.path).toBe(relativePath);
         expect(result?.content).toBe(reference?.parsed.body.split(/\r?\n/).slice(0, 5).join("\n"));
-      }
-      // The pool and the calling thread run the same reader: a scan's page objects and
-      // result lists are byte-identical across the thread boundary.
-      for (const lookup of ["page-4", "source.page-4", "entity.keeper"]) {
-        const inThread = await readWikiPagesTask({
-          rootDir,
-          visibility: null,
-          select: "lookup",
-          lookup,
-        });
+        // A pooled lookup returns the same page object as a one-page read of its match.
         const pooled = await readMemoryWikiPages({
           rootDir,
           visibility: null,
           select: "lookup",
           lookup,
         });
-        expect(pooled.page).not.toBeNull();
-        expect(JSON.stringify(pooled.page)).toBe(JSON.stringify(inThread.page));
+        expect(JSON.stringify(pooled.page)).toBe(JSON.stringify(reference));
       }
+      // The pool and the calling thread run the same reader: result lists are
+      // byte-identical across the thread boundary.
       for (const search of SEARCHES) {
         const task = { rootDir, visibility: null, select: "search" as const, ...search };
-        const inThread = await readWikiPagesTask(task);
+        const inThread = await readWikiPagesTask({
+          ...task,
+          relativePaths: await listVault(rootDir),
+        });
         const pooled = await readMemoryWikiPages(task);
         expect(JSON.stringify(pooled.results)).toBe(JSON.stringify(inThread.results));
       }
@@ -229,23 +242,25 @@ describe("memory wiki query reader", () => {
     const { rootDir } = await createScoringVault();
     const extractLinks = vi.spyOn(wikiLinks, "extractWikiLinks");
 
+    const relativePaths = await listVault(rootDir);
     const search = await readWikiPagesTask({
       rootDir,
+      relativePaths,
       visibility: null,
       select: "search",
       query: "keeps the harbor ledger",
       mode: "auto",
       maxResults: 5,
     });
-    const lookup = await readWikiPagesTask({
+    const keys = await readWikiPagesTask({
       rootDir,
+      relativePaths,
       visibility: null,
-      select: "lookup",
-      lookup: "keeper",
+      select: "keys",
     });
 
     expect(search.results.map((result) => result.path)).toContain("entities/keeper.md");
-    expect(lookup.page?.relativePath).toBe("entities/keeper.md");
+    expect(keys.keys).toContainEqual({ relativePath: "entities/keeper.md", id: "entity.keeper" });
     expect(extractLinks).not.toHaveBeenCalled();
   });
 
@@ -270,6 +285,7 @@ describe("memory wiki query reader", () => {
 
   it("rejects a page swapped outside the vault between listing and reading", async () => {
     const { rootDir } = await createScoringVault();
+    const relativePaths = await listVault(rootDir);
     const targetPath = path.join(rootDir, "sources", "page-1.md");
     const outside = await createScoringVault();
     const canonicalTarget = await fs.realpath(targetPath);
@@ -286,7 +302,7 @@ describe("memory wiki query reader", () => {
     });
 
     await expect(
-      readWikiPagesTask({ rootDir, visibility: null, select: "lookup", lookup: "page-1" }),
+      readWikiPagesTask({ rootDir, relativePaths, visibility: null, select: "keys" }),
     ).rejects.toMatchObject({
       name: "FsSafeError",
       code: expect.stringMatching(/symlink|path-mismatch/u),
@@ -414,6 +430,35 @@ describe("memory wiki query reader", () => {
     } finally {
       process.off("worker", onWorker);
     }
+  });
+
+  it("returns no page when a lookup's match changes before it is read again", async () => {
+    const { rootDir } = await createScoringVault();
+    const reread = queryPages.readWikiPagesTask;
+    // The match is chosen from worker keys and read again on this thread; the second read
+    // sees the page after its id changed.
+    vi.spyOn(queryPages, "readWikiPagesTask").mockImplementation(async (task, ...rest) => {
+      const read = await reread(task, ...rest);
+      return read.select === "page" && read.page
+        ? { ...read, page: { ...read.page, id: "source.renamed" } }
+        : read;
+    });
+
+    const byId = await readMemoryWikiPages({
+      rootDir,
+      visibility: null,
+      select: "lookup",
+      lookup: "source.page-4",
+    });
+    const byPath = await readMemoryWikiPages({
+      rootDir,
+      visibility: null,
+      select: "lookup",
+      lookup: "page-4",
+    });
+
+    expect(byId.page).toBeNull();
+    expect(byPath.page?.relativePath).toBe("sources/page-4.md");
   });
 
   it("recreates the reader after the plugin closes it", async () => {

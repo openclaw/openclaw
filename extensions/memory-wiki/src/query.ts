@@ -15,7 +15,7 @@ import {
 import {
   normalizeLookupKey,
   readWikiPagesTask,
-  type WikiPageReadTask,
+  type WikiPageReadScope,
   type WikiPageVisibility,
 } from "./query-pages.js";
 import { readMemoryWikiPages } from "./query-reader.js";
@@ -190,7 +190,7 @@ async function searchWikiCorpus(params: {
         mode: params.mode,
       })
     : [];
-  const search = (scope: Partial<Pick<WikiPageReadTask, "relativePaths" | "excludePaths">>) =>
+  const search = (scope: Partial<Pick<WikiPageReadScope, "relativePaths" | "excludePaths">>) =>
     readMemoryWikiPages(
       {
         rootDir,
@@ -243,7 +243,7 @@ async function readExactWikiPage(
   return readWikiPage(rootDir, relativePath, visibility, signal);
 }
 
-/** Resolve one page by path, basename or id after a whole-vault read in the reader worker. */
+/** Resolve one page by path, basename or id over the page keys the reader pool reads. */
 export async function readMemoryWikiPageByLookup(
   rootDir: string,
   lookup: string,

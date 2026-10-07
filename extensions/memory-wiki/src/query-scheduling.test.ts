@@ -5,6 +5,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWikiMarkdown } from "./markdown.js";
 import * as queryReader from "./query-reader.js";
 import { closeMemoryWikiQueryReader, readMemoryWikiPages } from "./query-reader.js";
+import {
+  createBatchedVault,
+  scanTask,
+  TIED_VAULT_PAGES,
+  wholeVaultReference,
+} from "./query-scan.test-support.js";
 import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
@@ -31,15 +37,6 @@ async function createScanVault() {
   }
   return vault;
 }
-
-const scanTask = (rootDir: string) => ({
-  rootDir,
-  visibility: null,
-  select: "search" as const,
-  query: "cobalt lantern ledger",
-  mode: "auto" as const,
-  maxResults: 5,
-});
 
 describe("memory wiki query scheduling", () => {
   it("serves an exact-path read without the pool while a whole-vault search scan is held", async () => {
@@ -85,11 +82,74 @@ describe("memory wiki query scheduling", () => {
     await readMemoryWikiPages(scanTask(rootDir));
     await readMemoryWikiPages(scanTask(rootDir), { signal: controller.signal });
 
-    expect(run.mock.calls.map(([, options]) => options.timeoutMs)).toEqual([undefined, undefined]);
+    // Each scan is a listing task and one scan task.
+    expect(run.mock.calls.map(([, options]) => options.timeoutMs)).toEqual(
+      Array(4).fill(undefined),
+    );
     expect(run.mock.calls.map(([, options]) => options.signal)).toEqual([
       undefined,
+      undefined,
+      controller.signal,
       controller.signal,
     ]);
+  });
+
+  it("reads an uncontended scan as one task that checkpoints between segments", async () => {
+    const { rootDir } = await createBatchedVault(createVault, TIED_VAULT_PAGES);
+    // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the intercepted pool receiver.
+    const dispatchRun = WorkerTaskPool.prototype.run;
+    const run = vi.spyOn(WorkerTaskPool.prototype, "run");
+    const replies: unknown[] = [];
+    const watchdogs: number[] = [];
+    run.mockImplementation(function (this: WorkerTaskPool<unknown, unknown>, input, options) {
+      const answer = options.onRequest;
+      const observed = answer
+        ? {
+            ...options,
+            onRequest: async (...request: Parameters<typeof answer>) => {
+              const reply = await answer(...request);
+              replies.push(reply.input);
+              watchdogs.push(reply.timeoutMs);
+              return reply;
+            },
+          }
+        : options;
+      return Reflect.apply(dispatchRun, this, [input, observed]);
+    });
+    // More results than one segment holds, then fewer, so segments both keep and cut results.
+    const task = { ...scanTask(rootDir), maxResults: 114 };
+    const cut = { ...task, maxResults: 10 };
+
+    const pooled = await readMemoryWikiPages(task);
+    const cutPooled = await readMemoryWikiPages(cut);
+    const lookup = await readMemoryWikiPages({
+      rootDir,
+      visibility: null,
+      select: "lookup",
+      lookup: "source.page-130",
+    });
+
+    expect(run.mock.calls.map(([submitted]) => (submitted as { select: string }).select)).toEqual([
+      "list",
+      "search",
+      "list",
+      "search",
+      "list",
+      "keys",
+    ]);
+    // Nothing else waits for compute or a worker, so every checkpoint lets the scan go on.
+    expect(replies.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(replies)).toEqual(new Set([null]));
+    // The pool requires a watchdog on each reply; the timer maximum adds no scan deadline.
+    expect(new Set(watchdogs)).toEqual(new Set([2_147_000_000]));
+    expect(pooled.results).toHaveLength(114);
+    expect(JSON.stringify(pooled.results)).toBe(
+      JSON.stringify(await wholeVaultReference(rootDir, task)),
+    );
+    expect(JSON.stringify(cutPooled.results)).toBe(
+      JSON.stringify(await wholeVaultReference(rootDir, cut)),
+    );
+    expect(lookup.page?.relativePath).toBe("sources/page-0130.md");
   });
 
   it("admits at most two scans at once and queues the rest", async () => {
