@@ -15,7 +15,8 @@ import {
 const OPENCODE_ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models";
 const OPENCODE_API_KEY =
   process.env.OPENCODE_API_KEY?.trim() || process.env.OPENCODE_ZEN_API_KEY?.trim() || "";
-const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENCODE_MODEL?.trim() || "ling-3.0-flash-fin-free";
+const EXPLICIT_LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENCODE_MODEL?.trim();
+const LIVE_MODEL_ID = EXPLICIT_LIVE_MODEL_ID || "ling-3.0-flash-fin-free";
 const LIVE = isLiveTestEnabled(["OPENCODE_LIVE_TEST"]) && OPENCODE_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
 
@@ -25,14 +26,22 @@ type OpencodeModelsResponse = {
 
 async function resolveOpencodeToolLiveModel() {
   const provider = await buildOpencodeZenLiveProviderConfig({ apiKey: OPENCODE_API_KEY });
-  const row = provider.models.find((model) => model.id === LIVE_MODEL_ID);
-  if (
-    !row ||
-    row.api !== "openai-completions" ||
-    !row.contextWindow ||
-    !row.reasoning ||
-    !row.compat?.supportsTools
-  ) {
+  const isToolCapable = (model: (typeof provider.models)[number]) =>
+    model.api === "openai-completions" &&
+    Boolean(model.contextWindow) &&
+    Boolean(model.reasoning) &&
+    Boolean(model.compat?.supportsTools) &&
+    model.input.every((kind) => kind === "text" || kind === "image");
+  // Free Zen models rotate; without an explicit override, fall back to another discovered
+  // free reasoning/tool model so catalog churn does not fail the round-trip proof.
+  const row =
+    provider.models.find((model) => model.id === LIVE_MODEL_ID && isToolCapable(model)) ??
+    (EXPLICIT_LIVE_MODEL_ID
+      ? undefined
+      : provider.models
+          .filter((model) => model.id.endsWith("-free") && isToolCapable(model))
+          .toSorted((a, b) => a.id.localeCompare(b.id))[0]);
+  if (!row) {
     throw new Error(`OpenCode catalog lacks a reasoning/tool-capable chat model: ${LIVE_MODEL_ID}`);
   }
   const input = row.input.filter((kind) => kind === "text" || kind === "image");
