@@ -919,7 +919,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       expect(fullMessageRequest.params).toMatchObject({
         sessionKey: "agent:main:main",
         messageId: "assistant-full-message",
-        maxChars: 500_000,
+        maxChars: 8_000_000,
       });
       await expect
         .poll(() => fullTextBubble.locator(".chat-text").textContent())
