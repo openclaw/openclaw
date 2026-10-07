@@ -61,7 +61,7 @@ it("joins accepted restart-safe terminal persistence after the real close prelud
     const write = writeAdmission.runOpenClawAgentWorkerWrite;
     let held = false;
     vi.spyOn(writeAdmission, "runOpenClawAgentWorkerWrite").mockImplementation(
-      (options, run, timing, signal) =>
+      (options, run, timing, writerSignal) =>
         write(
           options,
           async () => {
@@ -75,7 +75,7 @@ it("joins accepted restart-safe terminal persistence after the real close prelud
             return run();
           },
           timing,
-          signal,
+          writerSignal,
         ),
     );
     kernel.scheduler.signal.addEventListener(
