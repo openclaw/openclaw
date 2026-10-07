@@ -580,6 +580,42 @@ test.each(["Unicode-prefixed signal environment", "path-concatenated shared envi
   },
 );
 
+test.each([
+  {
+    disabledSignal: "metrics",
+    envKey: "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    flags: { traces: true, metrics: false, logs: false },
+  },
+  {
+    disabledSignal: "traces",
+    envKey: "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    flags: { traces: false, metrics: true, logs: false },
+  },
+  {
+    disabledSignal: "stdout-only logs",
+    envKey: "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    flags: { traces: true, metrics: false, logs: true, logsExporter: "stdout" },
+  },
+] as const)(
+  "does not auto-create an undeclared $disabledSignal OTLP exporter",
+  async ({ disabledSignal, envKey, flags }) => {
+    process.env[PRELOAD_ENV] = "0";
+    const credential = `qa-otel-${disabledSignal.replaceAll(" ", "-")}-disabled-password`;
+    process.env[envKey] = `https://operator:${credential}@[`;
+    const diagnostics = captureOtelDiagnostics();
+    const ctx = createOtelContext("https://collector.example.com/otlp", flags);
+    ctx.internalDiagnostics!.emit = () => {};
+    const service = createDiagnosticsOtelService();
+
+    try {
+      await service.start(ctx);
+      expect(diagnostics.join("\n")).not.toContain(credential);
+    } finally {
+      await service.stop?.(ctx);
+    }
+  },
+);
+
 const UNREADABLE_TLS_ERROR =
   "Configured OpenTelemetry TLS root certificate file is missing, empty, or unreadable; refusing insecure export";
 

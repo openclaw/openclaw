@@ -416,6 +416,24 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
+it("keeps the owner's absent target when a later creator observes an unexpected file", async () => {
+  const options = fixture();
+  const creator = captureOpenClawAgentDatabaseExecution(options, {
+    expectedCreationIdentity: readDatabasePathIdentitySync(options.path),
+  });
+  fs.mkdirSync(path.dirname(options.path), { recursive: true });
+  fs.writeFileSync(options.path, "");
+  const later = captureOpenClawAgentDatabaseExecution(options, {
+    expectedCreationIdentity: readDatabasePathIdentitySync(options.path),
+  });
+  try {
+    await expect(later.prepare(source())).rejects.toThrow(/changed before creating open/);
+    expect(fs.readFileSync(options.path)).toHaveLength(0);
+  } finally {
+    await Promise.allSettled([creator.release(), later.release()]);
+  }
+});
+
 it("retains the first creator's file witness on a preexisting execution owner", async () => {
   const options = fixture();
   fs.mkdirSync(path.dirname(options.path), { recursive: true });

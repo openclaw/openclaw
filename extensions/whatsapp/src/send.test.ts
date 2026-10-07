@@ -306,6 +306,15 @@ describe("web outbound", () => {
     });
   });
 
+  it("does not retry transient outbound send failures to avoid duplicate sends", async () => {
+    sendMessage.mockRejectedValueOnce({ error: { message: "connection closed" } });
+
+    await expect(
+      sendMessageWhatsApp("+1555", "hi", { verbose: false, cfg: WHATSAPP_TEST_CFG }),
+    ).rejects.toEqual({ error: { message: "connection closed" } });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("marks gif playback for video when requested", async () => {
     const buf = Buffer.from("gifvid");
     loadWebMediaMock.mockResolvedValueOnce({

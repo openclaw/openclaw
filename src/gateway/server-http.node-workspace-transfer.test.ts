@@ -129,6 +129,33 @@ describe("cloud bootstrap artifact HTTP routing", () => {
 });
 
 describe("node workspace transfer HTTP routing", () => {
+  it("reserves the namespace before hooks and collapses missing or rejected auth", async () => {
+    const hooks = vi.fn(async () => false);
+    const callback = vi.fn<NodeWorkspaceTransferHttpCallback>(async () => ({
+      kind: "unauthorized",
+    }));
+    await withTransferServer({
+      callback,
+      hooks,
+      run: async (origin) => {
+        const path = `/__openclaw__/worker-transfer/v1/environments/worker%3Afixture/snapshots/${"a".repeat(64)}/pack`;
+        const missing = await fetch(`${origin}${path}`);
+        const rejected = await fetch(`${origin}${path}`, {
+          headers: { authorization: "Bearer rejected-transfer-token" },
+        });
+
+        expect(missing.status).toBe(404);
+        expect(rejected.status).toBe(404);
+        expect(missing.headers.get("cache-control")).toBe("no-store");
+        expect(rejected.headers.get("cache-control")).toBe("no-store");
+        await expect(missing.json()).resolves.toEqual({ error: "not_found" });
+        await expect(rejected.json()).resolves.toEqual({ error: "not_found" });
+        expect(callback).toHaveBeenCalledOnce();
+        expect(hooks).not.toHaveBeenCalled();
+      },
+    });
+  });
+
   it("parses the closed route family and lets authenticated work own its response", async () => {
     const routes: Array<{ kind: string; environmentId: string }> = [];
     const callback: NodeWorkspaceTransferHttpCallback = async ({ bearer, res, route }) => {

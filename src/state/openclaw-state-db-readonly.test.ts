@@ -65,36 +65,53 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it("keeps authoritative state availability through retained snapshots", async () => {
-  await withTempDir("openclaw-state-availability-", async (root) => {
-    const options = createOptions(root);
-    expect(isOpenClawStateDatabaseDefinitelyAbsent(options.env)).toBe(true);
-    openOpenClawStateDatabase(options);
-    const observeMissingPath = (retained: boolean) => {
-      const probe = vi.spyOn(fs, "lstatSync").mockImplementation(() => {
-        throw Object.assign(new Error("synthetic missing-path observation"), { code: "ENOENT" });
-      });
-      syncBuiltinESMExports();
-      try {
-        expect(isOpenClawStateDatabaseDefinitelyAbsent(options.env)).toBe(!retained);
-        expect(probe).toHaveBeenCalledTimes(retained ? 0 : 1);
-      } finally {
-        probe.mockRestore();
+it.each([undefined, "EACCES"])(
+  "keeps authoritative state availability (filesystem failure: %s)",
+  async (code) => {
+    await withTempDir("openclaw-state-availability-", async (root) => {
+      const options = createOptions(root);
+      if (code) {
+        const probe = vi.spyOn(fs, "lstatSync").mockImplementation(() => {
+          throw Object.assign(new Error("synthetic filesystem observation"), { code });
+        });
         syncBuiltinESMExports();
+        try {
+          expect(isOpenClawStateDatabaseDefinitelyAbsent(options.env)).toBe(false);
+          expect(probe).toHaveBeenCalledOnce();
+        } finally {
+          probe.mockRestore();
+          syncBuiltinESMExports();
+        }
+        return;
       }
-    };
-    observeMissingPath(true);
-    closeOpenClawStateDatabaseForTest();
-    await withOpenClawStateDatabaseReadSnapshot(async () => observeMissingPath(true), options);
-    withArtifactPreservingStateReads(() =>
-      withSynchronousArtifactPreservingStateSnapshot(() => {
-        withExistingOpenClawStateDatabaseReadOnly(() => observeMissingPath(true), options);
-      }),
-    );
-    observeMissingPath(false);
-    expect(fs.existsSync(options.path)).toBe(true);
-  });
-});
+      expect(isOpenClawStateDatabaseDefinitelyAbsent(options.env)).toBe(true);
+      openOpenClawStateDatabase(options);
+      const observeMissingPath = (retained: boolean) => {
+        const probe = vi.spyOn(fs, "lstatSync").mockImplementation(() => {
+          throw Object.assign(new Error("synthetic missing-path observation"), { code: "ENOENT" });
+        });
+        syncBuiltinESMExports();
+        try {
+          expect(isOpenClawStateDatabaseDefinitelyAbsent(options.env)).toBe(!retained);
+          expect(probe).toHaveBeenCalledTimes(retained ? 0 : 1);
+        } finally {
+          probe.mockRestore();
+          syncBuiltinESMExports();
+        }
+      };
+      observeMissingPath(true);
+      closeOpenClawStateDatabaseForTest();
+      await withOpenClawStateDatabaseReadSnapshot(async () => observeMissingPath(true), options);
+      withArtifactPreservingStateReads(() =>
+        withSynchronousArtifactPreservingStateSnapshot(() => {
+          withExistingOpenClawStateDatabaseReadOnly(() => observeMissingPath(true), options);
+        }),
+      );
+      observeMissingPath(false);
+      expect(fs.existsSync(options.path)).toBe(true);
+    });
+  },
+);
 
 it("keeps fresh synchronous read callbacks from returning asynchronous work", async () => {
   await withTempDir("openclaw-state-sync-read-", async (root) => {
