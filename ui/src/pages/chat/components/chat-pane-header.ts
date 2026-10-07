@@ -534,6 +534,7 @@ export function renderChatPanePanelToggle(props: {
   icon: TemplateResult;
   className?: string;
   expanded?: boolean;
+  pressed?: boolean;
   onToggle: () => void;
 }) {
   return html`<openclaw-tooltip .content=${props.label}>
@@ -542,6 +543,7 @@ export function renderChatPanePanelToggle(props: {
       type="button"
       aria-label=${props.label}
       aria-expanded=${ifDefined(props.expanded === undefined ? undefined : String(props.expanded))}
+      aria-pressed=${ifDefined(props.pressed === undefined ? undefined : String(props.pressed))}
       @click=${props.onToggle}
     >
       ${props.icon}
@@ -577,35 +579,27 @@ export function renderChatPanePanelLayoutActions(
   }
   ${
     split || layout.expanded
-      ? html`<openclaw-tooltip .content=${focusLabel}>
-          <button
-            class="btn btn--ghost btn--icon chat-icon-btn chat-panel-focus"
-            type="button"
-            aria-pressed=${String(layout.expanded === true)}
-            aria-label=${focusLabel}
-            @click=${() =>
-              onLayoutChange(
-                setSidebarExpanded(ensureSidebarConversation(layout), layout.expanded !== true),
-                { dashboardPresentation: "personal" },
-              )}
-          >
-            ${layout.expanded ? icons.minimize : icons.maximize}
-          </button>
-        </openclaw-tooltip>`
+      ? renderChatPanePanelToggle({
+          label: focusLabel,
+          icon: layout.expanded ? icons.minimize : icons.maximize,
+          className: "chat-panel-focus",
+          pressed: layout.expanded === true,
+          onToggle: () =>
+            onLayoutChange(
+              setSidebarExpanded(ensureSidebarConversation(layout), layout.expanded !== true),
+              { dashboardPresentation: "personal" },
+            ),
+        })
       : nothing
   }
   ${
     split && side && swapLabel
-      ? html`<openclaw-tooltip .content=${swapLabel}>
-          <button
-            class="btn btn--ghost btn--icon chat-icon-btn chat-panel-swap"
-            type="button"
-            aria-label=${swapLabel}
-            @click=${() => onLayoutChange(promoteSidebarPanel(layout, side.id))}
-          >
-            ${icons.arrowLeftRight}
-          </button>
-        </openclaw-tooltip>`
+      ? renderChatPanePanelToggle({
+          label: swapLabel,
+          icon: icons.arrowLeftRight,
+          className: "chat-panel-swap",
+          onToggle: () => onLayoutChange(promoteSidebarPanel(layout, side.id)),
+        })
       : nothing
   }
   ${

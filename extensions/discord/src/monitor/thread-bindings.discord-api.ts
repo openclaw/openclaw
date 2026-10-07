@@ -75,47 +75,31 @@ export function summarizeDiscordError(err: unknown): string {
   return "error";
 }
 
-function extractDiscordErrorStatus(err: unknown): number | undefined {
+export function isDiscordThreadGoneError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
-    return undefined;
+    return false;
   }
   const candidate = err as {
     status?: unknown;
     statusCode?: unknown;
-    response?: { status?: unknown };
-  };
-  return (
-    parseStrictNonNegativeInteger(candidate.status) ??
-    parseStrictNonNegativeInteger(candidate.statusCode) ??
-    parseStrictNonNegativeInteger(candidate.response?.status)
-  );
-}
-
-function extractDiscordErrorCode(err: unknown): number | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const candidate = err as {
     code?: unknown;
     rawError?: { code?: unknown };
     body?: { code?: unknown };
-    response?: { body?: { code?: unknown }; data?: { code?: unknown } };
+    response?: { status?: unknown; body?: { code?: unknown }; data?: { code?: unknown } };
   };
-  return (
+  const code =
     parseStrictNonNegativeInteger(candidate.code) ??
     parseStrictNonNegativeInteger(candidate.rawError?.code) ??
     parseStrictNonNegativeInteger(candidate.body?.code) ??
     parseStrictNonNegativeInteger(candidate.response?.body?.code) ??
-    parseStrictNonNegativeInteger(candidate.response?.data?.code)
-  );
-}
-
-export function isDiscordThreadGoneError(err: unknown): boolean {
-  const code = extractDiscordErrorCode(err);
+    parseStrictNonNegativeInteger(candidate.response?.data?.code);
   if (code === DISCORD_UNKNOWN_CHANNEL_ERROR_CODE) {
     return true;
   }
-  const status = extractDiscordErrorStatus(err);
+  const status =
+    parseStrictNonNegativeInteger(candidate.status) ??
+    parseStrictNonNegativeInteger(candidate.statusCode) ??
+    parseStrictNonNegativeInteger(candidate.response?.status);
   // 404: deleted/unknown channel. 403: bot no longer has access.
   return status === 404 || status === 403;
 }
@@ -300,8 +284,7 @@ export async function createThreadForBinding(params: {
         ...(assertCreateAllowed ? { assertCreateAllowed } : {}),
       },
     );
-    const createdId = normalizeOptionalString(created?.id) ?? "";
-    return createdId || null;
+    return normalizeOptionalString(created?.id) ?? null;
   } catch (err) {
     logVerbose(
       `discord thread binding auto-thread create failed for ${params.channelId}: ${summarizeDiscordError(err)}`,

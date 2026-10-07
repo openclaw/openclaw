@@ -15,7 +15,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import * as allocation from "./allocation.js";
 import * as worktreeGit from "./git.js";
-import { getRegistryWorktree } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 

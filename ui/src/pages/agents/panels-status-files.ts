@@ -27,21 +27,7 @@ import {
 } from "../../lib/presenter.ts";
 import { renderAgentContextSection } from "./panels-overview.ts";
 
-type ChannelSummaryEntry = {
-  id: string;
-  label: string;
-  accounts: ChannelAccountSnapshot[];
-};
-
-function resolveChannelLabel(snapshot: ChannelsStatusSnapshot, id: string) {
-  const meta = snapshot.channelMeta?.find((entry) => entry.id === id);
-  if (meta?.label) {
-    return meta.label;
-  }
-  return snapshot.channelLabels?.[id] ?? id;
-}
-
-function resolveChannelEntries(snapshot: ChannelsStatusSnapshot | null): ChannelSummaryEntry[] {
+function resolveChannelEntries(snapshot: ChannelsStatusSnapshot | null) {
   if (!snapshot) {
     return [];
   }
@@ -52,7 +38,9 @@ function resolveChannelEntries(snapshot: ChannelsStatusSnapshot | null): Channel
   ]);
   return Array.from(ids, (id) => ({
     id,
-    label: resolveChannelLabel(snapshot, id),
+    label:
+      snapshot.channelMeta?.find((entry) => entry.id === id)?.label ||
+      (snapshot.channelLabels?.[id] ?? id),
     accounts: snapshot.channelAccounts?.[id] ?? [],
   }));
 }

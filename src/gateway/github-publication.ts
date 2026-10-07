@@ -19,7 +19,6 @@ import {
   assertExpectedSharedGitHubPublisher,
   matchesCurrentGitHubPublicationIdentity,
   prepareCurrentGitHubPublicationIdentity,
-  resolveGitHubPublicationWorktreeOwner,
   readGitHubPublicationWorktreeOwner,
   prepareGitHubPublicationWorkspaceOwner,
 } from "./github-publication-availability.js";
@@ -63,7 +62,7 @@ const activePublicationExecutions = new Map<string, Promise<SessionGitHubPublica
 
 function sameWorktree(
   row: PublicationRow,
-  worktree: ReturnType<typeof resolveGitHubPublicationWorktreeOwner>["worktree"],
+  worktree: Awaited<ReturnType<typeof readGitHubPublicationWorktreeOwner>>["worktree"],
 ): boolean {
   return (
     row.worktree_id === worktree.id &&
@@ -182,12 +181,13 @@ export function createGitHubPublicationCoordinator(params: {
           ),
       },
     );
-    const { worktree } = await readGitHubPublicationWorktreeOwner({
+    const worktreeOwner = await readGitHubPublicationWorktreeOwner({
       sessionId: request.claim.sessionId,
       sessionKey: request.sessionKey,
       agentId: request.agentId,
       lifecycleRevision: admitted.loaded.entry?.lifecycleRevision ?? null,
     });
+    const { worktree } = worktreeOwner;
     assertRequester();
     if (!params.placements.validateTurnClaim(request.claim)) {
       throw new Error("GitHub publication lost the live session turn claim after verification.");
@@ -219,17 +219,7 @@ export function createGitHubPublicationCoordinator(params: {
           assertCurrent: () => {
             assertRequester();
             assertStoredClaim(db, request);
-            resolveGitHubPublicationWorktreeOwner({
-              sessionId: request.claim.sessionId,
-              sessionKey: request.sessionKey,
-              agentId: request.agentId,
-              lifecycleRevision: admitted.loaded.entry?.lifecycleRevision ?? null,
-              expected: {
-                worktreeId: worktree.id,
-                repositoryFingerprint: worktree.repoFingerprint,
-                branch: worktree.branch,
-              },
-            });
+            worktreeOwner.assertCurrent();
           },
           claim: request.claim,
         });
@@ -473,7 +463,7 @@ export function createGitHubPublicationCoordinator(params: {
     }
     await params.placements.prepareWorkspaceResultClaim(claim);
     const first = rows[0]!;
-    const { worktree } = await readGitHubPublicationWorktreeOwner({
+    const worktreeOwner = await readGitHubPublicationWorktreeOwner({
       sessionId: first.session_id,
       sessionKey: first.session_key,
       agentId: first.agent_id,
@@ -483,6 +473,7 @@ export function createGitHubPublicationCoordinator(params: {
         branch: first.branch,
       },
     });
+    const { worktree } = worktreeOwner;
     if (!params.placements.validateWorkspaceResultClaim(claim)) {
       throw new Error("GitHub publication lost its workspace result claim before snapshot.");
     }
@@ -514,6 +505,7 @@ export function createGitHubPublicationCoordinator(params: {
     const snapshot = await captureGitHubPublicationWorkspaceSnapshot({
       cwd: worktree.path,
       assertCurrent: () => {
+        worktreeOwner.assertCurrent();
         if (!params.placements.validateWorkspaceResultClaim(claim)) {
           throw new Error("GitHub publication lost its workspace result claim during snapshot.");
         }

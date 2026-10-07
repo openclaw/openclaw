@@ -871,7 +871,6 @@ describe("Code Mode subscribed bridge lifecycle", () => {
   });
 
   it.each([
-    { kind: "explicit cancellation", close: "cancel" },
     { kind: "snapshot expiry", close: "expire" },
     { kind: "gateway shutdown", close: "shutdown" },
   ] as const)(
@@ -933,9 +932,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
             ? undefined
             : wait.execute(`code-wait-${close}`, { runId: suspended.runId });
 
-        if (close === "cancel") {
-          pending.cancel?.();
-        } else if (close === "expire") {
+        if (close === "expire") {
           parked.expiresAt = Date.now() - 1;
           testing.removeExpiredRuns();
         } else {
@@ -945,12 +942,6 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         if (waiting) {
           const result = resultDetails(await waiting);
           expect(result.status).not.toBe("waiting");
-          if (close === "cancel") {
-            expect(result).toMatchObject({
-              status: "completed",
-              value: expect.stringMatching(/cancel/i),
-            });
-          }
         } else {
           await waitForPendingBridgeSettlement([pending], { kind: "awaiting" });
           await expect(

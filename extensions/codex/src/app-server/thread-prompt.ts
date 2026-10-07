@@ -44,17 +44,9 @@ export function buildDeveloperInstructions(
   } = {},
 ): string {
   const deferredToolNames = new Set<string>();
-  let screenToolName: string | undefined;
-  let showWidgetToolName: string | undefined;
-  let dashboardToolName: string | undefined;
-  let portalToolName: string | undefined;
+  const toolNames = new Map<string, string>();
   let messageTool: Parameters<typeof buildUiPresentationPrompt>[0]["messageTool"];
-  let hasSkillWorkshop = false;
-  let hasSessionsSpawn = false;
   let hasSessionsYield = false;
-  let hasSubagentsList = false;
-  let hasSessionsSend = false;
-  let hasControlTools = false;
   let hasSeenDirectNamespace = false;
   for (const spec of options.dynamicTools ?? []) {
     const isDirectNamespace =
@@ -70,29 +62,16 @@ export function buildDeveloperInstructions(
       if (tool.deferLoading === true && name) {
         deferredToolNames.add(name);
       }
-      if (name === "screen") {
-        screenToolName ??= qualifiedName;
-      }
-      if (name === "show_widget") {
-        showWidgetToolName ??= qualifiedName;
-      }
-      if (name === "dashboard") {
-        dashboardToolName ??= qualifiedName;
-      }
-      if (name === "portal") {
-        portalToolName ??= qualifiedName;
+      if (!toolNames.has(name)) {
+        toolNames.set(name, qualifiedName);
       }
       if (name === "message") {
         messageTool ??= { name: qualifiedName, parameters: tool.inputSchema };
       }
-      hasSkillWorkshop ||= name === SKILL_WORKSHOP_TOOL_NAME;
-      hasSessionsSpawn ||= name === "sessions_spawn";
       hasSessionsYield ||= isDirectNamespace && name === "sessions_yield";
-      hasSubagentsList ||= name === "subagents";
-      hasSessionsSend ||= name === "sessions_send";
-      hasControlTools ||= name === "openclaw" || name === "gateway";
     }
   }
+  const hasSessionsSpawn = toolNames.has("sessions_spawn");
   const nativeCommandGuidance = listRegisteredPluginAgentPromptGuidance({
     surface: "codex_app_server",
     includeLegacyGlobalGuidance: false,
@@ -121,7 +100,9 @@ export function buildDeveloperInstructions(
           .join(", ")}.`
       : undefined,
     deferredToolDiscoveryGuidance,
-    hasSkillWorkshop ? buildSkillWorkshopPromptSection().join("\n") : undefined,
+    toolNames.has(SKILL_WORKSHOP_TOOL_NAME)
+      ? buildSkillWorkshopPromptSection().join("\n")
+      : undefined,
     // Codex defers native collab tools behind tool_search on search-capable
     // models (codex-rs spec_plan add_collaboration_tools). Without this hint
     // models cannot see spawn_agent and grab the always-direct sessions_spawn.
@@ -147,21 +128,22 @@ export function buildDeveloperInstructions(
               : "",
           hasVisibleSessionSpawn: hasSessionsSpawn,
           hasSessionsYield,
-          hasSubagentsList,
-          hasSessionsSend,
+          hasSubagentsList: toolNames.has("subagents"),
+          hasSessionsSend: toolNames.has("sessions_send"),
         }).join("\n")
       : undefined,
     params.disableTools !== true && params.promptMode !== "minimal" && params.promptMode !== "none"
       ? buildUiPresentationPrompt({
-          screenToolName,
-          showWidgetToolName,
-          dashboardToolName,
-          portalToolName,
+          screenToolName: toolNames.get("screen"),
+          showWidgetToolName: toolNames.get("show_widget"),
+          dashboardToolName: toolNames.get("dashboard"),
+          portalToolName: toolNames.get("portal"),
           messageTool,
         })
       : undefined,
     buildCredentialSafetyPrompt({
-      controlToolsAvailable: params.disableTools !== true && hasControlTools,
+      controlToolsAvailable:
+        params.disableTools !== true && (toolNames.has("openclaw") || toolNames.has("gateway")),
     }),
     nativeCommandGuidance,
     params.gitCoauthorPrompt,

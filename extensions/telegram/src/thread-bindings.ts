@@ -128,6 +128,11 @@ async function initializeThreadBindingManager(
     });
   };
 
+  const captureConversationMutation = (raw: string) => {
+    const conversationId = normalizeOptionalString(raw);
+    return conversationId ? captureBindingMutation(manager, conversationId) : undefined;
+  };
+
   const manager: TelegramThreadBindingManager = {
     accountId,
     shouldPersistMutations: () => persist,
@@ -158,15 +163,11 @@ async function initializeThreadBindingManager(
     touchConversation: (conversationIdRaw, at) => {
       const activityAt = at ?? Date.now();
       return mutate(async () => {
-        const conversationId = normalizeOptionalString(conversationIdRaw);
-        if (!conversationId) {
+        const mutation = captureConversationMutation(conversationIdRaw);
+        if (!mutation?.previous) {
           return null;
         }
-        const mutation = captureBindingMutation(manager, conversationId);
         const existingLocal = mutation.previous;
-        if (!existingLocal) {
-          return null;
-        }
         const requestedActivityAt = resolveNonNegativeIntegerOption(activityAt, Date.now());
         const nextRecord: TelegramThreadBindingRecord = {
           ...existingLocal,
@@ -181,15 +182,11 @@ async function initializeThreadBindingManager(
     },
     unbindConversation: ({ conversationId: conversationIdRaw, throwOnPersistError }) =>
       mutate(async () => {
-        const conversationId = normalizeOptionalString(conversationIdRaw);
-        if (!conversationId) {
+        const mutation = captureConversationMutation(conversationIdRaw);
+        if (!mutation?.previous) {
           return null;
         }
-        const mutation = captureBindingMutation(manager, conversationId);
-        const removed = mutation.previous ?? null;
-        if (!removed) {
-          return null;
-        }
+        const removed = mutation.previous;
         await mutation.commit(removed, {
           remove: true,
           reason: "unbind-conversation",

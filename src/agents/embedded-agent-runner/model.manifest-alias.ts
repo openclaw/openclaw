@@ -102,19 +102,39 @@ function resolveManifestAliasTargetApi(params: {
   return model?.api ?? providerCatalog.api;
 }
 
-function resolveManifestModelCatalogProviderAlias(params: {
+export function resolveManifestModelCatalogProviderAliasMetadata(params: {
   provider: string;
   modelId?: string;
   cfg?: OpenClawConfig;
-  plugins: readonly ManifestModelCatalogAliasPlugin[];
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): ManifestModelCatalogProviderAliasMetadata {
   const provider = normalizeProviderId(params.provider);
   if (!provider) {
     return { provider: params.provider };
   }
+  const env = params.env ?? process.env;
+  // Gateway plugin metadata is process-stable. Reuse its lifecycle-owned snapshot
+  // so every model turn does not rediscover the same manifest alias table.
+  const currentPlugins =
+    env === process.env
+      ? getCurrentPluginMetadataSnapshot({
+          config: params.cfg,
+          workspaceDir: params.workspaceDir,
+          env,
+          ...(params.cfg === undefined ? { requireDefaultDiscoveryContext: true } : {}),
+        })?.plugins
+      : undefined;
+  const plugins =
+    currentPlugins ??
+    loadPluginManifestRegistryCore({
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env,
+    }).plugins;
   const claims: ManifestModelCatalogProviderAliasMetadata[] = [];
   const normalizedConfig = normalizePluginsConfig(params.cfg?.plugins);
-  for (const plugin of params.plugins) {
+  for (const plugin of plugins) {
     if (
       !isActivatedManifestOwner({ plugin, normalizedConfig, rootConfig: params.cfg }) ||
       !(
@@ -178,40 +198,4 @@ function resolveManifestModelCatalogProviderAlias(params: {
   return claims.length > 1
     ? { provider: params.provider, ambiguous: true }
     : (claims[0] ?? { provider: params.provider });
-}
-
-export function resolveManifestModelCatalogProviderAliasMetadata(params: {
-  provider: string;
-  modelId?: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): ManifestModelCatalogProviderAliasMetadata {
-  const provider = normalizeProviderId(params.provider);
-  if (!provider) {
-    return { provider: params.provider };
-  }
-  const env = params.env ?? process.env;
-  // Gateway plugin metadata is process-stable. Reuse its lifecycle-owned snapshot
-  // so every model turn does not rediscover the same manifest alias table.
-  const currentPlugins =
-    env === process.env
-      ? getCurrentPluginMetadataSnapshot({
-          config: params.cfg,
-          workspaceDir: params.workspaceDir,
-          env,
-          ...(params.cfg === undefined ? { requireDefaultDiscoveryContext: true } : {}),
-        })?.plugins
-      : undefined;
-  const plugins =
-    currentPlugins ??
-    loadPluginManifestRegistryCore({
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-      env,
-    }).plugins;
-  return resolveManifestModelCatalogProviderAlias({
-    ...params,
-    plugins,
-  });
 }

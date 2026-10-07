@@ -33,13 +33,6 @@ function formatResolutionLogDetails(base: string, details: Array<string | undefi
   return nonEmpty.length > 0 ? `${base} (${nonEmpty.join("; ")})` : base;
 }
 
-function formatResolvedBase(input: string, target: string | undefined): string {
-  if (!target) {
-    return input;
-  }
-  return input === target ? input : `${input}→${target}`;
-}
-
 function formatAliasSummary(aliases: string[]): string | undefined {
   if (aliases.length === 0) {
     return undefined;
@@ -80,7 +73,7 @@ function formatDiscordChannelUnresolved(entry: DiscordChannelResolution): string
 function formatDiscordUserResolved(entry: DiscordUserResolution): string | null {
   const displayName = entry.name?.trim();
   const target = displayName || entry.id;
-  const base = formatResolvedBase(entry.input, target);
+  const base = !target || entry.input === target ? entry.input : `${entry.input}→${target}`;
   const formatted = formatResolutionLogDetails(base, [
     // Repeating the id is only useful when the input was not already that id.
     displayName && entry.id && entry.id !== entry.input ? `id:${entry.id}` : undefined,
@@ -196,43 +189,31 @@ async function resolveGuildEntriesByChannelAllowlist(params: {
       if (entry.input !== target && !existingGroup.aliases.includes(entry.input)) {
         existingGroup.aliases.push(entry.input);
       }
-      if (!existingGroup.guildName && entry.guildName) {
-        existingGroup.guildName = entry.guildName;
-      }
-      if (!existingGroup.channelName && entry.channelName) {
-        existingGroup.channelName = entry.channelName;
-      }
-      if (!existingGroup.note && entry.note) {
-        existingGroup.note = entry.note;
+      for (const key of ["guildName", "channelName", "note"] as const) {
+        if (!existingGroup[key] && entry[key]) {
+          existingGroup[key] = entry[key];
+        }
       }
       mappingByTarget.set(target, existingGroup);
       const existing = nextGuilds[entry.guildId] ?? {};
-      const mergedChannels = {
+      let mergedChannels = {
         ...sourceGuild.channels,
         ...existing.channels,
       };
-      const mergedGuild: DiscordGuildEntry = {
+      if (source.channelKey && entry.channelId) {
+        const sourceChannel = sourceGuild.channels?.[source.channelKey];
+        if (sourceChannel) {
+          mergedChannels = {
+            ...mergedChannels,
+            [entry.channelId]: { ...sourceChannel, ...mergedChannels[entry.channelId] },
+          };
+        }
+      }
+      nextGuilds[entry.guildId] = {
         ...sourceGuild,
         ...existing,
         channels: mergedChannels,
       };
-      nextGuilds[entry.guildId] = mergedGuild;
-
-      if (source.channelKey && entry.channelId) {
-        const sourceChannel = sourceGuild.channels?.[source.channelKey];
-        if (sourceChannel) {
-          nextGuilds[entry.guildId] = {
-            ...mergedGuild,
-            channels: {
-              ...mergedChannels,
-              [entry.channelId]: {
-                ...sourceChannel,
-                ...mergedChannels[entry.channelId],
-              },
-            },
-          };
-        }
-      }
     }
     const mapping = [...mappingByTarget.values()].map((group) =>
       formatDiscordChannelResolvedGroup(group),
@@ -247,37 +228,35 @@ async function resolveGuildEntriesByChannelAllowlist(params: {
   }
 }
 
-async function resolveAllowFromByUserAllowlist(params: {
-  token: string;
-  allowFrom: string[] | undefined;
-  fetcher: typeof fetch;
-  runtime: RuntimeEnv;
-}): Promise<string[] | undefined> {
-  const allowEntries = (params.allowFrom ?? []).filter((entry) => entry !== "*");
-  if (allowEntries.length === 0) {
-    return params.allowFrom;
+async function resolveUserAllowlist<T>(
+  params: { token: string; fetcher: typeof fetch; runtime: RuntimeEnv },
+  existing: T,
+  entries: string[],
+  scope: "user" | "channel user",
+  transform: (existing: T, resolvedMap: Map<string, DiscordUserResolution>) => T,
+): Promise<T> {
+  const { token, fetcher, runtime } = params;
+  if (entries.length === 0) {
+    return existing;
   }
   try {
     const resolvedUsers = await resolveDiscordUserAllowlist({
-      token: params.token,
-      entries: allowEntries,
-      fetcher: params.fetcher,
+      token,
+      entries,
+      fetcher,
     });
     const { resolvedMap, mapping, unresolved } = buildAllowlistResolutionSummary(resolvedUsers, {
       formatResolved: formatDiscordUserResolved,
       formatUnresolved: formatDiscordUserUnresolved,
     });
-    const allowFrom = canonicalizeAllowlistWithResolvedIds({
-      existing: params.allowFrom,
-      resolvedMap,
-    });
-    summarizeMapping("discord users", mapping, unresolved, params.runtime);
-    return allowFrom;
+    const next = transform(existing, resolvedMap);
+    summarizeMapping(`discord ${scope}s`, mapping, unresolved, runtime);
+    return next;
   } catch (err) {
-    params.runtime.log?.(
-      `discord user resolve failed; using config entries. ${formatErrorMessage(err)}`,
+    runtime.log?.(
+      `discord ${scope} resolve failed; using config entries. ${formatErrorMessage(err)}`,
     );
-    return params.allowFrom;
+    return existing;
   }
 }
 
@@ -290,53 +269,6 @@ function collectGuildUserEntries(guildEntries: GuildEntries): Set<string> {
     }
   }
   return userEntries;
-}
-
-async function resolveGuildEntriesByUserAllowlist(params: {
-  token: string;
-  guildEntries: GuildEntries;
-  fetcher: typeof fetch;
-  runtime: RuntimeEnv;
-}): Promise<GuildEntries> {
-  const userEntries = collectGuildUserEntries(params.guildEntries);
-  if (userEntries.size === 0) {
-    return params.guildEntries;
-  }
-  try {
-    const resolvedUsers = await resolveDiscordUserAllowlist({
-      token: params.token,
-      entries: Array.from(userEntries),
-      fetcher: params.fetcher,
-    });
-    const { resolvedMap, mapping, unresolved } = buildAllowlistResolutionSummary(resolvedUsers, {
-      formatResolved: formatDiscordUserResolved,
-      formatUnresolved: formatDiscordUserUnresolved,
-    });
-    const nextGuilds = patchAllowlistUsersInConfigEntries({
-      entries: params.guildEntries,
-      resolvedMap,
-      strategy: "canonicalize",
-    });
-    for (const [guildKey, guildConfig] of Object.entries(nextGuilds)) {
-      const nextGuild = { ...guildConfig };
-      const channels = guildConfig.channels ?? {};
-      if (channels && typeof channels === "object") {
-        nextGuild.channels = patchAllowlistUsersInConfigEntries({
-          entries: channels,
-          resolvedMap,
-          strategy: "canonicalize",
-        });
-      }
-      nextGuilds[guildKey] = nextGuild;
-    }
-    summarizeMapping("discord channel users", mapping, unresolved, params.runtime);
-    return nextGuilds;
-  } catch (err) {
-    params.runtime.log?.(
-      `discord channel user resolve failed; using config entries. ${formatErrorMessage(err)}`,
-    );
-    return params.guildEntries;
-  }
 }
 
 export async function resolveDiscordAllowlistConfig(params: {
@@ -360,20 +292,41 @@ export async function resolveDiscordAllowlistConfig(params: {
   }
 
   if (isDangerousNameMatchingEnabled(params.discordConfig)) {
-    allowFrom = await resolveAllowFromByUserAllowlist({
-      token: params.token,
+    allowFrom = await resolveUserAllowlist(
+      params,
       allowFrom,
-      fetcher: params.fetcher,
-      runtime: params.runtime,
-    });
+      (allowFrom ?? []).filter((entry) => entry !== "*"),
+      "user",
+      (existing, resolvedMap) => canonicalizeAllowlistWithResolvedIds({ existing, resolvedMap }),
+    );
 
     if (hasGuildEntries(guildEntries)) {
-      guildEntries = await resolveGuildEntriesByUserAllowlist({
-        token: params.token,
+      guildEntries = await resolveUserAllowlist(
+        params,
         guildEntries,
-        fetcher: params.fetcher,
-        runtime: params.runtime,
-      });
+        [...collectGuildUserEntries(guildEntries)],
+        "channel user",
+        (existing, resolvedMap) => {
+          const nextGuilds = patchAllowlistUsersInConfigEntries({
+            entries: existing,
+            resolvedMap,
+            strategy: "canonicalize",
+          });
+          for (const [guildKey, guildConfig] of Object.entries(nextGuilds)) {
+            const nextGuild = { ...guildConfig };
+            const channels = guildConfig.channels ?? {};
+            if (channels && typeof channels === "object") {
+              nextGuild.channels = patchAllowlistUsersInConfigEntries({
+                entries: channels,
+                resolvedMap,
+                strategy: "canonicalize",
+              });
+            }
+            nextGuilds[guildKey] = nextGuild;
+          }
+          return nextGuilds;
+        },
+      );
     }
   }
 

@@ -464,28 +464,20 @@ export function resolveEmbeddedInjection(
         compatAssertCurrent: preparation.compatAssertCurrent ?? preparation.assertCurrent,
       });
     const injection = handle.messageInjection;
-    if (injection) {
-      return injection.isAvailable()
-        ? {
-            prepareQueueMessage: legacy?.prepareQueueMessage,
-            queueMessage: (text, options) => {
-              legacy?.assertQueueCurrent();
-              return injection.queueMessage(text, options);
-            },
-            claimPendingUserInputAnswer: handle.claimPendingUserInputAnswer?.bind(handle),
-            cancelPendingUserInput: handle.cancelPendingUserInput?.bind(handle),
-          }
-        : undefined;
-    }
     // Legacy handles predate explicit injection capability. Preserve their
     // shipped eligibility probe while modern backends use messageInjection.
-    const isAvailable = handle.isStopped ? !handle.isStopped() : handle.isStreaming();
+    const isAvailable = injection
+      ? injection.isAvailable()
+      : handle.isStopped
+        ? !handle.isStopped()
+        : handle.isStreaming();
+    const target = injection || handle;
     return isAvailable
       ? {
           prepareQueueMessage: legacy?.prepareQueueMessage,
           queueMessage: (text, options) => {
             legacy?.assertQueueCurrent();
-            return handle.queueMessage(text, options);
+            return target.queueMessage(text, options);
           },
           claimPendingUserInputAnswer: handle.claimPendingUserInputAnswer?.bind(handle),
           cancelPendingUserInput: handle.cancelPendingUserInput?.bind(handle),

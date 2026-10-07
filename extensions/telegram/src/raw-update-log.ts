@@ -32,9 +32,6 @@ const TELEGRAM_RAW_UPDATE_ALWAYS_REDACT_KEYS = new Set([
   "url",
   "username",
   "vcard",
-]);
-const TELEGRAM_RAW_UPDATE_ALLOWED_ID_KEYS = new Set(["message_id", "update_id"]);
-const TELEGRAM_RAW_UPDATE_ID_REDACT_KEYS = new Set([
   "chat_id",
   "custom_emoji_id",
   "inline_message_id",
@@ -46,6 +43,7 @@ const TELEGRAM_RAW_UPDATE_ID_REDACT_KEYS = new Set([
   "user_id",
   "user_chat_id",
 ]);
+const TELEGRAM_RAW_UPDATE_ALLOWED_ID_KEYS = new Set(["message_id", "update_id"]);
 
 function shouldRedactTelegramRawUpdateValue(key: string, parentKey: string | undefined): boolean {
   if (!key) {
@@ -56,9 +54,6 @@ function shouldRedactTelegramRawUpdateValue(key: string, parentKey: string | und
   }
   if (TELEGRAM_RAW_UPDATE_ALLOWED_ID_KEYS.has(key)) {
     return false;
-  }
-  if (TELEGRAM_RAW_UPDATE_ID_REDACT_KEYS.has(key)) {
-    return true;
   }
   if (key === "id" || key.endsWith("_id") || key.endsWith("_ids")) {
     return parentKey !== undefined;

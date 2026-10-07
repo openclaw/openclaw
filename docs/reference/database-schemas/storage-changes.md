@@ -1091,14 +1091,16 @@ still propagate. Registration rechecks current authority after preparation and
 at write admission.
 
 Gateway `session.members.list` and `session.members.listEvidence` read full
-membership rows through the existing session-transcript read worker. Both methods
-recheck the exact session instance and current management rights after the read
-settles. Member ordering, actor evidence, and missing-database behavior are
-unchanged. Incognito membership remains with its process-local native owner;
-the synchronous session-store facade retains its existing compatibility contract.
-Target resolution, profile and creator catalogs, public-share metadata, projection
-refreshes, and membership writes retain their existing execution paths. This cut
-moves the member-row query, not every database read performed by these RPCs.
+membership rows and current session metadata together in one SQLite snapshot on
+the projection worker lane. They do not queue a second session read behind
+transcript history. Both methods recheck the exact session instance and current
+management rights after the snapshot settles, including foreign ownership changes
+that have not published resident facts. Member ordering, actor evidence, and
+missing-database behavior are unchanged. Incognito membership and metadata use the
+same snapshot kernel through their process-local native owner; the synchronous
+session-store facade retains its existing compatibility contract. Profile and
+creator catalogs and membership writes retain their existing execution paths.
+There is no schema, configuration, retention, or update migration.
 
 Watched upstream-session discovery runs its existing single-query snapshot and
 row decoding in the shared-state worker. The monitor awaits that snapshot and

@@ -154,22 +154,13 @@ export function normalizeRichText(value: RichText, depth = 0): RichText {
     const flattened: RichText[] = [];
     for (const item of value) {
       const normalized = normalizeRichText(item, depth + 1);
-      if (normalized === "") {
-        continue;
-      }
       if (Array.isArray(normalized)) {
         flattened.push(...normalized);
-      } else {
+      } else if (normalized !== "") {
         flattened.push(normalized);
       }
     }
-    if (flattened.length === 0) {
-      return "";
-    }
-    if (flattened.length === 1) {
-      return flattened[0] ?? "";
-    }
-    return flattened;
+    return flattened.length <= 1 ? (flattened[0] ?? "") : flattened;
   }
   if (value.type === "mathematical_expression" || value.type === "custom_emoji") {
     return value;
@@ -215,9 +206,7 @@ function measureRichBlockCaption(
   depth: number,
 ): void {
   if (caption) {
-    if (depth > size.nesting) {
-      size.nesting = depth;
-    }
+    size.nesting = Math.max(size.nesting, depth);
     measureRichBlockText(caption.text, size, depth);
     if (caption.credit) {
       measureRichBlockText(caption.credit, size, depth);
@@ -232,9 +221,7 @@ function measureRichBlockChildren(
   pending: Array<{ children: readonly InputRichBlock[]; depth: number }>,
 ): void {
   // Empty containers still contribute their nesting edge; plain text leaves do not add one.
-  if (depth > size.nesting) {
-    size.nesting = depth;
-  }
+  size.nesting = Math.max(size.nesting, depth);
   for (const block of children) {
     size.blocks += 1;
     switch (block.type) {
@@ -272,18 +259,14 @@ function measureRichBlockChildren(
         break;
       case "list":
         size.blocks += block.items.length;
-        if (depth >= size.nesting) {
-          size.nesting = depth + 1;
-        }
+        size.nesting = Math.max(size.nesting, depth + 1);
         for (const item of block.items) {
           pending.push({ children: item.blocks, depth: depth + 1 });
         }
         break;
       case "table":
         size.blocks += block.cells.length;
-        if (depth >= size.nesting) {
-          size.nesting = depth + 1;
-        }
+        size.nesting = Math.max(size.nesting, depth + 1);
         if (block.caption) {
           measureRichBlockText(block.caption, size, depth + 1);
         }

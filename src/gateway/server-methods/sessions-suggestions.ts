@@ -421,9 +421,8 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
             });
             if (!released.ok) {
               respond(false, undefined, released.error);
-              return false;
             }
-            return true;
+            return released.ok;
           } catch (error) {
             respondSuggestionDispatchError(respond, error);
             return false;

@@ -16,29 +16,6 @@ type ToolResultFlushManager = Pick<
 
 const DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
 
-async function waitForAgentIdleBestEffort(
-  agent: IdleAwareAgent | null | undefined,
-  timeoutMs: number,
-  abortSignal?: AbortSignal,
-): Promise<void> {
-  const waitForIdle = agent?.waitForIdle;
-  if (abortSignal?.aborted || typeof waitForIdle !== "function") {
-    return;
-  }
-  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS);
-
-  try {
-    await raceWithTimeout(
-      waitForIdle.call(agent).then(() => undefined),
-      resolvedTimeoutMs,
-      () => undefined,
-      { ref: false, signal: abortSignal },
-    );
-  } catch {
-    // Best-effort during cleanup.
-  }
-}
-
 export async function flushPendingToolResultsAfterIdle(opts: {
   agent: IdleAwareAgent | null | undefined;
   sessionManager: ToolResultFlushManager | null | undefined;
@@ -46,13 +23,28 @@ export async function flushPendingToolResultsAfterIdle(opts: {
   /** Cancels only the optional idle wait, never required transcript persistence. */
   abortSignal?: AbortSignal;
 }): Promise<void> {
+  const waitForAgentIdleBestEffort = async () => {
+    const { agent, timeoutMs = DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS, abortSignal } = opts;
+    const waitForIdle = agent?.waitForIdle;
+    if (abortSignal?.aborted || typeof waitForIdle !== "function") {
+      return;
+    }
+    const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS);
+
+    try {
+      await raceWithTimeout(
+        waitForIdle.call(agent).then(() => undefined),
+        resolvedTimeoutMs,
+        () => undefined,
+        { ref: false, signal: abortSignal },
+      );
+    } catch {
+      // Best-effort during cleanup.
+    }
+  };
   const isImmediateTimeout = opts.timeoutMs !== undefined && opts.timeoutMs <= 0;
   if (!isImmediateTimeout) {
-    await waitForAgentIdleBestEffort(
-      opts.agent,
-      opts.timeoutMs ?? DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS,
-      opts.abortSignal,
-    );
+    await waitForAgentIdleBestEffort();
   }
   const { sessionManager } = opts;
   if (

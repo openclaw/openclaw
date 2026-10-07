@@ -33,6 +33,7 @@ import {
   readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase,
   readRepositoryGitHubPublicationInDatabase,
 } from "../gateway/github-repository-publication-store.js";
+import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.js";
 import {
   listCronStandingGrantsInDatabase,
   lookupCronStandingGrantInDatabase,
@@ -427,6 +428,9 @@ serveOwnedWorkerTasks(
                   ? selectSkillLibraryRevisionManifestsBatch(db, command.input)
                   : undefined,
               };
+            }
+            if (command.type === "operatorApprovals.placementGrant") {
+              return { type: command.type, rows: readPlacementGrantRows(db, command.input) };
             }
             if (command.type === "operatorApprovals.history") {
               return {

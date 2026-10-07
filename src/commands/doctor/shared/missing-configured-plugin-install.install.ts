@@ -279,15 +279,11 @@ async function installCandidatePackage(
           (source.source === "npm"
             ? isUnavailableNpmTarget(attempt.result)
             : isUnavailableClawHubTarget(attempt.result)),
-        onFallback: (message) => {
-          channelNotices.push(message);
-        },
+        onFallback: (message) => void channelNotices.push(message),
       });
     },
     result: (attempt) => attempt.result,
-    onFallback: (message) => {
-      channelNotices.push(message);
-    },
+    onFallback: (message) => void channelNotices.push(message),
   });
   if (!installResult.ok) {
     return {

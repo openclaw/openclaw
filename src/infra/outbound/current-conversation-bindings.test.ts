@@ -13,16 +13,17 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
+import * as admission from "../sqlite-worker-operation-admission.js";
 import {
   testing,
   bindGenericCurrentConversation,
   getGenericCurrentConversationBindingCapabilities,
-  inspectGenericCurrentConversationBinding,
   listGenericCurrentConversationBindingsBySession,
   resolveGenericCurrentConversationBinding,
   touchGenericCurrentConversationBinding,
   unbindGenericCurrentConversationBindings,
 } from "./current-conversation-bindings.js";
+import { inspectSessionBindingByConversation } from "./session-binding-service.js";
 import type { SessionBindingRecord } from "./session-binding.types.js";
 
 type CurrentConversationBindingDatabase = Pick<
@@ -152,6 +153,25 @@ async function withReadOnlyStateDatabase<T>(run: () => T | Promise<T>): Promise<
   }
 }
 
+async function withRejectedBindingCommit<T>(run: () => Promise<T>): Promise<T> {
+  const createAdmission = admission.createSqliteWorkerOperationAdmission;
+  const injected = vi
+    .spyOn(admission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((admit, attachment) =>
+      createAdmission((request, grant) => {
+        if (request.stage === "commit") {
+          throw new Error("Injected binding commit failure");
+        }
+        admit(request, grant);
+      }, attachment),
+    );
+  try {
+    return await run();
+  } finally {
+    injected.mockRestore();
+  }
+}
+
 function workspaceConversation(conversationId: string) {
   return {
     channel: "workspace",
@@ -212,12 +232,12 @@ describe("generic current-conversation bindings", () => {
     expect(binding).not.toBeNull();
     vi.setSystemTime(new Date(1_002_000));
     expect(
-      inspectGenericCurrentConversationBinding({
+      inspectSessionBindingByConversation({
         channel: "workspace",
         accountId: "default",
         conversationId: "user:inspection",
       }),
-    ).toBeNull();
+    ).toMatchObject({ status: "available", binding: null });
     // Rewinding exposes whether inspection pruned the existing SQLite row.
     vi.setSystemTime(new Date(1_000_500));
     expect(resolveWorkspaceConversation("user:inspection")).not.toBeNull();
@@ -520,7 +540,7 @@ describe("generic current-conversation bindings", () => {
       });
 
       await expect(
-        withReadOnlyStateDatabase(() =>
+        withRejectedBindingCommit(() =>
           bindWorkspaceConversation("user:owner", {
             targetSessionKey: "agent:codex:acp:failed-target",
           }),
@@ -804,7 +824,7 @@ describe("generic current-conversation bindings", () => {
       });
 
       await expect(
-        withReadOnlyStateDatabase(() =>
+        withRejectedBindingCommit(() =>
           bindWorkspaceConversation("user:U1", {
             targetSessionKey: "agent:codex:acp:session-b",
           }),
@@ -841,7 +861,7 @@ describe("generic current-conversation bindings", () => {
       const bound = expectSessionBinding(await bindWorkspaceConversation("user:U1"));
 
       await expect(
-        withReadOnlyStateDatabase(() =>
+        withRejectedBindingCommit(() =>
           unbindGenericCurrentConversationBindings({
             bindingId: bound.bindingId,
             reason: "test cleanup",
@@ -858,7 +878,7 @@ describe("generic current-conversation bindings", () => {
       await bindWorkspaceConversation("user:U2", { targetSessionKey });
 
       await expect(
-        withReadOnlyStateDatabase(() =>
+        withRejectedBindingCommit(() =>
           unbindGenericCurrentConversationBindings({
             targetSessionKey,
             reason: "test cleanup",
@@ -910,7 +930,7 @@ describe("generic current-conversation bindings", () => {
 
       vi.setSystemTime(new Date(1_002_000));
       await expect(
-        withReadOnlyStateDatabase(() =>
+        withRejectedBindingCommit(() =>
           unbindGenericCurrentConversationBindings({
             targetSessionKey,
             reason: "test cleanup",

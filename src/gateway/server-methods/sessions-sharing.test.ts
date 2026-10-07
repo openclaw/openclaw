@@ -30,6 +30,7 @@ import {
   prepareGatewayLocalUserIngress,
 } from "../local-user-ingress.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
 import {
   authorizeResolvedSessionMutation,
   resolveSessionMutationAuthorization,
@@ -438,7 +439,7 @@ describe("session sharing handlers", () => {
 
       await expect(
         call("session.visibility.set", { sessionKey, visibility: "draft" }, requestContext),
-      ).rejects.toThrow("session changed before sharing mutation");
+      ).rejects.toThrow(SessionMutationFactsUnavailableError);
 
       const replacement = loadSessionEntry({ agentId: "main", sessionKey });
       expect(replacement?.sessionId).toBe("session-replaced");

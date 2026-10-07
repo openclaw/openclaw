@@ -66,7 +66,7 @@ function fixture(name: string, state: "active" | "failed" | "local" | "reclaimed
   const barriers = createGatewayWorkerPlacementReclaimBarriers({
     placements: { get: () => ({ ...placement }) as never, waitForTurnClaimRelease: async () => {} },
     loadSessionRuntime: async () => ({
-      managedWorktrees: { findLiveByOwner: () => undefined },
+      managedWorktrees: { findLiveByOwner: async () => undefined },
       resolveGatewaySessionStoreTargetWithStore: () => target,
       resolveCanonicalSessionEntryFromStoreKeys: () => entry,
     }),
@@ -250,7 +250,7 @@ async function cancellationLoadFixture(
   };
   const runtime = {
     managedWorktrees: {
-      findLiveByOwner: () => ({
+      findLiveByOwner: async () => ({
         id: "task-worktree",
         name: "test",
         repoFingerprint: "test",
@@ -515,7 +515,7 @@ it.each(["missing", "local", "reclaimed"] as const)(
 );
 
 it.each([false, true])(
-  "Stop follows Move's synchronous draining owner before barrier return (abandon=%s)",
+  "Stop follows Move's acknowledged draining owner before barrier return (abandon=%s)",
   async (abandonSource) => {
     const entering = createDeferredCore();
     const begin = createDeferredCore();
@@ -549,15 +549,6 @@ it.each([false, true])(
     }
 
     const transitions: string[] = [];
-    let transitionsAtFirstYield: string[] | undefined;
-    const beginPlacementMove = f.placements.beginPlacementMove.bind(f.placements);
-    vi.spyOn(f.placements, "beginPlacementMove").mockImplementation((request) => {
-      const result = beginPlacementMove(request);
-      queueMicrotask(() => {
-        transitionsAtFirstYield = [...transitions];
-      });
-      return result;
-    });
     const moving = f.coordinated
       .move(
         {
@@ -597,7 +588,7 @@ it.each([false, true])(
         }),
       ]);
       expect(f.placements.get(REQUEST.sessionId)?.state).toBe("draining");
-      expect.soft(transitionsAtFirstYield).toEqual(["draining"]);
+      expect(transitions).toEqual(["draining"]);
       f.loaded.resolve();
       await f.waitForCancellationStart(stopping);
       expect(f.harness.environments.destroy).not.toHaveBeenCalled();

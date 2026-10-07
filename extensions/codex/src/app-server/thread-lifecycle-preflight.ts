@@ -32,10 +32,14 @@ import {
   resolveCodexNativeModelInputTools,
   type CodexNativeModelInputTools,
 } from "./native-model-input-tools.js";
-import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
+import {
+  applyCodexNativeSkillIsolation,
+  resolveCodexNativeSkillIsolation,
+} from "./native-skill-isolation.js";
+import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { mergeCodexNativeProjectDocThreadConfig } from "./project-doc-thread-config.js";
-import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
+import { flattenCodexDynamicToolFunctions, isJsonObject, type JsonObject } from "./protocol.js";
 import { readScheduledCodexAppManagedRequirementsFingerprint } from "./scheduled-app-authority.js";
 import {
   hashCodexAppServerBindingFingerprint,
@@ -55,7 +59,6 @@ import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
   CodexThreadFinalConfigPatchResult,
-  CodexThreadRequestContext,
 } from "./thread-lifecycle-types.js";
 import { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";
 import {
@@ -66,6 +69,10 @@ import {
 } from "./thread-requests.js";
 import { mergeCodexNativeShellEnvironment } from "./thread-shell-environment.js";
 import { resolveCodexWebSearchPlan } from "./web-search.js";
+
+export type CodexThreadRequestContext = Awaited<
+  ReturnType<typeof prepareCodexThreadRequestContext>
+>;
 
 function assertCodexThreadInferenceAuthority(
   params: CodexStartOrResumeThreadParams,
@@ -109,7 +116,7 @@ export async function prepareCodexThreadRequestContext(
     assertCurrent: () => void;
     throwIfAborted: () => void;
   },
-): Promise<CodexThreadRequestContext> {
+) {
   const startModelSelection = resolveCodexAppServerThreadModelSelection({
     homeScope: params.appServer.start.homeScope,
     provider: params.params.provider,
@@ -162,7 +169,10 @@ export async function prepareCodexThreadRequestContext(
     bindingIdentity: options.bindingIdentity,
     startModelSelection,
     startModelProvider: startModelSelection.modelProvider,
-    normalizeBindingModelProvider: (authProfileId, modelProvider) =>
+    normalizeBindingModelProvider: (
+      authProfileId: string | undefined,
+      modelProvider: string | undefined,
+    ) =>
       normalizeCodexAppServerBindingModelProvider({
         authProfileId,
         modelProvider,
@@ -258,6 +268,23 @@ export async function prepareCodexThreadFinalConfigPatch(
       configPatch: params.finalConfigPatch,
       nativeHookRelayGeneration: params.nativeHookRelayGeneration,
     }
+  );
+}
+
+export function buildCodexThreadRequestConfig(
+  params: CodexStartOrResumeThreadParams,
+  context: Pick<CodexThreadRequestContext, "userMcpServersConfigPatch" | "nativeSkillIsolation">,
+  pluginConfigPatch: JsonObject | undefined,
+  finalConfigPatch: JsonObject | undefined,
+): JsonObject | undefined {
+  return applyCodexNativeSkillIsolation(
+    mergeCodexThreadConfigs(
+      params.config,
+      context.userMcpServersConfigPatch,
+      pluginConfigPatch,
+      finalConfigPatch,
+    ),
+    context.nativeSkillIsolation,
   );
 }
 

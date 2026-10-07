@@ -6,6 +6,7 @@ import { resolveConfigPath } from "../../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../../config/sessions/targets.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { preflightOpenClawDatabaseSchemaContexts } from "../../state/openclaw-database-preflight-contexts.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
@@ -29,6 +30,18 @@ export type TargetDatabaseSchemaContextOptions = {
   /** Candidate admission owns schema validation; the installed process still pins source bytes. */
   configValidation?: "candidate";
 };
+
+export function assertReadableGitMetadata(
+  metadataUnreadable: string | undefined,
+  code: Parameters<typeof createUpdatePreflightFailure>[0] = "target-git-metadata",
+): void {
+  if (metadataUnreadable) {
+    const failure = createUpdatePreflightFailure(code, metadataUnreadable);
+    throw new UpdatePreMutationError("target-metadata-preflight", failure.message, {
+      failureFacts: failure.failureFacts,
+    });
+  }
+}
 
 // Doctor's input hash stays root-only; activation also fences include bytes and targets.
 export function updateConfigSource(snapshot: ConfigFileSnapshot) {
@@ -100,13 +113,8 @@ export async function captureTargetDatabaseSchemaContext(
   let legacyConfigPlan =
     before &&
     isDeepStrictEqual(updateConfigSource(before), updateConfigSource(snapshot)) &&
-    isDeepStrictEqual(
-      planned.includeIdentity.includeFileHashesForWrite ?? {},
-      writeOptions.includeFileHashesForWrite ?? {},
-    ) &&
-    isDeepStrictEqual(
-      planned.includeIdentity.includeFileTargetsForWrite ?? {},
-      writeOptions.includeFileTargetsForWrite ?? {},
+    (["includeFileHashesForWrite", "includeFileTargetsForWrite"] as const).every((key) =>
+      isDeepStrictEqual(planned.includeIdentity[key] ?? {}, writeOptions[key] ?? {}),
     )
       ? planned
       : undefined;

@@ -48,6 +48,8 @@ import {
   canonicalSessionKeyMigrationRequiredError,
   readWithCanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
+import { prepareSessionColdSourceGuard } from "./session-cold-storage-source-guard.worker.js";
+import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { boundSessionDiagnosticText } from "./session-diagnostic-text.js";
 import {
   assertSessionEntryCurrentNativeSource,
@@ -355,19 +357,46 @@ export function readExactSessionEntriesWithLifecycle(
     const read = withOpenClawAgentDatabaseReadOnly(
       (database) => {
         source = captureSessionEntryReadSource(database, request.expectedIdentity);
-        return runSqliteDeferredTransactionSync(database.db, () =>
-          request.projection === "worktree"
-            ? readSessionWorktreeOwnerFactsInDatabase(database, request.sessionKeys)
-            : request.sessionKeys.flatMap((sessionKey) => {
-                const entry = readExactSessionEntryRow(
-                  database,
-                  sessionKey,
-                  request.snapshotFields ?? "full",
-                  "canonical",
-                )?.entry;
-                return entry ? [{ sessionKey, entry }] : [];
-              }),
+        using sourceGuard = prepareSessionColdSourceGuard(
+          { ...request.database, env: request.env },
+          request.manualCompact?.sources,
         );
+        return runSqliteDeferredTransactionSync(database.db, () => {
+          const entries =
+            request.projection === "worktree"
+              ? readSessionWorktreeOwnerFactsInDatabase(database, request.sessionKeys)
+              : request.sessionKeys.flatMap((sessionKey) => {
+                  const entry = readExactSessionEntryRow(
+                    database,
+                    sessionKey,
+                    request.snapshotFields ?? "full",
+                    "canonical",
+                  )?.entry;
+                  return entry ? [{ sessionKey, entry }] : [];
+                });
+          return {
+            entries,
+            ...(request.manualCompact
+              ? {
+                  manualCompact: {
+                    archive: readSessionColdTranscript(
+                      database.db,
+                      request.manualCompact.sessionId,
+                    ),
+                    refusedSource: sourceGuard.read(
+                      database,
+                      new Map(
+                        request.sessionKeys.map((key) => [
+                          key,
+                          entries.find((row) => row.sessionKey === key)?.entry,
+                        ]),
+                      ),
+                    ),
+                  },
+                }
+              : {}),
+          };
+        });
       },
       { ...request.database, env: request.env },
     );
@@ -380,7 +409,7 @@ export function readExactSessionEntriesWithLifecycle(
     return {
       kind: "session-exact-entries",
       source,
-      entries: read.found ? read.value : [],
+      ...(read.found ? read.value : { entries: [] }),
       lifecycleTimestamps: {},
     };
   }

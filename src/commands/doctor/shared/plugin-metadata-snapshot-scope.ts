@@ -86,31 +86,24 @@ export function createDoctorPluginMetadataSnapshotScope(params: {
       workspaceDir === undefined && currentBaseSnapshot?.pluginIds === undefined
         ? currentBaseSnapshot
         : undefined;
-    for (const current of [snapshotsByWorkspace.get(workspaceDir), inheritedBase]) {
-      if (
-        current &&
+    const current = [snapshotsByWorkspace.get(workspaceDir), inheritedBase].find(
+      (snapshot) =>
+        snapshot &&
         isPluginMetadataSnapshotCompatible({
-          snapshot: current,
+          snapshot,
           config,
           env,
-          workspaceDir: workspaceDir ?? current.workspaceDir,
-        })
-      ) {
-        const snapshot = resolveConfigWideDoctorPluginMetadataSnapshot({
-          snapshot: current,
-          config,
-          env,
-        });
-        snapshotsByWorkspace.set(workspaceDir, snapshot);
-        return snapshot;
-      }
-    }
+          workspaceDir: workspaceDir ?? snapshot.workspaceDir,
+        }),
+    );
     const snapshot = resolveConfigWideDoctorPluginMetadataSnapshot({
-      snapshot: loadPluginMetadataSnapshot({
-        config,
-        env,
-        ...(workspaceDir ? { workspaceDir } : {}),
-      }),
+      snapshot:
+        current ??
+        loadPluginMetadataSnapshot({
+          config,
+          env,
+          ...(workspaceDir ? { workspaceDir } : {}),
+        }),
       config,
       env,
     });

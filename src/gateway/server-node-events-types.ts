@@ -23,7 +23,11 @@ export type NodeEventContext = Pick<
   nodeSubscribe: (nodeId: string, sessionKey: string, connId?: string) => void | Promise<void>;
   nodeUnsubscribe: (nodeId: string, sessionKey: string, connId?: string) => void | Promise<void>;
   loadGatewayModelCatalogSnapshot?: GatewayRequestContext["loadGatewayModelCatalogSnapshot"];
-  authorizeNodeSystemRunEvent: NodeRegistry["authorizeSystemRunEvent"];
+  authorizeNodeSystemRunEvent: (
+    params: Omit<Parameters<NodeRegistry["authorizeSystemRunEventWithState"]>[0], "terminal"> & {
+      event: "exec.started" | "exec.finished" | "exec.denied";
+    },
+  ) => boolean | NonNullable<ReturnType<NodeRegistry["authorizeSystemRunEventWithState"]>>;
   updateNodePresenceActivity?: (
     params: Omit<NodePresenceActivityUpdate, "observedAtMs">,
   ) => { lastActiveAtMs: number; presenceUpdatedAtMs: number } | null;

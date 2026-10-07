@@ -11,8 +11,8 @@ import type { TtsAutoMode } from "../../config/types.tts.js";
 import { isSuppressedControlReplyText } from "../../gateway/control-reply-text.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import {
-  getDeliveryQueueEntryStatus,
-  loadDeliveryQueueEntry,
+  captureDeliveryQueueStateContext,
+  inspectDeliveryQueueReceipt,
   type DeliveryQueueCompletionRetention,
 } from "../../infra/delivery-queue-sqlite.js";
 import * as deliveryRecovery from "../../infra/delivery-recovery.shared.js";
@@ -259,8 +259,15 @@ export function buildDirectCronDeliveryIdempotencyKey(params: {
 }
 
 /** Receipts own recipient delivery; projections never stand in for custody. */
-export function isCompletedDirectCronDelivery(id: string): boolean {
-  return getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, id) === "completed";
+export async function isCompletedDirectCronDelivery(id: string): Promise<boolean> {
+  const context = captureDeliveryQueueStateContext();
+  const receipt = await inspectDeliveryQueueReceipt(
+    OUTBOUND_DELIVERY_QUEUE_NAME,
+    id,
+    false,
+    context,
+  );
+  return receipt.status === "completed";
 }
 
 /** Wait only for an active recipient owner, never for crashed ambiguous sends. */
@@ -268,17 +275,19 @@ export async function waitForCompletedDirectCronDelivery(params: {
   id: string;
   signal?: AbortSignal;
 }): Promise<boolean> {
+  const context = captureDeliveryQueueStateContext();
   // SQLite producer leases fence cross-process sends for at most 30 seconds.
   for (let attempt = 0; attempt < 120; attempt += 1) {
-    const status = getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, params.id);
+    params.signal?.throwIfAborted();
+    const { status, pendingEntry: owner } = await inspectDeliveryQueueReceipt(
+      OUTBOUND_DELIVERY_QUEUE_NAME,
+      params.id,
+      true,
+      context,
+    );
+    params.signal?.throwIfAborted();
     if (status === "completed") {
       return true;
-    }
-    const owner =
-      status === "pending" ? loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, params.id) : null;
-    if (!owner && status === "pending") {
-      // Completion can replace a pending row between the two indexed reads.
-      return isCompletedDirectCronDelivery(params.id);
     }
     if (
       !owner ||

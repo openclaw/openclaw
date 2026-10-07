@@ -581,6 +581,7 @@ async function runPreparedCliAgentOwned(
 
     const finishDeliveredFailure = async (
       error: unknown,
+      bindingReplacedDuringRun: boolean,
     ): Promise<EmbeddedAgentRunResult | undefined> => {
       const evidence = getCliMessagingDeliveryEvidence(error);
       if (!evidence) {
@@ -595,6 +596,7 @@ async function runPreparedCliAgentOwned(
         preparedContextAgentMeta,
         sessionBindingDisabled,
         reusableCliSessionId: resolveCliSessionId(context.reusableCliSession),
+        bindingReplacedDuringRun,
       });
     };
 

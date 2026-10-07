@@ -200,16 +200,20 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
   const lifecycleGeneration = captureAgentRunLifecycleGeneration(params.identity.runId);
   const runContext = getAgentRunContext(params.identity.runId);
   const placementRuntime = await resolveSessionPlacementRuntimeOverride(params.identity);
+  params.abortSignal?.throwIfAborted();
+  params.preparedRunAdmission?.assertSourceCurrent();
+  assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+  const harnessContext = (provider: string, modelId: string) => ({
+    config: params.selection.cfg,
+    provider,
+    modelId,
+    agentId: params.identity.agentId,
+    sessionKey: params.harness.sessionKey,
+  });
   const resolveRuntimeOverride = (provider: string, model: string) => {
     const requestedRuntime = params.harness.resolveRuntimeOverride(provider, model);
     assertRequiredWorkerSelection(params.selection.cfg, { agentRuntime: requestedRuntime });
-    const policy = resolveAgentHarnessPolicy({
-      config: params.selection.cfg,
-      provider,
-      modelId: model,
-      agentId: params.identity.agentId,
-      sessionKey: params.harness.sessionKey,
-    });
+    const policy = resolveAgentHarnessPolicy(harnessContext(provider, model));
     if (params.selection.cfg.cloudWorkers?.requiredProfile) {
       return policy.runtime;
     }
@@ -219,9 +223,6 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
         ? placementRuntime
         : undefined;
   };
-  params.abortSignal?.throwIfAborted();
-  params.preparedRunAdmission?.assertSourceCurrent();
-  assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
   const clearObservedModel = () => {
     const event = {
       ...params.identity,
@@ -273,11 +274,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     }
     const prepare = () =>
       ensureSelectedAgentHarnessPlugin({
-        config: params.selection.cfg,
-        provider: candidate.provider,
-        modelId: candidate.model,
-        agentId: params.identity.agentId,
-        sessionKey: params.harness.sessionKey,
+        ...harnessContext(candidate.provider, candidate.model),
         agentHarnessId: candidate.agentHarnessRuntimeOverride,
         agentHarnessRuntimeOverride: candidate.agentHarnessRuntimeOverride,
         workspaceDir: params.harness.workspaceDir,
@@ -338,11 +335,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
                 resolvedHost ??
                 (() => {
                   const harness = selectAgentHarness({
-                    provider: candidate.provider,
-                    modelId: candidate.model,
-                    config: params.selection.cfg,
-                    agentId: params.identity.agentId,
-                    sessionKey: params.harness.sessionKey,
+                    ...harnessContext(candidate.provider, candidate.model),
                     agentHarnessRuntimeOverride,
                   });
                   return {
@@ -520,6 +513,21 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
         authScope,
       })
     ) {
+      const recordTargetUnavailable = (attempts: FallbackAttempt[]) =>
+        recordEmbeddedCyberFailoverTargetUnavailable({
+          sessionId: params.identity.sessionId,
+          target,
+          authScope,
+          attempts,
+          cooloffMs: cyberFailover.cooloffMs,
+        });
+      const restoreOriginalRefusal = () => {
+        assistantErrorTranscript.restore(originalErrorTranscript);
+        fallbackResult = {
+          ...originalFallbackResult,
+          result: { ...originalFallbackResult.result, turnAttempt: undefined },
+        };
+      };
       if (originalFallbackResult.result.turnAttempt) {
         await discardTurnAttempt(originalFallbackResult.result.turnAttempt);
       }
@@ -538,13 +546,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
           targetFallbackResult.outcome === "completed" &&
           isEmbeddedCyberFailoverTargetUsable(targetFallbackResult.result.result);
         if (!usable) {
-          recordEmbeddedCyberFailoverTargetUnavailable({
-            sessionId: params.identity.sessionId,
-            target,
-            authScope,
-            attempts: targetFallbackResult.attempts,
-            cooloffMs: cyberFailover.cooloffMs,
-          });
+          recordTargetUnavailable(targetFallbackResult.attempts);
         }
         const targetResult = targetFallbackResult.result.result;
         // Retain cancellation or committed work even when the policy retry failed.
@@ -573,11 +575,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
           if (targetFallbackResult.result.turnAttempt) {
             await discardTurnAttempt(targetFallbackResult.result.turnAttempt);
           }
-          assistantErrorTranscript.restore(originalErrorTranscript);
-          fallbackResult = {
-            ...originalFallbackResult,
-            result: { ...originalFallbackResult.result, turnAttempt: undefined },
-          };
+          restoreOriginalRefusal();
         }
       } catch (error) {
         const resolution = resolveModelFallbackError(error, {
@@ -592,27 +590,17 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
           throw error;
         }
         if (resolution.error.reason === "auth" || resolution.error.reason === "auth_permanent") {
-          recordEmbeddedCyberFailoverTargetUnavailable({
-            sessionId: params.identity.sessionId,
-            target,
-            authScope,
-            attempts: [
-              {
-                provider: target.provider,
-                model: target.model,
-                error: resolution.error.message,
-                reason: resolution.error.reason,
-                code: resolution.error.code,
-              },
-            ],
-            cooloffMs: cyberFailover.cooloffMs,
-          });
+          recordTargetUnavailable([
+            {
+              provider: target.provider,
+              model: target.model,
+              error: resolution.error.message,
+              reason: resolution.error.reason,
+              code: resolution.error.code,
+            },
+          ]);
         }
-        assistantErrorTranscript.restore(originalErrorTranscript);
-        fallbackResult = {
-          ...originalFallbackResult,
-          result: { ...originalFallbackResult.result, turnAttempt: undefined },
-        };
+        restoreOriginalRefusal();
       }
     }
     const abortFields =
@@ -669,13 +657,9 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
         fallbackOutcome: outcome,
         terminal,
       });
-    let releaseAcceptedTerminalWork: (() => void) | undefined;
-    if (acceptedTerminal) {
-      const acceptedTerminalWork = await params.onAcceptedTerminal?.();
-      if (typeof acceptedTerminalWork === "function") {
-        releaseAcceptedTerminalWork = acceptedTerminalWork;
-      }
-    }
+    const releaseAcceptedTerminalWork = acceptedTerminal
+      ? await params.onAcceptedTerminal?.()
+      : undefined;
     try {
       if (fallbackResult.result.turnAttempt) {
         if (acceptedTerminal) {
@@ -690,7 +674,9 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
         }
       }
     } finally {
-      releaseAcceptedTerminalWork?.();
+      if (typeof releaseAcceptedTerminalWork === "function") {
+        releaseAcceptedTerminalWork();
+      }
     }
     let sessionOverrideSettled = false;
     const settleSessionOverride = async () => {

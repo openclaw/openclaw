@@ -6,10 +6,11 @@ import { promisify } from "node:util";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { afterEach, expect, test, vi } from "vitest";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findGitCheckoutRoot } from "../agents/worktrees/git.js";
-import { getRegistryWorktree } from "../agents/worktrees/registry.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
+import { getRegistryWorktree } from "../agents/worktrees/registry.test-support.js";
+import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
@@ -289,7 +290,9 @@ test.each([
     const { storePath } = await createSessionStoreDir();
     await writeSessionStore({ entries: { main: sessionStoreEntry("sess-retained-parent") } });
     const warnSpy = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
-    const originalRemoveIfLossless = managedWorktrees.removeIfLossless.bind(managedWorktrees);
+    const originalRemoveIfLossless = captureMethodCall("removeIfLossless")(
+      ManagedWorktreeService.prototype,
+    );
     let restoreRemoveIfLossless = () => {};
     let worktreeId: string | undefined;
     try {
@@ -308,12 +311,12 @@ test.each([
         await fs.writeFile(dirtyFile, "preserve my work\n");
       } else {
         const removeSpy = vi
-          .spyOn(managedWorktrees, "removeIfLossless")
-          .mockImplementation(async (id) => {
+          .spyOn(ManagedWorktreeService.prototype, "removeIfLossless")
+          .mockImplementation(async function (this: ManagedWorktreeService, id) {
             if (outcome === "failed") {
               throw new Error("simulated cleanup failure");
             }
-            await originalRemoveIfLossless(id);
+            await originalRemoveIfLossless(this, id);
             return false;
           });
         restoreRemoveIfLossless = () => removeSpy.mockRestore();
@@ -433,14 +436,16 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
 
     // Pause the exact old-binding removal before destructive work. A same-key
     // worktree reset must remain fenced until that prior generation is gone.
-    const originalRemoveIfLossless = managedWorktrees.removeIfLossless.bind(managedWorktrees);
+    const originalRemoveIfLossless = captureMethodCall("removeIfLossless")(
+      ManagedWorktreeService.prototype,
+    );
     const removalGate = new Promise<void>((resolve) => {
       releaseWorktreeRemoval = resolve;
     });
     const { promise: removalStarted, resolve: markRemovalStarted } = createDeferredCore();
     const removeIfLosslessSpy = vi
-      .spyOn(managedWorktrees, "removeIfLossless")
-      .mockImplementation(async (id) => {
+      .spyOn(ManagedWorktreeService.prototype, "removeIfLossless")
+      .mockImplementation(async function (this: ManagedWorktreeService, id) {
         if (id === worktree?.id) {
           expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
             targetSessionKey: "agent:main:main",
@@ -450,7 +455,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
           expect(isSessionLifecycleMutationActive(storePath, ["agent:main:main"])).toBe(true);
           await removalGate;
         }
-        return await originalRemoveIfLossless(id);
+        return await originalRemoveIfLossless(this, id);
       });
     restoreRemoveIfLossless = () => removeIfLosslessSpy.mockRestore();
     const resetPromise = directSessionReq<{

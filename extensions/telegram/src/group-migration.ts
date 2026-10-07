@@ -16,23 +16,23 @@ type TelegramGroupMigrationResult = {
 function resolveAccountGroups(
   cfg: OpenClawConfig,
   accountId?: string | null,
-): { groups?: TelegramGroups } {
+): TelegramGroups | undefined {
   if (!accountId) {
-    return {};
+    return undefined;
   }
   const normalized = normalizeAccountId(accountId);
   const accounts = cfg.channels?.telegram?.accounts;
   if (!accounts || typeof accounts !== "object") {
-    return {};
+    return undefined;
   }
   const exact = accounts[normalized];
   if (exact?.groups) {
-    return { groups: exact.groups };
+    return exact.groups;
   }
   const matchKey = Object.keys(accounts).find(
     (key) => normalizeLowercaseStringOrEmpty(key) === normalizeLowercaseStringOrEmpty(normalized),
   );
-  return { groups: matchKey ? accounts[matchKey]?.groups : undefined };
+  return matchKey ? accounts[matchKey]?.groups : undefined;
 }
 
 function migrateTelegramGroupsInPlace(
@@ -64,7 +64,7 @@ export function migrateTelegramGroupConfig(params: {
     scope: MigrationScope;
     groups: TelegramGroups | undefined;
   }> = [
-    { scope: "account", groups: resolveAccountGroups(params.cfg, params.accountId).groups },
+    { scope: "account", groups: resolveAccountGroups(params.cfg, params.accountId) },
     { scope: "global", groups: params.cfg.channels?.telegram?.groups },
   ];
 
@@ -73,9 +73,7 @@ export function migrateTelegramGroupConfig(params: {
     if (result.migrated) {
       scopes.push(target.scope);
     }
-    if (result.skippedExisting) {
-      skippedExisting = true;
-    }
+    skippedExisting ||= result.skippedExisting;
   }
 
   return { migrated: scopes.length > 0, skippedExisting, scopes };

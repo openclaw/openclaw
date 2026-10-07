@@ -352,6 +352,20 @@ cannot be updated, OpenClaw continues with the remaining plugins, keeps the prev
 installation where possible, and prints a short next action. A running updated
 Gateway can also report a plugin that did not load without turning the core update
 into a failure. Individual plugin outcomes remain available in `--json` output.
+When ClawHub has not published a version-matched official runtime plugin, the
+updater tries its declared trusted npm source for that same version, honoring
+catalog pins. Security and integrity refusals do not permit a source fallback.
+If neither source can serve the release, a
+compatible working installation stays in place with a version-skew warning and
+an `openclaw plugins update <id>` retry instruction.
+
+Unfinished plugin migrations retain their settings and state inputs while
+`plugins install`, `plugins update`, `doctor --fix`, and `update repair` repair
+the package. A verified replacement can be installed before its remaining data
+migration completes; pending migration still guards runtime activation. Explicit
+`config unset plugins.entries.<id>` can remove that entry, with the normal config
+backup preserved. Removing the entry does not settle its pending data migration.
+
 Failures to install core, repair required configuration or state, or start the
 updated Gateway remain update failures, except for the service-definition refusals
 described above.

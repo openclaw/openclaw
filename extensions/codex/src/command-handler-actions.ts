@@ -215,31 +215,25 @@ export async function handleNativeGoal(
     assertCurrent: authority.assertCurrent,
     ...(connection.usesSupervisionConnection ? { startOptions: connection.appServer.start } : {}),
   };
-  if (action === "status" || action === "get") {
+  if (action === "status" || action === "get" || action === "clear") {
+    const clear = action === "clear";
     if (args.length > 1) {
-      return "Usage: /codex goal [status]";
+      return clear ? "Usage: /codex goal clear" : "Usage: /codex goal [status]";
     }
     const response = await deps.codexControlRequest(
       pluginConfig,
-      CODEX_CONTROL_METHODS.getThreadGoal,
+      clear ? CODEX_CONTROL_METHODS.clearThreadGoal : CODEX_CONTROL_METHODS.getThreadGoal,
       { threadId: binding.threadId },
-      goalRequestOptions,
+      clear
+        ? { ...goalRequestOptions, assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx) }
+        : goalRequestOptions,
     );
+    if (clear) {
+      return isJsonObject(response) && response.cleared === true
+        ? "Cleared the Codex goal."
+        : "No Codex goal was active.";
+    }
     return formatNativeGoal(response);
-  }
-  if (action === "clear") {
-    if (args.length > 1) {
-      return "Usage: /codex goal clear";
-    }
-    const response = await deps.codexControlRequest(
-      pluginConfig,
-      CODEX_CONTROL_METHODS.clearThreadGoal,
-      { threadId: binding.threadId },
-      { ...goalRequestOptions, assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx) },
-    );
-    return isJsonObject(response) && response.cleared === true
-      ? "Cleared the Codex goal."
-      : "No Codex goal was active.";
   }
   const requestedStatus =
     action === "pause"

@@ -241,40 +241,22 @@ function preserveTelegramHtmlTag(
 
 function escapeUnsupportedTelegramHtml(text: string): string {
   let result = "";
-  let index = 0;
   const openTags: string[] = [];
-  while (index < text.length) {
-    const char = text[index];
-    if (char === "&") {
-      const entityEnd = findTelegramHtmlEntityEnd(text, index);
-      if (entityEnd !== -1) {
-        result += text.slice(index, entityEnd + 1);
-        index = entityEnd + 1;
-      } else {
-        result += "&amp;";
-        index += 1;
-      }
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    const end =
+      char === "&"
+        ? findTelegramHtmlEntityEnd(text, index)
+        : char === "<"
+          ? text.indexOf(">", index + 1)
+          : -1;
+    if (end === -1) {
+      result += char === "&" || char === "<" || char === ">" ? escapeTelegramHtml(char) : char;
       continue;
     }
-    if (char === "<") {
-      const end = text.indexOf(">", index + 1);
-      if (end !== -1) {
-        const rawTag = text.slice(index, end + 1);
-        result += preserveTelegramHtmlTag(rawTag, openTags, escapeTelegramHtml);
-        index = end + 1;
-      } else {
-        result += "&lt;";
-        index += 1;
-      }
-      continue;
-    }
-    if (char === ">") {
-      result += "&gt;";
-      index += 1;
-      continue;
-    }
-    result += char;
-    index += 1;
+    const raw = text.slice(index, end + 1);
+    result += char === "&" ? raw : preserveTelegramHtmlTag(raw, openTags, escapeTelegramHtml);
+    index = end;
   }
   return result;
 }

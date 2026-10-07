@@ -58,6 +58,12 @@ changes require a new ownership read. Transactions, pinned snapshots, and dynami
 authorizers keep querying the metadata. This changes no schema, stored bytes, or
 update behavior.
 
+The shared-state content-version marker uses the same admitted read revision.
+Unchanged reads reuse its successful result; foreign commits, local writes,
+rollback, schema changes, and connection disposal invalidate reuse. Transactions,
+pinned snapshots, and authorizer-controlled reads still query the marker. Version
+validation and upgrade or downgrade behavior are unchanged.
+
 Registry discovery reuses successful migration checks for the admitted schema
 generation. The minute retention sweep reads deletion history in a worker and
 shares one matcher across its agent stores; live deletion status and lifecycle
@@ -94,6 +100,10 @@ Returned entries and participant identities remain caller-owned. Transcript
 watermark reads select the hot generation and the retained cold or hot sequence
 in one statement; hot-only readers keep their existing meaning. These query
 changes preserve schemas, stored bytes, live authority, and update behavior.
+
+Display-history readers resolve selected activity anchors by session and event ID,
+retaining the sequence fence inside the same read snapshot. These point lookups
+use the existing primary key and require no schema or data migration.
 
 Session entry writes batch their saved snapshot fields in one upsert, preserving
 per-field revision triggers and rollback.

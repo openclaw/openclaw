@@ -90,28 +90,21 @@ fun resolveProfileAccentArgb(entries: JsonObject?): Long? {
 }
 
 fun resolveGatewayThemeFamily(config: JsonObject?): AppearanceThemeFamily {
-  val raw =
-    config
-      ?.get("ui")
-      .asObjectOrNull()
-      ?.get("prefs")
-      .asObjectOrNull()
-      ?.get("theme")
-      .asStringOrNull()
+  val raw = gatewayUiPrefs(config)?.get("theme").asStringOrNull()
   return AppearanceThemeFamily.entries.firstOrNull { it.rawValue == raw } ?: AppearanceThemeFamily.Claw
 }
 
 fun resolveGatewayThemeMode(config: JsonObject?): AppearanceThemeMode {
-  val raw =
-    config
-      ?.get("ui")
-      .asObjectOrNull()
-      ?.get("prefs")
-      .asObjectOrNull()
-      ?.get("themeMode")
-      .asStringOrNull()
+  val raw = gatewayUiPrefs(config)?.get("themeMode").asStringOrNull()
   return AppearanceThemeMode.entries.firstOrNull { it.rawValue == raw } ?: AppearanceThemeMode.System
 }
+
+private fun gatewayUiPrefs(config: JsonObject?): JsonObject? =
+  config
+    ?.get("ui")
+    .asObjectOrNull()
+    ?.get("prefs")
+    .asObjectOrNull()
 
 fun resolveGatewayAccentArgb(config: JsonObject?): Long? {
   val ui = config?.get("ui").asObjectOrNull()

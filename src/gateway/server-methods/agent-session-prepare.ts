@@ -69,28 +69,23 @@ export async function prepareAgentSession(params: PrepareAgentSessionParams) {
   if (!selected.entry?.sessionId) {
     return prepareAdmittedAgentSession(params, selected, requestedAgentId);
   }
-  const database = toDatabaseOptions(
-    resolveSqliteScope({
-      agentId: parseAgentSessionKey(selected.canonicalKey)?.agentId ?? requestedAgentId,
-      sessionKey: selected.canonicalKey,
-      storePath: selected.storePath,
-    }),
-  );
+  const databaseForSession = (session: typeof selected) =>
+    toDatabaseOptions(
+      resolveSqliteScope({
+        agentId: parseAgentSessionKey(session.canonicalKey)?.agentId ?? requestedAgentId,
+        sessionKey: session.canonicalKey,
+        storePath: session.storePath,
+      }),
+    );
   return withOpenClawAgentDatabaseRuntime(
-    database,
+    databaseForSession(selected),
     (opened) => {
       params.assertCurrent?.();
       const current = loadSessionEntry(params.requestedSessionKey, {
         agentId: requestedAgentId,
         clone: false,
       });
-      const currentDatabase = toDatabaseOptions(
-        resolveSqliteScope({
-          agentId: parseAgentSessionKey(current.canonicalKey)?.agentId ?? requestedAgentId,
-          sessionKey: current.canonicalKey,
-          storePath: current.storePath,
-        }),
-      );
+      const currentDatabase = databaseForSession(current);
       if (
         current.canonicalKey !== selected.canonicalKey ||
         currentDatabase.agentId !== opened.agentId ||

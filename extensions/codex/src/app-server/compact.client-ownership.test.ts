@@ -22,9 +22,9 @@ import {
   releaseLeasedSharedCodexAppServerClient,
   retainSharedCodexAppServerClientIfCurrent,
   retireSharedCodexAppServerClientIfCurrent,
-  resetSharedCodexAppServerClientForTests,
 } from "./shared-client.js";
 import * as sharedClientRuntime from "./shared-client.js";
+import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import { createInferenceReadyClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
 import {
   createParams,

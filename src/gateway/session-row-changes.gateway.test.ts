@@ -104,6 +104,7 @@ describe("gateway session row change publications", () => {
         rejectCommit = true;
         await expect(write()).rejects.toThrow("commit rejected");
         expect(changed).not.toHaveBeenCalled();
+        expect(facts).not.toHaveBeenCalled();
         rejectCommit = false;
         const committed = await write();
         if (source === "observer digests") {
@@ -121,6 +122,7 @@ describe("gateway session row change publications", () => {
           expect(await write()).toBe(false);
         }
         expect(changed).toHaveBeenCalledTimes(1);
+        expect(facts).toHaveBeenCalledTimes(1);
       } finally {
         unsubscribe();
       }

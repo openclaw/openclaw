@@ -496,10 +496,9 @@ describe("resident sessions.list", () => {
         ).toBe("active reply"),
       );
       const healed = await listSessions({ client, context, request });
-      expect(healed.sessions.find((session) => session.key === sessionKey)).toMatchObject({
-        derivedTitle: undefined,
-        lastMessagePreview: "active reply",
-      });
+      const healedRow = healed.sessions.find((session) => session.key === sessionKey);
+      expect(healedRow?.derivedTitle).toBeUndefined();
+      expect(healedRow?.lastMessagePreview).toBe("active reply");
 
       expect((await listSessions({ client, context, request })).sessions).toEqual(healed.sessions);
       expect(loadSessionEntry({ agentId: "main", sessionKey })).toEqual(storedEntry);

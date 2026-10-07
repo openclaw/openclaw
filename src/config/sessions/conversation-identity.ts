@@ -206,13 +206,20 @@ export function conversationIdentityFromMsgContext(params: {
     accountId: route?.accountId,
     threadId: route?.threadId,
   });
+  // A synthetic turn has no transport sender. Its host-prepared originating route
+  // is paired delivery, while From can be an allowlist identity used for execution.
+  const pairedDeliveryContext =
+    explicitDeliveryContext ??
+    (params.ctx.InternalTurnSource && params.ctx.OriginatingChannel && params.ctx.OriginatingTo
+      ? deliveryContext
+      : undefined);
   const groupResolution = params.groupResolution ?? resolveGroupSessionKey(params.ctx);
   const routeContext = conversationRouteContextFromMsgContext(params.ctx);
   const kind = groupResolution?.chatType ?? normalizeKind(params.ctx.ChatType);
   const directIngressTarget = kind === "direct" ? normalizeText(params.ctx.From) : undefined;
   // An explicit delivery context is already a paired route. Otherwise direct ingress
   // addresses the sender (`From`), while OriginatingTo can describe the local endpoint.
-  const useDirectIngressTarget = Boolean(directIngressTarget && !explicitDeliveryContext?.to);
+  const useDirectIngressTarget = Boolean(directIngressTarget && !pairedDeliveryContext?.to);
   const deliveryTarget = useDirectIngressTarget
     ? directIngressTarget
     : (normalizeText(deliveryContext?.to) ??

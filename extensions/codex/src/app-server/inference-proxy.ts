@@ -209,7 +209,6 @@ export async function createCodexInferenceProxy(params: {
     return {
       target,
       path: incoming.pathname,
-      sampling: incoming.pathname === "/responses",
     };
   };
   const { prepare, prepareHttp } = createCodexInferenceDispatch({
@@ -235,7 +234,7 @@ export async function createCodexInferenceProxy(params: {
     res.once("close", abort);
     void (async () => {
       try {
-        const { target, sampling, path } = resolveTarget(req);
+        const { target, path } = resolveTarget(req);
         if (req.method !== "POST") {
           throw new Error(FAILURE);
         }
@@ -254,14 +253,7 @@ export async function createCodexInferenceProxy(params: {
           res.writeHead(503, OVERLOAD_HEADERS).end(OVERLOAD_BODY);
           return;
         }
-        upload = await prepareHttp(
-          req,
-          sampling,
-          path,
-          signal,
-          releasePermit,
-          Boolean(params.oauth),
-        );
+        upload = await prepareHttp(req, path, signal, releasePermit, Boolean(params.oauth));
         const preparedUpload = upload;
         let body = upload.body;
         for (let attempt = 0; attempt < (params.oauth ? 2 : 1); attempt++) {
@@ -416,11 +408,11 @@ export async function createCodexInferenceProxy(params: {
       const close = () => finish();
       const failHandshake = () => finish(Date.now() >= deadlineAtMs ? 504 : 502);
       try {
-        const { target, sampling, path } = resolveTarget(req);
+        const { target, path } = resolveTarget(req);
         if (params.oauth) {
           throw new Error(FAILURE);
         }
-        if (!sampling && path !== "/guardian" && path !== "/guardian-classifier") {
+        if (path !== "/responses" && path !== "/guardian" && path !== "/guardian-classifier") {
           throw new Error(FAILURE);
         }
         if (connections.size >= MAX_WEBSOCKETS) {
@@ -619,7 +611,6 @@ export async function createCodexInferenceProxy(params: {
                     }
                     prepared = await prepare(
                       codexWebSocketDataToBuffer(data),
-                      sampling,
                       path,
                       req.headers,
                       signal,

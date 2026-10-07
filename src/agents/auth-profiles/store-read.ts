@@ -147,25 +147,17 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     options: LoadAuthProfileStoreOptions,
     env?: NodeJS.ProcessEnv,
   ): AuthProfileStoreReadSequence<AuthProfileStore | undefined> {
-    let inherited: Result<AuthProfileStore, unknown>;
     try {
-      inherited = {
-        ok: true,
-        value: yield* readAuthProfileStore({ agentDir: options.inheritedAuthDir, options }),
-      };
+      return yield* readAuthProfileStore({ agentDir: options.inheritedAuthDir, options });
     } catch (error) {
-      inherited = { ok: false, error };
+      return loadInheritedAuthProfileStore(
+        () => {
+          throw error;
+        },
+        options.inheritedAuthDir,
+        env ?? getScopedAuthProfileEnv(),
+      );
     }
-    return loadInheritedAuthProfileStore(
-      () => {
-        if (!inherited.ok) {
-          throw inherited.error;
-        }
-        return inherited.value;
-      },
-      options.inheritedAuthDir,
-      env ?? getScopedAuthProfileEnv(),
-    );
   }
 
   function* resolveRuntimeAuthProfileStore(
@@ -471,14 +463,15 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
       published !== undefined &&
       (published.runtimeExternalProfileIds !== undefined ||
         published.runtimeExternalProfileIdsAuthoritative === true);
+    const readOptions = {
+      allowKeychainPrompt: false,
+      readOnly: true,
+      ...(options.inheritedAuthDir ? { inheritedAuthDir: options.inheritedAuthDir } : {}),
+    };
     if (hasPublishedExternalProfiles) {
       const durable = yield* ensureAuthProfileStoreWithoutExternalProfilesReads(
         agentDir,
-        {
-          allowKeychainPrompt: false,
-          readOnly: true,
-          ...(options.inheritedAuthDir ? { inheritedAuthDir: options.inheritedAuthDir } : {}),
-        },
+        readOptions,
         env,
       );
       return mergeAuthProfileStores(durable, published);
@@ -488,12 +481,7 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     }
     return yield* ensureAuthProfileStoreReads(
       agentDir,
-      {
-        config: options.config,
-        readOnly: true,
-        allowKeychainPrompt: false,
-        ...(options.inheritedAuthDir ? { inheritedAuthDir: options.inheritedAuthDir } : {}),
-      },
+      { ...readOptions, config: options.config },
       env,
     );
   }

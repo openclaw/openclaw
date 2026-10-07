@@ -40,8 +40,8 @@ import {
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { isCurrentWorkerWorkspacePendingResultOwner } from "../worker-environments/placement-workspace-result.js";
 import {
-  prepareSessionWorkerPlacementArchiveCheck,
-  prepareSessionWorkerPlacementMutationCheck,
+  prepareSessionWorkerPlacementArchiveCheckAsync,
+  prepareSessionWorkerPlacementMutationCheckAsync,
   prepareSessionWorkerPlacementStop,
 } from "../worker-environments/session-placement-lifecycle.js";
 import { hasGatewaySessionAbortOwner } from "./chat-abort-authorization.js";
@@ -297,14 +297,10 @@ export async function prepareSessionLifecycleDrain(
             .then(() => true)
         : Promise.resolve(false)
       : Promise.resolve(true);
-    const workerWork = workerDrained
-      ? withTimeout(workerDrained, timeoutMs, "worker inference lifecycle drain").then(() => true)
-      : Promise.resolve(true);
-    const terminalWork = terminalDrain
-      ? withTimeout(terminalDrain.drained, timeoutMs, "agent terminal lifecycle drain").then(
-          () => true,
-        )
-      : Promise.resolve(true);
+    const waitForDrain = (work: Promise<void> | undefined, label: string) =>
+      work ? withTimeout(work, timeoutMs, label).then(() => true) : Promise.resolve(true);
+    const workerWork = waitForDrain(workerDrained, "worker inference lifecycle drain");
+    const terminalWork = waitForDrain(terminalDrain?.drained, "agent terminal lifecycle drain");
     const drains = await Promise.all([
       prepared.controllerDrain,
       replyWork,
@@ -325,8 +321,8 @@ export async function prepareSessionLifecycleDrain(
     const placementTarget = { context: params.context, sessionId: params.sessionId };
     const assertPlacementCurrent =
       params.action === "archive"
-        ? prepareSessionWorkerPlacementArchiveCheck(placementTarget).assertCurrent
-        : prepareSessionWorkerPlacementMutationCheck(placementTarget);
+        ? (await prepareSessionWorkerPlacementArchiveCheckAsync(placementTarget)).assertCurrent
+        : await prepareSessionWorkerPlacementMutationCheckAsync(placementTarget);
     return {
       // Only the caller's active mutation may replace this mutex-free ingress lease.
       handoffToMutation: () => releaseAdmissions(),

@@ -35,7 +35,6 @@ import {
 } from "./dynamic-tool-construction-plan.js";
 import {
   filterCodexDynamicTools,
-  filterCodexDynamicToolsForDisabledNativeSurface,
   isForcedPrivateQaCodexRuntime,
   isSystemAgentOnlyCodexDynamicToolAllowlist,
   normalizeCodexDynamicToolName,
@@ -321,12 +320,12 @@ export async function buildDynamicTools(
   const readableAllToolProjection = filterProviderNormalizableTools(allTools);
   preNormalizationDiagnostics.push(...readableAllToolProjection.diagnostics);
   const readableAllTools = [...readableAllToolProjection.tools];
-  const normallyProfiledTools =
-    input.nativeToolSurfaceEnabled === false
-      ? filterCodexDynamicToolsForDisabledNativeSurface(readableAllTools, input.pluginConfig, {
-          preserveShell: shouldKeepOpenClawShellDynamicTools(input, nativeExecutionPolicy),
-        })
-      : filterCodexDynamicTools(readableAllTools, input.pluginConfig);
+  const normallyProfiledTools = filterCodexDynamicTools(readableAllTools, input.pluginConfig, {
+    disabledNativeSurface:
+      input.nativeToolSurfaceEnabled === false
+        ? { preserveShell: shouldKeepOpenClawShellDynamicTools(input, nativeExecutionPolicy) }
+        : undefined,
+  });
   const hostSystemAgentActive =
     input.isHostScopedToolActive?.("openclaw") ?? isHostScopedAgentToolActive("openclaw");
   const profileFilteredTools =

@@ -357,17 +357,58 @@ function unitFastFiles(includePatterns?: string[]): string[] {
   return getUnitFastTestFiles(includePatterns).filter((file) => !otherOwners.has(file));
 }
 
-function matchesNativeBunSource(file: string, sha256: string, cwd: string): boolean {
+function nativeBunSourceHash(file: string, cwd: string): string | undefined {
   try {
-    return (
-      createHash("sha256")
-        .update(readFileSync(path.join(cwd, file)))
-        .digest("hex") === sha256
-    );
+    return createHash("sha256")
+      .update(readFileSync(path.join(cwd, file)))
+      .digest("hex");
   } catch {
     // Missing or unreadable qualification inputs retain the ordinary Vitest run.
-    return false;
+    return undefined;
   }
+}
+
+function matchesNativeBunSource(file: string, sha256: string, cwd: string): boolean {
+  return nativeBunSourceHash(file, cwd) === sha256;
+}
+
+export function inspectNativeBunQualifications(cwd = process.cwd()): {
+  staleEntries: string[];
+  changedInputs: { file: string; reason: "changed" | "unreadable" }[];
+} {
+  const hashes = new Map<string, string | undefined>();
+  const changedInputs = new Map<string, "changed" | "unreadable">();
+  const changed = (file: string, expected: string): boolean => {
+    if (!hashes.has(file)) {
+      hashes.set(file, nativeBunSourceHash(file, cwd));
+    }
+    const actual = hashes.get(file);
+    if (actual === expected) {
+      return false;
+    }
+    changedInputs.set(file, actual === undefined ? "unreadable" : "changed");
+    return true;
+  };
+  // Inspect every input even when shared drift already invalidates the cohort.
+  const sharedChanged = Object.entries(nativeBunQualification.setup)
+    .map(([file, sha256]) => changed(file, sha256))
+    .some(Boolean);
+  const staleEntries = Object.entries(nativeBunTestHashes)
+    .filter(([file, sha256]) => {
+      const testChanged = changed(file, sha256);
+      const helperChanged = Object.entries(nativeBunHelperHashes[file] ?? {})
+        .map(([helper, hash]) => changed(helper, hash))
+        .some(Boolean);
+      return sharedChanged || testChanged || helperChanged;
+    })
+    .map(([file]) => file)
+    .toSorted();
+  return {
+    staleEntries,
+    changedInputs: [...changedInputs.keys()]
+      .toSorted()
+      .map((file) => ({ file, reason: changedInputs.get(file)! })),
+  };
 }
 
 function qualifiedNativeBunFiles(files: readonly string[], cwd: string): string[] {

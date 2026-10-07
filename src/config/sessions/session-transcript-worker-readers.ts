@@ -348,17 +348,7 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "usage-cache", ...input }),
     ),
     readMembershipFacts: reader("session-membership-facts", "membership facts", (value) => value),
-    readMembers: async (input) =>
-      await runRequest(
-        () => ({ kind: "session-members", ...input }),
-        JSON.stringify(input).length * 2,
-        (value) => {
-          if (!Array.isArray(value)) {
-            throw new Error("Session history worker returned another result instead of members");
-          }
-          return value;
-        },
-      ),
+    readMembers: reader("session-members", "members", (value) => value),
     readSuggestions: reader("session-suggestions", "suggestions", (value) => value.suggestions),
     readExactEntries: async (input, signal) => {
       const captured = { ...input, env: captureSessionTranscriptStorageEnvironment(input.env) };

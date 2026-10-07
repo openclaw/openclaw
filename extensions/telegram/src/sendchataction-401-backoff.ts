@@ -91,11 +91,12 @@ export function createTelegramSendChatActionHandler({
 }: CreateTelegramSendChatActionHandlerParams) {
   let consecutive401Failures = 0;
   let consecutiveTransientFailures = 0;
-  let suspended = false;
   let transientCooldownUntilMs = 0;
   let failureVersion = 0;
   let authorizationRetryTail = Promise.resolve();
   const blockedUntilByKey = new Map<string, number>();
+  const isSuspended = () =>
+    consecutive401Failures > 0 && consecutive401Failures >= maxConsecutive401;
 
   const clearTransientCooldown = () => {
     consecutiveTransientFailures = 0;
@@ -105,7 +106,6 @@ export function createTelegramSendChatActionHandler({
   const reset = () => {
     consecutive401Failures = 0;
     clearTransientCooldown();
-    suspended = false;
     blockedUntilByKey.clear();
   };
 
@@ -115,6 +115,12 @@ export function createTelegramSendChatActionHandler({
       throw new Error(`sendChatAction transient cooldown active for ${Math.ceil(remainingMs)}ms`);
     }
   };
+  const assertCanSend = () => {
+    if (isSuspended()) {
+      throw new Error("sendChatAction suspended");
+    }
+    assertNotCoolingDown();
+  };
 
   const sendChatAction = async (
     chatId: number | string,
@@ -122,7 +128,7 @@ export function createTelegramSendChatActionHandler({
     threadParams: TelegramSendChatActionParams | undefined,
     send: () => Promise<true>,
   ): Promise<void> => {
-    if (suspended) {
+    if (isSuspended()) {
       return;
     }
 
@@ -154,10 +160,7 @@ export function createTelegramSendChatActionHandler({
 
   const sendWithBackoff = async <T>(send: () => Promise<T>, signal: AbortSignal): Promise<T> => {
     signal.throwIfAborted();
-    if (suspended) {
-      throw new Error("sendChatAction suspended");
-    }
-    assertNotCoolingDown();
+    assertCanSend();
     let attemptFailureVersion = failureVersion;
     let releaseAuthorizationRetry: (() => void) | undefined;
     try {
@@ -176,10 +179,7 @@ export function createTelegramSendChatActionHandler({
           }),
         ]);
         signal.throwIfAborted();
-        if (suspended) {
-          throw new Error("sendChatAction suspended");
-        }
-        assertNotCoolingDown();
+        assertCanSend();
       }
       let failuresBeforeBackoff = consecutive401Failures;
       while (failuresBeforeBackoff > 0) {
@@ -190,10 +190,7 @@ export function createTelegramSendChatActionHandler({
         );
         await sleepWithAbort(backoffMs, signal);
         // Another topic can change account state while this request backs off.
-        if (suspended) {
-          throw new Error("sendChatAction suspended");
-        }
-        assertNotCoolingDown();
+        assertCanSend();
         // Earlier in-flight calls can add failures; repeat only for a higher failure count.
         if (consecutive401Failures <= failuresBeforeBackoff) {
           break;
@@ -225,7 +222,6 @@ export function createTelegramSendChatActionHandler({
         consecutive401Failures++;
 
         if (consecutive401Failures >= maxConsecutive401) {
-          suspended = true;
           logger(
             `CRITICAL: sendChatAction suspended after ${consecutive401Failures} consecutive 401 errors. ` +
               `Bot token is likely invalid. Telegram may DELETE the bot if requests continue. ` +
@@ -293,7 +289,7 @@ export function createTelegramSendChatActionHandler({
   return {
     apiTransformer,
     sendChatAction,
-    isSuspended: () => suspended,
+    isSuspended,
     reset,
   };
 }

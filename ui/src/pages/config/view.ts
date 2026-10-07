@@ -464,10 +464,11 @@ export function renderConfig(props: ConfigProps) {
                             activeSubsection: null,
                             showAdvanced: effectiveShowAdvanced,
                             forceAdvancedSection: props.forceAdvancedSection,
-                            onShowAdvanced: () => props.setShowAdvancedSettings(true),
+                            onShowAdvanced: () =>
+                              props.onAppearanceChange({ showAdvancedSettings: true }),
                             onHideAdvanced: props.forceShowAdvanced
                               ? undefined
-                              : () => props.setShowAdvancedSettings(false),
+                              : () => props.onAppearanceChange({ showAdvancedSettings: false }),
                             sectionActions:
                               props.activeSection === "env"
                                 ? html`<button

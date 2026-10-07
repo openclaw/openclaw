@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
+import type { setEnvironmentData } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -179,11 +180,19 @@ describe("node SQLite locations", () => {
 });
 
 describe("node SQLite safety", () => {
+  let inheritedAdmission: Parameters<typeof setEnvironmentData>[1];
   beforeEach(() => {
+    const workerThreads = process.getBuiltinModule("node:worker_threads");
+    inheritedAdmission = workerThreads.getEnvironmentData("openclaw.sqliteNativeRuntimeAdmission");
+    // Observe the library independently of the test runner's earlier admission.
+    workerThreads.setEnvironmentData("openclaw.sqliteNativeRuntimeAdmission", undefined);
     vi.resetModules();
   });
 
   afterEach(() => {
+    process
+      .getBuiltinModule("node:worker_threads")
+      .setEnvironmentData("openclaw.sqliteNativeRuntimeAdmission", inheritedAdmission);
     vi.restoreAllMocks();
   });
 
@@ -246,6 +255,80 @@ describe("node SQLite safety", () => {
       });
     },
   );
+
+  it.each([
+    "unchanged",
+    "pid",
+    "executable",
+    "nodeVersion",
+    "bunVersion",
+    "library",
+    "malformed",
+  ] as const)(
+    "inherits admitted SQLite capabilities only for its original process and library (%s)",
+    async (changed) => {
+      const native = mockBunSqliteNativeBoundary({ isBun: false });
+      const parent = await loadNodeSqliteWithVersion("3.44.6", 1);
+      parent.requireNodeSqlite();
+      parent.prepare.mockRestore();
+      const receiptKey = "openclaw.sqliteNativeRuntimeAdmission";
+      const receipt = native.environment.get(receiptKey);
+      if (changed !== "unchanged") {
+        const value = receipt && typeof receipt === "object" ? receipt : {};
+        const runtime = "runtime" in value ? value.runtime : undefined;
+        native.environment.set(receiptKey, {
+          ...value,
+          ...(changed === "malformed"
+            ? { extensionLoadingSupported: "yes" }
+            : {
+                runtime: {
+                  ...(runtime && typeof runtime === "object" ? runtime : {}),
+                  [changed]: {
+                    pid: process.pid + 1,
+                    executable: `${process.execPath}.other`,
+                    nodeVersion: "99.0.0",
+                    bunVersion: "1.0.0",
+                    library: {
+                      source: "discovered",
+                      path: "/other/sqlite.dylib",
+                      version: "3.53.4",
+                      extensionLoadingSupported: true,
+                    },
+                  }[changed],
+                },
+              }),
+        });
+      }
+      native.mainThread = false;
+      vi.resetModules();
+      const worker = await loadNodeSqliteWithVersion("3.53.4", 0);
+      expect(worker.supportsNodeSqliteJsonb()).toBe(changed !== "unchanged");
+      expect(worker.supportsNodeSqliteExtensionLoading()).toBe(changed !== "unchanged");
+      if (changed === "unchanged") {
+        expect(worker.prepare).not.toHaveBeenCalled();
+      } else {
+        expect(worker.prepare).toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("applies the current WAL safety floor to inherited runtime admission", async () => {
+    const native = mockBunSqliteNativeBoundary({ isBun: false });
+    const parent = await loadNodeSqliteWithVersion("3.53.4", 0);
+    parent.requireNodeSqlite();
+    parent.prepare.mockRestore();
+    const receiptKey = "openclaw.sqliteNativeRuntimeAdmission";
+    const receipt = native.environment.get(receiptKey);
+    native.environment.set(receiptKey, {
+      ...(receipt && typeof receipt === "object" ? receipt : {}),
+      version: "3.51.2",
+    });
+    native.mainThread = false;
+    vi.resetModules();
+    const worker = await loadNodeSqliteWithVersion("3.53.4", 0);
+    expect(() => worker.requireNodeSqlite()).toThrow("SQLite 3.51.2, which is affected");
+    expect(worker.prepare).not.toHaveBeenCalled();
+  });
 });
 
 const homebrew = "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib";

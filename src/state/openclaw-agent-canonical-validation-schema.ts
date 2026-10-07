@@ -1,4 +1,8 @@
+import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { SQLITE_CANONICAL_DEFINITIONS_KEY } from "../infra/bun-sqlite-library.js";
 import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readSqliteSchemaCookie } from "../infra/sqlite-schema-contract.js";
@@ -62,7 +66,22 @@ function expectedDefinitions(): Map<string, string | null> {
   return resolveGlobalSingleton(
     Symbol.for("openclaw.agentCanonicalValidationSchemaDefinitions"),
     () => {
+      const sourceHash = createHash("sha256").update(OPENCLAW_AGENT_SCHEMA_SQL).digest("hex");
+      const inherited: unknown = getEnvironmentData(SQLITE_CANONICAL_DEFINITIONS_KEY);
+      if (
+        isRecord(inherited) &&
+        inherited.format === 1 &&
+        inherited.pid === process.pid &&
+        inherited.sourceHash === sourceHash &&
+        inherited.definitions instanceof Map &&
+        [...inherited.definitions].every(
+          ([name, sql]) => typeof name === "string" && (sql === null || typeof sql === "string"),
+        )
+      ) {
+        return inherited.definitions;
+      }
       const database = openNodeSqliteDatabase(":memory:");
+      let definitions: Map<string, string | null>;
       try {
         // sqlite-allow-raw -- Bootstrap the canonical DDL in an isolated schema comparison database.
         database.exec(
@@ -76,10 +95,18 @@ function expectedDefinitions(): Map<string, string | null> {
             canonicalSessionValidationSchemaSql(),
           ].join("\n"),
         );
-        return readDefinitions(database);
+        definitions = readDefinitions(database);
       } finally {
         database.close();
       }
+      // Publish only newly constructed canonical facts, never target rows or a prior code generation's map.
+      setEnvironmentData(SQLITE_CANONICAL_DEFINITIONS_KEY, {
+        format: 1,
+        pid: process.pid,
+        sourceHash,
+        definitions,
+      });
+      return definitions;
     },
   );
 }

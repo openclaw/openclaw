@@ -65,8 +65,8 @@ describe("infra/device-auth-store", () => {
         env,
       });
       await closeOpenClawStateDatabaseAsync();
-      const databaseDirectory = path.dirname(path.join(stateDir, "state", "openclaw.sqlite"));
-      const artifactsBeforeRead = fs.readdirSync(databaseDirectory).toSorted();
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      const bytesBeforeRead = fs.readFileSync(databasePath);
 
       expect(
         (await loadDeviceAuthTokenReadOnly({ deviceId: "device-1", role: "operator", env }))?.token,
@@ -81,7 +81,8 @@ describe("infra/device-auth-store", () => {
           })
         )?.token,
       ).toBe("origin-token");
-      expect(fs.readdirSync(databaseDirectory).toSorted()).toEqual(artifactsBeforeRead);
+      expect(fs.readFileSync(databasePath)).toEqual(bytesBeforeRead);
+      expect(fs.statSync(`${databasePath}-wal`, { throwIfNoEntry: false })?.size ?? 0).toBe(0);
     });
   });
 

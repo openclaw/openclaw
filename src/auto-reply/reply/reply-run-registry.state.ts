@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveActiveEmbeddedRunRecoveryBlocker } from "../../agents/embedded-agent-runner/run-state.js";
 import { isEmbeddedRunHandleCompacting } from "../../agents/embedded-agent-runner/runs.probes.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { notifyGatewayWorkMetricsChanged } from "../../infra/gateway-work-metrics-events.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   resolveRunStaleThresholdMs,
@@ -220,6 +221,7 @@ const executionStartedOperations =
   (replyRunState.executionStartedOperations = new WeakSet<ReplyOperation>());
 export function markReplyOperationExecutionStarted(operation: ReplyOperation): void {
   executionStartedOperations.add(operation);
+  notifyGatewayWorkMetricsChanged();
 }
 export function hasReplyOperationExecutionStarted(operation: ReplyOperation): boolean {
   return executionStartedOperations.has(operation);
@@ -698,6 +700,7 @@ export function clearReplyRunState(params: {
     replyRunState.activeKeysBySessionId.delete(params.sessionId);
   }
   clearWaitSessionIds(params.sessionKey);
+  notifyGatewayWorkMetricsChanged();
   notifyReplyRunEnded(params.sessionKey);
 }
 

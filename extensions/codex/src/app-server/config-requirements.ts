@@ -108,16 +108,9 @@ function readRequirementsStringArray(value: unknown): string[] | undefined {
 
 function normalizeRequirementsSandboxMode(value: string): CodexSandboxMode | undefined {
   const compact = value.replace(/[\s_-]/g, "").toLowerCase();
-  if (compact === "readonly") {
-    return "read-only";
-  }
-  if (compact === "workspacewrite") {
-    return "workspace-write";
-  }
-  if (compact === "dangerfullaccess") {
-    return "danger-full-access";
-  }
-  return undefined;
+  return (["read-only", "workspace-write", "danger-full-access"] as const).find(
+    (mode) => mode.replaceAll("-", "") === compact,
+  );
 }
 
 function normalizeRequirementsHostName(value: string): string | undefined {

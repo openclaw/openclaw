@@ -8,6 +8,10 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  projectionLane,
+  rotateDatabaseWorkers,
+} from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -248,6 +252,8 @@ describe("direct session model catalogs", () => {
         });
         expect(f.readPrepared).not.toHaveBeenCalled();
         expect(f.loadDeferred).not.toHaveBeenCalled();
+        // Retire cached readers without releasing request-owned registrations.
+        await rotateDatabaseWorkers(projectionLane);
         expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
       });
     },
@@ -325,8 +331,9 @@ describe("direct session model catalogs", () => {
       const changed = await pending;
       const fresh = await f.request(params);
       expect(fresh.mock.calls).toEqual(control.mock.calls);
-      expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
       expect(changed.mock.calls).toEqual(control.mock.calls);
+      await rotateDatabaseWorkers(projectionLane);
+      expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     });
   });
 
@@ -411,6 +418,7 @@ describe("direct session model catalogs", () => {
           }),
         );
       }
+      await rotateDatabaseWorkers(projectionLane);
       expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     });
   });
@@ -466,6 +474,7 @@ describe("direct session model catalogs", () => {
           await pending;
           expect(respond).toHaveBeenCalledWith(true, { swarmEnabled: false });
         }
+        await rotateDatabaseWorkers(projectionLane);
         expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
       });
     },

@@ -24,6 +24,12 @@ type TelegramRichPlainFallbackTrigger =
   | "rich-content-required";
 
 type TelegramPlainFallbackTrigger = TelegramRichPlainFallbackTrigger | "empty-content";
+const RICH_FALLBACK_TRIGGERS: Array<[RegExp, TelegramRichPlainFallbackTrigger]> = [
+  [RICH_ENTITY_INVALID_RE, "rich-entity-invalid"],
+  [RICH_CONTENT_REQUIRED_RE, "rich-content-required"],
+  [RICH_STRUCTURE_INVALID_RE, "rich-structure-invalid"],
+  [PARSE_ERR_RE, "html-parse"],
+];
 
 type TelegramPlainFallbackPlan = {
   plainText: string;
@@ -43,16 +49,7 @@ function getTelegramPlainFallbackTrigger(
   err: unknown,
 ): TelegramRichPlainFallbackTrigger | undefined {
   const message = formatErrorMessage(err);
-  if (RICH_ENTITY_INVALID_RE.test(message)) {
-    return "rich-entity-invalid";
-  }
-  if (RICH_CONTENT_REQUIRED_RE.test(message)) {
-    return "rich-content-required";
-  }
-  if (RICH_STRUCTURE_INVALID_RE.test(message)) {
-    return "rich-structure-invalid";
-  }
-  return PARSE_ERR_RE.test(message) ? "html-parse" : undefined;
+  return RICH_FALLBACK_TRIGGERS.find(([pattern]) => pattern.test(message))?.[1];
 }
 
 export function splitTelegramPlainTextChunks(text: string, limit: number): string[] {

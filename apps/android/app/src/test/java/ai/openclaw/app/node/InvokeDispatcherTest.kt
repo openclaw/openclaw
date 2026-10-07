@@ -13,7 +13,6 @@ import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
 import android.content.Context
 import android.content.pm.PackageManager
-import android.location.Location
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -343,13 +342,18 @@ internal fun newInvokeDispatcher(
     locationHandler =
       LocationHandler(
         appContext = appContext,
-        dataSource = InvokeDispatcherFakeLocationDataSource(),
+        capture = { _, _, _ -> error("unused in InvokeDispatcherTest") },
+        hasFinePermission = { false },
+        hasCoarsePermission = { false },
+        hasBackgroundPermission = { false },
       ),
     deviceHandler = DeviceHandler(appContext),
     notificationsHandler =
       NotificationsHandler(
         appContext = appContext,
-        stateProvider = InvokeDispatcherFakeNotificationsStateProvider(),
+        readSnapshot = { DeviceNotificationSnapshot(enabled = false, connected = false, notifications = emptyList()) },
+        requestServiceRebind = {},
+        executeAction = { NotificationActionResult(ok = true, code = null, message = null) },
       ),
     systemHandler = SystemHandler(InvokeDispatcherFakeSystemNotificationPoster()),
     talkHandler = talkHandler,
@@ -384,33 +388,6 @@ private fun newCameraHandler(appContext: Context): CameraHandler =
     camera = CameraCaptureManager(appContext),
     setCameraAudioCaptureActive = { true },
   )
-
-private class InvokeDispatcherFakeLocationDataSource : LocationDataSource {
-  override fun hasFinePermission(context: Context): Boolean = false
-
-  override fun hasCoarsePermission(context: Context): Boolean = false
-
-  override fun hasBackgroundPermission(context: Context): Boolean = false
-
-  override suspend fun fetchLocation(
-    desiredProviders: List<String>,
-    maxAgeMs: Long?,
-    timeoutMs: Long,
-  ): Location {
-    error("unused in InvokeDispatcherTest")
-  }
-}
-
-private class InvokeDispatcherFakeNotificationsStateProvider : NotificationsStateProvider {
-  override fun readSnapshot(context: Context): DeviceNotificationSnapshot = DeviceNotificationSnapshot(enabled = false, connected = false, notifications = emptyList())
-
-  override fun requestServiceRebind(context: Context) = Unit
-
-  override fun executeAction(
-    context: Context,
-    request: NotificationActionRequest,
-  ): NotificationActionResult = NotificationActionResult(ok = true, code = null, message = null)
-}
 
 private class InvokeDispatcherFakeSystemNotificationPoster : SystemNotificationPoster {
   override fun post(request: SystemNotifyRequest) = Unit

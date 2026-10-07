@@ -443,7 +443,7 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
     ...actual,
     getSessionBindingService: () => ({
       ...actual.getSessionBindingService(),
-      resolveByConversation: (ref: unknown) => bindingMocks.resolveByConversation(ref),
+      resolveByConversationAsync: async (ref: unknown) => bindingMocks.resolveByConversation(ref),
     }),
   };
 });

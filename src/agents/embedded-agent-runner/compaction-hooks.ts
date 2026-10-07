@@ -247,6 +247,13 @@ type CompactionHookParams = {
 /** Internal hooks settle and forward messages before plugin hooks see the same phase. */
 export async function runCompactionHooks(params: CompactionHookParams): Promise<void> {
   params.assertActive?.();
+  const logHookFailure = (hookName: string, error: unknown) => {
+    params.assertActive?.();
+    log.warn(`${hookName} hook failed`, {
+      errorMessage: formatErrorMessage(error),
+      errorStack: error instanceof Error ? error.stack : undefined,
+    });
+  };
   try {
     const hookEvent = createInternalHookEvent(
       "session",
@@ -284,11 +291,7 @@ export async function runCompactionHooks(params: CompactionHookParams): Promise<
       });
     }
   } catch (err) {
-    params.assertActive?.();
-    log.warn(`session:compact:${params.phase} hook failed`, {
-      errorMessage: formatErrorMessage(err),
-      errorStack: err instanceof Error ? err.stack : undefined,
-    });
+    logHookFailure(`session:compact:${params.phase}`, err);
   }
   params.assertActive?.();
   if (params.hookRunner?.hasHooks?.(`${params.phase}_compaction`)) {
@@ -321,11 +324,7 @@ export async function runCompactionHooks(params: CompactionHookParams): Promise<
         );
       }
     } catch (err) {
-      params.assertActive?.();
-      log.warn(`${params.phase}_compaction hook failed`, {
-        errorMessage: formatErrorMessage(err),
-        errorStack: err instanceof Error ? err.stack : undefined,
-      });
+      logHookFailure(`${params.phase}_compaction`, err);
     }
   }
   params.assertActive?.();

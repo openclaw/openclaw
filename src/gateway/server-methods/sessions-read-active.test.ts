@@ -593,7 +593,7 @@ it.each([false, true])(
       const result = await listSessions({
         client: identifiedClient("viewer@example.com"),
         context,
-        request: { agentId: "main", limit: 100 },
+        request: { agentId: "main", activeOnly: true, limit: 100 },
       });
       expect(readiness).toHaveBeenCalled();
       const row = result.sessions.find((session) => session.key === sessionKey);

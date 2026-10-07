@@ -26,10 +26,7 @@ export function hasTelegramOpaqueCallbackPrefix(data?: string | null): boolean {
 }
 
 export function parseTelegramOpaqueCallbackData(data?: string | null): string | null {
-  if (!data) {
-    return null;
-  }
-  if (!hasTelegramOpaqueCallbackPrefix(data)) {
+  if (!data || !hasTelegramOpaqueCallbackPrefix(data)) {
     return null;
   }
   const encoded = data.slice(TELEGRAM_OPAQUE_CALLBACK_PREFIX.length);

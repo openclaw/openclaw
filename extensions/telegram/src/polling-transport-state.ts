@@ -25,10 +25,10 @@ export class TelegramPollingTransportState {
       return undefined;
     }
     const previous = this.#telegramTransport;
-    const shouldCreateTransport = this.#transportDirty || !previous;
-    const nextTransport = shouldCreateTransport
-      ? (this.opts.createTelegramTransport?.() ?? previous)
-      : previous;
+    const nextTransport =
+      this.#transportDirty || !previous
+        ? (this.opts.createTelegramTransport?.() ?? previous)
+        : previous;
     // When the dirty flag triggered a rebuild, release the old transport's
     // dispatchers. Without this, each network stall / recoverable error
     // leaves a full pool of keep-alive sockets to api.telegram.org dangling

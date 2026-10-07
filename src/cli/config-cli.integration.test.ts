@@ -13,7 +13,8 @@ import {
 const configRuntime = await import("../config/config.js");
 const { clearConfigCache } = configRuntime;
 const { REDACTED_SENTINEL } = await import("../config/redact-snapshot.js");
-const { recordDeferredPluginMigrations } = await import("../infra/deferred-plugin-migrations.js");
+const { readDeferredPluginMigrations, recordDeferredPluginMigrations } =
+  await import("../infra/deferred-plugin-migrations.js");
 const { closeOpenClawStateDatabaseForTest } = await import("../state/openclaw-state-db.js");
 const runtimeSchema = await import("../config/runtime-schema.js");
 const { runConfigGet, runConfigPatch, runConfigSet, runConfigUnset } =
@@ -45,10 +46,11 @@ function installRuntimeSchemaReadHook(hook: () => void | Promise<void>): void {
 }
 
 describe("config cli integration", () => {
-  it("rejects explicit edits to pending plugin inputs without acknowledging discarded changes", async () => {
+  it("protects pending plugin inputs while admitting explicit plugin entry removal", async () => {
     const pluginPath = "plugins.entries.sample.config";
     const raw = JSON.stringify({
       gateway: { mode: "local", port: 18789 },
+      session: { store: "/srv/legacy/sessions.json" },
       plugins: { entries: { sample: { config: { legacyRoot: "/srv/legacy" } } } },
     });
     await withConfig(raw, async ({ configPath, tempDir }) => {
@@ -60,7 +62,11 @@ describe("config cli integration", () => {
                 pluginId: "sample",
                 reason: "The configured plugin is not installed.",
                 command: "openclaw plugins install @example/sample",
-                configPaths: [["plugins", "entries", "sample", "config"]],
+                requiresStateMigration: true,
+                configPaths: [
+                  ["plugins", "entries", "sample", "config"],
+                  ["session", "store"],
+                ],
               },
             ],
           });
@@ -69,7 +75,7 @@ describe("config cli integration", () => {
             ["set", `${pluginPath}.legacyRoot`, "/srv/replacement", "--dry-run"],
             ["unset", `${pluginPath}.legacyRoot`],
             ["set", pluginPath, '{"legacyRoot":"/srv/replacement"}', "--replace"],
-            ["unset", "plugins.entries.sample"],
+            ["unset", "plugins.entries"],
           ]) {
             await reject(run(...args));
             expect(errors.at(-1)).toContain('Plugin "sample" data/settings upgrade is unfinished');
@@ -83,6 +89,17 @@ describe("config cli integration", () => {
             gateway: { port: 18790 },
             plugins: { entries: { sample: { config: { legacyRoot: "/srv/legacy" } } } },
           });
+          const beforeRemoval = read(configPath);
+          const pending = readDeferredPluginMigrations();
+          await run("unset", "plugins.entries.sample");
+          expect(load(configPath)).not.toHaveProperty("plugins.entries.sample");
+          expect(load(configPath)).toMatchObject({
+            gateway: { port: 18790 },
+            session: { store: "/srv/legacy/sessions.json" },
+          });
+          expect(read(`${configPath}.bak`)).toBe(beforeRemoval);
+          expect(readDeferredPluginMigrations()).toEqual(pending);
+          expect(logs.join("\n")).toContain("Removed plugins.entries.sample");
         } finally {
           closeOpenClawStateDatabaseForTest();
         }

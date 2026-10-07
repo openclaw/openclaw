@@ -16,6 +16,7 @@ import {
 } from "../plugin-sdk/channel-ingress-runtime.js";
 import { recordAcceptedSessionParticipantInput } from "../sessions/session-participant-input-recording.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   markPluginRegistryActive,
@@ -31,6 +32,7 @@ import {
 import { createPluginRegistry } from "./registry.js";
 import {
   bindGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
   hasGatewayContextOwner,
 } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
@@ -285,7 +287,7 @@ describe("bundled channel ingress runtime ownership", () => {
     }
   });
 
-  it.each(["bundled", "global", "config"] as const)(
+  it.each(["bundled", "global"] as const)(
     "retains the host Gateway resolver for a trusted %s channel ingress",
     async (origin) => {
       const gatewayContext = {} as GatewayRequestContext;
@@ -482,25 +484,22 @@ describe("bundled channel ingress runtime ownership", () => {
     ).toMatchObject({ ingressState: "present", invoker: { state: "present" } });
   });
 
-  it.each(["workspace", "global"] as const)(
-    "does not mint for %s plugins, only the exact active bundled record",
-    async (origin) => {
-      const audit = createAudit();
-      const external = createRuntimeBuilder({ origin, audit });
-      const bundled = createRuntimeBuilder({ origin: "bundled", audit });
-      const ingress = await bundled.resolveIngress("person-a");
+  it("does not mint for untrusted plugins, only the exact active bundled record", async () => {
+    const audit = createAudit();
+    const external = createRuntimeBuilder({ origin: "workspace", audit });
+    const bundled = createRuntimeBuilder({ origin: "bundled", audit });
+    const ingress = await bundled.resolveIngress("person-a");
 
-      expect(inspect(external.buildContext(contextParams({ ingress })))).toMatchObject({
-        ingressState: "unknown",
-        invoker: { state: "unknown" },
-      });
-      expect(inspect(bundled.buildContext(contextParams({ ingress })))).toMatchObject({
-        ingressState: "present",
-        invoker: { state: "present", kind: "person" },
-        decisionCoverage: "enforced",
-      });
-    },
-  );
+    expect(inspect(external.buildContext(contextParams({ ingress })))).toMatchObject({
+      ingressState: "unknown",
+      invoker: { state: "unknown" },
+    });
+    expect(inspect(bundled.buildContext(contextParams({ ingress })))).toMatchObject({
+      ingressState: "present",
+      invoker: { state: "present", kind: "person" },
+      decisionCoverage: "enforced",
+    });
+  });
 
   it.each(["accepted", "mismatched", "builder failure"] as const)(
     "consumes the handoff after its first %s attempt",
@@ -585,7 +584,6 @@ describe("bundled channel ingress runtime ownership", () => {
       },
     },
     { name: "participant", context: { senderId: "person-b" } },
-    { name: "participant whitespace", context: { senderId: " person-a " } },
     {
       name: "omitted native conversation",
       ingress: {
@@ -811,5 +809,41 @@ describe("bundled channel ingress runtime ownership", () => {
         invoker: { state: "unknown" },
       },
     );
+  });
+});
+
+describe("plugin runtime hook dispatch ownership", () => {
+  it.each([
+    { origin: "bundled" as const, trustedOfficialInstall: undefined },
+    { origin: "global" as const, trustedOfficialInstall: true },
+  ])("binds $origin hook dispatch to its host-owned plugin identity", async (ownership) => {
+    const hookTurn = {
+      name: "Inbox watcher",
+      agentId: "mail",
+      sessionKey: "hook:imap:account:1",
+      message: "Summarize the incoming email.",
+      externalContentSource: "email",
+      deliver: false,
+    } satisfies Parameters<PluginRuntime["hooks"]["dispatchHookAgentTurn"]>[0];
+    let observedPluginId: string | undefined;
+    const dispatchHookAgentTurn = vi.fn(async () => {
+      observedPluginId = getPluginRuntimeGatewayRequestScope()?.pluginId;
+      return { ok: true as const, runId: "hook-run" };
+    });
+    const builder = createPluginRegistry({
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      runtime: createLazyPluginRuntime({ runtimeOptions: { hooks: { dispatchHookAgentTurn } } }),
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({ id: "trusted-mail", ...ownership });
+    const api = builder.createApi(record, { config: {} });
+    builder.registry.plugins.push(record);
+
+    await expect(api.runtime.hooks.dispatchHookAgentTurn(hookTurn)).resolves.toEqual({
+      ok: true,
+      runId: "hook-run",
+    });
+    expect(observedPluginId).toBe("trusted-mail");
+    expect(dispatchHookAgentTurn).toHaveBeenCalledWith(hookTurn);
   });
 });

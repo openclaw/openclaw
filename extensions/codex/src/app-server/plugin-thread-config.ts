@@ -91,7 +91,13 @@ export function buildCodexPluginThreadConfigInputFingerprint(params: {
   const policy = resolveCodexPluginsPolicy(params.pluginConfig);
   return fingerprintCodexPolicy({
     version: CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION,
-    policy: policyFingerprint(policy),
+    policy: {
+      enabled: policy.enabled,
+      allowAllPlugins: policy.allowAllPlugins,
+      allowDestructiveActions: policy.allowDestructiveActions,
+      destructiveApprovalMode: policy.destructiveApprovalMode,
+      plugins: policy.pluginPolicies,
+    },
     appCacheKey: params.appCacheKey ?? null,
   });
 }
@@ -128,10 +134,7 @@ export async function buildCodexPluginThreadConfig(
         ? { ...requestParams, threadId: params.threadId }
         : requestParams,
     );
-  let inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
-    pluginConfig: params.pluginConfig,
-    appCacheKey: params.appCacheKey,
-  });
+  let inputFingerprint = buildCodexPluginThreadConfigInputFingerprint(params);
   const policy = resolveCodexPluginsPolicy(params.pluginConfig);
   if (!policy.enabled) {
     return emptyPluginThreadConfig({
@@ -141,16 +144,18 @@ export async function buildCodexPluginThreadConfig(
     });
   }
 
+  const inventoryParams = {
+    request: threadRequest,
+    appCache,
+    appCacheKey: params.appCacheKey,
+    appInventoryCacheKey: threadAppCacheKey,
+    configCwd: params.configCwd,
+    metadataCache: params.metadataCache,
+  };
   const readInventory = (suppressAppInventoryRefresh?: true) =>
     readCodexPluginInventory({
-      pluginConfig: params.pluginConfig,
+      ...inventoryParams,
       policy,
-      request: threadRequest,
-      appCache,
-      appCacheKey: params.appCacheKey,
-      appInventoryCacheKey: threadAppCacheKey,
-      configCwd: params.configCwd,
-      metadataCache: params.metadataCache,
       nowMs: params.nowMs,
       suppressAppInventoryRefresh,
     });
@@ -164,10 +169,7 @@ export async function buildCodexPluginThreadConfig(
       targetAppIds: collectCodexPluginOwnedAppIds(inventory),
     });
     inventory = await readInventory();
-    inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig: params.pluginConfig,
-      appCacheKey: params.appCacheKey,
-    });
+    inputFingerprint = buildCodexPluginThreadConfigInputFingerprint(params);
   };
   const activationRequired = inventory.records.some((record) => record.activationRequired);
   const appInventoryMissing = shouldRefreshMissingAppInventory(params, policy, inventory);
@@ -189,13 +191,8 @@ export async function buildCodexPluginThreadConfig(
       continue;
     }
     const activation = await ensureCodexPluginActivation({
+      ...inventoryParams,
       identity: record.policy,
-      request: threadRequest,
-      appCache,
-      appCacheKey: params.appCacheKey,
-      appInventoryCacheKey: threadAppCacheKey,
-      configCwd: params.configCwd,
-      metadataCache: params.metadataCache,
       deferAppInventoryRefresh: true,
       targetAppIds: record.ownedAppIds,
     });
@@ -596,16 +593,6 @@ function shouldRefreshMissingAppInventory(
     policy.pluginPolicies.some((plugin) => plugin.enabled) &&
     inventory.appInventory?.state === "missing",
   );
-}
-
-function policyFingerprint(policy: ResolvedCodexPluginsPolicy): JsonValue {
-  return {
-    enabled: policy.enabled,
-    allowAllPlugins: policy.allowAllPlugins,
-    allowDestructiveActions: policy.allowDestructiveActions,
-    destructiveApprovalMode: policy.destructiveApprovalMode,
-    plugins: policy.pluginPolicies,
-  };
 }
 
 // Native request keys may be dotted. Normalize each policy patch before merging
