@@ -627,25 +627,25 @@ describe("handleCompactCommand", () => {
   });
 
   it("lets the active run settle naturally before compacting", async () => {
-    vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValue(true);
-    vi.mocked(waitForEmbeddedAgentRunEnd).mockResolvedValue(true);
+    vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: true,
       compacted: true,
       compactionKind: "context-engine",
-      result: { tokensBefore: 999, tokensAfter: 42 },
+      result: { summary: "summary", firstKeptEntryId: "kept", tokensBefore: 999, tokensAfter: 42 },
     });
 
     const result = await handleCompactCommand(
       {
         ...buildCompactParams("/compact", compactCommandConfig),
         sessionEntry: { sessionId: "settle-session", updatedAt: Date.now() },
-      } as HandleCommandsParams,
+      },
       true,
     );
 
     expect(vi.mocked(abortEmbeddedAgentRun)).not.toHaveBeenCalled();
     expect(vi.mocked(waitForEmbeddedAgentRunEnd)).toHaveBeenCalledWith(expect.any(String), 60_000);
+    expect(result?.sessionCompaction).toMatchObject({ compacted: true, tokensAfter: 42 });
     expect(result?.reply?.text).not.toContain("aborted");
   });
 

@@ -88,6 +88,11 @@ compaction, but cannot run manual `/compact`.
 /compact Focus on the API design decisions
 ```
 
+If a turn is active, `/compact` gives it up to 60 seconds to finish before
+cancelling it and waiting up to 15 more seconds for it to stop. When cancellation
+succeeds, the command's reply asks you to resend the interrupted request, including
+when the run is still stopping and compaction cannot proceed.
+
 Client-side compaction in the built-in OpenClaw runtime passes focus to both older-history and split-turn-prefix summaries. The host limits operator-provided focus to 800 Unicode code points and escapes it as prompt data before adding it to model requests.
 
 Client-side manual compaction uses `agents.defaults.compaction.keepRecentTokens` (default: 20,000) as its cut-point budget and keeps that recent tail in rebuilt context.
