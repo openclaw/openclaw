@@ -431,8 +431,8 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
     // A request lifetime narrows inherited tool lifetimes; neither may replace the other.
     const approvalSignals =
       params.method === "exec.approval.request" ||
-        params.method === "plugin.approval.request" ||
-        params.method === "openclaw.chat"
+      params.method === "plugin.approval.request" ||
+      params.method === "openclaw.chat"
         ? [...(identity.approvalSignals ?? []), ...(params.signal ? [params.signal] : [])]
         : undefined;
     const approvalAuthority =
