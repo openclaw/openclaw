@@ -111,9 +111,10 @@ export async function projectCodexCatalogPage(
         const rolloutPath = typeof thread.path === "string" ? thread.path.trim() : "";
         page.managedThreads = [{ threadId: thread.id, ...(rolloutPath ? { rolloutPath } : {}) }];
       } else {
-        const session = toCatalogSession(thread, false, sanitize, {
-          value: typeof thread.preview === "string" ? thread.preview : undefined,
-        });
+        const session = toCatalogSession(
+          thread,
+          typeof thread.preview === "string" ? thread.preview : undefined,
+        );
         if (session) {
           page.sessions.push(session);
         }
@@ -180,7 +181,7 @@ export async function projectCodexCatalogDeltaPage(
     if (typeof thread.preview === "string" && Boolean(thread.preview) !== Boolean(row.preview)) {
       return undefined;
     }
-    const session = toCatalogSession(thread, false, params.sanitize, { value: row.preview });
+    const session = toCatalogSession(thread, row.preview);
     return copyCodexCatalogSource(thread, {
       ...row,
       nativeMetadata: true,

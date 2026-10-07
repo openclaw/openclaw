@@ -91,16 +91,15 @@ function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
   // reports, so query the loaded library before callers open real state databases.
   const database = new sqlite.DatabaseSync(":memory:");
   try {
-    const row = database.prepare("SELECT sqlite_version() AS version").get() as
-      | { version?: unknown }
-      | undefined;
+    const row = database
+      .prepare(
+        "SELECT sqlite_version() AS version, sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted",
+      )
+      .get() as { version?: unknown; omitted?: unknown } | undefined;
     const version = typeof row?.version === "string" ? row.version : "unknown";
     assertSqliteWalResetSafeVersion(version, process.versions.node);
     jsonbSupported = (compareValidSemver(version, "3.45.0") ?? -1) >= 0;
-    const capabilities = database
-      .prepare("SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted")
-      .get();
-    extensionLoadingSupported = capabilities?.omitted === 0;
+    extensionLoadingSupported = row?.omitted === 0;
     validatedSqliteModule = sqlite;
   } finally {
     database.close();

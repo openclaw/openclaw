@@ -1,4 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { authProfileRuntimeMode } from "../agents/auth-profiles/runtime-scope.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  setRuntimeAuthProfileStoreSnapshot,
+} from "../agents/auth-profiles/runtime-snapshots.js";
+import * as authProfileSource from "../agents/auth-profiles/source-check.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { clearActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import {
@@ -34,9 +41,48 @@ beforeEach(() => {
   clearActiveRuntimeWebToolsMetadata();
   resolveRuntimeWebSearchProvidersMock.mockReset();
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeAuthProfileStoreSnapshots();
+  vi.unstubAllEnvs();
+});
 
 describe("web search configuration presence", () => {
+  it.each([false, true])(
+    "uses published auth stores without cold admission (configured=%s)",
+    async (configured) => {
+      const sourceProbe = vi.spyOn(authProfileSource, "hasAnyAuthProfileStoreSourceAsync");
+      const agentDir = resolveDefaultAgentDir({});
+      resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+        createCustomSearchProvider({ authProviderId: "xai" }),
+      ]);
+      setRuntimeAuthProfileStoreSnapshot(
+        configured
+          ? createOAuthAuthProfileStore({
+              provider: "xai",
+              profileId: "xai:test",
+              access: "test-access",
+              refresh: "test-refresh",
+            })
+          : { version: 1, profiles: {} },
+        agentDir,
+      );
+      await expect(prepareWebSearchConfiguration({ config: {} })).resolves.toBe(configured);
+      expect(sourceProbe).not.toHaveBeenCalled();
+      if (configured) {
+        await expect(
+          authProfileRuntimeMode.run({ kind: "env-only" }, () =>
+            prepareWebSearchConfiguration({ config: {} }),
+          ),
+        ).resolves.toBe(false);
+      }
+      sourceProbe.mockClear();
+      setRuntimeAuthProfileStoreSnapshot({ version: 1, profiles: {} }, agentDir);
+      await expect(prepareWebSearchConfiguration({ config: {} })).resolves.toBe(false);
+      expect(sourceProbe).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { name: "absent", value: undefined, configured: false },
     { name: "empty", value: "  ", configured: false },

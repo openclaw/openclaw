@@ -292,34 +292,23 @@ describe("models list published transport", () => {
     },
   );
 
-  it("projects a standalone owner's Claude CLI route with that owner's plugin registry", async () => {
-    const claudeCfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: { work: { workspace: "/tmp/published-cli-work" } },
-        defaults: {
-          model: { primary: "anthropic/claude-opus-5" },
-          models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
-        },
-      },
-    };
+  // Only the standalone owner registers Claude CLI; the command process has no active registry.
+  async function listStandaloneClaudeOwner(
+    claudeCfg: OpenClawConfig,
+    entries: Array<{ provider: string; id: string; name: string }>,
+  ) {
     vi.mocked(configLoader.loadModelsConfigWithSource).mockResolvedValue({
       sourceConfig: claudeCfg,
       resolvedConfig: claudeCfg,
       diagnostics: [],
     });
     vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
-    // Only the standalone owner registers Claude CLI; the command process has no active registry.
     const pluginRegistry = createEmptyPluginRegistry();
     pluginRegistry.cliBackends.push({
       pluginId: "anthropic",
       source: "test",
       backend: { id: "claude-cli", modelProvider: "anthropic", config: { command: "claude" } },
     });
-    const entries = [
-      { provider: "anthropic", id: "claude-opus-5", name: "Claude Opus 5" },
-      { provider: "claude-cli", id: "claude-opus-5", name: "Claude Opus 5" },
-    ];
     vi.mocked(catalog.withPreparedModelCatalogOwner).mockImplementation(
       async (_params, read) =>
         await read(
@@ -344,6 +333,25 @@ describe("models list published transport", () => {
         ),
     );
     await list({ agent: "work", json: true });
+  }
+
+  it("projects a standalone owner's Claude CLI route with that owner's plugin registry", async () => {
+    await listStandaloneClaudeOwner(
+      {
+        agents: {
+          ownership: "explicit",
+          entries: { work: { workspace: "/tmp/published-cli-work" } },
+          defaults: {
+            model: { primary: "anthropic/claude-opus-5" },
+            models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
+          },
+        },
+      },
+      [
+        { provider: "anthropic", id: "claude-opus-5", name: "Claude Opus 5" },
+        { provider: "claude-cli", id: "claude-opus-5", name: "Claude Opus 5" },
+      ],
+    );
     expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         models: [expect.objectContaining({ key: "anthropic/claude-opus-5", available: true })],
@@ -351,6 +359,38 @@ describe("models list published transport", () => {
       2,
     );
   });
+
+  it("lists a Claude CLI model once when only the standalone owner's registry has Claude CLI", async () => {
+    await listStandaloneClaudeOwner(
+      {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            work: {
+              workspace: "/tmp/published-cli-work",
+              models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
+            },
+          },
+          defaults: { model: { primary: "anthropic/claude-opus-5" } },
+        },
+      },
+      [
+        { provider: "anthropic", id: "claude-opus-5", name: "Claude Opus 5" },
+        { provider: "claude-cli", id: "claude-opus-5", name: "Claude Opus 5" },
+        { provider: "claude-cli", id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
+      ],
+    );
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        models: [
+          expect.objectContaining({ key: "anthropic/claude-opus-5" }),
+          expect.objectContaining({ key: "claude-cli/claude-haiku-4-5" }),
+        ],
+      }),
+      2,
+    );
+  });
+
   it("rejects conflicting output flags before reading any catalog", async () => {
     await expect(list({ json: true, plain: true })).rejects.toThrow(
       "Choose either --json or --plain",

@@ -26,10 +26,20 @@ type AudienceRecord = {
 /** A host-minted audience plus the owner-held release for its session leases. */
 export type MemoryAudienceGrant = { audience: MemoryAudience; release: () => void };
 
+/**
+ * Why no audience was granted, classified by its repair:
+ * - `stale-lineage`: the session's recorded lineage no longer matches its ancestors or
+ *   predates lineage receipts; only respawning or recreating the session restores access.
+ * - `unverified`: storage could not verify the lineage now; a later turn resolves again.
+ * - `ineligible`: the lineage carries no audience by design, for example a host-run,
+ *   cross-agent, rowless-parent, or chat-less root session.
+ */
+type MemoryAudienceDenialKind = "stale-lineage" | "unverified" | "ineligible";
+
 /** Resolution outcome; a denial names why no memory audience was granted. */
 export type MemoryAudienceResolution =
   | ({ status: "granted" } & MemoryAudienceGrant)
-  | { status: "denied"; reason: string; legacyLineage?: true };
+  | { status: "denied"; kind: MemoryAudienceDenialKind; reason: string };
 
 const hostAudiences = new WeakSet<object>();
 const audienceRecords = new WeakMap<object, AudienceRecord>();
@@ -187,9 +197,9 @@ export async function resolveMemoryAudienceFromEntry(
   const seen = new Set<string>();
   const record: AudienceRecord = { leases: [], state: "current", holders: 0 };
   let requiredLifecycleRevision: string | undefined;
-  const deny = (reason: string, legacyLineage?: true): MemoryAudienceResolution => {
+  const deny = (kind: MemoryAudienceDenialKind, reason: string): MemoryAudienceResolution => {
     releaseRecordLeases(record);
-    return { status: "denied", reason, ...(legacyLineage ? { legacyLineage } : {}) };
+    return { status: "denied", kind, reason };
   };
 
   try {
@@ -201,7 +211,10 @@ export async function resolveMemoryAudienceFromEntry(
         !isSessionId(sessionId) ||
         seen.has(sessionKey)
       ) {
-        return deny(`session lineage at ${sessionKey} is malformed, cyclic, or cross-agent`);
+        return deny(
+          "ineligible",
+          `session lineage at ${sessionKey} is malformed, cyclic, or cross-agent`,
+        );
       }
       seen.add(sessionKey);
       // A turn admission already owns its current row. Reuse that prepared fact
@@ -215,13 +228,24 @@ export async function resolveMemoryAudienceFromEntry(
         entry.sessionId !== sessionId ||
         (depth > 0 && entry.lifecycleRevision !== requiredLifecycleRevision)
       ) {
-        return deny(`session ${sessionKey} is missing or no longer matches its recorded lineage`);
+        // The admitted row moving under this turn is transient. An ancestor reset or
+        // removal after the spawn is permanent: the receipt names a lost incarnation.
+        if (depth === 0) {
+          return deny("unverified", `session ${sessionKey} no longer matches its admitted turn`);
+        }
+        return deny(
+          "stale-lineage",
+          `session ${params.sessionKey} has stale lineage: ancestor ${sessionKey} was reset or removed after its child was spawned. Respawn or recreate it from a current session to restore memory access; resetting it keeps the stale lineage.`,
+        );
       }
       // The lease re-verifies this exact incarnation against current storage,
       // so a change between the read above and here denies the grant.
       const lease = await leaseSessionGeneration({ agentId, sessionKey, storePath, entry });
       if (!lease) {
-        return deny(`session ${sessionKey} changed while its memory audience was resolved`);
+        return deny(
+          "unverified",
+          `session ${sessionKey} changed while its memory audience was resolved`,
+        );
       }
       record.leases.push(lease);
 
@@ -232,8 +256,8 @@ export async function resolveMemoryAudienceFromEntry(
         // revision (such as a channel-created row) is recorded by its absence.
         if (typeof entry.spawnedBySenderIsOwner !== "boolean") {
           return deny(
+            "stale-lineage",
             `spawned session ${sessionKey} predates memory lineage receipts (spawnedBySenderIsOwner), so it has no inherited memory audience. Respawn it from its parent session to restore memory access.`,
-            true,
           );
         }
         // Voice consult children record no navigation parent; a recorded one must agree.
@@ -243,7 +267,7 @@ export async function resolveMemoryAudienceFromEntry(
           !isSessionId(entry.spawnedBySessionId) ||
           entry.parentSessionLifecycleRevision === ""
         ) {
-          return deny(`spawned session ${sessionKey} has malformed lineage receipts`);
+          return deny("ineligible", `spawned session ${sessionKey} has malformed lineage receipts`);
         }
         sessionKey = entry.spawnedBy;
         sessionId = entry.spawnedBySessionId;
@@ -277,15 +301,18 @@ export async function resolveMemoryAudienceFromEntry(
           ),
         };
       }
-      return deny(`root session ${sessionKey} has no durable chat type`);
+      return deny("ineligible", `root session ${sessionKey} has no durable chat type`);
     }
-    return deny(`session lineage exceeds ${MAX_LINEAGE_HOPS} hops`);
+    return deny("ineligible", `session lineage exceeds ${MAX_LINEAGE_HOPS} hops`);
   } catch (error) {
     releaseRecordLeases(record);
     // A caller that is no longer current propagates; unavailable session
     // storage denies memory access instead of failing the whole turn.
     assertCallerCurrent();
-    return deny(`session storage could not verify the lineage: ${formatErrorMessage(error)}`);
+    return deny(
+      "unverified",
+      `session storage could not verify the lineage: ${formatErrorMessage(error)}`,
+    );
   }
 }
 

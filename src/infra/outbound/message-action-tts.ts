@@ -51,11 +51,7 @@ export async function maybeApplyTtsToMessageActionSendPayload(params: {
   if (params.dryRun) {
     return params.payload;
   }
-  const ttsAuto = resolveMessageActionSessionTtsAuto({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
+  const ttsAuto = resolveMessageActionSessionTtsAuto(params);
   const explicitTts = getReplyPayloadMetadata(params.payload)?.ttsExplicit === true;
   const preparedTtsPreferences = await prepareTtsPreferences();
   if (

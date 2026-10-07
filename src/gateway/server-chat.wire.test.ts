@@ -98,6 +98,8 @@ function connect(
       data?: { text?: string; delta?: string };
       state?: string;
       deltaText?: string;
+      itemId?: string;
+      itemStartOffset?: number;
     };
   }> = [];
   const socket = Object.assign(new EventEmitter(), {
@@ -211,7 +213,12 @@ it("sends append-only wire text while retaining snapshots for observers and late
   const { frames: late } = connect(clients, "late");
   await emit(2, undefined, " world");
   expect(payloads(frames, "chat")).toEqual([
-    expect.objectContaining({ message: expect.any(Object), deltaText: "Hello" }),
+    expect.objectContaining({
+      message: expect.any(Object),
+      deltaText: "Hello",
+      itemId: "answer",
+      itemStartOffset: 0,
+    }),
     expect.not.objectContaining({ message: expect.anything() }),
   ]);
   expect(payloads(frames, "agent").at(-1)?.data).toEqual({
@@ -236,6 +243,10 @@ it("sends append-only wire text while retaining snapshots for observers and late
   await emit(5, "Reset!", "!");
   expect(payloads(frames, "agent").at(-1)?.data?.text).toBe("Reset!");
   await emit(6, "Other", "Other", undefined, "other");
+  expect(payloads(frames, "chat").at(-1)).toMatchObject({
+    itemId: "other",
+    itemStartOffset: "Reset!\n\n".length,
+  });
   await emit(7, "Reset! again", " again");
   expect(payloads(frames, "agent").at(-1)?.data?.text).toBe("Reset! again");
   await emitLifecycleEnd(handler, "wire-run", 8);

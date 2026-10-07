@@ -28,7 +28,6 @@ import {
   prepareSessionStoreTargetInventory,
 } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
-import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   assertExistingDatabaseIdentity,
@@ -437,7 +436,6 @@ export async function prepareSessionMutationFacts(
           preparedSources,
           registryDiscovery: inventory.registryDiscovery,
         }),
-        projectionLane,
       );
       const assertPaths = () => {
         for (const { candidate, identity } of candidateIdentities) {

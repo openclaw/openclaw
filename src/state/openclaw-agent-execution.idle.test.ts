@@ -260,3 +260,78 @@ it("keeps warm executors through unrelated configuration publication", async () 
   expect(opened).toHaveLength(2);
   expect(closedAgents()).toEqual([]);
 });
+
+it("joins config-triggered idle drainage without letting a released borrower close its successor", async () => {
+  const config: OpenClawConfig = { agents: { entries: { first: {} } } };
+  setRuntimeConfigSnapshot(config);
+  const previous = capture("first");
+  await previous.prepare(source);
+  await previous.release();
+  const first = opened[0];
+  assert(first);
+  const closing = createDeferredCore();
+  first.close.mockImplementation(() => closing.promise);
+  let next: ReturnType<typeof capture> | undefined;
+  try {
+    setRuntimeConfigSnapshot({
+      ...config,
+      session: { store: path.join(env.OPENCLAW_STATE_DIR!, "relocated", "{agentId}.sqlite") },
+    });
+    expect(() => previous.assertCurrent()).toThrow("reference is released");
+    next = capture("first");
+    let prepared = false;
+    const preparing = next.prepare(source).then(() => {
+      prepared = true;
+    });
+    await Promise.resolve();
+    expect(prepared).toBe(false);
+    expect(opened).toHaveLength(1);
+    closing.resolve();
+    await preparing;
+    expect(opened).toHaveLength(2);
+    expect(() => previous.assertCurrent()).toThrow("reference is released");
+    const staleCleanup = vi.fn(async () => undefined);
+    await expect(
+      previous.runExisting(source, staleCleanup, { retireNativeOnFailure: true }),
+    ).rejects.toThrow("reference is released");
+    expect(staleCleanup).not.toHaveBeenCalled();
+    expect(opened[1]?.close).not.toHaveBeenCalled();
+    next.assertCurrent();
+    setRuntimeConfigSnapshot(config);
+    next.assertCurrent();
+    await next.release();
+    expect(closedAgents()).toEqual(["first", "first"]);
+    await closeOpenClawAgentDatabasesAsync();
+    expect(opened.every(({ close }) => close.mock.calls.length === 1)).toBe(true);
+  } finally {
+    closing.resolve();
+    await previous.release();
+    await next?.release();
+  }
+});
+
+it("drains a configuration-retired executor only after its last borrower releases", async () => {
+  setRuntimeConfigSnapshot({ agents: { entries: { first: {}, second: {} } } });
+  const first = capture("first");
+  const joining = capture("first");
+  try {
+    await first.prepare(source);
+    await use("second");
+    setRuntimeConfigSnapshot({ agents: { entries: { second: {} } } });
+    expect(closedAgents()).toEqual([]);
+    await first.prepare(source);
+    await first.release();
+    expect(closedAgents()).toEqual([]);
+    await joining.prepare(source);
+    expect(opened).toHaveLength(2);
+    await joining.release();
+    expect(closedAgents()).toEqual(["first"]);
+    await use("second");
+    expect(opened).toHaveLength(2);
+    await closeOpenClawAgentDatabasesAsync();
+    expect(closedAgents()).toEqual(["first", "second"]);
+    expect(opened.every(({ close }) => close.mock.calls.length === 1)).toBe(true);
+  } finally {
+    await Promise.allSettled([first.release(), joining.release()]);
+  }
+});

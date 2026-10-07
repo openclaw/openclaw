@@ -447,7 +447,12 @@ Bare names match only commands invoked through `PATH`, so `rg` can match
 `/opt/homebrew/bin/rg` when the command is `rg`, but **not** `./rg` or
 `/tmp/rg`. Use a path glob to trust one specific binary location.
 
-Legacy `agents.default` entries are migrated to `agents.main` on load.
+Saved policies that still use the legacy `agents.default` key or `commandText`
+fields are not converted on load. OpenClaw refuses them until
+`openclaw doctor --fix` moves `agents.default` to `agents.main` and drops
+`commandText`; `openclaw update` runs the same Doctor pass. Plugin and operator
+APIs still accept the legacy shape as input and normalize it before saving. See
+[Exec approval policy](/gateway/doctor/config-migrations#exec-approval-policy).
 Shell chains such as `echo ok && pwd` still need every top-level segment
 to satisfy allowlist rules.
 
@@ -512,7 +517,7 @@ Each allowlist entry supports:
 | `argPattern`       | ECMAScript argv regex or generated exact-argv hash; omitted is path-only |
 | `id`               | Stable opaque ID; generated as a UUID when absent                        |
 | `source`           | Generated entry source, such as `allow-always`; omit for manual entries  |
-| `commandText`      | Legacy plaintext input; discarded during load                            |
+| `commandText`      | Legacy plaintext input; saved entries need `openclaw doctor --fix`       |
 | `lastUsedAt`       | Last-used timestamp                                                      |
 | `lastUsedCommand`  | Last command that matched; omitted for generated hashed argv entries     |
 | `lastResolvedPath` | Last resolved binary path                                                |

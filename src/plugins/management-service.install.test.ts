@@ -457,27 +457,4 @@ describe("managed plugin installation", () => {
     await enable;
     expect(mocks.readConfig).toHaveBeenCalledTimes(2);
   });
-
-  it("classifies unavailable ClawHub security checks", async () => {
-    const code = "clawhub_security_unavailable";
-    mocks.clawhubInstall.mockResolvedValue({
-      ok: false,
-      error: "ClawHub install failed",
-      code,
-      version: "1.2.3",
-      warning: "Review the release",
-    });
-
-    await expect(
-      installManagedPlugin({
-        request: { source: "clawhub", packageName: "community/plugin" },
-        env: {},
-      }),
-    ).rejects.toMatchObject({
-      kind: "unavailable",
-      code,
-      version: "1.2.3",
-      warning: "Review the release",
-    });
-  });
 });

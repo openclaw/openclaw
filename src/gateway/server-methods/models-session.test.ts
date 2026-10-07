@@ -32,6 +32,8 @@ import {
   registerGatewayModelCatalogPrivateAccess,
   type PreparedGatewayModelCatalogSnapshot,
 } from "../server-model-catalog-auth.js";
+import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
+import { buildGatewaySessionRow } from "../session-utils-row.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import {
   connectChatMetadataAccount,
@@ -165,6 +167,57 @@ const isolated = {
 } as const;
 
 describe("direct session model catalogs", () => {
+  it("shares a saved selection revision with session events without retiring it for activity", async () => {
+    await withOpenClawTestState(isolated, async (state) => {
+      const f = fixture();
+      await state.writeConfig(f.config);
+      const scope = { agentId: "main", sessionKey: "agent:main:catalog-revision" };
+      await writeSessionFixture(scope, {
+        sessionId: "catalog-revision-session",
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: f.person.id },
+        authProfileOverride: f.authProfileId,
+        authProfileOverrideSource: "user",
+      });
+      let revision: unknown;
+      for (const [patch, changed] of [
+        [{}, true],
+        [{ label: "Renamed", updatedAt: 2, lastReadAt: 2 }, false],
+        [{ authProfileOverride: "openai:shared" }, true],
+        [{ modelOverride: "gpt-5.6-luna", providerOverride: "openai" }, true],
+        [{ agentRuntimeOverride: "openclaw" }, true],
+        [{ lifecycleRevision: "replacement" }, true],
+      ] satisfies Array<[Partial<SessionEntry>, boolean]>) {
+        await writeSessionFixture(scope, patch);
+        const respond = await f.request({ sessionKey: scope.sessionKey, view: "configured" });
+        const result = respond.mock.calls[0]?.[1];
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+        expect(result).toHaveProperty("sessionModelRevision", expect.any(String));
+        const nextRevision = (result as { sessionModelRevision: string }).sessionModelRevision;
+        expect(nextRevision === revision).toBe(!changed);
+        revision = nextRevision;
+        const entry = expectDefined(loadSessionEntry(scope), "saved entry");
+        const row = buildGatewaySessionRow({
+          cfg: f.config,
+          agentId: scope.agentId,
+          key: scope.sessionKey,
+          entry,
+          store: { [scope.sessionKey]: entry },
+          storePath: openOpenClawAgentDatabase(scope).path,
+          preparedAcpMeta: null,
+          preparedRepositoryWorkspace: null,
+          activeModel: null,
+          skipTranscriptUsageFallback: true,
+        });
+        expect(
+          buildGatewaySessionSnapshot({ sessionRow: row, includeSession: true }),
+        ).toMatchObject({
+          session: { sessionModelRevision: revision },
+        });
+      }
+    });
+  });
+
   it.each(["missing", "foreign"] as const)(
     "rejects a saved session with %s ownership before catalog I/O",
     async (ownership) => {
@@ -516,6 +569,7 @@ describe("direct session model catalogs", () => {
         const direct = await f.request({ sessionKey, view: "configured" });
         expect(direct.mock.calls[0]?.[1]).toMatchObject({
           models: [{ id: "gpt-5.6-luna", provider: "openai" }],
+          sessionModelRevision: undefined,
         });
         const payload = direct.mock.calls[0]?.[1];
         expect(payload).not.toEqual(

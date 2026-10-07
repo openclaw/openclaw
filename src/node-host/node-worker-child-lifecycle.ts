@@ -175,7 +175,6 @@ export class NodeWorkerChildLifecycle {
     workerEnv: NodeJS.ProcessEnv;
     input: NodeWorkerLaunchInput;
     descriptor: WorkerLaunchDescriptor;
-    planHash: string;
     supervisor: NodeWorkerProcessIdentity;
     claim: NodeWorkerLaunchClaim;
     signal?: AbortSignal;
@@ -195,7 +194,7 @@ export class NodeWorkerChildLifecycle {
     const finishFailed = (errorText: string) =>
       this.options.capacity.finish({
         launchId: params.input.launchId,
-        planHash: params.planHash,
+        planHash: params.claim.planHash,
         supervisor: params.supervisor,
         worker: null,
         state: "failed",
@@ -212,7 +211,7 @@ export class NodeWorkerChildLifecycle {
         nativeInferenceSnapshot: this.options.nativeInferenceSnapshot,
         input: params.input,
         descriptor: params.descriptor,
-        planHash: params.planHash,
+        planHash: params.claim.planHash,
         supervisor: params.supervisor,
         connectionFailure,
         scrubber,
@@ -269,7 +268,7 @@ export class NodeWorkerChildLifecycle {
       journalReady,
       gatewayNamespace: params.input.gatewayNamespace,
       launchId: params.input.launchId,
-      planHash: params.planHash,
+      planHash: params.claim.planHash,
       scrubber,
       connectionFailure,
       supervisor: params.supervisor,

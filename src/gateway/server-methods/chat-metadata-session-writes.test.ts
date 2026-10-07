@@ -130,6 +130,9 @@ it.each(
       recordSelected("a", 10);
       recordSelected("b", 20);
     }
+    // Raw fixture writes bypass admission; drain setup maintenance before warming either cache.
+    await closeOpenClawAgentDatabasesAsync(state.root);
+    expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     const database = openOpenClawAgentDatabase(selected);
     if (write.startsWith("legacy sibling")) {
       expect(loadSessionEntry(sibling)?.sessionId).toBe("sibling");

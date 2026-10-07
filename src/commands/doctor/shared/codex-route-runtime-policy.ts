@@ -304,7 +304,6 @@ export function ensureCodexRuntimePolicy(params: {
   agentId?: string;
   modelRef: string;
   legacyModelRef?: string;
-  isDefaults?: boolean;
   preRepairCfg?: OpenClawConfig;
   changes: string[];
   env?: NodeJS.ProcessEnv;
@@ -330,7 +329,7 @@ export function ensureCodexRuntimePolicy(params: {
       ? preRepairRuntimePin.runtimeId
       : undefined) ??
     "codex";
-  if (params.isDefaults) {
+  if (params.agentPath === "agents.defaults") {
     shieldExplicitListedAgentRefsFromDefaultPolicy({
       cfg: params.cfg,
       modelRef: params.modelRef,
@@ -394,13 +393,7 @@ export function rewriteStringModelSlotIfCanonicalCodexRuntime(params: {
   ) {
     return;
   }
-  rewriteStringModelSlot({
-    hits: params.hits,
-    container: params.container,
-    key: params.key,
-    path: params.path,
-    blockedModelIdentities: params.blockedModelIdentities,
-  });
+  rewriteStringModelSlot(params);
 }
 
 export function rewriteModelConfigSlotIfCanonicalCodexRuntime(params: {

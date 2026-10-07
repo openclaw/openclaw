@@ -13,7 +13,6 @@ import {
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasLegacyInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
@@ -70,7 +69,6 @@ function resolveReplyMediaAttachmentType(value: unknown): ReplyMediaAttachment["
 }
 
 export async function buildMessagePayload(params: {
-  cfg: OpenClawConfig;
   actionParams: Record<string, unknown>;
   input: MessageActionInput;
   channel?: ChannelId;
@@ -249,7 +247,7 @@ export async function buildMessagePayload(params: {
       input.messageActionAuthorization?.scheduled ? input.assertDirectAdapterHandoff : undefined,
       () =>
         applyMessageCrossContextMarker({
-          cfg: params.cfg,
+          cfg: input.cfg,
           channel,
           action: "send",
           target,
@@ -374,7 +372,6 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   const action: ChannelMessageActionName = "send";
   const to = readToolStringParam(params, "to", { required: true });
   let sendPayload = await buildMessagePayload({
-    cfg,
     actionParams: params,
     input,
     channel,

@@ -13,6 +13,7 @@ import { isSessionRunActive } from "../../../lib/session-run-state.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import type { PaneSessionChangeOptions } from "../chat-pane-shared.ts";
+import { isUnfinishedSubagent } from "../chat-spawned-subagent.ts";
 import { SubagentsPanelData, type SubagentsPanelRow } from "../subagents-panel-data.ts";
 import "../../../components/elapsed-time.ts";
 import "./chat-subagents-panel.css";
@@ -233,7 +234,7 @@ class ChatSubagentsPanel extends OpenClawLightDomElement {
 
     const rows = this.data?.rows ?? [];
     const unfinished = (row: SubagentsPanelRow) =>
-      row.session.status === "queued" || isSessionRunActive(row.session);
+      row.session.status === "queued" || isUnfinishedSubagent(row.session);
     const running = rows.filter(unfinished);
     const finished = rows.filter((row) => !unfinished(row));
     const loading = this.data?.loading ?? false;

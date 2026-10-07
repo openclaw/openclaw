@@ -196,6 +196,7 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
 export function invalidatePluginCacheMetadata(cache: PluginCache): void {
   cache.sourceAdmissions?.invalidate();
   cache.metadata = createPluginMetadataCache();
+  cache.sdk.native.parents.clear();
   for (const root of cache.roots.values()) {
     root.files.clear();
     root.checkedEntries.clear();

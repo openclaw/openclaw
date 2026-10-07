@@ -3726,11 +3726,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(listMatchedTestFiles(worker)).toEqual(
       expect.arrayContaining([
         "src/gateway/github-publication-transcript.test.ts",
+        "src/gateway/mcp-http.session-controls.test.ts",
+        "src/gateway/mcp-http.test.ts",
         "src/gateway/server-worker-placement-session-evidence.test.ts",
         "src/gateway/server-worker-placement-session-evidence.worker.test.ts",
         "src/gateway/session-lifecycle-run-failure.test.ts",
         "src/gateway/session-lifecycle-state.persistence.test.ts",
         "src/gateway/talk/client-spoken-confirmation.test.ts",
+        "src/gateway/tool-resolution.swarm-collector.test.ts",
+        "src/gateway/tool-resolution.terminal.test.ts",
         "src/gateway/worker-workspace-recovery-transcript.test.ts",
         "src/gateway/session-utils.queued-collector-admission.test.ts",
         "src/gateway/session-utils.queued-collector.test.ts",

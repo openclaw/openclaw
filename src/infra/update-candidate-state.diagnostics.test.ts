@@ -1,6 +1,7 @@
-import { expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   createUpdateStateInspectionDiagnostics,
+  createUpdateStateIoReporter,
   formatUpdateStateInspectionError,
   UPDATE_STATE_INSPECTION_PROGRESS_PREFIX,
 } from "./update-candidate-state.diagnostics.js";
@@ -9,6 +10,11 @@ import { createUpdateErrorFact, normalizeUpdateFailureFacts } from "./update-fai
 const privateRoot = "/synthetic/private operator";
 const stateDir = `${privateRoot}/.openclaw`;
 const env = { HOME: privateRoot, OPENCLAW_STATE_DIR: stateDir };
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 it.each(["SIGILL", "SIGABRT", "SIGTERM"])(
   "reports the active worker step for %s without blaming storage",
@@ -33,6 +39,51 @@ it.each(["SIGILL", "SIGABRT", "SIGTERM"])(
     expect(message).not.toMatch(/Check access|free space|storage performance/);
   },
 );
+it("coalesces completed filesystem work without generating timer heartbeats", () => {
+  vi.useFakeTimers();
+  const progress = vi.fn();
+  const completed = createUpdateStateIoReporter("/private/copy", "plugin snapshot", progress);
+  completed();
+  vi.advanceTimersByTime(499);
+  completed();
+  expect(progress).toHaveBeenCalledTimes(1);
+  vi.advanceTimersByTime(1);
+  completed();
+  expect(progress.mock.calls.map(([value]) => value.completedIo)).toEqual([1, 3]);
+  vi.advanceTimersByTime(10_000);
+  expect(progress).toHaveBeenCalledTimes(2);
+});
+
+it("streams valid I/O receipts separately from the diagnostic stderr budget", () => {
+  const progress = vi.fn();
+  const exceeded = vi.fn();
+  const diagnostics = createUpdateStateInspectionDiagnostics({
+    operation: "State snapshot",
+    phase: "snapshot",
+    paths: ["/private/copy"],
+    onProgress: progress,
+    stderrLimit: { bytes: 128, onExceeded: exceeded },
+  });
+  for (let completedIo = 1; completedIo <= 200; completedIo++) {
+    diagnostics.onOutputChunk(
+      Buffer.from(
+        `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify({ phase: "plugin snapshot", completedIo })}\n`,
+      ),
+      "stderr",
+    );
+  }
+  expect(progress).toHaveBeenCalledTimes(200);
+  expect(diagnostics.stderr()).toBe("");
+  expect(exceeded).not.toHaveBeenCalled();
+  diagnostics.onOutputChunk(
+    Buffer.from(
+      `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify({ phase: "plugin snapshot", completedIo: -1 })}\n`,
+    ),
+    "stderr",
+  );
+  expect(progress).toHaveBeenCalledTimes(200);
+  expect(diagnostics.stderr()).toContain("completedIo");
+});
 
 it.each(["", "EACCES: "])("does not promote private worker prose (%j)", (prefix) => {
   const detail = `${prefix}Inspection failed for synthetic-private-tenant at '${privateRoot}/source.sqlite'`;

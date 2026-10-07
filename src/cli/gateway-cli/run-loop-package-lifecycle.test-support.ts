@@ -369,7 +369,6 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                       layout: resolveNpmGlobalPrefixLayoutFromPrefix(stage.prefix),
                       installTarget: createNpmTarget(path.dirname(root)),
                     },
-                    manager: "npm",
                     committed: false,
                   });
                   expect(disposal).toMatchObject({ status: "failed", preserveStage: true });
