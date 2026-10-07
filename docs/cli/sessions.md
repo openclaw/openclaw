@@ -322,6 +322,10 @@ the owner approves the exec request. The output directory is always resolved
 inside `.openclaw/trajectory-exports/` under the selected workspace.
 The file list in text and JSON output reports only artifacts written to the bundle.
 
+For stored keys without an agent prefix, such as `global`, export uses the
+configured default or sole agent. Pass `--agent <id>` when multiple agents are
+configured without a default.
+
 ## Cleanup maintenance
 
 Run maintenance now instead of waiting for the next write cycle. Without
