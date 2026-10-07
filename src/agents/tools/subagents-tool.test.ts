@@ -7,6 +7,10 @@ const owner = vi.hoisted(() => ({
   listeners: new Set<() => void>(),
   cancel: vi.fn(),
 }));
+const dismiss = vi.hoisted(() => ({ delivery: vi.fn() }));
+vi.mock("../subagents/registry/subagent-registry.js", () => ({
+  dismissSubagentRunDelivery: dismiss.delivery,
+}));
 vi.mock("../subagents/registry/subagent-control.js", () => ({
   DEFAULT_RECENT_MINUTES: 30,
   MAX_RECENT_MINUTES: 1440,
@@ -69,6 +73,7 @@ beforeEach(() => {
   owner.runs = [];
   owner.listeners.clear();
   owner.cancel.mockReset();
+  dismiss.delivery.mockReset();
 });
 function run() {
   const entry = createSubagentRunRecord({
@@ -171,5 +176,30 @@ describe("subagents native run contract", () => {
     await expect(
       tool().execute("cancel", { action: "cancel", runId: entry.runId }),
     ).rejects.toThrow("cancellation owner changed");
+  });
+  it("dismisses a run's stuck completion through the registry and reports the outcome", async () => {
+    const entry = run();
+    entry.execution = { status: "terminal", endedAt: 100, outcome: { status: "error" } };
+    dismiss.delivery.mockResolvedValue({
+      status: "ok",
+      runId: entry.runId,
+      reason: "dismissed",
+    });
+    const result = await tool().execute("dismiss", { action: "dismiss", runId: entry.runId });
+    expect(dismiss.delivery).toHaveBeenCalledExactlyOnceWith({ runId: entry.runId });
+    expect(result.details).toMatchObject({
+      status: "ok",
+      action: "dismiss",
+      runId: entry.runId,
+      reason: "dismissed",
+    });
+    expect(owner.cancel).not.toHaveBeenCalled();
+  });
+  it("refuses to dismiss a run outside the controlled session tree", async () => {
+    const entry = run();
+    entry.requesterSessionKey = "agent:other:main";
+    const result = await tool().execute("dismiss", { action: "dismiss", runId: entry.runId });
+    expect(result.details).toMatchObject({ status: "forbidden" });
+    expect(dismiss.delivery).not.toHaveBeenCalled();
   });
 });
