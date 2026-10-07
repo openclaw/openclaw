@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 
 const mocks = vi.hoisted(() => ({
-  starts: new Map<number, number>(),
+  starts: new Map<number, number | null>(),
   kill: vi.fn<typeof process.kill>(),
   readOwner: vi.fn<typeof import("./gateway-owner-lease.js").readGatewayOwnerLease>(),
   sleep: vi.fn<() => Promise<void>>(),
@@ -61,6 +61,32 @@ describe("stale Gateway process-group escalation", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
+
+  it.each(["recorded owner", "missing start identity"])(
+    "does not signal a PID with %s",
+    async (reason) => {
+      if (reason === "recorded owner") {
+        mocks.readOwner.mockReturnValue({
+          owner: "gateway-owner",
+          pid: leader,
+          host: "gateway-test-host",
+          startedAt: 1000,
+          port: 18789,
+          mode: "supervised",
+          supervisor: { kind: "systemd", name: "openclaw-gateway.service" },
+          state: "dead",
+          expired: true,
+        });
+      } else {
+        mocks.starts.set(leader, null);
+      }
+      await withMockedPlatform("darwin", async () => {
+        expect(await terminateStaleGatewayPids([leader])).toEqual([]);
+        expect(mocks.kill).not.toHaveBeenCalled();
+        expect(mocks.sleep).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("kills a surviving child after the group leader exits on SIGTERM", async () => {
     await withMockedPlatform("darwin", async () => {
