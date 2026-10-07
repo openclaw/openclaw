@@ -3282,7 +3282,6 @@
 ["src/agents/subagents/registry/subagent-registry-queued-recovery.test.ts","../../../config/sessions/session-accessor.sqlite-replacement-projection.js","c9cb5778ebf85e501690fdadfa3bed62ddb511e94f8404856a867b3e9e7f90d3",1]
 ["src/agents/subagents/registry/subagent-registry-queued-recovery.test.ts","../../../gateway/call.js","9fdb112aaa7ecd6585f449eeb4910d0891eeff9abd8b2684486ec943f952eb34",1]
 ["src/agents/subagents/registry/subagent-registry-queued-recovery.test.ts","./subagent-control-session.js","5088801468b86b015d4b9ecd1cb6ade3ffe44831efabc5bacc86822a035de510",1]
-["src/agents/subagents/registry/subagent-registry-queued-recovery.test.ts","./subagent-session-reconciliation.js","97bdf04b5f0f41960acbf5d8b368ff936afd6bf6ff3b7f878b2bc33e415ba17b",1]
 ["src/agents/subagents/registry/subagent-registry-queued-registration.test.ts","./subagent-registry.js","5035b37223c42fd527077644b6ea6ea9af63f52246cf4d9752288670eaddf4f2",1]
 ["src/agents/subagents/registry/subagent-registry-read.scoped.test.ts","./subagent-registry-memory.js","a664fa44adc7c3e262989176ec51cbe1b688c6d7167ef238d16c2087d8e2466a",1]
 ["src/agents/subagents/registry/subagent-registry-requester-wake-pointer.worker.test.ts","./subagent-registry-lifecycle-log.js","5eecfc893ab401bc33588c7bad1be8a867b9235302a5392c5022db8a7162f1fe",1]
