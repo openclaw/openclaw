@@ -6,6 +6,7 @@ import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatReactionAccess
+import ai.openclaw.app.chat.ChatSessionCreation
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatTranscriptCache
 import ai.openclaw.app.chat.ChatWidgetResource
@@ -5542,9 +5543,12 @@ class NodeRuntime internal constructor(
       agentId = agentId,
     )
 
-  fun startNewChat(worktree: Boolean = false) {
+  fun startNewChat(
+    worktree: Boolean = false,
+    creation: ChatSessionCreation = ChatSessionCreation.Default,
+  ) {
     retirePendingChatSelection()
-    chat.startNewChat(worktree = worktree)
+    chat.startNewChat(worktree = worktree, creation = creation)
   }
 
   fun toggleMessageSpeech(
