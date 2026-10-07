@@ -25,6 +25,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/config-reload.test.ts",
   "src/gateway/config-reload.transcripts.test.ts",
   "src/gateway/control-ui-assistant-media-policy.test.ts",
+  "src/gateway/control-ui-plugin-assets.test.ts",
   "src/gateway/control-ui-public-session-token.test.ts",
   "src/gateway/control-ui-public-session.concurrent.test.ts",
   "src/gateway/control-ui-session-pr-access.test.ts",

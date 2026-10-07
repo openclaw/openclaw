@@ -33,12 +33,9 @@ import {
   resolvePersonalGitHubOwner,
   updateUserGitHubConnection,
 } from "../../state/user-github-connections.js";
+import { getUserProfileListItem } from "../../state/user-profile-list-item.test-support.js";
 import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
-import {
-  ensureGatewayOwnerProfile,
-  ensureProfileForEmail,
-  getUserProfileListItem,
-} from "../../state/user-profiles.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
