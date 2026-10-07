@@ -260,6 +260,7 @@ it("rejects duplicate ids and admits a bounded rich single-option question at th
   expect((duplicate[2] as { message: string }).message).toContain("duplicate question id");
 
   const oneOption = await call("question.request", {
+    ...requestParams,
     id: "rich-question",
     questions: [
       {

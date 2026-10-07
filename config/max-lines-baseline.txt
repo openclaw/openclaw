@@ -157,7 +157,6 @@ extensions/signal/src/core.test.ts
 extensions/signal/src/monitor/event-handler.inbound-context.test.ts
 extensions/signal/src/monitor/event-handler.ts
 extensions/slack/src/action-runtime.ts
-extensions/slack/src/channel.test.ts
 extensions/slack/src/channel.ts
 extensions/slack/src/message-action-dispatch.test.ts
 extensions/slack/src/monitor/events/interactions.block-actions.ts
@@ -348,7 +347,6 @@ src/cli/gateway-cli/run.ts
 src/cli/mcp-cli.ts
 src/cli/plugins-authoring-command.ts
 src/cli/plugins-cli-test-helpers.ts
-src/cli/plugins-cli.install.test.ts
 src/cli/plugins-cli.runtime.ts
 src/cli/plugins-cli.update.test.ts
 src/cli/run-main.ts
