@@ -8465,7 +8465,7 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(consistency.run).not.toContain("GITHUB_OUTPUT");
     expect(checkout.with).toMatchObject({
       repository: "openclaw/openclaw",
-      ref: "${{ steps.defining_workflow.outputs.workflow_sha }}",
+      ref: "${{ fromJSON(toJSON(job)).workflow_sha }}",
       "persist-credentials": false,
     });
     const ref = checkout.with?.ref;
@@ -8475,7 +8475,10 @@ test "$package_manager" = "pnpm@12.1.0"
     const calledSha = "a".repeat(40);
     expect(
       runInNewContext(ref.slice(3, -2), {
-        steps: { defining_workflow: { outputs: { workflow_sha: calledSha } } },
+        fromJSON: JSON.parse,
+        toJSON: JSON.stringify,
+        job: { workflow_repository: "openclaw/openclaw", workflow_sha: calledSha },
+        steps: { defining_workflow: { outputs: { workflow_sha: "f".repeat(40) } } },
         github: { sha: "b".repeat(40), workflow_sha: "c".repeat(40) },
         inputs: { workflow_ref: "refs/heads/main", package_ref: "d".repeat(40) },
         needs: { resolve_package: { outputs: { tooling_sha: "e".repeat(40) } } },
