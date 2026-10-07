@@ -225,9 +225,45 @@ internal fun buildGatewayTlsConfig(
   val expected = expectedInput?.let(::normalizeGatewayTlsFingerprintInput)
   val effectiveFingerprint = AtomicReference(expected)
 
+  fun recordAcceptedFingerprint(chain: Array<X509Certificate>) {
+    val certificate = chain.firstOrNull() ?: return
+    effectiveFingerprint.set(certificate.sha256Fingerprint())
+  }
+
   @SuppressLint("CustomX509TrustManager")
   val trustManager =
-    object : GatewayTrustManager(defaultTrust, expectedInput == null) {
+    object : X509ExtendedTrustManager() {
+      override fun checkClientTrusted(
+        chain: Array<X509Certificate>,
+        authType: String,
+      ) {
+        defaultTrust.checkClientTrusted(chain, authType)
+      }
+
+      override fun checkClientTrusted(
+        chain: Array<X509Certificate>,
+        authType: String,
+        socket: Socket,
+      ) {
+        if (defaultTrust is X509ExtendedTrustManager) {
+          defaultTrust.checkClientTrusted(chain, authType, socket)
+        } else {
+          checkClientTrusted(chain, authType)
+        }
+      }
+
+      override fun checkClientTrusted(
+        chain: Array<X509Certificate>,
+        authType: String,
+        engine: SSLEngine,
+      ) {
+        if (defaultTrust is X509ExtendedTrustManager) {
+          defaultTrust.checkClientTrusted(chain, authType, engine)
+        } else {
+          checkClientTrusted(chain, authType)
+        }
+      }
+
       override fun checkServerTrusted(
         chain: Array<X509Certificate>,
         authType: String,
@@ -248,10 +284,34 @@ internal fun buildGatewayTlsConfig(
         effectiveFingerprint.set(fingerprint)
       }
 
-      override fun onPlatformTrustAccepted(chain: Array<X509Certificate>) {
-        val certificate = chain.firstOrNull() ?: return
-        effectiveFingerprint.set(certificate.sha256Fingerprint())
+      override fun checkServerTrusted(
+        chain: Array<X509Certificate>,
+        authType: String,
+        socket: Socket,
+      ) {
+        if (expectedInput == null && defaultTrust is X509ExtendedTrustManager) {
+          // Preserve the connected hostname for Android's domain-aware platform trust manager.
+          defaultTrust.checkServerTrusted(chain, authType, socket)
+          recordAcceptedFingerprint(chain)
+        } else {
+          checkServerTrusted(chain, authType)
+        }
       }
+
+      override fun checkServerTrusted(
+        chain: Array<X509Certificate>,
+        authType: String,
+        engine: SSLEngine,
+      ) {
+        if (expectedInput == null && defaultTrust is X509ExtendedTrustManager) {
+          defaultTrust.checkServerTrusted(chain, authType, engine)
+          recordAcceptedFingerprint(chain)
+        } else {
+          checkServerTrusted(chain, authType)
+        }
+      }
+
+      override fun getAcceptedIssuers(): Array<X509Certificate> = defaultTrust.acceptedIssuers
     }
 
   val context = SSLContext.getInstance("TLS")
@@ -326,7 +386,24 @@ internal suspend fun probeGatewayTlsFingerprint(
     val fingerprintRef = AtomicReference<String?>(null)
     val probeTrustManager =
       @SuppressLint("CustomX509TrustManager")
-      object : GatewayTrustManager() {
+      object : X509ExtendedTrustManager() {
+        override fun checkClientTrusted(
+          chain: Array<X509Certificate>,
+          authType: String,
+        ): Unit = throw CertificateException("gateway TLS check does not accept client certificates")
+
+        override fun checkClientTrusted(
+          chain: Array<X509Certificate>,
+          authType: String,
+          socket: Socket,
+        ) = checkClientTrusted(chain, authType)
+
+        override fun checkClientTrusted(
+          chain: Array<X509Certificate>,
+          authType: String,
+          engine: SSLEngine,
+        ) = checkClientTrusted(chain, authType)
+
         override fun checkServerTrusted(
           chain: Array<X509Certificate>,
           authType: String,
@@ -336,6 +413,20 @@ internal suspend fun probeGatewayTlsFingerprint(
           // Abort validation after capture; the probe is not deciding trust.
           throw CertificateException("gateway TLS check captured fingerprint")
         }
+
+        override fun checkServerTrusted(
+          chain: Array<X509Certificate>,
+          authType: String,
+          socket: Socket,
+        ) = checkServerTrusted(chain, authType)
+
+        override fun checkServerTrusted(
+          chain: Array<X509Certificate>,
+          authType: String,
+          engine: SSLEngine,
+        ) = checkServerTrusted(chain, authType)
+
+        override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
       }
 
     val context = SSLContext.getInstance("TLS")
@@ -426,74 +517,6 @@ private fun probeGatewayTlsSystemTrust(
   } finally {
     runCatching { socket.close() }
   }
-}
-
-private abstract class GatewayTrustManager(
-  private val defaultTrust: X509TrustManager? = null,
-  private val usesPlatformTrust: Boolean = false,
-) : X509ExtendedTrustManager() {
-  override fun checkClientTrusted(
-    chain: Array<X509Certificate>,
-    authType: String,
-  ) {
-    val trust = defaultTrust ?: throw CertificateException("gateway TLS check does not accept client certificates")
-    trust.checkClientTrusted(chain, authType)
-  }
-
-  override fun checkClientTrusted(
-    chain: Array<X509Certificate>,
-    authType: String,
-    socket: Socket,
-  ) {
-    if (defaultTrust is X509ExtendedTrustManager) {
-      defaultTrust.checkClientTrusted(chain, authType, socket)
-    } else {
-      checkClientTrusted(chain, authType)
-    }
-  }
-
-  override fun checkClientTrusted(
-    chain: Array<X509Certificate>,
-    authType: String,
-    engine: SSLEngine,
-  ) {
-    if (defaultTrust is X509ExtendedTrustManager) {
-      defaultTrust.checkClientTrusted(chain, authType, engine)
-    } else {
-      checkClientTrusted(chain, authType)
-    }
-  }
-
-  override fun checkServerTrusted(
-    chain: Array<X509Certificate>,
-    authType: String,
-    socket: Socket,
-  ) {
-    if (usesPlatformTrust && defaultTrust is X509ExtendedTrustManager) {
-      // Preserve Android's connected-hostname validation before recording the admitted chain.
-      defaultTrust.checkServerTrusted(chain, authType, socket)
-      onPlatformTrustAccepted(chain)
-    } else {
-      checkServerTrusted(chain, authType)
-    }
-  }
-
-  override fun checkServerTrusted(
-    chain: Array<X509Certificate>,
-    authType: String,
-    engine: SSLEngine,
-  ) {
-    if (usesPlatformTrust && defaultTrust is X509ExtendedTrustManager) {
-      defaultTrust.checkServerTrusted(chain, authType, engine)
-      onPlatformTrustAccepted(chain)
-    } else {
-      checkServerTrusted(chain, authType)
-    }
-  }
-
-  protected open fun onPlatformTrustAccepted(chain: Array<X509Certificate>) {}
-
-  override fun getAcceptedIssuers(): Array<X509Certificate> = if (defaultTrust == null) emptyArray() else defaultTrust.acceptedIssuers
 }
 
 private fun X509Certificate.sha256Fingerprint(): String = encoded.toByteString().sha256().hex()

@@ -190,10 +190,12 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.autoSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.AbsoluteAlignment
@@ -2288,7 +2290,8 @@ internal fun ChatBubble(
     // One image window for the whole message, including separated assistant runs.
     // Paging disposes previews instead of retaining every decoded bitmap in Compose.
     val imageCount = displayableContent.count { it.type == "image" && it.isDetachedChatAttachment() }
-    var imagePage by rememberSaveable(messageId) { mutableStateOf(0) }
+    // Keep the existing saved-state parcel shape when using primitive state at runtime.
+    var imagePage by rememberSaveable(messageId, stateSaver = autoSaver<Int>()) { mutableIntStateOf(0) }
     val lastImagePage = ((imageCount - 1) / CHAT_MESSAGE_IMAGE_WINDOW).coerceAtLeast(0)
     val currentImagePage = imagePage.coerceIn(0, lastImagePage)
     val orderedContent =
@@ -4531,7 +4534,7 @@ private fun LiveTalkButton(
   ChatRoundButton(
     onClick = onClick,
     enabled = enabled,
-    modifier = Modifier.size(ClawTheme.spacing.touchTarget).semantics { contentDescription = buttonDescription },
+    modifier = Modifier.semantics { contentDescription = buttonDescription },
     contentColor = if (active) ClawTheme.colors.accent else ClawTheme.colors.primaryText,
     background = if (active) Color.Transparent else ClawTheme.colors.primary,
   ) {

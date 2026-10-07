@@ -196,14 +196,14 @@ internal fun ChatRoundButton(
   onClick: () -> Unit,
   contentColor: Color,
   background: Color,
+  modifier: Modifier = Modifier,
   enabled: Boolean = true,
-  modifier: Modifier = Modifier.size(ClawTheme.spacing.touchTarget),
   content: @Composable () -> Unit,
 ) {
   Surface(
     onClick = onClick,
     enabled = enabled,
-    modifier = modifier,
+    modifier = Modifier.size(ClawTheme.spacing.touchTarget).then(modifier),
     shape = CircleShape,
     color = Color.Transparent,
     contentColor = contentColor,

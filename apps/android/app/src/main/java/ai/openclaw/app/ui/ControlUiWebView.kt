@@ -341,44 +341,43 @@ private class ControlUiWebViewClient(
   fun installAuth(view: WebView): Boolean {
     val origin = controlUiOriginRule(page.baseUrl) ?: return false
     val root = basePath ?: return false
-    if (
-      !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) ||
-      !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
-    ) {
-      // Platform WebMessagePort is available since API 23, below our minimum SDK.
-      usesMessagePort = true
-      return true
-    }
-    WebViewCompat.addWebMessageListener(view, NATIVE_GATEWAY_AUTH_BRIDGE, setOf(origin)) { source, message, sourceOrigin, isMainFrame, reply ->
-      if (message.type != WebMessageCompat.TYPE_STRING || !isActiveDocument(view) || source !== view || !isMainFrame ||
-        !sameControlUiOrigin(sourceOrigin.toString(), page.baseUrl)
-      ) {
-        return@addWebMessageListener
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+      if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+        WebViewCompat.addWebMessageListener(view, NATIVE_GATEWAY_AUTH_BRIDGE, setOf(origin)) { source, message, sourceOrigin, isMainFrame, reply ->
+          if (message.type != WebMessageCompat.TYPE_STRING || !isActiveDocument(view) || source !== view || !isMainFrame ||
+            !sameControlUiOrigin(sourceOrigin.toString(), page.baseUrl)
+          ) {
+            return@addWebMessageListener
+          }
+          val response = respondToChallenge(message.data) ?: return@addWebMessageListener
+          if (isActiveDocument(view) && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            reply.postMessage(response)
+          }
+        }
+        authInstalled = true
+        val payload = controlUiStartupAuth(page)
+        authScript =
+          WebViewCompat.addDocumentStartJavaScript(
+            view,
+            """
+            (() => {
+              if (window.top !== window) return;
+              const base = ${JsonPrimitive(root)};
+              if (new RegExp(${JsonPrimitive(controlUiDotSegmentPattern.pattern)}, "i").test(location.pathname)) return;
+              if (base && location.pathname !== base && !location.pathname.startsWith(base + "/")) return;
+              Object.defineProperty(window, "__OPENCLAW_NATIVE_CONTROL_AUTH__", {
+                value: $payload,
+                configurable: true,
+              });
+            })();
+            """.trimIndent(),
+            setOf(origin),
+          )
+        return true
       }
-      val response = respondToChallenge(message.data) ?: return@addWebMessageListener
-      if (isActiveDocument(view) && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-        reply.postMessage(response)
-      }
     }
-    authInstalled = true
-    val payload = controlUiStartupAuth(page)
-    authScript =
-      WebViewCompat.addDocumentStartJavaScript(
-        view,
-        """
-        (() => {
-          if (window.top !== window) return;
-          const base = ${JsonPrimitive(root)};
-          if (new RegExp(${JsonPrimitive(controlUiDotSegmentPattern.pattern)}, "i").test(location.pathname)) return;
-          if (base && location.pathname !== base && !location.pathname.startsWith(base + "/")) return;
-          Object.defineProperty(window, "__OPENCLAW_NATIVE_CONTROL_AUTH__", {
-            value: $payload,
-            configurable: true,
-          });
-        })();
-        """.trimIndent(),
-        setOf(origin),
-      )
+    // Platform WebMessagePort is available since API 23, below our minimum SDK.
+    usesMessagePort = true
     return true
   }
 
