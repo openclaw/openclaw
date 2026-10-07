@@ -563,8 +563,17 @@ merge_read() {
     [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ]; then
     # This complete read reports policy/check facts; prior-CI admission still owns their verdict.
     response=$(merge_rest observe-prior-ci "$pr") || return 1
-    printf '%s\n' "$response" | jq -c '{transport:"rest",payload:.}'
-    return
+    if ! printf '%s\n' "$response" | jq -e '. == {restUnavailable:true}' >/dev/null 2>&1; then
+      printf '%s\n' "$response" | jq -c '{transport:"rest",payload:.}'
+      return
+    fi
+    if [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ]; then
+      merge_outcome_stop "merged PR receipt became unavailable during active prior-CI admission" >&2
+      return 1
+    fi
+    # Only the absent merged-receipt field permits this mode to return unavailable.
+    # Postdispatch reconciliation may change readers, never repeat the mutation.
+    first=graphql
   fi
   if [ "$first" = rest ]; then second=graphql; else second=rest; fi
   local transport

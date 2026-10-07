@@ -94,6 +94,7 @@ Other selection rules:
 - Changing `agents.defaults.model.primary` does not rewrite existing session pins. If status reports `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, run `/model default` to clear the pin.
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing only `models.providers.*.models` instead of the full built-in catalog.
 - The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening the chat model picker reads published rows, including rows matched by a trailing `provider/*` policy entry. Use its explicit Refresh action to request immediate provider discovery. Default and configured picker views hide catalog rows marked `deprecated` or `disabled`. There is one exception: a row stays visible when that exact model is configured as a primary, fallback, utility or tool model, alias or settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
+- Configured models stay in the picker when their sign-in, key, or CLI login is missing: they show as unavailable instead of disappearing. This covers the primary, fallbacks, utility and tool models, and each `agents.defaults.models` or per-agent `models` entry.
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 - Chat and New Session keep the Default reset choice pinned in its provider group, then put the selected model before the remaining catalog choices. Models settings puts the selected model first. Other rows keep the Gateway's catalog order, including provider-curated recommendations where supplied. Text `/models <provider>` pages also put the current model first instead of alphabetizing the catalog. Picker search checks the full list, not just the visible rows.
 - Signing in to a provider keeps existing choices visible in open Control UI and terminal model pickers while discovery refreshes in the background. Changes to model restrictions, operator roles, or catalog mode still retire the old choices until the replacement catalog is ready.
@@ -146,7 +147,8 @@ warning identify the failed fresh-generation retry.
 
 For models configured to use a CLI runtime, channel picker availability follows that
 runtime's prepared authentication. A provider API key does not substitute for its
-native login.
+native login. When Claude Code is logged out, its models stay listed as unavailable
+and the Control UI picker and `/models` suggest `claude auth login`.
 
 If discovery fails, **Settings > Models** and `openclaw models list` report the
 failure and keep the last compatible model list. Without one, OpenClaw shows
@@ -431,6 +433,8 @@ openclaw models auth list|add|login|paste-api-key|paste-token|setup-token|order
     `openclaw models scan` inspects OpenRouter's public free-model catalog and can check candidates for tool and image support live. The catalog itself is public, so metadata-only scans (`--no-probe`) need no key. Live checking and `--set-default`/`--set-image` require an OpenRouter API key (auth profile or `OPENROUTER_API_KEY`). Without one they fail closed to metadata-only output.
 
     Results rank by: image support, then tool latency, then context size, then parameter count. In a TTY, checked results prompt an interactive fallback selection. Non-interactive mode needs `--yes` to accept defaults.
+
+    A probed scan replaces `agents.defaults.model.fallbacks` even without `--set-default`; the flag additionally sets the primary. Use `--no-probe` to inspect candidates without writing config.
 
   </Accordion>
 </AccordionGroup>

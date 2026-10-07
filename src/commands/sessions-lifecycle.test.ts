@@ -425,13 +425,13 @@ describe("sessions lifecycle commands", () => {
     },
   );
 
-  it("keeps separate owners when delete responses share a canonical key", async () => {
+  it("keeps requested owners when described sessions share a canonical key", async () => {
     mocks.callGateway
       .mockResolvedValueOnce({
-        session: { key: "agent:work:main", sessionId: "work-session", agentId: "work" },
+        session: { key: "global", sessionId: "work-session", agentId: "work" },
       })
       .mockResolvedValueOnce({
-        session: { key: "agent:peer:main", sessionId: "peer-session", agentId: "peer" },
+        session: { key: "global", sessionId: "peer-session", agentId: "peer" },
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -452,6 +452,19 @@ describe("sessions lifecycle commands", () => {
       runtime,
     );
 
+    for (const [index, agentId] of ["work", "peer"].entries()) {
+      expect(mocks.callGateway).toHaveBeenNthCalledWith(
+        index + 3,
+        "sessions.delete",
+        expect.any(Object),
+        {
+          key: `agent:${agentId}:main`,
+          expectedSessionId: `${agentId}-session`,
+          deleteTranscript: true,
+        },
+        { defaultTimeoutMs: 10 * 60_000 },
+      );
+    }
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("openclaw memory forget --agent work --session global"),
     );

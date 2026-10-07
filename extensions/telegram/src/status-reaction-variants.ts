@@ -159,7 +159,7 @@ function extractTelegramAllowedReactions(
     return undefined;
   }
   if (availableReactions == null) {
-    // Explicitly omitted/null => all emoji reactions are allowed in this chat.
+    // Explicit null means all emoji reactions are allowed in this chat.
     return null;
   }
   if (!Array.isArray(availableReactions)) {

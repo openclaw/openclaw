@@ -190,8 +190,8 @@ export class WorkboardStoreRuntime {
     assertCurrent?: () => void,
   ): Promise<T> {
     return await this.runOperation(async () => {
-      const runAndNotify = async () =>
-        await this.withMutationAuthority(async () => await this.runMutation(run), assertCurrent);
+      const runAndNotify = () =>
+        this.withMutationAuthority(() => this.runMutation(run), assertCurrent);
       const result = this.mutationQueue.then(runAndNotify, runAndNotify);
       this.mutationQueue = result.then(
         () => undefined,

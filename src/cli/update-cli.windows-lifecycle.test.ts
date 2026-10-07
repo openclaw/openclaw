@@ -199,38 +199,6 @@ describe("update-cli", () => {
     });
   });
 
-  it("restores Windows Scheduled Task autostart when service stop fails", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const root = await fixture.mockPackageInstallAtCaseDir("openclaw-update-stop-failure");
-    fixture.mockRunningManagedGateway([
-      nodeExecutable,
-      path.join(root, "dist", "index.js"),
-      "gateway",
-      "run",
-    ]);
-    suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
-    serviceStop.mockRejectedValueOnce(new Error("stop failed"));
-    resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
-
-    await expect(invokeUpdateCli({ yes: true })).rejects.toEqual(new ExitError(1));
-
-    expect(suspendScheduledTaskAutoStartForUpdate).toHaveBeenCalledTimes(1);
-    expect(serviceStop).toHaveBeenCalledTimes(1);
-    expect(freshRestartCalls()).toHaveLength(0);
-    expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledTimes(1);
-    expect(packageInstallCommandCall()).toBeDefined();
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    const suspendOrder = suspendScheduledTaskAutoStartForUpdate.mock.invocationCallOrder[0];
-    const stopOrder = serviceStop.mock.invocationCallOrder[0];
-    const resumeOrder = resumeScheduledTaskAutoStartAfterUpdate.mock.invocationCallOrder[0];
-    expect(requireValue(suspendOrder, "Scheduled Task suspend order")).toBeLessThan(
-      requireValue(stopOrder, "service stop order"),
-    );
-    expect(requireValue(stopOrder, "service stop order")).toBeLessThan(
-      requireValue(resumeOrder, "Scheduled Task resume order"),
-    );
-  });
-
   it.each([
     { command: "update", fault: "stop-enable-committed" },
     { command: "doctor", fault: "suspension-spawn" },
@@ -347,6 +315,23 @@ describe("update-cli", () => {
         ...(fault === "stop-enable-committed" ? ["/DISABLE"] : []),
       ]);
       expect(serviceStop).toHaveBeenCalledTimes(stopFailure ? 1 : 0);
+      if (stopFailure) {
+        const nativeOrder = (action: string) => {
+          const index = vi
+            .mocked(runCommandWithTimeout)
+            .mock.calls.findIndex(([argv]) => argv[0] === "schtasks" && argv.at(-1) === action);
+          return requireValue(
+            vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[index],
+            `${action} order`,
+          );
+        };
+        const stopOrder = requireValue(
+          serviceStop.mock.invocationCallOrder[0],
+          "service stop order",
+        );
+        expect(nativeOrder("/DISABLE")).toBeLessThan(stopOrder);
+        expect(stopOrder).toBeLessThan(nativeOrder("/ENABLE"));
+      }
       expect(packageInstallCommandCall() !== undefined).toBe(command === "update");
       expect(JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"))).toMatchObject({
         version: "1.0.0",

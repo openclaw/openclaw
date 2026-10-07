@@ -304,6 +304,10 @@ Explicit account selections and empty account orders remain authoritative. API k
 for the `anthropic` provider require an explicit selection; they do not replace
 native subscription login automatically.
 
+Fresh plugin completions, including Memory Dreaming, use the same account order.
+An explicit profile on the requested model stays authoritative; an empty account
+order preserves native Claude login.
+
 Docker installs need Claude Code and the chosen credentials inside the persisted container home, not only on the host. See [Claude CLI backend in Docker](/install/docker#claude-cli-backend-in-docker).
 
 The gateway service must resolve `claude` on `PATH`. For a nonstandard path,
@@ -513,6 +517,9 @@ bytes are not tool results or agent progress; client request deadlines and the
 overall agent turn timeout still apply.
 
 The shared listener remains available after the turn that first started it completes.
+Later calls use their own run's permissions and caller liveness, without retaining
+the starting turn's transcript read fence or request scope.
+The listener retains the Gateway's process broker and database-reader lifecycle.
 After plugin replacement, new CLI turns resolve bridge tools against the current
 plugin generation without restarting the listener. Retired plugin instances remain
 unavailable, and each turn still needs its own active context grant.

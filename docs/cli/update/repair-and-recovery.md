@@ -134,6 +134,9 @@ retires older sealed Doctor captures and reports each removal; incomplete captur
 and update captures are never retired automatically, so take a verified backup
 when you need a long-term copy.
 
+Filesystems that reject native no-replace rename can still retain captures through
+exclusive hard-link or file-copy publication. Existing captures are never overwritten.
+
 These captures are evidence for manual recovery. Active writers can change state
 during capture; an observed change leaves the capture incomplete and produces a
 warning. The set is not an atomic snapshot across active stores. Missing,

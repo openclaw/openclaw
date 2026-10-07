@@ -5,8 +5,10 @@ import { root as fsRoot } from "../../infra/fs-safe.js";
 import { normalizeGitPathForFilesystem, type GitCommandOptions } from "../../infra/git-exec.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
+import type { WorktreeWaitBudget } from "./allocation.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import type { WorktreeSourceProfile } from "./checkout-profiles.js";
+import { hasWorktreeUnknownOutcome } from "./errors.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
 import {
@@ -24,6 +26,7 @@ import { prepareWorktreeTemplate } from "./template-cache.js";
 const log = createSubsystemLogger("agents/worktrees");
 
 type CheckoutOptions = WorktreeFilesystemOptions & {
+  waitBudget?: WorktreeWaitBudget;
   env: NodeJS.ProcessEnv;
   now: () => number;
   enabled: boolean;
@@ -213,11 +216,11 @@ async function prepareTemplate(options: CheckoutOptions) {
     backend: backend.id,
     reuseOnly: options.deferGitCheckout,
     requireSpace: options.requireSpace,
-    validate: async (existing) => {
+    validate: async (existing, templateOptions) => {
       const status = await runGit(
         existing.path,
         ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--ignored"],
-        gitOptions(options),
+        gitOptions(templateOptions),
       );
       // NUL records keep filenames from impersonating HEAD headers.
       const fields = status.stdout.split("\0");
@@ -232,23 +235,28 @@ async function prepareTemplate(options: CheckoutOptions) {
         heads[0] === `# branch.oid ${commit}`
       );
     },
-    prepare: async (preparing) => {
+    prepare: async (preparing, templateOptions) => {
       await options.requireSpace();
-      await backend.createTemplate(preparing.path, options);
+      await backend.createTemplate(preparing.path, templateOptions);
       await requireGit(
         options.repoRoot,
         ["worktree", "add", "--detach", "--", preparing.path, commit],
-        checkoutGitOptions(options),
+        checkoutGitOptions({ ...options, ...templateOptions }),
       );
     },
   });
-  return record
-    ? {
-        record,
-        backend,
-        sourceIndex: await resolveGitMetadataPath(record.path, "index", gitOptions(options)),
-      }
-    : undefined;
+  try {
+    return record
+      ? {
+          record,
+          backend,
+          sourceIndex: await resolveGitMetadataPath(record.path, "index", gitOptions(options)),
+        }
+      : undefined;
+  } catch (error) {
+    await record?.release(error);
+    throw error;
+  }
 }
 
 /** Git owns registration, branches and indexes; the backend only materializes files. */
@@ -372,6 +380,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     }
     return result.code === 0 ? added : result;
   };
+  let retainedTemplate: Awaited<ReturnType<typeof prepareTemplate>>;
   const prepare = async (): Promise<CheckoutResult> => {
     if (profile && commit !== profile.commit) {
       preserve = true;
@@ -384,9 +393,12 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     let cloneBytes: number | undefined;
     if (options.enabled && checkoutBytes !== 0 && !profile && !options.sourceOnly) {
       try {
-        template = await prepareTemplate(options);
+        template = retainedTemplate = await prepareTemplate(options);
         cloneBytes = template ? await estimateTemplateCloneBytes(template) : undefined;
       } catch (error) {
+        if (hasWorktreeUnknownOutcome(error)) {
+          throw error;
+        }
         assertOwned(options);
         log.warn(`worktree acceleration unavailable; using Git checkout: ${String(error)}`);
       }
@@ -498,6 +510,9 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
         ...options.checkoutBudget,
       });
     } catch (error) {
+      if (hasWorktreeUnknownOutcome(error)) {
+        throw error;
+      }
       rollbackGuard();
       await assertRegistration(rollbackOptions);
       if (existingBranch) {
@@ -537,8 +552,13 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
   } catch (error) {
     outcome = { error };
   }
+  await retainedTemplate?.record.release("error" in outcome ? outcome.error : undefined);
   const failures = "error" in outcome ? [outcome.error] : [];
-  if (("error" in outcome || outcome.result.code !== 0) && !preserve) {
+  if (
+    ("error" in outcome || outcome.result.code !== 0) &&
+    !preserve &&
+    !("error" in outcome && hasWorktreeUnknownOutcome(outcome.error))
+  ) {
     try {
       rollbackGuard();
       await assertRegistration(rollbackOptions);

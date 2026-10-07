@@ -148,7 +148,10 @@ export function resolveCompletionFromSessionEntry(
   let reason: SubagentLifecycleEndedReason = SUBAGENT_ENDED_REASON_COMPLETE;
   switch (status) {
     case "failed":
-      outcome = { status: "error", error: "session completed before registry settled" };
+      outcome = {
+        status: "error",
+        error: sessionEntry?.lastRunError || "session completed before registry settled",
+      };
       reason = SUBAGENT_ENDED_REASON_ERROR;
       break;
     case "killed":
@@ -156,7 +159,7 @@ export function resolveCompletionFromSessionEntry(
       reason = SUBAGENT_ENDED_REASON_KILLED;
       break;
     case "timeout":
-      outcome = { status: "timeout" };
+      outcome = { status: "timeout", error: sessionEntry?.lastRunError };
       break;
     default:
       if (status !== "done" && typeof sessionEntry?.endedAt !== "number") {

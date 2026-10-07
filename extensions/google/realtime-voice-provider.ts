@@ -582,10 +582,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
 
-    const silenceThresholdMs =
-      typeof this.config.silenceDurationMs === "number"
-        ? Math.max(0, Math.floor(this.config.silenceDurationMs))
-        : DEFAULT_AUDIO_STREAM_END_SILENCE_MS;
+    const silenceThresholdMs = this.config.silenceDurationMs ?? DEFAULT_AUDIO_STREAM_END_SILENCE_MS;
     this.consecutiveSilenceMs += Math.round(
       realtimeVoiceAudioDurationMs(this.audioFormat, audio.length),
     );
@@ -892,7 +889,6 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
             return;
           }
         }
-        continue;
       }
     }
     if (content.generationComplete || content.interrupted || content.turnComplete) {

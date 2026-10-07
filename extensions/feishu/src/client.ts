@@ -26,7 +26,6 @@ const FEISHU_WS_CONFIG = {
   pingTimeout: 3,
 } as const;
 
-/** User-Agent header value for all Feishu API requests. */
 export function getFeishuUserAgent(): string {
   return FEISHU_USER_AGENT;
 }
@@ -497,10 +496,7 @@ type FeishuWsClientCallbacks = Pick<
   "onError" | "onReady" | "onReconnected" | "onReconnecting"
 >;
 
-/**
- * Create a Feishu WebSocket client for an account.
- * Note: WSClient is not cached since each call creates a new connection.
- */
+/** WSClient is not cached since each call creates a new connection. */
 export async function createFeishuWSClient(
   account: ResolvedFeishuAccount,
   callbacks: FeishuWsClientCallbacks = {},

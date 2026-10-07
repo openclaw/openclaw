@@ -21,14 +21,13 @@ extensions/anthropic-vertex/stream-runtime.ts	4
 extensions/anthropic/cli-backend.ts	2
 extensions/anthropic/cli-migration.ts	1
 extensions/anthropic/config-defaults.ts	2
-extensions/anthropic/register.runtime.ts	1
 extensions/anthropic/session-catalog-continue.ts	1
 extensions/anthropic/session-catalog-history.ts	2
 extensions/anthropic/session-catalog-listing.ts	1
 extensions/anthropic/session-catalog-parsing.ts	5
 extensions/anthropic/session-catalog-registration.ts	3
 extensions/anthropic/session-catalog-runtime.ts	1
-extensions/anthropic/stream-wrappers.ts	3
+extensions/anthropic/stream-wrappers.ts	1
 extensions/baseten/models.ts	1
 extensions/beam/src/mirror.ts	2
 extensions/browser/src/browser-node-fallback.ts	1
@@ -437,7 +436,6 @@ extensions/line/src/flex-templates/basic-cards.ts	12
 extensions/line/src/flex-templates/media-control-cards.ts	12
 extensions/line/src/flex-templates/schedule-cards.ts	27
 extensions/line/src/gateway.ts	1
-extensions/line/src/monitor-durable.ts	1
 extensions/line/src/monitor.ts	1
 extensions/line/src/outbound.ts	3
 extensions/line/src/send.ts	1
@@ -466,11 +464,10 @@ extensions/matrix/src/exec-approvals.ts	1
 extensions/matrix/src/group-mentions.ts	1
 extensions/matrix/src/matrix/account-config.ts	2
 extensions/matrix/src/matrix/actions/devices.ts	1
-extensions/matrix/src/matrix/actions/messages.ts	8
+extensions/matrix/src/matrix/actions/messages.ts	7
 extensions/matrix/src/matrix/actions/polls.ts	1
 extensions/matrix/src/matrix/actions/reactions.ts	1
 extensions/matrix/src/matrix/actions/summary.ts	2
-extensions/matrix/src/matrix/client-bootstrap.ts	1
 extensions/matrix/src/matrix/client/config.ts	4
 extensions/matrix/src/matrix/client/logging.ts	2
 extensions/matrix/src/matrix/config-update.ts	4
@@ -509,13 +506,11 @@ extensions/matrix/src/matrix/sdk/crypto-bootstrap.ts	1
 extensions/matrix/src/matrix/sdk/crypto-facade.ts	1
 extensions/matrix/src/matrix/sdk/crypto-node.runtime.ts	1
 extensions/matrix/src/matrix/sdk/decrypt-bridge.ts	1
-extensions/matrix/src/matrix/sdk/event-helpers.ts	1
 extensions/matrix/src/matrix/sdk/fake-indexeddb-prune.ts	4
 extensions/matrix/src/matrix/sdk/idb-persistence.ts	3
 extensions/matrix/src/matrix/sdk/transport.ts	2
 extensions/matrix/src/matrix/send.ts	8
-extensions/matrix/src/matrix/send/chunking.ts	2
-extensions/matrix/src/matrix/send/client.ts	1
+extensions/matrix/src/matrix/send/chunking.ts	1
 extensions/matrix/src/matrix/send/formatting.ts	1
 extensions/matrix/src/matrix/thread-bindings.ts	2
 extensions/matrix/src/onboarding.ts	7
@@ -773,7 +768,7 @@ extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	6
 extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	1
 extensions/qa-lab/src/providers/mock-openai/server.ts	6
 extensions/qa-lab/src/qa-transport.ts	1
-extensions/qa-lab/src/run-config.ts	2
+extensions/qa-lab/src/run-config.ts	1
 extensions/qa-lab/src/runtime-parity.ts	1
 extensions/qa-lab/src/runtime-tool-fixture.ts	2
 extensions/qa-lab/src/scenario-catalog.ts	1
@@ -1816,7 +1811,6 @@ src/commands/doctor-security.ts	3
 src/commands/doctor-session-canonical-keys.ts	1
 src/commands/doctor-session-incognito-key-repair-state.ts	8
 src/commands/doctor-session-snapshots.ts	3
-src/commands/doctor-session-sqlite-compact.ts	1
 src/commands/doctor-session-sqlite-recover-report.ts	1
 src/commands/doctor-session-state-providers.ts	3
 src/commands/doctor-session-transcript-headers.ts	4
@@ -1826,7 +1820,6 @@ src/commands/doctor-skills.ts	1
 src/commands/doctor-sqlite-compact.ts	1
 src/commands/doctor-sqlite-maintenance-lock.ts	2
 src/commands/doctor-state-integrity.ts	1
-src/commands/doctor-state-sqlite-compact.ts	1
 src/commands/doctor-telegram-general-topic-conversations.ts	2
 src/commands/doctor-tools-md-migration.ts	5
 src/commands/doctor-workspace.ts	4

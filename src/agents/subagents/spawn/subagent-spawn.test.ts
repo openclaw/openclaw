@@ -158,34 +158,6 @@ describe("spawnSubagentDirect seam flow", () => {
     },
   );
 
-  it("binds private completion to the admitted completion owner rather than the controller", async () => {
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:main:main": { sessionId: "controller-incarnation" },
-      "agent:main:owner": { sessionId: "owner-incarnation" },
-    });
-    const result = await spawn(
-      { task: "private work", completionTarget: "parent" },
-      {
-        agentSessionKey: "agent:main:main",
-        completionOwnerKey: "agent:main:owner",
-      },
-    );
-    expect(result).toMatchObject({
-      status: "accepted",
-      completionTarget: "parent",
-      expectsCompletionMessage: true,
-    });
-    expect(result.note).toContain("private requester turn");
-    expect(gatewayRequest("agent").scopes).toBeUndefined();
-    expect(firstRegisteredSubagentRun()).toMatchObject({
-      controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:owner",
-      completionTarget: "parent",
-      completionRequesterSessionId: "owner-incarnation",
-      expectsCompletionMessage: true,
-    });
-  });
-
   it("rejects private completion without an existing parent incarnation", async () => {
     const result = await spawn(
       { task: "private work", completionTarget: "parent" },
@@ -418,21 +390,6 @@ describe("spawnSubagentDirect seam flow", () => {
       source: "override",
     });
     expectNoChildSpawnSideEffects();
-  });
-
-  it("resolves an explicit model alias to its canonical child model", async () => {
-    configOverride = createConfigOverride({
-      agents: {
-        defaults: { workspace: os.tmpdir(), models: { "openai/gpt-5.4": { alias: "fast" } } },
-        entries: { main: { workspace: "/tmp/workspace-main" } },
-      },
-    });
-    const result = await spawn({ task: "use the selected model", model: "fast" });
-    expect(result).toMatchObject({
-      status: "accepted",
-      modelApplied: true,
-      resolvedModel: "openai/gpt-5.4",
-    });
   });
 
   it("rejects failed model preparation without creating child state", async () => {

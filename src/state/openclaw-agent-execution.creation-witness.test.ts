@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, assert, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import {
@@ -88,6 +89,20 @@ it("exposes a prepared generation only after registration publication and keeps 
     expect(observedUnpublishedIdentity).toBe(true);
     const claim = execution.capturePreparedGenerationClaim();
     expect(claim).toBeDefined();
+    claim!.assertCurrent();
+    const warmStages: string[] = [];
+    const warmSource = source((request) => warmStages.push(request.stage));
+    const host = observeHostDataSql();
+    try {
+      await Promise.all([execution.prepare(warmSource), execution.prepare(warmSource)]);
+      await execution.prepare(warmSource);
+      expect(warmStages).toEqual([]);
+      expect(host.queries).toEqual([]);
+    } finally {
+      host.restore();
+    }
+    await execution.prepare(warmSource, undefined, { readmitSchema: true });
+    expect(warmStages).toContain("prepare");
     claim!.assertCurrent();
     await execution.release();
     expect(() => execution.capturePreparedGenerationClaim()).toThrow(/released/);

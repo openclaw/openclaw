@@ -21,6 +21,7 @@ import {
   getAdmittedSqliteSchemaFacts,
   readSqliteCacheDataVersion,
   readSqliteDataVersion,
+  registerSqliteSchemaMutationListener,
   runSqliteReadOperationSync,
 } from "./sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
@@ -146,6 +147,8 @@ describe("admitted SQLite schema facts", () => {
     reader.exec("PRAGMA journal_mode=WAL");
     const writer = new DatabaseSync(filename);
     databases.push(writer);
+    const schemaMutation = vi.fn();
+    registerSqliteSchemaMutationListener(reader, schemaMutation);
     const read = () =>
       runSqliteReadOperationSync(reader, () => {
         expect(tableExists(reader, "session_nodes")).toBe(true);
@@ -166,9 +169,21 @@ describe("admitted SQLite schema facts", () => {
       expect(
         observation.queries.filter((sql) => /PRAGMA schema_version/iu.test(sql)).length,
       ).toBeLessThanOrEqual(100);
+      expect(schemaMutation).not.toHaveBeenCalled();
     } finally {
       observation.restore();
     }
+  });
+
+  it("does not retain an expired snapshot's identity when adopting matching facts", () => {
+    const database = openDatabase(undefined, false);
+    const facts = runSqlitePinnedReadSnapshotSync(database, () => {
+      admitSqliteSchema(database);
+      return getAdmittedSqliteSchemaFacts(database)!;
+    });
+    expect(adoptSqliteSchemaFacts(database, structuredClone(facts))).toBe(true);
+    expect(getAdmittedSqliteSchemaFacts(database)).not.toBe(facts);
+    expect(tableExists(database, "original")).toBe(true);
   });
 
   it("invalidates derived column facts when adopting a foreign schema publication", () => {
@@ -200,6 +215,8 @@ describe("admitted SQLite schema facts", () => {
       // Bypass local schema publications, as a worker or another process does.
       const writer = new DatabaseSync(filename);
       databases.push(writer);
+      const schemaMutation = vi.fn();
+      registerSqliteSchemaMutationListener(reader, schemaMutation);
       const hasTable = (name: string) =>
         runSqliteReadOperationSync(reader, () => tableExists(reader, name));
       expect(hasTable("committed")).toBe(false);
@@ -209,6 +226,7 @@ describe("admitted SQLite schema facts", () => {
       expect(hasTable("committed")).toBe(true);
       expect(getAdmittedSqliteSchemaFacts(reader)?.indexes.has("committed_index")).toBe(true);
       expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(2);
+      expect(schemaMutation).toHaveBeenCalledTimes(1);
 
       const readSnapshot = () => {
         expect(hasTable("later")).toBe(false);
@@ -218,6 +236,7 @@ describe("admitted SQLite schema facts", () => {
         expect(hasTable("later")).toBe(false);
         expect(getAdmittedSqliteSchemaFacts(reader)?.indexes.has("committed_index")).toBe(true);
         expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(2);
+        expect(schemaMutation).toHaveBeenCalledTimes(1);
       };
       if (pin === "transaction") {
         reader.exec("BEGIN");
@@ -233,6 +252,7 @@ describe("admitted SQLite schema facts", () => {
       expect(hasTable("later")).toBe(true);
       expect(getAdmittedSqliteSchemaFacts(reader)?.indexes.has("committed_index")).toBe(false);
       expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(3);
+      expect(schemaMutation).toHaveBeenCalledTimes(2);
       writer.exec("PRAGMA user_version = 2147483647");
       expect(() =>
         runSqliteReadOperationSync(reader, () =>

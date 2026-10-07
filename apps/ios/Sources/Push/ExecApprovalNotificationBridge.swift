@@ -18,12 +18,6 @@ struct ApprovalNotificationPrompt: Codable, Equatable, Hashable {
         self.kind = kind
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case approvalId
-        case gatewayDeviceId
-        case kind
-    }
-
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.approvalId = try container.decode(String.self, forKey: .approvalId)

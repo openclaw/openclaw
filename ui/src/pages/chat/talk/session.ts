@@ -1,5 +1,6 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
+import type { TalkCatalogResult, TalkClientCreateParams } from "@openclaw/gateway-protocol";
+import type { SchemaContract } from "../../../../../packages/gateway-protocol/src/schema-contract.js";
 import { VOICE_TRANSCRIPT_QUEUE_POLICY } from "../../../../../src/talk/voice-transcript.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
@@ -22,17 +23,9 @@ import { normalizeLaunchTransport, type RealtimeTalkLaunchTransport } from "./tr
 
 export type { RealtimeTalkStatus };
 
-type RealtimeTalkLaunchOptions = {
-  provider?: string;
-  model?: string;
-  voice?: string;
-  voiceChangeId?: string;
-  transport?: RealtimeTalkLaunchTransport;
-  vadThreshold?: number;
-  silenceDurationMs?: number;
-  prefixPaddingMs?: number;
-  reasoningEffort?: string;
-};
+type RealtimeTalkLaunchOptions = SchemaContract<
+  Omit<TalkClientCreateParams, "sessionKey" | "voiceSessionId" | "mode" | "brain" | "capabilities">
+>;
 
 type RealtimeTalkLocalOptions = {
   inputDeviceId?: string;

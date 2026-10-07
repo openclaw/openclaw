@@ -1,4 +1,3 @@
-// Imessage helper module supports normalize behavior.
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import {
   normalizeLowercaseStringOrEmpty,

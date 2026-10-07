@@ -153,9 +153,6 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       : quickReplies;
 
     const sendMessageBatch = async (messages: messagingApi.Message[]) => {
-      if (messages.length === 0) {
-        return;
-      }
       for (let i = 0; i < messages.length; i += 5) {
         const batch = messages.slice(i, i + 5);
         await recordResult(sendBatch(to, batch, sendOptions));

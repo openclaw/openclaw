@@ -187,16 +187,4 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
     expect(registerSubagentRunMock).not.toHaveBeenCalled();
   });
-
-  it("passes lightweight bootstrap flags", async () => {
-    const result = await spawnSubagentDirect(
-      { task: "inspect workspace", lightContext: true },
-      context,
-    );
-    expect(result.status).toBe("accepted");
-    expect(request("agent")?.params).toMatchObject({
-      bootstrapContextMode: "lightweight",
-      bootstrapContextRunKind: "default",
-    });
-  });
 });

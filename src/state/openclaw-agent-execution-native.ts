@@ -94,6 +94,7 @@ export function createAgentDatabaseNativeGeneration(
   assertCleanupOwned: () => void,
   expectedIdentity: AgentDatabaseExecutionFileIdentity | undefined,
   acceptFileIdentity: (identity: AgentDatabaseExecutionFileIdentity) => void,
+  retainVerification: () => () => Promise<void>,
   creatingIdentity?: DatabasePathIdentity,
   creationClaim?: AgentDatabaseFileExecutionOpen["creationClaim"],
 ): AgentDatabaseNativeGeneration {
@@ -504,6 +505,7 @@ export function createAgentDatabaseNativeGeneration(
     assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing = false,
     signal?: AbortSignal,
+    readmitSchema = false,
   ): Promise<T | undefined> {
     const assertOperationCurrent = () => {
       assertCurrent();
@@ -511,12 +513,26 @@ export function createAgentDatabaseNativeGeneration(
       assertCallerCurrent?.();
       signal?.throwIfAborted();
     };
-    const store = openedStore ?? (await open(source, assertCallerCurrent, createIfMissing, signal));
+    const wasPrepared = preparationPublished;
+    // Opening publishes registration before another caller can reuse this generation.
+    const store = preparationPublished
+      ? openedStore
+      : await open(source, assertCallerCurrent, createIfMissing, signal);
     assertOperationCurrent();
     if (!store) {
       return undefined;
     }
-    if (!nativeIdentity || createIfMissing) {
+    const schema = createIfMissing
+      ? getOpenClawAgentDatabaseValidationForTransfer({ agentId, path: pathname })?.schema
+      : undefined;
+    const requiresReadmission =
+      createIfMissing &&
+      wasPrepared &&
+      (readmitSchema ||
+        !schema ||
+        Atomics.load(new Int32Array(schema.valid), 0) !== 1 ||
+        captureAgentDatabasePreparationJournal(agentId, { env: input.environment }) !== undefined);
+    if (!nativeIdentity || requiresReadmission) {
       const registration = captureOpenClawAgentDatabaseRegistration({
         agentId,
         agentPath: pathname,
@@ -544,6 +560,7 @@ export function createAgentDatabaseNativeGeneration(
         check: integrityCheckPending,
         ...(integrityCheckPending === "full" && nativeIdentity
           ? {
+              release: retainVerification(),
               proof: {
                 identity: nativeIdentity.physicalIdentity,
                 complete: (assertVerifierCurrent: () => void) => {

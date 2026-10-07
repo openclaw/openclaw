@@ -24,6 +24,7 @@ import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
 import * as allocation from "./allocation.js";
 import * as capacity from "./capacity.js";
 import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
+import { readPendingWorktrees } from "./pending-slots.js";
 import { getRegistryWorktree } from "./registry.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import { ManagedWorktreeService } from "./service.js";
@@ -416,7 +417,7 @@ describe("ManagedWorktreeService capacity", () => {
   );
 
   it.each(["create", "restore"] as const)(
-    "preserves materialized files and their branch when %s loses allocation ownership",
+    "preserves materialized files and their branch when %s loses checkout ownership",
     async (operation) => {
       const params = { repoRoot: repo, name: "lost-allocation", baseRef: "HEAD" };
       const branch = `openclaw/${params.name}`;
@@ -438,15 +439,17 @@ describe("ManagedWorktreeService capacity", () => {
           result.code === 0
         ) {
           destination = argv[argv.indexOf("-C") + 1];
+          const checkoutId = archived?.id ?? (await readPendingWorktrees(env))[0]?.record.id;
+          expect(checkoutId).toBeDefined();
           runOpenClawStateWriteTransaction(
             ({ db }) => {
               const changed = executeSqliteQuerySync(
                 db,
                 getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
                   .updateTable("state_leases")
-                  .set({ owner: "successor" })
-                  .where("scope", "=", "core:managed-worktrees:create")
-                  .where("lease_key", "=", "capacity"),
+                  .set({ owner: "successor", expires_at: 0 })
+                  .where("scope", "=", "core:managed-worktrees:mutation")
+                  .where("lease_key", "=", checkoutId!),
               );
               expect(changed.numAffectedRows).toBe(1n);
             },
@@ -492,15 +495,18 @@ describe("ManagedWorktreeService capacity", () => {
           .split("\n")
           .find((line) => line.startsWith("worktree ") && line.endsWith("retry-hydration"))
           ?.slice("worktree ".length);
+        const [pending] = await readPendingWorktrees(env);
+        expect(pending?.record.path).toBe(destination);
         runOpenClawStateWriteTransaction(
           ({ db }) => {
-            executeSqliteQuerySync(
+            const revoked = executeSqliteQuerySync(
               db,
               getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
                 .deleteFrom("state_leases")
-                .where("scope", "=", "core:managed-worktrees:create")
-                .where("lease_key", "=", "capacity"),
+                .where("scope", "=", "core:managed-worktrees:mutation")
+                .where("lease_key", "=", pending!.record.id),
             );
+            expect(revoked.numAffectedRows).toBe(1n);
           },
           { env },
         );

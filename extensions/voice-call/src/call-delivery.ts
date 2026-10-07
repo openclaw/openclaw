@@ -150,7 +150,7 @@ export function createCallDelivery(params: {
           // Persist the batch end before sending: after a restart the restored call resumes
           // from this cursor, so a delivered or uncertain batch is never sent twice.
           await saveStatus(snapshot, "liveTranscriptDelivery", {
-            status: "sent",
+            status: "pending",
             cursor,
             at: Date.now(),
           });
@@ -161,6 +161,11 @@ export function createCallDelivery(params: {
             kind: "live",
             text: `Voice call ${snapshot.callId}, live transcript:\n${formatCallTranscript(entries)}`,
             idempotencyKey: `voice-call:${snapshot.callId}:live:${range}`,
+          });
+          await saveStatus(snapshot, "liveTranscriptDelivery", {
+            status: "sent",
+            cursor,
+            at: Date.now(),
           });
         } catch (error) {
           await recordFailure(snapshot, "liveTranscriptDelivery", error, { cursor });

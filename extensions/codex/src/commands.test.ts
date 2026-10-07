@@ -13,6 +13,7 @@ import {
   resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
@@ -1241,7 +1242,9 @@ describe("codex command", () => {
     },
   );
 
-  it("rolls back replacement ownership when the host advances during displaced release", async () => {
+  it("rolls back replacement ownership when the host advances during displaced release", async ({
+    signal,
+  }) => {
     const context = await createCodexRuntimeContextOverrides(
       tempDir,
       "agent:main:test:release-rollover",
@@ -1271,18 +1274,16 @@ describe("codex command", () => {
       clientId: previous.client.getInstanceId(),
       cwd: "/repo",
     });
-    let releaseOld!: () => void;
-    const oldReleaseBlocked = new Promise<void>((resolve) => {
-      releaseOld = resolve;
-    });
-    const oldReleaseStarted = vi.fn();
+    const oldReleaseBlocked = createDeferred<void>();
+    const entered = createDeferred<void>();
+    const oldReleaseStarted = vi.fn(entered.resolve);
     const oldUnsubscribe = vi.fn();
     await retainCodexAppServerLiveThread(
       previous.client,
       "thread-release-rollover",
       async (_threadId, assertCurrent) => {
         oldReleaseStarted();
-        await oldReleaseBlocked;
+        await oldReleaseBlocked.promise;
         assertCurrent?.();
         oldUnsubscribe();
       },
@@ -1305,9 +1306,12 @@ describe("codex command", () => {
 
     const command = runCommand("resume thread-release-rollover", { codexControlRequest }, context);
     try {
-      await vi.waitFor(() => expect(oldReleaseStarted).toHaveBeenCalledOnce(), { timeout: 5_000 });
+      await expect(
+        withinTest(Promise.race([entered.promise, command]), signal),
+      ).resolves.toBeUndefined();
+      expect(oldReleaseStarted).toHaveBeenCalledOnce();
       await patchSessionEntry({ ...scope, update: () => ({ sessionId: "session-2" }) });
-      releaseOld();
+      oldReleaseBlocked.resolve();
 
       expect((await command).text).toContain("Codex session generation is no longer current");
       expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
@@ -1327,7 +1331,7 @@ describe("codex command", () => {
         consumeCodexAppServerLiveThread(replacement.client, "thread-release-rollover"),
       ).resolves.toBeUndefined();
     } finally {
-      releaseOld();
+      oldReleaseBlocked.resolve();
       await command;
       retainPreviousClient.mockRestore();
       previous.client.close();
@@ -2560,14 +2564,8 @@ describe("codex command", () => {
   });
 
   it("consumes diagnostics confirmations before async upload work", async () => {
-    let releaseFirstConfirmUpload: () => void = () => undefined;
-    let firstConfirmUploadStarted: () => void = () => undefined;
-    const firstConfirmUpload = new Promise<void>((resolve) => {
-      releaseFirstConfirmUpload = resolve;
-    });
-    const firstConfirmUploadStartedPromise = new Promise<void>((resolve) => {
-      firstConfirmUploadStarted = resolve;
-    });
+    const firstConfirmUpload = createDeferred<void>();
+    const firstConfirmUploadStarted = createDeferred<void>();
     const readBinding = vi.fn(() => ({
       threadId: "thread-race",
       cwd: "/repo",
@@ -2575,8 +2573,8 @@ describe("codex command", () => {
       updatedAt: "2026-04-28T00:00:00.000Z",
     }));
     const safeCodexControlRequest = vi.fn(async () => {
-      firstConfirmUploadStarted();
-      await firstConfirmUpload;
+      firstConfirmUploadStarted.resolve();
+      await firstConfirmUpload.promise;
       return { ok: true as const, value: { threadId: "thread-race" } };
     });
     const deps = createDeps({
@@ -2590,7 +2588,7 @@ describe("codex command", () => {
     try {
       expect(
         await Promise.race([
-          firstConfirmUploadStartedPromise.then(() => "entered"),
+          firstConfirmUploadStarted.promise.then(() => "entered"),
           firstConfirm.then(() => "settled"),
         ]),
       ).toBe("entered");
@@ -2600,7 +2598,7 @@ describe("codex command", () => {
         text: "No pending Codex diagnostics confirmation was found. Run /diagnostics again to create a fresh request.",
       });
     } finally {
-      releaseFirstConfirmUpload();
+      firstConfirmUpload.resolve();
       await firstConfirm;
     }
     const firstConfirmResult = await firstConfirm;

@@ -3,6 +3,7 @@ import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { Browser, Page, Response } from "playwright-core";
+import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
 import {
   appendCdpPath,
   assertCdpEndpointAllowed,
@@ -353,7 +354,9 @@ async function readPagesViaPlaywright(
             return new Set(
               result.targetInfos
                 .filter(
-                  (info) => info.type === "page" && !isBlockedTarget(opts.cdpUrl, info.targetId),
+                  (info) =>
+                    isSelectableCdpBrowserTarget(info) &&
+                    !isBlockedTarget(opts.cdpUrl, info.targetId),
                 )
                 .map((info) => info.targetId),
             );

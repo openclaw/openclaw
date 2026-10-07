@@ -67,6 +67,12 @@ function invalidate(owner: SchemaOwner): void {
   owner.facts = undefined;
 }
 
+function notifySchemaMutation(owner: SchemaOwner): void {
+  for (const listener of owner.mutationListeners ?? []) {
+    listener();
+  }
+}
+
 function observeTransactionState(database: DatabaseSync, owner: SchemaOwner): void {
   const inTransaction = database.isTransaction;
   if (owner.transactionOpen !== inTransaction) {
@@ -106,9 +112,7 @@ function publishSchemaChange(database: DatabaseSync, owner: SchemaOwner): void {
 export function invalidateSqliteSchemaFacts(database: DatabaseSync): void {
   const owner = owners.get(database);
   if (owner) {
-    for (const listener of owner.mutationListeners ?? []) {
-      listener();
-    }
+    notifySchemaMutation(owner);
     // Capture physical identity before DDL, while the caller owns cleanup on admission failure.
     bindScope(database, owner);
     invalidate(owner);
@@ -541,6 +545,10 @@ export function readSqliteCacheDataVersion(
       // Data commits preserve schema-derived caches; compare both markers in one snapshot.
       const unchanged = facts && matchesSqliteSchemaFacts(database, facts);
       if (!unchanged) {
+        if (facts) {
+          // Foreign DDL revokes borrowed admission proof when this connection observes it.
+          notifySchemaMutation(owner);
+        }
         invalidate(owner);
       }
       owner.dataVersion = dataVersion;
@@ -592,33 +600,27 @@ export function adoptSqliteSchemaFacts(database: DatabaseSync, facts: SqliteSche
   if (!matchesSqliteSchemaFacts(database, facts)) {
     return false;
   }
-  const scope = bindScope(database, owner);
+  const snapshot = getSqlitePinnedReadSnapshot(database);
+  observeSchemaLifetime(database, owner, snapshot);
   if (
-    owner.scopeRevision !== scope.revision ||
-    (owner.facts &&
-      (owner.facts.schemaVersion !== facts.schemaVersion ||
-        owner.facts.userVersion !== facts.userVersion))
+    owner.facts &&
+    (owner.facts.schemaVersion !== facts.schemaVersion ||
+      owner.facts.userVersion !== facts.userVersion)
   ) {
     invalidate(owner);
   }
-  owner.scopeRevision = scope.revision;
-  owner.snapshot = getSqlitePinnedReadSnapshot(database);
+  owner.snapshot = snapshot;
   owner.admitted = true;
   owner.dataVersion = dataVersion;
-  owner.facts = { ...facts, revision: owner.revision };
+  owner.facts ??= { ...facts, revision: owner.revision };
   return true;
 }
 
-/** Consume admitted facts; operation admission owns foreign-commit freshness. */
-export function getAdmittedSqliteSchemaFacts(
+function observeSchemaLifetime(
   database: DatabaseSync,
-): SqliteSchemaFacts | undefined {
-  const owner = owners.get(database);
-  // Dynamic authorizer decisions cannot be represented by a cached schema result.
-  if (!owner?.admitted || owner.authorizerActive) {
-    return undefined;
-  }
-  const snapshot = getSqlitePinnedReadSnapshot(database);
+  owner: SchemaOwner,
+  snapshot: object | undefined,
+): boolean {
   if (owner.snapshot && owner.snapshot !== snapshot) {
     invalidate(owner);
     owner.snapshot = undefined;
@@ -637,6 +639,20 @@ export function getAdmittedSqliteSchemaFacts(
     owner.transactionalSchema = false;
     owner.transactionalFacts = false;
   }
+  return scopeChanged;
+}
+
+/** Consume admitted facts; operation admission owns foreign-commit freshness. */
+export function getAdmittedSqliteSchemaFacts(
+  database: DatabaseSync,
+): SqliteSchemaFacts | undefined {
+  const owner = owners.get(database);
+  // Dynamic authorizer decisions cannot be represented by a cached schema result.
+  if (!owner?.admitted || owner.authorizerActive) {
+    return undefined;
+  }
+  const snapshot = getSqlitePinnedReadSnapshot(database);
+  const scopeChanged = observeSchemaLifetime(database, owner, snapshot);
   if (!owner.facts) {
     owner.snapshot = snapshot;
     // Managed operations refresh on their next admission. Unmanaged snapshots and

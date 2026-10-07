@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { CHAT_MESSAGE_MAX_CHARS } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
@@ -919,7 +920,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       expect(fullMessageRequest.params).toMatchObject({
         sessionKey: "agent:main:main",
         messageId: "assistant-full-message",
-        maxChars: 500_000,
+        maxChars: CHAT_MESSAGE_MAX_CHARS,
       });
       await expect
         .poll(() => fullTextBubble.locator(".chat-text").textContent())

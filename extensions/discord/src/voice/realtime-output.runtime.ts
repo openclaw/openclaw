@@ -433,11 +433,7 @@ export class DiscordRealtimeOutput {
         return;
       }
       let refreshWatchdog = this.activity.snapshot().streamEnding;
-      while (this.buffers.length > 0) {
-        const buffered = this.buffers.shift();
-        if (!buffered) {
-          break;
-        }
+      for (let buffered = this.buffers.shift(); buffered; buffered = this.buffers.shift()) {
         this.bufferedBytes -= buffered.length;
         const writable = this.stream.write(buffered);
         if (refreshWatchdog) {

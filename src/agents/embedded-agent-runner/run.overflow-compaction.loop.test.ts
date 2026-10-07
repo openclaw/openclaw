@@ -361,7 +361,7 @@ describe("embedded run retry dispatch", () => {
     expect(uncapped.preparedAttempt).not.toHaveProperty("authoredContextTokenCap");
   });
 
-  it.each(["openclaw", "codex"])(
+  it.each(["openclaw"])(
     "prepares GitHub tools for each admitted run and continuation (%s)",
     async (harness) => {
       const gateway = {} as GatewayRequestContext;

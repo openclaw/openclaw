@@ -2618,7 +2618,16 @@ fi
 if [ "$native_assignment_enabled" = "1" ]; then
   phase capture-native-assignment-input node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs before-update
 fi
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  # Seed after baseline CLI work so only the published update can consume this legacy input.
+  phase seed-legacy-pending-delivery node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    seed-legacy-operator-pending-delivery
+fi
 phase update-candidate update_candidate_for_install_mode
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  phase assert-legacy-pending-delivery node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    assert-legacy-operator-pending-delivery "$UPDATE_JSON" "$UPDATE_ERR"
+fi
 if [ "$native_assignment_enabled" = "1" ]; then
   phase assert-native-assignment-first-hop node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs post-update "$candidate_version"
 fi

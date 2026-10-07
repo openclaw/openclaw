@@ -157,7 +157,6 @@ extensions/signal/src/core.test.ts
 extensions/signal/src/monitor/event-handler.inbound-context.test.ts
 extensions/signal/src/monitor/event-handler.ts
 extensions/slack/src/action-runtime.ts
-extensions/slack/src/channel.test.ts
 extensions/slack/src/channel.ts
 extensions/slack/src/message-action-dispatch.test.ts
 extensions/slack/src/monitor/events/interactions.block-actions.ts
@@ -348,7 +347,6 @@ src/cli/gateway-cli/run.ts
 src/cli/mcp-cli.ts
 src/cli/plugins-authoring-command.ts
 src/cli/plugins-cli-test-helpers.ts
-src/cli/plugins-cli.install.test.ts
 src/cli/plugins-cli.runtime.ts
 src/cli/plugins-cli.update.test.ts
 src/cli/run-main.ts
@@ -444,7 +442,6 @@ src/gateway/server-methods/agent.sessions-and-models.test-utils.ts
 src/gateway/server-methods/agents-mutate.test.ts
 src/gateway/server-methods/agents.ts
 src/gateway/server-methods/approval-shared.test.ts
-src/gateway/server-methods/approval.test.ts
 src/gateway/server-methods/chat.directive-tags.test.ts
 src/gateway/server-methods/config.ts
 src/gateway/server-methods/cron.ts
@@ -607,7 +604,6 @@ ui/src/pages/config/config-page.ts
 ui/src/pages/config/view.browser.test.ts
 ui/src/pages/cron/view.ts
 ui/src/pages/sessions/sessions-page.ts
-ui/src/pages/sessions/view.test.ts
 ui/src/pages/sessions/view.ts
 ui/src/pages/usage/view-overview.ts
 ui/src/pages/usage/view.ts

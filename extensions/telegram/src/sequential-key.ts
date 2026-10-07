@@ -84,7 +84,6 @@ function getTelegramMessageReactionSequentialKey(
     : undefined;
 }
 
-/** Registry key for a text command, or undefined when the text is not one. */
 function resolveTelegramCommandKeyForControlLane(params: {
   rawText?: string;
   botUsername?: string;
