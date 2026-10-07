@@ -197,7 +197,7 @@ describe("embedded provider dispatch admission", () => {
         );
         const manager = SessionManager.open(target, state.workspaceDir);
         if (field === "replay") {
-          await manager.appendMessage(message);
+          manager.appendMessage(message);
           const markPersisted = vi.spyOn(recorder, "markRuntimePersisted");
           const replay = await preparePersistedCurrentUserTurn({
             sessionManager: manager,
