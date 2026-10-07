@@ -41,6 +41,7 @@ OpenTelemetry metrics or change Prometheus metric labels.
   - On completion: `openclaw.harness.result_classification`, `openclaw.harness.yield_detected`, `openclaw.harness.items.started`, `openclaw.harness.items.completed`, `openclaw.harness.items.active`
   - On error: `openclaw.harness.phase`, `openclaw.errorCategory`, optional `openclaw.harness.cleanup_failed`
   - Span event `openclaw.agent.commentary` for completed preambles from supported harnesses, including the built-in runtime, Codex, and Claude CLI. Attributes include `openclaw.commentary.sequence`, `openclaw.commentary.text_length`, and `openclaw.commentary.content_truncated`. The existing `diagnostics.otel.captureContent` setting controls bounded, redacted output-message content.
+  - With `captureContent: true`: bounded, redacted `input.value` on start and `output.value` (the runtime's final message text) on completion. For CLI backends (Claude Code, Gemini CLI), `input.value` is the exact prompt the CLI received, after history reseeding, plugin input text transforms, and prompt context; the Codex harness records the turn prompt OpenClaw handed it.
 - `openclaw.tool.execution`
   - `gen_ai.tool.name`, `gen_ai.operation.name` (`execute_tool`), `openclaw.toolName`, `openclaw.tool.source`, optional `gen_ai.tool.call.id`, `openclaw.tool.owner`, `openclaw.tool.params.*`, optional `openclaw.agent`
   - Optional `openclaw.errorCategory`/`openclaw.errorCode` on errors, `openclaw.deniedReason` and `openclaw.outcome=blocked` when denied by policy or sandbox
@@ -53,6 +54,7 @@ OpenTelemetry metrics or change Prometheus metric labels.
 - `openclaw.message.processed`
   - `openclaw.channel`, `openclaw.outcome`, `openclaw.reason`, optional `openclaw.agent` (the agent that initially ingested the prompt)
   - Isolated cron agent turns use this span as the parent of their harness spans, keeping model calls, tools, and usage on the same trace through completion or failure.
+  - With `captureContent: true`: bounded, redacted `input.value` (inbound message text) and `output.value` (the model's own response text; hook replies and host notices are never captured)
 - `openclaw.message.delivery`
   - `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`, `openclaw.errorCategory`, `openclaw.delivery.result_count`
 - `openclaw.session.stuck`
@@ -67,6 +69,37 @@ OpenTelemetry metrics or change Prometheus metric labels.
 When content capture is explicitly enabled, model and tool spans can also
 include bounded, redacted `openclaw.content.*` attributes for the specific
 content classes you opted into.
+
+`openclaw.message.processed` and `openclaw.harness.run` spans follow the same
+existing `captureContent` setting. When it is `true`, `input.value` and
+`output.value` carry the inbound message or turn prompt and the model's final
+response text, bounded to 128 KiB (131072 UTF-16
+code units) per field and redacted through the same sensitive-text filter as
+other exported content. `output.value` records what the LLM actually responded
+with — the model's own final response, before delivery filtering — so sentinel
+replies such as `NO_REPLY` appear verbatim; this is LLM-observability data, not
+a delivery record. Only the text of the model's last message counts. Text the
+model passed to the `message` tool is an argument to a tool call, not its final
+message, so tool-only turns record the model's closing message (usually
+`NO_REPLY`) or nothing; the sent text is on the child `openclaw.model.call`
+output messages and, for the built-in runtime, the `openclaw.tool.execution`
+span (`gen_ai.tool.call.arguments`). CLI backends do not export tool arguments,
+so their message-tool text is not captured on any span. Earlier narration in
+the turn ("Checking now…") is never reported as the final response: a message
+that ended in a tool call is not final, and CLI turns record only the final
+message, never the cumulative reply text. Text the
+model did not write is never captured, even when it was delivered to the chat:
+plugin hook replies (`before_dispatch`, `before_agent_reply`), no-visible-reply
+fallbacks, continuation statuses, failure texts, and Gateway restart notices.
+Turns where no model produced text carry no `output.value`.
+The captured content is routed as private listener-only payload data to
+trusted diagnostics exporters only; it never appears on public event
+payloads.
+
+**Upgrade note:** if you already run with `diagnostics.otel.captureContent:
+true`, these message and run span attributes are new — your existing setting
+now also exports this prompt and reply content with no further configuration
+change. Nothing new is exported while `captureContent` is unset or `false`.
 
 ## Diagnostic event catalog
 
@@ -200,7 +233,9 @@ for usage methods and request options.
   `durationMs`, `outcome`, optional `resultClassification`, `yieldDetected`,
   and `itemLifecycle` counts. Errors add `phase`
   (`prepare`/`start`/`send`/`resolve`/`cleanup`), `errorCategory`, and
-  optional `cleanupFailed`.
+  optional `cleanupFailed`. With `captureContent: true`, started and completed
+  events also carry bounded, redacted turn prompt and final assistant text
+  as private listener-only data exported on spans, never on public payloads.
 
 **Exec**
 

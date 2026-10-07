@@ -55,6 +55,8 @@ export type EmbeddedAttemptExecutionState = {
   deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
   terminal: AgentRunAttemptTerminal;
   trajectoryEndRecorded: boolean;
+  /** Final assistant text captured for the run-completed diagnostic event; gated before export. */
+  diagnosticFinalResponse?: string;
 };
 
 export type EmbeddedAttemptExternalAbortController = {

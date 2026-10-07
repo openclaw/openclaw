@@ -75,6 +75,8 @@ type InternalReplySessionOptions = {
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Defers the child-completion wake until the visible waiting status is delivered. */
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
+  /** Receives the LLM's own final response text — pre-delivery-normalization, sentinels included. */
+  onRawLlmResponse?: (response: string) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
   /** Observes one transcript-start reader preparation; completion cannot control the run. */
   onTranscriptStartPreparation?: () => (() => void) | undefined;

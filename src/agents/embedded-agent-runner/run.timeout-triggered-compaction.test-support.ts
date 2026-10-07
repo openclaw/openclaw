@@ -75,7 +75,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
         params.onUserMessagePersisted?.(makeUserMessage("hello", 1));
         return session.makeAttemptResult({
           timedOut: true,
-          lastAssistant: { usage: { input: 160_000 } } as never,
+          lastAssistant: { role: "assistant", content: [], usage: { input: 160_000 } } as never,
         });
       })
       .mockResolvedValueOnce(
@@ -147,7 +147,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
       clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
       return session.makeAttemptResult({
         timedOut: true,
-        lastAssistant: { usage: { input: 160_000 } } as never,
+        lastAssistant: { role: "assistant", content: [], usage: { input: 160_000 } } as never,
       });
     });
     mockedCompactDirect.mockResolvedValueOnce(
@@ -188,7 +188,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
       makeAttemptResult({
         timedOut: true,
-        lastAssistant: { usage: { input: 150_000 } } as never,
+        lastAssistant: { role: "assistant", content: [], usage: { input: 150_000 } } as never,
       }),
     );
     const nativeCompact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
@@ -237,7 +237,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
       session.makeAttemptResult({
         timedOut: true,
         aborted: true,
-        lastAssistant: { usage: { input: 150_000 } } as never,
+        lastAssistant: { role: "assistant", content: [], usage: { input: 150_000 } } as never,
       }),
     );
     mockedCompactDirect.mockResolvedValue({
@@ -268,7 +268,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
           timedOut: true,
           idleTimedOut: true,
           assistantTexts: [],
-          lastAssistant: { usage: { input: 20_000 } } as never,
+          lastAssistant: { role: "assistant", content: [], usage: { input: 20_000 } } as never,
         }),
       )
       .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));

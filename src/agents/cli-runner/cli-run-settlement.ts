@@ -447,6 +447,7 @@ export function buildCliRunResult(params: {
   const runParams = context.params;
   const text = output.text?.trim();
   const rawText = output.rawText?.trim();
+  const rawFinalText = output.rawFinalText?.trim();
   const sourceReplyMirror = resolveCliSourceReplyMirror({
     evidence: output,
     runParams,
@@ -558,6 +559,11 @@ export function buildCliRunResult(params: {
       ...(output.finalPromptText ? { finalPromptText: output.finalPromptText } : {}),
       ...(finalAssistantVisibleText ? { finalAssistantVisibleText } : {}),
       ...(rawText ? { finalAssistantRawText: rawText } : {}),
+      // An empty final message is recorded as "" so capture never falls back to
+      // the cumulative raw text.
+      ...(rawFinalText !== undefined && rawFinalText !== rawText
+        ? { finalAssistantMessageRawText: rawFinalText }
+        : {}),
       systemPromptReport: context.systemPromptReport,
       ...(terminalInterruption
         ? {

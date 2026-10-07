@@ -13,10 +13,12 @@ import {
   unopenedMcpConfig,
 } from "../agent-bundle-mcp-manager.test-support.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "../agent-bundle-mcp-runtime-shared.js";
+import { transformCliResultText } from "../cli-output-results.js";
 import { isCliBindingFlushed, runCliAgent } from "../cli-runner.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { applyCliSessionBindingResult, getCliSessionBinding } from "../cli-session.js";
 import * as cliTranscript from "../command/attempt-execution.helpers.js";
+import { resolveDiagnosticModelResponse } from "../diagnostic-model-response.js";
 import {
   buildBlockedCliRunResult,
   buildCliDeliveredFailure,
@@ -271,6 +273,53 @@ describe.each([false, true])("CLI run rejection (cleanupFails=%s)", (cleanupFail
       expect(cleanup).toHaveBeenCalledOnce();
     },
   );
+});
+
+it("captures only the last CLI result as the model's final message", async () => {
+  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+  const result = buildCliRunResult({
+    context,
+    output: transformCliResultText({
+      text: "Checking now\nDone",
+      textParts: ["Checking now", "Done"],
+      rawFinalText: "Done",
+    }),
+    usedHistoryPrompt: false,
+    userTurnHandled: true,
+    sessionBindingDisabled: true,
+    preparedContextAgentMeta: {},
+  });
+  expect(result.meta.finalAssistantRawText).toBe("Checking now\nDone");
+  expect(resolveDiagnosticModelResponse(result)).toBe("Done");
+});
+
+it("captures nothing when the CLI's final message was empty after narration", async () => {
+  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+  const result = buildCliRunResult({
+    context,
+    output: transformCliResultText({ text: "Checking now", rawFinalText: "" }),
+    usedHistoryPrompt: false,
+    userTurnHandled: true,
+    sessionBindingDisabled: true,
+    preparedContextAgentMeta: {},
+  });
+  expect(result.meta.finalAssistantRawText).toBe("Checking now");
+  expect(resolveDiagnosticModelResponse(result)).toBeUndefined();
+});
+
+it("never captures host-synthesized optional silence as model output", async () => {
+  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+  context.params.terminalReplyExpectation = "optional";
+  const result = buildCliRunResult({
+    context,
+    output: { text: "" },
+    usedHistoryPrompt: false,
+    userTurnHandled: true,
+    sessionBindingDisabled: true,
+    preparedContextAgentMeta: {},
+  });
+  expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
+  expect(resolveDiagnosticModelResponse(result)).toBeUndefined();
 });
 
 it("preserves completed result boundaries for independent final delivery", async () => {

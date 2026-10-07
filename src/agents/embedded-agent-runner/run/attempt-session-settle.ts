@@ -112,7 +112,10 @@ type CleanupEmbeddedAttemptSessionInput = EmbeddedAttemptSessionResources & {
   trajectoryEndRecorded: boolean;
   deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
   emitDiagnosticRunCompleted?: EmitDiagnosticRunCompleted;
-  state: Pick<EmbeddedAttemptExecutionState, "terminal" | "beforeAgentRunBlockedBy">;
+  state: Pick<
+    EmbeddedAttemptExecutionState,
+    "terminal" | "beforeAgentRunBlockedBy" | "diagnosticFinalResponse"
+  >;
 };
 
 export async function cleanupEmbeddedAttemptSessionPhase(
@@ -210,7 +213,11 @@ export async function cleanupEmbeddedAttemptSessionPhase(
             ? "aborted"
             : "completed",
     cleanupError ?? finalState.promptError,
-    beforeAgentRunBlocked ? { blockedBy: input.state.beforeAgentRunBlockedBy } : undefined,
+    beforeAgentRunBlocked
+      ? { blockedBy: input.state.beforeAgentRunBlockedBy }
+      : input.state.diagnosticFinalResponse
+        ? { finalResponse: input.state.diagnosticFinalResponse }
+        : undefined,
   );
 
   if (cleanupError) {
