@@ -192,12 +192,17 @@ function isErrorBackoffPending(
   return backoffUntilMs !== undefined && nowMs < backoffUntilMs;
 }
 
-export function collectRunnableJobs(state: CronServiceState, nowMs: number): CronJob[] {
+export function collectRunnableJobs(
+  state: CronServiceState,
+  nowMs: number,
+  opts?: { allowCronMissedRunByLastRun?: boolean },
+): CronJob[] {
   return (
     state.store?.jobs.filter((job) =>
       isRunnableJob({
         job,
         nowMs,
+        allowCronMissedRunByLastRun: opts?.allowCronMissedRunByLastRun,
       }),
     ) ?? []
   );
