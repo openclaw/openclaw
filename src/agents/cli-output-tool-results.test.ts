@@ -108,10 +108,45 @@ describe("Claude tool-result output budgets", () => {
 
   it("charges user records that mix tool results with other content in full", () => {
     const parser = createParser();
-    const record = toolResultRecord("toolu_mixed", "z".repeat(4_300_000));
-    record.message.content.push({ type: "text", text: "note" } as never);
-    parser.push(`${JSON.stringify(record)}\n`);
-    expect(parser.getErrorText()).toContain("exceeded 8388608 characters");
+    const line = (index: number) => {
+      const record = toolResultRecord(`toolu_mixed_${index}`, "z".repeat(1_500_000));
+      record.message.content.push({ type: "text", text: "note" } as never);
+      return `${JSON.stringify(record)}\n`;
+    };
+    // Each line stays under the 8 MiB line limit; together they exceed the turn budget.
+    expect(line(0).length).toBeLessThan(4 * 1024 * 1024);
+    for (let index = 0; index < 3; index += 1) {
+      parser.push(line(index));
+    }
+    expect(parser.getErrorText()).toBe(
+      "CLI JSONL output exceeded 8388608 characters; refusing to parse output.",
+    );
+  });
+
+  it("charges IDs and padding even when payload numbers re-encode longer than the wire", () => {
+    // `1e20` is 4 characters on the wire but re-encodes as 21 digits.
+    const numbers = `[${Array.from({ length: 200_000 }, () => "1e20").join(",")}]`;
+    const line = (id: string, padding = "") =>
+      `{"type":"user","message":{"role":"user","content":[{"type":"tool_result",` +
+      `"tool_use_id":"${id}","content":""}]},` +
+      `"session_id":"${SESSION_ID}","tool_use_result":${numbers}}${padding}\n`;
+    const budgetError = "CLI JSONL output exceeded 8388608 characters; refusing to parse output.";
+
+    const idParser = createParser();
+    const longId = "i".repeat(3_000_000);
+    expect(line(longId).length).toBeLessThan(4_100_000);
+    for (let index = 0; index < 3; index += 1) {
+      idParser.push(line(`${longId}${index}`));
+    }
+    expect(idParser.getErrorText()).toBe(budgetError);
+
+    const paddingParser = createParser();
+    const padded = line("toolu_pad", " ".repeat(4_300_000));
+    expect(padded.length).toBeLessThan(5_400_000);
+    paddingParser.push(padded);
+    expect(paddingParser.getErrorText()).toBeNull();
+    paddingParser.push(padded);
+    expect(paddingParser.getErrorText()).toBe(budgetError);
   });
 
   it("keeps tool-result records under the ordinary frame limit", () => {
