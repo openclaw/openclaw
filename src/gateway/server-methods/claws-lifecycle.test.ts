@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CLAW_CRON_REF_SCHEMA_VERSION,
+  clawCronGatewayJobConfigRevision,
   clawCronGatewayInput,
   type PersistedClawCronRef,
 } from "../../claws/cron.js";
@@ -129,6 +130,7 @@ function callRemoveApply(
   getRuntimeConfig: () => unknown,
   options: {
     hasCurrentClientAuthority?: () => boolean;
+    cron?: unknown;
     client?: unknown;
   } = {},
 ) {
@@ -143,7 +145,7 @@ function callRemoveApply(
         req: { type: "req", id: "remove", method: "claws.remove.apply" },
         params,
         respond: (...args) => replies.push(args),
-        context: { getRuntimeConfig } as never,
+        context: { getRuntimeConfig, cron: options.cron } as never,
         client: (options.client ?? {
           connect: { role: "operator", scopes: ["operator.admin"] },
         }) as never,
@@ -153,6 +155,30 @@ function callRemoveApply(
         isWebchatConnect: () => false,
       }),
   };
+}
+
+function storedClawCronJob() {
+  const ref: PersistedClawCronRef = {
+    schemaVersion: CLAW_CRON_REF_SCHEMA_VERSION,
+    agentId: "worker",
+    manifestId: "nightly",
+    declarationKey: "claw:worker:nightly",
+    schedulerJobId: "owned-job",
+    status: "complete",
+    job: {
+      id: "nightly",
+      schedule: { cron: "0 8 * * *", timezone: "UTC" },
+      session: "isolated",
+      message: "Review work",
+    },
+    createdAtMs: 1,
+    updatedAtMs: 1,
+  };
+  const definition = expectDefined(
+    normalizeCronJobCreate(clawCronGatewayInput(ref.agentId, ref)),
+    "owned scheduler job fixture",
+  );
+  return { ...definition, id: ref.schedulerJobId, createdAtMs: 1, updatedAtMs: 1, state: {} };
 }
 
 describe("Claw Update and Remove Gateway previews", () => {
@@ -225,6 +251,28 @@ describe("Claw Update and Remove Gateway previews", () => {
 
 describe("claws.remove.apply Gateway method", () => {
   const params = { agentId: "worker", planIntegrity: `sha256:${"a".repeat(64)}` };
+
+  it("reads a versioned cron view before removing an owned schedule", async () => {
+    const rawJob = storedClawCronJob();
+    const cron = { readJob: vi.fn(async (id: string) => (id === rawJob.id ? rawJob : undefined)) };
+    let observedRevision: string | undefined;
+    let missingJob: unknown = null;
+    applyClawRemoveForGateway.mockImplementation(async (input) => {
+      const callbacks = input.createApplyCallbacks(() => {}, []);
+      const job = await callbacks.cronGateway.get(rawJob.id);
+      observedRevision = clawCronGatewayJobConfigRevision(job);
+      missingJob = await callbacks.cronGateway.get("missing-job");
+      return { agentId: "worker", status: "complete", agentRemoved: true };
+    });
+
+    const request = callRemoveApply(params, () => ({}), { cron });
+    await request.run();
+
+    expect(cron.readJob).toHaveBeenCalledWith(rawJob.id);
+    expect(observedRevision).toMatch(/^sha256:/);
+    expect(missingJob).toBeUndefined();
+    expect(request.replies[0]?.[0]).toBe(true);
+  });
 
   it("requires admin control-plane authority but permits removal with Labs off", async () => {
     expect(coreGatewayHandlers["claws.remove.apply"]).toBeDefined();
@@ -315,6 +363,27 @@ describe("claws.update.apply Gateway method", () => {
     updatedAtMs: 1,
   } satisfies PersistedClawCronRef;
 
+  it("reads a versioned cron view before updating an owned schedule", async () => {
+    const rawJob = storedClawCronJob();
+    const cron = { readJob: vi.fn(async (id: string) => (id === rawJob.id ? rawJob : undefined)) };
+    let observedRevision: string | undefined;
+    let missingJob: unknown = null;
+    applyClawUpdateForGateway.mockImplementation(async (input) => {
+      const job = await input.cronGateway.get(rawJob.id);
+      observedRevision = clawCronGatewayJobConfigRevision(job);
+      missingJob = await input.cronGateway.get("missing-job");
+      return { agentId: "worker", status: "complete" };
+    });
+
+    const request = callUpdateApply(params, () => enabled, { cron });
+    await request.run();
+
+    expect(cron.readJob).toHaveBeenCalledWith(rawJob.id);
+    expect(observedRevision).toMatch(/^sha256:/);
+    expect(missingJob).toBeUndefined();
+    expect(request.replies[0]?.[0]).toBe(true);
+  });
+
   it("requires admin control-plane authority and blocks Update with Labs off", async () => {
     expect(coreGatewayHandlers["claws.update.apply"]).toBeDefined();
     expect(authorizeOperatorScopesForMethod("claws.update.apply", ["operator.read"])).toEqual({
@@ -381,7 +450,7 @@ describe("claws.update.apply Gateway method", () => {
     };
     const cron = {
       add: vi.fn(async (_job: unknown, _options: { commitGuard: () => void }) => ({ id: "job-1" })),
-      readJob: vi.fn(async () => ({ id: "job-1" })),
+      readJob: vi.fn(async () => ({ ...storedClawCronJob(), id: "job-1" })),
       list: vi.fn(async () => []),
       remove: vi.fn(async (_id: string, _options: { commitGuard: () => void }) => ({
         removed: true,

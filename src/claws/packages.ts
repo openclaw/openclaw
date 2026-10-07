@@ -1,5 +1,6 @@
 import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import { createPluginInstallLogger } from "../cli/plugins-command-helpers.js";
+import { readConfigFileSnapshotForWrite } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import type { PackageDirInstallTransaction } from "../infra/install-package-dir.js";
@@ -468,7 +469,7 @@ async function installClawPackagesUnlocked(
       installedPackages.push(packageRef);
 
       assertForwardCurrent();
-      const beforePluginCommit = bindClawPluginBeforeCommit(options, pkg, assertForwardCurrent);
+      const pluginCommit = bindClawPluginBeforeCommit(options, pkg, assertForwardCurrent);
       await installPlugin({
         request: {
           source: "clawhub",
@@ -481,13 +482,14 @@ async function installClawPackagesUnlocked(
         env: options.clawHubBaseUrl
           ? { ...options.env, OPENCLAW_CLAWHUB_URL: options.clawHubBaseUrl }
           : options.env,
-        beforePersistentApply: assertForwardCurrent,
-        onBeforePluginArtifactCommit: (artifact, config) => {
+        beforePersistentApply: pluginCommit.beforePersistentApply,
+        onBeforePluginArtifactCommit: async (artifact) => {
+          const { snapshot } = await readConfigFileSnapshotForWrite();
           const current = inspectClawPluginCapabilities(
             artifact.stagedArtifactDir,
             artifact.pluginId,
             options.env,
-            config,
+            snapshot.sourceConfig,
             artifact.currentArtifactDir,
           );
           if (
@@ -498,8 +500,9 @@ async function installClawPackagesUnlocked(
               `Plugin ${pkg.ref}@${pkg.version} effective capability grants changed after planning; run add --dry-run again.`,
             );
           }
+          pluginCommit.artifactReviewed();
         },
-        beforePersistentEffect: beforePluginCommit,
+        beforePersistentEffect: pluginCommit.beforePersistentEffect,
         logger: createPluginInstallLogger(runtime),
         confirmInstall: async (warning) => {
           assertCurrent();

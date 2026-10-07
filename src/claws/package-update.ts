@@ -10,6 +10,7 @@ import { clawPackageKey } from "./application-provenance.js";
 import { digestClawValue as digest } from "./digest.js";
 import { readClawInventory } from "./inventory-read.js";
 import { hasOtherWorkspaceSkillOwner, planOwnedClawSkillUpgrade } from "./owned-skill-upgrade.js";
+import { withClawPackageRefWrite } from "./package-ref-state-write.js";
 import {
   digestClawPackageRef,
   replaceClawPackageRefExpected,
@@ -461,7 +462,12 @@ export async function applyClawPackageUpdate(
                 }
                 await transaction.rollback(assertRollbackCurrent);
                 assertRollbackCurrent();
-                await restoreRef(assertRollbackCurrent);
+                await withClawPackageRefWrite(
+                  lease,
+                  options,
+                  () => options.assertCurrent?.(),
+                  async (stateOptions) => await replaceExpected(claimed, previous, stateOptions),
+                );
               } finally {
                 lease.release();
               }

@@ -117,7 +117,7 @@ export class AgentClawPanel extends OpenClawLightDomElement {
     getGatewayUrl: () => this.context.gateway.connection.gatewayUrl,
     canReviewUpdate: () => this.canReviewUpdate(),
     canApplyUpdate: () => this.canApplyUpdate(),
-    loadStatus: () => void this.loadStatus(),
+    loadStatus: (force) => void this.loadStatus(force),
   });
 
   protected override updated(changed: PropertyValues<this>) {
@@ -137,14 +137,14 @@ export class AgentClawPanel extends OpenClawLightDomElement {
     }
   }
 
-  private async loadStatus() {
+  private async loadStatus(force = false) {
     const agentId = this.agentId;
     const scope = this.gateway.capture();
     if (
       !agentId ||
       !scope ||
       !this.canReadStatus() ||
-      (this.statusLoading && this.statusAgentId === agentId)
+      (this.statusLoading && this.statusAgentId === agentId && !force)
     ) {
       return;
     }
@@ -416,7 +416,6 @@ export class AgentClawPanel extends OpenClawLightDomElement {
     return (
       this.clawsEnabled() &&
       this.isOfficialPackage() &&
-      !this.statusLoading &&
       !this.removing &&
       !this.removeUnknown &&
       !this.removeResult &&

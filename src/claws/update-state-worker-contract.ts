@@ -1,3 +1,4 @@
+import type { ClawPackageLifecycleLeaseIdentity } from "../state/claw-package-lifecycle-lease.js";
 import type { PersistedClawCronRef } from "./cron.js";
 import type { PersistedClawMcpServerRef } from "./mcp.js";
 import type { PersistedClawPackageRef } from "./package-extension-provenance.js";
@@ -10,6 +11,7 @@ export type ClawUpdateStateWorkerOperations = {
     input: {
       expected?: PersistedClawPackageRef;
       replacement?: PersistedClawPackageRef;
+      packageLease?: ClawPackageLifecycleLeaseIdentity;
     };
     output: void;
   };

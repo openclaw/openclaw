@@ -44,7 +44,6 @@ import {
   pathWatchers,
   publishRecoveredCoverage,
   publishSkillsWatchChanges,
-  unsubscribeWorkspaceFromPath,
   workspaceWatchLastEnsuredAt,
   workspaceWatchOwners,
   workspaceWatchTargetCache,
@@ -55,11 +54,16 @@ import {
   type SkillsWatchOwner,
 } from "./refresh-watch-registry.js";
 import {
+  disposeWorkspaceWatchState,
+  unsubscribeOwnedWorkspaceFromPath,
+} from "./refresh-watch-retirement.js";
+import {
   compareSkillsWatchTargets,
   resolveSkillsWatchTargets,
   type WatchTarget,
 } from "./refresh-watch-targets.js";
 export { registerSkillsChangeListener } from "./refresh-state.js";
+export { closeSkillsWatchersForAgent } from "./refresh-watch-retirement.js";
 
 const log = createSubsystemLogger("gateway/skills");
 // Gateway startup imports this owner before serving turns. Shared watcher handles,
@@ -516,22 +520,6 @@ function subscribeWorkspaceToPath(workspaceDir: string, target: WatchTarget): vo
   pathWatchers.set(target.path, state);
 }
 
-function disposeWorkspaceWatchState(
-  watcherKey: string,
-  watchTargets: readonly WatchTarget[] = workspaceWatchTargets.get(watcherKey) ?? [],
-): void {
-  disposeRemoteSkillsWatcher(watcherKey);
-  for (const watchTarget of watchTargets) {
-    unsubscribeWorkspaceFromPath(watcherKey, watchTarget);
-  }
-  workspaceWatchTargets.delete(watcherKey);
-  workspaceWatchOwners.delete(watcherKey);
-  workspaceWatchTargetCache.delete(watcherKey);
-  workspaceWatchLastEnsuredAt.delete(watcherKey);
-  // Reacquisition invalidates after an unwatched interval. Disposal itself does
-  // not change skills, including for other subscriptions sharing this workspace.
-}
-
 export function ensureSkillsWatcher(params: {
   workspaceDir: string;
   executionWorkspaceDir?: string;
@@ -552,6 +540,7 @@ export function ensureSkillsWatcher(params: {
   }
   const owner: SkillsWatchOwner = {
     workspaceDir,
+    agentId: params.agentId,
     sourceScope,
     sharedScanPending: workspaceWatchOwners.get(watcherKey)?.sharedScanPending ?? false,
     unavailable: workspaceWatchOwners.get(watcherKey)?.unavailable ?? false,
@@ -565,7 +554,7 @@ export function ensureSkillsWatcher(params: {
   };
   const now = Date.now();
   if (params.config?.skills?.load?.watch === false) {
-    disposeWorkspaceWatchState(watcherKey);
+    void disposeWorkspaceWatchState(watcherKey);
     evictWorkspaceWatchStates(now, disposeWorkspaceWatchState);
     return;
   }
@@ -591,6 +580,7 @@ export function ensureSkillsWatcher(params: {
     ensureRemoteSkillsWatcher({
       watcherKey,
       workspaceDir,
+      agentId: params.agentId,
       executionWorkspaceDir: workspaceExecutionWorkspaceDir,
       access,
       sourcePlan: workspacePlan,
@@ -648,7 +638,7 @@ export function ensureSkillsWatcher(params: {
     const nextTargetKeys = new Set(watchTargets.map((target) => target.path));
     for (const watchTarget of previousTargets) {
       if (!nextTargetKeys.has(watchTarget.path)) {
-        unsubscribeWorkspaceFromPath(watcherKey, watchTarget);
+        void unsubscribeOwnedWorkspaceFromPath(watcherKey, watchTarget);
       }
     }
     // A replacement notification can synchronously dispose or re-ensure this owner.

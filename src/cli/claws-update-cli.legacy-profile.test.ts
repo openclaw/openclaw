@@ -8,7 +8,11 @@ import type { buildClawUpdatePlan } from "../claws/update-plan.js";
 import type { RuntimeEnv } from "../runtime.js";
 import * as cliTestHelpers from "./claws-cli.test-helpers.js";
 
+const enabledClawsLabsConfig = { gateway: { controlUi: { experimental: { claws: true } } } };
+
 const mocks = vi.hoisted(() => ({
+  getRuntimeConfig: vi.fn(),
+  readCurrentConfigForPolicyCheck: vi.fn(),
   listConfiguredMcpServers: vi.fn(),
   openExistingOpenClawStateDatabaseReadOnly: vi.fn(),
   closeReadOnlyDatabase: vi.fn(),
@@ -16,6 +20,16 @@ const mocks = vi.hoisted(() => ({
   buildClawUpdatePlan: vi.fn(),
   applyClawUpdatePlan: vi.fn(),
   withOpenClawStateLease: vi.fn(),
+}));
+
+vi.mock("../config/config.js", async () => ({
+  ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
+  getRuntimeConfig: mocks.getRuntimeConfig,
+}));
+
+vi.mock("../config/io.js", async () => ({
+  ...(await vi.importActual<typeof import("../config/io.js")>("../config/io.js")),
+  readCurrentConfigForPolicyCheck: mocks.readCurrentConfigForPolicyCheck,
 }));
 
 vi.mock("../config/mcp-config.js", async () => ({
@@ -87,12 +101,16 @@ async function writeLegacyProfilePackage(): Promise<string> {
   return root;
 }
 
-function setRecordedSource(root: string, overrides: Record<string, unknown> = {}): void {
+function setRecordedSource(
+  root: string,
+  overrides: Record<string, unknown> = {},
+  agentId = "demo-agent",
+): void {
   mocks.readClawStatus.mockResolvedValue({
     records: [
       {
         install: {
-          agentId: "demo-agent",
+          agentId,
           claw: {
             kind: "package",
             name: "@acme/demo-agent",
@@ -116,8 +134,11 @@ function parsedOutput(): Record<string, unknown> {
 describe("recorded local Claw Update with a released v1 profile", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
     logs.length = 0;
     errors.length = 0;
+    mocks.getRuntimeConfig.mockReturnValue(enabledClawsLabsConfig);
+    mocks.readCurrentConfigForPolicyCheck.mockReturnValue(enabledClawsLabsConfig);
     mocks.listConfiguredMcpServers.mockResolvedValue({
       ok: true,
       path: "config",
@@ -129,9 +150,9 @@ describe("recorded local Claw Update with a released v1 profile", () => {
       walMaintenance: { close: mocks.closeReadOnlyDatabase },
     });
     mocks.buildClawUpdatePlan.mockImplementation(
-      async (input: { diagnostics?: ClawDiagnostic[] }) => ({
+      async (input: { agentId: string; diagnostics?: ClawDiagnostic[] }) => ({
         ...plan([]),
-        agentId: "demo-agent",
+        agentId: input.agentId,
         planIntegrity: "sha256:legacy-local-preview",
         diagnostics: input.diagnostics ?? [],
       }),
@@ -144,6 +165,10 @@ describe("recorded local Claw Update with a released v1 profile", () => {
     mocks.withOpenClawStateLease.mockImplementation(
       async (_options, run) => await run({ assertOwned: vi.fn() }),
     );
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("strips and discloses host-owned settings for the exact recorded local source", async () => {
@@ -191,10 +216,47 @@ describe("recorded local Claw Update with a released v1 profile", () => {
     expect(logs.join("\n")).toContain("named delegation settings are operator-owned");
   });
 
+  it("updates an installed alias from its exact recorded local source", async () => {
+    const root = await writeLegacyProfilePackage();
+    setRecordedSource(root, {}, "my-demo");
+
+    await runClawsUpdateCommand("my-demo", { dryRun: true, json: true }, runtime);
+
+    const input = mocks.buildClawUpdatePlan.mock.calls[0]?.[0] as
+      | Parameters<typeof buildClawUpdatePlan>[0]
+      | undefined;
+    expect(input?.agentId).toBe("my-demo");
+    expect(input?.targetOpenClawProfile?.agent).not.toHaveProperty("model");
+    expect(input?.targetOpenClawProfile?.agent).not.toHaveProperty("subagents");
+    expect(input?.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "legacy_openclaw_model_ignored", level: "warning" }),
+        expect.objectContaining({ code: "legacy_openclaw_subagents_ignored", level: "warning" }),
+      ]),
+    );
+    expect(parsedOutput()).toMatchObject({ agentId: "my-demo" });
+
+    logs.length = 0;
+    await runClawsUpdateCommand(
+      "my-demo",
+      { yes: true, planIntegrity: "sha256:legacy-local-preview" },
+      runtime,
+    );
+    expect(mocks.applyClawUpdatePlan).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "my-demo" }),
+      expect.objectContaining({ targetDiagnostics: input?.diagnostics }),
+      expect.objectContaining({ consentPlanIntegrity: "sha256:legacy-local-preview" }),
+    );
+  });
+
   it.each([
-    ["artifact record", { integrityKind: "artifact" }],
-    ["different recorded manifest", { manifestPath: "/tmp/other/openclaw.claw.json" }],
-  ])("keeps %s strict", async (_case, override) => {
+    ["artifact record", { integrityKind: "artifact" }, "clawhub_official_claw_required"],
+    [
+      "different recorded manifest",
+      { manifestPath: "/tmp/other/openclaw.claw.json" },
+      "legacy_openclaw_profile_requires_conversion",
+    ],
+  ])("keeps %s strict", async (_case, override, code) => {
     const root = await writeLegacyProfilePackage();
     setRecordedSource(root, override);
 
@@ -203,9 +265,7 @@ describe("recorded local Claw Update with a released v1 profile", () => {
     expect(mocks.buildClawUpdatePlan).not.toHaveBeenCalled();
     expect(parsedOutput()).toMatchObject({
       valid: false,
-      diagnostics: expect.arrayContaining([
-        expect.objectContaining({ code: "legacy_openclaw_profile_requires_conversion" }),
-      ]),
+      diagnostics: expect.arrayContaining([expect.objectContaining({ code })]),
     });
   });
 

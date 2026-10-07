@@ -42,6 +42,7 @@ export const workspaceWatchTargets = new Map<string, WatchTarget[]>();
 // retain the configured agent workspace as their stable public identity.
 export type SkillsWatchOwner = {
   workspaceDir: string;
+  agentId?: string;
   sourceScope: SkillsSourceScope;
   sharedScanPending: boolean;
   unavailable: boolean;
@@ -61,14 +62,18 @@ export type PendingSkillsWatchChange = {
   change: SkillsWatchChange | "initial-scan" | "unavailable";
 };
 
-export function unsubscribeWorkspaceFromPath(workspaceDir: string, watchTarget: WatchTarget): void {
+export function unsubscribeWorkspaceFromPath(
+  workspaceDir: string,
+  watchTarget: WatchTarget,
+): Promise<void> | undefined {
   const state = pathWatchers.get(watchTarget.path);
   if (!state) {
-    return;
+    return undefined;
   }
   state.subscribers.delete(workspaceDir);
   if (state.subscribers.size === 0) {
-    void state.close().then(
+    const closing = state.close();
+    void closing.then(
       () => {
         if (state.subscribers.size === 0 && pathWatchers.get(watchTarget.path) === state) {
           pathWatchers.delete(watchTarget.path);
@@ -79,7 +84,9 @@ export function unsubscribeWorkspaceFromPath(workspaceDir: string, watchTarget: 
         state.failed = true;
       },
     );
+    return closing;
   }
+  return undefined;
 }
 
 export const workspaceWatchLastEnsuredAt = new Map<string, number>();

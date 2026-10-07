@@ -1,3 +1,4 @@
+import type { ClawPackageLifecycleLeaseIdentity } from "../state/claw-package-lifecycle-lease.js";
 import type { PersistedClawCronRef } from "./cron.js";
 import { readClawInventory } from "./inventory-read.js";
 import type { PersistedClawMcpServerRef } from "./mcp.js";
@@ -17,6 +18,7 @@ import type { PersistedClawWorkspaceFile } from "./workspace.js";
 
 export type ClawUpdateStateOptions = ClawMutationStateOptions & {
   assertForwardCurrent?: () => void;
+  packageLease?: ClawPackageLifecycleLeaseIdentity;
 };
 
 async function inventory(options: ClawUpdateStateOptions) {
@@ -107,7 +109,7 @@ export async function replaceClawPackageRefForUpdate(
   }
   return execute(options, {
     type: "claws.update.replacePackageRef",
-    input: { expected, replacement },
+    input: { expected, replacement, packageLease: options.packageLease },
   });
 }
 

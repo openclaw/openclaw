@@ -4,7 +4,7 @@ import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
   isPathOwnedByAnotherRegisteredAgent,
   resolveRegisteredAgentIdForDir,
@@ -30,6 +30,7 @@ import {
 import { claimCronRunReceiptInDatabaseForTest } from "../cron/store/run-receipt-store.test-support.js";
 import * as memoryRuntime from "../plugins/memory-runtime.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import * as skillsRefresh from "../skills/runtime/refresh.js";
 import {
   beginAgentDeletionJournal,
   readAgentDeletionJournal,
@@ -51,6 +52,10 @@ import {
 const fixture = useClawMonitorFixture();
 
 describe("Claw serving monitor cleanup", () => {
+  it.each(["WORKER", "worker "])("rejects noncanonical monitor agent ID %j", async (agentId) =>
+    expect((await fixture(false)).invoke({ phase: "inspect", agentId })).rejects.toThrow(/Invalid/),
+  );
+
   it("releases the deleted agent's reverse directory owner after complete removal", async () => {
     const current = await fixture(false);
     const agentDir = resolveAgentDir(current.getConfig(), "worker");
@@ -133,6 +138,58 @@ describe("Claw serving monitor cleanup", () => {
     } finally {
       retireModels.mockRestore();
       closeMemory.mockRestore();
+    }
+  });
+
+  it("does not acknowledge drainage before the removed agent's skill watchers close", async () => {
+    const current = await fixture(false);
+    const closeStarted = createDeferred();
+    const releaseClose = createDeferred();
+    const close = vi
+      .spyOn(skillsRefresh, "closeSkillsWatchersForAgent")
+      .mockImplementation(async ({ agentId }) => {
+        expect(agentId).toBe("worker");
+        closeStarted.resolve();
+        await releaseClose.promise;
+      });
+    const plan = await current.plan();
+    const removal = current.apply(plan);
+    try {
+      await awaitGateBeforeSettlement(
+        closeStarted.promise,
+        removal,
+        "Claw removal completed without joining its skill watcher retirement",
+      );
+      let completed = false;
+      void removal.then(() => {
+        completed = true;
+      });
+      await Promise.resolve();
+      expect(completed).toBe(false);
+    } finally {
+      releaseClose.resolve();
+      close.mockRestore();
+    }
+    expect(await removal).toMatchObject({ status: "complete", agentRemoved: true });
+  });
+
+  it("keeps the deletion fence and workspace when skill watcher retirement fails", async () => {
+    const current = await fixture(false);
+    const close = vi
+      .spyOn(skillsRefresh, "closeSkillsWatchersForAgent")
+      .mockRejectedValue(new Error("synthetic Windows EPERM"));
+    try {
+      const result = await current.apply(await current.plan());
+      expect(result).toMatchObject({
+        status: "partial",
+        agentRemoved: true,
+        error: { code: "monitor_cleanup_failed" },
+      });
+      expect(result.error?.message).toContain("synthetic Windows EPERM");
+      expect(readAgentDeletionJournal("worker")).toBeDefined();
+      await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).resolves.toBeUndefined();
+    } finally {
+      close.mockRestore();
     }
   });
 

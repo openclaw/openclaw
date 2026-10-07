@@ -1,7 +1,8 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import {
   markGatewayRestartDraining,
@@ -72,6 +73,69 @@ it("retires remote subscriptions during Gateway drain and reacquires after runti
   subscriptions[1]!.emit("change");
   expect(getSkillsSnapshotVersion(gateway)).toBeGreaterThan(restartedVersion);
 });
+
+it.each(["direct", "alias", "repointed-alias"] as const)(
+  "joins a removed agent's %s remote skills subscription before drainage completes",
+  async (workspaceMode) => {
+    const { params, access } = await remoteFixture();
+    const workspaceDir =
+      workspaceMode !== "direct" ? path.join(fixture.root, "workspace-alias") : params.workspaceDir;
+    if (workspaceMode !== "direct") {
+      await fs.symlink(
+        params.workspaceDir,
+        workspaceDir,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      releases.push(registerAgentWorkspaceAccess(workspaceDir, access));
+    }
+    const closeStarted = createDeferred();
+    const releaseClose = createDeferred();
+    access.watchSkills.mockImplementation(async (_request, _emit, signal) => {
+      await new Promise<void>((resolve) => {
+        signal.addEventListener(
+          "abort",
+          () => {
+            closeStarted.resolve();
+            resolve();
+          },
+          { once: true },
+        );
+      });
+      await releaseClose.promise;
+    });
+    refresh.ensureSkillsWatcher({ ...params, workspaceDir, agentId: "worker" });
+    await waitForSkillsWatcherTurn();
+    await observer.readyAll();
+    if (workspaceMode === "repointed-alias") {
+      await fs.unlink(workspaceDir);
+      await fs.symlink(
+        await fixture.createFixtureDirectory("replacement-workspace"),
+        workspaceDir,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
+
+    const drain = refresh.closeSkillsWatchersForAgent({
+      agentId: "worker",
+    });
+    try {
+      await awaitGateBeforeSettlement(
+        closeStarted.promise,
+        drain,
+        "Claw drainage completed before remote watcher cancellation began",
+      );
+      let drained = false;
+      void drain.then(() => {
+        drained = true;
+      });
+      await waitForSkillsWatcherTurn();
+      expect(drained).toBe(false);
+    } finally {
+      releaseClose.resolve();
+    }
+    await drain;
+  },
+);
 afterEach(() => vi.unstubAllEnvs());
 
 async function remoteFixture() {

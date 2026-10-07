@@ -262,13 +262,35 @@ export async function readClawHubSkillsLockfile(
   return { version: 1, skills: {} };
 }
 
+function writeGuardedClawHubTrackingJson(
+  filePath: string,
+  value: ClawHubSkillsLockfile | ClawHubSkillOrigin,
+  assertCurrent: () => void,
+): void {
+  assertCurrent();
+  replaceFileAtomicSync({
+    filePath,
+    content: `${JSON.stringify(value, null, 2)}\n`,
+    mode: 0o600,
+    dirMode: 0o777 & ~process.umask(),
+    copyFallbackOnPermissionError: true,
+    syncTempFile: true,
+    syncParentDir: true,
+    beforeRename: assertCurrent,
+  });
+}
+
 async function writeClawHubSkillsLockfile(
   workspaceDir: string,
   lockfile: ClawHubSkillsLockfile,
   beforePersistentApply?: () => void,
 ): Promise<void> {
-  beforePersistentApply?.();
-  await writeJson(path.join(workspaceDir, DOT_DIR, "lock.json"), lockfile, {
+  const filePath = path.join(workspaceDir, DOT_DIR, "lock.json");
+  if (beforePersistentApply) {
+    writeGuardedClawHubTrackingJson(filePath, lockfile, beforePersistentApply);
+    return;
+  }
+  await writeJson(filePath, lockfile, {
     trailingNewline: true,
   });
 }
@@ -372,8 +394,12 @@ async function writeClawHubSkillOrigin(
   origin: ClawHubSkillOrigin,
   beforePersistentApply?: () => void,
 ): Promise<void> {
-  beforePersistentApply?.();
-  await writeJson(path.join(skillDir, DOT_DIR, "origin.json"), origin, { trailingNewline: true });
+  const filePath = path.join(skillDir, DOT_DIR, "origin.json");
+  if (beforePersistentApply) {
+    writeGuardedClawHubTrackingJson(filePath, origin, beforePersistentApply);
+    return;
+  }
+  await writeJson(filePath, origin, { trailingNewline: true });
 }
 
 async function readInstalledSkillFileLock(

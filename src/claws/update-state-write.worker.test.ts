@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { acquireClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
@@ -238,6 +239,52 @@ it("changes package, workspace, MCP, and cron references on the shared worker", 
   } finally {
     sql.restore();
   }
+});
+
+it("rejects a package rollback after its lifecycle lease is released", async () => {
+  const { plan } = await makeProvenancePlan(state.root, {
+    schemaVersion: 1,
+    agent: { id: "worker" },
+  });
+  await persistClawInstallRecordForAdd(plan, { env: state.env, stateMode: "worker" });
+  const previous = persistClawPackageRef(
+    plan,
+    {
+      kind: "skill",
+      source: "clawhub",
+      ref: "@openclaw/triage",
+      version: "1.0.0",
+      integrity: `sha256:${"a".repeat(64)}`,
+    },
+    { env: state.env, status: "complete" },
+  );
+  const lease = acquireClawPackageLifecycleLease(
+    {
+      kind: "skill",
+      source: "clawhub",
+      ref: previous.ref,
+      workspace: plan.agent.workspace,
+    },
+    { env: state.env, required: true },
+  );
+  if (!lease?.identity) {
+    throw new Error("Expected a package lifecycle lease.");
+  }
+  lease.release();
+  await expect(
+    replaceClawPackageRefForUpdate(previous, undefined, {
+      env: state.env,
+      stateMode: "worker",
+      packageLease: lease.identity,
+    }),
+  ).rejects.toThrow("Claw package rollback no longer owns its lifecycle lease.");
+  expect(
+    await readClawPackageRefsForUpdate({
+      env: state.env,
+      stateMode: "worker",
+      agentId: "worker",
+    }),
+  ).toEqual([previous]);
 });
 
 it("uses async installer callbacks to complete a package Update through the worker", async () => {

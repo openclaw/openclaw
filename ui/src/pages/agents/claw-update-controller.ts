@@ -56,7 +56,7 @@ export class ClawUpdateController {
       getGatewayUrl: () => string;
       canReviewUpdate: () => boolean;
       canApplyUpdate: () => boolean;
-      loadStatus: () => void;
+      loadStatus: (force?: boolean) => void;
     },
   ) {}
 
@@ -307,7 +307,7 @@ export class ClawUpdateController {
       this.pending = null;
       this.unknown = false;
       this.result = result;
-      this.options.loadStatus();
+      this.options.loadStatus(true);
     } catch (error) {
       if (this.gateway.isCurrent(scope) && revision === this.revision && !this.result) {
         if (isRejectedClawMutation(error)) {

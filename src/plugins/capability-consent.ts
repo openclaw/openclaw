@@ -337,7 +337,7 @@ export function createManagedPluginArtifactConsentHandler(params: {
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   requireCapabilityConsent?: boolean;
-  beforePersistentEffect?: () => void | Promise<void>;
+  beforePersistentEffect?: (artifact: PluginInstallArtifactConsentRequest) => void | Promise<void>;
   previousRecords?: Record<string, PluginInstallRecord>;
   previousPluginOwners?: ReadonlyMap<string, string>;
   /** Update-only flows may defer consent while every known package entry is disabled. */
@@ -403,7 +403,9 @@ export function createManagedPluginArtifactConsentHandler(params: {
         acknowledgeCapabilities: params.acknowledgeCapabilities,
         onCapabilityConsent: params.onCapabilityConsent,
         requireCapabilityConsent: params.requireCapabilityConsent,
-        beforePersistentEffect: params.beforePersistentEffect,
+        ...(params.beforePersistentEffect
+          ? { beforePersistentEffect: () => params.beforePersistentEffect?.(artifact) }
+          : {}),
         ...(previousRecord ? { previousRecord } : {}),
         ...(previousDeclared ? { previousDeclared } : {}),
         mode: artifact.mode,

@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { bindClawPluginBeforeCommit } from "../claws/package-plugin-before-commit.js";
+import { inspectClawPluginCapabilities } from "../claws/plugin-capability-probe.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createClawHubArchiveFactory } from "./clawhub.test-support.js";
@@ -55,6 +58,17 @@ async function writePluginSource(root: string, tool: string): Promise<string> {
   );
   await fs.writeFile(path.join(sourceDir, "index.js"), "export {};\n");
   return sourceDir;
+}
+
+async function findStagedPluginArtifactDir(env: NodeJS.ProcessEnv): Promise<string> {
+  const extensionsDir = resolveDefaultPluginExtensionsDir(env);
+  const stages = (await fs.readdir(extensionsDir)).filter((entry) =>
+    entry.startsWith(".openclaw-install-stage-"),
+  );
+  if (stages.length !== 1) {
+    throw new Error(`Expected one staged plugin artifact, found ${stages.length}.`);
+  }
+  return path.join(extensionsDir, stages[0]!);
 }
 
 describe("Claw-managed plugin capability consent", () => {
@@ -214,6 +228,229 @@ describe("Claw-managed plugin capability consent", () => {
       expect(readPersistedInstalledPluginIndexInstallRecords({ env })?.["claw-audit"]).toEqual(
         originalRecord,
       );
+    });
+  });
+
+  it("rejects a staged capability change during the Claw owner's final check", async () => {
+    const root = dirs.make("openclaw-claw-plugin-final-stage-");
+    const sourceDir = await writePluginSource(root, "audit.read");
+    const env = {
+      OPENCLAW_HOME: path.join(root, "home"),
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
+    };
+    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+
+    await withEnvAsync(env, async () => {
+      let stageChanged = false;
+      await expect(
+        installManagedPlugin({
+          request: { source: "local", path: sourceDir },
+          env,
+          clawManaged: true,
+          onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
+          beforePersistentEffect: async () => {
+            if (stageChanged) {
+              return;
+            }
+            stageChanged = true;
+            const stagedArtifactDir = await findStagedPluginArtifactDir(env);
+            await fs.writeFile(
+              path.join(stagedArtifactDir, "openclaw.plugin.json"),
+              JSON.stringify({
+                id: "claw-audit",
+                contracts: { tools: ["audit.read", "audit.write"] },
+                configSchema: { type: "object" },
+              }),
+            );
+          },
+        }),
+      ).rejects.toMatchObject({ capabilityConsent: { pluginId: "claw-audit" } });
+
+      expect(stageChanged).toBe(true);
+      await expect(
+        fs.stat(path.join(resolveDefaultPluginExtensionsDir(env), "claw-audit")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(readPersistedInstalledPluginIndexInstallRecords({ env })?.["claw-audit"]).toBeFalsy();
+    });
+  });
+
+  it("rejects sibling-entry drift even when the merged capability token is unchanged", async () => {
+    const root = dirs.make("openclaw-claw-plugin-sibling-drift-");
+    const sourceDir = await writePluginSource(root, "audit.read");
+    await fs.writeFile(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify({
+        name: "@example/claw-audit",
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.js", "./child/child.js"] },
+      }),
+    );
+    await fs.mkdir(path.join(sourceDir, "child"));
+    await fs.writeFile(path.join(sourceDir, "child/child.js"), "export {};\n");
+    await fs.writeFile(
+      path.join(sourceDir, "child/openclaw.plugin.json"),
+      JSON.stringify({
+        id: "claw-audit-child",
+        contracts: { tools: ["audit.child"] },
+        configSchema: { type: "object" },
+      }),
+    );
+    await fs.mkdir(path.join(sourceDir, "other"));
+    await fs.writeFile(path.join(sourceDir, "other/other.js"), "export {};\n");
+    await fs.writeFile(
+      path.join(sourceDir, "other/openclaw.plugin.json"),
+      JSON.stringify({
+        id: "claw-audit-other",
+        contracts: { tools: ["audit.child"] },
+        configSchema: { type: "object" },
+      }),
+    );
+    const env = {
+      OPENCLAW_HOME: path.join(root, "home"),
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
+    };
+    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+
+    await withEnvAsync(env, async () => {
+      const expected = inspectClawPluginCapabilities(sourceDir, "claw-audit", env);
+      let changed: ReturnType<typeof inspectClawPluginCapabilities> | undefined;
+      const install = installManagedPlugin({
+        request: { source: "local", path: sourceDir },
+        env,
+        clawManaged: true,
+        onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
+        onBeforePluginArtifactCommit: async (artifact) => {
+          const current = inspectClawPluginCapabilities(
+            artifact.stagedArtifactDir,
+            artifact.pluginId,
+            env,
+          );
+          if (
+            stableStringify(current.grantsByPluginId) !== stableStringify(expected.grantsByPluginId)
+          ) {
+            throw new Error("effective capability grants changed after planning");
+          }
+        },
+        beforePersistentEffect: async () => {
+          if (changed) {
+            return;
+          }
+          const stagedArtifactDir = await findStagedPluginArtifactDir(env);
+          await fs.writeFile(
+            path.join(stagedArtifactDir, "package.json"),
+            JSON.stringify({
+              name: "@example/claw-audit",
+              version: "1.0.0",
+              openclaw: { extensions: ["./index.js", "./other/other.js"] },
+            }),
+          );
+          changed = inspectClawPluginCapabilities(stagedArtifactDir, "claw-audit", env);
+        },
+      });
+      await expect(install).rejects.toThrow("effective capability grants changed after planning");
+      expect(changed?.declared).toEqual(expected.declared);
+      expect(changed?.grantsByPluginId).not.toEqual(expected.grantsByPluginId);
+      await expect(
+        fs.stat(path.join(resolveDefaultPluginExtensionsDir(env), "claw-audit")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(readPersistedInstalledPluginIndexInstallRecords({ env })?.["claw-audit"]).toBeFalsy();
+    });
+  });
+
+  it("does not mark a failed final-stage update as an external mutation", async () => {
+    const root = dirs.make("openclaw-claw-plugin-final-update-");
+    const sourceDir = await writePluginSource(root, "audit.read");
+    const env = {
+      OPENCLAW_HOME: path.join(root, "home"),
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
+    };
+    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+
+    await withEnvAsync(env, async () => {
+      const onCapabilityConsent = async (review: { reviewToken: string }) => ({
+        reviewToken: review.reviewToken,
+      });
+      await installManagedPlugin({
+        request: { source: "local", path: sourceDir },
+        env,
+        clawManaged: true,
+        onCapabilityConsent,
+      });
+      const artifactDir = path.join(resolveDefaultPluginExtensionsDir(env), "claw-audit");
+      const originalArtifact = await fs.readFile(path.join(artifactDir, "openclaw.plugin.json"));
+      const originalRecord = readPersistedInstalledPluginIndexInstallRecords({ env })?.[
+        "claw-audit"
+      ];
+
+      await writePluginSource(root, "audit.write");
+      const onExternalMutation = vi.fn();
+      const pluginCommit = bindClawPluginBeforeCommit(
+        {
+          assertPluginOwnerCurrent: async () => {
+            const stagedArtifactDir = await findStagedPluginArtifactDir(env);
+            await fs.writeFile(
+              path.join(stagedArtifactDir, "openclaw.plugin.json"),
+              JSON.stringify({
+                id: "claw-audit",
+                contracts: { tools: ["audit.write", "audit.admin"] },
+                configSchema: { type: "object" },
+              }),
+            );
+          },
+          onExternalMutation,
+        },
+        { kind: "plugin", source: "clawhub", ref: "@example/claw-audit", version: "1.0.1" },
+        () => {},
+      );
+      await expect(
+        installManagedPlugin({
+          request: { source: "local", path: sourceDir, mode: "update" },
+          env,
+          clawManaged: true,
+          onCapabilityConsent,
+          onBeforePluginArtifactCommit: async () => pluginCommit.artifactReviewed(),
+          beforePersistentEffect: pluginCommit.beforePersistentEffect,
+          beforePersistentApply: pluginCommit.beforePersistentApply,
+        }),
+      ).rejects.toMatchObject({ capabilityConsent: { pluginId: "claw-audit" } });
+
+      expect(onExternalMutation).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(artifactDir, "openclaw.plugin.json"))).toEqual(
+        originalArtifact,
+      );
+      expect(readPersistedInstalledPluginIndexInstallRecords({ env })?.["claw-audit"]).toEqual(
+        originalRecord,
+      );
+
+      const successfulMutation = vi.fn();
+      const successfulCommit = bindClawPluginBeforeCommit(
+        { onExternalMutation: successfulMutation },
+        { kind: "plugin", source: "clawhub", ref: "@example/claw-audit", version: "1.0.1" },
+        () => {},
+      );
+      await installManagedPlugin({
+        request: { source: "local", path: sourceDir, mode: "update" },
+        env,
+        clawManaged: true,
+        onCapabilityConsent,
+        onBeforePluginArtifactCommit: async () => successfulCommit.artifactReviewed(),
+        beforePersistentEffect: successfulCommit.beforePersistentEffect,
+        beforePersistentApply: successfulCommit.beforePersistentApply,
+      });
+      expect(successfulMutation).toHaveBeenCalledOnce();
+      expect(
+        readPersistedInstalledPluginIndexInstallRecords({ env })?.["claw-audit"]?.acceptedSurface
+          ?.tools,
+      ).toEqual(["audit.write"]);
     });
   });
 });

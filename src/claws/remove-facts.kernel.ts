@@ -17,7 +17,10 @@ export type ClawRemoveFacts = {
   attachedJobs: AttachedCronJob[];
   cronRefs: PersistedClawCronRef[];
   install: PersistedClawInstall | null;
-  journal: Pick<AgentDeletionJournalEntry, "operationId" | "cleanupCompleted" | "agentDir"> | null;
+  journal: Pick<
+    AgentDeletionJournalEntry,
+    "operationId" | "cleanupCompleted" | "agentDir" | "workspaceDir"
+  > | null;
   deletionLease: { owner: string; expiresAt: number | null } | null;
   sessionStoreOwners: Array<{
     path: string;
@@ -43,6 +46,7 @@ export function readClawRemoveFactsInDatabase(
           operationId: journal.operationId,
           cleanupCompleted: journal.cleanupCompleted,
           agentDir: journal.agentDir,
+          workspaceDir: journal.workspaceDir,
         }
       : null,
     deletionLease: deletionLease

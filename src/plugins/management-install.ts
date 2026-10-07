@@ -377,6 +377,14 @@ async function installResolvedManagedPluginSource(
       : request.source === "npm-pack"
         ? "npm"
         : request.source;
+  const finalClawArtifactReview =
+    params.requireCapabilityConsent &&
+    (params.onBeforePluginArtifactCommit || params.beforePersistentEffect)
+      ? async (artifact: PluginInstallArtifactConsentRequest) => {
+          await params.beforePersistentEffect?.();
+          await params.onBeforePluginArtifactCommit?.(artifact, params.snapshot.config);
+        }
+      : undefined;
   const capabilityConsent = consentExemptSource
     ? undefined
     : await prepareManagedPluginArtifactConsentHandler({
@@ -394,6 +402,7 @@ async function installResolvedManagedPluginSource(
         acknowledgeCapabilities: params.acknowledgeCapabilities,
         onCapabilityConsent: params.onCapabilityConsent,
         requireCapabilityConsent: params.requireCapabilityConsent,
+        ...(finalClawArtifactReview ? { beforePersistentEffect: finalClawArtifactReview } : {}),
       });
 
   const common = requestDeferredPluginInstall(
@@ -407,8 +416,10 @@ async function installResolvedManagedPluginSource(
         ? {
             onBeforePluginArtifactCommit: async (artifact: PluginInstallArtifactConsentRequest) => {
               await capabilityConsent?.onBeforePluginArtifactCommit(artifact);
-              await params.onBeforePluginArtifactCommit?.(artifact, params.snapshot.config);
-              await params.beforePersistentEffect?.();
+              if (!finalClawArtifactReview) {
+                await params.onBeforePluginArtifactCommit?.(artifact, params.snapshot.config);
+                await params.beforePersistentEffect?.();
+              }
             },
           }
         : {}),

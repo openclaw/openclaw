@@ -185,14 +185,13 @@ export async function runClawsUpdateCommand(
   } else {
     loaded = await readClawManifestFile(source, {
       allowLegacyDynamicToolProfile: !opts.from,
-      authorizeLegacyLocalUpdateHostSettings: ({ manifest, source: loadedSource }) =>
+      authorizeLegacyLocalUpdateHostSettings: ({ source: loadedSource }) =>
         !opts.from &&
         recordedInstall?.claw.integrityKind === "development-snapshot" &&
         recordedInstall.claw.kind === loadedSource.kind &&
         recordedInstall.claw.name === loadedSource.name &&
         recordedInstall.claw.packageRoot === loadedSource.packageRoot &&
-        recordedInstall.claw.manifestPath === loadedSource.manifestPath &&
-        recordedInstall.agentId === manifest.agent.id,
+        recordedInstall.claw.manifestPath === loadedSource.manifestPath,
     });
   }
   if (!loaded.ok) {

@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import type { ClawLifecyclePlanResult } from "../../../../packages/gateway-protocol/src/schema/claws.js";
 import { t } from "../../i18n/index.ts";
@@ -5,10 +6,6 @@ import "../../styles/claws-manifest-review.css";
 
 type ManifestPlan = Pick<ClawLifecyclePlanResult, "operation" | "target" | "manifestDisclosure">;
 type SourceCoordinate = { packageName: string; version: string };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 function isNormalizedManifest(value: string): boolean {
   try {

@@ -14,7 +14,11 @@ import { bindClawPluginInstallConsent } from "./gateway-plugin-consent.js";
 import { digestClawPackageRef } from "./package-update-provenance.js";
 import { applyClawPackageUpdate } from "./package-update.js";
 import { projectClawPluginCapabilityReviews } from "./plugin-capability-review.js";
-import { readClawPackageRefs, type PersistedClawPackageRef } from "./provenance.js";
+import {
+  readClawInstallRecord,
+  readClawPackageRefs,
+  type PersistedClawPackageRef,
+} from "./provenance.js";
 import { readClawManifestFile } from "./reader.js";
 import { createClawUpdatePlanFixture } from "./resource-update.test-helpers.js";
 import type { ClawAddPlan } from "./types.js";
@@ -46,11 +50,11 @@ afterEach(closeStateDatabaseForTest);
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const createClawHubArchive = createClawHubArchiveFactory(afterEach);
 
-async function revokeConversationAccess(configPath: string, pluginId: string) {
+async function setConversationAccess(configPath: string, pluginId: string, allowed: boolean) {
   const current = JSON.parse(await fs.readFile(configPath, "utf8")) as {
     plugins: { entries: Record<string, { hooks: { allowConversationAccess: boolean } }> };
   };
-  current.plugins.entries[pluginId]!.hooks.allowConversationAccess = false;
+  current.plugins.entries[pluginId]!.hooks.allowConversationAccess = allowed;
   await fs.writeFile(configPath, JSON.stringify(current));
 }
 
@@ -722,7 +726,7 @@ describe("Claw plugin capability consent through the managed installer", () => {
       let revoked = false;
       fixture.onNextDownload(async () => {
         revoked = true;
-        await revokeConversationAccess(configPath, "diffs/child");
+        await setConversationAccess(configPath, "diffs/child", false);
       });
       const result = await applyClawAddPlan(plan, {
         env,
@@ -745,9 +749,9 @@ describe("Claw plugin capability consent through the managed installer", () => {
     });
   });
 
-  it("preserves a prior accepted official plugin and its Claw reference when update consent is denied", async () => {
+  it("rejects a child grant revoked during the managed installer download", async () => {
     const fixture = await createPluginClawFixture(
-      dirs.make("openclaw-claw-plugin-update-consent-"),
+      dirs.make("openclaw-claw-plugin-late-grant-add-"),
       "official",
       true,
     );
@@ -761,64 +765,158 @@ describe("Claw plugin capability consent through the managed installer", () => {
       }
       const plan = await buildGatewayClawAddPlan(source, { config, sourceMcpServers: {} });
       expect(plan.blockers).toEqual([]);
-      const accepted = vi.fn(async (review: { reviewToken: string }) => ({
-        reviewToken: review.reviewToken,
-      }));
-      const added = await applyClawAddPlan(plan, {
+
+      let revokedDuringInstall = false;
+      // Apply re-probes once; its next download occurs after the managed installer snapshots config.
+      fixture.onNextDownload(async () => {
+        fixture.onNextDownload(async () => {
+          revokedDuringInstall = true;
+          await setConversationAccess(configPath, "diffs/child", false);
+        });
+      });
+      const result = await applyClawAddPlan(plan, {
         env,
         config,
         consentPlanIntegrity: plan.planIntegrity,
-        pluginConsent: {
-          onCapabilityConsent: accepted,
-        },
-      });
-      expect(added.status).toBe("complete");
-      expect(accepted).toHaveBeenCalledOnce();
-
-      const beforeRefs = readClawPackageRefs({ env, agentId: "audit-claw" });
-      const previous = beforeRefs.find((ref) => ref.ref === "@openclaw/diffs");
-      expect(previous).toMatchObject({ version: "1.0.0", status: "complete" });
-      if (!previous) {
-        return;
-      }
-      const artifactDir = path.join(resolveDefaultPluginExtensionsDir(env), "diffs");
-      const beforeArtifact = await fs.readFile(path.join(artifactDir, "index.js"));
-      const beforeRecord = readPersistedInstalledPluginIndexInstallRecords({ env })?.diffs;
-      expect(beforeRecord).toMatchObject({
-        source: "clawhub",
-        clawhubPackage: "@openclaw/diffs",
+        pluginConsent: consentForPluginPlan(plan),
       });
 
-      const v2 = await fixture.addVersion("1.1.0");
-      const { targetAddPlan, updatePlan } = createPluginVersionUpdate({
-        plan,
-        packageName: fixture.packageName,
-        version: "1.1.0",
-        integrity: v2.integrity,
-        previous,
+      expect(revokedDuringInstall).toBe(true);
+      expect(result).toMatchObject({
+        status: "partial",
+        error: { message: expect.stringContaining("effective capability grants changed") },
       });
-      let revoked = false;
-      fixture.onNextDownload(async () => {
-        revoked = true;
-        await revokeConversationAccess(configPath, "diffs/child");
-      });
-
       await expect(
-        applyClawPackageUpdate(updatePlan, targetAddPlan, {
-          env,
-          config,
-          pluginConsent: {
-            onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
-          },
-        }),
-      ).rejects.toMatchObject({
-        partial: false,
-        message: expect.stringContaining("effective capability grants changed"),
+        fs.stat(path.join(resolveDefaultPluginExtensionsDir(env), "diffs")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(readPersistedInstalledPluginIndexInstallRecords({ env })?.diffs).toBeFalsy();
+      expect(readClawPackageRefs({ env, agentId: "audit-claw" })).not.toContainEqual(
+        expect.objectContaining({ status: "complete" }),
+      );
+      const partialRecord = readClawInstallRecord("audit-claw", { env });
+      expect(partialRecord?.status).toBe("partial");
+      expect(result.configCommitted).toBe(false);
+      const deniedConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+      expect(deniedConfig.agents?.entries?.["audit-claw"]).toBeUndefined();
+
+      await setConversationAccess(configPath, "diffs/child", true);
+      const resumed = await applyClawAddPlan(plan, {
+        env,
+        config,
+        consentPlanIntegrity: plan.planIntegrity,
+        pluginConsent: consentForPluginPlan(plan),
+        resumeRecord: partialRecord,
       });
-      expect(revoked).toBe(true);
-      expect(await fs.readFile(path.join(artifactDir, "index.js"))).toEqual(beforeArtifact);
-      expect(readPersistedInstalledPluginIndexInstallRecords({ env })?.diffs).toEqual(beforeRecord);
-      expect(readClawPackageRefs({ env, agentId: "audit-claw" })).toEqual(beforeRefs);
+      expect(resumed.status).toBe("complete");
+      expect(readClawInstallRecord("audit-claw", { env })?.status).toBe("complete");
+      expect(readPersistedInstalledPluginIndexInstallRecords({ env })?.diffs).toBeTruthy();
+      expect(readClawPackageRefs({ env, agentId: "audit-claw" })).toContainEqual(
+        expect.objectContaining({ status: "complete", version: "1.0.0" }),
+      );
     });
   });
+
+  it.each(["apply re-probe", "managed installer download"] as const)(
+    "preserves a prior accepted official plugin and its Claw reference when Update consent is denied at %s",
+    async (revocationStage) => {
+      const fixture = await createPluginClawFixture(
+        dirs.make("openclaw-claw-plugin-update-consent-"),
+        "official",
+        true,
+      );
+      const { config, configPath, env, manifestPath } = fixture;
+
+      await withEnvAsync(env, async () => {
+        const source = await readClawManifestFile(manifestPath);
+        expect(source.ok).toBe(true);
+        if (!source.ok) {
+          return;
+        }
+        const plan = await buildGatewayClawAddPlan(source, { config, sourceMcpServers: {} });
+        expect(plan.blockers).toEqual([]);
+        const accepted = vi.fn(async (review: { reviewToken: string }) => ({
+          reviewToken: review.reviewToken,
+        }));
+        const added = await applyClawAddPlan(plan, {
+          env,
+          config,
+          consentPlanIntegrity: plan.planIntegrity,
+          pluginConsent: {
+            onCapabilityConsent: accepted,
+          },
+        });
+        expect(added.status).toBe("complete");
+        expect(accepted).toHaveBeenCalledOnce();
+
+        const beforeRefs = readClawPackageRefs({ env, agentId: "audit-claw" });
+        const previous = beforeRefs.find((ref) => ref.ref === "@openclaw/diffs");
+        expect(previous).toMatchObject({ version: "1.0.0", status: "complete" });
+        if (!previous) {
+          return;
+        }
+        const artifactDir = path.join(resolveDefaultPluginExtensionsDir(env), "diffs");
+        const beforeArtifact = await fs.readFile(path.join(artifactDir, "index.js"));
+        const beforeRecord = readPersistedInstalledPluginIndexInstallRecords({ env })?.diffs;
+        expect(beforeRecord).toMatchObject({
+          source: "clawhub",
+          clawhubPackage: "@openclaw/diffs",
+        });
+
+        const v2 = await fixture.addVersion("1.1.0");
+        const { targetAddPlan, updatePlan } = createPluginVersionUpdate({
+          plan,
+          packageName: fixture.packageName,
+          version: "1.1.0",
+          integrity: v2.integrity,
+          previous,
+        });
+        let revoked = false;
+        const revoke = async () => {
+          revoked = true;
+          await setConversationAccess(configPath, "diffs/child", false);
+        };
+        fixture.onNextDownload(
+          revocationStage === "apply re-probe"
+            ? revoke
+            : async () => {
+                fixture.onNextDownload(revoke);
+              },
+        );
+
+        await expect(
+          applyClawPackageUpdate(updatePlan, targetAddPlan, {
+            env,
+            config,
+            pluginConsent: {
+              onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
+            },
+          }),
+        ).rejects.toMatchObject({
+          partial: false,
+          message: expect.stringContaining("effective capability grants changed"),
+        });
+        expect(revoked).toBe(true);
+        expect(await fs.readFile(path.join(artifactDir, "index.js"))).toEqual(beforeArtifact);
+        expect(readPersistedInstalledPluginIndexInstallRecords({ env })?.diffs).toEqual(
+          beforeRecord,
+        );
+        expect(readClawPackageRefs({ env, agentId: "audit-claw" })).toEqual(beforeRefs);
+
+        await setConversationAccess(configPath, "diffs/child", true);
+        const retried = await applyClawPackageUpdate(updatePlan, targetAddPlan, {
+          env,
+          config,
+          pluginConsent: consentForPluginPlan(targetAddPlan),
+        });
+        expect(retried.appliedIds).toEqual([`plugin:${fixture.packageName}`]);
+        expect(await fs.readFile(path.join(artifactDir, "index.js"), "utf8")).toContain("1.1.0");
+        expect(readPersistedInstalledPluginIndexInstallRecords({ env })?.diffs?.version).toBe(
+          "1.1.0",
+        );
+        expect(readClawPackageRefs({ env, agentId: "audit-claw" })).toContainEqual(
+          expect.objectContaining({ status: "complete", version: "1.1.0" }),
+        );
+      });
+    },
+  );
 });

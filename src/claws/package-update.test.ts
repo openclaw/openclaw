@@ -619,15 +619,27 @@ describe("applyClawPackageUpdate", () => {
   });
 
   it.each([
-    { lateFailure: false, directReinstall: false },
-    { lateFailure: true, directReinstall: false },
-    { lateFailure: false, directReinstall: true },
+    { lateFailure: false, directReinstall: false, finalStageRejected: false },
+    { lateFailure: true, directReinstall: false, finalStageRejected: false },
+    { lateFailure: false, directReinstall: true, finalStageRejected: false },
+    { lateFailure: false, directReinstall: false, finalStageRejected: true },
   ])(
-    "owned upgrade with late provenance failure=$lateFailure direct reinstall=$directReinstall",
-    async ({ lateFailure, directReinstall }) => {
+    "owned upgrade late=$lateFailure reinstall=$directReinstall review=$finalStageRejected",
+    async ({ lateFailure, directReinstall, finalStageRejected }) => {
       const root = dirs.make("claw-owned-upgrade-");
       const targetDir = path.join(root, "plugins", "audit");
+      const stagedArtifactDir = path.join(root, "staged-audit");
       await fs.mkdir(targetDir, { recursive: true });
+      await fs.mkdir(stagedArtifactDir, { recursive: true });
+      await fs.writeFile(
+        path.join(stagedArtifactDir, "package.json"),
+        JSON.stringify({ name: "audit", openclaw: { extensions: ["./index.js"] } }),
+      );
+      await fs.writeFile(
+        path.join(stagedArtifactDir, "openclaw.plugin.json"),
+        JSON.stringify({ id: "audit", configSchema: { type: "object" } }),
+      );
+      await fs.writeFile(path.join(stagedArtifactDir, "index.js"), "export {};\n");
       const env = {
         OPENCLAW_STATE_DIR: root,
         OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
@@ -659,6 +671,11 @@ describe("applyClawPackageUpdate", () => {
       };
       const currentRecords = { audit: { ...priorRecords.audit, version: "1.0.0" } };
       const uninstallPlugin = vi.fn(async () => {});
+      const replaceExpected = vi.fn(() => {
+        if (lateFailure && committed) {
+          throw failure;
+        }
+      });
       const reloadPlugins = vi.fn(async () => {
         expect(hasPluginLifecycleLease()).toBe(false);
         return { operationId: "upgrade", generation: 4, pluginIds: ["audit"] };
@@ -679,6 +696,14 @@ describe("applyClawPackageUpdate", () => {
           priorRecords.audit.installedAt = new Date(20).toISOString();
         }
         await params.beforePersistentEffect?.();
+        await params.onBeforePluginArtifactCommit?.(
+          { pluginId: "audit", stagedArtifactDir, currentArtifactDir: targetDir, mode: "update" },
+          {},
+        );
+        if (finalStageRejected) {
+          throw new Error("final staged capability review rejected the update");
+        }
+        params.beforePersistentApply?.();
         const write = await commitPluginInstallRecordsWithConfig({
           previousInstallRecords: priorRecords,
           nextInstallRecords: currentRecords,
@@ -719,11 +744,7 @@ describe("applyClawPackageUpdate", () => {
             },
             reloadPlugins,
             readRefs: () => [previous],
-            replaceExpected: () => {
-              if (lateFailure && committed) {
-                throw failure;
-              }
-            },
+            replaceExpected,
             runtime: {
               log: () => {},
               error: () => {},
@@ -791,6 +812,14 @@ describe("applyClawPackageUpdate", () => {
           expect(committed).toBe(false);
           expect(uninstallPlugin).not.toHaveBeenCalled();
           expect(reloadPlugins).not.toHaveBeenCalled();
+        } else if (finalStageRejected) {
+          await expect(pending).rejects.toMatchObject({ partial: false });
+          expect(committed).toBe(false);
+          expect(replaceExpected).toHaveBeenLastCalledWith(
+            expect.objectContaining({ version: "1.0.0" }),
+            previous,
+            expect.any(Object),
+          );
         } else if (lateFailure) {
           const error = await pending.catch((reason: unknown) => reason);
           expect(uninstallPlugin).not.toHaveBeenCalled();
@@ -800,7 +829,7 @@ describe("applyClawPackageUpdate", () => {
         }
         expect(installPlugin).toHaveBeenCalledOnce();
         expect(uninstallPlugin).not.toHaveBeenCalled();
-        expect(reloadPlugins).toHaveBeenCalledTimes(directReinstall ? 0 : 1);
+        expect(reloadPlugins).toHaveBeenCalledTimes(directReinstall || finalStageRejected ? 0 : 1);
       });
     },
   );

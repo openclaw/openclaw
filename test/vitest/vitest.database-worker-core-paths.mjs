@@ -337,6 +337,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/claws/add-state-write.worker.test.ts",
   "src/claws/remove-state-write.worker.test.ts",
   "src/claws/update-state-write.worker.test.ts",
+  "src/claws/package-update.skill-upgrade.test.ts",
   "src/claws/update-apply.requirements.test.ts",
   "src/claws/update-apply.agent-guards.test.ts",
   "src/claws/update-apply.test.ts",

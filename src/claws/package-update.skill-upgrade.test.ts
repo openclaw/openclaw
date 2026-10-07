@@ -290,6 +290,28 @@ describe("owned ClawHub skill upgrade", () => {
     registry.telemetry.mockReset();
   });
 
+  it("restores skill ownership after a worker-backed rollback", async () => {
+    const current = await setupInstalledClaw();
+    const previous = readClawPackageRefs({ env: current.env })[0];
+    if (!previous) {
+      throw new Error("expected the installed v1 skill reference");
+    }
+    const execution = await applyClawPackageUpdate(
+      createClawUpdatePlanFixture([
+        { ...current.action, currentDigest: digestClawPackageRef(previous) },
+      ]),
+      current.targetAddPlan,
+      { env: current.env, stateMode: "worker" },
+    );
+
+    expect(readClawPackageRefs({ env: current.env })[0]).toMatchObject({ version: "2.0.0" });
+    await execution.rollback();
+    expect(readClawPackageRefs({ env: current.env })).toEqual([previous]);
+    expect(await fs.readFile(path.join(current.skillDir, "SKILL.md"), "utf8")).toBe(
+      current.v1.content,
+    );
+  });
+
   it("replaces exact v2 bytes and index, then restores v1 after downstream rollback", async () => {
     const current = await setup();
     const execution = await applyClawPackageUpdate(

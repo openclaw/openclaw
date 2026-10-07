@@ -31,6 +31,7 @@ export function createSkillsWatcherMock() {
     let failure: WatchHealth["failure"];
     let closeBarrier = Promise.resolve();
     let closing: Promise<void> | undefined;
+    const closeStarted = createDeferredCore();
     const health = (): WatchHealth => ({
       state,
       mode: options.mode === "poll" ? "poll" : "events",
@@ -41,6 +42,7 @@ export function createSkillsWatcherMock() {
       if (closing) {
         return closing;
       }
+      closeStarted.resolve();
       ready.reject(new DOMException("Retired", "AbortError"));
       closing = closeBarrier.then(() => {
         state = "closed";
@@ -63,6 +65,7 @@ export function createSkillsWatcherMock() {
       options,
       subscription,
       close,
+      closeStarted: closeStarted.promise,
       get closed() {
         return closing !== undefined;
       },

@@ -1,10 +1,12 @@
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { clawPackageLifecycleLeaseKey } from "../state/claw-package-lifecycle-lease.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { readOpenClawStateLeaseExpiry } from "../state/openclaw-state-lease-store.js";
 import { deleteClawCronRef, upsertClawCronRef } from "./cron.js";
 import { deleteClawMcpServerRef, upsertClawMcpServerRef } from "./mcp.js";
 import { replaceClawPackageRefExpected } from "./package-update-provenance.js";
-import { updateClawInstallRecord } from "./provenance.js";
+import { readClawInstallRecordFromDatabase, updateClawInstallRecord } from "./provenance.js";
 import type { ClawUpdateStateCommand } from "./update-state-worker-contract.js";
 import { deleteClawWorkspaceFileRecord, upsertClawWorkspaceFile } from "./workspace.js";
 
@@ -18,6 +20,27 @@ export function executeClawUpdateStateCommand(
       const result = (() => {
         switch (command.type) {
           case "claws.update.replacePackageRef":
+            if (command.input.packageLease) {
+              const ref = command.input.expected ?? command.input.replacement;
+              const workspace = ref
+                ? readClawInstallRecordFromDatabase(database.db, ref.agentId)?.workspace
+                : undefined;
+              if (!ref || !workspace) {
+                throw new Error("Claw package rollback install ownership is unavailable.");
+              }
+              const key = clawPackageLifecycleLeaseKey(
+                ref.kind === "skill"
+                  ? { kind: "skill", source: ref.source, ref: ref.ref, workspace }
+                  : { kind: "plugin", source: ref.source, ref: ref.ref },
+              );
+              if (
+                command.input.packageLease.scope !== "claw-package-lifecycle" ||
+                command.input.packageLease.key !== key ||
+                readOpenClawStateLeaseExpiry(database.db, command.input.packageLease) === undefined
+              ) {
+                throw new Error("Claw package rollback no longer owns its lifecycle lease.");
+              }
+            }
             return replaceClawPackageRefExpected(
               command.input.expected,
               command.input.replacement,

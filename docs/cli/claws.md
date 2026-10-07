@@ -605,6 +605,11 @@ If cancellation, drainage, or config convergence cannot finish, removal reports
 record. Local files remain intact. Resolve the reported failure, preview again,
 and retry removal. The fence prevents new runs and agent recreation until cleanup
 finishes; restarting the Gateway does not discard an incomplete removal.
+The Gateway waits for this agent's skill subscriptions and any physical watchers
+retired by their removal before file cleanup, including on Windows. If a close fails, its
+terminal result cannot be retried in that Gateway process: restart the serving
+Gateway to release its handles, then preview and retry removal. Do not delete
+the fenced workspace by hand.
 
 If session cleanup or transcript archive export fails after the agent is removed
 from config, removal reports `partial` with `session_cleanup_failed` and retains

@@ -9,17 +9,20 @@ const log = createSubsystemLogger("gateway/skills");
 const runInSkillsWatcherContext = AsyncLocalStorage.snapshot();
 type RemoteSkillsWatch = {
   access: AgentWorkspaceAccess;
+  workspaceDir: string;
+  agentId?: string;
   signature: string;
   controller: AbortController;
   unavailable: boolean;
 };
 const remoteWatchers = new Map<string, RemoteSkillsWatch>();
 // Retired transports may still be draining; shutdown must await them too.
-const remoteWatchTasks = new Set<Promise<void>>();
+const remoteWatchTasks = new Map<Promise<void>, { agentId?: string }>();
 
 export function ensureRemoteSkillsWatcher(params: {
   watcherKey: string;
   workspaceDir: string;
+  agentId?: string;
   executionWorkspaceDir?: string;
   access: AgentWorkspaceAccess;
   sourcePlan: WorkspaceSkillSourcePlan;
@@ -44,6 +47,8 @@ export function ensureRemoteSkillsWatcher(params: {
   disposeRemoteSkillsWatcher(watcherKey);
   const state: RemoteSkillsWatch = {
     access,
+    workspaceDir,
+    agentId: params.agentId,
     signature,
     controller: new AbortController(),
     unavailable: !access.watchSkills,
@@ -95,8 +100,22 @@ export function ensureRemoteSkillsWatcher(params: {
       }
     }
   });
-  remoteWatchTasks.add(task);
+  remoteWatchTasks.set(task, { agentId: params.agentId });
   void task.finally(() => remoteWatchTasks.delete(task));
+}
+
+export async function closeRemoteSkillsWatchersForAgent(params: {
+  agentId: string;
+}): Promise<void> {
+  const matches = (owner: { agentId?: string }) => owner.agentId === params.agentId;
+  for (const [watcherKey, state] of remoteWatchers) {
+    if (matches(state)) {
+      disposeRemoteSkillsWatcher(watcherKey);
+    }
+  }
+  await Promise.all(
+    [...remoteWatchTasks].filter(([, owner]) => matches(owner)).map(([task]) => task),
+  );
 }
 
 export function disposeRemoteSkillsWatcher(watcherKey: string): void {
@@ -109,5 +128,5 @@ export async function closeRemoteSkillsWatchers(): Promise<void> {
   for (const key of remoteWatchers.keys()) {
     disposeRemoteSkillsWatcher(key);
   }
-  await Promise.all(remoteWatchTasks);
+  await Promise.all(remoteWatchTasks.keys());
 }

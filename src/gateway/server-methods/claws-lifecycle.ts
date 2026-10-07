@@ -24,6 +24,7 @@ import { assertClawsLabsEnabled, ClawsLabsDisabledError } from "../../claws/labs
 import { readCurrentConfigForPolicyCheckAsync } from "../../config/io.runtime.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
+import { cronJobReadView } from "../../cron/job-read-view.js";
 import { normalizeCronJobCreate } from "../../cron/normalize.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginInstallBatchReload } from "../../plugins/install-runtime-batch.js";
@@ -193,7 +194,7 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
             assertCurrent();
             const job = await context.cron.readJob(schedulerJobId);
             assertCurrent();
-            return job;
+            return job ? cronJobReadView(job) : undefined;
           },
           list: async (agentId) => ({
             jobs: (await context.cron.list({ includeDisabled: true })).filter(
@@ -306,7 +307,7 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
               assertApplyCurrent();
               const job = await context.cron.readJob(schedulerJobId);
               assertApplyCurrent();
-              return job;
+              return job ? cronJobReadView(job) : undefined;
             },
             remove: async (schedulerJobId, options) => {
               assertApplyCurrent();
