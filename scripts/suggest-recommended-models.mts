@@ -5,7 +5,6 @@
 // Arena score, then OpenRouter 30-day usage; the newest served family member
 // without its own Arena row takes the slot of its newest ranked older sibling.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -115,27 +114,17 @@ const rankingsSchema = z.object({
 type ArenaRow = z.infer<typeof arenaSchema>["rows"][number]["row"];
 type ModelPrice = { input: number; output: number };
 
-/** One request per source per UTC day; later runs that day reuse the cached body. */
-async function fetchCachedJson<T>(
-  cacheDir: string,
-  name: string,
+/** Every run fetches fresh; a failed or malformed response fails the run. */
+async function fetchJson<T>(
   url: string,
   schema: z.ZodType<T>,
   headers?: Record<string, string>,
 ): Promise<T> {
-  const file = path.join(cacheDir, `${name}.json`);
-  if (fs.existsSync(file)) {
-    return schema.parse(JSON.parse(fs.readFileSync(file, "utf8")));
-  }
   const response = await fetch(url, { headers });
   if (!response.ok) {
     throw new Error(`${url} returned HTTP ${response.status}`);
   }
-  const body = await response.text();
-  // Cache only a body that parses, so a bad response cannot stick for the day.
-  const parsed = schema.parse(JSON.parse(body));
-  fs.writeFileSync(file, body);
-  return parsed;
+  return schema.parse(await response.json());
 }
 
 function formatDate(ms: number): string {
@@ -143,10 +132,10 @@ function formatDate(ms: number): string {
 }
 
 function formatPrice(price: ModelPrice | undefined): string {
-  return price ? `$${+price.input.toFixed(3)} / $${+price.output.toFixed(3)}` : "?";
+  return price ? `$${Number(price.input.toFixed(3))} / $${Number(price.output.toFixed(3))}` : "?";
 }
 
-async function suggestRecommendedModels(args: string[]): Promise<void> {
+export async function suggestRecommendedModels(args: string[]): Promise<void> {
   const { values } = parseArgs({
     args,
     options: { list: { type: "string" } },
@@ -160,31 +149,17 @@ async function suggestRecommendedModels(args: string[]): Promise<void> {
   const listText = fs.readFileSync(listPath, "utf8");
   const curated = z.array(z.string()).parse(JSON.parse(listText));
   const now = Date.now();
-  const cacheDir = path.join(os.tmpdir(), SCRIPT_LABEL, formatDate(now));
-  fs.mkdirSync(cacheDir, { recursive: true });
-  process.stderr.write(`[${SCRIPT_LABEL}] inputs cached in ${cacheDir}\n`);
 
   const apiKey = process.env.OPENROUTER_API_KEY;
   const [arenaPage, catalog, openRouter, vercel, rankings] = await Promise.all([
-    fetchCachedJson(cacheDir, "arena-agent-latest", SOURCES.arena, arenaSchema),
-    fetchCachedJson(cacheDir, "catalog-v2", SOURCES.catalog, catalogSchema),
-    fetchCachedJson(
-      cacheDir,
-      "openrouter-models",
-      SOURCES.openRouterModels,
-      openRouterModelsSchema,
-    ),
-    fetchCachedJson(cacheDir, "vercel-models", SOURCES.vercelModels, vercelModelsSchema),
+    fetchJson(SOURCES.arena, arenaSchema),
+    fetchJson(SOURCES.catalog, catalogSchema),
+    fetchJson(SOURCES.openRouterModels, openRouterModelsSchema),
+    fetchJson(SOURCES.vercelModels, vercelModelsSchema),
     apiKey
-      ? fetchCachedJson(
-          cacheDir,
-          "openrouter-rankings-daily",
-          SOURCES.openRouterRankings,
-          rankingsSchema,
-          {
-            Authorization: `Bearer ${apiKey}`,
-          },
-        )
+      ? fetchJson(SOURCES.openRouterRankings, rankingsSchema, {
+          Authorization: `Bearer ${apiKey}`,
+        })
       : undefined,
   ]);
   if (arenaPage.num_rows_total > arenaPage.rows.length) {
@@ -234,7 +209,7 @@ async function suggestRecommendedModels(args: string[]): Promise<void> {
   // everywhere because catalog rows only carry ids and names.
   const nonChat = new Set([
     ...openRouterModels
-      .filter((model) => model.architecture.output_modalities.join() !== "text")
+      .filter((model) => model.architecture.output_modalities.join(",") !== "text")
       .map((model) => model.key),
     ...vercelModels.filter((model) => model.type !== "language").map((model) => model.key),
   ]);
@@ -330,26 +305,29 @@ async function suggestRecommendedModels(args: string[]): Promise<void> {
       continue;
     }
     const sibling = newestOf(ranked);
-    if (arena.has(sibling)) {
+    // A successor with no Arena row of its own takes an Arena-ranked sibling's
+    // slot; with no usage yet, it also takes a usage-ranked sibling's slot. It
+    // counts the sibling's usage too, so it ties at least level and sorts first.
+    if (arena.has(sibling) || !usage.has(latest)) {
       inherits.set(latest, sibling);
-    } else if (!usage.has(latest)) {
-      // Launch day: no usage yet, so the new model takes its usage-ranked sibling's slot.
-      inherits.set(latest, sibling);
-      effectiveUsage.set(latest, usage.get(sibling) ?? 0);
+      effectiveUsage.set(latest, Math.max(usage.get(latest) ?? 0, usage.get(sibling) ?? 0));
     }
   }
   const arenaRowOf = (key: string) => arena.get(inherits.get(key) ?? key);
-  const inheritedFirst = (a: string, b: string) =>
-    Number(!inherits.has(a)) - Number(!inherits.has(b)) || a.localeCompare(b);
+  // Usage breaks ties, then successors sort ahead of the sibling they inherit from.
+  const byUsage = (a: string, b: string) =>
+    (effectiveUsage.get(b) ?? 0) - (effectiveUsage.get(a) ?? 0) ||
+    Number(!inherits.has(a)) - Number(!inherits.has(b)) ||
+    a.localeCompare(b);
   const scored = [...candidates]
     .filter((key) => arenaRowOf(key))
-    .toSorted((a, b) => arenaRowOf(b)!.score - arenaRowOf(a)!.score || inheritedFirst(a, b));
+    .toSorted((a, b) => arenaRowOf(b)!.score - arenaRowOf(a)!.score || byUsage(a, b));
   const scoredKeys = new Set(scored);
   // Without usage data, curated entries the Arena does not rank keep their order.
   const unscored = rankings
     ? [...candidates]
         .filter((key) => !scoredKeys.has(key) && effectiveUsage.get(key))
-        .toSorted((a, b) => effectiveUsage.get(b)! - effectiveUsage.get(a)! || inheritedFirst(a, b))
+        .toSorted(byUsage)
     : curated.filter((key) => candidates.has(key) && !scoredKeys.has(key));
   const suggested = [...scored, ...unscored];
 
