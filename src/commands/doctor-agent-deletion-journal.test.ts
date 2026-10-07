@@ -20,6 +20,7 @@ import {
 } from "../state/openclaw-agent-db-lease.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { INCOGNITO_AGENT_SQLITE_BASENAME } from "../state/openclaw-agent-db.paths.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -67,6 +68,8 @@ it.each([
       schemaVersion: 19,
     });
     const lockPath = `${pathname}.reindex-lock.sqlite`;
+    const incognitoPath = path.join(path.dirname(pathname), INCOGNITO_AGENT_SQLITE_BASENAME);
+    fs.copyFileSync(pathname, incognitoPath);
     using lock = new DatabaseSync(lockPath);
     lock.exec("CREATE TABLE coordination (id INTEGER)");
     const externalPath =
@@ -142,6 +145,8 @@ it.each([
     const receipt = JSON.parse(fs.readFileSync(path.join(recoveryDir, files[0]!), "utf8"));
     expect(receipt.journal).toEqual([original]);
     expect(receipt.held).toContainEqual({ agentId, path: pathname });
+    expect(receipt.held).toContainEqual({ agentId, path: incognitoPath });
+    expect(fs.readFileSync(incognitoPath)).toEqual(before);
     expect(receipt.held).not.toContainEqual({ agentId, path: lockPath });
     if (externalPath) {
       expect(receipt.held).toContainEqual({ agentId, path: externalPath });
@@ -188,7 +193,13 @@ it.each([
   },
 );
 
-it.each(["default", "external-registered", "configured-custom-lost-state", "malformed-config"])(
+it.each([
+  "default",
+  "external-registered",
+  "configured-custom-lost-state",
+  "incognito-lost-state",
+  "malformed-config",
+])(
   "reconstructs with a receipt and keeps %s stores held on the next Doctor pass",
   async (location) => {
     const stateDir = fs.realpathSync.native(tempDirs.make("doctor-journal-recovery-"));
@@ -209,12 +220,18 @@ it.each(["default", "external-registered", "configured-custom-lost-state", "malf
     const statePath = resolveOpenClawStateSqlitePath(env);
     const db = new DatabaseSync(statePath);
     db.exec("DROP TABLE agent_deletion_journal");
-    const lostState = location === "configured-custom-lost-state";
+    const lostState =
+      location === "configured-custom-lost-state" || location === "incognito-lost-state";
     if (lostState) {
-      const custom = path.join(path.dirname(stores[0]!), "history.sqlite");
+      const custom = path.join(
+        path.dirname(stores[0]!),
+        location === "incognito-lost-state" ? INCOGNITO_AGENT_SQLITE_BASENAME : "history.sqlite",
+      );
       fs.renameSync(stores[0]!, custom);
       stores[0] = custom;
-      cfg.session = { store: custom };
+      if (location === "configured-custom-lost-state") {
+        cfg.session = { store: custom };
+      }
     } else if (location !== "default") {
       const custom = path.join(tempDirs.make("doctor-journal-custom-"), "history.main.sqlite");
       fs.renameSync(stores[0]!, custom);

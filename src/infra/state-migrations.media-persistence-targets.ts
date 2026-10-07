@@ -9,6 +9,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { createAgentDatabaseDeletionClassifier } from "../state/agent-deletion-discovery.js";
 import { readAgentDatabaseDeletionSnapshot } from "../state/agent-deletion-journal.read.js";
 import type { AgentDeletionJournalDisposition } from "../state/agent-deletion-journal.types.js";
+import { resolveOpenClawAgentDatabaseDiscoveryPaths } from "../state/openclaw-agent-db-discovery-paths.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   createOpenClawAgentDatabasePathMatcher,
@@ -149,11 +150,14 @@ export function discoverAgentDatabaseMigrationTargets(params: {
     for (const sessionsDir of resolveAgentSessionDirsFromAgentsDirSync(agentsDir)) {
       const agentDir = path.dirname(sessionsDir);
       const databaseDir = path.join(agentDir, "agent");
-      candidates.push({
-        agentId: normalizeAgentId(path.basename(agentDir)),
-        path: path.join(databaseDir, "openclaw-agent.sqlite"),
-        source: "disk",
-      });
+      const agentId = normalizeAgentId(path.basename(agentDir));
+      for (const pathname of resolveOpenClawAgentDatabaseDiscoveryPaths({
+        agentDir: databaseDir,
+        agentId,
+        env: params.env,
+      })) {
+        candidates.push({ agentId, path: pathname, source: "disk" });
+      }
     }
   } catch (error) {
     failure(agentsDir, `Could not enumerate agent databases under ${agentsDir}: ${String(error)}`);

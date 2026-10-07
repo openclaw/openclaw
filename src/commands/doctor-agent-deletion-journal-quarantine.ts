@@ -8,6 +8,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { hasSqliteFileFamily } from "../state/agent-deletion-discovery.js";
 import {
   reconstructAgentDeletionJournal,
   recordAgentDeletionRecoveryHolds,
@@ -19,6 +20,7 @@ import {
 } from "../state/agent-deletion-journal.js";
 import { parseAgentDeletionDatabasePaths } from "../state/agent-deletion-journal.read.js";
 import type { HeldAgentDatabase } from "../state/agent-deletion-journal.types.js";
+import { resolveOpenClawAgentDatabaseDiscoveryPaths } from "../state/openclaw-agent-db-discovery-paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
@@ -80,7 +82,11 @@ export async function quarantineAgentDeletionJournal(params: {
   const held = source.missing ? [...params.inventory] : [...source.held];
   for (const row of source.invalid) {
     const paths = new Set([
-      path.join(row.agent_dir, "openclaw-agent.sqlite"),
+      ...resolveOpenClawAgentDatabaseDiscoveryPaths({
+        agentDir: row.agent_dir,
+        agentId: row.agent_id,
+        env,
+      }).filter(hasSqliteFileFamily),
       ...params.inventory
         .filter((target) => normalizeAgentId(target.agentId) === normalizeAgentId(row.agent_id))
         .map((target) => target.path),
