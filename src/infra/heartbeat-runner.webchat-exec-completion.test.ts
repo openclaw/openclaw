@@ -1,4 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { appendExecTimeoutRetryGuidance } from "../agents/bash-tools.exec-output.js";
 import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
@@ -13,6 +18,12 @@ import {
 import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  cancelExecRequestOwners,
+  captureExecRequestOwners,
+  withExecRequestOwners,
+  withExecRequestTurn,
+} from "./exec-request-context.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import type { HeartbeatDeps } from "./heartbeat-runner.js";
@@ -21,8 +32,10 @@ import {
   seedSessionStore,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
+import * as heartbeatTargets from "./outbound/targets.js";
 import {
   enqueueSystemEvent,
+  enqueueSystemEventEntry,
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "./system-events.js";
@@ -114,6 +127,120 @@ async function readProjectionMessages(scenario: ProjectionScenario) {
   const events = await loadTranscriptEvents({ agentId: "main", ...scenario });
   return events.map(readTranscriptEventMessage).filter((message) => message?.role === "assistant");
 }
+
+it.for(["route preparation", "model reply"] as const)(
+  "retires a stopped exec owner during %s without consuming its live coalesced peer",
+  async (stage, test) => {
+    await withProjectionScenario(async (scenario) => {
+      const captureOwner = (runId: string) => {
+        const identity = {
+          runId,
+          sessionKey: scenario.sessionKey,
+          sessionId: scenario.sessionId,
+        };
+        return withExecRequestTurn({ identity }, async () => {
+          const owner = captureExecRequestOwners(identity)?.[0];
+          if (!owner) {
+            throw new Error("Expected the completion's original exec owner");
+          }
+          return owner;
+        });
+      };
+      const stoppedOwner = await captureOwner("stopped-request");
+      const liveOwner = await captureOwner("live-request");
+      const canceledText = "Exec completed (stopped-command, code 0) :: CANCELED_COMPLETION";
+      const liveText = "Exec completed (live-command, code 0) :: LIVE_COMPLETION";
+      const enqueue = (text: string, owner: typeof liveOwner) =>
+        enqueueSystemEventEntry(
+          text,
+          withExecRequestOwners({ sessionKey: scenario.sessionKey }, [owner]),
+        );
+      const canceled = enqueue(canceledText, stoppedOwner);
+      const live = enqueue(liveText, liveOwner);
+      expect(canceled?.id).toEqual(expect.any(String));
+      expect(live?.id).toEqual(expect.any(String));
+      const entered = createDeferred();
+      const release = createDeferred();
+      const reply = vi
+        .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
+        .mockResolvedValue(completionPayload("LIVE_COMPLETION"));
+      if (stage === "route preparation") {
+        const resolve = heartbeatTargets.resolveHeartbeatDeliveryTargetWithSessionRoute;
+        vi.spyOn(
+          heartbeatTargets,
+          "resolveHeartbeatDeliveryTargetWithSessionRoute",
+        ).mockImplementationOnce(async (params) => {
+          const target = await resolve(params);
+          // Preflight has captured both real occurrences before this awaited route returns.
+          entered.resolve();
+          await release.promise;
+          return target;
+        });
+      } else {
+        reply.mockImplementationOnce(async (ctx) => {
+          expect(ctx.Body).toContain(canceledText);
+          expect(ctx.Body).toContain(liveText);
+          entered.resolve();
+          await release.promise;
+          // Even a provider that completes after cancellation cannot publish this stale batch.
+          return completionPayload("CANCELED_BATCH_REPLY");
+        });
+      }
+      const published: unknown[] = [];
+      const unsubscribe = onSessionTranscriptUpdate((update) => {
+        if (update.sessionKey === scenario.sessionKey && update.message !== undefined) {
+          published.push(update.message);
+        }
+      });
+      const pending = runProjectionWake(scenario, reply);
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(entered.promise, pending, "wake settled before the race gate"),
+          test.signal,
+        );
+        cancelExecRequestOwners([stoppedOwner]);
+        release.resolve();
+        expect(await pending).toEqual({ status: "skipped", reason: "preempted" });
+        expect(reply).toHaveBeenCalledTimes(stage === "route preparation" ? 0 : 1);
+        if (stage === "model reply") {
+          expect(reply.mock.calls[0]?.[1]?.abortSignal?.aborted).toBe(true);
+        }
+        expect(liveOwner.signal.aborted).toBe(false);
+        expect(await readProjectionMessages(scenario)).toEqual([]);
+        expect(published).toEqual([]);
+        expect(peekSystemEventEntries(scenario.sessionKey).map((event) => event.id)).toEqual([
+          live?.id,
+        ]);
+        expect(enqueue(canceledText, stoppedOwner)).toBeNull();
+
+        expect((await runProjectionWake(scenario, reply)).status).toBe("ran");
+        const next = reply.mock.calls.at(-1)?.[0];
+        expect(next?.Body).toContain(liveText);
+        expect(next?.Body).not.toContain(canceledText);
+        expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);
+        const messages = await readProjectionMessages(scenario);
+        expect(messages.map((message) => message?.content)).toEqual([
+          [{ type: "text", text: "LIVE_COMPLETION" }],
+        ]);
+        expect(published).toHaveLength(1);
+        const calls = reply.mock.calls.length;
+        expect(await runProjectionWake(scenario, reply)).toEqual({
+          status: "skipped",
+          reason: "no-pending-event",
+        });
+        expect(reply).toHaveBeenCalledTimes(calls);
+        expect(await readProjectionMessages(scenario)).toEqual(messages);
+      } finally {
+        release.resolve();
+        try {
+          await pending;
+        } finally {
+          unsubscribe();
+        }
+      }
+    });
+  },
+);
 
 it.each(["automatic", "message_tool"] as const)(
   "settles an unneeded completion silently in %s mode",

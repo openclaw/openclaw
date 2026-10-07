@@ -24,7 +24,15 @@ import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/s
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { withExecRequestTurn } from "../../infra/exec-request-context.js";
+import {
+  captureExecRequestOwners,
+  withExecRequestOwners,
+  withExecRequestTurn,
+} from "../../infra/exec-request-context.js";
+import {
+  consumeSelectedSystemEventEntries,
+  enqueueSystemEventEntry,
+} from "../../infra/system-events.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
@@ -50,6 +58,133 @@ const writeSession = (sessionKey: string, sessionId: string) =>
   });
 
 describe("descendant cascade ownership", () => {
+  it("stops the original request's continuation child while preserving a later human child", async ({
+    signal,
+  }) => {
+    const sessionKey = "agent:main:main";
+    const continuationChildKey = "agent:main:subagent:exec-continuation-child";
+    const laterChildKey = "agent:main:subagent:later-human-child";
+    await writeSession(sessionKey, "main-session");
+    await writeSession(continuationChildKey, "exec-continuation-child");
+    await writeSession(laterChildKey, "later-human-child");
+    const originalIdentity = {
+      runId: "original-command-request",
+      sessionKey,
+      sessionId: "main-session",
+      agentId: "main",
+      ownerConnId: "request-owner",
+    };
+    const originalOwners = await withExecRequestTurn({ identity: originalIdentity }, async () =>
+      expectDefined(captureExecRequestOwners(originalIdentity), "original command owners"),
+    );
+    const completion = expectDefined(
+      enqueueSystemEventEntry(
+        "Exec completed (original-command, code 0) :: Continue original work",
+        withExecRequestOwners({ sessionKey }, originalOwners),
+      ),
+      "original completion occurrence",
+    );
+    const continuationStart = vi.fn(async () => {
+      releaseSwarmRun("exec-continuation-child");
+    });
+    const laterStarted = createDeferred();
+    const laterStart = vi.fn(async () => {
+      laterStarted.resolve();
+      releaseSwarmRun("later-human-child");
+    });
+    const reserveChild = async (
+      runId: string,
+      childSessionKey: string,
+      requesterTurnRunId: string,
+      start: () => Promise<void>,
+    ) => {
+      await registerSubagentRun({
+        runId,
+        childSessionKey,
+        requesterSessionKey: sessionKey,
+        requesterAgentId: "main",
+        requesterTurnRunId,
+        requesterDisplayKey: sessionKey,
+        task: "preserve exact requester ownership",
+        cleanup: "keep",
+        collect: true,
+        queued: true,
+      });
+      enqueueSwarmRun({
+        groupId: "exec-continuation-ownership",
+        runId,
+        maxConcurrent: 1,
+        activeRunIds: ["held-continuation-capacity"],
+        start,
+        onStartFailure: () => true,
+      });
+    };
+    try {
+      await withExecRequestTurn(
+        {
+          identity: { ...originalIdentity, runId: "command-continuation" },
+          owners: originalOwners,
+        },
+        () =>
+          reserveChild(
+            "exec-continuation-child",
+            continuationChildKey,
+            "command-continuation",
+            continuationStart,
+          ),
+      );
+      const laterIdentity = { ...originalIdentity, runId: "later-human-request" };
+      const laterOwners = await withExecRequestTurn({ identity: laterIdentity }, async () => {
+        await reserveChild("later-human-child", laterChildKey, "later-human-request", laterStart);
+        return expectDefined(captureExecRequestOwners(laterIdentity), "later human owners");
+      });
+      const laterRun = createActiveRun(sessionKey, {
+        sessionId: "main-session",
+        agentId: "main",
+        owner: { connId: "request-owner" },
+      });
+      const context = createChatAbortContext({
+        chatAbortControllers: new Map([["later-human-request", laterRun]]),
+      });
+      const respond = await invokeChatAbortHandler({
+        handler: handleChatAbortRequestWithLifecycle,
+        context,
+        request: { sessionKey, runId: "original-command-request" },
+        client: { connId: "request-owner", connect: { scopes: ["operator.write"] } },
+      });
+      expect(requireLastRespondCall(respond).slice(0, 2)).toEqual([
+        true,
+        { ok: true, aborted: true, runIds: [] },
+      ]);
+      expect(
+        (await getSubagentRunByChildSessionKey(laterChildKey))?.execution.endedAt,
+      ).toBeUndefined();
+      expect(laterRun.controller.signal.aborted).toBe(false);
+      expect(laterOwners.every((owner) => !owner.signal.aborted)).toBe(true);
+      expect(originalOwners.every((owner) => owner.signal.aborted)).toBe(true);
+
+      releaseSwarmRun("held-continuation-capacity");
+      await withinTest(laterStarted.promise, signal);
+      expect(laterStart).toHaveBeenCalledOnce();
+      expect(continuationStart).not.toHaveBeenCalled();
+      expect(await getSubagentRunByChildSessionKey(continuationChildKey)).toMatchObject({
+        runId: "exec-continuation-child",
+        requesterTurnRunId: "command-continuation",
+        endedReason: "subagent-killed",
+        execution: { status: "terminal" },
+      });
+      expect(await getSubagentRunByChildSessionKey(laterChildKey)).toMatchObject({
+        runId: "later-human-child",
+        requesterTurnRunId: "later-human-request",
+      });
+    } finally {
+      consumeSelectedSystemEventEntries(sessionKey, [completion]);
+      releaseSwarmRun("held-continuation-capacity");
+      releaseSwarmRun("exec-continuation-child");
+      releaseSwarmRun("later-human-child");
+    }
+  });
+
   it("does not stop descendants after the original caller is revoked during parent cancellation", async ({
     signal,
   }) => {

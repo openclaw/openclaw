@@ -37,6 +37,7 @@ import {
   resolveDeliveryNotSentRetryability,
 } from "./delivery-recovery.shared.js";
 import { formatErrorMessage } from "./errors.js";
+import { readExecRequestOwners } from "./exec-request-context.js";
 import { classifyHeartbeatAgentOutcome } from "./heartbeat-delivery-normalization.js";
 import { isExecCompletionSystemEvent } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
@@ -130,7 +131,11 @@ async function prepareHeartbeatDispatchReply(
     runState.admission.reason === "active-run" &&
     !response &&
     (!selected || !hasOutboundReplyContent(selected));
-  if (execution === "cancelled" || execution === "superseded" || admissionBusy) {
+  const execCancelled = () =>
+    prepared.inspectedSystemEventsToConsume.some((event) =>
+      readExecRequestOwners(event)?.some((owner) => owner.signal.aborted),
+    );
+  if (execution === "cancelled" || execution === "superseded" || admissionBusy || execCancelled()) {
     const reason =
       execution === "superseded"
         ? "preempted"
@@ -225,7 +230,7 @@ async function prepareHeartbeatDispatchReply(
       accountId: delivery.accountId,
     });
     const queueKey = resolveSystemEventQueueKey(sessionKey, agentId);
-    if (completedExecTurn && preflight.shouldInspectPendingEvents && !consume) {
+    if (completedExecTurn && !execCancelled() && preflight.shouldInspectPendingEvents && !consume) {
       const execEvents = prepared.inspectedSystemEventsToConsume.filter(
         isExecCompletionSystemEvent,
       );
@@ -235,7 +240,7 @@ async function prepareHeartbeatDispatchReply(
         holdSystemEventDelivery(queueKey, execEvents);
       }
     }
-    if (consume && preflight.shouldInspectPendingEvents) {
+    if (consume && !execCancelled() && preflight.shouldInspectPendingEvents) {
       consumeSelectedSystemEventEntries(resolveSystemEventQueueKey(sessionKey, agentId), [
         ...prepared.inspectedSystemEventsToConsume,
         ...prepared.deferredGenericEvents,
@@ -260,6 +265,7 @@ async function prepareHeartbeatDispatchReply(
     }
     if (
       completedExecTurn &&
+      !execCancelled() &&
       (consume ||
         policy.execEffectSettled ||
         (policy.deliveryError && !policy.retryUnqueuedDelivery)) &&

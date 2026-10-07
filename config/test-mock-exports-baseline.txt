@@ -2171,7 +2171,6 @@
 ["src/agents/bash-tools.exec-liveness.test.ts","../process/supervisor/index.js","03f852a56b4365b32e3988185389653d0c0c5e34bd26fbc99d9de1eefc438629",1]
 ["src/agents/bash-tools.exec-liveness.test.ts","./bash-tools.exec-host-gateway.js","bc190be1384e4f35df021861a38ebc9a7dc068cc7fa89ca3947a3e700158fb28",1]
 ["src/agents/bash-tools.exec-runtime.cleanup.test.ts","../infra/heartbeat-wake.js","34c1f400511d780906133e943e69724b224ba98cf8d8211139ff2f4f19fdcb99",1]
-["src/agents/bash-tools.exec-runtime.cleanup.test.ts","../infra/system-events.js","30616a2e75a9475fecc2733c4a32eaa6eb99b162f5df7afd9f8adc8a161d8098",1]
 ["src/agents/bash-tools.exec-runtime.cleanup.test.ts","../process/supervisor/index.js","29b0f301c639b9d652b812d38aa427d24fc14d63d3362954a40734709272de64",1]
 ["src/agents/bash-tools.exec-runtime.test.ts","../infra/heartbeat-wake.js","34c1f400511d780906133e943e69724b224ba98cf8d8211139ff2f4f19fdcb99",1]
 ["src/agents/bash-tools.exec-runtime.test.ts","../infra/system-events.js","30616a2e75a9475fecc2733c4a32eaa6eb99b162f5df7afd9f8adc8a161d8098",1]
