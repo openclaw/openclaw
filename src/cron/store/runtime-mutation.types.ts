@@ -132,7 +132,13 @@ export type CronRuntimeMutationContracts = {
     input: CronRuntimeMutationInputs["cron.markDeliveryStarted"];
     facts: { deletionBlocked: boolean };
     preparation: { allowMissingJob: boolean; defaultAgentId?: string };
-    outcome: Record<string, never>;
+    outcome: { job?: CronJob };
+  };
+  "cron.releaseDeliveryAdmission": {
+    input: CronRuntimeMutationInputs["cron.releaseDeliveryAdmission"];
+    facts: Record<string, never>;
+    preparation: Record<string, never>;
+    outcome: { job?: CronJob };
   };
   "cron.finishReceipt": {
     input: CronRuntimeMutationInputs["cron.finishReceipt"];

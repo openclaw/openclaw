@@ -22,7 +22,12 @@ import {
   resolveCronDeliveryRouteSessionKey,
   resolveDirectCronTranscriptMirrorText,
 } from "./isolated-agent/delivery-dispatch-awareness.js";
-import { buildDirectCronDeliveryIdempotencyKey } from "./isolated-agent/delivery-dispatch-policy.js";
+import {
+  buildDirectCronDeliveryIdempotencyKey,
+  DIRECT_CRON_DELIVERY_COMPLETION_RETENTION,
+  readDirectCronDeliveryStatus,
+  waitForCompletedDirectCronDelivery,
+} from "./isolated-agent/delivery-dispatch-policy.js";
 import {
   resolveDeliveryTarget,
   type DeliveryTargetResolution,
@@ -42,10 +47,15 @@ type CronAnnounceTarget = {
 };
 
 type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
-type CronAnnounceDeliveryOutcome = Extract<
-  Awaited<ReturnType<typeof sendDurableMessageBatchCore>>,
-  { status: "sent" | "suppressed" }
->;
+type CronAnnounceDeliveryOutcome =
+  | Extract<
+      Awaited<ReturnType<typeof sendDurableMessageBatchCore>>,
+      { status: "sent" | "suppressed" }
+    >
+  // A retained receipt shows another attempt already delivered this occurrence.
+  | { status: "completed" }
+  // The occurrence was admitted earlier, but the queue can no longer show its outcome.
+  | { status: "unknown"; reason: string };
 
 async function resolveCronAnnounceDelivery(params: {
   cfg: OpenClawConfig;
@@ -120,12 +130,47 @@ export async function sendCronAnnouncePayloadStrict(params: {
   if (!delivery.ok) {
     throw delivery.error;
   }
+  const fence = params.completion?.deliveryAttemptFence;
+  const occurrenceAtMs = fence?.occurrenceAtMs ?? params.completion?.runStartedAt;
+  const routeIntentId =
+    occurrenceAtMs === undefined
+      ? undefined
+      : buildDirectCronDeliveryIdempotencyKey({
+          jobId: params.jobId,
+          occurrenceAtMs,
+          delivery: delivery.resolvedTarget,
+        });
+  // In-run retries, outbound-queue replay, and the scheduler's retry run all
+  // reuse this occurrence's one durable send instead of each queuing another.
+  // An admitted intent stays the occurrence's send even if its route changed.
+  const admittedIntentId = fence?.admittedIntentId;
+  const deliveryIntentId = admittedIntentId ?? routeIntentId;
+  const custody = deliveryIntentId
+    ? await readDirectCronDeliveryStatus(deliveryIntentId)
+    : undefined;
+  if (custody === "completed") {
+    return { status: "completed" };
+  }
+  // An admitted occurrence is never admitted again. Without queue custody its
+  // outcome cannot be shown: the receipt may have been pruned, or a run could
+  // not withdraw the admission of a send it never started.
+  if (admittedIntentId && custody === undefined) {
+    return {
+      status: "unknown",
+      reason:
+        "an earlier attempt already queued this occurrence and its delivery record is gone; check the target, then run the job manually to send it again",
+    };
+  }
   const runSessionKey = resolveCronNotificationSessionKey({
     jobId: params.jobId,
     sessionKey: params.target.sessionKey,
   });
+  // A send admitted under an earlier route still reaches that route's
+  // recipient, so the current route's conversation gets no projection of it.
   const route =
-    params.completion && delivery.resolvedTarget.mode === "explicit"
+    params.completion &&
+    delivery.resolvedTarget.mode === "explicit" &&
+    deliveryIntentId === routeIntentId
       ? (
           await resolveCronDeliveryRouteSessionKey({
             cfg: params.cfg,
@@ -141,42 +186,92 @@ export async function sendCronAnnouncePayloadStrict(params: {
   // delivery once the Gateway has released ownership of the timed-out work.
   params.abortSignal.throwIfAborted();
   const deliveryAttemptFence = params.completion?.deliveryAttemptFence;
-  await deliveryAttemptFence?.beforeAttempt();
-  params.abortSignal.throwIfAborted();
-  deliveryAttemptFence?.assertCurrent();
 
   // Cron delivery is durable and non-best-effort for primary announces; partial
   // channel failure must surface as a cron run failure.
   let recipientReached = false;
+  // An attempt that never reached the recipient and left its intent outside
+  // queue custody ended before enqueue or was dropped unsent on abort. That is
+  // proof of non-delivery, so release the admission and let a retry send it.
+  const releaseUnsentAdmission = async () => {
+    if (
+      !deliveryIntentId ||
+      !deliveryAttemptFence?.releaseAdmission ||
+      recipientReached ||
+      (await readDirectCronDeliveryStatus(deliveryIntentId)) !== undefined
+    ) {
+      return;
+    }
+    try {
+      await deliveryAttemptFence.releaseAdmission(deliveryIntentId);
+    } catch {
+      // A refused release keeps the admission: a retry then reports Unknown
+      // rather than risk sending the occurrence twice.
+    }
+  };
   const deliveredPayloads: NormalizedOutboundPayload[] = [];
-  const send = await sendDurableMessageBatchCore({
-    cfg: params.cfg,
-    channel: delivery.resolvedTarget.channel,
-    to: delivery.resolvedTarget.to,
-    accountId: delivery.resolvedTarget.accountId,
-    threadId: delivery.resolvedTarget.threadId,
-    payloads: [params.payload],
-    session: delivery.session,
-    identity: delivery.identity,
-    bestEffort: false,
-    deps: createOutboundSendDeps(params.deps),
-    signal: params.abortSignal,
-    assertDirectAdapterHandoff: deliveryAttemptFence?.assertCurrent,
-    ...(route ? { onPayload: (payload) => deliveredPayloads.push(payload) } : {}),
-    onDeliveryResult: () => {
-      if (!recipientReached) {
-        recipientReached = true;
-        params.onDeliveryAttempt?.(true);
-      }
-    },
-  });
+  let send: Awaited<ReturnType<typeof sendDurableMessageBatchCore>>;
+  try {
+    await deliveryAttemptFence?.beforeAttempt(
+      deliveryIntentId ? { intentId: deliveryIntentId } : undefined,
+    );
+    params.abortSignal.throwIfAborted();
+    deliveryAttemptFence?.assertCurrent();
+    send = await sendDurableMessageBatchCore({
+      cfg: params.cfg,
+      channel: delivery.resolvedTarget.channel,
+      to: delivery.resolvedTarget.to,
+      accountId: delivery.resolvedTarget.accountId,
+      threadId: delivery.resolvedTarget.threadId,
+      payloads: [params.payload],
+      session: delivery.session,
+      identity: delivery.identity,
+      bestEffort: false,
+      ...(deliveryIntentId
+        ? {
+            deliveryIntentId,
+            reusePendingDeliveryIntent: true,
+            completionRetention: DIRECT_CRON_DELIVERY_COMPLETION_RETENTION,
+          }
+        : {}),
+      deps: createOutboundSendDeps(params.deps),
+      signal: params.abortSignal,
+      assertDirectAdapterHandoff: deliveryAttemptFence?.assertCurrent,
+      ...(route ? { onPayload: (payload) => deliveredPayloads.push(payload) } : {}),
+      onDeliveryResult: () => {
+        if (!recipientReached) {
+          recipientReached = true;
+          params.onDeliveryAttempt?.(true);
+        }
+      },
+    });
+  } catch (error) {
+    await releaseUnsentAdmission();
+    throw error;
+  }
+  const mayHaveReachedRecipient = durableMessageBatchMayHaveReachedRecipient(send);
   if (!recipientReached) {
-    params.onDeliveryAttempt?.(durableMessageBatchMayHaveReachedRecipient(send));
+    params.onDeliveryAttempt?.(mayHaveReachedRecipient);
+  }
+  // Queue replay or another run can own the same intent while this attempt
+  // runs; their completed receipt is this occurrence's delivery.
+  if (
+    deliveryIntentId &&
+    send.status !== "sent" &&
+    (await waitForCompletedDirectCronDelivery({
+      id: deliveryIntentId,
+      signal: params.abortSignal,
+    }))
+  ) {
+    return { status: "completed" };
+  }
+  if (send.status !== "sent" && !mayHaveReachedRecipient) {
+    await releaseUnsentAdmission();
   }
   if (send.status === "failed" || send.status === "partial_failed") {
     throw send.error;
   }
-  if (send.status === "sent" && route && params.completion) {
+  if (send.status === "sent" && route && params.completion && deliveryIntentId) {
     await commitDirectCronOutboundRoute({
       cfg: params.cfg,
       runSessionKey,
@@ -196,11 +291,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
         text: resolveDirectCronTranscriptMirrorText(
           projectDeliveredDirectCronPayloadsForMirror(deliveredPayloads),
         ),
-        idempotencyKey: buildDirectCronDeliveryIdempotencyKey({
-          jobId: params.jobId,
-          runStartedAt: params.completion.runStartedAt,
-          delivery: delivery.resolvedTarget,
-        }),
+        idempotencyKey: deliveryIntentId,
         deliveryMirror: { kind: CRON_DIRECT_DELIVERY_CONTEXT_KIND },
       },
     });

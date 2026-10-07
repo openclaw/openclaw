@@ -48,6 +48,8 @@ import { resolveDeliveryState } from "./timer-trigger.js";
 type CronRunTimeout = { timeoutMs: number; reason: string };
 type CronCoreRunOptions = {
   runId?: string;
+  /** A forced or if-enabled manual run delivers its own request, not a scheduled occurrence. */
+  immediate?: boolean;
   activeJobMarker?: CronActiveJobMarker;
   owningCronLaneTaskMarker?: CommandLaneTaskMarker;
   streamBatch?: string;
@@ -214,6 +216,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
         handle: opts.runReceipt,
         activeJobMarker: opts.activeJobMarker,
         signal: runAbortController.signal,
+        immediate: opts.immediate === true,
       })
     : undefined;
   const operatorCancellationMarker = Symbol("cron-operator-cancelled");

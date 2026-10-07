@@ -29,6 +29,24 @@ certificate as an older proof. Existing rows are not backfilled or reinterpreted
 The companion row is pruned with its launch under the same retention policy; the
 schema version is unchanged.
 
+Cron job runtime state can carry `deliveryAdmission`, the outbound intent that a
+command or script completion announcement first queued for one scheduled
+occurrence. It is an optional property of the existing `cron_jobs.state_json`
+document, written in the same transaction that records the run's delivery
+attempt. Later runs of that occurrence reuse the intent and never queue another,
+even after the queue prunes its delivery receipt. A run whose send the queue
+withdrew before the platform send started clears the record, so its retry
+queues the occurrence again. The clearing transaction requires the same
+stored intent, no queue entry for it, and no later run of the job, so that
+cleanup can finish after the run itself. A later scheduled occurrence replaces
+the record, immediate `force` and `if-enabled` runs never write it, and
+deleting the job deletes it. Jobs without the property admit
+their next occurrence normally, so there is no migration or backfill. Older
+readers preserve the property but ignore it: a retry they run queues the
+occurrence again, even while this build's send is still queued, so a downgrade
+during an unfinished occurrence can deliver it twice. The schema version is
+unchanged.
+
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
 
 The per-agent companion table `session_reactions` stores message reaction rows

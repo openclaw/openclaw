@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
+import { findDeliveryIntentOwnersInDatabase } from "../../infra/outbound/delivery-queue-ownership.kernel.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
@@ -336,10 +337,68 @@ export function markCronDeliveryStartedInWorker(
         allowMissingJob: preparation.allowMissingJob,
         resolveAgentId: (job) => resolveCronJobEffectiveAgentId(job, preparation.defaultAgentId),
       });
-      return retainCronRuntimeMutationOutcome("cron.markDeliveryStarted", db, input.nonce, {});
+      const outcome: CronRuntimeMutationContracts["cron.markDeliveryStarted"]["outcome"] = {};
+      // The admission commits with the attempt fact, before the outbound queue
+      // takes custody. A run that removed its own one-shot has no row to carry it.
+      const job = input.deliveryAdmission
+        ? loadRuntimeRows(db, input.storeKey, [input.handle.jobId]).jobs.get(input.handle.jobId)
+        : undefined;
+      if (job && input.deliveryAdmission) {
+        job.state.deliveryAdmission = { ...input.deliveryAdmission };
+        updateCronRuntimeRow(db, input.storeKey, job);
+        outcome.job = job;
+      }
+      return retainCronRuntimeMutationOutcome("cron.markDeliveryStarted", db, input.nonce, outcome);
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.run-receipt.mark-delivery-started" },
+  );
+}
+
+/**
+ * Withdraws an admission whose send its run proved never started. The stored
+ * admission, the queue's lack of custody, and the absence of any later run
+ * authorize it, so abort cleanup that outlives the run can still settle it.
+ */
+export function releaseCronDeliveryAdmissionInWorker(
+  database: OpenClawStateDatabase,
+  input: CronRuntimeWorkerOperations["cron.releaseDeliveryAdmission"]["input"],
+) {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      prepareCronRuntimeMutation("cron.releaseDeliveryAdmission", input.nonce, {});
+      const outcome: CronRuntimeMutationContracts["cron.releaseDeliveryAdmission"]["outcome"] = {};
+      const job = loadRuntimeRows(db, input.storeKey, [input.handle.jobId]).jobs.get(
+        input.handle.jobId,
+      );
+      const current = job?.state.deliveryAdmission;
+      // A run that started after this one read the admission when it activated;
+      // releasing now could let it and a later retry both send the occurrence.
+      const laterRunStarted =
+        (job?.state.runningAtMs !== undefined &&
+          job.state.runningReceiptId !== input.handle.receiptId) ||
+        (job?.state.lastRunAtMs ?? 0) > input.handle.startedAtMs;
+      if (
+        job &&
+        current?.occurrenceAtMs === input.admission.occurrenceAtMs &&
+        current.intentId === input.admission.intentId &&
+        !laterRunStarted &&
+        findDeliveryIntentOwnersInDatabase(database, { ids: [input.admission.intentId] })[0] ===
+          null
+      ) {
+        delete job.state.deliveryAdmission;
+        updateCronRuntimeRow(db, input.storeKey, job);
+        outcome.job = job;
+      }
+      return retainCronRuntimeMutationOutcome(
+        "cron.releaseDeliveryAdmission",
+        db,
+        input.nonce,
+        outcome,
+      );
+    },
+    { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+    { operationLabel: "cron.release-delivery-admission" },
   );
 }
 

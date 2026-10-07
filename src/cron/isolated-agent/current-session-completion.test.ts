@@ -217,6 +217,7 @@ describe("current-session completion media", () => {
       let current = true;
       const beforeAttempt = vi.fn(async () => {});
       fixture.params.deliveryAttemptFence = {
+        occurrenceAtMs: 0,
         beforeAttempt,
         assertCurrent: () => {
           if (!current) {
