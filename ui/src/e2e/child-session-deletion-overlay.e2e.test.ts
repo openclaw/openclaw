@@ -88,10 +88,25 @@ suite.define(() => {
       const activateToggle = () => toggle.evaluate((element) => (element as HTMLElement).click());
       await activateToggle();
       await survivor.waitFor({ state: "detached" });
+      // Hold the fresh child read so its response carries a label the cached
+      // rows never had: the settled assertions below can only run once that
+      // read has published, which is the child-load owner's completion boundary.
+      await gateway.deferNext("sessions.list", { spawnedBy: parentKey });
       await activateToggle();
       await expect.poll(childReads, { timeout: 10_000 }).toBeGreaterThan(readsBeforeRefresh);
+      await gateway.resolveDeferred(
+        "sessions.list",
+        sessionsListResponse([
+          sessionRow(doomedKey, "Doomed child", 40, { spawnedBy: parentKey }),
+          sessionRow(survivorKey, "Surviving child refreshed", 36, { spawnedBy: parentKey }),
+        ]),
+      );
+      await expect
+        .poll(async () => ((await survivor.count()) > 0 ? await survivor.textContent() : ""), {
+          timeout: 10_000,
+        })
+        .toContain("Surviving child refreshed");
 
-      await survivor.waitFor({ state: "visible" });
       if ((await error.count()) > 0) {
         console.log(
           "FALSE-ERROR-STATE",
@@ -105,9 +120,6 @@ suite.define(() => {
         );
         await captureUiProof(suite, page, "child-session-deletion-overlay-false-error.png");
       }
-      expect(await error.count()).toBe(0);
-      // The false pagination error must stay absent once the read settles.
-      await page.waitForTimeout(2_000);
       expect(await error.count()).toBe(0);
       expect(await doomed.count()).toBe(0);
       expect(await survivor.count()).toBe(1);
