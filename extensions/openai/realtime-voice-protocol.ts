@@ -132,6 +132,7 @@ export abstract class OpenAIRealtimeProtocol {
           instructions: cfg.instructions,
           interruptResponseOnInputAudio: cfg.interruptResponseOnInputAudio,
           language: cfg.language,
+          inputTranscriptionModel: cfg.inputTranscriptionModel,
           model: cfg.model ?? OPENAI_REALTIME_DEFAULT_MODEL,
           noiseReduction: null,
           prefixPaddingMs: cfg.prefixPaddingMs,
@@ -165,7 +166,7 @@ export abstract class OpenAIRealtimeProtocol {
         input_audio_format: format,
         output_audio_format: format,
         input_audio_transcription: {
-          model: "whisper-1",
+          model: cfg.inputTranscriptionModel ?? "whisper-1",
           ...(cfg.language ? { language: cfg.language } : {}),
         },
         turn_detection: buildOpenAIRealtimeTurnDetectionConfig(cfg),

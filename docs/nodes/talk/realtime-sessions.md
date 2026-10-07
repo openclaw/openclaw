@@ -165,6 +165,28 @@ If OpenAI cannot transcribe an utterance, browser Talk shows the provider's erro
 without ending the call or inventing a transcript. You can speak again; audio
 responses continue independently of input transcription.
 
+For an Azure Realtime provider, you can select a separate input-transcription
+model or deployment with `talk.realtime.providers.openai.inputTranscriptionModel`:
+
+```json5
+{
+  talk: {
+    realtime: {
+      providers: {
+        openai: {
+          inputTranscriptionModel: "my-transcription-deployment",
+        },
+      },
+    },
+  },
+}
+```
+
+This value configures transcription only; it does not change the Realtime
+conversation model. Leave it unset to use the provider-specific default. For
+Azure, use the transcription deployment name supported by the resource and
+Realtime API version you have deployed.
+
 If the microphone disconnects or its permission is revoked, browser Talk ends
 the call and shows an error. Choose an available **Microphone input**, restore
 permission if needed, and start Talk again. An unexpected GPT-Live connection

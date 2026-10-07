@@ -493,7 +493,9 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
         ? buildOpenAIRealtimeSidebandUrl(cfg.callId)
         : `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
     }
-    const defaultHeaders = { Authorization: `Bearer ${apiKey}` };
+    const defaultHeaders = cfg.azureEndpoint
+      ? { "api-key": apiKey }
+      : { Authorization: `Bearer ${apiKey}` };
     return {
       url,
       headers:
