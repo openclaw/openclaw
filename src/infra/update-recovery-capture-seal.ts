@@ -9,7 +9,9 @@ export async function hasPendingUpdateRecoverySeal(directory: string): Promise<b
     // Retain all pairs, including distinct inodes and malformed partials; do not infer repair authority.
     return true;
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) return false;
+    if (hasErrnoCode(error, "ENOENT")) {
+      return false;
+    }
     throw error;
   }
 }

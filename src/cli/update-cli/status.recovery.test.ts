@@ -251,7 +251,9 @@ it.each([
     const retained = new Map<string, Buffer>();
     for (const name of await fs.readdir(directory, { recursive: true })) {
       const pathname = path.join(directory, name);
-      if ((await fs.lstat(pathname)).isFile()) retained.set(name, await fs.readFile(pathname));
+      if ((await fs.lstat(pathname)).isFile()) {
+        retained.set(name, await fs.readFile(pathname));
+      }
     }
     await updateStatusCommand({ json });
     if (json) {
@@ -301,8 +303,11 @@ it.each(["linked", "copied"])(
   async (kind) => {
     const c = await capture();
     const partial = `${c.manifestPath}.partial`;
-    if (kind === "linked") await fs.link(c.manifestPath, partial);
-    else await fs.copyFile(c.manifestPath, partial);
+    if (kind === "linked") {
+      await fs.link(c.manifestPath, partial);
+    } else {
+      await fs.copyFile(c.manifestPath, partial);
+    }
     const { readUpdateRecoveryBaselineIdentity } =
       await import("../../infra/update-recovery-backup-reader.js");
     await expect(

@@ -555,9 +555,13 @@ it("retires only expired sealed standalone Doctor captures and preserves incompl
       const retained = await sealed(`doctor-${randomUUID()}`, 31);
       const finalPath = path.join(retained, "manifest.json");
       const partialPath = `${finalPath}.partial`;
-      if (kind === "linked") await fs.link(finalPath, partialPath);
-      else if (kind === "copied") await fs.copyFile(finalPath, partialPath);
-      else await fs.writeFile(partialPath, "different, unverified bytes");
+      if (kind === "linked") {
+        await fs.link(finalPath, partialPath);
+      } else if (kind === "copied") {
+        await fs.copyFile(finalPath, partialPath);
+      } else {
+        await fs.writeFile(partialPath, "different, unverified bytes");
+      }
       interrupted.push(retained);
     }
     const assertCurrent = vi.fn();
