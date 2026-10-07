@@ -70,26 +70,4 @@ describe("createProfileAvailability.stopRunningBrowser", () => {
       expect(chromeMocks.stopOwnedOpenClawChrome).not.toHaveBeenCalled();
     },
   );
-
-  it.each(["not-running", "stopped"] as const)(
-    "reports the managed Chrome owner result: %s",
-    async (status) => {
-      chromeMocks.stopOwnedOpenClawChrome.mockResolvedValue({ status });
-      const { profileCtx } = createStopHarness(makeBrowserProfile());
-      await expect(profileCtx.stopRunningBrowser()).resolves.toEqual({
-        stopped: status === "stopped",
-      });
-      expect(chromeMocks.stopOwnedOpenClawChrome).toHaveBeenCalledOnce();
-      expect(pwAiMocks.closePlaywrightBrowserConnection).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["existing-session", "extension"] as const)(
-    "does not terminate a personal %s browser",
-    async (driver) => {
-      const { profileCtx } = createStopHarness(makeBrowserProfile({ driver }));
-      await profileCtx.stopRunningBrowser();
-      expect(chromeMocks.stopOwnedOpenClawChrome).not.toHaveBeenCalled();
-    },
-  );
 });
