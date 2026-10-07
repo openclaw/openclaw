@@ -170,37 +170,58 @@ describe("context-engine turn outbox", () => {
     ["ordinary", "agent:main:telegram:direct:synthetic"],
     ["child", "agent:main:subagent:synthetic"],
     ["requester-settle", "agent:main:telegram:direct:synthetic-settle"],
-  ])("preserves prepared identity through real delayed recorder persistence (%s)", async (kind, sessionKey) => {
-    const stateDir = createStateDir();
-    const supplied = {
-      agentId: "main",
-      sessionId: `isolated-${kind}`,
-      sessionKey,
-      storePath: path.join(stateDir, "sessions.json"),
-    };
-    await upsertSessionEntryCore(supplied, { sessionId: supplied.sessionId, updatedAt: 1 });
-    const target = await resolveAgentRunSessionTarget({
-      ...supplied,
-      config: {},
-      missingSessionKey: "resolve-existing",
-      sessionTarget: supplied,
-    });
-    const message = { role: "user" as const, content: "synthetic input", timestamp: 1 };
-    const recorder = createUserTurnTranscriptRecorder({
-      message,
-      target: { ...target, sessionEntry: { sessionId: supplied.sessionId, updatedAt: 1 } },
-    });
-    const lease = createLease(createEngine(async () => ({ status: "committed" })));
-    await drainPendingContextEngineTurnsBeforeRun({ admission: undefined, lease, recorder, sessionTarget: target });
-    expect(recorder.getAdmissionReceipt()).toBeUndefined();
-    await recorder.persistApproved();
-    await recorder.waitForRuntimePersistence();
-    const admission = recorder.getAdmissionReceipt();
-    expect(admission).toBeDefined();
-    expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
-    expect(admission).toMatchObject({ agentId: target.agentId, sessionId: target.sessionId, sessionKey: target.sessionKey });
-    console.info("admission-lifecycle-equality", JSON.stringify({ scenario: kind, agentId: admission?.agentId === target.agentId, sessionId: admission?.sessionId === target.sessionId, sessionKey: admission?.sessionKey === target.sessionKey, storePath: admission?.storePath === resolveSessionTranscriptDatabasePath(target) }));
-  });
+  ])(
+    "preserves prepared identity through real delayed recorder persistence (%s)",
+    async (kind, sessionKey) => {
+      const stateDir = createStateDir();
+      const supplied = {
+        agentId: "main",
+        sessionId: `isolated-${kind}`,
+        sessionKey,
+        storePath: path.join(stateDir, "sessions.json"),
+      };
+      await upsertSessionEntryCore(supplied, { sessionId: supplied.sessionId, updatedAt: 1 });
+      const target = await resolveAgentRunSessionTarget({
+        ...supplied,
+        config: {},
+        missingSessionKey: "resolve-existing",
+        sessionTarget: supplied,
+      });
+      const message = { role: "user" as const, content: "synthetic input", timestamp: 1 };
+      const recorder = createUserTurnTranscriptRecorder({
+        message,
+        target: { ...target, sessionEntry: { sessionId: supplied.sessionId, updatedAt: 1 } },
+      });
+      const lease = createLease(createEngine(async () => ({ status: "committed" })));
+      await drainPendingContextEngineTurnsBeforeRun({
+        admission: undefined,
+        lease,
+        recorder,
+        sessionTarget: target,
+      });
+      expect(recorder.getAdmissionReceipt()).toBeUndefined();
+      await recorder.persistApproved();
+      await recorder.waitForRuntimePersistence();
+      const admission = recorder.getAdmissionReceipt();
+      expect(admission).toBeDefined();
+      expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
+      expect(admission).toMatchObject({
+        agentId: target.agentId,
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+      });
+      console.info(
+        "admission-lifecycle-equality",
+        JSON.stringify({
+          scenario: kind,
+          agentId: admission?.agentId === target.agentId,
+          sessionId: admission?.sessionId === target.sessionId,
+          sessionKey: admission?.sessionKey === target.sessionKey,
+          storePath: admission?.storePath === resolveSessionTranscriptDatabasePath(target),
+        }),
+      );
+    },
+  );
 
   it("preserves canonical identity with prior history and an outstanding transcript write", async () => {
     const { target: supplied, current, database } = await createTranscript("pending-history");
@@ -271,17 +292,24 @@ describe("context-engine turn outbox", () => {
         storePathMatches: field !== "storePath",
       };
       const error = await recorder.waitForRuntimePersistence().then(
-        () => { throw new Error("expected admission rejection"); },
+        () => {
+          throw new Error("expected admission rejection");
+        },
         (rejection: unknown) => rejection,
       );
       expect(error).toBeInstanceOf(Error);
       const diagnostic = (error as Error).message;
       expect(diagnostic).toBe(
-        "context-engine transcript target changed before provider dispatch " + JSON.stringify(expected),
+        "context-engine transcript target changed before provider dispatch " +
+          JSON.stringify(expected),
       );
       for (const privateValue of [
-        "synthetic-private-value", target.agentId, target.sessionId, target.sessionKey,
-        target.storePath, admission.storePath,
+        "synthetic-private-value",
+        target.agentId,
+        target.sessionId,
+        target.sessionKey,
+        target.storePath,
+        admission.storePath,
       ]) {
         expect(diagnostic).not.toContain(privateValue);
       }

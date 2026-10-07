@@ -109,7 +109,12 @@ export async function drainPendingContextEngineTurnsBeforeRun(params: {
         // comparison results to the dispatch owner, never transcript identifiers.
         throw new Error(
           "context-engine transcript target changed before provider dispatch " +
-            JSON.stringify({ agentIdMatches, sessionIdMatches, sessionKeyMatches, storePathMatches }),
+            JSON.stringify({
+              agentIdMatches,
+              sessionIdMatches,
+              sessionKeyMatches,
+              storePathMatches,
+            }),
         );
       }
       return store.enqueueIntent({
