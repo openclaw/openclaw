@@ -76,7 +76,7 @@ const publications = new WeakMap<
   SessionRowProjection,
   {
     context: SessionRowReadView["state"]["rowContext"];
-    revision: object | undefined;
+    revision: object;
   } & Publication
 >();
 const encodings = new WeakMap<GatewaySessionRow, string>();
@@ -98,14 +98,9 @@ export function prepareSessionRowPublication(
   read: SessionRowReadView = projection,
 ) {
   const view: PublicationView = (context) => {
-    const revision = projection.sharingRevision;
+    const revision = projection.state.revision;
     let publication = publications.get(projection);
-    if (
-      !publication ||
-      publication.context !== context ||
-      publication.revision !== revision ||
-      !revision
-    ) {
+    if (!publication || publication.context !== context || publication.revision !== revision) {
       // Row facts own row-view invalidation; list revisions only retire list views.
       publication = {
         context,
