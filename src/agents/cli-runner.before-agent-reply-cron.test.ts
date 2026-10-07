@@ -246,8 +246,12 @@ describe("runCliAgent before_agent_reply seam", () => {
           heldRequest = captureGuardedFetchRequestAuthority();
           heldClaim = readClaimingHookAdmission(context)?.assertCurrent;
           if (scenario === "ordinary session") {
-            expect(heldRequest).toBeUndefined();
-            expect(heldClaim).toBeUndefined();
+            // Non-cron turns carry no generation claim, but the hook admission
+            // still fences caller, abort, and lifecycle authority.
+            expect(heldRequest).toBeTypeOf("function");
+            expect(heldClaim).toBeTypeOf("function");
+            heldRequest?.();
+            heldClaim?.();
           } else if (scenario === "current root") {
             expect(heldRequest).toBeTypeOf("function");
             expect(heldClaim).toBeTypeOf("function");
@@ -301,6 +305,55 @@ describe("runCliAgent before_agent_reply seam", () => {
       });
     },
   );
+
+  it("fences ordinary-turn hook work behind caller and abort authority", async () => {
+    await withOpenClawTestState({ label: "cli-ordinary-hook-fence" }, async (state) => {
+      const abort = new AbortController();
+      const callerGuard = vi.fn();
+      let admission: (() => void) | undefined;
+      hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+      replyMock.mockImplementation(async (_event, context) => {
+        admission = readClaimingHookAdmission(context)?.assertCurrent;
+        // Ordinary turns carry no cron generation, yet hook network I/O must
+        // still be fenced behind the caller and abort authorities that the
+        // post-hook preparation re-checks.
+        expect(admission).toBeTypeOf("function");
+        admission?.();
+        return { handled: true, reply: { text: "hook result" } };
+      });
+      const operation = withBeforeAgentReplyObserver(
+        {
+          beforeDispatch: async () => {},
+          afterDispatch: async (result) => result,
+        },
+        () =>
+          runCliAgent({
+            ...runParams,
+            sessionKey: "agent:main:ordinary-fence",
+            sessionFile: "agent:main:ordinary-fence",
+            workspaceDir: state.workspaceDir,
+            provider: "fixture-cli",
+            trigger: "user",
+            abortSignal: abort.signal,
+            assertCurrent: callerGuard,
+            runId: "ordinary-hook-fence",
+            config: { agents: { defaults: { workspace: state.workspaceDir } } },
+          }),
+      );
+      expect((await operation).payloads).toEqual([{ text: "hook result" }]);
+      expect(prepareMock).not.toHaveBeenCalled();
+      expect(executeMock).not.toHaveBeenCalled();
+      // The admission stays live outside the hook: caller revocation and a
+      // fired abort signal both reject the fence the hook would have used.
+      callerGuard.mockImplementation(() => {
+        throw new Error("caller authority revoked");
+      });
+      expect(admission).toThrow("caller authority revoked");
+      callerGuard.mockImplementation(() => {});
+      abort.abort(new Error("caller aborted during hook work"));
+      expect(admission).toThrow();
+    });
+  });
 
   it("attributes terminal run and harness spans to the resolved execution owner", async () => {
     const runId = "run-owner-attribution";
