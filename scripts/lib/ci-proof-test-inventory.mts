@@ -2313,8 +2313,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/cron/isolated-agent.auth-profile-propagation.test.ts",
   "src/cron/isolated-agent.delivery-awareness.test.ts",
   "src/cron/isolated-agent.hook-content-wrapping.test.ts",
-  "src/cron/isolated-agent.isolated-auth-session-flag.test.ts",
-  "src/cron/isolated-agent.lane.test.ts",
   "src/cron/isolated-agent.model-preflight.test.ts",
   "src/cron/isolated-agent.session-identity.test.ts",
   "src/cron/isolated-agent/current-session-completion.test.ts",
