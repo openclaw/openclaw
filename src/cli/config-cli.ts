@@ -143,7 +143,8 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     );
     const res = getAtPath(redactConfigObject(snapshot.config, uiHints), parsedPath);
     if (!res.found || res.value === undefined) {
-      const message = isConfigSchemaPath(schema, parsedPath)
+      const { withRootSchemaKey } = await import("../config/schema-base.js");
+      const message = isConfigSchemaPath(withRootSchemaKey(schema), parsedPath)
         ? `Config path is valid but unset: ${opts.path}. The runtime default applies until you set an authored value with ${formatCliCommand(`openclaw config set ${quoteCliArg(opts.path)} <value>`)}.`
         : `Unknown config path: ${opts.path}. Run ${formatCliCommand("openclaw config schema")} to inspect valid paths.`;
       if (opts.json) {
@@ -230,13 +231,9 @@ async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const { readBestEffortRuntimeConfigSchema } = await import("../config/runtime-schema.js");
-    const schema = (await readBestEffortRuntimeConfigSchema()).schema as {
-      properties?: Record<string, unknown>;
-    };
-    writeRuntimeJson(runtime, {
-      ...schema,
-      properties: { $schema: { type: "string" }, ...schema.properties },
-    });
+    const { withRootSchemaKey } = await import("../config/schema-base.js");
+    const { schema } = await readBestEffortRuntimeConfigSchema();
+    writeRuntimeJson(runtime, withRootSchemaKey(schema));
   } catch (err) {
     runtime.error(danger(`Config schema error: ${formatErrorMessage(err)}`));
     exitCliAfterOutput(runtime, 1);

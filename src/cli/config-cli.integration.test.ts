@@ -444,6 +444,46 @@ describe("config cli integration", () => {
     });
   });
 
+  it("classifies the documented root $schema key as a valid path", async () => {
+    const marker = "https://openclaw.example/config.schema.json";
+    await withConfig(JSON.stringify({ plugins: { enabled: true } }), async ({ configPath }) => {
+      for (const json of [false, true]) {
+        logs.length = 0;
+        errors.length = 0;
+        await reject(run("get", "$schema", ...(json ? ["--json"] : [])));
+        let message: string;
+        if (json) {
+          expect(errors).toEqual([]);
+          const failure = JSON.parse(logs[0] ?? "");
+          message = failure.error.message;
+        } else {
+          expect(logs).toEqual([]);
+          message = errors[0] ?? "";
+        }
+        expect(message).toContain("Config path is valid but unset: $schema.");
+        expect(message).not.toContain("Unknown config path");
+      }
+      logs.length = 0;
+      errors.length = 0;
+      await reject(run("get", "$notAConfigField"));
+      expect(errors[0] ?? "").toContain("Unknown config path: $notAConfigField.");
+      logs.length = 0;
+      errors.length = 0;
+      await reject(run("get", "$schema.nested"));
+      expect(errors[0] ?? "").toContain("Unknown config path: $schema.nested.");
+      logs.length = 0;
+      errors.length = 0;
+      await run("set", "$schema", marker);
+      expect(errors).toEqual([]);
+      logs.length = 0;
+      errors.length = 0;
+      await run("get", "$schema");
+      expect(errors).toEqual([]);
+      expect(logs[0]).toBe(`${marker}\n`);
+      expect(load(configPath).$schema).toBe(marker);
+    });
+  });
+
   it("redacts SecretRef ids and plugin-only sensitive fields in JSON/text order", async () => {
     const secretRefId = "CONFIG_GET_TEST_TOKEN";
     const schemaOnlySecrets = ["first-private-route", "second-private-route"];

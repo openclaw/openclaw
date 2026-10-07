@@ -93,6 +93,22 @@ function preparePublicSchema(schema: ConfigSchema): ConfigSchema {
   return schema;
 }
 
+/**
+ * Re-attach the root `$schema` key that `preparePublicSchema` hides. The published schema feeds the
+ * Control UI form, where the key must stay invisible, while the CLI accepts it on write and
+ * advertises it in `config schema`, so CLI surfaces must classify it as a valid path too.
+ */
+export function withRootSchemaKey(schema: ConfigSchema): ConfigSchema {
+  const root = asSchemaObject(schema);
+  if (!root || !root.properties || Object.hasOwn(root.properties, "$schema")) {
+    return schema;
+  }
+  return {
+    ...schema,
+    properties: { $schema: { type: "string" }, ...root.properties },
+  };
+}
+
 let baseConfigSchemaStablePayload: BaseConfigSchemaStablePayload | null = null;
 
 function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
