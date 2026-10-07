@@ -6,6 +6,7 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
   baseRecord,
@@ -77,22 +78,78 @@ export function readChannelIngressClaimSnapshotInDatabase(
       ...claimed.flatMap((row) => (row.lane_key ? [row.lane_key] : [])),
     ]),
   ];
-  if (!input.deriveLaneKey && blocked.length) {
+  // Stored keys are authoritative unless a reconcile callback can remap them;
+  // reconcilable rows must stay visible to the JS-level pass. The blocked set is
+  // bound as one JSON table value so a retry-heavy account cannot exceed SQLite's
+  // per-query bind-variable budget; the JS pass still rechecks every row.
+  if (!input.reconcileStoredLaneKey && blocked.length) {
     pending = pending.where((eb) =>
-      eb.or([eb("lane_key", "is", null), eb("lane_key", "not in", blocked)]),
+      eb.or([eb("lane_key", "is", null), eb("lane_key", "not in", sqliteStringSet(blocked))]),
     );
   }
   const ordered =
     input.orderBy === "id"
       ? pending.orderBy("event_id", "asc")
       : pending.orderBy("received_at", "asc").orderBy("event_id", "asc");
+  let paged = ordered;
+  if (input.claimAfter) {
+    const cursor = input.claimAfter;
+    paged =
+      input.orderBy === "id"
+        ? paged.where("event_id", ">", cursor.eventId)
+        : paged.where((eb) =>
+            eb.or([
+              eb("received_at", ">", cursor.receivedAt),
+              eb.and([
+                eb("received_at", "=", cursor.receivedAt),
+                eb("event_id", ">", cursor.eventId),
+              ]),
+            ]),
+          );
+  }
   // Repair can expose up to 100 later rows without changing the caller's scan window.
+  let pendingBeforeCursor: number | undefined;
+  if (input.expectedPendingBeforeCursor !== undefined && input.claimAfter) {
+    // A retained direct-scan cursor is only valid while the scan-visible pending
+    // rows before it are unchanged. Count them in this same read so a write from
+    // any handle that inserted or removed a row before the cursor is observed
+    // atomically with the paged snapshot; the caller drops the resume otherwise.
+    const cursor = input.claimAfter;
+    let before = getQueue(db)
+      .selectFrom("channel_ingress_events")
+      .select((expression) => expression.fn.countAll<number>().as("count"))
+      .where("queue_name", "=", input.queueName)
+      .where("status", "=", "pending");
+    if (input.candidateIds) {
+      before = before.where("event_id", "in", input.candidateIds);
+    }
+    if (!input.reconcileStoredLaneKey && blocked.length) {
+      before = before.where((eb) =>
+        eb.or([eb("lane_key", "is", null), eb("lane_key", "not in", sqliteStringSet(blocked))]),
+      );
+    }
+    before =
+      input.orderBy === "id"
+        ? before.where("event_id", "<", cursor.eventId)
+        : before.where((eb) =>
+            eb.or([
+              eb("received_at", "<", cursor.receivedAt),
+              eb.and([
+                eb("received_at", "=", cursor.receivedAt),
+                eb("event_id", "<", cursor.eventId),
+              ]),
+            ]),
+          );
+    const counted = executeSqliteQueryTakeFirstSync(db, before);
+    pendingBeforeCursor = normalizeSqliteNumber(counted?.count ?? null) ?? 0;
+  }
   return {
     claimed,
     pending: executeSqliteQuerySync(
       db,
-      ordered.limit(normalizeLimit(input.scanLimit) + CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT),
+      paged.limit(normalizeLimit(input.scanLimit) + CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT),
     ).rows,
+    ...(pendingBeforeCursor === undefined ? {} : { pendingBeforeCursor }),
   };
 }
 

@@ -152,6 +152,9 @@ export function failedRecord<TPayload, TMetadata>(
 
 export const CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT = 100;
 
+/** Bound the number of bounded pages one claim scans past fully blocked lanes. */
+export const CHANNEL_INGRESS_CLAIM_SCAN_PAGE_BUDGET = 10;
+
 /** Resolve host policy only for the rows the original bounded scan would visit. */
 export function selectChannelIngressClaim(
   snapshot: ChannelIngressClaimSnapshot,
@@ -166,14 +169,19 @@ export function selectChannelIngressClaim(
     }
   }
   const corruptIds: string[] = [];
-  let pending = snapshot.pending;
-  while (true) {
-    const removed = new Set<string>();
-    for (const row of pending.slice(0, Math.max(1, Math.floor(request.scanLimit ?? 100)))) {
+  const pending = snapshot.pending;
+  const scanLimit = Math.max(1, Math.floor(request.scanLimit ?? 100));
+  let scanOffset = 0;
+  let corruptCapHit = false;
+  while (scanOffset < pending.length) {
+    const window = pending.slice(scanOffset, scanOffset + scanLimit);
+    if (window.length === 0) {
+      break;
+    }
+    for (const row of window) {
       if (!baseRecord(row)) {
         if (corruptIds.length < CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT) {
           corruptIds.push(row.event_id);
-          removed.add(row.event_id);
         }
         continue;
       }
@@ -182,9 +190,24 @@ export function selectChannelIngressClaim(
         return { corruptIds, selected: { id: row.event_id, laneKey } };
       }
     }
-    if (removed.size === 0 || corruptIds.length >= CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT) {
-      return { corruptIds };
+    // Scan the next bounded window of this snapshot. Corrupt rows are collected
+    // but the scan window is bounded by the snapshot's repair allowance.
+    scanOffset += window.length;
+    if (corruptIds.length >= CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT) {
+      corruptCapHit = true;
+      break;
     }
-    pending = pending.filter((row) => !removed.has(row.event_id));
   }
+  if (corruptCapHit) {
+    // Corrupt repair budget is consumed; rows beyond the scan point must stay
+    // reachable on a later scan, so do not page past them here.
+    return { corruptIds };
+  }
+  // The whole snapshot held no eligible row. Signal another bounded page when
+  // the snapshot consumed its full allowance, so a free lane beyond a fully
+  // blocked prefix stays reachable instead of wedging the claim.
+  return {
+    corruptIds,
+    ...(pending.length >= scanLimit + CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT ? { more: true } : {}),
+  };
 }
