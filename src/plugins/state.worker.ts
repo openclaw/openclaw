@@ -1,4 +1,5 @@
 import { ZodError } from "zod";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
   DeferredPluginMigrationConflictError,
   readDeferredPluginMigrationCompletions,
@@ -45,6 +46,7 @@ export const pluginRuntimeOperations = {
         const database = open();
         return refreshPersistedInstalledPluginIndexWithLeaseSync({
           ...prepared,
+          env: cloneEnvWithPlatformSemantics(prepared.env),
           candidates: candidates && restoreCandidates(candidates),
           discovery: discovery && {
             candidates: restoreCandidates(discovery.candidates),

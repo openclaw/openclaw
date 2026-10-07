@@ -549,7 +549,8 @@ export async function refreshPersistedInstalledPluginIndex(
     reason: params.reason,
     policyPluginIds: params.policyPluginIds,
     artifactPreservingReadOnly: params.artifactPreservingReadOnly,
-    env,
+    // Windows snapshots are proxies; the worker restores their semantics from these entries.
+    env: { ...env },
     installRoots: resolveActivePluginInstallRoots(env),
     ...(now ? { nowMs: now().getTime() } : {}),
   });
