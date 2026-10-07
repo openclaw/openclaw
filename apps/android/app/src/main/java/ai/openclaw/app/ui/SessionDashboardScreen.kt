@@ -114,12 +114,7 @@ internal fun sessionDashboardUrl(
     }
   val uri = baseUrl.trimEnd('/').toUri()
   val basePath = uri.encodedPath.orEmpty().trimEnd('/')
-  val encodedRoute =
-    buildList {
-      add("dashboard")
-      add(encodeDashboardPathSegment(agentId))
-      addAll(routeSegments)
-    }.joinToString("/")
+  val encodedRoute = (listOf("dashboard", encodeDashboardPathSegment(agentId)) + routeSegments).joinToString("/")
   return uri
     .buildUpon()
     .encodedPath("$basePath/$encodedRoute")

@@ -15,10 +15,6 @@ type TelegramAutoSelectFamilyDecision = {
 
 let wsl2SyncCache: boolean | undefined;
 
-function isWSL2SyncCached(): boolean {
-  return (wsl2SyncCache ??= isWSL2Sync());
-}
-
 type TelegramDnsResultOrderDecision = {
   value: "ipv4first" | "verbatim";
   source: string;
@@ -40,7 +36,7 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
     return { value: params.network.autoSelectFamily, source: "config" };
   }
   // WSL2 has unstable IPv6 connectivity; disable autoSelectFamily to use IPv4 directly
-  if (isWSL2SyncCached()) {
+  if ((wsl2SyncCache ??= isWSL2Sync())) {
     return { value: false, source: "default-wsl2" };
   }
   return { value: true, source: "default-node22" };

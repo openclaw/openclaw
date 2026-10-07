@@ -67,11 +67,15 @@ function buildCodexEffectiveMcpCatalog(
     const deniedNames = new Set(
       denialMap && Object.hasOwn(denialMap, status.name) ? denialMap[status.name] : [],
     );
-    const observedNames = new Set<string>();
-    for (const [toolName, raw] of Object.entries(status.tools).toSorted(([left], [right]) =>
-      left.localeCompare(right),
-    )) {
-      observedNames.add(toolName);
+    const observedNames = new Set(Object.keys(status.tools));
+    const toolEntries = [
+      ...Object.entries(status.tools).toSorted(([left], [right]) => left.localeCompare(right)),
+      ...[...deniedNames]
+        .filter((name) => !observedNames.has(name))
+        .toSorted()
+        .map((name) => [name, undefined] as const),
+    ];
+    for (const [toolName, raw] of toolEntries) {
       const deniedBySession = deniedNames.has(toolName) ? true : undefined;
       const tool = catalogTool({
         serverName: status.name,
@@ -82,26 +86,12 @@ function buildCodexEffectiveMcpCatalog(
       });
       (deniedBySession ? sessionDeniedTools : tools).push(tool);
     }
-    for (const toolName of [...deniedNames].toSorted()) {
-      if (observedNames.has(toolName)) {
-        continue;
-      }
-      sessionDeniedTools.push(
-        catalogTool({
-          serverName: status.name,
-          safeServerName,
-          toolName,
-          deniedBySession: true,
-        }),
-      );
-    }
     serverEntries.push([
       status.name,
       {
         ...projectCodexMcpServerMetadata(status),
         safeServerName,
-        toolCount:
-          observedNames.size + [...deniedNames].filter((name) => !observedNames.has(name)).length,
+        toolCount: toolEntries.length,
       },
     ]);
   }

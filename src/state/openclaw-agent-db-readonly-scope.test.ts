@@ -402,6 +402,15 @@ it("closes generic and explicit candidate-family readers without releasing unrel
     const closeReaders = () =>
       applyAgentDatabaseReaderRequest({ kind: "close", candidates, deleted: false });
     try {
+      await applyAgentDatabaseReaderRequest({
+        kind: "close",
+        candidates,
+        deleted: false,
+        retainedPaths: [sibling],
+      });
+      expect(selected.isOpen).toBe(false);
+      expect(explicit.isOpen).toBe(true);
+      expect(retained.isOpen).toBe(true);
       await closeReaders();
       expect(selected.isOpen).toBe(false);
       expect(explicit.isOpen).toBe(false);

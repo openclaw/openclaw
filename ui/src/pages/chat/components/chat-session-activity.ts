@@ -54,15 +54,10 @@ export function renderInterSessionActivity(
               }
             }}
           >
-            ${
-              expanded
-                ? renderForwardedAttribution(group, { ...opts, showAvatar: false })
-                : renderForwardedAttribution(group, {
-                    ...opts,
-                    updateCount: count,
-                    linkSource: false,
-                  })
-            }
+            ${renderForwardedAttribution(group, {
+              ...opts,
+              ...(expanded ? { showAvatar: false } : { updateCount: count, linkSource: false }),
+            })}
             ${opts.searchResult ? nothing : html`<span class="chat-session-activity__chevron" aria-hidden="true">${icons.chevronRight}</span>`}
           </summary>
           <div class="chat-session-activity__body">

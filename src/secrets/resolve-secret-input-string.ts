@@ -5,7 +5,6 @@ import {
   parseSecretRef,
   type SecretRef,
 } from "../config/types.secrets.js";
-import { resolveSecretRefString } from "./resolve.js";
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 
@@ -35,6 +34,7 @@ export async function materializeSecretInput(params: {
 
   let resolved: string;
   try {
+    const { resolveSecretRefString } = await import("./resolve.js");
     resolved = await resolveSecretRefString(ref, {
       config: params.config,
       env: params.env,

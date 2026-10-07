@@ -235,26 +235,21 @@ internal abstract class LegacyChatDatabase : RoomDatabase() {
           // Earlier rows did not persist the default agent that owned an unscoped key. Never
           // guess after upgrade: queued input stays visible for manual resend, while accepted
           // input remains delivery-ambiguous and must not be replayed under a different owner.
-          connection
-            .prepare(
-              "UPDATE outbox_commands SET status = ?, lastError = ? " +
-                "WHERE status = ? AND sessionKey NOT LIKE 'agent:%'",
-            ).use { statement ->
-              statement.bindText(1, ChatOutboxStatus.Failed.dbValue)
-              statement.bindText(2, OUTBOX_OWNER_CHANGED_ERROR)
-              statement.bindText(3, ChatOutboxStatus.Queued.dbValue)
-              statement.step()
-            }
-          connection
-            .prepare(
-              "UPDATE outbox_commands SET status = ?, lastError = ? " +
-                "WHERE status = ? AND sessionKey NOT LIKE 'agent:%'",
-            ).use { statement ->
-              statement.bindText(1, ChatOutboxStatus.Failed.dbValue)
-              statement.bindText(2, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
-              statement.bindText(3, ChatOutboxStatus.Accepted.dbValue)
-              statement.step()
-            }
+          for ((status, error) in listOf(
+            ChatOutboxStatus.Queued to OUTBOX_OWNER_CHANGED_ERROR,
+            ChatOutboxStatus.Accepted to OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
+          )) {
+            connection
+              .prepare(
+                "UPDATE outbox_commands SET status = ?, lastError = ? " +
+                  "WHERE status = ? AND sessionKey NOT LIKE 'agent:%'",
+              ).use { statement ->
+                statement.bindText(1, ChatOutboxStatus.Failed.dbValue)
+                statement.bindText(2, error)
+                statement.bindText(3, status.dbValue)
+                statement.step()
+              }
+          }
         }
       }
 

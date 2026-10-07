@@ -460,21 +460,15 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     if ("source" in p) {
-      if (!p.slug && !p.all) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, 'clawhub skills.update requires "slug" or "all"'),
-        );
-        return;
-      }
-      if (p.slug && p.all) {
+      if (Boolean(p.slug) === Boolean(p.all)) {
         respond(
           false,
           undefined,
           errorShape(
             ErrorCodes.INVALID_REQUEST,
-            'clawhub skills.update accepts either "slug" or "all", not both',
+            p.slug
+              ? 'clawhub skills.update accepts either "slug" or "all", not both'
+              : 'clawhub skills.update requires "slug" or "all"',
           ),
         );
         return;

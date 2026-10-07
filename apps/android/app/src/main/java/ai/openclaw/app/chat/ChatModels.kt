@@ -324,6 +324,8 @@ internal fun parseChatProgressCardGetResult(element: JsonElement): ChatProgressC
     return ChatProgressCardGetResult(sessionKey = null, card = null)
   }
   val card = rawCard as? JsonObject ?: error("Invalid progressCard.get response")
+
+  fun integer(key: String): Long? = (card[key] as? JsonPrimitive)?.takeUnless { it.isString }?.content?.toLongOrNull()
   val sessionKey =
     card["sessionKey"]
       .asJsonStringOrNull()
@@ -331,19 +333,11 @@ internal fun parseChatProgressCardGetResult(element: JsonElement): ChatProgressC
       ?.takeIf { it.isNotEmpty() }
       ?: error("Invalid progress card session key")
   val revision =
-    (card["revision"] as? JsonPrimitive)
-      ?.takeUnless { it.isString }
-      ?.content
-      ?.toLongOrNull()
+    integer("revision")
       ?.takeIf { it in 1..Int.MAX_VALUE }
       ?.toInt()
       ?: error("Invalid progress card revision")
-  val updatedAt =
-    (card["updatedAt"] as? JsonPrimitive)
-      ?.takeUnless { it.isString }
-      ?.content
-      ?.toLongOrNull()
-      ?: error("Invalid progress card update time")
+  val updatedAt = integer("updatedAt") ?: error("Invalid progress card update time")
   val markdown =
     if (card.containsKey("markdown")) {
       card["markdown"].asJsonStringOrNull()

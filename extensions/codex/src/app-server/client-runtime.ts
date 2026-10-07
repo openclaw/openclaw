@@ -31,6 +31,12 @@ import { withTimeout } from "./timeout.js";
 
 type ThreadRelease = CodexAppServerLiveThreadOwnership["release"];
 
+function defaultThreadRelease(client: CodexAppServerClient): ThreadRelease {
+  return async (threadId, assertCurrent, withCurrent) => {
+    await unsubscribeCodexAppServerLiveThread(client, threadId, 5_000, assertCurrent, withCurrent);
+  };
+}
+
 type ClientRuntime = ThreadOwnershipState &
   CodexClientWorkspaceState & {
     context: ClientRuntimeContext;
@@ -378,11 +384,7 @@ async function evictExcessIdleThreads(
 export async function retainCodexAppServerLiveThread(
   client: CodexAppServerClient,
   threadId: string,
-  releaseThread?: (
-    threadId: string,
-    assertCurrent?: () => void,
-    withCurrent?: (write: () => void) => Promise<void>,
-  ) => Promise<void>,
+  releaseThread?: ThreadRelease,
   configFingerprint?: string,
   serviceTier?: CodexServiceTier | null,
   ephemeralPolicy?: CodexEphemeralThreadPolicy,
@@ -420,15 +422,7 @@ export async function retainCodexAppServerLiveThread(
         : Number.POSITIVE_INFINITY,
     release:
       (releaseThread ? (physicalThreadReleases.get(releaseThread) ?? releaseThread) : undefined) ??
-      (async (releasedThreadId, assertCurrent, withCurrent) => {
-        await unsubscribeCodexAppServerLiveThread(
-          client,
-          releasedThreadId,
-          5_000,
-          assertCurrent,
-          withCurrent,
-        );
-      }),
+      defaultThreadRelease(client),
   };
   runtime.retainedThreads.set(threadId, retained);
   if (previousOwner !== ownerToken) {
@@ -508,19 +502,7 @@ export async function claimCodexAppServerLiveThread(
   }
   const retained = runtime.retainedThreads.get(threadId) ?? {
     expiresAt: Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS,
-    release: async (
-      releasedThreadId: string,
-      assertCurrent?: () => void,
-      withCurrent?: (write: () => void) => Promise<void>,
-    ) => {
-      await unsubscribeCodexAppServerLiveThread(
-        client,
-        releasedThreadId,
-        5_000,
-        assertCurrent,
-        withCurrent,
-      );
-    },
+    release: defaultThreadRelease(client),
   };
   return claimCodexAppServerThreadOwnership(client, runtime, threadId, retained, onInvalidated);
 }

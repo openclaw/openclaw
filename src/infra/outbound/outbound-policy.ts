@@ -79,6 +79,10 @@ function isCrossContextTarget(params: {
   );
 }
 
+function mergeMessagePolicy<T extends object>(global: T | undefined, agent: T | undefined) {
+  return global || agent ? { ...global, ...agent } : undefined;
+}
+
 export function resolveEffectiveMessageToolsConfig(params: {
   cfg: OpenClawConfig;
   agentId?: string | null;
@@ -93,38 +97,22 @@ export function resolveEffectiveMessageToolsConfig(params: {
   if (!agentConfig) {
     return globalConfig;
   }
+  const crossContext = mergeMessagePolicy(globalConfig?.crossContext, agentConfig.crossContext);
   // Agent message-tool policy is an override layer; nested policy groups must merge independently.
   return {
     ...globalConfig,
     ...agentConfig,
-    crossContext:
-      globalConfig?.crossContext || agentConfig.crossContext
-        ? {
-            ...globalConfig?.crossContext,
-            ...agentConfig.crossContext,
-            marker:
-              globalConfig?.crossContext?.marker || agentConfig.crossContext?.marker
-                ? {
-                    ...globalConfig?.crossContext?.marker,
-                    ...agentConfig.crossContext?.marker,
-                  }
-                : undefined,
-          }
-        : undefined,
-    broadcast:
-      globalConfig?.broadcast || agentConfig.broadcast
-        ? {
-            ...globalConfig?.broadcast,
-            ...agentConfig.broadcast,
-          }
-        : undefined,
-    actions:
-      globalConfig?.actions || agentConfig.actions
-        ? {
-            ...globalConfig?.actions,
-            ...agentConfig.actions,
-          }
-        : undefined,
+    crossContext: crossContext
+      ? {
+          ...crossContext,
+          marker: mergeMessagePolicy(
+            globalConfig?.crossContext?.marker,
+            agentConfig.crossContext?.marker,
+          ),
+        }
+      : undefined,
+    broadcast: mergeMessagePolicy(globalConfig?.broadcast, agentConfig.broadcast),
+    actions: mergeMessagePolicy(globalConfig?.actions, agentConfig.actions),
   };
 }
 

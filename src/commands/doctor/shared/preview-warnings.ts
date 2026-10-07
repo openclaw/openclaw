@@ -1,4 +1,7 @@
-import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalRecord,
+  isRecord as hasRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import {
   listAgentEntriesWithSource,
   resolveAgentConfig,
@@ -28,12 +31,8 @@ function listAgentRecords(cfg: OpenClawConfig) {
 }
 
 function hasPluginLoadPaths(cfg: OpenClawConfig): boolean {
-  const plugins = cfg.plugins;
-  if (!hasRecord(plugins)) {
-    return false;
-  }
-  const load = plugins.load;
-  return hasRecord(load) && Array.isArray(load.paths) && load.paths.length > 0;
+  const load = asOptionalRecord(asOptionalRecord(cfg.plugins)?.load);
+  return Array.isArray(load?.paths) && load.paths.length > 0;
 }
 
 function hasSubagentAllowlistConfig(cfg: OpenClawConfig): boolean {
@@ -46,45 +45,18 @@ function hasSubagentAllowlistConfig(cfg: OpenClawConfig): boolean {
   });
 }
 
-function hasConfiguredSafeBins(cfg: OpenClawConfig): boolean {
-  const globalExec = cfg.tools?.exec;
-  if (
-    hasRecord(globalExec) &&
-    Array.isArray(globalExec.safeBins) &&
-    globalExec.safeBins.length > 0
-  ) {
-    return true;
-  }
-  return listAgentRecords(cfg).some((agent) => {
-    const agentExec = hasRecord(agent) && hasRecord(agent.tools) ? agent.tools.exec : undefined;
-    return (
-      hasRecord(agentExec) && Array.isArray(agentExec.safeBins) && agentExec.safeBins.length > 0
-    );
-  });
+function hasSafeBins(exec: unknown): boolean {
+  const safeBins = asOptionalRecord(exec)?.safeBins;
+  return Array.isArray(safeBins) && safeBins.length > 0;
 }
 
-function resolveGroupVisibleReplyPolicy(cfg: OpenClawConfig): {
-  path: "messages.groupChat.visibleReplies" | "messages.visibleReplies";
-  value: "automatic" | "message_tool";
-} {
-  const groupVisibleReplies = cfg.messages?.groupChat?.visibleReplies;
-  if (groupVisibleReplies) {
-    return {
-      path: "messages.groupChat.visibleReplies",
-      value: groupVisibleReplies,
-    };
-  }
-  const globalVisibleReplies = cfg.messages?.visibleReplies;
-  if (globalVisibleReplies) {
-    return {
-      path: "messages.visibleReplies",
-      value: globalVisibleReplies,
-    };
-  }
-  return {
-    path: "messages.groupChat.visibleReplies",
-    value: "automatic",
-  };
+function hasConfiguredSafeBins(cfg: OpenClawConfig): boolean {
+  return (
+    hasSafeBins(cfg.tools?.exec) ||
+    listAgentRecords(cfg).some((agent) =>
+      hasSafeBins(asOptionalRecord(asOptionalRecord(agent)?.tools)?.exec),
+    )
+  );
 }
 
 function formatTargets(targets: string[]): string {
@@ -95,33 +67,27 @@ function formatTargets(targets: string[]): string {
 }
 
 function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): string[] {
-  const groupPolicy = resolveGroupVisibleReplyPolicy(cfg);
-  const warnings: string[] = [];
-  if (groupPolicy.value === "message_tool") {
-    const targets = collectUnavailableSourceReplyTargets(cfg);
-    if (targets.length === 0) {
-      return warnings;
-    }
-    warnings.push(
-      `- ${groupPolicy.path} is set to "message_tool", but the message tool is unavailable for ${formatTargets(
-        targets,
-      )}; OpenClaw falls back to automatic visible replies, so normal replies may post to the source chat. Enable the message tool or set ${groupPolicy.path} to "automatic".`,
-    );
+  const groupPolicy = cfg.messages?.groupChat?.visibleReplies;
+  const globalPolicy = cfg.messages?.visibleReplies;
+  const policies: Array<{ path: string; fallback: string }> = [];
+  if ((groupPolicy || globalPolicy) === "message_tool") {
+    policies.push({
+      path: groupPolicy ? "messages.groupChat.visibleReplies" : "messages.visibleReplies",
+      fallback: "visible",
+    });
   }
-
-  const globalVisibleReplies = cfg.messages?.visibleReplies;
-  if (globalVisibleReplies === "message_tool" && groupPolicy.path !== "messages.visibleReplies") {
-    const targets = collectUnavailableSourceReplyTargets(cfg);
-    if (targets.length === 0) {
-      return warnings;
-    }
-    warnings.push(
-      `- messages.visibleReplies is set to "message_tool", but the message tool is unavailable for ${formatTargets(
-        targets,
-      )}; OpenClaw falls back to automatic direct-chat replies, so normal replies may post to the source chat. Enable the message tool or set messages.visibleReplies to "automatic".`,
-    );
+  if (globalPolicy === "message_tool" && groupPolicy) {
+    policies.push({ path: "messages.visibleReplies", fallback: "direct-chat" });
   }
-  return warnings;
+  const targets = policies.length > 0 ? collectUnavailableSourceReplyTargets(cfg) : [];
+  return targets.length === 0
+    ? []
+    : policies.map(
+        ({ path, fallback }) =>
+          `- ${path} is set to "message_tool", but the message tool is unavailable for ${formatTargets(
+            targets,
+          )}; OpenClaw falls back to automatic ${fallback} replies, so normal replies may post to the source chat. Enable the message tool or set ${path} to "automatic".`,
+      );
 }
 
 function collectChannelBoundMessageToolPolicyWarnings(cfg: OpenClawConfig): string[] {
@@ -149,8 +115,8 @@ function collectChannelBoundMessageToolPolicyWarnings(cfg: OpenClawConfig): stri
 }
 
 const PROFILE_CONFIGURED_TOOL_SECTIONS = [
-  { key: "exec", label: "tools.exec", grants: ["exec", "process"] },
-  { key: "fs", label: "tools.fs", grants: ["read", "write", "edit"] },
+  { key: "exec", grants: ["exec", "process"] },
+  { key: "fs", grants: ["read", "write", "edit"] },
 ] as const;
 
 type ConfiguredToolSectionGrantEntry = {
@@ -174,14 +140,6 @@ function collectConfiguredToolSectionGrantEntries(params: {
   return entries;
 }
 
-function formatQuotedList(values: string[]): string {
-  return values.map((value) => `"${value}"`).join(", ");
-}
-
-function hasNonEmptyStringList(value: unknown): value is string[] {
-  return Array.isArray(value) && value.some((entry) => typeof entry === "string");
-}
-
 function readPreviewStringList(value: unknown): string[] | undefined {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string")
@@ -190,21 +148,25 @@ function readPreviewStringList(value: unknown): string[] | undefined {
 
 function collectProfileConfiguredSectionWarnings(params: {
   configuredEntries: ConfiguredToolSectionGrantEntry[];
-  profilePolicy: ToolPolicyConfig | undefined;
+  policy?: Record<string, unknown> | null;
+  inheritedPolicy?: Record<string, unknown> | null;
   profile: string;
   profilePath: string;
   advicePath?: string;
   profileKind: "active" | "provider" | "inherited provider";
-  hasAllow: boolean;
 }): string[] {
-  if (!params.profilePolicy) {
+  const alsoAllow =
+    readPreviewStringList(params.policy?.alsoAllow) ??
+    readPreviewStringList(params.inheritedPolicy?.alsoAllow);
+  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(params.profile), alsoAllow);
+  if (!profilePolicy) {
     return [];
   }
   const uncoveredEntries = params.configuredEntries
     .map((entry) => ({
       ...entry,
       grants: entry.grants.filter(
-        (toolName) => !isToolAllowedByPolicyName(toolName, params.profilePolicy),
+        (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
       ),
     }))
     .filter((entry) => entry.grants.length > 0);
@@ -214,11 +176,11 @@ function collectProfileConfiguredSectionWarnings(params: {
   const grants = [...new Set(uncoveredEntries.flatMap((entry) => entry.grants))];
   const advicePath = params.advicePath ?? params.profilePath;
   const providerSuffix = params.profileKind === "active" ? "" : " for that provider";
-  const advice = params.hasAllow
-    ? `Add these grants to ${advicePath}.allow and set ${advicePath}.profile to "full" if these tools should be available${providerSuffix}.`
-    : `Add ${advicePath}.alsoAllow: [${formatQuotedList(
-        grants,
-      )}] if these tools should be available${providerSuffix}.`;
+  const allow = params.policy?.allow;
+  const advice =
+    Array.isArray(allow) && allow.some((entry) => typeof entry === "string")
+      ? `Add these grants to ${advicePath}.allow and set ${advicePath}.profile to "full" if these tools should be available${providerSuffix}.`
+      : `Add ${advicePath}.alsoAllow: [${grants.map((value) => `"${value}"`).join(", ")}] if these tools should be available${providerSuffix}.`;
   return [
     `- ${params.profilePath}.profile is "${params.profile}" and ${uncoveredEntries
       .map((entry) => entry.label)
@@ -251,17 +213,13 @@ function collectProfileConfiguredToolSectionScopeWarnings(params: {
   if (configuredEntries.length === 0) {
     return [];
   }
-  const alsoAllow =
-    readPreviewStringList(tools?.alsoAllow) ??
-    readPreviewStringList(params.inheritedTools?.alsoAllow);
-  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
   return collectProfileConfiguredSectionWarnings({
     configuredEntries,
-    profilePolicy,
+    policy: tools,
+    inheritedPolicy: params.inheritedTools,
     profile,
     profilePath: params.pathLabel,
     profileKind: "active",
-    hasAllow: hasNonEmptyStringList(tools?.allow),
   });
 }
 
@@ -280,27 +238,21 @@ function collectByProviderConfiguredToolSectionWarnings(params: {
     : undefined;
   return Object.entries(byProvider).flatMap(([providerKey, policyValue]) => {
     const policy = hasRecord(policyValue) ? policyValue : undefined;
-    if (!policy) {
-      return [];
-    }
-    const profile = typeof policy.profile === "string" ? policy.profile : undefined;
-    if (!profile) {
+    const profile = policy?.profile;
+    if (typeof profile !== "string" || !profile) {
       return [];
     }
     const inheritedPolicy = resolveInheritedProviderPolicyForPreview(
       inheritedByProvider,
       providerKey,
     );
-    const alsoAllow =
-      readPreviewStringList(policy.alsoAllow) ?? readPreviewStringList(inheritedPolicy?.alsoAllow);
-    const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
     return collectProfileConfiguredSectionWarnings({
       configuredEntries: params.configuredEntries,
-      profilePolicy,
+      policy,
+      inheritedPolicy,
       profile,
       profilePath: `${params.pathLabel}.byProvider.${providerKey}`,
       profileKind: "provider",
-      hasAllow: hasNonEmptyStringList(policy.allow),
     });
   });
 }
@@ -351,12 +303,8 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
       return [];
     }
     const inheritedPolicy = hasRecord(policyValue) ? policyValue : undefined;
-    if (!inheritedPolicy) {
-      return [];
-    }
-    const profile =
-      typeof inheritedPolicy.profile === "string" ? inheritedPolicy.profile : undefined;
-    if (!profile) {
+    const profile = inheritedPolicy?.profile;
+    if (typeof profile !== "string" || !profile) {
       return [];
     }
     const overridingEntry =
@@ -372,18 +320,14 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
     if (typeof overridingPolicy?.profile === "string") {
       return [];
     }
-    const alsoAllow =
-      readPreviewStringList(overridingPolicy?.alsoAllow) ??
-      readPreviewStringList(inheritedPolicy.alsoAllow);
-    const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
     return collectProfileConfiguredSectionWarnings({
       configuredEntries: params.configuredEntries,
-      profilePolicy,
+      policy: overridingPolicy,
+      inheritedPolicy,
       profile,
       profilePath: `tools.byProvider.${providerKey}`,
       advicePath: `${params.overridingPathLabel}.byProvider.${overridingEntry?.key ?? providerKey}`,
       profileKind: "inherited provider",
-      hasAllow: hasNonEmptyStringList(overridingPolicy?.allow),
     });
   });
 }

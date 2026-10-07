@@ -13,7 +13,7 @@ import {
 import { updateDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite.kernel.js";
 import { resolveDeliveryQueueStateEnv } from "../delivery-queue-state-context.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
-import { failDurableDelivery } from "./delivery-completion.js";
+import { settleDurableDelivery } from "./delivery-completion.js";
 import * as mediaSpool from "./delivery-queue-media-spool.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import { renewDeliveryPlatformSendLease } from "./delivery-queue-platform-lease.js";
@@ -327,7 +327,7 @@ describe("exhausted delivery producer recovery", () => {
     if (!staged) {
       throw new Error("Expected settlement owner");
     }
-    await failDurableDelivery(completion, tmpDir());
+    await settleDurableDelivery(completion, { platformSendStarted: true }, tmpDir());
     expect(await queueStorage.finalizeDeliveryFailureSettlement(staged, tmpDir())).toBe(true);
     expect(
       await queueStorage.stageDeliveryFailureSettlement(staged, staged.settlement!, tmpDir()),

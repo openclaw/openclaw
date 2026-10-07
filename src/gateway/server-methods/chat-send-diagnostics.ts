@@ -99,7 +99,6 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
       }
       let phase: ChatSendPhase | undefined = initialPhase;
       let phaseStartedAt = performance.now();
-      let closed = false;
       const flush = (now: number) => {
         if (phase) {
           totals.set(phase, (totals.get(phase) ?? 0) + now - phaseStartedAt);
@@ -109,14 +108,13 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
       active.add(flush);
       const scope: PhaseScope = {
         mark(nextPhase) {
-          if (!closed && !finished) {
+          if (active.has(flush)) {
             flush(performance.now());
             phase = nextPhase;
           }
         },
         finish() {
           scope.mark();
-          closed = true;
           active.delete(flush);
         },
       };

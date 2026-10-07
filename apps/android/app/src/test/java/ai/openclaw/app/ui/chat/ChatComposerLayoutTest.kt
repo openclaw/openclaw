@@ -11,6 +11,7 @@ import ai.openclaw.app.GatewayTalkSetupIssue
 import ai.openclaw.app.GatewayTalkSetupReadiness
 import ai.openclaw.app.GatewayTalkSetupState
 import ai.openclaw.app.GatewayTalkSetupTarget
+import ai.openclaw.app.GatewayTalkSetupTargetIssue
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
@@ -1265,7 +1266,7 @@ class ChatComposerLayoutTest {
           readiness.value.copy(
             realtimeTalk =
               GatewayTalkSetupState.NeedsSetup(
-                GatewayTalkSetupIssue.ConfigureProvider(GatewayTalkSetupTarget.REALTIME_TALK),
+                GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.ConfigureProvider, GatewayTalkSetupTarget.REALTIME_TALK),
               ),
           )
       }

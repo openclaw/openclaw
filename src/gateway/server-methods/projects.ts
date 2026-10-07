@@ -158,13 +158,10 @@ function retainNewestRawProjectCandidate(
   const insertionIndex = candidates.findIndex(
     (existing) => compareRawProjectCandidates(candidate, existing) < 0,
   );
-  if (insertionIndex < 0) {
-    if (candidates.length < PROJECTS_LIST_MAX_RAW_CANDIDATES) {
-      candidates.push(candidate);
-    }
+  if (insertionIndex < 0 && candidates.length >= PROJECTS_LIST_MAX_RAW_CANDIDATES) {
     return;
   }
-  candidates.splice(insertionIndex, 0, candidate);
+  candidates.splice(insertionIndex < 0 ? candidates.length : insertionIndex, 0, candidate);
   if (candidates.length > PROJECTS_LIST_MAX_RAW_CANDIDATES) {
     candidates.pop();
   }
@@ -329,24 +326,19 @@ async function listObservedProjects(
   const candidates: ProjectCandidate[] = [];
   for (const raw of rawCandidates) {
     const identity = identities.get(raw.kind === "worktree" ? raw.repoRoot : raw.checkoutPath);
-    if (raw.kind === "worktree") {
-      // Registry facts survive a missing source checkout or exhausted probe budget.
-      candidates.push({
-        checkoutPath: raw.checkoutPath,
-        fingerprint: raw.fingerprint,
-        lastUsedAt: raw.lastUsedAt,
-        ...(identity?.originUrl ? { originUrl: identity.originUrl } : {}),
-      });
+    const checkout =
+      raw.kind === "worktree"
+        ? { checkoutPath: raw.checkoutPath, fingerprint: raw.fingerprint }
+        : identity && { checkoutPath: identity.checkoutRoot, fingerprint: identity.fingerprint };
+    if (!checkout) {
       continue;
     }
-    if (identity) {
-      candidates.push({
-        checkoutPath: identity.checkoutRoot,
-        fingerprint: identity.fingerprint,
-        lastUsedAt: raw.lastUsedAt,
-        ...(identity.originUrl ? { originUrl: identity.originUrl } : {}),
-      });
-    }
+    // Registry facts survive a missing source checkout or exhausted probe budget.
+    candidates.push({
+      ...checkout,
+      lastUsedAt: raw.lastUsedAt,
+      ...(identity?.originUrl ? { originUrl: identity.originUrl } : {}),
+    });
   }
 
   // M5: merge operator-enabled device checkout advertisements at this seam.

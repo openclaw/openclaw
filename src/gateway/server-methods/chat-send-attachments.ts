@@ -37,18 +37,15 @@ import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-function isPdfOffloadedRef(ref: OffloadedRef): boolean {
-  const mime = ref.mimeType.trim().toLowerCase();
-  if (mime === "application/pdf" || mime.endsWith("+pdf")) {
-    return true;
-  }
-  return path.extname(ref.path.split(/[?#]/u)[0] ?? "").toLowerCase() === ".pdf";
-}
-
 // Managed inbound PDFs can be read host-side from the media-store root, even
 // for locked-down agents, so sandbox staging may safely fall back to that path.
 function isManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
-  if (!isPdfOffloadedRef(ref)) {
+  const mime = ref.mimeType.trim().toLowerCase();
+  if (
+    mime !== "application/pdf" &&
+    !mime.endsWith("+pdf") &&
+    path.extname(ref.path.split(/[?#]/u)[0] ?? "").toLowerCase() !== ".pdf"
+  ) {
     return false;
   }
   try {

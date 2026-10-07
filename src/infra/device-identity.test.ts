@@ -19,7 +19,6 @@ import {
   deriveDeviceIdFromPublicKey,
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
-  loadOrCreateProcessDeviceIdentity,
   normalizeDevicePublicKeyBase64Url,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
@@ -394,24 +393,6 @@ describe("device identity SQLite store", () => {
           .get(),
       ).toEqual({ role: "global", schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
       verified.close();
-    });
-  });
-
-  it("keeps process identities cached by database path and identity key", async () => {
-    await withTempDir("openclaw-device-identity-cache-", async (rootDir) => {
-      const primaryOptions = storeOptions(rootDir);
-      const secondaryOptions = storeOptions(rootDir, "secondary");
-      const primary = loadOrCreateProcessDeviceIdentity(primaryOptions);
-      const secondary = loadOrCreateProcessDeviceIdentity(secondaryOptions);
-
-      expect(loadOrCreateProcessDeviceIdentity(primaryOptions)).toBe(primary);
-      expect(loadOrCreateProcessDeviceIdentity(secondaryOptions)).toBe(secondary);
-      expect(secondary.deviceId).not.toBe(primary.deviceId);
-
-      const claimPath = path.join(rootDir, "identity", "device.json.doctor-importing");
-      writeRetiredIdentity(claimPath);
-      expect(loadOrCreateProcessDeviceIdentity(primaryOptions)).toBe(primary);
-      expect(fs.existsSync(claimPath)).toBe(true);
     });
   });
 

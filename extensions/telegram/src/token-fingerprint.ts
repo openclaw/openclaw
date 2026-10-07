@@ -9,8 +9,5 @@ export function fingerprintTelegramBotToken(token: string): string {
 
 export function resolveTelegramBotUserIdFromToken(token?: string): number | undefined {
   const rawBotId = token?.trim().split(":", 1)[0];
-  if (!rawBotId || !/^\d+$/.test(rawBotId)) {
-    return undefined;
-  }
-  return parseStrictPositiveInteger(rawBotId);
+  return rawBotId && /^\d+$/.test(rawBotId) ? parseStrictPositiveInteger(rawBotId) : undefined;
 }

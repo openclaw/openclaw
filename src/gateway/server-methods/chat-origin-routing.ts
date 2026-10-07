@@ -199,10 +199,7 @@ function isAcpSessionKey(sessionKey: string | undefined): boolean {
 }
 
 function resolveExplicitOriginBinding(origin: ChatSendExplicitOrigin | undefined) {
-  if (!origin?.accountId) {
-    return undefined;
-  }
-  if (origin.originatingChannel === INTERNAL_MESSAGE_CHANNEL) {
+  if (!origin?.accountId || origin.originatingChannel === INTERNAL_MESSAGE_CHANNEL) {
     return undefined;
   }
   return getSessionBindingService().resolveByConversation({

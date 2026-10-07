@@ -775,20 +775,14 @@ describe("registerPreActionHooks", () => {
     });
   });
 
-  it("uses the Commander path past parent option values for gateway calls", async () => {
+  it("leaves gateway call config loading to the transport past parent option values", async () => {
     const parseProgram = buildProgram();
     process.argv = ["node", "openclaw", "gateway", "--token", "secret", "call", "health", "--json"];
 
     await parseProgram.parseAsync(process.argv);
 
-    const bootstrap = ensureConfigReadyMock.mock.calls.at(-1)?.[0];
-    expect(bootstrap).toEqual({
-      runtime: runtimeMock,
-      measure: expect.any(Function),
-      commandPath: ["gateway", "call"],
-      suppressDoctorStdout: true,
-      validateConfigOnly: true,
-    });
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("uses the shared skip policy for gateway health on the Commander path", async () => {

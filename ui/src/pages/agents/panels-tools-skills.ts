@@ -273,21 +273,13 @@ export function renderAgentTools(
   );
 
   const sortSectionTools = (tools: AgentToolEntry[]) =>
-    tools.toSorted((left, right) => {
-      const leftId = normalizeToolPolicyName(left.id);
-      const rightId = normalizeToolPolicyName(right.id);
-      const leftActive = activeToolIds.has(leftId) ? 1 : 0;
-      const rightActive = activeToolIds.has(rightId) ? 1 : 0;
-      if (leftActive !== rightActive) {
-        return rightActive - leftActive;
-      }
-      const leftAllowed = resolveAllowed(left.id).allowed ? 1 : 0;
-      const rightAllowed = resolveAllowed(right.id).allowed ? 1 : 0;
-      if (leftAllowed !== rightAllowed) {
-        return rightAllowed - leftAllowed;
-      }
-      return left.label.localeCompare(right.label);
-    });
+    tools.toSorted(
+      (left, right) =>
+        Number(activeToolIds.has(normalizeToolPolicyName(right.id))) -
+          Number(activeToolIds.has(normalizeToolPolicyName(left.id))) ||
+        Number(resolveAllowed(right.id).allowed) - Number(resolveAllowed(left.id).allowed) ||
+        left.label.localeCompare(right.label),
+    );
 
   const updateTools = (targetIds: string[], nextEnabled: boolean) => {
     const nextAllow = new Set(normalizeToolList(alsoAllow));
@@ -378,20 +370,17 @@ export function renderAgentTools(
             })}</span
           >`,
         actions: html`
-          <button
-            class="btn btn--sm"
-            ?disabled=${!editable}
-            @click=${() => updateTools(toolIds, true)}
-          >
-            ${t("agentTools.enableAll")}
-          </button>
-          <button
-            class="btn btn--sm"
-            ?disabled=${!editable}
-            @click=${() => updateTools(toolIds, false)}
-          >
-            ${t("agentTools.disableAll")}
-          </button>
+          ${[true, false].map(
+            (enabled) => html`
+              <button
+                class="btn btn--sm"
+                ?disabled=${!editable}
+                @click=${() => updateTools(toolIds, enabled)}
+              >
+                ${t(enabled ? "agentTools.enableAll" : "agentTools.disableAll")}
+              </button>
+            `,
+          )}
           ${renderAgentConfigActions(params)}
         `,
       },
@@ -513,34 +502,21 @@ export function renderAgentTools(
                     </span>
                   </span>
                   <span class="agent-tools-group__counts">
-                    <span
-                      >${t(
-                        section.tools.length === 1 ? "agentTools.toolsOne" : "agentTools.tools",
-                        {
-                          count: String(section.tools.length),
-                        },
-                      )}</span
-                    >
-                    <span
-                      >${t(
-                        enabledSectionCount === 1
-                          ? "agentTools.enabledToolsOne"
-                          : "agentTools.enabledTools",
-                        { count: String(enabledSectionCount) },
-                      )}</span
-                    >
-                    ${
-                      activeSectionCount > 0
-                        ? html`<span
-                            >${t(
-                              activeSectionCount === 1
-                                ? "agentTools.listedToolsOne"
-                                : "agentTools.listedTools",
-                              { count: String(activeSectionCount) },
-                            )}</span
-                          >`
-                        : nothing
-                    }
+                    ${(
+                      [
+                        ["tools", section.tools.length],
+                        ["enabledTools", enabledSectionCount],
+                        ["listedTools", activeSectionCount],
+                      ] as const
+                    ).map(([label, count]) =>
+                      label === "listedTools" && count === 0
+                        ? nothing
+                        : html`<span
+                            >${t(`agentTools.${label}${count === 1 ? "One" : ""}`, {
+                              count: String(count),
+                            })}</span
+                          >`,
+                    )}
                   </span>
                 </summary>
                 <div class="agent-tools-list">

@@ -1,9 +1,9 @@
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { extractRawResponseItemText } from "./event-projector-values.js";
 import {
   isJsonObject,
   type CodexServerNotification,
   type CodexThreadItem,
-  type JsonObject,
   type JsonValue,
 } from "./protocol.js";
 
@@ -74,10 +74,7 @@ export function isTerminalTurnStatus(status: string | undefined): boolean {
 /** Detects Codex's interrupted-turn marker, not user-authored copies of it. */
 export function isCodexTurnAbortMarkerNotification(
   notification: CodexServerNotification,
-  options: {
-    currentPromptText?: string;
-    currentPromptTexts?: readonly string[];
-  } = {},
+  options: { currentPromptText?: string } = {},
 ): boolean {
   if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
     return false;
@@ -91,36 +88,13 @@ export function isCodexTurnAbortMarkerNotification(
   ) {
     return false;
   }
-  const text = extractRawResponseItemText(item).trim();
-  const currentPromptTexts = [options.currentPromptText, ...(options.currentPromptTexts ?? [])]
-    .filter((prompt): prompt is string => typeof prompt === "string" && prompt.length > 0)
-    .map((prompt) => prompt.trim());
-  if (role === "user" && currentPromptTexts.includes(text)) {
+  const text = extractRawResponseItemText(item, "input_text") ?? "";
+  if (role === "user" && options.currentPromptText?.trim() === text) {
     return false;
   }
   return (
     text.startsWith(CODEX_TURN_ABORT_MARKER_START) && text.endsWith(CODEX_TURN_ABORT_MARKER_END)
   );
-}
-
-function extractRawResponseItemText(item: JsonObject): string {
-  const content = item.content;
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .flatMap((entry) => {
-      if (!isJsonObject(entry)) {
-        return [];
-      }
-      const type = readString(entry, "type");
-      if (type !== "input_text" && type !== "text") {
-        return [];
-      }
-      const text = readString(entry, "text");
-      return text ? [text] : [];
-    })
-    .join("");
 }
 
 export function readCodexNotificationItem(

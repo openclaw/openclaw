@@ -28,10 +28,8 @@ function toTranscriptToolResultContentItem(item: unknown): Record<string, unknow
   if (record.type === "inputText") {
     return { type: "text", text: typeof record.text === "string" ? record.text : "" };
   }
-  if (record.type === "inputImage") {
-    return typeof record.imageUrl === "string"
-      ? { type: "image", url: record.imageUrl }
-      : { type: "text", text: formatUnsupportedCodexDynamicToolOutput(record.type) };
+  if (record.type === "inputImage" && typeof record.imageUrl === "string") {
+    return { type: "image", url: record.imageUrl };
   }
   return { type: "text", text: formatUnsupportedCodexDynamicToolOutput(record.type) };
 }

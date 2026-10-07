@@ -364,6 +364,10 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                               orderedProviderGroups,
                               ([provider]) => provider,
                               ([provider, options]) => {
+                                const providerLabel = providerDisplayLabel(provider);
+                                const groupLabel = t("chat.modelControls.providerModels", {
+                                  provider: providerLabel,
+                                });
                                 const auth = params.providerAuth?.get(provider);
                                 const showAuth =
                                   auth &&
@@ -387,9 +391,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                   <section
                                     class="chat-controls__provider-model-group"
                                     data-chat-model-provider-group=${provider}
-                                    aria-label=${t("chat.modelControls.providerModels", {
-                                      provider: providerDisplayLabel(provider),
-                                    })}
+                                    aria-label=${groupLabel}
                                   >
                                     <div
                                       class="chat-controls__provider-heading"
@@ -402,16 +404,14 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                         data-chat-model-group-toggle
                                         data-chat-model-provider-toggle
                                         aria-expanded=${String(provider === activeModelOption?.provider)}
-                                        aria-label=${`${t("chat.modelControls.providerModels", {
-                                          provider: providerDisplayLabel(provider),
-                                        })} (${options.length})`}
+                                        aria-label=${`${groupLabel} (${options.length})`}
                                         aria-description=${routeDetail ?? nothing}
                                         ?disabled=${params.disabled}
                                         @click=${toggleModelProviderGroup}
                                       >
                                         ${renderChatModelProviderIcon(provider)}
                                         <span class="chat-controls__provider-label"
-                                          >${providerDisplayLabel(provider)}</span
+                                          >${providerLabel}</span
                                         >
                                         <span>${options.length}</span>
                                         <span
@@ -442,9 +442,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                       class="chat-controls__provider-model-list"
                                       data-chat-model-list="true"
                                       role="listbox"
-                                      aria-label=${t("chat.modelControls.providerModels", {
-                                        provider: providerDisplayLabel(provider),
-                                      })}
+                                      aria-label=${groupLabel}
                                     >
                                       ${repeat(options, modelPickerOptionKey, (entry) =>
                                         renderChatModelPickerOption({

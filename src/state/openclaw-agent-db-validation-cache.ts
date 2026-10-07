@@ -597,9 +597,11 @@ export function clearOpenClawAgentDatabaseValidationCache(rootPath?: string): vo
 /** Reader cleanup releases local metadata without revoking its parent's shared proof. */
 export function releaseOpenClawAgentDatabaseReadValidation(
   candidates: readonly Pick<OpenClawAgentDatabaseReadCandidateResource, "path" | "scope">[],
+  retainedPaths: readonly string[] = [],
 ): void {
   for (const pathname of validatedPaths.keys()) {
     if (
+      !retainedPaths.some((retained) => path.resolve(retained) === pathname) &&
       candidates.some((candidate) => matchesAgentDatabaseReadCandidatePath(candidate, pathname))
     ) {
       validatedPaths.delete(pathname);

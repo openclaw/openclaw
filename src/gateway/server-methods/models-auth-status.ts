@@ -154,13 +154,11 @@ export function aggregateRefreshableAuthStatus(
   expectsOAuth = false,
 ): ModelAuthStatusRollup {
   const profiles = prov.effectiveProfiles ?? prov.profiles;
-  const oauth = profiles.filter((profile) => profile.type === "oauth");
-  if (oauth.length > 0) {
-    return aggregateProfileStatus(oauth, now);
-  }
-  const tokens = profiles.filter((profile) => profile.type === "token");
-  if (tokens.length > 0) {
-    return aggregateProfileStatus(tokens, now);
+  for (const type of ["oauth", "token"] as const) {
+    const selected = profiles.filter((profile) => profile.type === type);
+    if (selected.length > 0) {
+      return aggregateProfileStatus(selected, now);
+    }
   }
   if (expectsOAuth) {
     return { status: "missing" };

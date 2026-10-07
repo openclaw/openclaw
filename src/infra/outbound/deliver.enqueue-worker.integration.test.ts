@@ -243,7 +243,18 @@ if (!isMainThread) {
           onDeliveryIntent: queued,
         });
         expect(admissionFailure).toMatchObject({
-          message: "synthetic enqueue transaction rejected",
+          name: "OutboundDeliveryError",
+          stage: "queue",
+          queueCustody: "released",
+          sentBeforeError: false,
+          results: [],
+          payloadOutcomes: [],
+          cause: {
+            name: "PlatformMessageNotDispatchedError",
+            code: "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED",
+            retryable: true,
+            cause: { message: "synthetic enqueue transaction rejected" },
+          },
         });
         expect(reply.attempts()).toBe(attempts);
         expect(send).toHaveBeenCalledOnce();

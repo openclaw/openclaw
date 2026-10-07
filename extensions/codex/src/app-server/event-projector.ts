@@ -16,7 +16,7 @@ import { CodexTurnProjection } from "./event-projector-result.js";
 import { buildCodexSteeringMessagesSnapshot } from "./event-projector-snapshot.js";
 import type { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import {
-  extractRawAssistantText,
+  extractRawResponseItemText,
   readCodexErrorNotificationMessage,
   readItem,
 } from "./event-projector-values.js";
@@ -669,7 +669,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     if (!item) {
       return;
     }
-    if (item.role === "assistant" && extractRawAssistantText(item)) {
+    if (item.role === "assistant" && extractRawResponseItemText(item)) {
       this.eventProjection.markSafetyBufferingAssistantStarted();
     }
     this.toolSearchEvidenceProjection?.recordRawResponseItem(item);

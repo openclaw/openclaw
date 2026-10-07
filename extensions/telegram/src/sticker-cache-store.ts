@@ -71,11 +71,7 @@ export async function searchStickers(query: string, limit = 10): Promise<CachedS
   const queryWords = queryLower.split(/\s+/).filter(Boolean);
   const results: Array<{ sticker: CachedSticker; score: number }> = [];
 
-  for (const { value: sticker } of await readStickerCacheStore(
-    "entries",
-    (store) => store.entries(),
-    [],
-  )) {
+  for (const sticker of await getAllCachedStickers()) {
     let score = 0;
     const descLower = normalizeLowercaseStringOrEmpty(sticker.description);
 

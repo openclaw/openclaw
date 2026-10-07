@@ -279,16 +279,16 @@ class ActivityPage extends OpenClawLightDomElement {
       this.runInspector = { status: "disconnected" };
       return;
     }
-    if (isGatewayMethodAdvertised(snapshot, "audit.run.inspect") === false) {
+    const unavailable =
+      isGatewayMethodAdvertised(snapshot, "audit.run.inspect") === false
+        ? "unsupported"
+        : !canCallGatewayMethod(snapshot, "audit.run.inspect", "operator.read")
+          ? "unauthorized"
+          : null;
+    if (unavailable) {
       this.cancelInspectorRequest();
       this.inspectorClient = snapshot.client;
-      this.runInspector = { status: "unsupported" };
-      return;
-    }
-    if (!canCallGatewayMethod(snapshot, "audit.run.inspect", "operator.read")) {
-      this.cancelInspectorRequest();
-      this.inspectorClient = snapshot.client;
-      this.runInspector = { status: "unauthorized" };
+      this.runInspector = { status: unavailable };
       return;
     }
     if (
@@ -375,14 +375,10 @@ class ActivityPage extends OpenClawLightDomElement {
           result.identity.state === "ambiguous"
         ) {
           const candidates = new Map(
-            previousState.result.identity.candidates.map((candidate) => [
-              candidate.executionId,
-              candidate,
-            ]),
+            [...previousState.result.identity.candidates, ...result.identity.candidates].map(
+              (candidate) => [candidate.executionId, candidate],
+            ),
           );
-          for (const candidate of result.identity.candidates) {
-            candidates.set(candidate.executionId, candidate);
-          }
           this.runInspector = {
             status: "ready",
             result: {

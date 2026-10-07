@@ -35,6 +35,15 @@ import { resolveSpooledUpdatePersistenceRetryDelayMs } from "./telegram-ingress-
 
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
 
+function abortedProcessingResult(
+  signal: AbortSignal,
+  fallback: string,
+): TelegramMessageProcessingResult {
+  return signal.reason === "skipped"
+    ? { kind: "skipped" }
+    : { kind: "failed-retryable", error: signal.reason ?? new Error(fallback) };
+}
+
 type TelegramMessageProcessorDeps = Omit<
   BuildTelegramMessageContextParams,
   | "primaryCtx"
@@ -415,16 +424,13 @@ export const createTelegramMessageProcessor = (
           return settledResult;
         }
         if (turnAbortSignal.aborted) {
-          const abortResult: TelegramMessageProcessingResult =
-            turnAbortSignal.reason === "skipped"
-              ? { kind: "skipped" }
-              : {
-                  kind: "failed-retryable",
-                  error:
-                    turnAbortSignal.reason ??
-                    new Error("telegram spooled replay owner cancelled before adoption"),
-                };
-          return await settle(abortResult, "terminal");
+          return await settle(
+            abortedProcessingResult(
+              turnAbortSignal,
+              "telegram spooled replay owner cancelled before adoption",
+            ),
+            "terminal",
+          );
         }
         if (adoptionAttempted && !deferred && result.kind === "completed") {
           runtime.error?.(
@@ -468,16 +474,9 @@ export const createTelegramMessageProcessor = (
             }
           }
           if (turnAbortSignal.aborted && !participant.abortSignal.aborted) {
-            const abortResult: TelegramMessageProcessingResult =
-              turnAbortSignal.reason === "skipped"
-                ? { kind: "skipped" }
-                : {
-                    kind: "failed-retryable",
-                    error:
-                      turnAbortSignal.reason ??
-                      new Error("telegram spooled replay owner cancelled"),
-                  };
-            participant.settle(abortResult);
+            participant.settle(
+              abortedProcessingResult(turnAbortSignal, "telegram spooled replay owner cancelled"),
+            );
           }
           return await participant.task;
         }

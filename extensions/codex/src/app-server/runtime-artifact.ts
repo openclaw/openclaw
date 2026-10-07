@@ -296,18 +296,15 @@ function attestNodeOptions(value: string): NodeOptionsAttestationResult {
     ) {
       continue;
     }
-    if (flag === "--dns-result-order") {
-      const order = inlineValue ?? tokens[++index];
-      if (order && SAFE_NODE_OPTIONS_DNS_RESULT_ORDERS.has(order)) {
-        continue;
-      }
+    const dnsOrder = flag === "--dns-result-order";
+    if (!dnsOrder && !SAFE_NODE_OPTIONS_NUMERIC_FLAGS.has(flag)) {
       return { ok: false, option: flag };
     }
-    if (!SAFE_NODE_OPTIONS_NUMERIC_FLAGS.has(flag)) {
-      return { ok: false, option: flag };
-    }
-    const numericValue = inlineValue ?? tokens[++index];
-    if (!numericValue || !/^\d+$/u.test(numericValue)) {
+    const argument = inlineValue ?? tokens[++index];
+    if (
+      !argument ||
+      !(dnsOrder ? SAFE_NODE_OPTIONS_DNS_RESULT_ORDERS.has(argument) : /^\d+$/u.test(argument))
+    ) {
       return { ok: false, option: flag };
     }
   }
@@ -632,14 +629,13 @@ function validateFilesystemDescriptorShape(descriptor: CodexRuntimeFilesystemDes
   ) {
     throw new Error("Invalid Codex runtime artifact descriptor");
   }
-  if (descriptor.packageRoot) {
-    if (
-      !isBoundedPath(descriptor.packageRoot) ||
+  if (
+    descriptor.packageRoot &&
+    (!isBoundedPath(descriptor.packageRoot) ||
       path.dirname(path.dirname(descriptor.nativePath)) !== descriptor.packageRoot ||
-      path.basename(path.dirname(descriptor.nativePath)) !== "bin"
-    ) {
-      throw new Error("Invalid Codex runtime package descriptor");
-    }
+      path.basename(path.dirname(descriptor.nativePath)) !== "bin")
+  ) {
+    throw new Error("Invalid Codex runtime package descriptor");
   }
   if (descriptor.codeModeHostPath && !isBoundedPath(descriptor.codeModeHostPath)) {
     throw new Error("Invalid Codex code-mode host artifact descriptor");
@@ -793,11 +789,10 @@ export async function finalizeCodexAppServerRuntimeArtifact(params: {
       : {}),
   };
   validateArtifactDescriptorShape(descriptor);
-  const binding = Object.freeze({
+  return Object.freeze({
     id: encodeArtifactId(descriptor),
     fingerprint: fingerprintBinding(descriptor, afterContentFingerprint),
   });
-  return binding;
 }
 
 /** Checks current pre-spawn bytes and selection against a previously minted binding. */

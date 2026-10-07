@@ -22,25 +22,6 @@ import { findPersistedAuthProfileCredential } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
 
-function restoresFencedOAuthRefreshGeneration(params: {
-  profileId: string;
-  existing: AuthProfileCredential | undefined;
-  incoming: AuthProfileCredential;
-}): boolean {
-  return (
-    params.existing?.type === "oauth" &&
-    params.incoming.type === "oauth" &&
-    params.incoming.copyToAgents !== true &&
-    !isOAuthRefreshFence(params.incoming) &&
-    isOAuthRefreshFence(params.existing) &&
-    isSameOAuthRefreshGeneration({
-      profileId: params.profileId,
-      left: params.existing,
-      right: params.incoming,
-    })
-  );
-}
-
 function loadAuthProfileWriteTarget(params: {
   agentDir?: string;
   stateDir?: string;
@@ -68,19 +49,16 @@ function loadAuthProfileWriteAuthority(
     return target;
   }
   if (params.stateDir) {
-    return loadPersistedSharedAuthProfileStore({
-      ...process.env,
-      OPENCLAW_STATE_DIR: params.stateDir,
-      OPENCLAW_AGENT_DIR: undefined,
-    })?.profiles[profileId];
+    return loadAuthProfileWriteTarget({ stateDir: params.stateDir })?.profiles[profileId];
   }
   return findPersistedAuthProfileCredential({ agentDir: params.agentDir, profileId });
 }
 
-function supersedesOAuthRefreshGenerationObservedAtAdmission(params: {
+function rejectsOAuthRefreshGenerationReplacement(params: {
   profileId: string;
   observed: AuthProfileCredential | undefined;
   current: AuthProfileCredential | undefined;
+  local: AuthProfileCredential | undefined;
   incoming: AuthProfileCredential;
   allowOAuthGenerationReplacement: boolean;
 }): boolean {
@@ -91,36 +69,42 @@ function supersedesOAuthRefreshGenerationObservedAtAdmission(params: {
   ) {
     return false;
   }
+  let supersedes = false;
   if (isDeepStrictEqual(params.current, params.observed)) {
     if (
-      params.allowOAuthGenerationReplacement ||
-      params.current === undefined ||
-      (params.current.type === "oauth" && isOAuthRefreshFence(params.current))
+      !params.allowOAuthGenerationReplacement &&
+      params.current !== undefined &&
+      !(params.current.type === "oauth" && isOAuthRefreshFence(params.current))
     ) {
-      return false;
+      supersedes =
+        params.current.type !== "oauth" ||
+        !isSameOAuthRefreshGeneration({
+          profileId: params.profileId,
+          left: params.current,
+          right: params.incoming,
+        });
     }
-    return (
-      params.current.type !== "oauth" ||
-      !isSameOAuthRefreshGeneration({
+  } else if (params.observed === undefined) {
+    supersedes = params.current !== undefined;
+  } else {
+    supersedes =
+      !params.allowOAuthGenerationReplacement ||
+      params.observed.type !== "oauth" ||
+      isSameOAuthRefreshGeneration({
         profileId: params.profileId,
-        left: params.current,
+        left: params.observed,
         right: params.incoming,
-      })
-    );
-  }
-  if (params.observed === undefined) {
-    return params.current !== undefined;
-  }
-  if (!params.allowOAuthGenerationReplacement) {
-    return true;
+      });
   }
   return (
-    params.observed.type !== "oauth" ||
-    isSameOAuthRefreshGeneration({
-      profileId: params.profileId,
-      left: params.observed,
-      right: params.incoming,
-    })
+    supersedes ||
+    (params.local?.type === "oauth" &&
+      isOAuthRefreshFence(params.local) &&
+      isSameOAuthRefreshGeneration({
+        profileId: params.profileId,
+        left: params.local,
+        right: params.incoming,
+      }))
   );
 }
 
@@ -205,17 +189,13 @@ export async function persistAuthProfileBatch(
               continue;
             }
             if (
-              supersedesOAuthRefreshGenerationObservedAtAdmission({
+              rejectsOAuthRefreshGenerationReplacement({
                 profileId,
                 observed: observedProfiles.get(profileId),
                 current: currentAuthorities.get(profileId),
+                local: next.profiles[profileId],
                 incoming: entry.credential,
                 allowOAuthGenerationReplacement: params.allowOAuthGenerationReplacement === true,
-              }) ||
-              restoresFencedOAuthRefreshGeneration({
-                profileId,
-                existing: next.profiles[profileId],
-                incoming: entry.credential,
               })
             ) {
               throw new Error(
@@ -374,17 +354,13 @@ export async function upsertAuthProfileWithLock(
         // Consumers can reject a changed profile kind under the same lock as the write.
         params.validateCurrentCredential?.(store.profiles[params.profileId]);
         if (
-          supersedesOAuthRefreshGenerationObservedAtAdmission({
+          rejectsOAuthRefreshGenerationReplacement({
             profileId: params.profileId,
             observed,
             current: currentAuthority,
+            local: store.profiles[params.profileId],
             incoming: credential,
             allowOAuthGenerationReplacement: false,
-          }) ||
-          restoresFencedOAuthRefreshGeneration({
-            profileId: params.profileId,
-            existing: store.profiles[params.profileId],
-            incoming: credential,
           })
         ) {
           rejectedFencedGeneration = true;

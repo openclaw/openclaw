@@ -107,25 +107,28 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           onRotationDetected: (info) =>
             log(formatTelegramOffsetRotationMessage(account.accountId, info)),
         });
+    const botOptions = () => ({
+      token,
+      accountId: account.accountId,
+      ownerAgentId,
+      config: cfg,
+      runtime: opts.runtime,
+      buildContext: pluginChannelRuntime?.inbound.buildContext,
+      // Pass the owning runtime's bound dispatcher through to the turn plan.
+      dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
+      abortSignal: opts.abortSignal,
+      setStatus: opts.setStatus,
+    });
     if (opts.useWebhook) {
       const { startTelegramWebhook } = await import("./webhook.js");
       const webhook = await startTelegramWebhook({
-        token,
-        accountId: account.accountId,
-        ownerAgentId,
-        config: cfg,
+        ...botOptions(),
         path: opts.webhookPath,
         legacyWebhook: opts.legacyWebhook ?? account.config.legacyWebhook,
         secret: opts.webhookSecret ?? account.config.webhookSecret,
-        runtime: opts.runtime,
-        buildContext: pluginChannelRuntime?.inbound.buildContext,
-        // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
-        dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
         fetch: proxyFetch,
-        abortSignal: opts.abortSignal,
         publicUrl: opts.webhookUrl ?? account.config.webhookUrl,
         webhookCertPath: opts.webhookCertPath,
-        setStatus: opts.setStatus,
       });
       try {
         await waitForAbortSignal(opts.abortSignal);
@@ -172,23 +175,14 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     const telegramTransport = createTelegramTransportForPolling();
 
     const pollingSession = new TelegramPollingSession({
-      token,
-      config: cfg,
-      accountId: account.accountId,
-      ownerAgentId,
-      runtime: opts.runtime,
-      buildContext: pluginChannelRuntime?.inbound.buildContext,
-      // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
-      dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
+      ...botOptions(),
       proxyFetch,
       botInfo: opts.botInfo,
-      abortSignal: opts.abortSignal,
       getCommittedUpdateId: offsetPersistence.getCommittedUpdateId,
       persistUpdateId: offsetPersistence.persistUpdateId,
       log,
       telegramTransport,
       createTelegramTransport: createTelegramTransportForPolling,
-      setStatus: opts.setStatus,
       ingress: {
         apiRoot: account.config.apiRoot,
         proxy: account.config.proxy,

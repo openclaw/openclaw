@@ -143,6 +143,34 @@ class DevicePage extends OpenClawLightDomElement {
     });
   }
 
+  private select(
+    key: "app.appearance" | "app.iconStyle" | "capabilities.computerControlProvider",
+    value: string,
+    options: Array<{ id: string; name: string; disabled?: boolean }>,
+    description?: string,
+    disabled = false,
+    liveValue = true,
+  ) {
+    const capability = this.context.nativeDeviceSettings;
+    const title = t(`configPage.deviceSettings.${key.slice(key.indexOf(".") + 1)}`);
+    return renderSettingsRow({
+      title,
+      description,
+      control: html`<select
+        class="settings-select"
+        aria-label=${title}
+        .value=${liveValue ? live(value) : value}
+        ?disabled=${disabled}
+        @change=${(event: Event) => {
+          // SAFETY: This handler is bound directly to the native select.
+          capability?.set(key, (event.currentTarget as HTMLSelectElement).value);
+        }}
+      >
+        ${options.map((option) => html`<option value=${option.id} ?selected=${option.id === value} ?disabled=${option.disabled}>${option.name}</option>`)}
+      </select>`,
+    });
+  }
+
   private editTargetProfile(value: string) {
     const capability = this.context.nativeDeviceSettings;
     if (!capability) {
@@ -366,51 +394,27 @@ class DevicePage extends OpenClawLightDomElement {
                 ${this.toggle("app.nativeExperienceEnabled", app.nativeExperienceEnabled, "nativeExperience", t("configPage.deviceSettings.nativeExperienceHint"))}
                 ${
                   app.appearance !== undefined
-                    ? renderSettingsRow({
-                        title: t("configPage.deviceSettings.appearance"),
-                        control: html`<select
-                          class="settings-select"
-                          aria-label=${t("configPage.deviceSettings.appearance")}
-                          .value=${live(app.appearance)}
-                          @change=${(event: Event) => {
-                            // SAFETY: This handler is bound directly to the appearance select.
-                            const value = (event.currentTarget as HTMLSelectElement).value;
-                            capability?.set("app.appearance", value);
-                          }}
-                        >
-                          ${["system", "light", "dark"].map((value) => html`<option value=${value} ?selected=${value === app.appearance}>${t(`configPage.deviceSettings.appearanceModes.${value}`)}</option>`)}
-                        </select>`,
-                      })
+                    ? this.select(
+                        "app.appearance",
+                        app.appearance,
+                        ["system", "light", "dark"].map((value) => ({
+                          id: value,
+                          name: t(`configPage.deviceSettings.appearanceModes.${value}`),
+                        })),
+                      )
                     : nothing
                 }
                 ${this.toggle("app.notificationsEnabled", app.notificationsEnabled, "notificationsEnabled", t("configPage.deviceSettings.notificationsEnabledHint"))}
                 ${this.toggle("app.showDockIcon", app.showDockIcon, "showDockIcon", t("configPage.deviceSettings.showDockIconHint"))}
                 ${
                   app.iconStyle
-                    ? renderSettingsRow({
-                        title: t("configPage.deviceSettings.iconStyle"),
-                        description: t("configPage.deviceSettings.iconStyleHint"),
-                        control: html`<select
-                          class="settings-select"
-                          aria-label=${t("configPage.deviceSettings.iconStyle")}
-                          .value=${live(app.iconStyle.selectedId)}
-                          ?disabled=${app.iconStyle.available.length === 0}
-                          @change=${(event: Event) => {
-                            // SAFETY: This handler is bound directly to the Dock icon select.
-                            const value = (event.currentTarget as HTMLSelectElement).value;
-                            capability?.set("app.iconStyle", value);
-                          }}
-                        >
-                          ${app.iconStyle.available.map(
-                            (style) => html`<option
-                              value=${style.id}
-                              ?selected=${style.id === app.iconStyle?.selectedId}
-                            >
-                              ${style.name}
-                            </option>`,
-                          )}
-                        </select>`,
-                      })
+                    ? this.select(
+                        "app.iconStyle",
+                        app.iconStyle.selectedId,
+                        app.iconStyle.available,
+                        t("configPage.deviceSettings.iconStyleHint"),
+                        app.iconStyle.available.length === 0,
+                      )
                     : nothing
                 }
                 ${this.toggle("app.iconAnimationsEnabled", app.iconAnimationsEnabled, "iconAnimations", t("configPage.deviceSettings.iconAnimationsHint"))}
@@ -485,33 +489,25 @@ class DevicePage extends OpenClawLightDomElement {
                 ${
                   capabilities.computerControlEnabled &&
                   capabilities.computerControlProvider !== undefined
-                    ? renderSettingsRow({
-                        title: t("configPage.deviceSettings.computerControlProvider"),
-                        control: html`<select
-                          class="settings-select"
-                          aria-label=${t("configPage.deviceSettings.computerControlProvider")}
-                          .value=${capabilities.computerControlProvider}
-                          @change=${(event: Event) => {
-                            // SAFETY: This handler is bound directly to the provider select.
-                            const value = (event.currentTarget as HTMLSelectElement).value;
-                            capability?.set("capabilities.computerControlProvider", value);
-                          }}
-                        >
-                          <option
-                            value="peekaboo"
-                            ?selected=${capabilities.computerControlProvider === "peekaboo"}
-                          >
-                            ${t("configPage.deviceSettings.peekaboo")}
-                          </option>
-                          <option
-                            value="cua"
-                            ?selected=${capabilities.computerControlProvider === "cua"}
-                            ?disabled=${!capabilities.cuaDriverBundled}
-                          >
-                            ${t(capabilities.cuaDriverBundled ? "configPage.deviceSettings.cua" : "configPage.deviceSettings.cuaUnavailable")}
-                          </option>
-                        </select>`,
-                      })
+                    ? this.select(
+                        "capabilities.computerControlProvider",
+                        capabilities.computerControlProvider,
+                        [
+                          { id: "peekaboo", name: t("configPage.deviceSettings.peekaboo") },
+                          {
+                            id: "cua",
+                            name: t(
+                              capabilities.cuaDriverBundled
+                                ? "configPage.deviceSettings.cua"
+                                : "configPage.deviceSettings.cuaUnavailable",
+                            ),
+                            disabled: !capabilities.cuaDriverBundled,
+                          },
+                        ],
+                        undefined,
+                        false,
+                        false,
+                      )
                     : nothing
                 }
                 ${this.toggle("capabilities.peekabooBridgeEnabled", capabilities.peekabooBridgeEnabled, "peekabooBridge", t("configPage.deviceSettings.peekabooBridgeHint"), !capabilities.computerControlEnabled)}

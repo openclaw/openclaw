@@ -410,16 +410,14 @@ function handleWidgetExportAction(
   title: string | undefined,
 ) {
   const value = event.detail.item.value;
+  const dropdown = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
   if (value === "raw-details") {
-    const dropdown = event.currentTarget;
-    const host =
-      dropdown instanceof HTMLElement ? dropdown.closest(".chat-tool-card__widget-host") : null;
+    const host = dropdown?.closest(".chat-tool-card__widget-host");
     const toggle = host?.querySelector<HTMLButtonElement>(
       ".chat-tool-card__widget-raw .chat-tool-card__raw-toggle",
     );
     toggle?.click();
-    const label =
-      dropdown instanceof HTMLElement ? dropdown.querySelector("[data-raw-label]") : null;
+    const label = dropdown?.querySelector("[data-raw-label]");
     label?.replaceChildren(
       t(
         toggle && toggle.getAttribute("aria-expanded") === "true"
@@ -432,13 +430,9 @@ function handleWidgetExportAction(
   if (value !== "copy" && value !== "download") {
     return;
   }
-  const dropdown = event.currentTarget;
-  const frame =
-    dropdown instanceof HTMLElement
-      ? dropdown
-          .closest(".chat-tool-card__preview")
-          ?.querySelector<HTMLIFrameElement>(".chat-tool-card__preview-frame")
-      : null;
+  const frame = dropdown
+    ?.closest(".chat-tool-card__preview")
+    ?.querySelector<HTMLIFrameElement>(".chat-tool-card__preview-frame");
   if (!frame) {
     showToast({ message: t("chat.toolCards.widgetExportFailed") });
     return;
