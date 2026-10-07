@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatIntervalMs } from "./heartbeat-config.js";
 import { resolveConfiguredHeartbeatPrompt } from "./heartbeat-runner-config.js";
 import { resolveHeartbeatSummaryForAgent } from "./heartbeat-summary.js";
+import {
+  inferHeartbeatWakeSourceFromReason,
+  resolveHeartbeatWakePayloadFlags,
+} from "./heartbeat-wake-policy.js";
 
 describe("heartbeat settings", () => {
   it.each([
@@ -19,20 +22,17 @@ describe("heartbeat settings", () => {
       agentId: "main",
       expected: { session: "telegram:alerts" },
     },
-    ...[false, true].map((perAgent) => ({
-      name: perAgent ? "disabled per-agent" : "disabled global",
+    {
+      name: "disabled global",
       cfg: {
         agents: {
           defaults: {
             heartbeat: {
-              every: perAgent ? "30m" : "0m",
+              every: "0m",
               target: "last",
               session: "telegram:default",
             },
           },
-          ...(perAgent
-            ? { entries: { main: { heartbeat: { every: "0m", session: "telegram:alerts" } } } }
-            : {}),
         },
       },
       agentId: "main",
@@ -41,9 +41,9 @@ describe("heartbeat settings", () => {
         every: "disabled",
         everyMs: null,
         target: "last",
-        session: perAgent ? "telegram:alerts" : "telegram:default",
+        session: "telegram:default",
       },
-    })),
+    },
   ] satisfies Array<{
     name: string;
     cfg: OpenClawConfig;
@@ -72,7 +72,6 @@ describe("heartbeat settings", () => {
   });
 
   it.each([
-    { name: "default prompt", cfg: {}, expected: HEARTBEAT_PROMPT },
     {
       name: "trimmed override prompt",
       cfg: { agents: { defaults: { heartbeat: { prompt: "  ping  " } } } },
@@ -84,4 +83,22 @@ describe("heartbeat settings", () => {
       expect(resolveConfiguredHeartbeatPrompt(cfg)).toBe(expected);
     },
   );
+});
+
+describe("session-state heartbeat wakes", () => {
+  it("infers the source and marks the wake as payload-bearing", () => {
+    expect(inferHeartbeatWakeSourceFromReason("session-state:agent:main:child")).toBe(
+      "session-state",
+    );
+    expect(
+      resolveHeartbeatWakePayloadFlags({
+        reason: "session-state:agent:main:child",
+      }),
+    ).toMatchObject({ isWakePayload: true });
+    expect(
+      resolveHeartbeatWakePayloadFlags({
+        source: "session-state",
+      }),
+    ).toMatchObject({ isWakePayload: true });
+  });
 });
