@@ -570,4 +570,63 @@ describe("conversation completion through the real delivery queue", () => {
       }
     }
   });
+
+  it("rechecks persisted route authority after durable queue admission", async () => {
+    const operationId = "revoked-after-queue-admission";
+    const message = "must remain unsent after route withdrawal";
+    const { stateDir, scope } = await createConversationOperation(operationId, message);
+    const sendText = vi.fn(async () => ({
+      channel: "reef" as const,
+      messageId: "must-not-send",
+    }));
+    installSender(sendText);
+    const enqueueReply = holdEnqueueReply();
+    const delivery = runGatewayConversationSend({
+      config: {},
+      readCurrentConfig: () => ({}),
+      agentId: "main",
+      senderIsOwner: true,
+      operationId,
+      conversationRef: conversation.conversationRef,
+      message,
+    });
+    const outcome = delivery.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      await enqueueReply.held;
+      const [queued] = readQueuedEntries(stateDir);
+      if (!queued || typeof queued.id !== "string") {
+        throw new Error("Committed conversation delivery was not readable from the real queue");
+      }
+      const queueId = queued.id;
+      expect(getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir)).toBe(
+        "pending",
+      );
+      expect(sendText).not.toHaveBeenCalled();
+
+      registerConversationAddresses(scope, [{ ...conversation, deliveryTarget: "reef:withdrawn" }]);
+      enqueueReply.release();
+
+      await expect(delivery).rejects.toMatchObject({
+        name: "ConversationInputError",
+        message: `Conversation is no longer available to this agent: ${conversation.conversationRef}`,
+      });
+      expect(sendText).not.toHaveBeenCalled();
+      expect(await getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+        status: "rejected",
+        queueId,
+        rejectionError: `Conversation is no longer available to this agent: ${conversation.conversationRef}`,
+      });
+      expect(getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir)).toBe(
+        "failed",
+      );
+      expect(await loadUnfinishedDelivery(queueId, stateDir)).toBeNull();
+    } finally {
+      enqueueReply.release();
+      await outcome;
+      enqueueReply.restore();
+    }
+  });
 });

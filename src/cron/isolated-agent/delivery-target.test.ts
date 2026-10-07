@@ -795,18 +795,80 @@ describe("resolveDeliveryTarget", () => {
   it("uses sessionKey thread entry before main session entry", async () => {
     setSessionStore({
       "agent:test:main": sessionEntry({ channel: "forum", to: "main-chat" }),
-      "agent:test:thread:42": sessionEntry({ channel: "forum", to: "thread-chat", threadId: 42 }),
+      "agent:agent-b:thread:42": sessionEntry({
+        channel: "forum",
+        to: "thread-chat",
+        threadId: 42,
+      }),
     });
 
     const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
       channel: "last",
-      sessionKey: "agent:test:thread:42",
+      sessionKey: "agent:agent-b:thread:42",
       to: undefined,
     });
 
     expect(result.channel).toBe("forum");
     expect(result.to).toBe("thread-chat");
     expect(result.threadId).toBe(42);
+    expect(result.ok && result.sourceSessionKey).toBe("agent:agent-b:thread:42");
+  });
+
+  it.each([
+    ["foreign-agent", "agent:other:thread:42"],
+    ["non-canonical", "AGENT:AGENT-B:THREAD:42"],
+  ])("omits %s source-session provenance", async (_caseName, sessionKey) => {
+    extractDeliveryInfoMock.mockReturnValueOnce({
+      deliveryContext: { channel: "forum", to: "thread-chat", threadId: 42 },
+      threadId: undefined,
+      sourceSessionKey: "agent:agent-b:thread:42",
+    });
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "last",
+      sessionKey,
+      to: undefined,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      channel: "forum",
+      to: "thread-chat",
+      threadId: 42,
+    });
+    expect(result.ok && result.sourceSessionKey).toBeUndefined();
+  });
+
+  it("rejects malformed source-session provenance", async () => {
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "last",
+      sessionKey: "agent:agent-b::thread:42",
+      to: undefined,
+    });
+
+    expect(result.ok).toBe(false);
+    expect("sourceSessionKey" in result).toBe(false);
+  });
+
+  it("omits source-session provenance when allowFrom reroutes a named session", async () => {
+    extractDeliveryInfoMock.mockReturnValueOnce({
+      deliveryContext: { channel: "alpha", to: "room-denied" },
+      threadId: undefined,
+      sourceSessionKey: "agent:agent-b:thread:42",
+    });
+
+    const result = await resolveDeliveryTarget(
+      makeCfg({ bindings: [], channels: { alpha: { allowFrom: ["room-allowed"] } } }),
+      AGENT_ID,
+      {
+        channel: "last",
+        sessionKey: "agent:agent-b:thread:42",
+        to: undefined,
+      },
+    );
+
+    expect(result).toMatchObject({ ok: true, channel: "alpha", to: "room-allowed" });
+    expect(result.ok && result.sourceSessionKey).toBeUndefined();
   });
 
   it("prefers stored deliveryContext lookup over exact session-store entries", async () => {
@@ -840,6 +902,54 @@ describe("resolveDeliveryTarget", () => {
       accountId: "primary",
       threadId: "thread-stored",
     });
+    expect(result.ok && result.sourceSessionKey).toBeUndefined();
+  });
+
+  it("preserves exact-session provenance from stored deliveryContext recovery", async () => {
+    const sourceSessionKey = "agent:agent-b:dashboard:example";
+    extractDeliveryInfoMock.mockReturnValueOnce({
+      deliveryContext: {
+        channel: "alpha",
+        to: "room-recovered",
+        accountId: "primary",
+      },
+      threadId: undefined,
+      sourceSessionKey,
+    });
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "last",
+      sessionKey: sourceSessionKey,
+      to: undefined,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      channel: "alpha",
+      to: "room-recovered",
+      accountId: "primary",
+      sourceSessionKey,
+    });
+  });
+
+  it("omits base-session provenance when recovery supplies a requested thread", async () => {
+    extractDeliveryInfoMock.mockReturnValueOnce({
+      deliveryContext: {
+        channel: "alpha",
+        to: "room-recovered",
+      },
+      threadId: "42",
+      sourceSessionKey: "agent:agent-b:main",
+    });
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "last",
+      sessionKey: "agent:agent-b:main:thread:42",
+      to: undefined,
+    });
+
+    expect(result).toMatchObject({ ok: true, channel: "alpha", to: "room-recovered" });
+    expect(result.ok && result.sourceSessionKey).toBeUndefined();
   });
 
   it("scopes unqualified stored delivery lookups to the job agent", async () => {
@@ -859,6 +969,7 @@ describe("resolveDeliveryTarget", () => {
 
     expect(extractDeliveryInfoMock).toHaveBeenCalledWith("agent:agent-b:main", {
       cfg: expect.any(Object),
+      includeSourceSessionKey: true,
     });
     expect(result).toMatchObject({
       ok: true,

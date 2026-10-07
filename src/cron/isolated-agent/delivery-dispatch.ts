@@ -62,6 +62,7 @@ import {
 } from "./delivery-payload-normalization.js";
 import { pickSummaryFromOutput, readAutomationFailedReport } from "./helpers.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
+import { resolveOwnedCanonicalAgentSessionKey } from "./session-key.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 const deliveryOutboundRuntimeLoader = createLazyImportLoader(
@@ -269,23 +270,41 @@ export async function dispatchCronDelivery(
         }),
       );
       deliveryAttempted = true;
-      // Custom session targets retain their caller-selected identity.
-      const { sessionKey: deliverySessionKey, route: directCronOutboundRoute } =
+      // Custom session targets retain their caller-selected identity. Other
+      // deliveries still resolve the destination route for policy, even when
+      // source provenance owns transcript and awareness attribution.
+      const isCustomSessionTarget =
         typeof params.job.sessionTarget === "string" &&
-        params.job.sessionTarget.startsWith("session:")
-          ? { sessionKey: params.agentSessionKey, route: null }
-          : await resolveCronDeliveryRouteSessionKey({
-              cfg: params.cfgWithAgentDefaults,
-              job: params.job,
+        params.job.sessionTarget.startsWith("session:");
+      const destinationRoute = isCustomSessionTarget
+        ? { sessionKey: params.agentSessionKey, route: null }
+        : await resolveCronDeliveryRouteSessionKey({
+            cfg: params.cfgWithAgentDefaults,
+            job: params.job,
+            agentId: params.agentId,
+            agentSessionKey: params.agentSessionKey,
+            delivery,
+            warningContext: "direct delivery mirror",
+          });
+      const ownedSourceSessionKey =
+        !isCustomSessionTarget && delivery.mode === "implicit"
+          ? resolveOwnedCanonicalAgentSessionKey({
+              sessionKey: delivery.sourceSessionKey,
               agentId: params.agentId,
-              agentSessionKey: params.agentSessionKey,
-              delivery,
-              warningContext: "direct delivery mirror",
-            });
+            })
+          : undefined;
+      const deliverySessionKey = ownedSourceSessionKey ?? destinationRoute.sessionKey;
+      const deliveryPolicySessionKey =
+        ownedSourceSessionKey &&
+        !isSameSessionKey(ownedSourceSessionKey, destinationRoute.sessionKey)
+          ? destinationRoute.sessionKey
+          : undefined;
+      const directCronOutboundRoute = destinationRoute.route;
       const deliverySession = buildOutboundSessionContext({
         cfg: params.cfgWithAgentDefaults,
         agentId: params.agentId,
         sessionKey: deliverySessionKey,
+        policySessionKey: deliveryPolicySessionKey,
       });
       const awarenessMainSessionKey = resolveCronAwarenessMainSessionKey({
         cfg: params.cfgWithAgentDefaults,

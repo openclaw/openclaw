@@ -62,7 +62,7 @@ export function readExactSessionDeliveryContext(params: {
  */
 export function extractDeliveryInfo(
   sessionKey: string | undefined,
-  options?: { cfg?: OpenClawConfig },
+  options?: { cfg?: OpenClawConfig; includeSourceSessionKey?: boolean },
 ): DeliveryInfo {
   return extractDeliveryInfoBatch([sessionKey], options)[0]!;
 }
@@ -72,6 +72,7 @@ type DeliveryInfo = {
     | { channel?: string; to?: string; accountId?: string; threadId?: string | number }
     | undefined;
   threadId: string | undefined;
+  sourceSessionKey?: string;
 };
 
 type DeliveryLookup = {
@@ -88,7 +89,7 @@ type DeliveryStoreRead = {
 /** Resolves one synchronous batch; only detached delivery facts leave the read scope. */
 export function extractDeliveryInfoBatch(
   sessionKeys: readonly (string | undefined)[],
-  options?: { cfg?: OpenClawConfig },
+  options?: { cfg?: OpenClawConfig; includeSourceSessionKey?: boolean },
 ): DeliveryInfo[] {
   const parsed = sessionKeys.map((sessionKey) => ({
     sessionKey,
@@ -218,8 +219,10 @@ export function extractDeliveryInfoBatch(
         return { get: store.get, normalizedIndex };
       });
       let context = deliveryContextFromSession(selected.entry);
+      let sourceSessionKey = selected.entrySourceSessionKey;
       if (!hasDeliveryTargetFields(context) && baseSessionKey !== sessionKey) {
         context = deliveryContextFromSession(selected.baseEntry);
+        sourceSessionKey = selected.baseEntrySourceSessionKey;
       }
       if (hasDeliveryTargetFields(context)) {
         results[index]!.deliveryContext = {
@@ -228,6 +231,9 @@ export function extractDeliveryInfoBatch(
           accountId: context.accountId,
           threadId: context.threadId,
         };
+        if (options?.includeSourceSessionKey && sourceSessionKey) {
+          results[index]!.sourceSessionKey = sourceSessionKey;
+        }
       }
     } catch {
       // Delivery recovery remains best-effort for each logical lookup.
@@ -273,13 +279,18 @@ function lazyDeliveryIndex(scope: {
 
 function findSessionEntryInStore(store: DeliveryStoreRead, keys: readonly string[]) {
   let bestEntry: SessionEntry | undefined;
+  let bestSourceSessionKey: string | undefined;
   let bestUpdatedAt = 0;
   let bestRoutable = false;
   let bestExact = false;
   // Preference order: routable delivery context first; then Matrix/tail-preserved
   // exact keys over folded aliases; then freshness. Ordinary lowercase-canonical
   // channels keep the previous freshest-routable alias behavior.
-  const acceptCandidate = (entry: SessionEntry | undefined, isExact = false) => {
+  const acceptCandidate = (
+    entry: SessionEntry | undefined,
+    isExact = false,
+    sourceSessionKey?: string,
+  ) => {
     if (!entry) {
       return;
     }
@@ -294,6 +305,7 @@ function findSessionEntryInStore(store: DeliveryStoreRead, keys: readonly string
         candidateUpdatedAt > bestUpdatedAt)
     ) {
       bestEntry = entry;
+      bestSourceSessionKey = sourceSessionKey;
       bestUpdatedAt = candidateUpdatedAt;
       bestRoutable = candidateRoutable;
       bestExact = isExact;
@@ -309,7 +321,7 @@ function findSessionEntryInStore(store: DeliveryStoreRead, keys: readonly string
     const exactEntry = store.get(normalized);
     if (exactEntry && !hasMismatchedCaseSensitiveDeliveryProof(exactEntry, normalized)) {
       foundRoutableCandidate ||= hasDeliveryTargetFields(deliveryContextFromSession(exactEntry));
-      acceptCandidate(exactEntry, exactKeyWins);
+      acceptCandidate(exactEntry, exactKeyWins, normalized);
     }
     for (const foldedLegacyKey of foldedLegacyKeys) {
       const foldedLegacyEntry = store.get(foldedLegacyKey);
@@ -342,7 +354,7 @@ function findSessionEntryInStore(store: DeliveryStoreRead, keys: readonly string
       }
     }
   }
-  return bestEntry;
+  return { entry: bestEntry, sourceSessionKey: bestSourceSessionKey };
 }
 
 function buildFreshestSessionEntryIndex(store: SessionEntryReadView): Map<string, SessionEntry> {
@@ -382,26 +394,43 @@ function loadDeliverySessionEntry(
 ) {
   let fallback:
     | {
-        entry: ReturnType<typeof findSessionEntryInStore>;
-        baseEntry: ReturnType<typeof findSessionEntryInStore>;
+        entry: SessionEntry | undefined;
+        entrySourceSessionKey: string | undefined;
+        baseEntry: SessionEntry | undefined;
+        baseEntrySourceSessionKey: string | undefined;
       }
     | undefined;
   for (const [storeIndex, storePath] of lookup.storePaths.entries()) {
     const store = readStore(storePath, storeIndex);
-    const entry = findSessionEntryInStore(store, lookup.sessionKeys);
-    const baseEntry = findSessionEntryInStore(store, lookup.baseKeys);
+    const entryMatch = findSessionEntryInStore(store, lookup.sessionKeys);
+    const baseEntryMatch = findSessionEntryInStore(store, lookup.baseKeys);
+    const entry = entryMatch.entry;
+    const baseEntry = baseEntryMatch.entry;
     if (!entry && !baseEntry) {
       continue;
     }
-    fallback ??= { entry, baseEntry };
+    const selected = {
+      entry,
+      entrySourceSessionKey: entryMatch.sourceSessionKey,
+      baseEntry,
+      baseEntrySourceSessionKey: baseEntryMatch.sourceSessionKey,
+    };
+    fallback ??= selected;
     // Prefer the first store that can actually route delivery; keep a non-routable fallback only
     // so callers can still inspect thread ids when no target-bearing session exists.
     if (
       hasDeliveryTargetFields(deliveryContextFromSession(entry)) ||
       hasDeliveryTargetFields(deliveryContextFromSession(baseEntry))
     ) {
-      return { entry, baseEntry };
+      return selected;
     }
   }
-  return fallback ?? { entry: undefined, baseEntry: undefined };
+  return (
+    fallback ?? {
+      entry: undefined,
+      entrySourceSessionKey: undefined,
+      baseEntry: undefined,
+      baseEntrySourceSessionKey: undefined,
+    }
+  );
 }

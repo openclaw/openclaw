@@ -897,7 +897,7 @@ describe("deliverOutboundPayloads", () => {
     hookMocks,
   });
 
-  it("revalidates conversation authority after queue admission and before the adapter", async () => {
+  it("blocks a revoked dashboard-source destination after queue admission and before the adapter", async () => {
     const order: string[] = [];
     queueMocks.enqueueDelivery.mockImplementationOnce(async () => {
       order.push("queue");
@@ -913,6 +913,10 @@ describe("deliverOutboundPayloads", () => {
         payloads: [{ text: "hello" }],
         deps: { matrix: sendMatrix },
         queuePolicy: "required",
+        session: {
+          key: "agent:main:dashboard:source-session",
+          policyKey: "agent:main:matrix:group:ops",
+        },
         deliveryCompletion: {
           kind: "conversation",
           agentId: "main",
@@ -921,13 +925,13 @@ describe("deliverOutboundPayloads", () => {
         },
         onDeliveryAttempt: async () => {
           order.push("authorize");
-          throw new PlatformMessageNotDispatchedError("route was revoked", {
+          throw new PlatformMessageNotDispatchedError("destination was revoked", {
             cause: undefined,
             retryable: false,
           });
         },
       }),
-    ).rejects.toThrow("route was revoked");
+    ).rejects.toThrow("destination was revoked");
 
     expect(order).toEqual(["queue", "authorize"]);
     expect(sendMatrix).not.toHaveBeenCalled();
@@ -1593,11 +1597,52 @@ describe("deliverOutboundPayloads", () => {
     expect(JSON.stringify(events)).not.toContain("secret-session-key");
   });
 
-  it("uses the base policy key for isolated heartbeat group media read denies", async () => {
+  it("keeps destination media reads for an allowed dashboard-source delivery", async () => {
     const resolveMediaAccessSpy = vi.spyOn(
       mediaCapabilityModule,
       "resolveAgentScopedOutboundMediaAccess",
     );
+    const readFile = vi.fn(async () => Buffer.from("allowed-media"));
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    await deliverMatrix({
+      accountId: "destination-account",
+      cfg: {
+        tools: {
+          allow: ["read"],
+        },
+      },
+      payloads: [{ text: "dashboard media", mediaUrl: "file:///tmp/policy.png" }],
+      deps: { matrix: sendMatrix },
+      mediaAccess: { localRoots: ["/tmp"], readFile },
+      session: {
+        key: "agent:main:dashboard:source-session",
+        policyKey: "agent:main:matrix:group:ops",
+        requesterSenderId: "trusted",
+        requesterAccountId: "source-account",
+      },
+    });
+
+    expect(resolveMediaAccessSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:matrix:group:ops",
+        messageProvider: undefined,
+        accountId: "source-account",
+        requesterSenderId: "trusted",
+      }),
+    );
+    const sendOptions = requireMatrixSendCall(sendMatrix)[2] as Record<string, unknown>;
+    expect(typeof sendOptions.mediaReadFile).toBe("function");
+    expect(sendOptions.mediaLocalRoots).toContain("/tmp");
+    resolveMediaAccessSpy.mockRestore();
+  });
+
+  it("uses the destination policy key for dashboard-source group media read denies", async () => {
+    const resolveMediaAccessSpy = vi.spyOn(
+      mediaCapabilityModule,
+      "resolveAgentScopedOutboundMediaAccess",
+    );
+    const readFile = vi.fn(async () => Buffer.from("must-not-read"));
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
 
     await deliverMatrix({
@@ -1620,10 +1665,11 @@ describe("deliverOutboundPayloads", () => {
           },
         } as OpenClawConfig["channels"],
       },
-      payloads: [{ text: "heartbeat media", mediaUrl: "file:///tmp/policy.png" }],
+      payloads: [{ text: "dashboard media", mediaUrl: "file:///tmp/policy.png" }],
       deps: { matrix: sendMatrix },
+      mediaAccess: { localRoots: ["/tmp"], readFile },
       session: {
-        key: "agent:main:matrix:group:ops:heartbeat",
+        key: "agent:main:dashboard:source-session",
         policyKey: "agent:main:matrix:group:ops",
         requesterSenderId: "attacker",
         requesterAccountId: "source-account",
@@ -1649,7 +1695,46 @@ describe("deliverOutboundPayloads", () => {
     expect((sendOptions.mediaLocalRoots as readonly string[] | undefined) ?? []).not.toContain(
       "/tmp",
     );
+    expect(readFile).not.toHaveBeenCalled();
     resolveMediaAccessSpy.mockRestore();
+  });
+
+  it("rejects destination-denied dashboard media before queue custody or adapter handoff", async () => {
+    const readFile = vi.fn(async () => Buffer.from("must-not-read"));
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "must-not-send" });
+
+    await expect(
+      deliverMatrix({
+        cfg: {
+          tools: {
+            allow: ["read"],
+          },
+          channels: {
+            matrix: {
+              groups: {
+                ops: {
+                  tools: {
+                    deny: ["read"],
+                  },
+                },
+              },
+            },
+          } as OpenClawConfig["channels"],
+        },
+        payloads: [{ text: "denied dashboard media", mediaUrl: "file:///tmp/policy.png" }],
+        deps: { matrix: sendMatrix },
+        mediaAccess: { localRoots: ["/tmp"], readFile },
+        queuePolicy: "required",
+        session: {
+          key: "agent:main:dashboard:source-session",
+          policyKey: "agent:main:matrix:group:ops",
+        },
+      }),
+    ).rejects.toThrow();
+
+    expect(readFile).not.toHaveBeenCalled();
+    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+    expect(sendMatrix).not.toHaveBeenCalled();
   });
 
   it("scopes media access after reply payload hooks add local media", async () => {
