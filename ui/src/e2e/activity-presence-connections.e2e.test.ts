@@ -79,7 +79,9 @@ suite.define(() => {
           ? createControlUiE2eArtifactDir("activity-presence")
           : undefined;
         const capture = async (name: string) => {
-          if (!directory) return;
+          if (!directory) {
+            return;
+          }
           const frame = await takeControlUiScreenshotFrame(
             page,
             card,
