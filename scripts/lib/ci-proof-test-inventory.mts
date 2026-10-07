@@ -845,7 +845,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/whatsapp/src/action-runtime.test.ts",
   "extensions/whatsapp/src/active-listener.test.ts",
   "extensions/whatsapp/src/auto-reply.broadcast-groups.combined.test.ts",
-  "extensions/whatsapp/src/auto-reply.web-auto-reply.error-delivery.test.ts",
   "extensions/whatsapp/src/auto-reply.web-auto-reply.media-delivery.test.ts",
   "extensions/whatsapp/src/auto-reply.web-auto-reply.routing.test.ts",
   "extensions/whatsapp/src/auto-reply/deliver-reply.filename-media.test.ts",
