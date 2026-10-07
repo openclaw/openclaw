@@ -448,6 +448,10 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       configuredProfileId: params.configuredProfileId,
       ...(agentHarnessPolicy ? { harnessRuntime: agentHarnessPolicy.runtime } : {}),
       agentDir,
+      reader:
+        providedReplyOperation?.key === authSessionKey
+          ? getReplyOperationSessionReader(providedReplyOperation)
+          : undefined,
       sessionEntry: authSessionEntry,
       sessionStore: authSessionStore,
       sessionKey: authSessionKey,

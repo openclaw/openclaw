@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
@@ -23,6 +24,8 @@ import {
   sessionCreatorProfileId,
   type SessionCreatedActor,
 } from "../../config/sessions/session-entry-provenance.js";
+import { SessionEntryChangedDuringReadError } from "../../config/sessions/session-entry-read-errors.js";
+import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-read-ordered.js";
 import {
   captureSessionEntryReadScope,
   isNativeSessionEntryRead,
@@ -35,6 +38,7 @@ import {
 import type {
   SessionEntryWorkerRead,
   PreparedSessionEntryWorkerRead,
+  SessionEntryCohortReader,
 } from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import {
@@ -101,6 +105,7 @@ export async function withSandboxRuntimeStatusInWorker<T>(
     assertCurrent: () => void;
     readSource?: CapturedSessionEntryReadSource;
     assertEntryCurrent?: (entry: SessionEntry | undefined) => void;
+    reader?: SessionEntryCohortReader;
   },
   consume: (runtime: ReturnType<typeof resolveSandboxRuntimeStatus>) => Promise<T>,
 ): Promise<T> {
@@ -128,24 +133,65 @@ export async function withSandboxRuntimeStatusInWorker<T>(
     }
   };
   assertCurrent();
+  const sessionKey = resolveSqliteSessionKey(
+    classification.comparableSessionKey,
+    classification.classificationAgentId,
+  );
+  const reader =
+    source.reader?.logicalAgentId === classification.classificationAgentId &&
+    source.reader.sessionKey === sessionKey
+      ? source.reader
+      : undefined;
   const scope = {
     agentId: classification.classificationAgentId,
-    sessionKey: resolveSqliteSessionKey(
-      classification.comparableSessionKey,
-      classification.classificationAgentId,
-    ),
+    sessionKey,
     storePath:
       source.readSource?.path ??
-      resolveSessionStorePathWithContext(
-        params.cfg?.session?.store,
-        {
-          agentId: classification.classificationAgentId,
-          env: source.env,
-        },
-        { cwd: source.cwd },
-      ),
+      (reader && !params.cfg?.session?.store?.trim()
+        ? reader.database.path
+        : resolveSessionStorePathWithContext(
+            params.cfg?.session?.store,
+            {
+              agentId: classification.classificationAgentId,
+              env: source.env,
+            },
+            { cwd: source.cwd },
+          )),
     env: source.env,
   };
+  if (reader) {
+    const key = assertSessionEntryCohortScope(reader, scope);
+    const withClassification = <R>(
+      consumeCurrent: (sandbox: ReturnType<typeof resolveSandboxRuntimeStatus>) => R,
+    ) =>
+      reader.withRead(
+        { sessionKeys: [key], snapshotFields: [] },
+        assertCurrent,
+        (read, assertPrepared) => {
+          assertPrepared();
+          const entry = read.entries.find((row) => row.sessionKey === key)?.entry;
+          source.assertEntryCurrent?.(entry);
+          return consumeCurrent(
+            resolveSandboxRuntimeStatusForClassification(
+              { ...params, preparedSessionEntry: entry ?? null },
+              classification,
+            ),
+          );
+        },
+      );
+    const sandbox = await withClassification((current) => current);
+    assertCurrent();
+    reader.assertCurrent();
+    const result = await consume(sandbox);
+    // Preparation may await approvals or skills. Publish its result only under
+    // a new phase's witness, with the same policy predicates it prepared against.
+    return withClassification((current) => {
+      if (!isDeepStrictEqual(current, sandbox)) {
+        throw new SessionEntryChangedDuringReadError();
+      }
+      return result;
+    });
+  }
   if (isNativeSessionEntryRead(scope, scope.agentId)) {
     return withSessionEntryReadOnlyInWorker(scope, assertCurrent, async (read) => {
       if (!read.ok) {

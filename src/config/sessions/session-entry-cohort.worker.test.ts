@@ -63,6 +63,7 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       replyInitializationSessionKey: sessionKey,
       includeMembers: true,
       includeParticipantRecords: true,
+      includeAuthProfileSource: true,
       lifecycleSessionKey: sessionKey,
       transcript: { sessionKey, entryIds: ["question", "missing"], includeHeader: true },
     };
@@ -74,6 +75,7 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       { identity: { id: "participant" }, contributionCount: 1 },
     ]);
     expect(first.lifecycleTimestamps.sessionStartedAt).toBe(123);
+    expect(first.authProfileSource).toBe(false);
     expect(first.transcript).toMatchObject({
       header: { id: "cohort" },
       anchors: [{ entryId: "question", sessionId: "cohort" }],
@@ -109,10 +111,12 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       }
       return exec(statement);
     });
-    const sql = trackSqliteStatementExecutions(database.db, ["fresh"], (statement) =>
+    const sql = trackSqliteStatementExecutions(database.db, ["fresh", "authSchema"], (statement) =>
       /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(statement.trim())
         ? "fresh"
-        : null,
+        : /^SELECT type FROM sqlite_master WHERE name = \?$/iu.test(statement.trim())
+          ? "authSchema"
+          : null,
     );
     try {
       const standalone = operations["session.entry.read"]({ sessionKey }, context);
@@ -125,6 +129,7 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       sql.counts.fresh = 0;
       expect(read().members?.[sessionKey]?.map(({ identityId }) => identityId)).toEqual(["member"]);
       expect(sql.counts.fresh).toBe(1);
+      expect(sql.counts.authSchema).toBe(0);
       expect(transactionCommands).toEqual(["BEGIN", "COMMIT"]);
       // A known write cannot hide the foreign change from this connection's next use.
       writeSessionEntry(database, parentKey, { sessionId: "parent", updatedAt: 2 });

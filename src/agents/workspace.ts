@@ -497,10 +497,14 @@ export async function resolveWorkspaceBootstrapStatus(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<"pending" | "complete"> {
   const resolvedDir = resolveUserPath(dir);
+  const bootstrapPath = path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME);
+  if (!(await pathExists(bootstrapPath))) {
+    return "complete";
+  }
   if (await isWorkspaceSetupCompleted(resolvedDir, options)) {
     return "complete";
   }
-  const bootstrapPath = path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME);
+  // The setup read can yield while bootstrap removes its file.
   return (await pathExists(bootstrapPath)) ? "pending" : "complete";
 }
 

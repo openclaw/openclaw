@@ -6,6 +6,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { prepareSqliteReadCache } from "../../infra/sqlite-read-cache.js";
+import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -41,6 +42,9 @@ function inspectAuthProfileTable(
 ): PersistedAuthProfileStoreInspection | null {
   const tableName =
     databaseKind === "shared-state" ? "config_machine_state" : AGENT_AUTH_CELLS[target].table;
+  if (getSqliteReadScopeRevision(db)?.schema.tables.has(tableName)) {
+    return null;
+  }
   const schemaObject = executeWithCachedStatement(
     db,
     "SELECT type FROM sqlite_master WHERE name = ?",
@@ -147,25 +151,40 @@ export function readAuthProfileRows(
   databaseKind: "agent" | "shared-state",
 ): AuthProfileRowRead {
   const canCache = prepareSqliteReadCache(database, databasePath);
-  const inspect = (target: "store" | "state"): PersistedAuthProfileStoreInspection => {
-    try {
-      return inspectAuthProfileJsonCell(database, target, databaseKind);
-    } catch (error) {
-      // Shared-state read ownership handles native failures and poisoned-handle eviction.
-      if (databaseKind === "shared-state") {
-        throw error;
-      }
-      // A broken state table must not turn an absent credential row into a present source.
-      return { status: "unreadable" };
-    }
-  };
-  const store = inspect("store");
-  const state = inspect("state");
+  const store = inspectAuthProfileRow(database, "store", databaseKind);
+  const state = inspectAuthProfileRow(database, "state", databaseKind);
   return {
     store,
     state,
     cacheable: store.status !== "unreadable" && state.status !== "unreadable" && canCache(),
   };
+}
+
+function inspectAuthProfileRow(
+  database: DatabaseSync,
+  target: "store" | "state",
+  databaseKind: "agent" | "shared-state",
+): PersistedAuthProfileStoreInspection {
+  try {
+    return inspectAuthProfileJsonCell(database, target, databaseKind);
+  } catch (error) {
+    // Shared-state read ownership handles native failures and poisoned-handle eviction.
+    if (databaseKind === "shared-state") {
+      throw error;
+    }
+    // A broken state table must not turn an absent credential row into a present source.
+    return { status: "unreadable" };
+  }
+}
+
+/** The selected worker returns source presence without transferring credential rows. */
+export function hasAgentAuthProfileSourceInDatabase(database: DatabaseSync): boolean {
+  const store = inspectAuthProfileRow(database, "store", "agent");
+  if (store.status !== "missing") {
+    return true;
+  }
+  const state = inspectAuthProfileRow(database, "state", "agent");
+  return state.status === "readable" && Boolean(state.raw);
 }
 
 /** Write one canonical auth cell on the caller's admitted transaction connection. */

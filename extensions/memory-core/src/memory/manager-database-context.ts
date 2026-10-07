@@ -637,9 +637,42 @@ export class MemoryIndexDatabase {
   }
 
   async withPublicationGeneration(run: () => Promise<void>): Promise<void> {
+    // This store only borrows the canonical executor; it never dispatches a
+    // command. Concrete publication stores still own their policy and cleanup.
+    const releaseExecution = this.writeOptions
+      ? (
+          await openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(
+            this.writeOptions,
+            this.db,
+            {
+              moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication),
+              input: undefined,
+              retainExecutionUntilClose: true,
+            },
+          )
+        ).close
+      : undefined;
     this.publicationGenerationActive = true;
     try {
-      await run();
+      const failures: unknown[] = [];
+      try {
+        await run();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await releaseExecution?.();
+      } catch (error) {
+        failures.push(error);
+      }
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, `${String(failures[0])}; Memory sync cleanup failed`, {
+          cause: failures[0],
+        });
+      }
     } finally {
       this.publicationGenerationActive = false;
     }

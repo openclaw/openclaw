@@ -105,6 +105,7 @@ export type SessionEntryCohortRequest = Pick<
   | "lifecycleSessionKey"
 > & {
   sessionKeys: readonly string[];
+  includeAuthProfileSource?: boolean;
   expected?: {
     /** Native incarnation returned by this cohort, independent of the host execution claim. */
     incarnation: string;
@@ -156,6 +157,7 @@ export type SessionExactEntriesWorkerResult = {
 export type SessionEntryCohortResult = SessionExactEntriesWorkerResult & {
   source: NonNullable<SessionExactEntriesWorkerResult["source"]>;
   databaseIdentity: NonNullable<SessionExactEntriesWorkerResult["databaseIdentity"]>;
+  authProfileSource?: boolean;
 };
 
 export type SessionRuntimeTargetWorkerInput = {
