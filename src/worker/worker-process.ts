@@ -129,13 +129,14 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
       }
     },
     terminateOwnedTree: () => {
-      if (process.platform === "win32") {
+      // Anchored applications share their owner's group; direct workers may lead their own.
+      if (process.platform !== "darwin") {
+        // Linux reads its group from procfs and keeps PID signaling where group signals are denied.
         signalProcessTree(process.pid, "SIGKILL");
         return;
       }
-      // Anchored applications share their owner's group; direct workers may lead their own.
       // Exec relays start parent-loss cleanup only after this process dies, so decide by
-      // syscall: a ps census here can stall past their cleanup budget.
+      // syscall: Darwin's ps census can stall past their cleanup budget.
       process.kill(isOwnedProcessGroupGone(process.pid) ? process.pid : -process.pid, "SIGKILL");
     },
     dispose: () => {
