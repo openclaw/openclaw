@@ -58,6 +58,7 @@ const READ_TASK = [
 function queryTaskScheduler(
   taskName: string | undefined,
   timeoutMs?: number,
+  checkUpdateAccess = false,
 ): { status: "ok"; value: unknown } | Exclude<ScheduledTaskStateProbe, { status: "found" }> {
   if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs < 1)) {
     return {
@@ -68,11 +69,21 @@ function queryTaskScheduler(
     };
   }
   // spawnSync requires an integer; rounding up or using zero would extend the allowance.
-  const probeTimeoutMs = resolvePositiveTimerTimeoutMs(
-    timeoutMs,
+  const probeTimeoutMs = Math.min(
+    resolvePositiveTimerTimeoutMs(timeoutMs, WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS),
     WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
   );
   const encodedTaskName = Buffer.from(taskName ?? "", "utf8").toString("base64");
+  // A UAC-filtered admin token retains the group SID but cannot control the
+  // administrator-owned task. Task RunLevel=LeastPrivilege does not change its ACL.
+  const readTask = checkUpdateAccess
+    ? [
+        "$identity=[Security.Principal.WindowsIdentity]::GetCurrent()",
+        "$principal=[Security.Principal.WindowsPrincipal]::new($identity)",
+        "if(($identity.Groups.Value -contains 'S-1-5-32-544') -and -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { Write-Output '-2147024891'; exit 2 }",
+        "Write-Output '{}'",
+      ].join("; ")
+    : "Read-Task $task | ConvertTo-Json -Depth 4 -Compress";
   const script = [
     "$ErrorActionPreference='Stop'",
     "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)",
@@ -82,7 +93,7 @@ function queryTaskScheduler(
     "try { $service=New-Object -ComObject 'Schedule.Service'; $service.Connect() } catch { Write-Output $_.Exception.HResult; exit 2 }",
     taskName === undefined
       ? "function Read-Folder($folder) { foreach($task in $folder.GetTasks(1)) { Read-Task $task }; foreach($child in $folder.GetFolders(0)) { Read-Folder $child } }; try { $tasks=@(Read-Folder ($service.GetFolder('\\'))); ConvertTo-Json -InputObject $tasks -Depth 4 -Compress; exit 0 } catch { Write-Output $_.Exception.HResult; exit 2 }"
-      : "try { $lookup=$true; $task=$service.GetFolder('\\').GetTask($taskName); $lookup=$false; Read-Task $task | ConvertTo-Json -Depth 4 -Compress; exit 0 } catch { $exception=$_.Exception; while($null -ne $exception.InnerException){$exception=$exception.InnerException}; Write-Output $exception.HResult; if($lookup){exit 1}; exit 2 }",
+      : `try { $lookup=$true; $task=$service.GetFolder('\\').GetTask($taskName); $lookup=$false; ${readTask}; exit 0 } catch { $exception=$_.Exception; while($null -ne $exception.InnerException){$exception=$exception.InnerException}; Write-Output $exception.HResult; if($lookup){exit 1}; exit 2 }`,
   ].join("; ");
   const probe = spawnSync(
     getWindowsPowerShellExePath(),
@@ -150,6 +161,12 @@ function queryTaskScheduler(
             : {}),
         },
       };
+}
+
+/** Read-only admission; lifecycle owners still revalidate before each mutation. */
+export function probeScheduledTaskUpdateAccess(taskName: string, timeoutMs?: number) {
+  const result = queryTaskScheduler(taskName, timeoutMs, true);
+  return result.status === "ok" ? { status: "allowed" as const } : result;
 }
 
 function readTaskSnapshot(value: unknown): ScheduledTaskSnapshot | undefined {

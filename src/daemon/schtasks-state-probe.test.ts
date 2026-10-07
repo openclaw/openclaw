@@ -60,6 +60,8 @@ it.each([
   { budget: 0.75, expected: 0, inventory: false },
   { budget: Number.NaN, expected: 0, inventory: false },
   { budget: 47_000, expected: 47_000, inventory: true },
+  { budget: 2_400_000, expected: 60_000, inventory: false },
+  { budget: 2_400_000, expected: 60_000, inventory: true },
 ])(
   "bounds native inspection to $expected ms (inventory=$inventory)",
   ({ budget, expected, inventory }) => {
