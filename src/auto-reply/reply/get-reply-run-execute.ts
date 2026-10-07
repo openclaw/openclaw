@@ -74,13 +74,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     thinkLevelOverride,
     thinkingCatalog,
     skillsSnapshot,
-    prefixedCommandBody,
-    queuedBody,
-    transcriptBody,
-    transcriptCommandBody,
-    promptMedia,
-    inboundMediaIndexes,
-    currentInboundContext,
     isRoomEvent,
     providedReplyOperation,
     preparedSessionState,
@@ -97,6 +90,15 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     authProfileId,
     authProfileIdSource,
   } = state;
+  const {
+    prefixedCommandBody,
+    queuedBody,
+    transcriptBody,
+    transcriptCommandBody,
+    media: promptMedia,
+    inboundMediaIndexes,
+    currentInboundContext,
+  } = state.promptBodies;
   const {
     params,
     runtimePolicySessionKey,

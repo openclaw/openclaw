@@ -55,11 +55,6 @@ type ParsedSteerInput = {
   instruction: string;
 };
 
-type ParsedSingleValueCommandInput = {
-  value: string;
-  sessionToken?: string;
-};
-
 type ParsedSetCommandInput = {
   key: string;
   value: string;
@@ -285,24 +280,6 @@ export function parseSteerInput(tokens: string[]): Result<ParsedSteerInput, stri
     value: {
       sessionToken,
       instruction,
-    },
-  };
-}
-
-export function parseSingleValueCommandInput(
-  tokens: string[],
-  usage: string,
-): Result<ParsedSingleValueCommandInput, string> {
-  const value = normalizeOptionalString(tokens[0]) ?? "";
-  if (!value || tokens.length > 2) {
-    return { ok: false, error: usage };
-  }
-  const sessionToken = normalizeOptionalString(tokens[1]);
-  return {
-    ok: true,
-    value: {
-      value,
-      sessionToken,
     },
   };
 }
