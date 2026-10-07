@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
@@ -129,7 +130,13 @@ export function registerRequesterStartupAdmissionTests({
         });
       }
       if (failure === "result changed during reservation") {
-        const mutate = completionStore.mutateRequesterCompletionBatch;
+        const mutate = vi
+          .mocked(completionStore.mutateRequesterCompletionBatch)
+          .getMockImplementation();
+        assert(
+          mutate,
+          "Requester preparation observation requires its registered settlement fixture",
+        );
         let changed = false;
         vi.spyOn(completionStore, "mutateRequesterCompletionBatch").mockImplementation(
           async (params) => {
