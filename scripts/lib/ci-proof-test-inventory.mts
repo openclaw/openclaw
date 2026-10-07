@@ -1146,7 +1146,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/embedded-agent-runner/run/settled-turn-finalization.silence.test.ts",
   "src/agents/embedded-agent-runner/run/settled-turn-finalization.stale-error.test.ts",
   "src/agents/embedded-agent-runner/run/settled-turn-finalization.test.ts",
-  "src/agents/embedded-agent-runner/run/settled-turn-finalization.timeout.test.ts",
   "src/agents/embedded-agent-runner/run/settled-turn-finalization.transport.test.ts",
   "src/agents/embedded-agent-runner/run/settled-turn-finalization.unavailable.test.ts",
   "src/agents/embedded-agent-runner/run/terminal-preparation.test.ts",
