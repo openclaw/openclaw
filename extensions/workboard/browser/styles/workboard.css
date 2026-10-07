@@ -1531,7 +1531,8 @@
 }
 
 .workboard-draft .btn.workboard-modal__close,
-.workboard-bulk-dialog .btn.workboard-modal__close {
+.workboard-bulk-dialog .btn.workboard-modal__close,
+.workboard-image-preview .btn.workboard-modal__close {
   flex: 0 0 30px;
   width: 30px;
   min-width: 30px;
@@ -3320,6 +3321,91 @@ workboard-inline-text {
 
 .workboard-detail__empty {
   color: var(--muted);
+}
+
+.workboard-attachment-thumbs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workboard-attachment-thumbs li {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.workboard-attachment-thumb {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  cursor: zoom-in;
+}
+
+.workboard-attachment-thumb:disabled {
+  cursor: default;
+}
+
+.workboard-attachment-thumb:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.workboard-attachment-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.workboard-attachment-thumb__status,
+.workboard-attachment-thumb__name {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.workboard-attachment-thumb__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workboard-image-preview {
+  display: grid;
+  gap: 16px;
+  margin: 0;
+  padding: 20px 24px 24px;
+  border: 1px solid var(--overlay-border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.workboard-image-preview h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workboard-image-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 72vh;
+  border-radius: var(--radius-md);
+  margin: 0 auto;
+  object-fit: contain;
+}
+
+.workboard-image-preview figcaption {
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .workboard-detail__session-row {
