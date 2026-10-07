@@ -49,7 +49,7 @@ export function createPluginToolInspection(
       if (release) {
         return release;
       }
-      const completion = createDeferredCore<void>();
+      const completion = createDeferredCore();
       release = completion.promise;
       void Promise.allSettled([
         (async () => await acquisition.release())(),
