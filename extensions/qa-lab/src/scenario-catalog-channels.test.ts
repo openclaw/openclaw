@@ -62,14 +62,24 @@ function runTelegramStreamingFinalScenario(params: {
 
 function runFanoutScenario(
   options: {
-    receipt?: "missing" | "failed" | "unlinked" | "same-child" | "wrong-label";
+    receipt?:
+      | "missing"
+      | "failed"
+      | "unlinked"
+      | "same-child"
+      | "wrong-label"
+      | "missing-run"
+      | "same-run";
+    providerMode?: "live-frontier" | "mock-openai";
     reply?: string;
+    completion?: "unfinished" | "failed" | "wrong-run" | "yielded" | "empty" | "wrong-result";
   } = {},
 ) {
+  const providerMode = options.providerMode ?? "live-frontier";
   return runLoadedScenarioFlow("subagent-fanout-synthesis", {
     api: {
       env: {
-        providerMode: "live-frontier",
+        providerMode,
       },
       readSessionToolActivity: async (_env: unknown, sessionKey: string) => {
         const attempt = sessionKey.split(":")[3];
@@ -87,7 +97,7 @@ function runFanoutScenario(
                   label:
                     options.receipt === "wrong-label" && isBeta
                       ? "unrelated"
-                      : `qa-fanout-${worker}-${attempt}`,
+                      : `qa-fanout-${worker}${providerMode === "mock-openai" ? "" : `-${attempt}`}`,
                   cleanup: "delete",
                 },
               },
@@ -104,6 +114,10 @@ function runFanoutScenario(
                 text: JSON.stringify({
                   status: options.receipt === "failed" && isBeta ? "error" : "accepted",
                   childSessionKey: `agent:qa:subagent:${options.receipt === "same-child" ? "alpha" : worker}`,
+                  runId:
+                    options.receipt === "missing-run" && isBeta
+                      ? undefined
+                      : `run-${options.receipt === "same-run" ? "alpha" : worker}`,
                 }),
               },
             ],
@@ -111,6 +125,27 @@ function runFanoutScenario(
           return options.receipt === "missing" && isBeta ? [call] : [call, result];
         });
         return projectQaToolActivity(messages);
+      },
+      waitForAgentRun: async (_env: unknown, runId: string) => {
+        const completion = runId === "run-beta" ? options.completion : undefined;
+        if (completion === "unfinished") {
+          return { runId, status: "timeout" };
+        }
+        const reply =
+          providerMode === "mock-openai" ? (runId === "run-alpha" ? "ALPHA-OK" : "BETA-OK") : "ok";
+        return {
+          runId: completion === "wrong-run" ? "unrelated-run" : runId,
+          status: completion === "failed" ? "error" : "ok",
+          endedAt: 200,
+          ...(completion === "yielded" ? { yielded: true } : {}),
+          terminalReply:
+            completion === "empty"
+              ? { disposition: "empty" }
+              : {
+                  disposition: "visible",
+                  text: completion === "wrong-result" ? "ALPHA-OK" : reply,
+                },
+        };
       },
       startAgentRun: async () => ({ runId: "parent-run" }),
       waitForAgentHistoryReply: async (
@@ -381,14 +416,35 @@ describe("qa scenario catalog channel contracts", () => {
     expect(matrixProgress.execution.isolationReason).toContain("streaming progress configuration");
   });
 
-  it("accepts synthesized fanout after delete-cleanup retires native child rows", async () => {
-    await expect(runFanoutScenario()).resolves.toMatchObject({ status: "pass" });
+  it.each(["live-frontier", "mock-openai"] as const)(
+    "accepts %s fanout after delete-cleanup retires native child rows",
+    async (providerMode) => {
+      await expect(runFanoutScenario({ providerMode })).resolves.toMatchObject({ status: "pass" });
+    },
+  );
+
+  it("rejects beta completing with alpha's mock result", async () => {
+    await expect(
+      runFanoutScenario({ providerMode: "mock-openai", completion: "wrong-result" }),
+    ).rejects.toThrow("child completion missing");
   });
 
-  it.each(["missing", "failed", "unlinked", "same-child", "wrong-label"] as const)(
-    "rejects %s spawn evidence despite matching parent synthesis",
-    async (receipt) => {
-      await expect(runFanoutScenario({ receipt })).rejects.toThrow("test condition was not met");
+  it.each([
+    "missing",
+    "failed",
+    "unlinked",
+    "same-child",
+    "wrong-label",
+    "missing-run",
+    "same-run",
+  ] as const)("rejects %s spawn evidence despite matching parent synthesis", async (receipt) => {
+    await expect(runFanoutScenario({ receipt })).rejects.toThrow("test condition was not met");
+  });
+
+  it.each(["unfinished", "failed", "wrong-run", "yielded", "empty", "wrong-result"] as const)(
+    "rejects %s child completion despite accepted spawns and matching parent synthesis",
+    async (completion) => {
+      await expect(runFanoutScenario({ completion })).rejects.toThrow("child completion missing");
     },
   );
 

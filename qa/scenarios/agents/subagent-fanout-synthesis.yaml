@@ -102,8 +102,8 @@ flow:
                                   expr: "text.trim() === config.expectedReply"
                               - expr: liveTurnTimeoutMs(env, 90000)
                               - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
-                          # The parent synthesis is the durable completion outcome. Linked
-                          # spawn receipts prove delegation even when cleanup retires child rows.
+                          # Spawn receipts bind child sessions to runs; agent.wait retains
+                          # terminal outcomes and replies after delete-cleanup retires child rows.
                           - call: waitForCondition
                             saveAs: fanoutSpawns
                             args:
@@ -112,20 +112,40 @@ flow:
                                   expr: |-
                                     (async () => {
                                       const activity = await readSessionToolActivity(env, sessionKey);
-                                      const spawns = [alphaLabel, betaLabel].map((label) => {
+                                      const spawns = [alphaLabel, betaLabel].map((label, index) => {
                                         const call = activity.find((item) => item.toolName === 'sessions_spawn' && item.successful && item.input?.label === label);
                                         const receipt = extractQaToolPayload(call?.result);
-                                        return call?.toolCallId && receipt?.status === 'accepted' && typeof receipt.childSessionKey === 'string' && receipt.childSessionKey.length > 0
-                                          ? { label, toolCallId: call.toolCallId, childSessionKey: receipt.childSessionKey }
+                                        return call?.toolCallId && receipt?.status === 'accepted' && typeof receipt.childSessionKey === 'string' && receipt.childSessionKey.length > 0 && typeof receipt.runId === 'string' && receipt.runId.length > 0
+                                          ? { label, toolCallId: call.toolCallId, childSessionKey: receipt.childSessionKey, runId: receipt.runId, expectedReply: env.providerMode === 'mock-openai' ? ['ALPHA-OK', 'BETA-OK'][index] : 'ok' }
                                           : undefined;
                                       });
-                                      return spawns.every(Boolean) && new Set(spawns.map((spawn) => spawn.toolCallId)).size === 2 && new Set(spawns.map((spawn) => spawn.childSessionKey)).size === 2 ? spawns : undefined;
+                                      return spawns.every(Boolean) && new Set(spawns.map((spawn) => spawn.toolCallId)).size === 2 && new Set(spawns.map((spawn) => spawn.childSessionKey)).size === 2 && new Set(spawns.map((spawn) => spawn.runId)).size === 2 ? spawns : undefined;
                                     })()
                               - expr: liveTurnTimeoutMs(env, 30000)
                               - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+                          - set: fanoutCompletions
+                            value: []
+                          - forEach:
+                              items:
+                                ref: fanoutSpawns
+                              item: child
+                              actions:
+                                - call: waitForAgentRun
+                                  saveAs: completion
+                                  args:
+                                    - ref: env
+                                    - expr: child.runId
+                                    - expr: liveTurnTimeoutMs(env, 30000)
+                                - assert:
+                                    expr: "completion.runId === child.runId && completion.status === 'ok' && completion.yielded !== true && typeof completion.endedAt === 'number' && completion.terminalReply?.disposition === 'visible' && completion.terminalReply.text.trim() === child.expectedReply"
+                                    message:
+                                      expr: "`child completion missing for ${child.label}: ${JSON.stringify({ child, completion })}`"
+                                - set: fanoutCompletions
+                                  value:
+                                    expr: "[...fanoutCompletions, { ...child, completion }]"
                           - set: details
                             value:
-                              expr: "parentOutbound.text"
+                              expr: "JSON.stringify({ reply: parentOutbound.text, children: fanoutCompletions })"
                           - set: lastError
                             value: __done__
                         catchAs: attemptError
