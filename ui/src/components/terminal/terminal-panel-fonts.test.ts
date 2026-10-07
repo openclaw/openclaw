@@ -53,7 +53,6 @@ it("adopts the newest font after asynchronous recovery without another panel ren
     panel,
     connection,
     sequence: 1,
-    signal,
     awaitFirstOutput: false,
     isCurrent: () => true,
     onReady: vi.fn(),
