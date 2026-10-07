@@ -200,7 +200,7 @@ extension OpenClawChatComposer {
         Menu {
             ForEach(self.viewModel.sessionBranches) { branch in
                 Button {
-                    guard !branch.active else { return }
+                    guard self.viewModel.canSelectSessionBranch(branch) else { return }
                     Task { await self.viewModel.switchToBranch(branch.leafEntryId) }
                 } label: {
                     HStack(spacing: 6) {
@@ -216,7 +216,7 @@ extension OpenClawChatComposer {
                         }
                     }
                 }
-                .disabled(branch.active)
+                .disabled(!self.viewModel.canSelectSessionBranch(branch))
             }
             .task {
                 await self.viewModel.refreshSessionBranches()
