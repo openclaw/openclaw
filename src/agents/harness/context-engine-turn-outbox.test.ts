@@ -185,7 +185,10 @@ describe("context-engine turn outbox", () => {
       sessionTarget: supplied,
     });
     const message = { role: "user" as const, content: "synthetic input", timestamp: 1 };
-    const recorder = createUserTurnTranscriptRecorder({ message, target });
+    const recorder = createUserTurnTranscriptRecorder({
+      message,
+      target: { ...target, sessionEntry: { sessionId: supplied.sessionId, updatedAt: 1 } },
+    });
     const lease = createLease(createEngine(async () => ({ status: "committed" })));
     await drainPendingContextEngineTurnsBeforeRun({ admission: undefined, lease, recorder, sessionTarget: target });
     expect(recorder.getAdmissionReceipt()).toBeUndefined();

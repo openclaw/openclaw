@@ -9,7 +9,8 @@ This investigation is based on upstream revision
 The added fixture resolves a synthetic persisted target through
 `resolveAgentRunSessionTarget`, installs the real durable admission callback,
 and persists through `createUserTurnTranscriptRecorder.persistApproved` before
-awaiting the provider-dispatch persistence boundary. Ordinary, child, and
+awaiting the recorder persistence waiter. This proves later self-persistence identity,
+not an outstanding runtime-write/provider-dispatch race. Ordinary, child, and
 requester-settle-shaped keys are covered, but this is not a live Telegram,
 spawn, or announcement reproduction. Logs contain only field equality booleans.
 
