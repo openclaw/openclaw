@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { buildMemoryFlushPlan } from "../../../extensions/memory-core/api.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
@@ -33,6 +34,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { validateConfigObject } from "../../config/validation.js";
 import { onAgentEventForRun } from "../../infra/agent-events.js";
 import {
   clearMemoryPluginState,
@@ -1491,6 +1493,83 @@ describe("runMemoryFlushIfNeeded", () => {
       );
     },
   );
+
+  it("recovers through named flush fallbacks from a validated nested selector", async () => {
+    // Configuration: the nested selector goes through the real config pipeline
+    // (normalization + validation), not a hand-built object.
+    const validated = validateConfigObject({
+      agents: {
+        defaults: {
+          compaction: {
+            memoryFlush: {
+              model: {
+                primary: "ollama/qwen3:8b",
+                fallbacks: ["openai/gpt-5.4"],
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      throw new Error(JSON.stringify(validated.issues));
+    }
+    // Plan: the real memory-core resolver, not the stubbed test plan.
+    registerMemoryFlushPlanResolverForTest(buildMemoryFlushPlan);
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry = createFlushSessionEntry();
+    await writeTestSessionStore(storePath, "main", sessionEntry);
+
+    // Dispatch: the primary fails and the named fallback recovers.
+    const primaryError = new Error("flush primary unavailable");
+    runEmbeddedAgentMock
+      .mockImplementationOnce(async () => {
+        throw primaryError;
+      })
+      .mockImplementationOnce(async () => ({ payloads: [], meta: {} }));
+    runWithModelFallbackMock.mockImplementationOnce(async (params: ModelFallbackParams) => {
+      await expect(
+        params.run("ollama", "qwen3:8b", {
+          modelRoutingProvenance: modelRoutingProvenance("ollama", "qwen3:8b"),
+        }),
+      ).rejects.toBe(primaryError);
+      return {
+        result: await params.run("openai", "gpt-5.4", {
+          modelRoutingProvenance: modelRoutingProvenance("ollama", "qwen3:8b", "fallback"),
+        }),
+        provider: "openai",
+        model: "gpt-5.4",
+        attempts: [],
+      };
+    });
+
+    const replyOperation = createReplyOperation();
+    const result = await runDefaultMemoryFlush(sessionEntry, {
+      cfg: validated.config,
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude",
+        thinkingCatalog: [
+          { provider: "ollama", id: "qwen3:8b", input: ["text"] },
+          { provider: "openai", id: "gpt-5.4", input: ["text"] },
+        ],
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      storePath,
+      replyOperation,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    const fallbackCall = requireModelFallbackCall();
+    expect(fallbackCall.provider).toBe("ollama");
+    expect(fallbackCall.model).toBe("qwen3:8b");
+    // The operator's named fallbacks — not the conversation model's chain.
+    expect(fallbackCall.fallbacksOverride).toEqual(["openai/gpt-5.4"]);
+    const persisted = loadMainSessionEntry(storePath);
+    expect(persisted.memoryFlush).toEqual({ kind: "succeeded", compactionCount: 1 });
+  });
 
   it("ignores stale runtime pins before memory-flush fallback preflight", async () => {
     const storePath = path.join(rootDir, "sessions.json");

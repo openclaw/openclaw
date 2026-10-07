@@ -261,6 +261,10 @@ Use the `{ primary, fallbacks }` selector form when you want named replacements 
 }
 ```
 
+The selector form requires a `primary` whenever `fallbacks` are supplied: a
+fallback-only object is rejected at config validation, so it can never
+silently inherit the active session's fallback chain.
+
 <Tip>
 The memory flush prevents context loss during compaction. If your agent has
 important facts in the conversation that are not yet written to a file, they

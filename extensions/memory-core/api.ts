@@ -24,3 +24,4 @@ export {
   registerMemoryCoreDoctorChecks,
 } from "./src/doctor-health.js";
 export { MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE } from "./src/memory/local-embedding-provider.js";
+export { buildMemoryFlushPlan } from "./src/flush-plan.js";

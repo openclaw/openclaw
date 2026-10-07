@@ -25,6 +25,27 @@ export const AgentModelSchema = z.union([
     .strict(),
 ]);
 
+/**
+ * Pre-compaction memory-flush model selector. A bare string keeps the exact
+ * override default; the object form must name a primary whenever fallbacks are
+ * supplied, so a fallback-only selector cannot silently inherit the active
+ * conversation model's fallback chain (and its unnamed paid models).
+ */
+export const MemoryFlushModelSchema = AgentModelSchema.superRefine((value, ctx) => {
+  if (typeof value === "object" && value !== null) {
+    const hasFallbacks = (value.fallbacks?.length ?? 0) > 0;
+    const hasPrimary = (value.primary?.trim().length ?? 0) > 0;
+    if (hasFallbacks && !hasPrimary) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "memoryFlush.model.fallbacks requires a primary model; use a bare string to keep the exact-override default.",
+        path: ["fallbacks"],
+      });
+    }
+  }
+});
+
 export const AgentToolModelSchema = z.union([
   z.string(),
   z

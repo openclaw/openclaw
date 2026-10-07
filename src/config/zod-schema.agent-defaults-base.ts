@@ -6,6 +6,7 @@ import {
   AgentModelSchema,
   AgentToolModelSchema,
   DecisionModelSchema,
+  MemoryFlushModelSchema,
 } from "./zod-schema.agent-model.js";
 
 const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
@@ -220,9 +221,10 @@ export const AgentDefaultsBaseSchema = z
              * A bare string resolves exactly: a cheap or local maintenance model never
              * silently falls through to the paid conversation model. Use the
              * `{ primary, fallbacks }` form to name the models you accept paying for on
-             * this path instead.
+             * this path instead. Fallbacks require a primary: a fallback-only object
+             * is rejected so it cannot silently inherit the conversation fallback chain.
              */
-            model: AgentModelSchema.optional(),
+            model: MemoryFlushModelSchema.optional(),
             /** Run the memory flush when context is within this many tokens of the compaction threshold. */
             softThresholdTokens: z.number().int().nonnegative().optional(),
             /**

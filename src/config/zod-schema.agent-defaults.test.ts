@@ -493,6 +493,48 @@ describe("agent defaults schema", () => {
     ).toBe(false);
   });
 
+  it("accepts memoryFlush.model as a string or a primary-led selector", () => {
+    for (const model of [
+      "ollama/qwen3:8b",
+      { primary: "ollama/qwen3:8b" },
+      { primary: "ollama/qwen3:8b", fallbacks: ["anthropic/claude-haiku-4-5"] },
+      // An empty selector is equivalent to unset.
+      { primary: "", fallbacks: [] },
+    ]) {
+      const result = AgentDefaultsSchema.parse({ compaction: { memoryFlush: { model } } })!;
+      expect(result.compaction?.memoryFlush?.model).toEqual(model);
+    }
+  });
+
+  it("rejects a fallback-only memoryFlush.model selector", () => {
+    // A fallback-only selector would silently inherit the conversation model's
+    // fallback chain at dispatch; validation rejects it instead.
+    for (const model of [
+      { fallbacks: ["anthropic/claude-haiku-4-5"] },
+      { primary: "   ", fallbacks: ["anthropic/claude-haiku-4-5"] },
+    ]) {
+      expectSchemaFailurePath(
+        AgentDefaultsSchema.safeParse({ compaction: { memoryFlush: { model } } }),
+        "compaction.memoryFlush.model",
+      );
+    }
+  });
+
+  it("keeps a stored string memoryFlush.model through config validation", () => {
+    // Upgrade evidence: configs written before the selector existed keep the
+    // exact-string behavior after validation.
+    const result = validateConfigObject({
+      agents: {
+        defaults: { compaction: { memoryFlush: { model: "ollama/qwen3:8b" } } },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(JSON.stringify(result.issues));
+    }
+    expect(result.config.agents?.defaults?.compaction?.memoryFlush?.model).toBe("ollama/qwen3:8b");
+  });
+
   it("accepts compaction.midTurnPrecheck.enabled", () => {
     const result = AgentDefaultsSchema.parse({
       compaction: {
