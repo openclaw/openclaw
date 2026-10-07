@@ -15,7 +15,7 @@ import {
 const databases: DatabaseSync[] = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
-    for (const database of databases.splice(0).reverse()) {
+    for (const database of databases.splice(0).toReversed()) {
       database.close();
     }
     cleanup();

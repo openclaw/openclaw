@@ -498,14 +498,10 @@ export async function resolveWorkspaceBootstrapStatus(
 ): Promise<"pending" | "complete"> {
   const resolvedDir = resolveUserPath(dir);
   const bootstrapPath = path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME);
-  if (!(await pathExists(bootstrapPath))) {
-    return "complete";
-  }
-  if (await isWorkspaceSetupCompleted(resolvedDir, options)) {
-    return "complete";
-  }
+  const complete =
+    !(await pathExists(bootstrapPath)) || (await isWorkspaceSetupCompleted(resolvedDir, options));
   // The setup read can yield while bootstrap removes its file.
-  return (await pathExists(bootstrapPath)) ? "pending" : "complete";
+  return complete || !(await pathExists(bootstrapPath)) ? "complete" : "pending";
 }
 
 export async function isWorkspaceBootstrapPending(dir: string): Promise<boolean> {
