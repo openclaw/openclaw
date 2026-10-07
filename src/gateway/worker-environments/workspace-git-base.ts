@@ -11,7 +11,7 @@ import {
 import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
 import { executeGitCommand, requireGitCommandOutput } from "../../infra/git-exec.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
-import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import { workerSshCommandOptions } from "./ssh.js";
 import {
   MAX_WORKSPACE_INVENTORY_PATH_BYTES,

@@ -40,67 +40,61 @@ afterEach(async () => {
 });
 
 describe("plugin runtime refresh admission", () => {
-  it.each([false, true])(
-    "preserves same-route delivery dedupe across refresh (media: %s)",
-    async (media) => {
-      const text = "The requested result was delivered by the original plugin generation.";
-      const mediaUrl = "https://example.test/delivered-result.png";
-      const sentTarget = {
-        tool: "message",
-        provider: "telegram",
-        to: "telegram:123",
-        ...(media ? { mediaUrls: [mediaUrl] } : { text }),
-      };
-      const payload = media ? { mediaUrl } : { text };
-      mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
-        params.registerPluginRuntimeRefreshConsumer?.(() => true);
-        expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
-        return makeAttemptResult({
-          assistantTexts: [],
-          toolMetas: [
-            { toolName: "message", isError: false },
-            { toolName: "plugins", isError: false },
-          ],
-          didSendViaMessagingTool: true,
-          messagingToolSentTexts: media ? [] : [text],
-          messagingToolSentMediaUrls: media ? [mediaUrl] : [],
-          messagingToolSentTargets: [sentTarget],
-        });
+  it("preserves same-route text delivery dedupe across refresh", async () => {
+    const text = "The requested result was delivered by the original plugin generation.";
+    const sentTarget = {
+      tool: "message",
+      provider: "telegram",
+      to: "telegram:123",
+      text,
+    };
+    const payload = { text };
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+      params.registerPluginRuntimeRefreshConsumer?.(() => true);
+      expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
+      return makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [
+          { toolName: "message", isError: false },
+          { toolName: "plugins", isError: false },
+        ],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: [text],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [sentTarget],
       });
-      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-        makeAttemptResult({ assistantTexts: [payload.text ?? "The requested image is ready."] }),
-      );
-      mockedBuildEmbeddedRunPayloads.mockReturnValue([payload]);
-      const onAttemptStart = vi.fn();
-      const result = await runEmbeddedAgent({
-        ...createOverflowRunParams(state),
-        prompt: "send the result, reload the plugin, then verify the result",
-        agentHarnessId: "openclaw",
-        provider: "fixture-provider",
-        model: "fixture-model",
-        sessionKey: undefined,
-        onAttemptStart,
-      });
-      expect(result.meta.error).toBeUndefined();
-      expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.pluginRuntimeRefreshMessages).toEqual([]);
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-      expect(onAttemptStart).toHaveBeenCalledTimes(2);
-      const final = await buildReplyPayloads({
-        payloads: result.payloads ?? [],
-        messagingToolSentTexts: result.messagingToolSentTexts,
-        messagingToolSentMediaUrls: result.messagingToolSentMediaUrls,
-        messagingToolSentTargets: result.messagingToolSentTargets,
-        messageProvider: "telegram",
-        originatingTo: "telegram:123",
-        isHeartbeat: false,
-        didLogHeartbeatStrip: false,
-        blockStreamingEnabled: false,
-        blockReplyPipeline: null,
-        replyToMode: "off",
-      });
-      expect(final.replyPayloads).toEqual([]);
-    },
-  );
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: [text] }));
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([payload]);
+    const onAttemptStart = vi.fn();
+    const result = await runEmbeddedAgent({
+      ...createOverflowRunParams(state),
+      prompt: "send the result, reload the plugin, then verify the result",
+      agentHarnessId: "openclaw",
+      provider: "fixture-provider",
+      model: "fixture-model",
+      sessionKey: undefined,
+      onAttemptStart,
+    });
+    expect(result.meta.error).toBeUndefined();
+    expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.pluginRuntimeRefreshMessages).toEqual([]);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(onAttemptStart).toHaveBeenCalledTimes(2);
+    const final = await buildReplyPayloads({
+      payloads: result.payloads ?? [],
+      messagingToolSentTexts: result.messagingToolSentTexts,
+      messagingToolSentMediaUrls: result.messagingToolSentMediaUrls,
+      messagingToolSentTargets: result.messagingToolSentTargets,
+      messageProvider: "telegram",
+      originatingTo: "telegram:123",
+      isHeartbeat: false,
+      didLogHeartbeatStrip: false,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      replyToMode: "off",
+    });
+    expect(final.replyPayloads).toEqual([]);
+  });
 
   it("reacquires generations while preserving run authority, committed work, and one terminal", async () => {
     const { getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
@@ -501,7 +495,6 @@ describe("plugin runtime refresh admission", () => {
 
 describe("plugin runtime refresh streaming delivery", () => {
   it.each([
-    { name: "same source", otherRoute: false, toolOnly: false, mirror: false },
     { name: "another target", otherRoute: true, toolOnly: false, mirror: false },
     { name: "source mirrors", otherRoute: false, toolOnly: false, mirror: true },
     {

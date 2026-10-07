@@ -8,7 +8,8 @@ extension ChatSessionSidebarModel {
         options: ViewOptions,
         peopleAvailable: Bool,
         selfOwnerID: String?,
-        sectionOrder: [String]) -> [Section]
+        sectionOrder: [String],
+        identity: (OpenClawChatSessionEntry) -> String = { $0.key }) -> [Section]
     {
         let grouping = options.effectiveGrouping(peopleAvailable: peopleAvailable)
         let known = groups.sorted { $0.position == $1.position ? $0.name < $1.name : $0.position < $1.position }
@@ -21,23 +22,33 @@ extension ChatSessionSidebarModel {
         var categories = grouping == .category ? known : []
         var returnToGroups = false
         // ui/src/components/app-sidebar-session-tree.ts:102: archived parents never expose descendants, even in All.
-        let byKey = Dictionary(rows.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+        func childIdentity(_ key: String, parent: OpenClawChatSessionEntry) -> String {
+            var child = parent
+            child.key = key
+            child.agentId = Self.sidebarAgentID(parent)
+            return identity(child)
+        }
+        let byKey = Dictionary(rows.map { (identity($0), $0) }, uniquingKeysWith: { first, _ in first })
         let curatedKeys = Set(byKey.values.filter {
             $0.pinned == true || ChatPayloadDecoding.trimmedNonEmptyString($0.category) != nil
-        }.map(\.key))
+        }.map(identity))
         var hidden = Set<String>()
-        var pending = rows.filter(\.isArchived).flatMap { $0.childSessions ?? [] }
+        var pending = rows.filter(\.isArchived).flatMap { row in
+            (row.childSessions ?? []).map { childIdentity($0, parent: row) }
+        }
         while let key = pending.popLast() {
             guard !curatedKeys.contains(key), hidden.insert(key).inserted else { continue }
-            pending += byKey[key]?.childSessions ?? []
+            pending += byKey[key].map { row in
+                (row.childSessions ?? []).map { childIdentity($0, parent: row) }
+            } ?? []
         }
-        let eligible = rows.filter { !hidden.contains($0.key) }.map { row in
+        let eligible = rows.filter { !hidden.contains(identity($0)) }.map { row in
             var row = row
             // ui/src/components/app-sidebar-session-tree.ts:92,105: curated children own root placement.
-            row.childSessions = row.childSessions?.filter { !curatedKeys.contains($0) }
+            row.childSessions = row.childSessions?.filter { !curatedKeys.contains(childIdentity($0, parent: row)) }
             return row
         }
-        for node in self.nodes(self.tree(from: eligible), matchingOwner: options.ownerID) {
+        for node in self.nodes(self.tree(from: eligible, identity: identity), matchingOwner: options.ownerID) {
             let row = node.session
             let id: String
             let category = ChatPayloadDecoding.trimmedNonEmptyString(row.category)
@@ -117,13 +128,15 @@ extension ChatSessionSidebarModel {
             default: titles[id] ?? String(id.dropFirst(6))
             }
             let nodes = buckets[id] ?? []
-            let nodesByKey = Dictionary(nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let nodesByKey = Dictionary(
+                nodes.map { (identity($0.session), $0) },
+                uniquingKeysWith: { first, _ in first })
             return Section(
                 id: id,
                 title: title,
                 nodes: id == "pinned"
                     ? OpenClawChatSessionListOrganizer.organize(nodes.map(\.session))
-                    .compactMap { nodesByKey[$0.key] } : nodes)
+                    .compactMap { nodesByKey[identity($0)] } : nodes)
         }
     }
 

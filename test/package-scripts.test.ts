@@ -155,9 +155,9 @@ describe("package scripts", () => {
     },
   );
 
-  it("enables live cache validation in the package script", () => {
+  it("runs live cache validation through the shared live runtime selector", () => {
     expect(readPackageJson().scripts["test:live:cache"]).toBe(
-      "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 -- node --import ./scripts/tsx.mjs scripts/check-live-cache.ts",
+      "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 -- node --import ./scripts/tsx.mjs scripts/test-live.mts src/agents/live-cache-regression.live.test.ts",
     );
   });
 
@@ -188,15 +188,15 @@ describe("package scripts", () => {
       const targets =
         buildAllIndex < 0
           ? extractNodeScriptTargets(script)
-          : resolveBuildAllSteps(parseBuildAllArgs(tokens.slice(buildAllIndex + 1)).profile)
-              .filter((step) => step.kind !== "pnpm")
-              .flatMap((step) => extractNodeScriptTargets(["node", ...step.args].join(" ")));
+          : resolveBuildAllSteps(
+              parseBuildAllArgs(tokens.slice(buildAllIndex + 1)).profile,
+            ).flatMap((step) => extractNodeScriptTargets(["node", ...step.args].join(" ")));
       const check = targets.indexOf("scripts/check-plugin-sdk-exports.mts");
 
       expect(check).toBeGreaterThanOrEqual(0);
       for (const prerequisite of [
         "scripts/runtime-postbuild.mts",
-        "scripts/write-plugin-sdk-entry-dts.ts",
+        "scripts/write-unified-entry-dts.ts",
       ]) {
         const publication = targets.indexOf(prerequisite);
         expect(publication, prerequisite).toBeGreaterThanOrEqual(0);

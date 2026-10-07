@@ -43,7 +43,6 @@ type Form = {
   previewViews: Set<string>;
   owner: McpFormResourceOwner;
   signal: AbortSignal;
-  context: StructuredInputResourceContext;
   operations: number;
   activeOperations: number;
   uploadedBytes: number;
@@ -83,10 +82,8 @@ const actionSchema = z.discriminatedUnion("action", [
     .strict(),
 ]);
 
-/** Binds capabilities to one originating MCP call; its ID is not a pending Gateway record ID. */
 export async function createMcpAppFormResourceContext(params: {
   origin: McpAppFormOrigin;
-  requestId: string | number;
   snapshot: Record<string, unknown>;
   signal: AbortSignal;
   uploadResources?: McpFormResourceUpload;
@@ -193,7 +190,6 @@ export async function createMcpAppFormResourceContext(params: {
     previewViews,
     owner,
     signal: params.signal,
-    context,
     operations: 0,
     activeOperations: 0,
     uploadedBytes: 0,
@@ -215,8 +211,8 @@ function acceptsFile(
   if (!accepts?.length) {
     return true;
   }
-  const name = file.name.toLowerCase(),
-    mime = file.mimeType.toLowerCase().split(";", 1)[0]!;
+  const name = file.name.toLowerCase();
+  const mime = file.mimeType.toLowerCase().split(";", 1)[0]!;
   return accepts.some((rule) => {
     const accept = rule.toLowerCase();
     return accept.startsWith(".")

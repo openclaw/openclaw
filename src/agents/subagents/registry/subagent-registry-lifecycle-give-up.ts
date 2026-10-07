@@ -11,11 +11,14 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import { shouldSuspendPendingFinalDelivery } from "./subagent-registry-cleanup.js";
-import { logAnnounceGiveUp, safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import {
+  logAnnounceGiveUp,
+  safeRemoveAttachmentsDir,
+  shouldRemoveSubagentAttachments,
+} from "./subagent-registry-helpers.js";
 import { retireSupersededCleanupIfNeeded } from "./subagent-registry-lifecycle-attempt.js";
 import { suspendPendingFinalDelivery } from "./subagent-registry-lifecycle-cleanup.js";
 import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle-context.js";
-import { emitCompletionEndedHookIfNeeded } from "./subagent-registry-lifecycle-delivery.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
 import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
@@ -24,7 +27,6 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 export const finalizeResumedAnnounceGiveUp = async (
   context: SubagentLifecycleAnnounceCleanupContext,
   giveUpParams: {
-    runId: string;
     entry: SubagentRunRecord;
     reason: "expiry" | "permanent_failure";
     cleanup?: "delete" | "keep";
@@ -50,8 +52,7 @@ export const finalizeResumedAnnounceGiveUp = async (
     runId = entry.runId;
     return (
       entry.generation === generation &&
-      (cleanupGeneration === undefined ||
-        context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration))
+      (cleanupGeneration === undefined || context.isCleanupAttemptCurrent(entry, cleanupGeneration))
     );
   };
   if (!isCurrent()) {
@@ -72,7 +73,7 @@ export const finalizeResumedAnnounceGiveUp = async (
     assertCurrent() {
       if (
         cleanupGeneration !== undefined &&
-        !context.isCleanupGenerationCurrent(runId, entry, cleanupGeneration)
+        !context.isCleanupGenerationCurrent(entry, cleanupGeneration)
       ) {
         throw new Error("Subagent give-up owner changed before persistence.");
       }
@@ -101,7 +102,6 @@ export const finalizeResumedAnnounceGiveUp = async (
     return;
   }
   await finishSubagentCleanup(context, {
-    runId,
     entry,
     cleanup: cleanup ?? entry.cleanup,
     cleanupGeneration,
@@ -116,7 +116,6 @@ export const finalizeResumedAnnounceGiveUp = async (
 export async function finishSubagentCleanup(
   context: SubagentLifecycleAnnounceCleanupContext,
   args: {
-    runId: string;
     entry: SubagentRunRecord;
     cleanup: "delete" | "keep";
     cleanupGeneration?: number;
@@ -131,19 +130,17 @@ export async function finishSubagentCleanup(
 ): Promise<void> {
   const { cleanup, cleanupGeneration, stateContext, isCurrent } = args;
   let entry = args.entry;
-  let runId = entry.runId;
   const sessionEffectsCurrent = () => isCurrent() && context.sessionEffectsHostCurrent(entry);
-  if ((cleanup === "delete" || !entry.retainAttachmentsOnKeep) && sessionEffectsCurrent()) {
+  if (shouldRemoveSubagentAttachments(entry, cleanup) && sessionEffectsCurrent()) {
     await safeRemoveAttachmentsDir(entry, sessionEffectsCurrent);
   }
   if (!isCurrent()) {
     if (cleanupGeneration !== undefined) {
-      await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
+      await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
     }
     return;
   }
   entry = getCurrentSubagentRunOwner(context.options.runs, entry) ?? entry;
-  runId = entry.runId;
   const completionReason = args.giveUpReason
     ? (entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE)
     : args.completionReason;
@@ -152,11 +149,11 @@ export async function finishSubagentCleanup(
   }
   const cleanupOwnerCurrent = () =>
     (cleanupGeneration === undefined || context.isCleanupGeneration(entry, cleanupGeneration)) &&
-    context.isCleanupOwnerCurrent(runId, entry);
+    context.isCleanupOwnerCurrent(entry);
   // Hook loading is best-effort; durable delivery and cleanup must already
   // be terminal before plugin code can fail or stall.
   await context.completeCleanupBookkeeping({
-    runId,
+    runId: entry.runId,
     entry,
     cleanup,
     completedAt: args.completedAt ?? Date.now(),
@@ -165,7 +162,6 @@ export async function finishSubagentCleanup(
     isCurrent: cleanupOwnerCurrent,
   });
   entry = getCurrentSubagentRunOwner(context.options.runs, entry) ?? entry;
-  runId = entry.runId;
   const endedHookOwnerCurrent = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
     return (
@@ -175,12 +171,16 @@ export async function finishSubagentCleanup(
     );
   };
   if (!(await context.shouldSuppressSessionEffects(entry)) && endedHookOwnerCurrent()) {
-    await emitCompletionEndedHookIfNeeded(
-      context.options,
-      entry,
-      completionReason ?? entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE,
-      endedHookOwnerCurrent,
-      async () => !(await context.shouldSuppressSessionEffects(entry)) && endedHookOwnerCurrent(),
-    );
+    const reason = completionReason ?? entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
+    if (context.options.shouldEmitEndedHookForRun({ entry, reason })) {
+      await context.options.emitSubagentEndedHookForRun({
+        entry,
+        reason,
+        sendFarewell: true,
+        isCurrent: endedHookOwnerCurrent,
+        prepareCurrent: async () =>
+          !(await context.shouldSuppressSessionEffects(entry)) && endedHookOwnerCurrent(),
+      });
+    }
   }
 }

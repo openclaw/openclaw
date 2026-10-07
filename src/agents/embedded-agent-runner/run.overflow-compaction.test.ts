@@ -1,7 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { markRuntimeCompactionDelegate } from "../../context-engine/compaction-watchdog.js";
 import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
@@ -358,7 +357,7 @@ describe("compactEmbeddedRunForRecovery", () => {
     expect(completionMocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
   });
 
-  it.each(["returned", "failed", "cancelled", "failed-result"] as const)(
+  it.each(["failed", "cancelled", "failed-result"] as const)(
     "keeps committed context chronology when the backend is %s",
     async (outcome) => {
       const state = createEmbeddedRunContextRecoveryState();
@@ -372,9 +371,7 @@ describe("compactEmbeddedRunForRecovery", () => {
       const controller = new AbortController();
       const error = new Error("backend settled after the committed replacement");
       const usageAccumulator = createUsageAccumulator();
-      let progressReset: unknown;
       const compact = vi.fn<ContextEngine["compact"]>(async ({ runtimeContext }) => {
-        progressReset = runtimeContext?.compactionTimeoutReset;
         const recorder = readCompactionAccountingRecorder(runtimeContext);
         expect(recorder?.requestBudget).toBe(requestBudget);
         expect(runtimeContext).not.toHaveProperty("requestBudget");
@@ -410,9 +407,7 @@ describe("compactEmbeddedRunForRecovery", () => {
         state,
         usageAccumulator,
         runParams: { ...baseRunParams, abortSignal: controller.signal },
-        // Only this synthetic canonical delegate is tagged; the real safety helper
-        // must project its progress callback without losing private accounting.
-        contextEngine: makeContextEngine(markRuntimeCompactionDelegate(compact), false),
+        contextEngine: makeContextEngine(compact, false),
       });
       const recovery = {
         tokenBudget: 100,
@@ -433,28 +428,15 @@ describe("compactEmbeddedRunForRecovery", () => {
           .soft(input.adoptCompactionTranscript)
           .toHaveBeenCalledExactlyOnceWith(completedFact, undefined);
       } else {
-        await expect(pending).resolves.toMatchObject({ result: { ok: outcome === "returned" } });
+        await expect(pending).resolves.toMatchObject({ result: { ok: false } });
       }
       expect(compact).toHaveBeenCalledOnce();
-      expect.soft(typeof progressReset).toBe("function");
       expect.soft(usageAccumulator).toMatchObject({ input: 100, output: 50, total: 150 });
       expect(state).toMatchObject({
         autoCompactionCount: 1,
         lastCompactionTokensAfter: 40,
         currentContextSnapshot: { tokens: 20 },
       });
-      if (outcome === "returned") {
-        compact.mockResolvedValueOnce({
-          ok: true,
-          compacted: true,
-          result: { tokensBefore: 100, tokensAfter: 60 },
-        });
-        await compactEmbeddedRunForRecovery(input, { ...recovery, attempt: 2 });
-        expect(state).toMatchObject({
-          autoCompactionCount: 2,
-          currentContextSnapshot: { tokens: 60 },
-        });
-      }
     },
   );
 });

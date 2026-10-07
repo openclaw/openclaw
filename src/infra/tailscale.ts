@@ -10,9 +10,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { runExec } from "../process/exec.js";
 import { signalProcessTree } from "../process/kill-tree.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { settlesWithin } from "../shared/settle-within.js";
 import { extractTailscaleServeGatewayUrls } from "../shared/tailscale-status.js";
 import { isVitestRuntimeEnv } from "./env.js";
 import { toErrorObject } from "./errors.js";
@@ -41,10 +43,7 @@ const SUDO_NONINTERACTIVE_AUTH_ERROR =
   /^sudo: (?:a password is required|no password was provided|a terminal is required|no tty present|no askpass program specified)/im;
 
 function tailnetHostnameFromStatus(parsed: Record<string, unknown>): string {
-  const self =
-    typeof parsed.Self === "object" && parsed.Self !== null
-      ? (parsed.Self as Record<string, unknown>)
-      : undefined;
+  const self = readRecord(parsed.Self);
   const dns = typeof self?.DNSName === "string" ? self.DNSName : undefined;
   const ips = Array.isArray(self?.TailscaleIPs)
     ? ((parsed.Self as { TailscaleIPs?: string[] }).TailscaleIPs ?? [])
@@ -85,9 +84,7 @@ export async function findTailscaleBinary(): Promise<string | null> {
     if (fromPath && (await checkBinary(fromPath))) {
       return fromPath;
     }
-  } catch {
-    // PATH lookup failed, continue
-  }
+  } catch {}
 
   const macAppPath = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
   if (await checkBinary(macAppPath)) {
@@ -105,9 +102,7 @@ export async function findTailscaleBinary(): Promise<string | null> {
         return candidate;
       }
     }
-  } catch {
-    // locate failed, continue
-  }
+  } catch {}
 
   return null;
 }
@@ -125,7 +120,7 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
     try {
       const { stdout } = await exec(candidate, ["status", "--json"], {
         timeoutMs: 5000,
-        maxBuffer: 400_000,
+        maxBuffer: 16 * 1024 * 1024,
       });
       return tailnetHostnameFromStatus(stdout ? parsePossiblyNoisyJsonObject(stdout) : {});
     } catch (err) {
@@ -141,16 +136,10 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
 
 let cachedTailscaleBinary: string | null = null;
 
-function getTestTailscaleBinaryOverride(env: NodeJS.ProcessEnv = process.env): string | null {
-  if (!isVitestRuntimeEnv(env)) {
-    return null;
-  }
-  const forcedBinary = env.OPENCLAW_TEST_TAILSCALE_BINARY?.trim();
-  return forcedBinary || null;
-}
-
 async function getTailscaleBinary(): Promise<string> {
-  const forcedBinary = getTestTailscaleBinaryOverride();
+  const forcedBinary = isVitestRuntimeEnv()
+    ? process.env.OPENCLAW_TEST_TAILSCALE_BINARY?.trim()
+    : undefined;
   if (forcedBinary) {
     cachedTailscaleBinary = forcedBinary;
     return forcedBinary;
@@ -201,18 +190,6 @@ function routeClaimError(message: TailscaleRouteOwnerFailure, serveStatus: strin
   });
 }
 
-function waitWithTimeout(promise: Promise<void>, timeoutMs: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(false), timeoutMs);
-    timer.unref?.();
-    const settled = () => {
-      clearTimeout(timer);
-      resolve(true);
-    };
-    void promise.then(settled, settled);
-  });
-}
-
 async function startTailscaleRouteOwner(
   argv: string[],
   serveStatus: string,
@@ -235,70 +212,66 @@ async function startTailscaleRouteOwner(
   let failure: Error | undefined;
   const { promise: exited, resolve: resolveExit } = createDeferredCore();
 
-  const startup = new Promise<void>((resolve, reject) => {
-    const settle = (error?: Error) => {
-      clearTimeout(startupTimer);
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    const startupTimer = setTimeout(
-      () => settle(new Error("Tailscale route claim did not become ready within 15 seconds")),
-      TAILSCALE_ROUTE_START_TIMEOUT_MS,
-    );
-    startupTimer.unref?.();
-
-    worker.on("message", (message: unknown) => {
-      const event = readRecord(message);
-      if (!event) {
-        return;
-      }
-      if (event.type === "spawned") {
-        if (typeof event.pid !== "number") {
-          return;
-        }
-        routePid = event.pid;
-      } else if (event.type === "ready") {
-        ready = true;
-        active = true;
-        settle();
-      } else if (event.type === "failed") {
-        if (
-          (event.code !== null && typeof event.code !== "number") ||
-          typeof event.stdout !== "string" ||
-          typeof event.stderr !== "string"
-        ) {
-          return;
-        }
-        failure = routeClaimError(
-          {
-            code: event.code,
-            stdout: event.stdout,
-            stderr: event.stderr,
-          },
-          serveStatus,
+  const startup = raceWithTimeout(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        worker.on("message", (message: unknown) => {
+          const event = readRecord(message);
+          if (!event) {
+            return;
+          }
+          if (event.type === "spawned") {
+            if (typeof event.pid !== "number") {
+              return;
+            }
+            routePid = event.pid;
+          } else if (event.type === "ready") {
+            ready = true;
+            active = true;
+            resolve();
+          } else if (event.type === "failed") {
+            if (
+              (event.code !== null && typeof event.code !== "number") ||
+              typeof event.stdout !== "string" ||
+              typeof event.stderr !== "string"
+            ) {
+              return;
+            }
+            failure = routeClaimError(
+              {
+                code: event.code,
+                stdout: event.stdout,
+                stderr: event.stderr,
+              },
+              serveStatus,
+            );
+            if (!ready) {
+              reject(failure);
+            }
+          }
+        });
+        worker.once("error", (error) =>
+          reject(toErrorObject(error, "Tailscale route owner failed")),
         );
-        if (!ready) {
-          settle(failure);
-        }
-      }
-    });
-    worker.once("error", (error) => settle(toErrorObject(error, "Tailscale route owner failed")));
-    worker.once("exit", (code, signal) => {
-      active = false;
-      resolveExit();
-      if (!ready) {
-        settle(
-          failure ??
-            new Error(
-              `Tailscale route owner exited before readiness (${signal ? `signal ${signal}` : `code ${code ?? "unknown"}`})`,
-            ),
-        );
-      }
-    });
-  });
+        worker.once("exit", (code, signal) => {
+          active = false;
+          resolveExit();
+          if (!ready) {
+            reject(
+              failure ??
+                new Error(
+                  `Tailscale route owner exited before readiness (${signal ? `signal ${signal}` : `code ${code ?? "unknown"}`})`,
+                ),
+            );
+          }
+        });
+      }),
+    TAILSCALE_ROUTE_START_TIMEOUT_MS,
+    () => {
+      throw new Error("Tailscale route claim did not become ready within 15 seconds");
+    },
+    { ref: false },
+  );
 
   const stop = async () => {
     if (stopping) {
@@ -315,7 +288,7 @@ async function startTailscaleRouteOwner(
     } else {
       worker.kill("SIGTERM");
     }
-    if (await waitWithTimeout(exited, TAILSCALE_ROUTE_STOP_TIMEOUT_MS)) {
+    if (await settlesWithin(exited, TAILSCALE_ROUTE_STOP_TIMEOUT_MS)) {
       return;
     }
     if (routePid) {
@@ -467,7 +440,7 @@ export async function getTailnetHostnameAfterServe(
     async () => {
       const { stdout } = await exec(candidate, ["status", "--json"], {
         timeoutMs: 5000,
-        maxBuffer: 400_000,
+        maxBuffer: 16 * 1024 * 1024,
         // Hostname discovery is best-effort. Avoid scary command-failure logs while the
         // local daemon settles after Serve configuration.
         logOutput: false,
@@ -586,22 +559,12 @@ function funnelStatusBackendsForPort(status: Record<string, unknown>): Set<strin
   if (enabledHosts.size === 0) {
     return backends;
   }
-  const web = (status as { Web?: Record<string, unknown> }).Web;
-  if (!web || typeof web !== "object") {
-    return backends;
-  }
-  for (const [host, handlers] of Object.entries(web)) {
+  for (const [host, handlers] of Object.entries(readRecord(status.Web) ?? {})) {
     if (!enabledHosts.has(host)) {
       continue;
     }
-    if (!handlers || typeof handlers !== "object") {
-      continue;
-    }
-    const handlerEntries = (handlers as { Handlers?: Record<string, unknown> }).Handlers;
-    if (!handlerEntries || typeof handlerEntries !== "object") {
-      continue;
-    }
-    for (const handler of Object.values(handlerEntries)) {
+    const handlerEntries = readRecord(readRecord(handlers)?.Handlers);
+    for (const handler of Object.values(handlerEntries ?? {})) {
       const proxy = (handler as { Proxy?: unknown })?.Proxy;
       if (typeof proxy === "string" && proxy.length > 0) {
         backends.add(proxy);
@@ -641,8 +604,7 @@ function readCachedWhois(ip: string, now: number): TailscaleWhoisIdentity | null
   if (!cached) {
     return undefined;
   }
-  const expiresAt = asDateTimestampMs(cached.expiresAt);
-  if (expiresAt === undefined || expiresAt <= validNow) {
+  if (cached.expiresAt <= validNow) {
     whoisCache.delete(ip);
     return undefined;
   }

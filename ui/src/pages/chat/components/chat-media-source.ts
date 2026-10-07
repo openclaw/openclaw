@@ -118,7 +118,7 @@ export class ChatMediaSourceController {
     this.playbackReadiness = "idle";
   }
 
-  updateSource(media: HTMLMediaElement, source: string, sourceIdentity = source): void {
+  updateSource(media: HTMLMediaElement, source: string, sourceIdentity: string): void {
     const nextSource = source.trim();
     const nextIdentity = sourceIdentity.trim();
     if (!nextSource || !nextIdentity) {

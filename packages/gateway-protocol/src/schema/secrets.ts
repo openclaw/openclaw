@@ -1,4 +1,3 @@
-// Gateway Protocol schema module defines protocol validation shapes.
 import { Type, type Static } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
@@ -10,7 +9,6 @@ import { withSince } from "./since.js";
  * These payloads request secret materialization from the gateway while keeping
  * caller scope, allowed paths, and provider overrides explicit.
  */
-/** Empty request payload for reloading configured secret providers. */
 export const SecretsReloadParamsSchema = closedObject({});
 
 const SecretStoreNameSchema = Type.String({
@@ -63,10 +61,8 @@ export const SecretStoreEntrySchema = Type.Union([
   SecretStoreEnvEntrySchema,
 ]);
 
-/** Empty request payload for listing the team secret store. */
 export const SecretsStoreListParamsSchema = closedObject({});
 
-/** Team secret-store inventory. */
 export const SecretsStoreListResultSchema = closedObject({
   entries: Type.Array(SecretStoreEntrySchema),
 });
@@ -112,7 +108,6 @@ export const SecretsResolveParamsSchema = closedObject({
   ),
 });
 
-/** Static type for secret resolution requests. */
 export type SecretsResolveParams = Static<typeof SecretsResolveParamsSchema>;
 
 /** One resolved secret assignment path plus its provider-owned value. */
@@ -130,5 +125,4 @@ export const SecretsResolveResultSchema = closedObject({
   inactiveRefPaths: Type.Optional(Type.Array(NonEmptyString)),
 });
 
-/** Static type for secret resolution responses. */
 export type SecretsResolveResult = Static<typeof SecretsResolveResultSchema>;

@@ -1,6 +1,3 @@
-/**
- * Snapshot-aware and synthetic provider-auth availability.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfigSnapshot } from "../config/config.js";
@@ -29,10 +26,8 @@ export type RuntimeProviderAuthLookup = {
   >;
   setupProviderFallbackRefs?: readonly string[];
   syntheticAuthProviderRefs?: readonly string[];
-  syntheticAuthProviderRefsComplete?: boolean;
 };
 
-/** Builds stable env/synthetic auth lookup data for repeated provider checks. */
 export function createRuntimeProviderAuthLookup(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
@@ -61,7 +56,6 @@ export function createRuntimeProviderAuthLookup(params: {
     syntheticAuthProviderRefs: syntheticAuthProviderRefs?.complete
       ? syntheticAuthProviderRefs.refs
       : undefined,
-    syntheticAuthProviderRefsComplete: syntheticAuthProviderRefs?.complete,
   };
 }
 
@@ -160,6 +154,13 @@ function resolveRuntimeAvailableProviderAuth<T>(
     ? authConfig.resolveInlineProviderApiKeyCooldownUntil(params.store, provider)
     : null;
   const inlineProviderApiKeyUsable = unusableUntil === null || unusableUntil <= Date.now();
+  const isUsableSource = (source: string) =>
+    !authConfig.isConfigBackedInlineProviderApiKey({
+      cfg: params.cfg,
+      provider,
+      source,
+      store: params.store,
+    }) || inlineProviderApiKeyUsable;
 
   const envAuth = resolveEnvApiKey(provider, params.env, {
     config: params.cfg,
@@ -177,13 +178,7 @@ function resolveRuntimeAvailableProviderAuth<T>(
       capability: params.capability,
       mode: envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
     }) &&
-    (!authConfig.isConfigBackedInlineProviderApiKey({
-      cfg: params.cfg,
-      provider,
-      source: envAuth.source,
-      store: params.store,
-    }) ||
-      inlineProviderApiKeyUsable)
+    isUsableSource(envAuth.source)
   ) {
     return true;
   }
@@ -212,13 +207,7 @@ function resolveRuntimeAvailableProviderAuth<T>(
         mode: managedRuntimeAuth.mode,
         authFlow: managedRuntimeAuth.authFlow,
       })) &&
-    (!authConfig.isConfigBackedInlineProviderApiKey({
-      cfg: params.cfg,
-      provider,
-      source: managedRuntimeAuth.source,
-      store: params.store,
-    }) ||
-      inlineProviderApiKeyUsable)
+    isUsableSource(managedRuntimeAuth.source)
   ) {
     return true;
   }
@@ -238,7 +227,6 @@ function resolveRuntimeAvailableProviderAuth<T>(
   return false;
 }
 
-/** Fast auth-availability check for runtime provider/model selection. */
 export function hasRuntimeAvailableProviderAuth(params: RuntimeProviderAuthParams): boolean {
   return resolveRuntimeAvailableProviderAuth(params, (provider) =>
     Boolean(

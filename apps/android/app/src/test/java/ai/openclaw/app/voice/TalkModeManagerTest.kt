@@ -3640,7 +3640,7 @@ class TalkModeManagerTest {
     }
 
   private fun createManager(
-    talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(),
+    talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(requestDetailed = { _, _, _ -> error("session missing") }),
     talkAudioPlayer: TalkAudioPlaying? = null,
     scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     isConnected: () -> Boolean = { true },

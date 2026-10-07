@@ -88,6 +88,7 @@ import {
   resolveRuntimePlacementSeconds,
 } from "./ci-test-timings.mts";
 import { UI_E2E_OWNER_WATCHES, UI_E2E_SMOKE_TEST_FILES } from "./ci-ui-e2e-owner-inventory.mts";
+import { groupBy } from "./group-by.mts";
 import { isStripeEligibleTestFile, listTrackedTestFiles } from "./list-test-files.mts";
 import { isExclusiveCiTestConfig } from "./local-check-runtime.mts";
 import { readPositiveEnvInt } from "./numeric-options.mjs";
@@ -126,16 +127,12 @@ function compactGroupTimingKey(group: NodeTestShardGroup): string {
   return group.timing_key ?? group.shard_name;
 }
 
-export type NodeTestShard = {
+export type NodeTestShard = Omit<
+  NodeTestShardGroup,
+  "shard_name" | "fallbackMaxWorkers" | "minTotalMemoryBytes"
+> & {
   checkName: string;
   shardName: string;
-  timing_key?: string;
-  configs: string[];
-  runner: string;
-  requiresDist: boolean;
-  pretestBuildMode?: NodeTestPretestBuildMode;
-  includePatterns?: string[];
-  env?: Record<string, string>;
   groups?: NodeTestShardGroup[];
   timeoutMinutes?: number;
   planConcurrency?: number;
@@ -152,8 +149,6 @@ type NodeTestPlanOptions = {
   includePrExemptRuntimeTests?: boolean;
   compact?: boolean;
   compactMode?: CompactNodeTestPlanMode;
-  compactGroupCount?: number;
-  compactWholeGroupCount?: number;
   compactNodeJobCap?: number;
   runnerBackend?: string;
 };
@@ -1856,26 +1851,16 @@ function createAutoReplyReplySplitShards(): NodeTestSplitShard[] {
   return Object.entries(groups)
     .flatMap(([groupName, includePatterns]) => {
       // Retain separate command stripes so packing can spread their import cost across jobs.
-      if (groupName === "auto-reply-reply-commands") {
-        return createStripedBatches(
-          includePatterns,
-          AUTO_REPLY_COMMANDS_STRIPES,
-          stripeFileWeight,
-        ).map((batch, index) => ({
-          configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-          includePatterns: batch,
-          requiresDist: false,
-          shardName: `${groupName}-${index + 1}`,
-        }));
-      }
-      return [
-        {
-          configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-          includePatterns,
-          requiresDist: false,
-          shardName: groupName,
-        },
-      ];
+      const striped = groupName === "auto-reply-reply-commands";
+      const batches = striped
+        ? createStripedBatches(includePatterns, AUTO_REPLY_COMMANDS_STRIPES, stripeFileWeight)
+        : [includePatterns];
+      return batches.map((batch, index) => ({
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        includePatterns: batch,
+        requiresDist: false,
+        shardName: striped ? `${groupName}-${index + 1}` : groupName,
+      }));
     })
     .filter((shard) => shard.includePatterns.length > 0);
 }
@@ -1946,15 +1931,14 @@ function resolveAgentCoreShardName(file: string): string {
 
 function createAgentCoreSplitShards(): NodeTestSplitShard[] {
   const excludedTests = new Set(agentVitestProjectOwners.core.exclude);
-  const groups = new Map<string, string[]>();
-  for (const file of listTrackedTestFiles("src/agents")) {
-    const name = relative("src/agents", file).replaceAll("\\", "/");
-    if (name.includes("/") || excludedTests.has(file)) {
-      continue;
-    }
-    const shardName = resolveAgentCoreShardName(file);
-    groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
-  }
+  const groups = groupBy(
+    listTrackedTestFiles("src/agents").filter(
+      (file) =>
+        !relative("src/agents", file).replaceAll("\\", "/").includes("/") &&
+        !excludedTests.has(file),
+    ),
+    resolveAgentCoreShardName,
+  );
 
   const sharedShards = [
     "agentic-agents-core-auth",
@@ -1971,26 +1955,16 @@ function createAgentCoreSplitShards(): NodeTestSplitShard[] {
       const includePatterns = groups.get(shardName) ?? [];
       // Retain the import-heavy CLI stripes; their files also share the bounded
       // worker pool, while timing estimates account for the effective file workers.
-      if (shardName === "agentic-agents-core-runner-cli") {
-        return createStripedBatches(
-          includePatterns,
-          AGENTS_CORE_RUNNER_CLI_STRIPES,
-          stripeFileWeight,
-        ).map((batch, index) => ({
-          configs: [agentVitestProjectOwners.core.config],
-          includePatterns: batch,
-          requiresDist: false,
-          shardName: `${shardName}-${index + 1}`,
-        }));
-      }
-      return [
-        {
-          configs: [agentVitestProjectOwners.core.config],
-          includePatterns,
-          requiresDist: false,
-          shardName,
-        },
-      ];
+      const striped = shardName === "agentic-agents-core-runner-cli";
+      const batches = striped
+        ? createStripedBatches(includePatterns, AGENTS_CORE_RUNNER_CLI_STRIPES, stripeFileWeight)
+        : [includePatterns];
+      return batches.map((batch, index) => ({
+        configs: [agentVitestProjectOwners.core.config],
+        includePatterns: batch,
+        requiresDist: false,
+        shardName: striped ? `${shardName}-${index + 1}` : shardName,
+      }));
     })
     .filter((shard) => shard.includePatterns.length > 0);
 
@@ -2100,11 +2074,10 @@ function resolveGatewayServerShardName(file: string): string {
 }
 
 function createGatewayServerSplitShards(): NodeTestSplitShard[] {
-  const groups = new Map<string, string[]>();
-  for (const file of listTrackedTestFiles("src/gateway").filter(isGatewayServerTestFile)) {
-    const shardName = resolveGatewayServerShardName(file);
-    groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
-  }
+  const groups = groupBy(
+    listTrackedTestFiles("src/gateway").filter(isGatewayServerTestFile),
+    resolveGatewayServerShardName,
+  );
   return [
     "agentic-control-plane-agent-chat",
     "agentic-control-plane-auth-node",
@@ -2151,11 +2124,7 @@ function resolveCronShardName(file: string): string {
 }
 
 function createCronSplitShards(): NodeTestSplitShard[] {
-  const groups = new Map<string, string[]>();
-  for (const file of listTrackedTestFiles("src/cron")) {
-    const shardName = resolveCronShardName(file);
-    groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
-  }
+  const groups = groupBy(listTrackedTestFiles("src/cron"), resolveCronShardName);
 
   return [
     "core-runtime-cron-parallel-core",
@@ -2284,14 +2253,10 @@ function resolveInfraShardName(file: string): string {
 }
 
 function createInfraSplitShards(): NodeTestSplitShard[] {
-  const groups = new Map<string, string[]>();
-  for (const file of listTrackedTestFiles("src/infra")) {
-    if (isDatabaseWorkerCoreTestFile(file)) {
-      continue;
-    }
-    const shardName = resolveInfraShardName(file);
-    groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
-  }
+  const groups = groupBy(
+    listTrackedTestFiles("src/infra").filter((file) => !isDatabaseWorkerCoreTestFile(file)),
+    resolveInfraShardName,
+  );
   groups.set("core-runtime-infra-storage-state", [
     ...(groups.get("core-runtime-infra-storage-state") ?? []),
     ...databaseWorkerCoreTestFiles,
@@ -3064,12 +3029,9 @@ function createNodeTestShardsForOwners(
 }
 
 /** Select planner envelopes that produce the protected Vitest transform-cache seed. */
-export function createVitestCacheWarmGroups(profile: "full" | "hybrid-hosted" = "full"): Array<{
-  configs: string[];
-  env?: Record<string, string>;
-  includePatterns?: string[];
-  shard_name: string;
-}> {
+export function createVitestCacheWarmGroups(
+  profile: "full" | "hybrid-hosted" = "full",
+): Pick<NodeTestShardGroup, "configs" | "env" | "includePatterns" | "shard_name">[] {
   // Preserve the package root and aliases used by checks-ui in either backend.
   const uiGroup = {
     configs: ["ui/vitest.config.ts"],
@@ -3239,7 +3201,7 @@ function createStripedBatches<T>(
   entries.sort((a, b) => b.weight - a.weight || a.index - b.index);
   const batches: Array<{
     totalWeight: number;
-    entries: Array<{ index: number; value: T; weight: number }>;
+    entries: typeof entries;
   }> = Array.from({ length: batchCount }, () => ({ totalWeight: 0, entries: [] }));
   const firstBatch = batches[0];
   if (!firstBatch) {
@@ -3355,11 +3317,7 @@ export function createNodeTestShardBundles(
   const unbundled: NodeTestShard[] = [];
   const groups = new Map<
     string,
-    {
-      configs: string[];
-      pretestBuildMode?: NodeTestPretestBuildMode;
-      requiresDist: boolean;
-      runner: string;
+    Pick<NodeTestShard, "configs" | "pretestBuildMode" | "requiresDist" | "runner"> & {
       shards: NodeTestShard[];
     }
   >();
@@ -3534,11 +3492,36 @@ function splitHostedReleaseShard(shard: NodeTestShard): NodeTestShard[] {
       `Release shard ${shard.shardName} contains an indivisible test above the hosted budget; split that test before release`,
     );
   }
-  const seconds = Math.max(
+  const currentGenerationSeconds = readCompleteSplitGenerationSeconds(
+    timings,
+    original.selectorKey,
+  );
+  let seconds = Math.max(
     timings[parentShardName] ?? 0,
     timings[original.timingKeys[0]!] ?? 0,
-    readCompleteSplitGenerationSeconds(timings, original.selectorKey) ?? 0,
+    currentGenerationSeconds ?? 0,
   );
+  if (
+    shard.shardName === "agentic-gateway-methods" &&
+    timings[parentShardName] === undefined &&
+    currentGenerationSeconds === undefined
+  ) {
+    // This whole owner retains its two-worker contract as files change. Keep
+    // completed historical walls until the new inventory has a full observation.
+    const selectors = new Set(
+      Object.keys(timings).flatMap((key) => {
+        const parsed = parseCompactSplitTimingKey(key);
+        return parsed?.parentShardName === parentShardName ? [parsed.selectorKey] : [];
+      }),
+    );
+    seconds = Math.max(
+      0,
+      ...Array.from(
+        selectors,
+        (selector) => readCompleteSplitGenerationSeconds(timings, selector) ?? 0,
+      ),
+    );
+  }
   if (seconds <= budget) {
     return [
       {
@@ -3551,6 +3534,30 @@ function splitHostedReleaseShard(shard: NodeTestShard): NodeTestShard[] {
   const weight = (entries: readonly string[]) =>
     entries.reduce((sum, file) => sum + stripeFileWeight(file), 0);
   const totalWeight = weight(files);
+  const singletonKeys = generation(files.map((file) => [file])).timingKeys;
+  const knownFileCosts = new Map<string, number>();
+  for (const [index, file] of files.entries()) {
+    const singleton = singletonKeys[index]!.match(/#include-1-[a-f0-9]{12}$/u)![0];
+    const cost = singletonCosts.get(singleton);
+    if (cost !== undefined) {
+      knownFileCosts.set(file, cost);
+    }
+  }
+  const knownSeconds = [...knownFileCosts.values()].reduce((sum, cost) => sum + cost, 0);
+  const unknownWeight = weight(files.filter((file) => !knownFileCosts.has(file)));
+  const residualSeconds = Math.max(0, seconds - knownSeconds);
+  const unknownSecondsPerWeight =
+    unknownWeight > 0 ? Math.max(seconds / totalWeight, residualSeconds / unknownWeight) : 0;
+  const knownResidualPerWeight = unknownWeight === 0 ? residualSeconds / totalWeight : 0;
+  // Repricing measured files must preserve the complete generation's remaining work.
+  const projectedSeconds = (stripe: readonly string[]) =>
+    stripe.reduce(
+      (sum, file) =>
+        sum +
+        (knownFileCosts.get(file) ?? stripeFileWeight(file) * unknownSecondsPerWeight) +
+        stripeFileWeight(file) * knownResidualPerWeight,
+      0,
+    );
   let count = Math.min(
     files.length,
     Math.max(
@@ -3563,7 +3570,7 @@ function splitHostedReleaseShard(shard: NodeTestShard): NodeTestShard[] {
     const stripes = createStripedBatches(files, count, stripeFileWeight);
     const keys = generation(stripes).timingKeys;
     const predicted = stripes.map((stripe, index) =>
-      Math.ceil(timings[keys[index]!] ?? (seconds * weight(stripe)) / totalWeight),
+      Math.ceil(timings[keys[index]!] ?? projectedSeconds(stripe)),
     );
     if (
       predicted.every((cost) => cost <= budget) &&
@@ -5235,8 +5242,18 @@ function createCompactNodeTestShardBundles(
     }
   }
 
-  // Settle Gateway admission before runtime placement reads the recipient's policy.
+  // Runtime placement compares required runner capacity and settled Gateway admission.
   for (const job of compactJobs) {
+    // Memory-gated plans need the measured 8-CPU/30.95-GiB allocation, even alone.
+    // Normalize the previous two-worker allowance onto their unmeasured siblings below.
+    if (
+      usesBlacksmithCapacity(job.runner) &&
+      job.runner !== EXTRA_LARGE_NODE_TEST_RUNNER &&
+      job.groups.some((group) => group.minTotalMemoryBytes !== undefined)
+    ) {
+      job.runner = EXTRA_LARGE_NODE_TEST_RUNNER;
+      job.env = { ...job.env, ...PINNED_COMPACT_GROUP_ENV };
+    }
     if (
       job.planConcurrency !== 2 ||
       !job.groups.some((group) => group.configs.some(isExclusiveCiTestConfig))
@@ -5308,16 +5325,6 @@ function createCompactNodeTestShardBundles(
   }
 
   for (const job of compactJobs) {
-    // Memory-gated plans need the measured 8-CPU/30.95-GiB allocation, even alone.
-    // Normalize the previous two-worker allowance onto their unmeasured siblings below.
-    if (
-      usesBlacksmithCapacity(job.runner) &&
-      job.runner !== EXTRA_LARGE_NODE_TEST_RUNNER &&
-      job.groups.some((group) => group.minTotalMemoryBytes !== undefined)
-    ) {
-      job.runner = EXTRA_LARGE_NODE_TEST_RUNNER;
-      job.env = { ...job.env, ...PINNED_COMPACT_GROUP_ENV };
-    }
     if (
       job.env?.OPENCLAW_VITEST_MAX_WORKERS !== "2" ||
       !job.groups.some((group) => usesMeasuredCompactWorkers(group, options.runnerBackend))

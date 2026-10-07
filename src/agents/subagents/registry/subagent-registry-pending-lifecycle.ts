@@ -25,7 +25,6 @@ type PendingLifecycleParams = {
 type PendingLifecycleTerminal = PendingLifecycleParams & {
   kind: PendingLifecycleKind;
   timer: NodeJS.Timeout;
-  entry: SubagentRunRecord;
 };
 
 export function createPendingLifecycleScheduler(params: {
@@ -71,20 +70,20 @@ export function createPendingLifecycleScheduler(params: {
         return;
       }
       pendingByRunId.delete(scheduleParams.runId);
-      const entry = getCurrentSubagentRunOwner(params.runs, pending.entry);
-      if (!entry || !canComplete(kind, entry, pending.entry)) {
+      const entry = getCurrentSubagentRunOwner(params.runs, pending.expectedEntry);
+      if (!entry || !canComplete(kind, entry, pending.expectedEntry)) {
         return;
       }
       let publication: Pick<SubagentRunRecord, "execution" | "endedReason"> | undefined;
       const isCurrent = () => {
-        const current = getCurrentSubagentRunOwner(params.runs, pending.entry);
+        const current = getCurrentSubagentRunOwner(params.runs, pending.expectedEntry);
         return (
           current !== undefined &&
           current.pauseReason !== "sessions_yield" &&
           (publication
             ? current.endedReason === publication.endedReason &&
               isDeepStrictEqual(current.execution, publication.execution)
-            : canComplete(kind, current, pending.entry))
+            : canComplete(kind, current, pending.expectedEntry))
         );
       };
       params.completeInBackground(
@@ -123,7 +122,7 @@ export function createPendingLifecycleScheduler(params: {
       );
     }, AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
     timer.unref?.();
-    pendingByRunId.set(scheduleParams.runId, { ...scheduleParams, kind, timer, entry: selected });
+    pendingByRunId.set(scheduleParams.runId, { ...scheduleParams, kind, timer });
   }
 
   return {
@@ -131,7 +130,11 @@ export function createPendingLifecycleScheduler(params: {
     clearPriorAttempt: (runId: string) => {
       const pending = pendingByRunId.get(runId);
       const current = params.runs.get(runId);
-      if (pending && current && pending.entry.execution.startedAt !== current.execution.startedAt) {
+      if (
+        pending &&
+        current &&
+        pending.expectedEntry.execution.startedAt !== current.execution.startedAt
+      ) {
         clearKind(runId);
       }
     },

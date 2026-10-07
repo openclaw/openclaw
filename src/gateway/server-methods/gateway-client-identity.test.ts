@@ -9,6 +9,7 @@ import {
   createUserTurnInputController,
 } from "./chat-send-user-turn.test-support.js";
 import {
+  authenticatedProfileUnavailableError,
   gatewayClientSenderFields,
   gatewayClientSessionCreator,
   resolveChatSendCallerContext,
@@ -79,6 +80,17 @@ describe("gateway client identity", () => {
 
     expect(gatewayClientSenderFields(client)).toEqual({});
     expect(gatewayClientSessionCreator(client)).toBeUndefined();
+  });
+
+  it("reports unavailable profiles without loading the GitHub plugin surface", () => {
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    for (const cause of [undefined, new Error("profile store unavailable")]) {
+      expect(authenticatedProfileUnavailableError(cause)).toMatchObject({
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("Authenticated profile verification is unavailable"),
+        retryAfterMs: 1_000,
+      });
+    }
   });
 });
 

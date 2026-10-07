@@ -47,6 +47,7 @@ import type {
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
+import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 
 type WorkerLocalDispatchBarrier = (params: {
   sessionId: string;
@@ -90,7 +91,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   const startup = createWorkerPlacementDispatchStartup({
     ...options,
     failure,
-    reportTransition: reportPlacementTransition,
   });
 
   // Background recovery observes previously requested cleanup; explicit Stop and
@@ -220,14 +220,18 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         deriveEnvironmentIntent(idempotencyKey).environmentId;
       placement =
         prepared?.placement ??
-        placements.transition({
-          sessionId: request.sessionId,
-          from: "requested",
-          to: "provisioning",
-          expectedGeneration: placement.generation,
-          patch: { environmentId: expectedEnvironmentId },
-        });
+        (await placements.transition(
+          {
+            sessionId: request.sessionId,
+            from: "requested",
+            to: "provisioning",
+            expectedGeneration: placement.generation,
+            patch: { environmentId: expectedEnvironmentId },
+          },
+          assertCurrent,
+        ));
       reportPlacementTransition(onTransition, placement);
+      assertCurrent();
       const environment = prepared
         ? prepared.environment
         : await environments.createWithRequest({
@@ -254,6 +258,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         ...(prepared ? { admittedNode: prepared.admittedNode } : {}),
       });
     } catch (error) {
+      if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
+        throw error;
+      }
       try {
         if (placement && (await startup.retainInterruptedProvisioning(placement, error))) {
           throw error;
@@ -293,7 +300,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   const reclaimCurrent = async (
     request: WorkerPlacementReclaimRequest,
     authorize?: WorkerPlacementAuthorization,
-    beforeDrain?: WorkerPlacementAuthorization,
+    beforeDrain?: WorkerPlacementReclaimSourceCheck,
     initial?: WorkerDispatchPlacement,
     completedOperation?: WorkerPlacementCancellationTarget,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
@@ -323,7 +330,11 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             }
             let failedPlacement = placements.get(request.sessionId);
             if (owned.state === "provisioning") {
-              failedPlacement = failure.cancelProvisioning(failedPlacement, initial);
+              failedPlacement = await failure.cancelProvisioning(
+                failedPlacement,
+                initial,
+                reauthorize,
+              );
               reportPlacementTransition(onTransition, failedPlacement);
             }
             // A preceding cleanup can finish while this request waits for the lifecycle fence.
@@ -368,12 +379,15 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
               // Keep local admission closed until the accepted checkpoint is bound locally.
               assertCurrent();
             }
-            const local = placements.transition({
-              sessionId: request.sessionId,
-              from: "failed",
-              to: "local",
-              expectedGeneration: failed.generation,
-            });
+            const local = await placements.transition(
+              {
+                sessionId: request.sessionId,
+                from: "failed",
+                to: "local",
+                expectedGeneration: failed.generation,
+              },
+              request.recoverToGateway ? reauthorize : undefined,
+            );
             if (local.state !== "local") {
               throw new Error("Failed cloud worker reclaim did not produce a local placement");
             }
@@ -435,10 +449,13 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     if (initial) {
       reportPlacementTransition(onTransition, initial);
     }
-    const checkSource = () => {
-      beforeDrain?.(pendingOperations?.currentPlacement());
-      assertGatewayRecoverySource();
-    };
+    const checkSource = Object.assign(
+      () => {
+        beforeDrain?.(pendingOperations?.currentPlacement());
+        assertGatewayRecoverySource();
+      },
+      { assertCurrent: beforeDrain?.assertCurrent },
+    );
     return await options.runReclaimPreparation({
       ...request,
       authorize,

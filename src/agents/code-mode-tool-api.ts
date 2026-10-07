@@ -19,7 +19,6 @@ export async function createCodeModeToolApiFile(
       optional = validateJsonSchemaValue({
         // SAFETY: The canonical validator checks the schema shape before compiling it.
         schema: (entry.parameters ?? {}) as JsonSchemaValue,
-        cacheKey: `code-mode-omitted-input:${JSON.stringify(entry.parameters)}`,
         value: {},
       }).ok;
     } catch {

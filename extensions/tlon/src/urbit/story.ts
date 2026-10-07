@@ -135,10 +135,10 @@ function mergeAdjacentStrings(inlines: StoryInline[]): StoryInline[] {
   return result;
 }
 
-export function createImageBlock(src: string, alt = "", height = 0, width = 0): StoryVerse {
+export function createImageBlock(src: string, alt = ""): StoryVerse {
   return {
     block: {
-      image: { src, height, width, alt },
+      image: { src, height: 0, width: 0, alt },
     },
   };
 }
@@ -154,10 +154,7 @@ export function isImageUrl(url: string): boolean {
   return imageExtensions.test(path);
 }
 
-function parseInlinesWithBreaks(text: string): {
-  inlines: StoryInline[];
-  imageBlocks: StoryVerse[];
-} {
+function parseInlinesWithBreaks(text: string) {
   const withBreaks: StoryInline[] = [];
   const imageBlocks: StoryVerse[] = [];
   for (const inline of parseInlineMarkdown(text)) {
@@ -182,18 +179,7 @@ function parseInlinesWithBreaks(text: string): {
   return { inlines: withBreaks, imageBlocks };
 }
 
-type MarkdownListItem = {
-  indent: number;
-  contentIndent: number;
-  markerType: Exclude<StoryListType, "tasklist">;
-  markerKey: string;
-  orderedStart?: number;
-  hasSourceBody: boolean;
-  hasBlockBody: boolean;
-  hasImages: boolean;
-  content: StoryInline[];
-  checked?: boolean;
-};
+type MarkdownListItem = NonNullable<ReturnType<typeof parseMarkdownListItem>>;
 
 const MARKDOWN_LIST_ITEM_PATTERN = /^([ \t]*)([-+*]|\d{1,9}[.)])(?:([ \t]+)(.*))?$/;
 
@@ -219,14 +205,16 @@ function whitespaceColumns(text: string, startColumn = 0): number {
   return column;
 }
 
-function parseMarkdownListItem(line: string): MarkdownListItem | undefined {
+function parseMarkdownListItem(line: string) {
   const match = line.match(MARKDOWN_LIST_ITEM_PATTERN);
   if (!match || isMarkdownThematicBreak(line.trim())) {
     return undefined;
   }
 
   const marker = expectDefined(match[2], "list marker capture");
-  const markerType = /^\d/.test(marker) ? "ordered" : "unordered";
+  const markerType: Exclude<StoryListType, "tasklist"> = /^\d/.test(marker)
+    ? "ordered"
+    : "unordered";
   const padding = match[3] ?? " ";
   const sourceBody = match[4] ?? "";
   let body = sourceBody;

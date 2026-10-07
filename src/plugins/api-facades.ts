@@ -96,11 +96,15 @@ export function instrumentPluginInstanceApi(
           return (registrar: OpenClawPluginCliRegistrar, ...options: unknown[]) =>
             instance.run(() =>
               Reflect.apply(value, target, [
-                instance.wrap((context: Parameters<OpenClawPluginCliRegistrar>[0]) => {
+                instance.wrap(async (context: Parameters<OpenClawPluginCliRegistrar>[0]) => {
+                  const { withPluginCliServiceScheduler } =
+                    await import("./cli-service-scheduler.js");
                   // Commander retains callbacks beyond this registrar's invocation.
                   // Bind at the typed host boundary, without proxying its native objects.
-                  bindPluginCliProgram(context.program);
-                  return registrar(context);
+                  return withPluginCliServiceScheduler(instance, () => {
+                    bindPluginCliProgram(context.program);
+                    return registrar(context);
+                  });
                 }),
                 ...options.map((option) => instance.wrap(option)),
               ]),

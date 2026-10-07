@@ -1,11 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { runExecProcess } from "../bash-tools.exec-runtime.js";
 import { registerSandboxBackend } from "./backend.js";
@@ -124,6 +127,29 @@ function resolve() {
   return resolveSandboxContext({ config, sessionKey: "agent:test:reservation", workspaceDir });
 }
 
+function observeRemovalIntent() {
+  const accepted = createDeferred();
+  const run = stateWorker.runOpenClawStateWorkerOperation;
+  vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
+    (context, operation, options) =>
+      run(
+        context,
+        (scope) =>
+          operation({
+            execute: async (command, executeOptions) => {
+              const result = await scope.execute(command, executeOptions);
+              if (command.type === "sandboxRegistry.beginRemoval") {
+                accepted.resolve();
+              }
+              return result;
+            },
+          }),
+        options,
+      ),
+  );
+  return accepted.promise;
+}
+
 async function seedLegacyRuntime() {
   const cfg = resolveSandboxConfigForAgent(config, "test");
   const { scopeKey } = resolveSandboxWorkspaceLayoutPaths({
@@ -144,6 +170,48 @@ async function seedLegacyRuntime() {
 }
 
 describe("durable sandbox runtime generations", () => {
+  it("rejects hosted custody released during reserved backend discovery before allocation", async () => {
+    const owner = acquireGatewayStateOwner({
+      databasePath: resolveOpenClawStateSqlitePath(),
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: path.join(workspaceDir, "openclaw.json"),
+        role: "gateway",
+      },
+    });
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const allocate = vi.fn();
+    install(async (params) => {
+      entered.resolve();
+      await resume.promise;
+      params.assertRuntimeCurrent?.();
+      allocate();
+      return handle(params);
+    });
+    const preparation = resolve();
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        preparation,
+        "Backend discovery not reached",
+      );
+      owner.release();
+      resume.resolve();
+      const error = await preparation.catch((failure: unknown) => failure);
+      expect(allocate).not.toHaveBeenCalled();
+      expect(error).toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
+      expect((await readRegistry()).entries).toEqual([
+        expect.objectContaining({ runtimeState: "pending" }),
+      ]);
+    } finally {
+      resume.resolve();
+      await preparation.catch(() => {});
+      owner.release();
+    }
+  });
+
   it("replays a shared reservation from its original provider workspace", async () => {
     config.agents = {
       ...config.agents,
@@ -301,6 +369,7 @@ describe("durable sandbox runtime generations", () => {
       if (operation === "prune") {
         advancePruneTime();
       }
+      const intent = observeRemovalIntent();
       const removing =
         operation === "recreate"
           ? removeSandboxContainer("legacy-runtime")
@@ -308,11 +377,8 @@ describe("durable sandbox runtime generations", () => {
       const creating = expect(resolve()).rejects.toThrow("removed or is being removed");
       await started.promise;
       try {
-        await vi.waitFor(async () => {
-          expect((await readRegistryEntry("legacy-runtime"))?.runtimeState).toBe(
-            "removing-pending",
-          );
-        });
+        await awaitGateBeforeSettlement(intent, removing, "Removal intent was not acknowledged");
+        expect((await readRegistryEntry("legacy-runtime"))?.runtimeState).toBe("removing-pending");
         expect(remove).not.toHaveBeenCalled();
       } finally {
         finish.resolve();
@@ -422,13 +488,7 @@ describe("durable sandbox runtime generations", () => {
       const creating = resolve();
       const failedCreation = expect(creating).rejects.toThrow("removed or is being removed");
       const id = await started.promise;
-      const discovery = createDeferred();
-      const readActualRegistry = registry.readRegistry;
-      vi.spyOn(registry, "readRegistry").mockImplementationOnce(() => {
-        const read = readActualRegistry();
-        void read.then(() => discovery.resolve(), discovery.reject);
-        return read;
-      });
+      const intent = observeRemovalIntent();
       let removing: Promise<void>;
       if (operation === "prune") {
         advancePruneTime();
@@ -437,7 +497,7 @@ describe("durable sandbox runtime generations", () => {
         removing = removeSandboxContainer(id);
       }
       try {
-        await discovery.promise;
+        await awaitGateBeforeSettlement(intent, removing, "Removal intent was not acknowledged");
         expect((await readRegistryEntry(id))?.runtimeState).toBe("removing-pending");
         expect(remove).not.toHaveBeenCalled();
       } finally {

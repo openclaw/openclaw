@@ -28,7 +28,7 @@ const {
     >(),
   watchedSessionsContextMock:
     vi.fn<
-      typeof import("openclaw/plugin-sdk/agent-harness-runtime").buildWatchedSessionsHarnessContext
+      typeof import("openclaw/plugin-sdk/agent-harness-runtime").prepareWatchedSessionsHarnessContext
     >(),
   openModelContextAsyncMock: vi.fn(async () => ({
     buildSessionContext: () => ({ messages: [{ role: "user", content: "Earlier request" }] }),
@@ -50,11 +50,11 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async () => {
     typeof import("openclaw/plugin-sdk/agent-harness-runtime")
   >("openclaw/plugin-sdk/agent-harness-runtime");
   prepareAgentWorkspaceContextMock.mockImplementation(bootstrap.prepareAgentWorkspaceContext);
-  watchedSessionsContextMock.mockImplementation(bootstrap.buildWatchedSessionsHarnessContext);
+  watchedSessionsContextMock.mockImplementation(bootstrap.prepareWatchedSessionsHarnessContext);
   return {
     ...bootstrap,
     prepareAgentWorkspaceContext: prepareAgentWorkspaceContextMock,
-    buildWatchedSessionsHarnessContext: watchedSessionsContextMock,
+    prepareWatchedSessionsHarnessContext: watchedSessionsContextMock,
     embeddedAgentLog: { warn: vi.fn(), debug: vi.fn() },
     formatErrorMessage: String,
     setActiveEmbeddedRun: vi.fn(),
@@ -356,7 +356,7 @@ describe("Agents API agent workspace instructions", () => {
       config: { agents: { defaults: { userTimezone: "America/Los_Angeles" } } },
     });
     promptFixture.declarations = toolDeclarations("message", "sessions_history");
-    watchedSessionsContextMock.mockReturnValueOnce("Watched fixture session: fixture-one");
+    watchedSessionsContextMock.mockResolvedValueOnce("Watched fixture session: fixture-one");
     const binding = await fixture.run();
     expect(promptFixture.turnInputs[0]).toContain("Current date: 2026-09-25");
     expect(promptFixture.turnInputs[0]).toContain("Time zone: America/Los_Angeles");
@@ -367,7 +367,7 @@ describe("Agents API agent workspace instructions", () => {
     expect(promptFixture.turnInputs[0]).toContain("Fixture prompt");
 
     now.mockReturnValue(Date.parse("2026-09-26T12:00:00-07:00"));
-    watchedSessionsContextMock.mockReturnValueOnce("Watched fixture session: fixture-two");
+    watchedSessionsContextMock.mockResolvedValueOnce("Watched fixture session: fixture-two");
     await fixture.run(binding, { sourceReplyDeliveryMode: "message_tool_only" });
     expect(promptFixture.turnInputs[1]).toContain("Current date: 2026-09-26");
     expect(promptFixture.turnInputs[1]).toContain("Use `message(action=send)`");

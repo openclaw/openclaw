@@ -1,7 +1,7 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "../../../llm/types.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
-import type { AgentMessage } from "../../runtime/index.js";
+import type { Agent, AgentMessage } from "../../runtime/index.js";
 import { buildSessionsYieldContextMessage } from "../../sessions-yield-context.js";
 import { agentSessionQueuePromptContext } from "../../sessions/agent-session-prompting.js";
 import {
@@ -16,17 +16,13 @@ import {
   recordAggregateTruncation,
 } from "../prompt-cache-observability.js";
 import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
-import {
-  type getEmbeddedSessionPromptState,
-  type ToolResultPromptProjectionState,
-  hasSessionUserTurnBeenSent,
-  markSessionUserTurnsSent,
-} from "../session-prompt-state.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { truncateOversizedToolResultsInMessages } from "../tool-result-truncation.js";
 import { snapshotRecentMessages } from "./attempt-context-summary.js";
 import {
   installModelPromptTransform,
   installRuntimeContextMessageForPrompt,
+  normalizeMessagesForLlmBoundary,
 } from "./attempt-llm-boundary.js";
 import {
   isSessionsYieldAbortError,
@@ -46,6 +42,8 @@ type PromptSubmissionSession = {
     state: { messages: AgentMessage[] };
     streamFn: StreamFn;
     transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+    prepareNextTurn?: Agent["prepareNextTurn"];
+    prepareNextTurnWithContext?: Agent["prepareNextTurnWithContext"];
     continue?: () => Promise<void>;
   };
 };
@@ -61,7 +59,7 @@ type SteeringLease = {
   isCurrent: () => boolean;
 };
 
-type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
+type TrajectoryRecorder = Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
 
 export async function submitEmbeddedAttemptPrompt(input: {
   attempt: Pick<
@@ -84,7 +82,11 @@ export async function submitEmbeddedAttemptPrompt(input: {
   assertHostActive?: () => void;
   /** Returns work only when a stale optional restriction must be withdrawn. */
   preparePrimaryModelRequest?: () =>
-    | Promise<() => Pick<Parameters<StreamFn>[1], "tools" | "systemPrompt">>
+    | Promise<
+        () => Pick<Parameters<StreamFn>[1], "tools" | "systemPrompt"> & {
+          promptUpdate?: { update?: RuntimeContextCustomMessage; commit: () => void };
+        }
+      >
     | undefined;
   /** Observes only the first admitted foreground dispatch, not preflight/compaction. */
   onPrimaryModelRequest?: (tools: NonNullable<Parameters<StreamFn>[1]["tools"]>) => void;
@@ -94,7 +96,6 @@ export async function submitEmbeddedAttemptPrompt(input: {
   promptActiveSession: PromptActiveSession;
   runtimeContextMessage?: RuntimeContextCustomMessage;
   runtimeOnly: boolean;
-  sessionPromptState: ReturnType<typeof getEmbeddedSessionPromptState>;
   systemPrompt: string;
   toolResultAggregateMaxChars: number;
   toolResultMaxChars: number;
@@ -122,10 +123,54 @@ export async function submitEmbeddedAttemptPrompt(input: {
   let primaryRequestObserved = false;
   const installProviderPromptHistoryTransform = (): (() => void) => {
     const baseStreamFn = activeSession.agent.streamFn;
+    const basePrepareNextTurn = activeSession.agent.prepareNextTurnWithContext;
+    const lateUpdates: RuntimeContextCustomMessage[] = [];
+    const prepareNextTurn: NonNullable<Agent["prepareNextTurnWithContext"]> = async (
+      turn,
+      signal,
+    ) => {
+      const snapshot = basePrepareNextTurn
+        ? await basePrepareNextTurn.call(activeSession.agent, turn, signal)
+        : await activeSession.agent.prepareNextTurn?.(signal);
+      if (lateUpdates.length === 0) {
+        return snapshot;
+      }
+      const updates = lateUpdates.splice(0);
+      const context = snapshot?.context ?? turn.context;
+      // Dispatch saw the update after conversion; insert it before the answer it governed.
+      const index = context.messages.indexOf(turn.message);
+      if (index < 0) {
+        return snapshot;
+      }
+      const newMessageIndex = turn.newMessages.indexOf(turn.message);
+      if (newMessageIndex >= 0) {
+        turn.newMessages.splice(
+          newMessageIndex,
+          0,
+          ...updates.filter((update) => !turn.newMessages.includes(update)),
+        );
+      }
+      const missing = updates.filter((update) => !context.messages.includes(update));
+      return {
+        ...snapshot,
+        context: {
+          ...context,
+          messages: [
+            ...context.messages.slice(0, index),
+            ...missing,
+            ...context.messages.slice(index),
+          ],
+        },
+      };
+    };
+    activeSession.agent.prepareNextTurnWithContext = prepareNextTurn;
     const persistThenStream: StreamFn = async (model, context, options) => {
-      await input.persistToolResultProjections();
       // Runtime admission queues behind the user append; join it outside that write lane.
       await userTurnRecorder?.waitForRuntimePersistence();
+      options?.signal?.throwIfAborted();
+      assertSteeringCurrent();
+      input.assertHostActive?.();
+      await input.persistToolResultProjections();
       options?.signal?.throwIfAborted();
       assertSteeringCurrent();
       input.assertHostActive?.();
@@ -139,12 +184,36 @@ export async function submitEmbeddedAttemptPrompt(input: {
         input.assertHostActive?.();
         // Read the live permitted surface only after all awaited preparation.
         // Do not reuse the tools snapshot captured before the restoration.
-        const restored = readRestoredContext();
-        requestContext = {
-          ...context,
-          tools: restored.tools,
-          systemPrompt: restored.systemPrompt,
-        };
+        const projection = readRestoredContext().promptUpdate;
+        if (projection?.update) {
+          await activeSession[agentSessionQueuePromptContext](projection.update, {
+            delivery: "current-request",
+          });
+          lateUpdates.push(projection.update);
+          requestContext = {
+            ...context,
+            messages: [
+              ...context.messages,
+              ...normalizeMessagesForLlmBoundary([projection.update], {
+                inHistorySystemUpdates: true,
+                appendOnlyRuntimeContext: true,
+                includeTimestamp: false,
+              }).filter((message) => message.role === "user"),
+            ],
+          };
+        }
+        options?.signal?.throwIfAborted();
+        assertSteeringCurrent();
+        input.assertHostActive?.();
+        if (projection) {
+          projection.commit();
+          await input.persistToolResultProjections();
+          options?.signal?.throwIfAborted();
+          assertSteeringCurrent();
+          input.assertHostActive?.();
+        }
+        const { tools, systemPrompt } = readRestoredContext();
+        requestContext = { ...requestContext, tools, systemPrompt };
       }
       if (foregroundRequest && !primaryRequestObserved) {
         primaryRequestObserved = true;
@@ -176,11 +245,17 @@ export async function submitEmbeddedAttemptPrompt(input: {
         }
         // Mark the current turn sent at provider dispatch so late media appends
         // instead of rewriting its prompt-cache slot (#99495).
-        markSessionUserTurnsSent(input.sessionPromptState, providerMessages);
         const recorder = attempt.userTurnTranscriptRecorder;
+        const idempotencyKey = recorder?.message?.idempotencyKey;
         if (
           recorder &&
-          hasSessionUserTurnBeenSent(input.sessionPromptState, recorder.message) !== false
+          (!idempotencyKey ||
+            providerMessages.some(
+              (message) =>
+                message.role === "user" &&
+                "idempotencyKey" in message &&
+                message.idempotencyKey === idempotencyKey,
+            ))
         ) {
           recorder.markSentToProvider?.();
         }
@@ -189,6 +264,9 @@ export async function submitEmbeddedAttemptPrompt(input: {
     );
     activeSession.agent.streamFn = providerPromptStreamFn;
     return () => {
+      if (activeSession.agent.prepareNextTurnWithContext === prepareNextTurn) {
+        activeSession.agent.prepareNextTurnWithContext = basePrepareNextTurn;
+      }
       if (activeSession.agent.streamFn === providerPromptStreamFn) {
         activeSession.agent.streamFn = baseStreamFn;
       }

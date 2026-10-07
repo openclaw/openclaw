@@ -165,7 +165,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     runtimeChannel: systemPrompt.runtimeChannel,
     hookAgentId: input.setup.sessionAgentId,
     diagnosticTrace: input.diagnostics.diagnosticTrace,
-    nestedToolActivities: toolBase.nestedToolActivities,
+    nestedToolActivityState: toolBase.nestedToolActivityState,
     isReplaySafeTool: (tool) => replaySafeTools.has(tool as never),
     diagnosticOwner,
     trajectoryRecorder: sessionRuntime.trajectoryRecorder,

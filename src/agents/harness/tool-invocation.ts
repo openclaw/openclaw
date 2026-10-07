@@ -68,20 +68,13 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
     if (beforeExecuteResult) {
       await beforeExecuteResult;
     }
-    const execute = () => {
-      params.assertCurrent?.();
-      boundary.markDispatched();
-      const shouldValidateArguments = params.shouldValidateArguments?.() ?? true;
-      const invokeTool = () => tool.execute(params.call.toolCallId, preparedArgs, params.signal);
-      return params.validateArguments && shouldValidateArguments
-        ? runWithToolExecutionValidation(
-            params.call.toolCallId,
-            params.validateArguments,
-            invokeTool,
-          )
-        : invokeTool();
-    };
-    rawResult = await execute();
+    params.assertCurrent?.();
+    boundary.markDispatched();
+    const shouldValidateArguments = params.shouldValidateArguments?.() ?? true;
+    const invokeTool = () => tool.execute(params.call.toolCallId, preparedArgs, params.signal);
+    rawResult = await (params.validateArguments && shouldValidateArguments
+      ? runWithToolExecutionValidation(params.call.toolCallId, params.validateArguments, invokeTool)
+      : invokeTool());
     boundary.capture();
     const executedArguments = boundary.executedArguments;
     const rawIsError = isToolResultError(rawResult);

@@ -1,8 +1,5 @@
 /** Handles /goal session objective commands and continuation prompt formatting. */
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   clearSessionGoal,
   createSessionGoal,
@@ -50,7 +47,7 @@ export function parseGoalCommand(raw: string): { action: string; text: string } 
   }
   const actionEnd = argText.search(/\s/);
   const actionRaw = actionEnd === -1 ? argText : argText.slice(0, actionEnd);
-  const action = normalizeOptionalLowercaseString(actionRaw) ?? "status";
+  const action = actionRaw.toLowerCase();
   if (!GOAL_ACTIONS.has(action)) {
     return { action: "start", text: argText };
   }

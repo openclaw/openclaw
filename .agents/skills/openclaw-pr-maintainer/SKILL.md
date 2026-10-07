@@ -124,6 +124,10 @@ do not manufacture another task after a bounded request is complete.
 
 ## Finalize and clean up
 
+Never remove the worktree containing a live
+session's cwd, including your own. A child command's `cd` or `cwd` override does
+not move the parent session. Defer that worktree's removal until the session
+exits or releases its cwd; report the retained path in the final handoff.
 Once the requested outcome and required verification are complete, remove the
 task's disposable proof and scratch. This includes test logs, receipts, local
 proof archives, and `.crabbox` outputs. Do not retain, archive, export, or hand off

@@ -1,12 +1,9 @@
 /**
- * Optional Playwright AI module loader.
- *
  * Lazily imports the Playwright-backed browser helpers while allowing routes to
  * soft-fail when the dependency is unavailable in a gateway build.
  */
 import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 
-/** Type of the Playwright-backed browser helper module. */
 export type PwAiModule = (typeof import("./pw-ai.js"))["pwAi"];
 
 type PwAiLoadMode = "soft" | "strict";
@@ -49,7 +46,6 @@ export function getLoadedPwAiModule(): PwAiModule | null | undefined {
   return loadedPwAiModule;
 }
 
-/** Load the Playwright AI helper module in soft or strict mode. */
 export async function getPwAiModule(opts?: { mode?: PwAiLoadMode }): Promise<PwAiModule | null> {
   const mode: PwAiLoadMode = opts?.mode ?? "soft";
   if (mode === "soft") {

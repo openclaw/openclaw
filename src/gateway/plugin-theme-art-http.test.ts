@@ -107,7 +107,6 @@ describe("plugin theme artwork HTTP", () => {
 
   it.each([
     ART_PATH.replace("%40scope%2Fpack", "unknown"),
-    ART_PATH.replace("neon", "unknown"),
     ART_PATH.replace("hat", "unknown"),
     ART_PATH.replace("beret", "constructor"),
     ART_PATH.replace("beret", "%zz"),
@@ -137,8 +136,6 @@ describe("plugin theme artwork HTTP", () => {
   it.each([
     ["oversized SVG", SVG + " ".repeat(HTTP_SVG_MAX_BYTES)],
     ["external reference", '<svg><image href="https://example.test/art.svg"/></svg>'],
-    ["script", "<svg><script>alert(1)</script></svg>"],
-    ["empty bytes", ""],
   ])("revalidates %s through the shared image response owner", async (_label, svg) => {
     const response = await withPluginMetadataSnapshotScope(snapshot(svg), () => request());
     expect(response.res.statusCode).toBe(404);

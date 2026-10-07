@@ -105,7 +105,7 @@ it("does not force a Windows process tree after losing the owner during graceful
         : '[{"ProcessId":4242}]';
     return { pid: 0, output: [null, stdout, ""], stdout, stderr: "", status: 0, signal: null };
   });
-  await expect(terminateGatewayProcessTree(4242, 300, assertCurrent)).rejects.toThrow(
+  await expect(terminateGatewayProcessTree(4242, assertCurrent)).rejects.toThrow(
     "stop owner retired",
   );
   expect(

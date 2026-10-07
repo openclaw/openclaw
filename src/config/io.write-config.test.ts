@@ -589,7 +589,7 @@ describe("config io write", () => {
       io.loadConfig();
       expect(warn).toHaveBeenCalledTimes(1);
 
-      await io.writeConfigFile({});
+      await io.writeConfigFile({}, { allowConfigSizeDrop: true });
       await io.writeConfigFile(staleConfig);
       expect(warn).toHaveBeenCalledTimes(2);
     },
@@ -938,14 +938,14 @@ describe("config io write", () => {
           code: "CONFIG_WRITE_REJECTED",
           reasons: ["gateway-mode-removed"],
         });
-        expect(warnMessages(warn)).toEqual([rejection?.message]);
+        expect(rejection?.message).toMatch(/Correct the proposed update.+invalid.+doctor --fix/);
         const audit = listConfigAuditRecordsForTests({ env: io.env, homedir: () => home }).find(
           (record) => record.event === "config.write" && record.configPath === configPath,
         );
         expect(audit).toMatchObject({
           result: "rejected",
           errorCode: "CONFIG_WRITE_REJECTED",
-          errorMessage: rejection?.message,
+          errorMessage: warnMessages(warn)[0],
           nextHash: null,
           nextBytes: null,
         });
@@ -957,15 +957,15 @@ describe("config io write", () => {
           expect(artifacts).toHaveLength(1);
           const savedPath = path.join(path.dirname(configPath), artifacts[0]!);
           expect(rejection).toHaveProperty("rejectedPath", savedPath);
-          expect(rejection?.message).toContain(`Rejected payload saved to ${savedPath}.`);
+          expect(warnMessages(warn)[0]).toContain(`Rejected payload saved to ${savedPath}.`);
           expect(JSON.parse(await fs.readFile(savedPath, "utf8"))).toMatchObject({
             update: { channel: "beta" },
           });
         } else {
           expect(rejection).not.toHaveProperty("rejectedPath");
-          expect(rejection?.message).toContain("Rejected payload could not be saved to");
-          expect(rejection?.message).toContain(outcome);
-          expect(rejection?.message).not.toContain("Rejected payload saved to");
+          expect(warnMessages(warn)[0]).toContain("Rejected payload could not be saved to");
+          expect(warnMessages(warn)[0]).toContain(outcome);
+          expect(warnMessages(warn)[0]).not.toContain("Rejected payload saved to");
           expect(artifacts).toHaveLength(outcome === "EEXIST" ? 1 : 0);
           if (outcome === "EEXIST") {
             await expect(
@@ -1441,7 +1441,7 @@ describe("config io write", () => {
     const persisted = await readPersistedConfig(configPath);
     expect(persisted.agents?.defaults?.model).toBe("claude-cli/claude-opus-4-8");
     expect(persisted.agents?.entries).toBeUndefined();
-    expect(persisted.agents?.list).toBeUndefined();
+    expect(persisted.agents).not.toHaveProperty("list");
   });
 
   itWithHome("persists an explicitly authored bootstrap roster on first write", async (home) => {
@@ -1456,7 +1456,7 @@ describe("config io write", () => {
 
     const persisted = await readPersistedConfig(configPath);
     expect(persisted.agents?.entries).toEqual({ main: {} });
-    expect(persisted.agents?.list).toBeUndefined();
+    expect(persisted.agents).not.toHaveProperty("list");
   });
 
   itWithHome("forwards explicitly authorized agent roster removals", async (home) => {

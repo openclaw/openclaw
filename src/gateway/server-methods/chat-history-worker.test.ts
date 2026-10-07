@@ -288,7 +288,7 @@ it("keeps transferred visibility proportional to the bounded delta, including cl
   expect(prepared.subagentCoordination.runMessages[0]![2]).toBe(false);
 });
 
-it("forwards large worker history as text JSON while preserving object callers and tiny budgets", async () => {
+it("forwards worker history as text JSON while preserving object callers and tiny budgets", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const scope = {
       agentId: "main",
@@ -311,10 +311,11 @@ it("forwards large worker history as text JSON while preserving object callers a
       acceptsSerializedJson: boolean,
       maxBytes = 200_000,
       method = "chat.history",
+      maxChars = 50_000,
     ) => {
       const respond = vi.fn<RespondFn>();
       await chatHistoryHandlers["chat.history"]!({
-        params: { sessionKey: scope.sessionKey, maxChars: 50_000, maxBytes },
+        params: { sessionKey: scope.sessionKey, maxChars, maxBytes },
         client: null,
         context,
         respond,
@@ -345,6 +346,12 @@ it("forwards large worker history as text JSON while preserving object callers a
       materialize.mockRestore();
     }
     expect(Array.isArray((await request(true, 200_000, "cron.history")).messages)).toBe(true);
+    const small = await request(true, 200_000, "chat.history", 64);
+    expect(small.messages).toBeInstanceOf(SerializedJsonArray);
+    expect(
+      JSON.parse(serializeGatewayFrame({ type: "res", payload: small }).toString()).payload
+        .messages,
+    ).toEqual((await request(false, 200_000, "chat.history", 64)).messages);
     const omissions: Extract<DiagnosticEventPayload, { type: "payload.large" }>[] = [];
     const stop = onDiagnosticEvent((event) => {
       if (event.type === "payload.large" && event.surface === "gateway.chat.history") {
@@ -354,13 +361,17 @@ it("forwards large worker history as text JSON while preserving object callers a
     try {
       const tiny = await request(true, 1024);
       expect(tiny.messages).toBeInstanceOf(SerializedJsonArray);
-      expect(
-        JSON.parse(serializeGatewayFrame({ type: "res", payload: tiny }).toString()).payload
-          .messages,
-      ).toHaveLength(1);
+      const messages = JSON.parse(serializeGatewayFrame({ type: "res", payload: tiny }).toString())
+        .payload.messages;
+      expect(messages).toMatchObject(
+        Array.from({ length: 3 }, (_, index) => ({
+          __openclaw: { id: `large-${index}`, truncated: true, reason: "oversized" },
+        })),
+      );
+      expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(1024);
       expect(tiny).not.toHaveProperty("omission");
       expect(omissions).toHaveLength(1);
-      expect(omissions[0]).toMatchObject({ action: "truncated", count: 2, limitBytes: 1024 });
+      expect(omissions[0]).toMatchObject({ action: "truncated", count: 3, limitBytes: 1024 });
     } finally {
       stop();
     }

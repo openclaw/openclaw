@@ -90,7 +90,7 @@ it("opens New Agent through the real Gateway and runner using a protected provid
           },
         },
       });
-      writeSecretStoreEntry({
+      await writeSecretStoreEntry({
         scope: { kind: "team" },
         name: secretRef.id,
         value: key,

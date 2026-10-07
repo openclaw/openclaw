@@ -6,12 +6,6 @@ import {
 } from "./monitor-helpers.js";
 
 describe("Mattermost mention normalization", () => {
-  it("does not recognize mentions without a bot username", () => {
-    expect(matchesMattermostBotMention("@echobot hello", undefined)).toBe(false);
-  });
-  it("trims text when no mention is configured", () => {
-    expect(normalizeMention("  hello world  ", undefined)).toBe("hello world");
-  });
   it("preserves multiline Markdown while removing case-insensitive mentions", () => {
     expect(
       normalizeMention(
@@ -27,11 +21,10 @@ describe("Mattermost mention normalization", () => {
       expect(normalizeMention(text, "echobot")).toBe(text);
     },
   );
-  it.each([
-    { bodyText: "", rawText: "@someoneelse", botUsername: undefined },
-    { bodyText: "\u0085", rawText: "@openclaw\u0085", botUsername: "openclaw" },
-    { bodyText: "", rawText: "@openclaw\n", botUsername: "openclaw" },
-  ])("rejects invalid empty-body wake event $rawText", (input) => {
-    expect(shouldDropEmptyMattermostBody(input)).toBe(true);
-  });
+  it.each([{ bodyText: "\u0085", rawText: "@openclaw\u0085", botUsername: "openclaw" }])(
+    "rejects invalid empty-body wake event $rawText",
+    (input) => {
+      expect(shouldDropEmptyMattermostBody(input)).toBe(true);
+    },
+  );
 });

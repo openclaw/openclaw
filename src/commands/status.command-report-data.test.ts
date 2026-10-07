@@ -84,7 +84,7 @@ it("shows skipped audit text when fast status omits the security audit", async (
   );
   expect(report.securityAuditLines.map(stripAnsi)).toEqual([
     "Skipped in fast status. Full report: openclaw security audit",
-    "Deep probe: openclaw status --deep",
+    "Deep check: openclaw status --deep",
   ]);
 });
 

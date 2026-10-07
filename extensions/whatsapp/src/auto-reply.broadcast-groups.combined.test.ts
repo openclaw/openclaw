@@ -24,19 +24,12 @@ installWebAutoReplyTestHomeHooks();
 describe("broadcast groups", () => {
   installWebAutoReplyUnitTestHooks();
 
-  it.each([
-    { label: "legacy list", roster: { list: [{ id: "alfred" }] } },
-    { label: "entries", roster: { entries: { alfred: {} } } },
-    {
-      label: "entries overriding legacy list",
-      roster: { entries: { alfred: {} }, list: [{ id: "missing" }] },
-    },
-  ])("skips unknown broadcast agent ids with $label", async ({ roster }) => {
+  it("skips unknown broadcast agent ids", async () => {
     setLoadConfigMock({
       channels: { whatsapp: { allowFrom: ["*"] } },
       agents: {
         defaults: { maxConcurrent: 10 },
-        ...roster,
+        entries: { alfred: {} },
       },
       broadcast: {
         "+1000": ["alfred", "missing"],
@@ -128,7 +121,7 @@ describe("broadcast groups", () => {
       channels: { whatsapp: { allowFrom: ["*"] } },
       agents: {
         defaults: { maxConcurrent: 10 },
-        list: [{ id: "alfred" }, { id: "baerbel" }],
+        entries: { alfred: {}, baerbel: {} },
       },
       bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "default" } }],
     } satisfies OpenClawConfig;
@@ -208,7 +201,7 @@ describe("broadcast groups", () => {
       channels: { whatsapp: { allowFrom: ["*"] } },
       agents: {
         defaults: { maxConcurrent: 10 },
-        list: [{ id: "alfred" }, { id: "baerbel" }],
+        entries: { alfred: {}, baerbel: {} },
       },
       bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "default" } }],
       broadcast: {
@@ -298,7 +291,7 @@ describe("broadcast groups", () => {
       },
       agents: {
         defaults: { maxConcurrent: 10 },
-        list: [{ id: "alfred" }, { id: "baerbel" }],
+        entries: { alfred: {}, baerbel: {} },
       },
       bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "work" } }],
       broadcast: {

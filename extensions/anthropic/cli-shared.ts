@@ -6,7 +6,10 @@ import type {
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
 import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeSortedUniqueTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 
 const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
@@ -371,25 +374,30 @@ function resolveClaudeCliSideQuestionExecutionArgs(baseArgs: readonly string[]):
   ];
 }
 
-function resolveClaudeCliRestrictedExecutionArgs(
-  baseArgs: readonly string[],
-  availability: NonNullable<CliBackendResolveExecutionArgsContext["toolAvailability"]>,
-): string[] {
-  const preservedDenials: string[] = [];
-  for (let i = 0; i < baseArgs.length; i += 1) {
-    const arg = baseArgs[i] ?? "";
+function readClaudeToolDenials(args: readonly string[]): string[] {
+  const denials: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] ?? "";
     if (arg === CLAUDE_DISALLOWED_TOOLS_ARG || arg === "--disallowed-tools") {
-      while (typeof baseArgs[i + 1] === "string" && !baseArgs[i + 1]?.startsWith("-")) {
+      while (typeof args[i + 1] === "string" && !args[i + 1]?.startsWith("-")) {
         i += 1;
-        preservedDenials.push(...(baseArgs[i] ?? "").split(","));
+        denials.push(...(args[i] ?? "").split(","));
       }
     } else if (
       arg.startsWith(`${CLAUDE_DISALLOWED_TOOLS_ARG}=`) ||
       arg.startsWith("--disallowed-tools=")
     ) {
-      preservedDenials.push(...arg.slice(arg.indexOf("=") + 1).split(","));
+      denials.push(...arg.slice(arg.indexOf("=") + 1).split(","));
     }
   }
+  return denials;
+}
+
+function resolveClaudeCliRestrictedExecutionArgs(
+  baseArgs: readonly string[],
+  availability: NonNullable<CliBackendResolveExecutionArgsContext["toolAvailability"]>,
+): string[] {
+  const preservedDenials = readClaudeToolDenials(baseArgs);
   const normalized = stripClaudeArgs(baseArgs, {
     bare: CLAUDE_RESTRICTED_BARE_ARGS,
     variadicValue: CLAUDE_RESTRICTED_VARIADIC_VALUE_ARGS,
@@ -415,12 +423,10 @@ function resolveClaudeCliRestrictedExecutionArgs(
       availability.openClaw.map((toolName) => `${OPENCLAW_MCP_TOOL_PREFIX}${toolName}`).join(","),
     );
   }
-  const denials = [
-    ...new Set([
-      ...preservedDenials.map((entry) => entry.trim()).filter(Boolean),
-      ...(availability.openClaw.length === 0 ? [CLAUDE_DENY_MCP_TOOLS_VALUE] : []),
-    ]),
-  ].toSorted();
+  const denials = normalizeSortedUniqueTrimmedStringList([
+    ...preservedDenials,
+    ...(availability.openClaw.length === 0 ? [CLAUDE_DENY_MCP_TOOLS_VALUE] : []),
+  ]);
   if (denials.length > 0) {
     normalized.push(CLAUDE_DISALLOWED_TOOLS_ARG, denials.join(","));
   }
@@ -431,10 +437,19 @@ export function resolveClaudeCliExecutionArgs(
   context: CliBackendResolveExecutionArgsContext,
   options: { excludeDynamicSystemPromptSections?: boolean } = {},
 ): string[] {
+  const baseArgs = context.hostOwnedTools?.includes("exec")
+    ? [
+        ...stripClaudeArgs(context.baseArgs, {
+          variadicValue: new Set([CLAUDE_DISALLOWED_TOOLS_ARG, "--disallowed-tools"]),
+        }),
+        CLAUDE_DISALLOWED_TOOLS_ARG,
+        [...new Set([...readClaudeToolDenials(context.baseArgs), "Bash"])].join(","),
+      ]
+    : context.baseArgs;
   const executionArgs =
     context.executionMode === "side-question"
-      ? resolveClaudeCliSideQuestionExecutionArgs(context.baseArgs)
-      : applyClaudeCliEffortArgs(context.baseArgs, context.thinkingLevel, context.modelId);
+      ? resolveClaudeCliSideQuestionExecutionArgs(baseArgs)
+      : applyClaudeCliEffortArgs(baseArgs, context.thinkingLevel, context.modelId);
   const resolvedArgs = context.toolAvailability
     ? resolveClaudeCliRestrictedExecutionArgs(executionArgs, context.toolAvailability)
     : executionArgs;

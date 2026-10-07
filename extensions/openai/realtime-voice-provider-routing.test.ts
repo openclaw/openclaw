@@ -83,6 +83,65 @@ describe("OpenAI realtime voice provider routing", () => {
     restoreTestEnvironment();
   });
 
+  it("keeps custom endpoints on the GA relay instead of the default GPT-Live route", () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const rawConfig = { baseUrl: "wss://voice.example.test/realtime", apiKey: "test-realtime-key" };
+    expect(
+      provider.resolveConfig?.({ cfg: {}, rawConfig, surface: "gateway-relay" }),
+    ).toMatchObject({
+      ...rawConfig,
+      model: "gpt-realtime-2.1",
+    });
+    const internalApi = readInternalRealtimeVoiceProviderApi(provider);
+    expect(internalApi.isBrowserSessionConfigured({ providerConfig: rawConfig })).toBe(false);
+    expect(
+      internalApi.resolveBrowserSessionCapabilities({ providerConfig: rawConfig }),
+    ).toMatchObject({
+      transports: ["gateway-relay"],
+      supportsBrowserSession: false,
+    });
+  });
+
+  it.each(["gpt-realtime-2.1", "gpt-live-1", "gpt-live-1-codex"])(
+    "rejects custom endpoint browser sessions before auth or broker calls (%s)",
+    async (model) => {
+      const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture();
+      const provider = buildOpenAIRealtimeVoiceProvider({
+        quicksilverBrowserSessionBroker: broker,
+      });
+      await expect(
+        provider.createBrowserSession?.({
+          model,
+          providerConfig: {
+            baseUrl: "wss://voice.example.test/realtime",
+            apiKey: "test-realtime-key",
+          },
+        }),
+      ).rejects.toThrow("requires gateway-relay");
+      expect(createBrowserSession).not.toHaveBeenCalled();
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+      expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["gpt-live-1", "gpt-live-1-codex"])(
+    "rejects custom endpoints for the separate GPT-Live protocol (%s)",
+    (model) => {
+      const provider = buildOpenAIRealtimeVoiceProvider();
+      const providerConfig = {
+        baseUrl: "wss://voice.example.test/realtime",
+        apiKey: "test-realtime-key",
+        model,
+      };
+      expect(() =>
+        provider.createBridge({ providerConfig, onAudio: vi.fn(), onClearAudio: vi.fn() }),
+      ).toThrow("does not support GPT-Live");
+      const internalApi = readInternalRealtimeVoiceProviderApi(provider);
+      expect(internalApi.isGatewayRelayConfigured({ providerConfig })).toBe(false);
+      expect(FakeWebSocket.instances).toHaveLength(0);
+    },
+  );
+
   it("declares realtime Talk capabilities for catalog selection", () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
 
@@ -215,7 +274,7 @@ describe("OpenAI realtime voice provider routing", () => {
     );
     const provider = buildOpenAIRealtimeVoiceProvider();
     const cfg = {
-      agents: { list: [{ id: "main" }, { id: "voice-agent" }] },
+      agents: { entries: { main: {}, "voice-agent": {} } },
     } as never;
 
     expect(
@@ -596,10 +655,10 @@ describe("OpenAI realtime voice provider routing", () => {
     });
     const cfg = {
       agents: {
-        list: [
-          { id: "helper", agentDir: "/tmp/openclaw-helper-agent" },
-          { id: "molty", agentDir: "/tmp/openclaw-molty-agent" },
-        ],
+        entries: {
+          helper: { agentDir: "/tmp/openclaw-helper-agent" },
+          molty: { agentDir: "/tmp/openclaw-molty-agent" },
+        },
       },
     } as never;
     const resolveCapabilities =

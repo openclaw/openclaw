@@ -35,9 +35,14 @@ import { resolveSessionAuthSelection } from "./auth-profiles/session-override.js
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { reconcileAuthProfileQuotaBlocks } from "./auth-profiles/usage.js";
 import { buildBtwCliPrompt, buildBtwQuestionPrompt, buildBtwSystemPrompt } from "./btw-prompts.js";
-import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
+import {
+  normalizeBtwContentBlocks,
+  readBtwTranscriptMessages,
+  resolveBtwSessionTranscriptPath,
+} from "./btw-transcript.js";
 import { executePreparedCliRun } from "./cli-runner/execute.runtime.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.runtime.js";
+import { collectTextContentBlocks } from "./content-blocks.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-block-chunker.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
@@ -92,7 +97,7 @@ import {
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
 import { resolveSandboxContext } from "./sandbox/context.js";
 import { resolveSessionModelRef } from "./session-model-ref.js";
-import { resolveSessionPlacementSandbox } from "./session-placement-admission.js";
+import { prepareSessionPlacementSandbox } from "./session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
@@ -103,13 +108,6 @@ import {
   toDiagnosticUsage,
   type NormalizedUsage,
 } from "./usage.js";
-
-function collectTextContent(content: Array<{ type?: string; text?: string }>): string {
-  return content
-    .filter((part): part is { type: "text"; text: string } => part.type === "text")
-    .map((part) => part.text)
-    .join("");
-}
 
 // Planning and immediate resolution share one scoped snapshot so provider
 // bindings and cooldown decisions cannot diverge inside a side question.
@@ -126,70 +124,39 @@ function resolveBtwAuthProfileStore(params: {
   store: AuthProfileStore;
   ignoreAutoPreferredProfile: boolean;
 } {
+  const storeOptions = { profileId: params.authProfileId, allowKeychainPrompt: false };
+  const loadStore = (externalCliProviderIds?: readonly string[]) =>
+    externalCliProviderIds
+      ? ensureAuthProfileStore(params.agentDir, { ...storeOptions, externalCliProviderIds })
+      : ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, storeOptions);
   if (isOpenAIProvider(params.provider)) {
     return {
-      store: ensureAuthProfileStore(params.agentDir, {
-        profileId: params.authProfileId,
-        externalCliProviderIds: ["openai"],
-        allowKeychainPrompt: false,
-      }),
+      store: loadStore(["openai"]),
       ignoreAutoPreferredProfile: false,
     };
   }
 
-  const userPinnedAuthProfileId =
-    params.authProfileIdSource === "user" ? params.authProfileId : undefined;
-  let externalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection({
+  const selection = {
     provider: params.provider,
     cfg: params.cfg,
     agentId: params.agentId,
     modelId: params.modelId,
     workspaceDir: params.workspaceDir,
-    userPinnedAuthProfileId,
-  });
-  let store: AuthProfileStore;
-  if (externalCliAuthScope.providerIds) {
-    store = ensureAuthProfileStore(params.agentDir, {
-      profileId: params.authProfileId,
-      externalCliProviderIds: externalCliAuthScope.providerIds,
-      allowKeychainPrompt: false,
-    });
-  } else {
-    store = ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
-      profileId: params.authProfileId,
-      allowKeychainPrompt: false,
-    });
-    externalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection({
-      provider: params.provider,
-      cfg: params.cfg,
-      agentId: params.agentId,
-      modelId: params.modelId,
-      workspaceDir: params.workspaceDir,
-      store,
-      userPinnedAuthProfileId,
-    });
+    userPinnedAuthProfileId:
+      params.authProfileIdSource === "user" ? params.authProfileId : undefined,
+  };
+  let externalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection(selection);
+  let store = loadStore(externalCliAuthScope.providerIds);
+  if (!externalCliAuthScope.providerIds) {
+    externalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection({ ...selection, store });
     if (externalCliAuthScope.providerIds) {
-      store = ensureAuthProfileStore(params.agentDir, {
-        profileId: params.authProfileId,
-        externalCliProviderIds: externalCliAuthScope.providerIds,
-        allowKeychainPrompt: false,
-      });
+      store = loadStore(externalCliAuthScope.providerIds);
     }
   }
   return {
     store,
     ignoreAutoPreferredProfile: externalCliAuthScope.ignoreAutoPreferredProfile,
   };
-}
-
-function normalizeBtwContentBlocks(content: unknown): unknown[] | undefined {
-  if (Array.isArray(content)) {
-    return content;
-  }
-  if (content && typeof content === "object") {
-    return [content];
-  }
-  return undefined;
 }
 
 function isBtwTextBlock(block: unknown): block is TextContent {
@@ -956,14 +923,16 @@ export async function runBtwSideQuestion(
           ? resolvedAttempt.auth.apiKey?.trim()
           : undefined;
       const sideRunId = params.authorityRunId;
+      using placement = await prepareSessionPlacementSandbox({
+        agentId: sessionAgentId,
+        config: params.cfg,
+        sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir,
+      });
+      placement.assertCurrent();
       const sandbox =
-        (await resolveSessionPlacementSandbox({
-          agentId: sessionAgentId,
-          config: params.cfg,
-          sessionId,
-          sessionKey: params.sessionKey,
-          workspaceDir,
-        })) ??
+        placement.sandbox ??
         (await resolveSandboxContext({
           config: params.cfg,
           // An independent policy key keeps its own owner; global execution retains its prepared one.
@@ -1043,6 +1012,7 @@ export async function runBtwSideQuestion(
         };
         let result: Awaited<ReturnType<NonNullable<AgentHarness["runSideQuestion"]>>>;
         try {
+          placement.assertCurrent();
           result = await selectedHarness.runSideQuestion(sideParams);
         } finally {
           host.close();
@@ -1089,6 +1059,7 @@ export async function runBtwSideQuestion(
         imageLimits,
       });
     }
+    params.opts?.abortSignal?.throwIfAborted();
     if (messages.length === 0 && !inFlightPrompt?.trim()) {
       throw new Error("No active session context.");
     }
@@ -1102,11 +1073,9 @@ export async function runBtwSideQuestion(
     });
     const fallbackRuntime = fallbackPolicy.runtime.trim();
     const sessionAuthProfileId = params.sessionEntry.authProfileOverride?.trim() || undefined;
-    const sessionAuthProfileSource = !sessionAuthProfileId
-      ? undefined
-      : params.sessionEntry.authProfileOverride?.trim() !== sessionAuthProfileId
-        ? "auto"
-        : resolveCollapsedSessionAuthPinSource(params.sessionEntry);
+    const sessionAuthProfileSource = sessionAuthProfileId
+      ? resolveCollapsedSessionAuthPinSource(params.sessionEntry)
+      : undefined;
     const cliProviderFromSessionAuth = sessionAuthProfileId
       ? resolveCliRuntimeExecutionProvider({
           provider: params.provider,
@@ -1379,13 +1348,13 @@ export async function runBtwSideQuestion(
     await blockEmitChain;
 
     if (finalEvent?.type === "error") {
-      const message = collectTextContent(finalEvent.error.content);
+      const message = collectTextContentBlocks(finalEvent.error.content).join("");
       throw new Error(message || finalEvent.error.errorMessage || "BTW failed.");
     }
 
     const finalMessage = finalEvent?.type === "done" ? finalEvent.message : undefined;
     if (finalMessage && !sawTextEvent) {
-      answerText = collectTextContent(finalMessage.content);
+      answerText = collectTextContentBlocks(finalMessage.content).join("");
     }
 
     const answer = answerText.trim();

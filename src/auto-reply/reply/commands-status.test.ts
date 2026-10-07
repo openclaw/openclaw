@@ -754,7 +754,7 @@ describe("buildStatusReply subagent summary", () => {
         ...baseCfg,
         agents: {
           defaults: {
-            agentRuntime: { id: "codex" },
+            models: { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } },
           },
         },
       },
@@ -846,7 +846,7 @@ describe("buildStatusReply subagent summary", () => {
             ...baseCfg,
             agents: {
               defaults: {
-                agentRuntime: { id: "codex" },
+                models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
               },
             },
           },
@@ -913,7 +913,7 @@ describe("buildStatusReply subagent summary", () => {
             ...baseCfg,
             agents: {
               defaults: {
-                agentRuntime: { id: "codex" },
+                models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
               },
             },
           },
@@ -1051,7 +1051,7 @@ describe("buildStatusReply subagent summary", () => {
             ...baseCfg,
             agents: {
               defaults: {
-                agentRuntime: { id: "codex" },
+                models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
               },
             },
           },
@@ -1088,11 +1088,9 @@ describe("buildStatusReply subagent summary", () => {
               authProfileId: "work",
             },
           ],
-          config: expect.objectContaining({
-            agents: expect.objectContaining({
-              defaults: expect.objectContaining({ agentRuntime: { id: "codex" } }),
-            }),
-          }),
+        });
+        expect(providerUsageCall[0]?.config?.agents?.defaults?.models).toEqual({
+          "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
         });
       },
       { skipSessionCleanup: true, skipHomeCleanup: true },
@@ -1119,7 +1117,7 @@ describe("buildStatusReply subagent summary", () => {
             ...baseCfg,
             agents: {
               defaults: {
-                agentRuntime: { id: "codex" },
+                models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
               },
             },
           },
@@ -1172,7 +1170,7 @@ describe("buildStatusReply subagent summary", () => {
             ...baseCfg,
             agents: {
               defaults: {
-                agentRuntime: { id: "codex" },
+                models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
               },
             },
           },
@@ -1632,7 +1630,7 @@ describe("buildStatusReply subagent summary", () => {
             ...baseCfg,
             agents: {
               defaults: {
-                agentRuntime: { id: "claude-cli" },
+                models: { "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } } },
               },
             },
           },
@@ -1667,7 +1665,7 @@ describe("buildStatusReply subagent summary", () => {
         ...baseCfg,
         agents: {
           defaults: {
-            agentRuntime: { id: "claude-cli" },
+            models: { "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } } },
           },
         },
       },
@@ -1718,7 +1716,7 @@ describe("buildStatusReply subagent summary", () => {
         },
         agents: {
           defaults: {
-            agentRuntime: { id: "codex" },
+            models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
           },
         },
       },
@@ -1758,7 +1756,7 @@ describe("buildStatusReply subagent summary", () => {
         },
         agents: {
           defaults: {
-            agentRuntime: { id: "codex" },
+            models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
           },
         },
       },
@@ -1856,7 +1854,7 @@ describe("buildStatusReply subagent summary", () => {
         ...baseCfg,
         agents: {
           defaults: {
-            agentRuntime: { id: "codex" },
+            models: { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } },
           },
         },
       },
@@ -1947,7 +1945,7 @@ describe("buildStatusReply subagent summary", () => {
         ...baseCfg,
         agents: {
           defaults: {
-            agentRuntime: { id: "codex" },
+            models: { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } },
           },
         },
       },
@@ -2079,13 +2077,12 @@ describe("buildStatusReply", () => {
         defaults: {
           model: "openai/gpt-5.4",
         },
-        list: [
-          {
-            id: "kira",
+        entries: {
+          kira: {
             model: "openai/gpt-5.4",
             thinkingDefault: "xhigh",
           },
-        ],
+        },
       },
       channels: {
         whatsapp: { allowFrom: ["*"] },
@@ -2107,15 +2104,14 @@ describe("buildStatusReply", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6"],
           },
         },
-        list: [
-          {
-            id: "kira",
+        entries: {
+          kira: {
             model: {
               primary: "openai/gpt-5.4",
               fallbacks: ["google/gemini-2.5-flash"],
             },
           },
-        ],
+        },
       },
       channels: {
         whatsapp: { allowFrom: ["*"] },
@@ -2138,11 +2134,7 @@ describe("buildStatusReply", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6"],
           },
         },
-        list: [
-          {
-            id: "kira",
-          },
-        ],
+        entries: { kira: {} },
       },
       channels: {
         whatsapp: { allowFrom: ["*"] },
@@ -2164,14 +2156,13 @@ describe("buildStatusReply", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6"],
           },
         },
-        list: [
-          {
-            id: "kira",
+        entries: {
+          kira: {
             model: {
               primary: "openai/gpt-5.4",
             },
           },
-        ],
+        },
       },
       channels: {
         whatsapp: { allowFrom: ["*"] },
@@ -2193,15 +2184,14 @@ describe("buildStatusReply", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6"],
           },
         },
-        list: [
-          {
-            id: "kira",
+        entries: {
+          kira: {
             model: {
               primary: "openai/gpt-5.4",
               fallbacks: [],
             },
           },
-        ],
+        },
       },
       channels: {
         whatsapp: { allowFrom: ["*"] },

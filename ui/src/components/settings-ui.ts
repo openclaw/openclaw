@@ -44,9 +44,7 @@ export type SettingsSectionProps = {
   actions?: TemplateResult;
   /** Section notice above the group, keeping bordered callouts outside the card. */
   notice?: TemplateResult | typeof nothing;
-  /** Extra count shown next to the heading. */
   count?: number;
-  /** Marks the group surface as a danger zone. */
   danger?: boolean;
   /** Opts this section into the shared Carapace settings contract. */
   carapace?: boolean;
@@ -138,7 +136,6 @@ export function renderSettingsPageHeader(props: SettingsPageHeaderProps): Templa
   `;
 }
 
-/** Section = plain text heading + one group surface containing rows. */
 export function renderSettingsSection(props: SettingsSectionProps, rows: unknown): TemplateResult {
   const description = props.description
     ? html`<p class="settings-section__desc">${props.description}</p>`
@@ -260,7 +257,6 @@ export function renderSettingsRow(
   `;
 }
 
-/** Clickable drill-in row with a trailing chevron. */
 export function renderSettingsNavRow(
   props: Omit<SettingsRowProps, "stacked" | "stackedOnNarrow"> & { onClick: () => void },
 ): TemplateResult {
@@ -281,7 +277,6 @@ export function renderSettingsToggle(props: {
   checked: boolean;
   onChange: (checked: boolean) => boolean | void;
   disabled?: boolean;
-  ariaDisabled?: boolean;
   ariaLabel: string;
 }): TemplateResult {
   return html`
@@ -290,7 +285,7 @@ export function renderSettingsToggle(props: {
       size="s"
       .checked=${live(props.checked)}
       ?disabled=${props.disabled ?? false}
-      aria-disabled=${props.ariaDisabled ? "true" : "false"}
+      aria-disabled="false"
       @change=${(event: Event) => {
         const target = event.currentTarget as HTMLElement & { checked: boolean };
         if (props.onChange(target.checked) === false) {
@@ -385,7 +380,6 @@ export function renderSettingsSegmented<T extends string>(
     ariaLabel?: string;
     descriptionId?: string;
     className?: string;
-    carapace?: boolean;
   } & (
     | {
         mode?: undefined;
@@ -438,7 +432,7 @@ export function renderSettingsSegmented<T extends string>(
   }
   return html`
     <wa-radio-group
-      class="settings-segmented ${props.carapace ? "oc-segmented" : ""} ${props.className ?? ""}"
+      class="settings-segmented  ${props.className ?? ""}"
       size="s"
       aria-describedby=${props.descriptionId ?? nothing}
       orientation="horizontal"
@@ -465,9 +459,7 @@ export function renderSettingsSegmented<T extends string>(
       ${props.options.map(
         (option) => html`
           <wa-radio
-            class="settings-segmented__btn ${
-              props.carapace ? "oc-segmented-item" : ""
-            } ${option.value === props.value ? "settings-segmented__btn--active" : ""}"
+            class="settings-segmented__btn  ${option.value === props.value ? "settings-segmented__btn--active" : ""}"
             appearance="button"
             value=${option.value}
             .checked=${live(option.value === props.value)}
@@ -488,7 +480,6 @@ export function renderSettingsSegmented<T extends string>(
   `;
 }
 
-/** Status = dot + plain text. Replaces status pills across settings. */
 export function renderSettingsStatus(props: {
   kind: SettingsStatusKind;
   label: unknown;
@@ -514,7 +505,6 @@ export function renderSettingsStatus(props: {
   `;
 }
 
-/** Right-aligned plain text value inside a row control. */
 export function renderSettingsValue(value: unknown, options: { mono?: boolean } = {}) {
   const className = options.mono
     ? "settings-row__value settings-row__value--mono"
@@ -533,7 +523,6 @@ export function renderSettingsEmpty(
     : html`<div class="settings-empty">${message}</div>`;
 }
 
-/** Shape-matched placeholder for settings rows whose content has not loaded yet. */
 export function renderSettingsLoadingSkeleton(
   options: { label?: unknown; rows?: number; carapace?: boolean } = {},
 ): TemplateResult {

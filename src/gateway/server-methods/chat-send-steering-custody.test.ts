@@ -1,9 +1,12 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createAssistantMessageEventStream, type Context } from "openclaw/plugin-sdk/llm";
+import type { Context } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import { installRuntimeContextMessageForPrompt } from "../../agents/embedded-agent-runner/run/attempt-llm-boundary.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  installRuntimeContextMessageForPrompt,
+  normalizeMessagesForLlmBoundary,
+} from "../../agents/embedded-agent-runner/run/attempt-llm-boundary.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../../agents/embedded-agent-runner/run/attempt-queue-message.js";
 import { buildRuntimeContextCustomMessage } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import type { CurrentInboundPromptContext } from "../../agents/internal-runtime-context.js";
@@ -12,9 +15,9 @@ import {
   createAssistant,
   createAssistantResultStream,
   createTestSession,
+  holdAssistantResponse,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
-  testModel,
 } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import type { AgentSessionEvent } from "../../agents/sessions/agent-session-types.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -51,35 +54,15 @@ import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-hel
 import { handleChatSend } from "./chat-send-handler.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { identifiedClient } from "./sessions-sharing.test-support.js";
 import type { RespondFn } from "./types.js";
 installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
-function holdAssistantResponse(text: string) {
-  const response = createAssistantMessageEventStream();
-  let released = false;
-  return {
-    response,
-    isReleased: () => released,
-    release: () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      response.push({
-        type: "done",
-        reason: "stop",
-        message: createAssistant(testModel, [{ type: "text", text }]),
-      });
-      response.end();
-    },
-  };
-}
-
 describe("steering input custody", () => {
-  it.each([
+  it.for([
     "shared-secret owner",
     "same grant",
     "changed grant",
@@ -93,7 +76,7 @@ describe("steering input custody", () => {
     "different role sandbox across profiles",
   ] as const)(
     "preserves authenticated chat.send steering authority across callers (%s)",
-    async (scenario) => {
+    async (scenario, { signal }) => {
       const startOwnerTurn = scenario === "same permissions across profiles";
       const sharedSecretOwner = scenario === "shared-secret owner";
       const profile = sharedSecretOwner
@@ -320,6 +303,13 @@ describe("steering input custody", () => {
         );
         guardSessionManager(sessionManager, { ...fixture.scope, runId: "original-backing-run" });
         const { session } = await createTestSession({ sessionManager });
+        const convertToLlm = session.agent.convertToLlm.bind(session.agent);
+        session.agent.convertToLlm = (messages) =>
+          convertToLlm(
+            normalizeMessagesForLlmBoundary(messages, {
+              sessionVersion: sessionManager.getHeader()?.version,
+            }),
+          );
         const providerStarted = createDeferred();
         const provider = holdAssistantResponse("Original work");
         streamMocks.streamSimple
@@ -463,12 +453,13 @@ describe("steering input custody", () => {
           expect(session.getSteeringMessages()).toEqual([]);
           expect(queueMessage).not.toHaveBeenCalled();
           if (queued) {
+            await withinTest(fixture.dispatchedRecorder, signal);
             expect(operation.personalToolParticipants?.resolve()?.profileId).toBe(profile.id);
             expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
             expect(dispatchInboundMessageMock.mock.calls[0]?.[0]).toMatchObject({
               replyOptions: { messageInjectionDisposition: "rejected" },
             });
-            expect(listSessionPendingInputs(fixture.scope)).toMatchObject({
+            expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
               total: 1,
               items: [{ runId: fixture.params.idempotencyKey, state: "queued" }],
             });
@@ -496,13 +487,17 @@ describe("steering input custody", () => {
           expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
           if (acrossProfiles) {
             const modelContext = streamMocks.streamSimple.mock.calls[1]![1] as Context;
-            const steeredUser = modelContext.messages.findLast(
-              (message) => message.role === "user",
+            const steeredUserIndex = modelContext.messages.findLastIndex(
+              (message) => message.role === "user" && !Reflect.get(message, "runtimeContext"),
             );
+            const steeredUser = modelContext.messages[steeredUserIndex];
+            const runtimeContext = modelContext.messages[steeredUserIndex - 1];
             const userText = JSON.stringify(steeredUser?.content);
-            expect(userText).toContain("requester_profile");
-            expect(userText).toContain(incomingProfile.id);
-            expect(userText).not.toContain(profile.id);
+            const runtimeText = JSON.stringify(runtimeContext?.content);
+            expect(runtimeText).toContain("requester_profile");
+            expect(runtimeText).toContain(incomingProfile.id);
+            expect(runtimeText).not.toContain(profile.id);
+            expect(userText).not.toContain("requester_profile");
           }
         } else if (queued) {
           expect(input).toMatchObject({ message: { content: fixture.params.message } });
@@ -534,13 +529,16 @@ describe("steering input custody", () => {
     "native custody",
     "native committed",
     "browser custody",
+    "browser custody workspace",
     "browser custody session ACL",
     "browser custody lifecycle",
   ] as const)(
     "owns the real backing-run outcome when authority changes at steering commit (%s)",
     async (inputState) => {
       const sharedProfileCustody =
-        inputState === "browser custody" || inputState === "browser custody session ACL";
+        inputState === "browser custody" ||
+        inputState === "browser custody workspace" ||
+        inputState === "browser custody session ACL";
       const creator = sharedProfileCustody
         ? ensureProfileForEmail("steering-session-creator@example.test")
         : undefined;
@@ -554,6 +552,11 @@ describe("steering input custody", () => {
       let releaseProviders = () => {};
       let backingRun: Promise<void> | undefined;
       try {
+        if (inputState === "browser custody workspace") {
+          await patchSessionEntryCore(fixture.scope, () => ({
+            pendingProjectGitUrl: "file:///synthetic/missing-project.git",
+          }));
+        }
         const browserCustody = sharedProfileCustody || inputState === "browser custody lifecycle";
         fixture.params.queueMode = "steer";
         const operation = fixture.activeRun;
@@ -677,7 +680,7 @@ describe("steering input custody", () => {
         }
         expect(recorder.getAdmissionReceipt()).toBeUndefined();
         const persistFallback = vi.spyOn(recorder, "persistFallback");
-        const pending = listSessionPendingInputs(fixture.scope);
+        const pending = await listSessionPendingInputs(fixture.scope);
         expect(pending.total).toBe(inputState === "internal fresh" ? 0 : 1);
         expect(
           fixture.beforeApprove.mock.calls.filter(
@@ -702,6 +705,7 @@ describe("steering input custody", () => {
         if (sharedProfileCustody || inputState === "native custody") {
           linkEmail(email, target.id);
           if (inputState === "browser custody session ACL") {
+            await initializeSessionReadContext(fixture.context);
             const visibility = {
               agentId: fixture.scope.agentId,
               sessionKey: fixture.scope.sessionKey,
@@ -815,7 +819,7 @@ describe("steering input custody", () => {
             receipt: recorder.getAdmissionReceipt(),
             sourceTerminal: fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`),
             sourceErrors,
-            pendingInputs: listSessionPendingInputs(fixture.scope),
+            pendingInputs: await listSessionPendingInputs(fixture.scope),
             abortOwners: fixture.context.chatAbortControllers.size,
             queuedTurns: fixture.context.chatQueuedTurns.size,
           }).toMatchObject({
@@ -940,6 +944,11 @@ describe("steering input custody", () => {
             ok: !refused,
             payload: { runId: fixture.params.idempotencyKey, status: refused ? "error" : "ok" },
           });
+          if (inputState === "browser custody workspace") {
+            expect(loadExactSessionEntryReadOnly(fixture.scope)?.entry).toMatchObject({
+              pendingProjectGitUrl: "file:///synthetic/missing-project.git",
+            });
+          }
           const staleRetry = await fixture.send(undefined, { expectedProfileId: profile.id });
           expect(staleRetry).toHaveBeenCalledExactlyOnceWith(
             false,
@@ -954,7 +963,7 @@ describe("steering input custody", () => {
           expect(loadTranscriptEventsSync(fixture.scope)).toEqual(transcript);
           expect(fixture.context.chatAbortControllers.size).toBe(0);
           expect(fixture.context.chatQueuedTurns.size).toBe(0);
-          expect(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+          expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
         }
       } catch (error) {
         failures.add(error);

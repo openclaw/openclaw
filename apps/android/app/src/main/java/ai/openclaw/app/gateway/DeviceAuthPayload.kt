@@ -39,9 +39,6 @@ internal object DeviceAuthPayload {
   /** Normalizes signed metadata fields without locale-sensitive lowercasing. */
   internal fun normalizeMetadataField(value: String?): String {
     val trimmed = value?.trim().orEmpty()
-    if (trimmed.isEmpty()) {
-      return ""
-    }
     // Keep cross-runtime normalization deterministic (TS/Swift/Kotlin):
     // lowercase ASCII A-Z only for auth payload metadata fields.
     val out = StringBuilder(trimmed.length)

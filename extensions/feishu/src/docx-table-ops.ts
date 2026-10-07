@@ -98,7 +98,6 @@ function calculateAdaptiveColumnWidths(
     ),
   );
 
-  // Redistribute remaining space to fill total width
   let remaining = totalWidth - widths.reduce((a, b) => a + b, 0);
   while (remaining > 0) {
     const growable = widths.map((w, i) => (w < MAX_COLUMN_WIDTH ? i : -1)).filter((i) => i >= 0);

@@ -1,6 +1,4 @@
 /**
- * Shared in-process browser control runtime state.
- *
  * The HTTP server path and background control service both reuse this singleton
  * so local tools can attach to the same browser runtime without racing owners.
  */
@@ -54,7 +52,6 @@ export function hasBrowserControlWork(): boolean {
   return state !== null || pendingLifecycles > 0;
 }
 
-/** Create a route context bound to the current shared browser runtime. */
 export function createBrowserControlContext() {
   return createBrowserRouteContext({
     getState: () => state,
@@ -113,7 +110,6 @@ export function stopBrowserControlRuntime(params: {
     }
     await stopBrowserRuntime({
       current,
-      getState: () => state,
       clearState: () => {
         state = null;
         owner = null;

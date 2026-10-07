@@ -14,7 +14,6 @@ import type {
   StructuredInputCompilerOptions,
   StructuredInputField,
   StructuredInputRecord,
-  StructuredInputValue,
 } from "./structured-input-boundary.js";
 import {
   buildField,
@@ -24,6 +23,7 @@ import {
   MAX_CHOICE_COUNT,
   MAX_CHOICE_LABEL,
   normalizeChoices,
+  readStructuredInputChoice,
   validateChoices,
   type Choice,
   type FieldContext,
@@ -376,7 +376,7 @@ function readChoices(
       return "has an invalid oneOf.";
     }
     return normalizeChoices(
-      oneOfValue.map((entry) => readChoice(entry, options)),
+      oneOfValue.map((entry) => readStructuredInputChoice(entry, options)),
       options.minimumChoiceCount ?? 1,
       options.allowRichForms ? 64 : MAX_CHOICE_COUNT,
     );
@@ -396,20 +396,8 @@ function readArrayChoices(
     return "must declare string enum, anyOf, or oneOf array choices.";
   }
   return normalizeChoices(
-    entries.map((entry) => readChoice(entry, options)),
+    entries.map((entry) => readStructuredInputChoice(entry, options)),
     options.minimumChoiceCount ?? 1,
     options.allowRichForms ? 64 : MAX_CHOICE_COUNT,
   );
-}
-
-function readChoice(entry: StructuredInputValue, options: StructuredInputCompilerOptions) {
-  return {
-    value: isStructuredInputRecord(entry) ? ownValue(entry, "const") : undefined,
-    label: isStructuredInputRecord(entry) ? ownValue(entry, "title") : undefined,
-    description: isStructuredInputRecord(entry) ? ownValue(entry, "description") : undefined,
-    thumbnail:
-      isStructuredInputRecord(entry) && options.allowRichForms
-        ? (ownValue(entry, "x-openai-thumbnail") ?? ownValue(entry, "x-openai-preview"))
-        : undefined,
-  };
 }

@@ -5,6 +5,13 @@ import {
   estimateCheckoutTransitionBytes,
   measureDirectoryTreeBytes,
 } from "./capacity.runtime.js";
+import {
+  classifyWorktreeEvictions,
+  prepareWorktreeEvictionRepositories,
+  purgeWorktreeCheckout,
+  readWorktreeSourceDependencies,
+} from "./eviction.runtime.js";
+import { readWorktreeCleanupFingerprint } from "./gc-fingerprint.runtime.js";
 import { gitPathspecBatches, splitNullBuffer } from "./git-path-inventory.js";
 import type {
   GitWorktreeOperation,
@@ -119,6 +126,16 @@ export async function executeGitWorktreeOperation(
   operation: GitWorktreeOperation,
 ): Promise<GitWorktreeOperationResult> {
   switch (operation.type) {
+    case "worktree.eviction-source":
+      return readWorktreeSourceDependencies(operation.input);
+    case "worktree.eviction-repositories":
+      return await prepareWorktreeEvictionRepositories(operation.input.repoRoots);
+    case "worktree.eviction-classify":
+      return await classifyWorktreeEvictions(operation.input.records);
+    case "worktree.eviction-purge":
+      return await purgeWorktreeCheckout(operation.input.record, operation.input.live);
+    case "worktree.cleanup-fingerprint":
+      return await readWorktreeCleanupFingerprint(operation.input.checkoutPath);
     case "worktree.snapshot-verify-exact":
       return await verifyExactStateSnapshot(operation.input);
     case "worktree.snapshot":

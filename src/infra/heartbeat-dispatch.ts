@@ -12,6 +12,7 @@ import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../auto-reply/heartbeat.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  isHostNoticePayload,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
   type ReplyPayload,
@@ -171,7 +172,13 @@ async function prepareHeartbeatDispatchReply(
   const { delivery, visibility, sessionKey, storePath, runSessionKey, previousUpdatedAt } =
     prepared;
   const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
-  const selected = resolveHeartbeatReplyPayload(replyResult);
+  // A continuation under a quiet heartbeat posts the model's reply, never host notices;
+  // its terminal failure then stays silent.
+  const selected = resolveHeartbeatReplyPayload(
+    prepared.quietHostNotices
+      ? replies.filter((reply) => !isHostNoticePayload(reply))
+      : replyResult,
+  );
   const execution = resolveReplyOperationAgentTurn(runState);
   const heartbeatResponse = selectHeartbeatToolResponse(replyResult);
   const response = heartbeatResponse?.response;
@@ -275,10 +282,10 @@ async function prepareHeartbeatDispatchReply(
       accountId: delivery.accountId,
     });
     if (consume && preflight.shouldInspectPendingEvents) {
-      consumeSelectedSystemEventEntries(
-        resolveSystemEventQueueKey(sessionKey, agentId),
-        prepared.inspectedSystemEventsToConsume,
-      );
+      consumeSelectedSystemEventEntries(resolveSystemEventQueueKey(sessionKey, agentId), [
+        ...prepared.inspectedSystemEventsToConsume,
+        ...prepared.deferredGenericEvents,
+      ]);
       if (prepared.hasExecCompletion && prepared.hasCronEvents) {
         // Coalesced waiters share this turn, but exec and cron retain separate prompt/delivery policy.
         requestHeartbeat({
@@ -579,7 +586,12 @@ export async function deliverHeartbeatDispatch(
       if (!internalProjection || policy.projectTarget === false) {
         return { visibleReplySent: false };
       }
-      const occurrenceIds = policy.prepared.inspectedSystemEventsToConsume.map((event) => event.id);
+      // Restart continuations are admitted as generic prompt text, so their queue
+      // identities join the publication key alongside inspected completions.
+      const occurrenceIds = [
+        ...policy.prepared.inspectedSystemEventsToConsume,
+        ...policy.prepared.deferredGenericEvents,
+      ].map((event) => event.id);
       if (!occurrenceIds.every((id): id is string => typeof id === "string" && id.length > 0)) {
         policy.deliveryReason = "exec completion occurrence identity unavailable";
         return { visibleReplySent: false };

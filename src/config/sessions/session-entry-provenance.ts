@@ -1,17 +1,19 @@
+import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
 import {
   SESSION_EXPANDED_PARTICIPANT_LIMIT,
   type SessionParticipant,
 } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
-import type { SessionConversationLink } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type {
+  SessionCreatedActor as ProjectedSessionCreatedActor,
+  SessionRow,
+} from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { HookExternalContentSource } from "../../security/external-content.js";
 
-/** Kept aligned with SessionStateActorType (src/sessions/session-state-event-kinds.ts); not imported to avoid layering config/sessions onto src/sessions. */
-export type SessionActor = {
-  type: "human" | "agent" | "system";
-  id?: string;
-  label?: string;
-};
+/** Persisted identity excludes display-only actor projections. */
+export type SessionActor = SchemaContract<
+  Pick<ProjectedSessionCreatedActor, "type" | "id" | "label">
+>;
 
 /** Only trusted creation owners may stamp a Gateway profile namespace. */
 export type SessionCreatedActor = SessionActor &
@@ -113,41 +115,33 @@ export function inheritSpawnSessionOwner(
   };
 }
 
-export type SessionCreatedVia =
-  | "operator" // gateway sessions.create (Control UI / operator clients)
-  | "spawn" // sessions_spawn native or ACP subagent spawn
-  | "channel" // inbound channel conversation materialization
-  | "cron"
-  | "talk"
-  | "run" // create-on-run materialization (agent-session-persist)
-  | "plugin" // trusted plugin runtime creation
-  | "internal"; // internal/hidden sessions (internal-session-effects, voice bare rows)
+export type SessionCreatedVia = NonNullable<SessionRow["createdVia"]>;
 
 // Return shape mirrors the SessionEntry creation fields as a leaf contract;
 // types.ts imports from here, never the reverse (madge cycle guard).
 export function buildSessionCreationStamp(params: {
   via: SessionCreatedVia;
+  surface?: "plugin-dock";
   actor?: SessionCreatedActor;
   now?: number;
   sandbox?: "required";
   incognito?: boolean;
   skillLibrarySelections?: SkillLibrarySelection[];
   inheritedGitContributorProfileIds?: string[];
-  conversationLink?: SessionConversationLink;
 }): {
   createdVia: SessionCreatedVia;
+  createdSurface?: "plugin-dock";
   createdActor?: SessionCreatedActor;
   createdAt: number;
   sandbox?: "required";
   skillLibrarySelections?: SkillLibrarySelection[];
   inheritedGitContributorProfileIds?: string[];
-  conversationLink?: SessionConversationLink;
 } {
   return {
     createdVia: params.via,
+    ...(params.surface ? { createdSurface: params.surface } : {}),
     ...(params.actor ? { createdActor: params.actor } : {}),
     createdAt: params.now ?? Date.now(),
-    ...(params.conversationLink ? { conversationLink: params.conversationLink } : {}),
     ...(params.sandbox === "required" ? { sandbox: "required" as const } : {}),
     ...(params.via === "spawn" && !params.incognito && params.inheritedGitContributorProfileIds
       ? { inheritedGitContributorProfileIds: [...params.inheritedGitContributorProfileIds] }
@@ -170,10 +164,9 @@ export function preserveCreationStamp<
     ? {
         ...entry,
         createdVia: authoritative.createdVia,
+        createdSurface: authoritative.createdSurface,
         createdActor: authoritative.createdActor,
         createdAt: authoritative.createdAt,
-        // A logical session keeps its launch conversation even when delivery moves or resets.
-        conversationLink: authoritative.conversationLink ?? entry.conversationLink,
         inheritedGitContributorProfileIds: authoritative.inheritedGitContributorProfileIds,
         ...(authoritative.sandbox === "required" ? { sandbox: authoritative.sandbox } : {}),
       }
@@ -210,8 +203,6 @@ export function inheritSessionCreationPolicy(
 }
 
 export type SessionEntryProvenance = {
-  /** First channel-supplied launch destination, inherited by explicitly created children. */
-  conversationLink?: SessionConversationLink;
   /** Human contributor candidates captured once by trusted delegation; not participant activity. */
   inheritedGitContributorProfileIds?: string[];
   /** Plugin id that owns this session through a trusted runtime creation seam. */

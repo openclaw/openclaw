@@ -14,6 +14,8 @@ import {
   resolvePreparedRunAdmission,
 } from "../../admitted-run-context.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
+import { buildAgentInternalEventContext, type AgentInternalEvent } from "../../internal-events.js";
+import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { settleRequesterAfterSessionSpawns } from "../registry/subagent-registry.js";
 import {
@@ -72,7 +74,10 @@ export function registerGuestSpawnCases(options: {
       });
       const started = createDeferred();
       const modelResult = createDeferred<EmbeddedAgentRunResult>();
-      const parentPrompts: string[] = [];
+      const parentTurns: Array<{
+        prompt: string;
+        internalEvents?: AgentInternalEvent[];
+      }> = [];
       options.runEmbeddedAgent.mockImplementation(async (params) => {
         const admitted = await resolvePreparedRunAdmission({
           runId: params.runId,
@@ -89,7 +94,10 @@ export function registerGuestSpawnCases(options: {
         );
         await params.onExecutionStarted?.();
         if (params.sessionKey === bound.parentSessionKey) {
-          parentPrompts.push(params.prompt);
+          parentTurns.push({
+            prompt: params.prompt,
+            internalEvents: params.internalEvents,
+          });
           return { payloads: [{ text: "Parent received the result" }], meta: { durationMs: 1 } };
         }
         started.resolve();
@@ -133,8 +141,12 @@ export function registerGuestSpawnCases(options: {
           meta: { durationMs: 1, finalAssistantVisibleText: "guest child complete" },
         });
         expect(await withinTest(delivered.promise, signal)).toBe("delivered");
-        expect(parentPrompts).toHaveLength(1);
-        expect(parentPrompts[0]).toContain("guest child complete");
+        expect(parentTurns).toHaveLength(1);
+        expect(parentTurns[0]?.prompt).toContain(RUNTIME_EVENT_USER_PROMPT);
+        expect(buildAgentInternalEventContext(parentTurns[0]?.internalEvents)).toContainEqual({
+          kind: "conversation-data",
+          text: expect.stringContaining("guest child complete"),
+        });
       } catch (error) {
         failures.push(error);
       } finally {

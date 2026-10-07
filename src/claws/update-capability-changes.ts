@@ -412,7 +412,7 @@ function prepareCapabilityComparisonConfig(
   entries: AgentConfig[],
   preferredDefaultAgentId: string,
 ): OpenClawConfig {
-  const { list: _legacyList, ...agents } = config.agents ?? {};
+  const agents = config.agents ?? {};
   const systemAgentId =
     agents.ownership !== "explicit" && entries.some((entry) => entry.id === preferredDefaultAgentId)
       ? (tryResolveAmbientOwnerAgentId(config) ?? preferredDefaultAgentId)

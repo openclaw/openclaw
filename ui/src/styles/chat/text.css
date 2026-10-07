@@ -1,8 +1,3 @@
-/* ======================================}
-
-   CHAT TEXT STYLING
-   ============================================= */
-
 .chat-thinking {
   padding: 10px 12px;
   border-radius: var(--radius-md);
@@ -87,7 +82,6 @@
   height: 14px;
 }
 
-/* Exhausted full-message load: quiet inline error + manual retry. */
 .chat-message-load-error {
   display: flex;
   align-items: center;
@@ -1335,11 +1329,6 @@
   border-top: 1px solid var(--border);
   margin: 1em 0;
 }
-
-/* ======================================}
-
-   RTL (Right-to-Left) SUPPORT
-   ============================================= */
 
 .chat-text[dir="rtl"] {
   text-align: right;

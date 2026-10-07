@@ -22,7 +22,7 @@ import {
 
 const log = createSubsystemLogger("memory");
 const RETRY_DELAYS_MS = [500, 2_000, 5_000];
-const MIN_POLL_INTERVAL_MS = 30_000;
+const DEFAULT_POLL_INTERVAL_MS = 30_000;
 type MemoryFileWatcherOptions = {
   workspaceDir: string;
   agentId: string;
@@ -164,8 +164,11 @@ export class MemoryFileWatcher {
               continue;
             }
             const mode = resolveFsObservationMode();
-            // Background reconciliation must stay bounded even when native events are unavailable.
-            const pollIntervalMs = Math.max(MIN_POLL_INTERVAL_MS, resolveFsObservationIntervalMs());
+            // Bound idle scanning by default while preserving explicit operator overrides.
+            const pollIntervalMs = resolveFsObservationIntervalMs(
+              process.env,
+              DEFAULT_POLL_INTERVAL_MS,
+            );
             const owner: Observation = {
               id,
               group,

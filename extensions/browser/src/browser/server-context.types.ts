@@ -1,7 +1,3 @@
-/**
- * Shared Browser server context types used by route handlers and profile
- * operation factories.
- */
 import type { Server } from "node:http";
 import type { ChromeMcpPageProbe } from "./chrome-mcp-contracts.js";
 import type { RunningChrome } from "./chrome.js";
@@ -23,7 +19,6 @@ export type BrowserTabTargetOptions = BrowserOperationOptions & {
   assertCurrent?: () => void | Promise<void>;
 };
 
-/** Runtime state for a single profile's Chrome instance. */
 export type ProfileRuntimeState = {
   profile: ResolvedBrowserProfile;
   running: RunningChrome | null;
@@ -46,7 +41,6 @@ export type ProfileRuntimeState = {
   };
 };
 
-/** Runtime state for the Browser control server. */
 export type BrowserServerState = {
   server?: Server | null;
   port: number;
@@ -67,7 +61,6 @@ export type EnsureTabAvailableOptions = BrowserOperationOptions & {
   allowPlaywrightFallback?: boolean;
 };
 
-/** Operations scoped to a single resolved Browser profile. */
 export type ProfileContext = {
   profile: ResolvedBrowserProfile;
   ensureBrowserAvailable: (opts?: { headless?: boolean; signal?: AbortSignal }) => Promise<void>;
@@ -99,19 +92,16 @@ export type ProfileContext = {
   resetProfile: () => Promise<{ moved: boolean; from: string; to?: string }>;
 };
 
-/** Profile-aware operations exposed to Browser route handlers. */
 export type BrowserRouteContext = {
   state: () => BrowserServerState;
   forProfile: (profileName?: string) => ProfileContext;
   listProfiles: () => Promise<ProfileStatus[]>;
 };
 
-/** Status payload returned by Browser profile listing. */
 export type ProfileStatus = BrowserClientProfileStatus & {
   transport: BrowserTransport;
 };
 
-/** Inputs for creating a Browser route context. */
 export type ContextOptions = {
   getState: () => BrowserServerState | null;
   onEnsureAttachTarget?: (profile: ResolvedBrowserProfile) => Promise<void>;

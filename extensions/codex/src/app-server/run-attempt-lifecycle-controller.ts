@@ -7,11 +7,12 @@ import {
   resolveAgentRunAbortLifecycleFields,
   resolveFastModeForElapsed,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { reportCodexExecutionNotification } from "./attempt-notification-state.js";
+import { readCodexNotificationItem } from "./attempt-notifications.js";
 import {
   resolveTerminalDynamicToolBatchAction,
   shouldReleaseTurnAfterTerminalDynamicTool,
 } from "./dynamic-tool-execution.js";
+import { itemName } from "./event-projector-items.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { buildCodexLifecycleTerminalMeta } from "./run-attempt-lifecycle-terminal.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
@@ -33,14 +34,17 @@ export function createCodexAttemptLifecycleController(
   } = connection;
   const { state, activeTurnItemIds, pendingOpenClawDynamicToolCompletionIds } = turnRuntime;
   type TerminalToolRelease = NonNullable<typeof state.pendingTerminalDynamicToolRelease>;
+  // A captured tool-authored final reply completes its batch: ordinary sibling results
+  // still settle, but they cannot reopen the turn for another model step.
+  const batchHadNonTerminalResult = () =>
+    state.currentTurnHadNonTerminalDynamicToolResult && !state.currentTurnHadToolAuthoredFinalReply;
   const releaseTurnAfterTerminalDynamicTool = (value: TerminalToolRelease) => {
     if (
       !shouldReleaseTurnAfterTerminalDynamicTool({
         completed: state.completed,
         aborted: runAbortController.signal.aborted,
         responseSuccess: value.response.success,
-        currentTurnHadNonTerminalDynamicToolResult:
-          state.currentTurnHadNonTerminalDynamicToolResult,
+        currentTurnHadNonTerminalDynamicToolResult: batchHadNonTerminalResult(),
         activeAppServerTurnRequests: state.activeAppServerTurnRequests,
         activeTurnItemIdsCount: activeTurnItemIds.size,
         pendingOpenClawDynamicToolCompletionIdsCount: pendingOpenClawDynamicToolCompletionIds.size,
@@ -49,6 +53,7 @@ export function createCodexAttemptLifecycleController(
       return;
     }
     state.pendingTerminalDynamicToolRelease = undefined;
+    state.currentTurnHadToolAuthoredFinalReply = false;
     trajectoryRecorder?.recordEvent("turn.dynamic_tool_terminal_release", {
       threadId: value.call.threadId,
       turnId: value.call.turnId,
@@ -83,7 +88,7 @@ export function createCodexAttemptLifecycleController(
       state.terminalDynamicToolReleaseCheckScheduled = false;
       if (
         state.pendingTerminalDynamicToolRelease?.response.success === true &&
-        !state.currentTurnHadNonTerminalDynamicToolResult &&
+        !batchHadNonTerminalResult() &&
         state.activeAppServerTurnRequests === 0 &&
         pendingOpenClawDynamicToolCompletionIds.size === 0
       ) {
@@ -95,8 +100,7 @@ export function createCodexAttemptLifecycleController(
         activeAppServerTurnRequests: state.activeAppServerTurnRequests,
         activeTurnItemIdsCount: activeTurnItemIds.size,
         pendingOpenClawDynamicToolCompletionIdsCount: pendingOpenClawDynamicToolCompletionIds.size,
-        currentTurnHadNonTerminalDynamicToolResult:
-          state.currentTurnHadNonTerminalDynamicToolResult,
+        currentTurnHadNonTerminalDynamicToolResult: batchHadNonTerminalResult(),
         hasPendingTerminalDynamicToolRelease: state.pendingTerminalDynamicToolRelease !== undefined,
       });
       if (action === "release-pending-terminal" && state.pendingTerminalDynamicToolRelease) {
@@ -104,6 +108,7 @@ export function createCodexAttemptLifecycleController(
       } else if (action === "clear-nonterminal-batch") {
         state.pendingTerminalDynamicToolRelease = undefined;
         state.currentTurnHadNonTerminalDynamicToolResult = false;
+        state.currentTurnHadToolAuthoredFinalReply = false;
       }
     });
     immediate.unref?.();
@@ -111,6 +116,21 @@ export function createCodexAttemptLifecycleController(
   const scheduleTurnReleaseAfterTerminalDynamicTool = (value: TerminalToolRelease) => {
     state.pendingTerminalDynamicToolRelease = value;
     scheduleTerminalDynamicToolReleaseCheck();
+  };
+  const recordDynamicToolResult = (value: TerminalToolRelease) => {
+    if (value.response.success && value.response.toolAuthoredFinalReply === true) {
+      state.currentTurnHadToolAuthoredFinalReply = true;
+    }
+    if (value.response.terminate === true && value.response.success) {
+      scheduleTurnReleaseAfterTerminalDynamicTool(value);
+    } else if (value.response.asyncStarted === true) {
+      scheduleTerminalDynamicToolReleaseCheck();
+    } else {
+      state.currentTurnHadNonTerminalDynamicToolResult = true;
+      if (!state.currentTurnHadToolAuthoredFinalReply) {
+        state.pendingTerminalDynamicToolRelease = undefined;
+      }
+    }
   };
   const { emitLifecycleStart, emitLifecycleTerminal, emitExecutionPhaseOnce } =
     createAgentHarnessAttemptLifecycle({
@@ -136,7 +156,26 @@ export function createCodexAttemptLifecycleController(
     });
   };
   const reportExecutionNotification = (notification: CodexServerNotification) => {
-    reportCodexExecutionNotification({ notification, emitExecutionPhaseOnce });
+    if (notification.method === "turn/started") {
+      emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
+      return;
+    }
+    if (notification.method === "item/agentMessage/delta") {
+      emitExecutionPhaseOnce("assistant_output_started", { phase: "assistant_output_started" });
+      return;
+    }
+    if (notification.method !== "item/started") {
+      return;
+    }
+    const item = readCodexNotificationItem(notification.params);
+    const tool = item ? itemName(item) : undefined;
+    if (item && tool) {
+      emitExecutionPhaseOnce(`tool:${item.id}`, {
+        phase: "tool_execution_started",
+        tool,
+        itemId: item.id,
+      });
+    }
   };
   const emitFastModeAutoProgress = async (payload: {
     enabled: boolean;
@@ -198,6 +237,7 @@ export function createCodexAttemptLifecycleController(
     }
   };
   return {
+    recordDynamicToolResult,
     scheduleTerminalDynamicToolReleaseCheck,
     scheduleTurnReleaseAfterTerminalDynamicTool,
     emitLifecycleStart,

@@ -7,10 +7,7 @@ import {
   deferOpenClawAgentPostCommitPublication,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import {
-  confirmSessionParticipantsSchemaEnsured,
-  ensureSessionParticipantsSchema,
-} from "../../state/openclaw-agent-session-participants-schema.js";
+import { ensureSessionParticipantsSchema } from "../../state/openclaw-agent-session-participants-schema.js";
 import { readUserProfileAliases } from "../../state/user-profiles.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import {
@@ -51,11 +48,7 @@ export function recordSessionParticipant(
       : undefined;
   const result = runOpenClawAgentWriteTransaction(
     (database) => {
-      if (ensureSessionParticipantsSchema(database.db)) {
-        deferOpenClawAgentPostCommitPublication(database, () =>
-          confirmSessionParticipantsSchemaEnsured(database.db),
-        );
-      }
+      ensureSessionParticipantsSchema(database.db);
       const kysely = getSessionKysely(database.db);
       const participantQuery = kysely
         .selectFrom("session_participants")

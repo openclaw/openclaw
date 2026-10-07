@@ -4,6 +4,7 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { isOpenClawAgentDatabasePathCurrent } from "../state/openclaw-agent-db-identity.js";
 import { retainAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
@@ -33,6 +34,10 @@ import {
   writeSessionCostUsageRollupInDatabase,
   type SessionCostUsageRollupSnapshot,
 } from "./session-cost-usage-cache.kernel.js";
+import {
+  captureUsageCostIncognitoBinding,
+  type UsageCostIncognitoBinding,
+} from "./session-cost-usage-incognito.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 // Per-agent SQLite storage for rebuildable per-session usage rollups.
@@ -164,26 +169,20 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
   };
 }
 
-async function readCacheDatabase(
+async function readRefreshLock(
   options: ReturnType<typeof captureCacheDatabaseOptions>,
-  request: SessionCostUsageCacheRead,
-) {
+): Promise<string | null> {
+  const request: SessionCostUsageCacheRead = { kind: "usage-refresh-lock" };
   if (isIncognitoOpenClawAgentSqlitePath(options.path, options)) {
     const { readSessionCostUsageCache } = await import("./session-cost-usage-cache-read.js");
-    return readSessionCostUsageCache(options, request);
+    return readSessionCostUsageCache(options, request).value;
   }
-  return withSessionHistoryWorkerDatabase(options, (owner) =>
+  const result = await withSessionHistoryWorkerDatabase(options, (owner) =>
     owner.readUsageCache({
       request,
       env: { ...options.env, OPENCLAW_STATE_DIR: options.env.OPENCLAW_STATE_DIR },
     }),
   );
-}
-
-async function readRefreshLock(
-  options: ReturnType<typeof captureCacheDatabaseOptions>,
-): Promise<string | null> {
-  const result = await readCacheDatabase(options, { kind: "usage-refresh-lock" });
   if (result.kind !== "usage-refresh-lock") {
     throw new Error("Invalid usage refresh-lock worker result");
   }
@@ -237,12 +236,47 @@ function parseRefreshLock(raw: string | null): SessionCostUsageRefreshLock | nul
 export async function isSessionCostUsageRefreshRunning(
   agentId?: string,
   databasePath?: string,
+  suppliedIncognito?: UsageCostIncognitoBinding,
 ): Promise<boolean> {
   const options = captureCacheDatabaseOptions({
     agentId: normalizeAgentId(agentId),
     path: databasePath,
   });
-  const lock = parseRefreshLock(await readRefreshLock(options));
+  const incognito =
+    suppliedIncognito ??
+    captureUsageCostIncognitoBinding({
+      agentId: options.agentId,
+      databasePath: options.path,
+    });
+  if (
+    incognito &&
+    (options.agentId !== incognito.actor.agentId || options.path !== incognito.actor.path)
+  ) {
+    throw new Error("Usage refresh status belongs to another actor");
+  }
+  const raw = incognito
+    ? await incognito.actor.sessions.withCompute(
+        incognito.authority,
+        incognito.target,
+        (compute) =>
+          compute.execute(
+            incognito.target
+              ? {
+                  type: "session.compute.usage.refreshLock",
+                  input: { ...incognito.target, request: {} },
+                }
+              : { type: "session.compute.store.refreshLock", input: { request: {} } },
+          ),
+        incognito.admissionSignal ?? getAsyncWorkSignal(),
+      )
+    : await readRefreshLock(options);
+  if (incognito) {
+    incognito.actor.assertReadable();
+    incognito.authority.assertCurrent();
+    incognito.admissionSignal?.throwIfAborted();
+    getAsyncWorkSignal()?.throwIfAborted();
+  }
+  const lock = parseRefreshLock(raw);
   // Status never waits for a writer; acquisition replaces stale locks with its existing CAS.
   return lock !== null && isPidAlive(lock.pid);
 }

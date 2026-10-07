@@ -45,7 +45,6 @@ export function planImportedTranscriptArtifactsToArchive(
     }
     const move = planSessionJsonlArchiveMove({
       archiveKey: sessionKey,
-      baseNameRaw: path.basename(sourcePathRaw),
       kind,
       reservedArchivePaths,
       sessionKey,
@@ -69,7 +68,6 @@ export function planImportedTranscriptArtifactsToArchive(
 
 export function planSessionJsonlArchiveMove(params: {
   archiveKey: string;
-  baseNameRaw: string;
   kind: SessionSqliteMigrationMoveKind;
   reservedArchivePaths?: ReadonlySet<string>;
   sessionKey?: string;
@@ -89,11 +87,15 @@ export function planSessionJsonlArchiveMove(params: {
   if (path.dirname(sourcePath) !== sessionsDir) {
     throw new Error(`Migration source is outside the target sessions directory: ${sourcePath}`);
   }
-  const archiveDir = resolveImportedTranscriptArchiveDir(params.target.storePath);
+  const archiveDir = path.join(path.dirname(sessionsDir), "session-sqlite-import-archive");
   assertSafeSessionSqliteMigrationDirectory(archiveDir);
   fs.mkdirSync(archiveDir, { recursive: true });
   assertSafeSessionSqliteMigrationDirectory(archiveDir);
-  const baseName = params.baseNameRaw.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(0, 160) || "artifact";
+  const baseName =
+    path
+      .basename(params.sourcePathRaw)
+      .replace(/[^A-Za-z0-9_.-]+/g, "_")
+      .slice(0, 160) || "artifact";
   const keySlug = params.archiveKey.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(0, 120) || "session";
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const suffix = attempt === 0 ? "" : `.${attempt}`;
@@ -112,11 +114,6 @@ export function planSessionJsonlArchiveMove(params: {
     };
   }
   throw new Error(`Could not archive ${baseName} for ${params.archiveKey}`);
-}
-
-function resolveImportedTranscriptArchiveDir(storePath: string): string {
-  const storeDir = canonicalFilePath(path.dirname(path.resolve(storePath)));
-  return path.join(path.dirname(storeDir), "session-sqlite-import-archive");
 }
 
 export async function archiveImportedLegacySessionStores(
@@ -156,7 +153,6 @@ export async function archiveImportedLegacySessionStores(
       }
       const move = planSessionJsonlArchiveMove({
         archiveKey: "legacy-store",
-        baseNameRaw: path.basename(storePath),
         kind: "legacy-store",
         sourcePathRaw: storePath,
         target: first.target,

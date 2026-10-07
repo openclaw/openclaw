@@ -1,6 +1,5 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import chalk from "chalk";
 import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { expandTildePath } from "../../shared/tilde-path.js";
@@ -8,29 +7,13 @@ import type { Skill } from "../../skills/loading/session.js";
 import { loadSkills } from "../../skills/loading/session.js";
 import { loadThemeFromPath, type Theme } from "../modes/interactive/theme/theme.js";
 import { CONFIG_DIR_NAME } from "../package-metadata.js";
-import { canonicalizePath, isLocalPath } from "../utils/paths.js";
+import { canonicalizePath } from "../utils/paths.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
 import { createEventBus, type EventBus } from "./event-bus.js";
-import {
-  clearExtensionCache,
-  createExtensionRuntime,
-  loadExtensionFromFactory,
-  loadExtensionsCached,
-} from "./extensions/loader.js";
-import type {
-  Extension,
-  ExtensionFactory,
-  ExtensionRuntime,
-  LoadExtensionsResult,
-} from "./extensions/types.js";
-import {
-  DefaultPackageManager,
-  type ResolvedPaths,
-  type ResolvedResource,
-} from "./package-manager.js";
+import { createExtensionRuntime, loadExtensionFromFactory } from "./extensions/loader.js";
+import type { Extension, ExtensionFactory, LoadExtensionsResult } from "./extensions/types.js";
 import type { PromptTemplate } from "./prompt-templates.js";
 import { loadPromptTemplates } from "./prompt-templates.js";
-import { SettingsManager } from "./settings-manager.js";
 import { createSourceInfo, type PathMetadata, type SourceInfo } from "./source-info.js";
 
 export interface ResourceExtensionPaths {
@@ -44,153 +27,21 @@ export interface ResourceLoader {
   getSkills(): { skills: Skill[]; diagnostics: ResourceDiagnostic[] };
   getPrompts(): { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] };
   getThemes(): { themes: Theme[]; diagnostics: ResourceDiagnostic[] };
-  getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> };
-  getSystemPrompt(): string | undefined;
-  getAppendSystemPrompt(): string[];
   extendResources(paths: ResourceExtensionPaths): void;
   reload(): Promise<void>;
-}
-
-type ResourceOverride<K extends keyof ResourceLoader> = (
-  base: ReturnType<ResourceLoader[K]>,
-) => ReturnType<ResourceLoader[K]>;
-
-const EMPTY_RESOLVED_PATHS: ResolvedPaths = {
-  extensions: [],
-  skills: [],
-  prompts: [],
-  themes: [],
-};
-
-function resolvePromptInput(input: string | undefined, description: string): string | undefined {
-  if (!input) {
-    return undefined;
-  }
-
-  if (existsSync(input)) {
-    try {
-      return readFileSync(input, "utf-8");
-    } catch (error) {
-      console.error(
-        chalk.yellow(`Warning: Could not read ${description} file ${input}: ${String(error)}`),
-      );
-      return undefined;
-    }
-  }
-
-  return input;
-}
-
-function loadContextFileFromDir(dir: string): { path: string; content: string } | null {
-  const candidates = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
-  for (const filename of candidates) {
-    const filePath = join(dir, filename);
-    if (existsSync(filePath)) {
-      try {
-        return {
-          path: filePath,
-          content: readFileSync(filePath, "utf-8"),
-        };
-      } catch (error) {
-        console.error(chalk.yellow(`Warning: Could not read ${filePath}: ${String(error)}`));
-      }
-    }
-  }
-  return null;
-}
-
-function loadProjectContextFiles(options: {
-  cwd: string;
-  agentDir: string;
-}): Array<{ path: string; content: string }> {
-  const contextFiles: Array<{ path: string; content: string }> = [];
-  const seenPaths = new Set<string>();
-
-  const globalContext = loadContextFileFromDir(options.agentDir);
-  if (globalContext) {
-    contextFiles.push(globalContext);
-    seenPaths.add(globalContext.path);
-  }
-
-  const ancestorContextFiles: Array<{ path: string; content: string }> = [];
-
-  let currentDir = options.cwd;
-  const root = resolve("/");
-
-  while (true) {
-    const contextFile = loadContextFileFromDir(currentDir);
-    if (contextFile && !seenPaths.has(contextFile.path)) {
-      ancestorContextFiles.unshift(contextFile);
-      seenPaths.add(contextFile.path);
-    }
-
-    if (currentDir === root) {
-      break;
-    }
-
-    const parentDir = resolve(currentDir, "..");
-    if (parentDir === currentDir) {
-      break;
-    }
-    currentDir = parentDir;
-  }
-
-  contextFiles.push(...ancestorContextFiles);
-
-  return contextFiles;
 }
 
 interface DefaultResourceLoaderOptions {
   cwd: string;
   agentDir: string;
-  settingsManager?: SettingsManager;
-  eventBus?: EventBus;
-  additionalExtensionPaths?: string[];
-  additionalSkillPaths?: string[];
-  additionalPromptTemplatePaths?: string[];
-  additionalThemePaths?: string[];
   extensionFactories?: ExtensionFactory[];
-  noExtensions?: boolean;
-  noSkills?: boolean;
-  noPromptTemplates?: boolean;
-  noThemes?: boolean;
-  noContextFiles?: boolean;
-  systemPrompt?: string;
-  appendSystemPrompt?: string[];
-  extensionsOverride?: ResourceOverride<"getExtensions">;
-  skillsOverride?: ResourceOverride<"getSkills">;
-  promptsOverride?: ResourceOverride<"getPrompts">;
-  themesOverride?: ResourceOverride<"getThemes">;
-  agentsFilesOverride?: ResourceOverride<"getAgentsFiles">;
-  systemPromptTransform?: (base: string | undefined) => string | undefined;
-  appendSystemPromptTransform?: (base: string[]) => string[];
 }
 
 export class DefaultResourceLoader implements ResourceLoader {
   private cwd: string;
   private agentDir: string;
-  private settingsManager: SettingsManager;
   private eventBus: EventBus;
-  private packageManager: DefaultPackageManager;
-  private additionalExtensionPaths: string[];
-  private additionalSkillPaths: string[];
-  private additionalPromptTemplatePaths: string[];
-  private additionalThemePaths: string[];
   private extensionFactories: ExtensionFactory[];
-  private noExtensions: boolean;
-  private noSkills: boolean;
-  private noPromptTemplates: boolean;
-  private noThemes: boolean;
-  private noContextFiles: boolean;
-  private systemPromptSource?: string;
-  private appendSystemPromptSource?: string[];
-  private extensionsOverride?: ResourceOverride<"getExtensions">;
-  private skillsOverride?: ResourceOverride<"getSkills">;
-  private promptsOverride?: ResourceOverride<"getPrompts">;
-  private themesOverride?: ResourceOverride<"getThemes">;
-  private agentsFilesOverride?: ResourceOverride<"getAgentsFiles">;
-  private systemPromptTransform?: (base: string | undefined) => string | undefined;
-  private appendSystemPromptTransform?: (base: string[]) => string[];
 
   private extensionsResult: LoadExtensionsResult;
   private skills: Skill[] = [];
@@ -199,47 +50,18 @@ export class DefaultResourceLoader implements ResourceLoader {
   private promptDiagnostics: ResourceDiagnostic[] = [];
   private themes: Theme[] = [];
   private themeDiagnostics: ResourceDiagnostic[] = [];
-  private agentsFiles: Array<{ path: string; content: string }> = [];
-  private systemPrompt?: string;
-  private appendSystemPrompt: string[] = [];
   private lastSkillPaths: string[] = [];
   private extensionSkillSourceInfos = new Map<string, SourceInfo>();
   private extensionPromptSourceInfos = new Map<string, SourceInfo>();
   private extensionThemeSourceInfos = new Map<string, SourceInfo>();
   private lastPromptPaths: string[] = [];
   private lastThemePaths: string[] = [];
-  private loaded = false;
 
   constructor(options: DefaultResourceLoaderOptions) {
     this.cwd = options.cwd;
     this.agentDir = options.agentDir;
-    this.settingsManager =
-      options.settingsManager ?? SettingsManager.create(this.cwd, this.agentDir);
-    this.eventBus = options.eventBus ?? createEventBus();
-    this.packageManager = new DefaultPackageManager({
-      cwd: this.cwd,
-      agentDir: this.agentDir,
-      settingsManager: this.settingsManager,
-    });
-    this.additionalExtensionPaths = options.additionalExtensionPaths ?? [];
-    this.additionalSkillPaths = options.additionalSkillPaths ?? [];
-    this.additionalPromptTemplatePaths = options.additionalPromptTemplatePaths ?? [];
-    this.additionalThemePaths = options.additionalThemePaths ?? [];
+    this.eventBus = createEventBus();
     this.extensionFactories = options.extensionFactories ?? [];
-    this.noExtensions = options.noExtensions ?? false;
-    this.noSkills = options.noSkills ?? false;
-    this.noPromptTemplates = options.noPromptTemplates ?? false;
-    this.noThemes = options.noThemes ?? false;
-    this.noContextFiles = options.noContextFiles ?? false;
-    this.systemPromptSource = options.systemPrompt;
-    this.appendSystemPromptSource = options.appendSystemPrompt;
-    this.extensionsOverride = options.extensionsOverride;
-    this.skillsOverride = options.skillsOverride;
-    this.promptsOverride = options.promptsOverride;
-    this.themesOverride = options.themesOverride;
-    this.agentsFilesOverride = options.agentsFilesOverride;
-    this.systemPromptTransform = options.systemPromptTransform;
-    this.appendSystemPromptTransform = options.appendSystemPromptTransform;
 
     this.extensionsResult = { extensions: [], errors: [], runtime: createExtensionRuntime() };
   }
@@ -258,18 +80,6 @@ export class DefaultResourceLoader implements ResourceLoader {
 
   getThemes(): { themes: Theme[]; diagnostics: ResourceDiagnostic[] } {
     return { themes: this.themes, diagnostics: this.themeDiagnostics };
-  }
-
-  getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> } {
-    return { agentsFiles: this.agentsFiles };
-  }
-
-  getSystemPrompt(): string | undefined {
-    return this.systemPrompt;
-  }
-
-  getAppendSystemPrompt(): string[] {
-    return this.appendSystemPrompt;
   }
 
   extendResources(paths: ResourceExtensionPaths): void {
@@ -303,85 +113,32 @@ export class DefaultResourceLoader implements ResourceLoader {
   }
 
   async reload(): Promise<void> {
-    if (this.loaded) {
-      clearExtensionCache();
-    }
-    await this.settingsManager.reload();
-    const resolvedPaths =
-      this.noExtensions && this.noSkills && this.noPromptTemplates && this.noThemes
-        ? EMPTY_RESOLVED_PATHS
-        : await this.packageManager.resolve();
-    const cliExtensionPaths = await this.packageManager.resolveExtensionSources(
-      this.additionalExtensionPaths,
-      {
-        temporary: true,
-      },
-    );
-    const metadataByPath = new Map<string, PathMetadata>();
-
     this.extensionSkillSourceInfos = new Map();
     this.extensionPromptSourceInfos = new Map();
     this.extensionThemeSourceInfos = new Map();
 
-    const getEnabledResources = (resources: ResolvedResource[]): ResolvedResource[] => {
-      for (const r of resources) {
-        if (!metadataByPath.has(r.path)) {
-          metadataByPath.set(r.path, r.metadata);
-        }
-      }
-      return resources.filter((r) => r.enabled);
+    const extensionsResult: LoadExtensionsResult = {
+      extensions: [],
+      errors: [],
+      runtime: createExtensionRuntime(),
     };
-
-    const getEnabledPaths = (resources: ResolvedResource[]): string[] =>
-      getEnabledResources(resources).map((r) => r.path);
-    const enabledExtensions = getEnabledPaths(resolvedPaths.extensions);
-    const enabledSkillResources = getEnabledResources(resolvedPaths.skills);
-    const enabledPrompts = getEnabledPaths(resolvedPaths.prompts);
-    const enabledThemes = getEnabledPaths(resolvedPaths.themes);
-
-    const mapSkillPath = (resource: { path: string; metadata: PathMetadata }): string => {
-      if (resource.metadata.source !== "auto" && resource.metadata.origin !== "package") {
-        return resource.path;
-      }
+    for (const [index, factory] of this.extensionFactories.entries()) {
+      const extensionPath = `<inline:${index + 1}>`;
       try {
-        const stats = statSync(resource.path);
-        if (!stats.isDirectory()) {
-          return resource.path;
-        }
-      } catch {
-        return resource.path;
-      }
-      const skillFile = join(resource.path, "SKILL.md");
-      if (existsSync(skillFile)) {
-        if (!metadataByPath.has(skillFile)) {
-          metadataByPath.set(skillFile, resource.metadata);
-        }
-        return skillFile;
-      }
-      return resource.path;
-    };
-
-    const enabledSkills = enabledSkillResources.map(mapSkillPath);
-
-    for (const r of [...cliExtensionPaths.extensions, ...cliExtensionPaths.skills]) {
-      if (!metadataByPath.has(r.path)) {
-        metadataByPath.set(r.path, { source: "cli", scope: "temporary", origin: "top-level" });
+        extensionsResult.extensions.push(
+          await loadExtensionFromFactory(
+            factory,
+            this.cwd,
+            this.eventBus,
+            extensionsResult.runtime,
+            extensionPath,
+          ),
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "failed to load extension";
+        extensionsResult.errors.push({ path: extensionPath, error: message });
       }
     }
-
-    const cliEnabledExtensions = getEnabledPaths(cliExtensionPaths.extensions);
-    const cliEnabledSkills = getEnabledPaths(cliExtensionPaths.skills);
-    const cliEnabledPrompts = getEnabledPaths(cliExtensionPaths.prompts);
-    const cliEnabledThemes = getEnabledPaths(cliExtensionPaths.themes);
-
-    const extensionPaths = this.noExtensions
-      ? cliEnabledExtensions
-      : this.mergePaths(cliEnabledExtensions, enabledExtensions);
-
-    const extensionsResult = await loadExtensionsCached(extensionPaths, this.cwd, this.eventBus);
-    const inlineExtensions = await this.loadExtensionFactories(extensionsResult.runtime);
-    extensionsResult.extensions.push(...inlineExtensions.extensions);
-    extensionsResult.errors.push(...inlineExtensions.errors);
 
     // Keep all extensions loaded. Conflicts are reported as diagnostics, and precedence is handled by load order.
     const conflicts = this.detectExtensionConflicts(extensionsResult.extensions);
@@ -389,97 +146,13 @@ export class DefaultResourceLoader implements ResourceLoader {
       extensionsResult.errors.push({ path: conflict.path, error: conflict.message });
     }
 
-    for (const p of this.additionalExtensionPaths) {
-      if (isLocalPath(p) && !existsSync(p)) {
-        extensionsResult.errors.push({ path: p, error: `Extension path does not exist: ${p}` });
-      }
-    }
-    this.extensionsResult = this.extensionsOverride
-      ? this.extensionsOverride(extensionsResult)
-      : extensionsResult;
-    this.applyExtensionSourceInfo(this.extensionsResult.extensions, metadataByPath);
-
-    const skillPaths = this.noSkills
-      ? this.mergePaths(cliEnabledSkills, this.additionalSkillPaths)
-      : this.mergePaths([...cliEnabledSkills, ...enabledSkills], this.additionalSkillPaths);
-
-    this.lastSkillPaths = skillPaths;
-    this.updateSkillsFromPaths(skillPaths, metadataByPath);
-    for (const p of this.additionalSkillPaths) {
-      if (isLocalPath(p) && !existsSync(p) && !this.skillDiagnostics.some((d) => d.path === p)) {
-        this.skillDiagnostics.push({
-          type: "error",
-          message: "Skill path does not exist",
-          path: p,
-        });
-      }
-    }
-
-    const promptPaths = this.noPromptTemplates
-      ? this.mergePaths(cliEnabledPrompts, this.additionalPromptTemplatePaths)
-      : this.mergePaths(
-          [...cliEnabledPrompts, ...enabledPrompts],
-          this.additionalPromptTemplatePaths,
-        );
-
-    this.lastPromptPaths = promptPaths;
-    this.updatePromptsFromPaths(promptPaths, metadataByPath);
-    for (const p of this.additionalPromptTemplatePaths) {
-      if (isLocalPath(p) && !existsSync(p) && !this.promptDiagnostics.some((d) => d.path === p)) {
-        this.promptDiagnostics.push({
-          type: "error",
-          message: "Prompt template path does not exist",
-          path: p,
-        });
-      }
-    }
-
-    const themePaths = this.noThemes
-      ? this.mergePaths(cliEnabledThemes, this.additionalThemePaths)
-      : this.mergePaths([...cliEnabledThemes, ...enabledThemes], this.additionalThemePaths);
-
-    this.lastThemePaths = themePaths;
-    this.updateThemesFromPaths(themePaths, metadataByPath);
-    for (const p of this.additionalThemePaths) {
-      if (!existsSync(p) && !this.themeDiagnostics.some((d) => d.path === p)) {
-        this.themeDiagnostics.push({
-          type: "error",
-          message: "Theme path does not exist",
-          path: p,
-        });
-      }
-    }
-
-    const agentsFiles = {
-      agentsFiles: this.noContextFiles
-        ? []
-        : loadProjectContextFiles({ cwd: this.cwd, agentDir: this.agentDir }),
-    };
-    const resolvedAgentsFiles = this.agentsFilesOverride
-      ? this.agentsFilesOverride(agentsFiles)
-      : agentsFiles;
-    this.agentsFiles = resolvedAgentsFiles.agentsFiles;
-
-    const baseSystemPrompt = resolvePromptInput(
-      this.systemPromptSource ?? this.discoverPromptFile("SYSTEM.md"),
-      "system prompt",
-    );
-    this.systemPrompt = this.systemPromptTransform
-      ? this.systemPromptTransform(baseSystemPrompt)
-      : baseSystemPrompt;
-
-    const appendSources =
-      this.appendSystemPromptSource ??
-      (this.discoverPromptFile("APPEND_SYSTEM.md")
-        ? [this.discoverPromptFile("APPEND_SYSTEM.md")!]
-        : []);
-    const baseAppend = appendSources
-      .map((s) => resolvePromptInput(s, "append system prompt"))
-      .filter((s): s is string => s !== undefined);
-    this.appendSystemPrompt = this.appendSystemPromptTransform
-      ? this.appendSystemPromptTransform(baseAppend)
-      : baseAppend;
-    this.loaded = true;
+    this.extensionsResult = extensionsResult;
+    this.lastSkillPaths = [];
+    this.lastPromptPaths = [];
+    this.lastThemePaths = [];
+    this.updateSkillsFromPaths([]);
+    this.updatePromptsFromPaths([]);
+    this.updateThemesFromPaths([]);
   }
 
   private registerExtensionPaths(
@@ -493,161 +166,79 @@ export class DefaultResourceLoader implements ResourceLoader {
     });
   }
 
-  private updateSkillsFromPaths(
-    skillPaths: string[],
-    metadataByPath?: Map<string, PathMetadata>,
-  ): void {
-    let skillsResult: { skills: Skill[]; diagnostics: ResourceDiagnostic[] };
-    if (this.noSkills && skillPaths.length === 0) {
-      skillsResult = { skills: [], diagnostics: [] };
-    } else {
-      skillsResult = loadSkills({
-        cwd: this.cwd,
-        agentDir: this.agentDir,
-        skillPaths,
-        includeDefaults: false,
-      });
-    }
-    const resolvedSkills = this.skillsOverride ? this.skillsOverride(skillsResult) : skillsResult;
-    this.skills = resolvedSkills.skills.map((skill) => ({
+  private updateSkillsFromPaths(skillPaths: string[]): void {
+    const skillsResult = loadSkills({
+      cwd: this.cwd,
+      agentDir: this.agentDir,
+      skillPaths,
+      includeDefaults: false,
+    });
+    this.skills = skillsResult.skills.map((skill) => ({
       ...skill,
       sourceInfo: this.resolveSourceInfoForPath(
         skill.filePath,
         this.extensionSkillSourceInfos,
-        metadataByPath,
         skill.sourceInfo,
       ),
     }));
-    this.skillDiagnostics = resolvedSkills.diagnostics;
+    this.skillDiagnostics = skillsResult.diagnostics;
   }
 
-  private updatePromptsFromPaths(
-    promptPaths: string[],
-    metadataByPath?: Map<string, PathMetadata>,
-  ): void {
-    let promptsResult: { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] };
-    if (this.noPromptTemplates && promptPaths.length === 0) {
-      promptsResult = { prompts: [], diagnostics: [] };
-    } else {
-      const allPrompts = loadPromptTemplates({
-        cwd: this.cwd,
-        agentDir: this.agentDir,
-        promptPaths,
-        includeDefaults: false,
-      });
-      const { resources, diagnostics } = this.dedupeResources(
-        allPrompts,
-        "prompt",
-        (prompt) => prompt.name,
-        (prompt) => prompt.filePath,
-      );
-      promptsResult = { prompts: resources, diagnostics };
-    }
-    const resolvedPrompts = this.promptsOverride
-      ? this.promptsOverride(promptsResult)
-      : promptsResult;
-    this.prompts = resolvedPrompts.prompts.map((prompt) => ({
-      ...prompt,
-      sourceInfo: this.resolveSourceInfoForPath(
-        prompt.filePath,
-        this.extensionPromptSourceInfos,
-        metadataByPath,
-        prompt.sourceInfo,
-      ),
-    }));
-    this.promptDiagnostics = resolvedPrompts.diagnostics;
+  private updatePromptsFromPaths(promptPaths: string[]): void {
+    const allPrompts = loadPromptTemplates({
+      cwd: this.cwd,
+      agentDir: this.agentDir,
+      promptPaths,
+    });
+    const { resources, diagnostics } = this.dedupeResources(
+      allPrompts,
+      "prompt",
+      (prompt) => prompt.name,
+      (prompt) => prompt.filePath,
+    );
+    this.prompts = resources.map((prompt) =>
+      Object.assign({}, prompt, {
+        sourceInfo: this.resolveSourceInfoForPath(
+          prompt.filePath,
+          this.extensionPromptSourceInfos,
+          prompt.sourceInfo,
+        ),
+      }),
+    );
+    this.promptDiagnostics = diagnostics;
   }
 
-  private updateThemesFromPaths(
-    themePaths: string[],
-    metadataByPath?: Map<string, PathMetadata>,
-  ): void {
-    let themesResult: { themes: Theme[]; diagnostics: ResourceDiagnostic[] };
-    if (this.noThemes && themePaths.length === 0) {
-      themesResult = { themes: [], diagnostics: [] };
-    } else {
-      const loaded = this.loadThemes(themePaths);
-      const deduped = this.dedupeResources(
-        loaded.themes,
-        "theme",
-        (theme) => theme.name ?? "unnamed",
-        (theme) => theme.sourcePath,
-      );
-      themesResult = {
-        themes: deduped.resources,
-        diagnostics: [...loaded.diagnostics, ...deduped.diagnostics],
-      };
-    }
-    const resolvedThemes = this.themesOverride ? this.themesOverride(themesResult) : themesResult;
-    this.themes = resolvedThemes.themes.map((theme) => {
+  private updateThemesFromPaths(themePaths: string[]): void {
+    const loaded = this.loadThemes(themePaths);
+    const deduped = this.dedupeResources(
+      loaded.themes,
+      "theme",
+      (theme) => theme.name ?? "unnamed",
+      (theme) => theme.sourcePath,
+    );
+    this.themes = deduped.resources.map((theme) => {
       const sourcePath = theme.sourcePath;
       theme.sourceInfo = sourcePath
         ? this.resolveSourceInfoForPath(
             sourcePath,
             this.extensionThemeSourceInfos,
-            metadataByPath,
             theme.sourceInfo,
           )
         : theme.sourceInfo;
       return theme;
     });
-    this.themeDiagnostics = resolvedThemes.diagnostics;
-  }
-
-  private applyExtensionSourceInfo(
-    extensions: Extension[],
-    metadataByPath: Map<string, PathMetadata>,
-  ): void {
-    for (const extension of extensions) {
-      extension.sourceInfo = this.resolveSourceInfoForPath(
-        extension.path,
-        undefined,
-        metadataByPath,
-      );
-      for (const command of extension.commands.values()) {
-        command.sourceInfo = extension.sourceInfo;
-      }
-      for (const tool of extension.tools.values()) {
-        tool.sourceInfo = extension.sourceInfo;
-      }
-    }
+    this.themeDiagnostics = [...loaded.diagnostics, ...deduped.diagnostics];
   }
 
   private resolveSourceInfoForPath(
     resourcePath: string,
-    extraSourceInfos?: Map<string, SourceInfo>,
-    metadataByPath?: Map<string, PathMetadata>,
+    extraSourceInfos: Map<string, SourceInfo>,
     existing?: SourceInfo,
   ): SourceInfo {
-    if (!resourcePath) {
-      return existing ?? this.getDefaultSourceInfoForPath(resourcePath);
-    }
-
-    if (resourcePath.startsWith("<")) {
-      return this.getDefaultSourceInfoForPath(resourcePath);
-    }
-
     const normalizedResourcePath = resolve(resourcePath);
-    if (extraSourceInfos) {
-      for (const [sourcePath, sourceInfo] of extraSourceInfos.entries()) {
-        const normalizedSourcePath = resolve(sourcePath);
-        if (isPathInside(normalizedSourcePath, normalizedResourcePath)) {
-          return { ...sourceInfo, path: resourcePath };
-        }
-      }
-    }
-
-    if (metadataByPath) {
-      const exact = metadataByPath.get(normalizedResourcePath) ?? metadataByPath.get(resourcePath);
-      if (exact) {
-        return createSourceInfo(resourcePath, exact);
-      }
-
-      for (const [sourcePath, metadata] of metadataByPath.entries()) {
-        const normalizedSourcePath = resolve(sourcePath);
-        if (isPathInside(normalizedSourcePath, normalizedResourcePath)) {
-          return createSourceInfo(resourcePath, metadata);
-        }
+    for (const [sourcePath, sourceInfo] of extraSourceInfos) {
+      if (isPathInside(sourcePath, normalizedResourcePath)) {
+        return { ...sourceInfo, path: resourcePath };
       }
     }
 
@@ -655,15 +246,6 @@ export class DefaultResourceLoader implements ResourceLoader {
   }
 
   private getDefaultSourceInfoForPath(filePath: string): SourceInfo {
-    if (filePath.startsWith("<") && filePath.endsWith(">")) {
-      return {
-        path: filePath,
-        source: filePath.slice(1, -1).split(":")[0] || "temporary",
-        scope: "temporary",
-        origin: "top-level",
-      };
-    }
-
     const normalizedPath = resolve(filePath);
     for (const [baseDir, scope] of [
       [this.agentDir, "user"],
@@ -782,33 +364,6 @@ export class DefaultResourceLoader implements ResourceLoader {
     }
   }
 
-  private async loadExtensionFactories(runtime: ExtensionRuntime): Promise<{
-    extensions: Extension[];
-    errors: Array<{ path: string; error: string }>;
-  }> {
-    const extensions: Extension[] = [];
-    const errors: Array<{ path: string; error: string }> = [];
-
-    for (const [index, factory] of this.extensionFactories.entries()) {
-      const extensionPath = `<inline:${index + 1}>`;
-      try {
-        const extension = await loadExtensionFromFactory(
-          factory,
-          this.cwd,
-          this.eventBus,
-          runtime,
-          extensionPath,
-        );
-        extensions.push(extension);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "failed to load extension";
-        errors.push({ path: extensionPath, error: message });
-      }
-    }
-
-    return { extensions, errors };
-  }
-
   private dedupeResources<T>(
     resources: T[],
     resourceType: "prompt" | "theme",
@@ -840,15 +395,6 @@ export class DefaultResourceLoader implements ResourceLoader {
     return { resources: Array.from(seen.values()), diagnostics };
   }
 
-  private discoverPromptFile(filename: "SYSTEM.md" | "APPEND_SYSTEM.md"): string | undefined {
-    const projectPath = join(this.cwd, CONFIG_DIR_NAME, filename);
-    if (existsSync(projectPath)) {
-      return projectPath;
-    }
-    const globalPath = join(this.agentDir, filename);
-    return existsSync(globalPath) ? globalPath : undefined;
-  }
-
   private detectExtensionConflicts(
     extensions: Extension[],
   ): Array<{ path: string; message: string }> {
@@ -872,4 +418,3 @@ export class DefaultResourceLoader implements ResourceLoader {
     return conflicts;
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

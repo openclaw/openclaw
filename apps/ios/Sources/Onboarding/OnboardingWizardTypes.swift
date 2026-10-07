@@ -73,26 +73,6 @@ enum OnboardingGatewayConnectionAttempt: Equatable {
     case trustCertificate
 }
 
-struct GatewaySetupLinkStaging {
-    private(set) var link: GatewayConnectDeepLink?
-
-    mutating func stage(_ link: GatewayConnectDeepLink) {
-        self.link = link
-    }
-
-    mutating func take() -> GatewayConnectDeepLink? {
-        defer { self.link = nil }
-        return self.link
-    }
-
-    @discardableResult
-    mutating func cancel() -> Bool {
-        guard self.link != nil else { return false }
-        self.link = nil
-        return true
-    }
-}
-
 enum OnboardingQRCodeDestination: Equatable {
     case mainUI
     case successScreen

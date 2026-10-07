@@ -8,18 +8,32 @@ import { promisify } from "node:util";
 import { Command } from "commander";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { registerSubCliByName } from "../cli/program/register.subclis.js";
+import { withCliCommandCleanup, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   createPluginCliLoadSession,
   loadPluginCliRegistrationEntriesWithDefaults,
 } from "./cli-registry-loader.js";
-import { registerPluginCliCommands } from "./cli.js";
+import { registerPluginCliCommandsFromValidatedConfig } from "./cli.js";
 import { createPluginModuleLoader } from "./loader-module-runtime.js";
-import { createPluginCache, resetPluginCache, withPluginCache } from "./plugin-cache.js";
+import * as pluginLoader from "./loader.js";
+import {
+  createPluginCache,
+  getPluginCache,
+  invalidatePluginCacheMetadata,
+  resetPluginCache,
+  retirePluginCache,
+  withPluginCache,
+} from "./plugin-cache.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
-import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
+import {
+  installOpenClawPluginSdkNativeResolver,
+  resolvePluginNativeAliasForParent,
+} from "./plugin-sdk-native-resolver.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { disposePluginRegistryInstances } from "./runtime.js";
+import { preparePluginLoaderAliases } from "./sdk-alias.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
 beforeEach(() => resetPluginCache());
@@ -77,6 +91,62 @@ afterEach(() => {
 });
 
 describe("native plugin alias preparation", () => {
+  it("returns native SDK filenames without changing Jiti alias targets", () => {
+    const f = fixture();
+    const specifier = "openclaw/plugin-sdk/used";
+    const aliases = preparePluginLoaderAliases({
+      modulePath: f.entry,
+      moduleUrl: import.meta.url,
+      devSourceRoot: f.root,
+      pluginSdkResolution: "dist",
+    });
+    installOpenClawPluginSdkNativeResolver({
+      pluginModulePath: f.entry,
+      devSourceRoot: f.root,
+      pluginSdkResolution: "dist",
+    });
+    const jitiTarget = process.platform === "win32" ? f.used.replaceAll("\\", "/") : f.used;
+    expect(aliases.resolveAlias(specifier)).toBe(jitiTarget);
+    expect(resolvePluginNativeAliasForParent(specifier, f.entry)).toBe(f.used);
+    expect(aliases.getAliasMap()[specifier]).toBe(jitiTarget);
+    expect(resolvePluginNativeAliasForParent(specifier, f.entry)).toBe(f.used);
+    const requirePlugin = createRequire(f.entry);
+    expect(requirePlugin.resolve(specifier)).toBe(f.used);
+    const resolve = vi.spyOn(path, "resolve");
+    const repeated = [
+      resolvePluginNativeAliasForParent(specifier, f.entry),
+      resolvePluginNativeAliasForParent(specifier, f.entry),
+    ];
+    const resolveCalls = resolve.mock.calls.length;
+    resolve.mockRestore();
+    expect(repeated).toEqual([f.used, f.used]);
+    expect(resolveCalls).toBe(0);
+  });
+
+  it("refreshes canonical parent boundaries with metadata invalidation", () => {
+    const f = fixture();
+    const outside = fixture();
+    const parent = path.join(path.dirname(f.entry), "linked-parent.cjs");
+    fs.symlinkSync(f.entry, parent);
+    installOpenClawPluginSdkNativeResolver({
+      pluginModulePath: f.entry,
+      devSourceRoot: f.root,
+      pluginSdkResolution: "dist",
+    });
+    const requirePlugin = createRequire(parent);
+    const specifier = "@openclaw/plugin-sdk/used";
+    expect(requirePlugin.resolve(specifier)).toBe(f.used);
+    fs.unlinkSync(parent);
+    fs.symlinkSync(outside.entry, parent);
+    expect(requirePlugin.resolve(specifier)).toBe(f.used);
+    invalidatePluginCacheMetadata(getPluginCache());
+    expect(() => requirePlugin.resolve(specifier)).toThrow();
+    fs.unlinkSync(parent);
+    fs.symlinkSync(f.entry, parent);
+    invalidatePluginCacheMetadata(getPluginCache());
+    expect(requirePlugin.resolve(specifier)).toBe(f.used);
+  });
+
   it.each([
     ["src", "production", "source"],
     ["dist", "development", "dist"],
@@ -435,15 +505,16 @@ describe("native plugin alias preparation", () => {
     "pairing-before",
     "plugins-after",
   ] as const)("keeps late Commander action aliases for %s registration", async (registration) => {
-    const f = fixture();
-    const pluginDir = path.dirname(f.entry);
-    // Use the supported entrypoint metadata fallback, including nested CLI descriptors.
-    fs.unlinkSync(f.entry);
-    const observed = path.join(f.root, "action.json");
-    const entry = writeFile(
-      pluginDir,
-      "index.cjs",
-      `module.exports = { id: "demo", register(api) {
+    const runRegistration = async () => {
+      const f = fixture();
+      const pluginDir = path.dirname(f.entry);
+      // Use the supported entrypoint metadata fallback, including nested CLI descriptors.
+      fs.unlinkSync(f.entry);
+      const observed = path.join(f.root, "action.json");
+      const entry = writeFile(
+        pluginDir,
+        "index.cjs",
+        `module.exports = { id: "demo", register(api) {
       api.registerCli(({ program }) => program.command("late").action(async () => {
         const results = await Promise.allSettled([
           Promise.resolve().then(() => require("openclaw/plugin-sdk/used")),
@@ -454,85 +525,132 @@ describe("native plugin alias preparation", () => {
         )));
       }), { commands: ["late"], descriptors: [{ name: "late", description: "Late import", hasSubcommands: false }], parentPath: ${JSON.stringify(registration === "nodes" ? ["nodes"] : [])} });
     } };`,
-    );
-    writeFile(
-      pluginDir,
-      "package.json",
-      JSON.stringify({ name: "demo", openclaw: { extensions: ["./index.cjs"] } }),
-    );
-    writeFile(
-      pluginDir,
-      "openclaw.plugin.json",
-      JSON.stringify({
-        id: "demo",
-        configSchema: { type: "object", properties: {} },
-        ...(registration === "nodes"
-          ? {}
-          : { cliCommands: [{ name: "late", description: "Late import", hasSubcommands: false }] }),
+      );
+      writeFile(
+        pluginDir,
+        "package.json",
+        JSON.stringify({ name: "demo", openclaw: { extensions: ["./index.cjs"] } }),
+      );
+      writeFile(
+        pluginDir,
+        "openclaw.plugin.json",
+        JSON.stringify({
+          id: "demo",
+          configSchema: { type: "object", properties: {} },
+          ...(registration === "nodes"
+            ? {}
+            : {
+                cliCommands: [{ name: "late", description: "Late import", hasSubcommands: false }],
+              }),
+        }),
+      );
+      const cfg = {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: [entry] },
+          entries: { demo: { enabled: true } },
+        },
+      };
+      const env = {
+        HOME: f.root,
+        OPENCLAW_STATE_DIR: path.join(f.root, "state"),
+        OPENCLAW_CONFIG_PATH: path.join(f.root, "openclaw.json"),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_DEV_SOURCE_ROOT: f.root,
+      };
+      const program = new Command().exitOverride();
+      const parse = () =>
+        program.parseAsync(registration === "nodes" ? ["nodes", "late"] : ["late"], {
+          from: "user",
+        });
+      if (registration === "explicit") {
+        const sessionCache = createPluginCache();
+        const registrationCache = createPluginCache();
+        const actionCache = createPluginCache();
+        const session = createPluginCliLoadSession(sessionCache);
+        const rawRegistryLoader = vi.spyOn(pluginLoader, "loadPluginRegistryHandle");
+        try {
+          expect(session.resources).toBeUndefined();
+          const [registrar] = await loadPluginCliRegistrationEntriesWithDefaults({
+            session,
+            cfg,
+            env,
+            primaryCommand: "late",
+          });
+          expect(rawRegistryLoader).toHaveBeenCalledOnce();
+          await withPluginCache(registrationCache, () => registrar!.register(program));
+          session.close();
+          await expect(registrar!.register(new Command())).rejects.toThrow(/preparation is closed/);
+          await withPluginCache(actionCache, () => session.withCache(parse));
+          expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual(["source", "unused"]);
+          return;
+        } finally {
+          session.close();
+          const registries = rawRegistryLoader.mock.results.flatMap((result) =>
+            result.type === "return" ? [result.value] : [],
+          );
+          rawRegistryLoader.mockRestore();
+          for (const registry of registries) {
+            expect((await disposePluginRegistryInstances(registry)).failures).toEqual([]);
+          }
+          for (const cache of [sessionCache, registrationCache, actionCache]) {
+            expect((await retirePluginCache(cache)).failures).toEqual([]);
+          }
+        }
+      } else {
+        clearRuntimeConfigSnapshot();
+        for (const [key, value] of Object.entries(env)) {
+          vi.stubEnv(key, value);
+        }
+        fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(cfg));
+        if (registration === "standalone" || registration === "deferred") {
+          await registerPluginCliCommandsFromValidatedConfig(program, env, undefined, {
+            mode: registration === "deferred" ? "lazy" : "eager",
+          });
+          await parse();
+          expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual(["source", "unused"]);
+          return;
+        }
+        const name =
+          registration === "nodes"
+            ? "nodes"
+            : registration === "pairing-before"
+              ? "pairing"
+              : "plugins";
+        // Eager traversal forwards the active invocation to every core registrar. Memory's
+        // plugin-loading policy exercises both before/after branches without changing policy.
+        const argv =
+          registration === "nodes"
+            ? ["node", "openclaw", "nodes", "late"]
+            : ["node", "openclaw", "memory", "status"];
+        await registerSubCliByName(program, name, argv);
+        if (registration !== "nodes") {
+          const names = program.commands.map((command) => command.name());
+          expect(names.indexOf("late") < names.indexOf(name)).toBe(
+            registration === "pairing-before",
+          );
+        }
+        await parse();
+      }
+      expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual(["source", "unused"]);
+    };
+    if (registration === "explicit") {
+      // Caller-owned programs retain the session without executable registry custody.
+      await runRegistration();
+      return;
+    }
+    await withCliProcessScope(() =>
+      withCliCommandCleanup(false, async (cleanup) => {
+        if (!cleanup?.pluginResources) {
+          throw new Error("Expected executable plugin resource owner");
+        }
+        try {
+          await runRegistration();
+        } finally {
+          await cleanup.pluginResources.release();
+        }
       }),
     );
-    const cfg = {
-      plugins: {
-        allow: ["demo"],
-        load: { paths: [entry] },
-        entries: { demo: { enabled: true } },
-      },
-    };
-    const env = {
-      HOME: f.root,
-      OPENCLAW_STATE_DIR: path.join(f.root, "state"),
-      OPENCLAW_CONFIG_PATH: path.join(f.root, "openclaw.json"),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_DEV_SOURCE_ROOT: f.root,
-    };
-    const program = new Command().exitOverride();
-    const parse = () =>
-      program.parseAsync(registration === "nodes" ? ["nodes", "late"] : ["late"], {
-        from: "user",
-      });
-    if (registration === "explicit") {
-      const session = createPluginCliLoadSession();
-      const [registrar] = await loadPluginCliRegistrationEntriesWithDefaults({
-        session,
-        cfg,
-        env,
-        primaryCommand: "late",
-      });
-      await withPluginCache(createPluginCache(), () => registrar!.register(program));
-      session.close();
-      await expect(registrar!.register(new Command())).rejects.toThrow(/preparation is closed/);
-      await withPluginCache(createPluginCache(), () => session.withCache(parse));
-    } else if (registration === "standalone" || registration === "deferred") {
-      await registerPluginCliCommands(program, cfg, env, undefined, {
-        mode: registration === "deferred" ? "lazy" : "eager",
-      });
-      await parse();
-    } else {
-      clearRuntimeConfigSnapshot();
-      for (const [key, value] of Object.entries(env)) {
-        vi.stubEnv(key, value);
-      }
-      fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(cfg));
-      const name =
-        registration === "nodes"
-          ? "nodes"
-          : registration === "pairing-before"
-            ? "pairing"
-            : "plugins";
-      // Eager traversal forwards the active invocation to every core registrar. Memory's
-      // plugin-loading policy exercises both before/after branches without changing policy.
-      const argv =
-        registration === "nodes"
-          ? ["node", "openclaw", "nodes", "late"]
-          : ["node", "openclaw", "memory", "status"];
-      await registerSubCliByName(program, name, argv);
-      if (registration !== "nodes") {
-        const names = program.commands.map((command) => command.name());
-        expect(names.indexOf("late") < names.indexOf(name)).toBe(registration === "pairing-before");
-      }
-      await parse();
-    }
-    expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual(["source", "unused"]);
   });
 
   it("captures explicit aliases before lazy evaluation", () => {

@@ -36,7 +36,7 @@ function createAvatarConfig(workspace: string, avatar: string): OpenClawConfig {
   return {
     agents: {
       defaults: { workspace },
-      list: [{ id: "main", workspace, identity: { avatar } }],
+      entries: { main: { workspace, identity: { avatar } } },
     },
   };
 }

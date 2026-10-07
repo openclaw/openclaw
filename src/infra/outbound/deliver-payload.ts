@@ -12,6 +12,7 @@ import type {
   NormalizedPayloadForChannelDelivery,
 } from "./deliver-contracts.js";
 import type { OutboundDeliveryResult, OutboundPayloadDeliveryKind } from "./deliver-types.js";
+import { payloadMediaSources } from "./delivery-queue-media-paths.js";
 import { flattenMarkdownDetails } from "./markdown-details.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
@@ -51,10 +52,7 @@ export function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPa
 export function normalizeTransformedPayloadForDelivery(
   payload: ReplyPayload,
   handler: ChannelHandler,
-  copyMetadata: (
-    source: ReplyPayload,
-    payload: ReplyPayload,
-  ) => ReplyPayload = copyReplyPayloadMetadata,
+  copyMetadata: (source: ReplyPayload, payload: ReplyPayload) => ReplyPayload,
 ): ReplyPayload | null {
   const normalizedPayload = handler.normalizePayload ? handler.normalizePayload(payload) : payload;
   if (!normalizedPayload) {
@@ -157,10 +155,7 @@ function stripInternalRuntimeScaffoldingFromValue(value: unknown): unknown {
 
 /** Every media reference a payload set carries, in payload order. */
 export function collectPayloadMediaSources(payloads: readonly ReplyPayload[]): string[] {
-  return payloads.flatMap((payload) => [
-    ...(typeof payload.mediaUrl === "string" && payload.mediaUrl.trim() ? [payload.mediaUrl] : []),
-    ...(payload.mediaUrls ?? []).filter((url) => typeof url === "string" && url.trim()),
-  ]);
+  return payloads.flatMap(payloadMediaSources);
 }
 
 /**
@@ -171,7 +166,6 @@ export function collectPayloadMediaSources(payloads: readonly ReplyPayload[]): s
  */
 export function resolveOutboundMediaAccessForSend(
   params: DeliverOutboundPayloadsCoreParams,
-  channel: string,
   mediaSources: readonly string[],
 ): OutboundMediaAccess {
   if (mediaSources.length === 0) {
@@ -183,7 +177,7 @@ export function resolveOutboundMediaAccessForSend(
     mediaSources,
     mediaAccess: params.mediaAccess,
     sessionKey: params.session?.policyKey ?? params.session?.key,
-    messageProvider: params.session?.key ? undefined : channel,
+    messageProvider: params.session?.key ? undefined : params.channel,
     accountId: params.session?.requesterAccountId ?? params.accountId,
     requesterSenderId: params.session?.requesterSenderId,
     requesterSenderName: params.session?.requesterSenderName,

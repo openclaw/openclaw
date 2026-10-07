@@ -452,9 +452,7 @@ export class AcpTranslatorPromptStream {
     if (this.getPendingPrompt(pending.sessionId, pending.idempotencyKey) !== pending) {
       return false;
     }
-    this.agentEvents.clearApprovalRelaysForPrompt(pending.sessionId, pending.idempotencyKey, {
-      denyActive: true,
-    });
+    this.agentEvents.clearApprovalRelaysForPrompt(pending.sessionId, pending.idempotencyKey);
     this.pendingPrompts.delete(pending.sessionId);
     this.sessionStore.clearActiveRun(pending.sessionId, pending.idempotencyKey);
     this.disconnects.clearWhenIdle();

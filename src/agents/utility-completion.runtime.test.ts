@@ -66,18 +66,14 @@ function prepared(utilityModelEntry?: {
 }
 
 describe("resolveUtilityCompletionRuntimeForAgent", () => {
-  it("reports the Claude CLI owner a utility model's runtime pin dispatches to", async () => {
-    await expect(
-      resolveUtilityCompletionRuntimeForAgent(prepared({ agentRuntime: { id: "claude-cli" } })),
-    ).resolves.toEqual({ id: "claude-cli", kind: "cli", label: "Claude CLI" });
-  });
-
-  it("reports the built-in HTTP runtime for a utility model without a CLI route", async () => {
-    await expect(resolveUtilityCompletionRuntimeForAgent(prepared())).resolves.toEqual({
-      id: "openclaw",
-      kind: "api",
-      label: "OpenClaw Default",
-    });
+  it.each([
+    {
+      pin: { agentRuntime: { id: "claude-cli" } },
+      expected: { id: "claude-cli", kind: "cli", label: "Claude CLI" },
+    },
+    { pin: undefined, expected: { id: "openclaw", kind: "api", label: "OpenClaw Default" } },
+  ])("reports the selected $expected.kind owner", async ({ pin, expected }) => {
+    await expect(resolveUtilityCompletionRuntimeForAgent(prepared(pin))).resolves.toEqual(expected);
   });
 
   it.each([true, false])(
@@ -101,21 +97,19 @@ describe("resolveUtilityCompletionRuntimeForAgent", () => {
     },
   );
 
-  it("omits the built-in API label when the prepared owner has no usable credentials", async () => {
+  it.each(["missing credentials", "retired owner"])("omits a route with %s", async (reason) => {
     const params = prepared();
-    params.cfg.models = undefined;
+    if (reason === "missing credentials") {
+      params.cfg.models = undefined;
+    } else {
+      params.isCurrent = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
+    }
     await withEnvAsync(
       { ANTHROPIC_API_KEY: undefined, ANTHROPIC_OAUTH_TOKEN: undefined },
       async () => {
         await expect(resolveUtilityCompletionRuntimeForAgent(params)).resolves.toBeUndefined();
       },
     );
-  });
-
-  it("omits a planned route when its owner retires during preparation", async () => {
-    const params = prepared();
-    params.isCurrent = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
-    await expect(resolveUtilityCompletionRuntimeForAgent(params)).resolves.toBeUndefined();
   });
 });
 

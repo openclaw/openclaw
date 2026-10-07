@@ -76,7 +76,7 @@ export function createSessionRowProjectionArchive(params: {
           params.referenced,
         );
         if (
-          records.sameParents(current.parents, lineage.parents) &&
+          isDeepStrictEqual(current.parents, lineage.parents) &&
           isDeepStrictEqual(current.entry, lineage.entry)
         ) {
           continue;
@@ -125,7 +125,11 @@ export function createSessionRowProjectionArchive(params: {
         }
         if (catalogOnly && row.entry?.archivedAt === undefined) {
           if (!params.dirty.has(records.identity(row))) {
-            row.pendingDatabaseFacts = row.retainedDatabaseFacts;
+            row.pendingDatabaseFacts = records.isPreparedSessionRowDatabaseFacts(
+              row.retainedDatabaseFacts,
+            )
+              ? row.retainedDatabaseFacts
+              : undefined;
           }
         } else {
           row.pendingDatabaseFacts = undefined;

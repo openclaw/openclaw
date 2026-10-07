@@ -1,9 +1,3 @@
-/**
- * OpenClaw plugin tool resolver.
- *
- * This module builds runtime plugin tools from config/options, delivery context,
- * auth profiles, and the current runtime config snapshot.
- */
 import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -45,16 +39,6 @@ type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
-  currentThreadTs?: string;
-  currentMessageId?: string | number;
-  sandboxRoot?: string;
-  modelHasVision?: boolean;
-  modelProvider?: string;
-  modelId?: string;
-  allowMediaInvokeCommands?: boolean;
-  requesterAgentIdOverride?: string;
-  requireExplicitMessageTarget?: boolean;
-  disableMessageTool?: boolean;
   disablePluginTools?: boolean;
   clientCaps?: string[];
   authProfileStore?: AuthProfileStore;
@@ -206,7 +190,6 @@ function createPluginToolDelivery(params: {
   };
 }
 
-/** Resolves plugin tools and their delivery context for an agent run. */
 export function resolveOpenClawPluginToolsForOptions(params: {
   options?: ResolveOpenClawPluginToolsOptions;
   resolvedConfig?: OpenClawConfig;

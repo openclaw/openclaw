@@ -1,4 +1,3 @@
-// Memory Core plugin module coordinates synchronization and shadow reindexing.
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -26,7 +25,7 @@ import { cleanupAgedMemoryReindexTempFiles, removeMemoryDatabaseFiles } from "./
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import { withMemoryIndexPublishGeneration } from "./manager-index-generation-lease.js";
 import {
-  resolveMemoryProviderState,
+  resolveMemoryProviderLifecycle,
   resolveFallbackCurrentProviderId,
   resolveMemoryFallbackProviderRequest,
 } from "./manager-provider-state.js";
@@ -466,19 +465,18 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       return false;
     }
 
-    const fallbackState = resolveMemoryProviderState({
+    this.providerLifecycle = resolveMemoryProviderLifecycle({
       provider: fallbackResult.provider,
       runtime: fallbackResult.runtime,
       requestedProvider: currentProviderId,
       fallbackFrom: currentProviderId,
       fallbackReason: reason,
     });
-    this.fallbackFrom = fallbackState.fallbackFrom;
-    this.fallbackReason = fallbackState.fallbackReason;
-    this.provider = fallbackState.provider;
-    this.providerRuntime = fallbackState.providerRuntime;
-    this.providerUnavailableReason = fallbackState.providerUnavailableReason;
-    this.providerLifecycle = fallbackState.lifecycle;
+    this.fallbackFrom = currentProviderId;
+    this.fallbackReason = reason;
+    this.provider = fallbackResult.provider;
+    this.providerRuntime = fallbackResult.runtime;
+    this.providerUnavailableReason = undefined;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     log.warn(`memory embeddings: switched to fallback provider (${fallbackRequest.provider})`, {
@@ -509,7 +507,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       // status keep the published handle and its vector/FTS/metadata state.
       const rebuilt = await this.withReindexDatabase(shadow, async () => {
         try {
-          await this.withDatabaseWrite(() => this.ensureSchema());
+          await shadow.admitSchema({
+            cacheEnabled: this.cache.enabled,
+            ftsEnabled: shadow.fts.enabled,
+            ftsTokenizer: this.settings.store.fts.tokenizer,
+          });
 
           const shouldSyncMemory = shouldRetryMemoryOnFailure;
           const shouldSyncSessions = shouldRetrySessionsOnFailure;

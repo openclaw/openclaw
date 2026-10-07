@@ -62,10 +62,10 @@ describe("candidate auth profile stores", () => {
       const candidates = await listCandidateAuthProfileStores({
         cfg: {
           agents: {
-            list: [
-              { id: "configured", agentDir: configuredAgentDir },
-              { id: "custom", agentDir: path.join(tempRoot, "active-custom-agent") },
-            ],
+            entries: {
+              configured: { agentDir: configuredAgentDir },
+              custom: { agentDir: path.join(tempRoot, "active-custom-agent") },
+            },
           },
         },
         env,

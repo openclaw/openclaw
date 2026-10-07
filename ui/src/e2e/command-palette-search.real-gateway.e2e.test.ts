@@ -21,6 +21,7 @@ import { createRequireRecord } from "../../../test/helpers/record.js";
 import { COMMUNITY_INVITE_KEY } from "../components/community-invite-state.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
@@ -40,6 +41,7 @@ const scope = {
   excludeSubagents: true,
   excludeCron: true,
   excludeSystem: true,
+  excludeDock: true,
 };
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 let instance: OpenClawTestInstance | undefined;
@@ -366,7 +368,8 @@ suite.define(() => {
             localStorage.setItem(key, JSON.stringify({ dismissedAtMs: 1770000000000 }));
           }, COMMUNITY_INVITE_KEY);
           observeSearchTraffic(page, rpc);
-          expect((await page.goto(url.href))?.status()).toBe(200);
+          expect((await page.goto(url.href))?.status()).toBe(404);
+          await enterControlUiSession(page);
           await waitForControlUiGatewayReady(page);
           await page.locator(".shell").waitFor({ state: "visible" });
           await expect
@@ -480,7 +483,13 @@ suite.define(() => {
             // The query owns one bounded metadata lookup. The scoped transcript
             // request above cannot be limited by any background roster window.
             expect(metadata).toHaveLength(1);
-            expect(metadata[0]?.params).toEqual({ ...scope, search: query, limit: 10 });
+            expect(metadata[0]?.params).toEqual({
+              ...scope,
+              search: query,
+              limit: 10,
+              rowMode: "compact",
+              source: "command-palette",
+            });
             expect(metadata[0]?.ok).toBe(true);
             expect(metadata[0]?.sessionKeys).toEqual(metadataKeys);
             expect(notices).toEqual(noMatches ? [expect.stringContaining("No results found")] : []);

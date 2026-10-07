@@ -1,4 +1,5 @@
 import { getProcessInstanceStartTime } from "../shared/pid-alive.js";
+import { sleep } from "../utils/sleep.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
 import type { CommandProcessIdentity } from "./command-process-custody.types.js";
 import { COMMAND_PROCESS_TREE_KILL_GRACE_MS } from "./exec-spawn.js";
@@ -39,9 +40,7 @@ export async function settleCommandProcessGroups(
           if (remaining <= 0) {
             return unresolved("Recorded process group remains alive after forced cleanup");
           }
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, Math.min(25, remaining));
-          });
+          await sleep(Math.min(25, remaining));
         }
         return undefined;
       } catch (error) {

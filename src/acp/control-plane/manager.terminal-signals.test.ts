@@ -63,7 +63,9 @@ describe("ACP terminal state signals", () => {
         requestId: "cancelled-state-turn",
       });
 
-      expect(listSessionStateEventsSince(childSessionKey, "main", 0, 200).events).toMatchObject([
+      expect(
+        (await listSessionStateEventsSince(childSessionKey, "main", 0, 200)).events,
+      ).toMatchObject([
         { kind: "human_direct_message", runId: "human-state-turn" },
         { kind: "run_completed", runId: "human-state-turn" },
         { kind: "run_completed", runId: "system-state-turn" },
@@ -121,10 +123,12 @@ describe("ACP terminal state signals", () => {
       }
       expect(settled).toBe(true);
       expect(
-        listSessionStateEventsSince(childSessionKey, "main", 0, 200).events.map((event) => ({
-          kind: event.kind,
-          runId: event.runId,
-        })),
+        (await listSessionStateEventsSince(childSessionKey, "main", 0, 200)).events.map(
+          (event) => ({
+            kind: event.kind,
+            runId: event.runId,
+          }),
+        ),
       ).toEqual([
         { kind: "run_completed", runId: "warm-terminal-worker" },
         { kind: "run_completed", runId: "contended-terminal" },

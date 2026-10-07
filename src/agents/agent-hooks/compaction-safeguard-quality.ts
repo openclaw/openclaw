@@ -6,8 +6,6 @@ import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/que
 import type { CompactionSummarizationInstructions } from "../compaction.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 
-// Compaction summary quality helpers. They define the structured summary contract
-// and audit whether summaries preserve pending asks plus exact identifiers.
 const MAX_EXTRACTED_IDENTIFIERS = 12;
 const MAX_UNTRUSTED_INSTRUCTION_CHARS = 4000;
 const MAX_ASK_OVERLAP_TOKENS = 12;
@@ -82,6 +80,7 @@ export function buildCompactionStructureInstructions(
     identifierSectionInstruction,
     "Do not omit unresolved asks from the user.",
     "Record completed requests outside ## Pending user asks; list only unresolved user requests there.",
+    "Use tool results to update task status: a check that ran and returned a failing result is completed, not an open TODO. Record its result under ## Decisions and keep only the remaining remediation in ## Open TODOs (e.g. failing tests -> fix the failures, not run the same tests again).",
     "When prior compaction summaries are present, re-distill them with new messages and remove stale duplicate detail.",
   ].join("\n");
   const latestRequestBlock = latestUnresolvedUserRequest
@@ -228,18 +227,9 @@ export function createSummaryQualityRetentionPlan(
       return content ? `${heading}\n${content}` : heading;
     });
   const joinSectionContent = (index: number, optional: string) => {
-    const tail = protectedTails[index] ?? "";
+    const tail = protectedTails[index];
     if (!tail) {
       return optional;
-    }
-    if (index === PENDING_ASK_SECTION_INDEX) {
-      const leading = normalizedSummaryLines(optional)[0] ?? "";
-      if (leading === tail) {
-        return optional;
-      }
-      if (latestUnresolvedUserRequest) {
-        return [tail, isEmptyPendingAsk(leading) ? "" : optional].filter(Boolean).join("\n");
-      }
     }
     if (index === EXACT_IDENTIFIERS_SECTION_INDEX) {
       const missing = auditedIdentifiers.filter(
@@ -247,11 +237,14 @@ export function createSummaryQualityRetentionPlan(
       );
       return [optional, ...missing].filter(Boolean).join("\n");
     }
-    const retainedOptional =
-      index === PENDING_ASK_SECTION_INDEX && protectedAskContext && isEmptyPendingAsk(optional)
-        ? ""
-        : optional;
-    return [retainedOptional, tail].filter(Boolean).join("\n");
+    // Only pending asks and exact identifiers have protected tails.
+    const leading = normalizedSummaryLines(optional)[0] ?? "";
+    if (leading === tail) {
+      return optional;
+    }
+    return latestUnresolvedUserRequest
+      ? [tail, isEmptyPendingAsk(leading) ? "" : optional].filter(Boolean).join("\n")
+      : [isEmptyPendingAsk(optional) ? "" : optional, tail].filter(Boolean).join("\n");
   };
   // Reserve every heading/content/tail separator up front so trimmed optional
   // text can never push the rendered artifact past `maxChars`.
@@ -430,10 +423,7 @@ function resolveAskOverlapRequirement(latestAsk: string | null): {
   if (!latestAsk) {
     return null;
   }
-  const askTokens = uniqueStrings(tokenizeAskOverlapText(latestAsk)).slice(
-    0,
-    MAX_ASK_OVERLAP_TOKENS,
-  );
+  const askTokens = tokenizeAskOverlapText(latestAsk).slice(0, MAX_ASK_OVERLAP_TOKENS);
   if (askTokens.length === 0) {
     return null;
   }

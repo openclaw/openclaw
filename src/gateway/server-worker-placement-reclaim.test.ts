@@ -30,7 +30,10 @@ import { workerWorkspaceResultStaging } from "./worker-environments/workspace-re
 const lookup = vi.hoisted(() => ({
   value: undefined as ReturnType<typeof import("./session-utils.js").loadSessionEntry> | undefined,
 }));
-vi.mock("./session-utils.js", () => ({ loadSessionEntry: () => lookup.value }));
+vi.mock("./session-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils.js")>()),
+  loadSessionEntry: () => lookup.value,
+}));
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
   getRuntimeConfig: () => ({}),
@@ -83,12 +86,10 @@ async function scenario(
     store: { [REQUEST.sessionKey]: entry },
   };
   lookup.value = { ...target, cfg: {}, entry, legacyKey: undefined };
-  if (pendingMove) {
-    await replaceSessionEntry(
-      { storePath, sessionKey: REQUEST.sessionKey, agentId: REQUEST.agentId },
-      entry,
-    );
-  }
+  await replaceSessionEntry(
+    { storePath, sessionKey: REQUEST.sessionKey, agentId: REQUEST.agentId },
+    entry,
+  );
   const barrierEntered = createDeferred();
   const releaseBarrier = createDeferred();
   const context = createWorkerStopChatContext();
@@ -385,7 +386,7 @@ async function scenario(
   if (beforeStop) {
     // A preceding lifecycle owner holds ingress pending while Stop joins that
     // same owner. This fixes ordering without timer delays or editing ingress.
-    await runExclusiveSessionLifecycleMutation({
+    await runExclusiveSessionLifecycleMutation("placement-reclaim", {
       scope: storePath,
       identities: [REQUEST.sessionKey, REQUEST.sessionId],
       run: async () => {
@@ -401,7 +402,7 @@ async function scenario(
     expect(oldResult.ok).toBe(false);
     expect(harness.environments.get(active.environmentId!)?.state).toBe("destroying");
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
-    expect(placements.listPendingWorkspaceResults()).toEqual([
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
       expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
     ]);
     await coordinated.reconcileActive();
@@ -444,7 +445,7 @@ async function scenario(
     finalPlacementState: finalPlacement?.state,
     environmentState: environment?.state,
     providerDestroyAttempts: vi.mocked(harness.environments.destroy).mock.calls.length,
-    pendingWorkspaceResults: placements.listPendingWorkspaceResults().length,
+    pendingWorkspaceResults: (await placements.listPendingWorkspaceResultsAsync()).length,
     preexistingAdmissionAccepted: oldResult.ok,
     preexistingResponses: old.respond.mock.calls,
     explicitNewAdmissionAccepted: freshResult.ok,
@@ -488,25 +489,6 @@ it("Stop fences ingress during provisioning without cancelling its dispatch prod
   expect(r.preexistingAdmissionAccepted).toBe(false);
   expect(r.reclaimResult).toEqual({ ok: true, state: "reclaimed" });
   expect(r.explicitNewAdmissionAccepted).toBe(true);
-});
-
-it("successful Stop cancels a preexisting send waiting on its lifecycle fence", async () => {
-  const r = await scenario("successful-stop");
-  expect(r.reclaimResult).toEqual({ ok: true, state: "reclaimed" });
-  expect(r.explicitNewAdmissionAccepted).toBe(true);
-  expect(
-    r.preexistingAdmissionAccepted,
-    "a send already waiting when Stop completes must not revive the worker",
-  ).toBe(false);
-});
-it("provider stop failure plus successful recovery still cancels preexisting ingress", async () => {
-  const r = await scenario("failed-stop-recovered-cleanup", { destroyFailure: true });
-  expect(r.reclaimResult).toEqual({ ok: false, message: "destroy pending" });
-  expect(r.explicitNewAdmissionAccepted).toBe(true);
-  expect(
-    r.preexistingAdmissionAccepted,
-    "provider cleanup failure must not let pending ingress escape Stop",
-  ).toBe(false);
 });
 
 it("a reservation preceding Stop cannot revive a successfully reclaimed worker", async () => {

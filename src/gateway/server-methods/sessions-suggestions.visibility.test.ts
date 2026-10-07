@@ -8,15 +8,22 @@ import {
   readSessionTranscriptMessageEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../../config/sessions/session-sharing-store.native.js";
 import { addSessionSuggestion } from "../../config/sessions/session-suggestion-store.js";
-import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import {
+  historyLane,
+  projectionLane,
+} from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { getSessionSuggestionTestMocks } from "./sessions-suggestions.test-mocks.js";
 import {
@@ -34,7 +41,7 @@ registerSessionSuggestionTestLifecycle(mocks);
 const { sessionSuggestionHandlers } = await import("./sessions-suggestions.js");
 
 describe("session suggestion visibility and role ceilings", () => {
-  it("lists suggestions without caller-thread SQLite and propagates reader rejection", async () => {
+  it("lists from resident sharing facts without discovery or caller SQLite and propagates reader rejection", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertDefaultSuggestionSession();
       addSessionSuggestion(
@@ -43,7 +50,7 @@ describe("session suggestion visibility and role ceilings", () => {
       );
       const requestContext = context();
       await initializeSessionReadContext(requestContext);
-      const params = { sessionKey };
+      const params = { sessionKey: "main" };
       const respond = vi.fn();
       const requester = client("alice", "Alice");
       const invoke = () =>
@@ -56,6 +63,33 @@ describe("session suggestion visibility and role ceilings", () => {
           isWebchatConnect: () => true,
         });
       const observer = observeParentSqlite();
+      const requests: string[] = [];
+      let failure: Error | undefined;
+      for (const { pool } of [historyLane, projectionLane]) {
+        const run = pool.run.bind(pool);
+        vi.spyOn(pool, "run").mockImplementation(async (...args) => {
+          const reply = await run(...args);
+          if (
+            reply.ok &&
+            typeof reply.value === "object" &&
+            !Array.isArray(reply.value) &&
+            "kind" in reply.value
+          ) {
+            const kind = reply.value.kind;
+            if (
+              ["session-target-inventory", "session-exact-entries", "session-suggestions"].includes(
+                kind,
+              )
+            ) {
+              requests.push(kind);
+            }
+            if (kind === "session-suggestions" && failure) {
+              throw failure;
+            }
+          }
+          return reply;
+        });
+      }
       try {
         await invoke();
         expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
@@ -63,21 +97,8 @@ describe("session suggestion visibility and role ceilings", () => {
           suggestions: [expect.objectContaining({ id: "idea" })],
         });
         expect(observer.counts).toEqual(emptySqliteCounts());
-        const failure = new Error("suggestion reader refused");
-        const run = historyLane.pool.run.bind(historyLane.pool);
-        vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
-          const reply = await run(...args);
-          if (
-            reply.ok &&
-            typeof reply.value === "object" &&
-            !Array.isArray(reply.value) &&
-            "kind" in reply.value &&
-            reply.value.kind === "session-suggestions"
-          ) {
-            throw failure;
-          }
-          return reply;
-        });
+        expect(requests).toEqual(["session-suggestions"]);
+        failure = new Error("suggestion reader refused");
         respond.mockClear();
         await expect(invoke()).rejects.toBe(failure);
         expect(respond).not.toHaveBeenCalled();
@@ -88,7 +109,7 @@ describe("session suggestion visibility and role ceilings", () => {
     });
   });
 
-  it.each(["policy", "profile", "disconnect", "session"] as const)(
+  it.each(["policy", "profile", "disconnect", "session", "membership", "projection"] as const)(
     "rechecks %s after a delayed suggestion list reply",
     async (change) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -113,15 +134,25 @@ describe("session suggestion visibility and role ceilings", () => {
             },
           },
         });
-        let committed = policy("write");
+        let committed = policy(change === "membership" ? "view" : "write");
+        if (change === "membership") {
+          addSessionMember(
+            { agentId: "main", sessionKey },
+            {
+              identityId: "alice",
+              addedBy: "owner",
+              expectedSessionId: "session-main",
+            },
+          );
+        }
         const requestContext = context(vi.fn(), committed);
         requestContext.getCommittedRuntimeConfig = () => committed;
         await initializeSessionReadContext(requestContext);
         const requester = client("alice", "Alice");
         const entered = createDeferred();
         const release = createDeferred();
-        const run = historyLane.pool.run.bind(historyLane.pool);
-        vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+        const run = projectionLane.pool.run.bind(projectionLane.pool);
+        vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
           const reply = await run(...args);
           if (
             reply.ok &&
@@ -149,6 +180,10 @@ describe("session suggestion visibility and role ceilings", () => {
             requester.authenticatedUserProfile = client("bob", "Bob").authenticatedUserProfile;
           } else if (change === "disconnect") {
             requester.invalidated = true;
+          } else if (change === "membership") {
+            removeSessionMember({ agentId: "main", sessionKey }, "alice");
+          } else if (change === "projection") {
+            bindSessionRowProjection(requestContext, () => undefined);
           } else {
             await upsertSessionEntryCore(
               { agentId: "main", sessionKey },
@@ -156,13 +191,13 @@ describe("session suggestion visibility and role ceilings", () => {
             );
           }
           release.resolve();
-          if (change === "session") {
+          if (change === "session" || change === "projection") {
             await expect(pending).rejects.toThrow(/unavailable/);
           } else {
             const result = await pending;
             expect(result.responses).toHaveLength(1);
             expect(result.responses[0]).toMatchObject(
-              change === "policy"
+              change === "policy" || change === "membership"
                 ? [
                     true,
                     { role: "viewer", suggestions: [expect.objectContaining({ id: "alice" })] },
@@ -225,6 +260,7 @@ describe("session suggestion visibility and role ceilings", () => {
         getRuntimeConfig: () => runtime,
         getCommittedRuntimeConfig: () => committed,
       });
+      await initializeSessionReadContext(requestContext);
       for (const phase of ["tentative", "committed"] as const) {
         if (phase === "committed") {
           committed = runtime;

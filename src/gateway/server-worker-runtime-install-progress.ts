@@ -55,9 +55,7 @@ export function createWorkerRuntimeInstallProgressPublisher(params: {
             if (stopped) {
               return;
             }
-            const observations = new Map(
-              [...nodeIds].map((nodeId) => [nodeId, params.readInstall(nodeId)]),
-            );
+            const observations = [...nodeIds].map((nodeId) => params.readInstall(nodeId));
             for (const placement of placements.values()) {
               const environment = placement.environmentId
                 ? params.environments.get(placement.environmentId)
@@ -80,7 +78,7 @@ export function createWorkerRuntimeInstallProgressPublisher(params: {
               // Turn admission reports progress for runs waiting on an active refresh.
               if (
                 placement.state === "provisioning" &&
-                [...observations.values()].some((observation) =>
+                observations.some((observation) =>
                   observation?.environmentIds.includes(environment.environmentId),
                 )
               ) {

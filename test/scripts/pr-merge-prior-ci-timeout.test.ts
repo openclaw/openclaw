@@ -96,25 +96,34 @@ function boundaryTimeoutCandidate(cancelled: boolean, sourceFault?: string) {
 }
 
 describePosix("pre-existing job deadline admission", () => {
-  it.each([false, true])("retains a boundary deadline with cancelled shard=%s", (cancelled) => {
-    const f = boundaryTimeoutCandidate(cancelled);
-    const result = f.verifyPriorCi(f.path);
-    expect(result.status, result.output).toBe(0);
-    const proof = JSON.parse(result.stdout);
-    expect(proof.failures).toMatchObject([
-      {
-        jobId: 601,
-        deadline: {
-          conclusion: "cancelled",
-          seconds: 1200,
-          workflowJob: "check-additional-shard",
-          step: { number: 10, conclusion: cancelled ? "cancelled" : "success" },
+  it.each(["boundary success", "boundary cancelled", "Node cancelled"])(
+    "retains the qualified %s deadline as failed evidence",
+    (kind) => {
+      const boundary = kind !== "Node cancelled";
+      const cancelled = kind === "boundary cancelled";
+      const f = boundary ? boundaryTimeoutCandidate(cancelled) : timeoutCandidate();
+      const result = boundary ? f.verifyPriorCi(f.path) : f.adminPriorCi(f.path);
+      expect(result.status, result.output).toBe(0);
+      const proof = boundary ? JSON.parse(result.stdout) : f.record().priorCiAdmin;
+      expect(proof.failures).toMatchObject([
+        {
+          jobId: 601,
+          deadline: {
+            conclusion: "cancelled",
+            seconds: boundary ? 1200 : 3600,
+            ...(boundary
+              ? {
+                  workflowJob: "check-additional-shard",
+                  step: { number: 10, conclusion: cancelled ? "cancelled" : "success" },
+                }
+              : { checkRunId: 601 }),
+          },
         },
-      },
-    ]);
-    expect(proof.cancelledJobIds).toEqual([]);
-    expect(f.state().mutations).toBe(0);
-  });
+      ]);
+      expect(proof.cancelledJobIds).toEqual([]);
+      expect(f.state().mutations).toBe(boundary ? 0 : 1);
+    },
+  );
 
   it.each([
     "success with cancellation annotation",
@@ -203,17 +212,6 @@ describePosix("pre-existing job deadline admission", () => {
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toMatch(/Prior-CI admin admission:/u);
     expect(f.state().mutations).toBe(0);
-  });
-
-  it("retains a deadline-cancelled root as failed evidence through native landing", () => {
-    const f = timeoutCandidate();
-    const result = f.adminPriorCi(f.path);
-    expect(result.status, result.output).toBe(0);
-    expect(f.state().mutations).toBe(1);
-    expect(f.record().priorCiAdmin.failures).toMatchObject([
-      { jobId: 601, deadline: { checkRunId: 601, conclusion: "cancelled", seconds: 3600 } },
-    ]);
-    expect(f.record().priorCiAdmin.cancelledJobIds).toEqual([]);
   });
 
   it.each([

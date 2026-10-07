@@ -51,7 +51,10 @@ describe("async config plugin validation", () => {
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.config.agents?.list).toEqual([{ id: "main" }]);
+      expect(Object.getOwnPropertyDescriptor(result.config.agents, "list")).toMatchObject({
+        enumerable: false,
+        value: [{ id: "main" }],
+      });
     }
   });
 

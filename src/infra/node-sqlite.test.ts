@@ -4,7 +4,10 @@ import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
+import {
+  ensureSqliteLibrarySelected,
+  mockBunSqliteNativeBoundary,
+} from "./bun-sqlite-library.test-support.js";
 import {
   openNodeSqliteDatabase,
   resolveExistingSqliteFileUri,
@@ -19,16 +22,13 @@ async function loadNodeSqliteWithVersion(version: string, extensionLoadingOmitte
     this: DatabaseSync,
     sql,
   ) {
-    if (sql === "SELECT sqlite_version() AS version") {
-      return {
-        get: () => ({ version }),
-      } as unknown as StatementSync;
-    }
     if (
-      extensionLoadingOmitted !== undefined &&
-      sql === "SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted"
+      sql ===
+      "SELECT sqlite_version() AS version, sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted"
     ) {
-      return { get: () => ({ omitted: extensionLoadingOmitted }) } as unknown as StatementSync;
+      return {
+        get: () => ({ version, omitted: extensionLoadingOmitted ?? 0 }),
+      } as unknown as StatementSync;
     }
     return originalPrepare.call(this, sql);
   });
@@ -212,6 +212,7 @@ describe("node SQLite safety", () => {
         await loadNodeSqliteWithVersion(version);
       expect(() => requireNodeSqlite()).not.toThrow();
       const queries = prepare.mock.calls.length;
+      expect(queries).toBe(1);
       expect(supportsNodeSqliteJsonb()).toBe(jsonb);
       expect(supportsNodeSqliteJsonb()).toBe(jsonb);
       expect(prepare.mock.calls).toHaveLength(queries);
@@ -251,25 +252,9 @@ const homebrew = "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib";
 const intelHomebrew = "/usr/local/opt/sqlite/lib/libsqlite3.dylib";
 const safeProbe = { version: "3.53.4", extensionLoadingSupported: true };
 
-function fixture(
-  overrides: Partial<
-    NonNullable<NonNullable<Parameters<typeof ensureSqliteLibrarySelected>[0]>["internals"]>
-  > = {},
-) {
-  const deps = {
-    isBun: true,
-    platform: "darwin",
-    env: {},
-    exists: vi.fn(() => true),
-    probe: vi.fn(() => safeProbe),
-    select: vi.fn(),
-    ...overrides,
-  };
-  return {
-    ...deps,
-    ensure: (options?: { explicitPath?: string }) =>
-      ensureSqliteLibrarySelected({ ...options, internals: deps }),
-  };
+function fixture(overrides: Parameters<typeof mockBunSqliteNativeBoundary>[0] = {}) {
+  const native = mockBunSqliteNativeBoundary(overrides);
+  return { ...native, ensure: ensureSqliteLibrarySelected };
 }
 
 describe("Bun SQLite library selection", () => {

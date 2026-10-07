@@ -1,25 +1,18 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { AccountScopedConversationBindingRecord } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 
 export const TELEGRAM_THREAD_BINDINGS_NAMESPACE = "telegram.thread-bindings";
 export const TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES = 5_000;
 
 type TelegramBindingTargetKind = "subagent" | "acp";
 
-export type TelegramThreadBindingRecord = {
-  accountId: string;
-  conversationId: string;
-  targetKind: TelegramBindingTargetKind;
-  targetSessionKey: string;
-  agentId?: string;
-  label?: string;
-  boundBy?: string;
-  boundAt: number;
-  lastActivityAt: number;
-  idleTimeoutMs?: number;
-  maxAgeMs?: number;
-  metadata?: Record<string, unknown>;
-};
+export type TelegramThreadBindingRecord =
+  AccountScopedConversationBindingRecord<TelegramBindingTargetKind> & {
+    idleTimeoutMs?: number;
+    maxAgeMs?: number;
+    metadata?: Record<string, unknown>;
+  };
 
 export type TelegramThreadBindingManager = {
   accountId: string;

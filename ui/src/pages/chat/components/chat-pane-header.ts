@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { ifDefined } from "lit/directives/if-defined.js";
 import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
@@ -85,6 +86,7 @@ type ChatPaneHeaderProps = {
   renameDisabledReason?: string;
   actionsDisabled?: boolean;
   panelActions: TemplateResult | typeof nothing;
+  runAction?: TemplateResult | typeof nothing;
   panelLayoutActions: TemplateResult | typeof nothing;
   presence?: TemplateResult | typeof nothing;
   sharingControl?: TemplateResult | typeof nothing;
@@ -113,10 +115,6 @@ function revealLabel(platform: string | null): string {
     return t("chat.sessionHeader.revealFileExplorer");
   }
   return t("chat.sessionHeader.revealFileManager");
-}
-function branchRelativeTime(updatedAt: string | undefined): string {
-  const timestamp = updatedAt ? Date.parse(updatedAt) : Number.NaN;
-  return Number.isFinite(timestamp) ? formatRelativeTimestamp(timestamp, { fallback: "" }) : "";
 }
 
 export function resolveChatPaneParentSession(
@@ -205,12 +203,13 @@ function renderSessionCrumb(props: ChatPaneHeaderProps) {
       }}
     />`;
   }
+  const title = html`${renderSessionColorDot(props.catalog ? props.catalogColor : props.session?.color)}<span
+      class="chat-pane__session-title-text"
+      >${props.title}</span
+    >`;
   return props.catalog || !props.session || props.renameDisabledReason
     ? html`<span class="chat-pane__session-title" title=${props.renameDisabledReason ?? props.title}
-        >${renderSessionColorDot(props.catalog ? props.catalogColor : props.session?.color)}<span
-          class="chat-pane__session-title-text"
-          >${props.title}</span
-        ></span
+        >${title}</span
       >`
     : html`<button
         class="chat-pane__session-title chat-pane__session-title-button"
@@ -219,10 +218,7 @@ function renderSessionCrumb(props: ChatPaneHeaderProps) {
         aria-label=${t("chat.sessionHeader.renameAria", { title: props.title })}
         @click=${props.onBeginRename}
       >
-        ${renderSessionColorDot(props.catalog ? props.catalogColor : props.session?.color)}<span
-          class="chat-pane__session-title-text"
-          >${props.title}</span
-        >
+        ${title}
       </button>`;
 }
 
@@ -431,7 +427,8 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
                     ${icons.gitBranch}
                   </button>
                   ${props.branches.map((branch) => {
-                    const relativeTime = branchRelativeTime(branch.updatedAt);
+                    const updatedAt = Date.parse(branch.updatedAt ?? "");
+                    const relativeTime = formatRelativeTimestamp(updatedAt, { fallback: "" });
                     return html`
                       <wa-dropdown-item
                         class="chat-pane__branch-item"
@@ -469,7 +466,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             : nothing
         }
         <div class="chat-pane__actions">
-          ${props.panelLayoutActions}
+          ${props.runAction ?? nothing} ${props.panelLayoutActions}
           <fieldset class="chat-pane__actions" ?disabled=${props.actionsDisabled}>
             ${compactSessionActions ? nothing : props.panelActions}
             ${(
@@ -530,6 +527,26 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
       </div>
     </div>
   `;
+}
+
+export function renderChatPanePanelToggle(props: {
+  label: string;
+  icon: TemplateResult;
+  className?: string;
+  expanded?: boolean;
+  onToggle: () => void;
+}) {
+  return html`<openclaw-tooltip .content=${props.label}>
+    <button
+      class="btn btn--ghost btn--icon chat-icon-btn ${props.className ?? ""}"
+      type="button"
+      aria-label=${props.label}
+      aria-expanded=${ifDefined(props.expanded === undefined ? undefined : String(props.expanded))}
+      @click=${props.onToggle}
+    >
+      ${props.icon}
+    </button>
+  </openclaw-tooltip>`;
 }
 
 export function renderChatPanePanelLayoutActions(

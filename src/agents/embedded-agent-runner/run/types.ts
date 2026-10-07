@@ -77,7 +77,7 @@ export type EmbeddedAttemptClientToolCallSlot = {
   completed: boolean;
 };
 
-type EmbeddedRunAttemptBase = Omit<
+export type EmbeddedRunAttemptBase = Omit<
   RunEmbeddedAgentParams,
   | "provider"
   | "model"
@@ -164,6 +164,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Audited exact denies that the plugin harness must enforce against native equivalents. */
   pluginHarnessToolPolicySafeDeniedTools?: readonly string[];
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  preparedTtsPreferences?: import("../../../tts/tts-preferences.js").PreparedTtsPreferences;
   /** Active file-backed artifact target resolved by the run/session target seam. */
   sessionFile: string;
   initialReplayState?: EmbeddedRunReplayState;

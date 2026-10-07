@@ -46,6 +46,20 @@ Channel/group, provider, sandbox, and per-agent allow/deny policies can
 still remove the tool after the profile stage. Use `/tools` from the same
 session to confirm the effective tool list.
 
+Senders restricted by a channel, group, or per-sender tool policy may start only
+hidden helpers of the same agent. `visible: true` and another `agentId` are
+refused, including for ACP spawns. Hidden helpers inherit the restricted tools,
+workspace, and session root; they cannot select another `cwd`, project, or managed
+worktree. ACP additionally refuses a spawn when it cannot enforce the inherited
+tools or filesystem restrictions; use `runtime: "subagent"` in that case.
+Ordinary global, agent, and profile tool policies alone do not impose this rule.
+Owner-authorized automations retain their own scheduling policy and workspace;
+ordinary guests cannot gain that authority through a tool allowlist.
+
+Children created before this rule was introduced lack sender-policy provenance.
+Their existing tool allow/deny snapshots still apply, but start fresh helpers to
+apply the inherited spawn limit.
+
 **Defaults:**
 
 - **Model:** same-agent native sub-agents inherit the caller's active model, including session and one-shot overrides, unless you set `agents.defaults.subagents.model` (or per-agent `agents.entries.*.subagents.model`). The inherited model ID is preserved exactly, even when it contains a provider prefix. Cross-agent spawns use the target agent's configured model. ACP runtime spawns use the same configured subagent model when present; otherwise the ACP harness keeps its own default. An explicit `sessions_spawn.model` still wins.
@@ -53,7 +67,7 @@ session to confirm the effective tool list.
 - **Fast mode:** with swarm enabled, native sub-agents inherit the requester's setting only when the resolved child provider and model match the requester's active model. A different child model uses its own defaults. Explicit `sessions_spawn.fastMode` values (`true`, `false`, or `"auto"`) take precedence; aliases resolving to the same model preserve inheritance.
 - **Run timeout:** pass `runTimeoutSeconds` to set a timeout for a specific native, ACP, or visible sub-agent run. When omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` if configured; otherwise it falls back to `0` (no timeout). An explicit `0` disables the timeout for that run.
 - **Process lifetime:** a detached OpenClaw sub-agent has its own run lifecycle. A background task created inside an external CLI backend is different: it shares the parent CLI subprocess and stops if that parent reaches `agents.defaults.timeoutSeconds`.
-- **Task delivery:** hidden and visible native sub-agents receive their delegated task in a `[Subagent Task]` message appended after any forked history. The message identifies the current child assignment and treats inherited conversation as background context. The hidden sub-agent system prompt carries runtime rules and routing context, not a duplicate of the task.
+- **Task delivery:** hidden and visible native sub-agents receive their delegated task in a user message appended after any forked history. Model-only runtime context identifies the current child assignment and treats inherited conversation as background context; the Control UI displays only the task text. The hidden sub-agent system prompt carries runtime rules and routing context, not a duplicate of the task.
 
 Guests with `operator.sessions.write` can launch hidden native children for their
 own sandboxed work and receive private parent completions. The child keeps the
@@ -314,6 +328,11 @@ a polling loop just to wait for completion.
 A sub-agent can also explicitly set `waitFor: "message"` to wait for an incoming
 continuation about external work, such as a remote job it does not drive itself.
 This does not schedule that message; an operator or integration must send it.
+This applies to both visible and hidden native children, based on the active
+registered task, not the session key format. Root sessions, collectors, stopped
+tasks, and superseded generations cannot claim a child message wait. Separate
+admitted follow-ups in the same child session remain independent tasks. A quiet
+native child can pause without acquiring an announced completion or pause notice.
 Without a real pending child/runtime completion or this explicit message intent,
 yield is rejected. Return completed work as the normal final response:
 `sessions_yield` is not a final-result submission. An accepted yield pauses
@@ -325,14 +344,23 @@ or a default "Paused awaiting continuation." line. The acknowledgment is
 presented as child-provided data using the same escaping as completion results. The
 notice is distinct from a completion and uses the requester's existing message
 queue policy if it is already running. It does not resume the child: send the
-continuation with `sessions_send` to the named child session. Yielding again in
-the requester does not repeat an already delivered pause notice.
+continuation to the named child session through an authorized caller with
+`sessions_send`. Owning a child does not grant that tool; the child messaging
+restrictions still apply. Yielding again in
+the requester does not repeat an already delivered pause notice. A default
+follow-up already admitted on the child's session while the child was still
+yielding continues it instead, so no notice is sent. A follow-up with its own
+requester stays a separate sibling and leaves the notice in place.
 
 A plugin can then continue that same run
 by calling `api.runtime.subagent.run` with the paused `sessionKey`, instead of
 starting a sibling. The requester is announced once such a follow-up finishes
 normally; a follow-up that yields again with `waitFor: "message"` leaves the run
 paused and sends a new continuation-needed notice.
+This also applies to a default-delivery plugin follow-up admitted while the
+child is still finishing its yielding turn: when the pause publishes, the
+follow-up takes over the requester's completion, and the requester is announced
+once that follow-up finishes.
 
 A yield claim belongs to the turn that spawned the children. When a later turn
 of the same session calls `sessions_yield` while children spawned by an earlier

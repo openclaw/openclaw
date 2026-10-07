@@ -45,7 +45,7 @@ struct OnboardingWizardView: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showGatewayProblemDetails: Bool = false
     @State private var lastPairingAutoResumeAttemptAt: Date?
-    @State private var setupLinkStaging = GatewaySetupLinkStaging()
+    @State private var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State private var qrCodeCompletion = OnboardingQRCodeCompletion()
     @State private var setupCode: String = ""
     @State private var setupCodeStatus: String?
@@ -138,7 +138,7 @@ struct OnboardingWizardView: View {
             Group {
                 switch self.step {
                 case .intro:
-                    self.introStep
+                    OnboardingIntroStep(onContinue: self.advanceFromIntro)
                 case .welcome:
                     self.welcomeStep
                 case .success:
@@ -268,7 +268,7 @@ struct OnboardingWizardView: View {
             self.applyPendingGatewaySetupLinkIfNeeded()
         }
         .onChange(of: self.appModel.gatewayServerName) { _, newValue in
-            guard newValue != nil, self.setupLinkStaging.link == nil else { return }
+            guard newValue != nil, self.stagedGatewaySetupLink == nil else { return }
             let destination = self.qrCodeCompletion.destination(
                 connectedStableID: self.appModel.activeGatewayConnectConfig?.effectiveStableID)
             self.showQRScanner = false
@@ -406,10 +406,6 @@ struct OnboardingWizardView: View {
         }
     }
 
-    private var introStep: some View {
-        OnboardingIntroStep(onContinue: self.advanceFromIntro)
-    }
-
     private var welcomeStep: some View {
         OnboardingWelcomeStep(
             statusLine: self.statusLine,
@@ -456,14 +452,14 @@ struct OnboardingWizardView: View {
                     .font(OpenClawType.footnoteSemiBold)
             }
 
-            if let stagedLink = self.setupLinkStaging.link {
+            if let stagedLink = self.stagedGatewaySetupLink {
                 self.stagedGatewaySetupSection(stagedLink)
             } else {
                 switch selectedMode {
                 case .homeNetwork:
                     self.homeNetworkConnectSection
                 case .remoteDomain:
-                    self.remoteDomainConnectSection
+                    self.manualConnectionFieldsSection(title: "Domain Settings")
                 case .developerLocal:
                     self.developerConnectSection
                 }
@@ -520,10 +516,6 @@ struct OnboardingWizardView: View {
             onRestartDiscovery: self.gatewayController.restartDiscovery)
 
         self.manualConnectionFieldsSection(title: "Manual Fallback")
-    }
-
-    private var remoteDomainConnectSection: some View {
-        self.manualConnectionFieldsSection(title: "Domain Settings")
     }
 
     private var developerConnectSection: some View {
@@ -941,7 +933,7 @@ extension OnboardingWizardView {
         if self.selectedMode == nil {
             self.selectedMode = link.tls ? .remoteDomain : .homeNetwork
         }
-        self.setupLinkStaging.stage(link)
+        self.stagedGatewaySetupLink = link
         self.localConnectionFailure = nil
         self.setupCodeStatus = "Setup link loaded for \(link.host):\(link.port). Tap Connect to apply."
         self.connectMessage = nil
@@ -951,7 +943,7 @@ extension OnboardingWizardView {
 
     private func connectStagedGatewaySetupLink() async {
         guard self.connectingGateway == nil else { return }
-        guard let link = self.setupLinkStaging.link else { return }
+        guard let link = self.stagedGatewaySetupLink else { return }
         guard link.isValidEndpoint else {
             let message = "Setup link has an invalid gateway endpoint."
             self.setupCodeStatus = message
@@ -965,9 +957,9 @@ extension OnboardingWizardView {
         self.pendingTargetSuppression.replace(owner: .setupLink, lease: lease)
         defer { self.pendingTargetSuppression.resumeAutoConnect(.setupLink, controller: self.gatewayController) }
         await self.appModel.resetGatewaySessionsForTargetSwitch()
-        guard self.setupLinkStaging.link == link else { return }
+        guard self.stagedGatewaySetupLink == link else { return }
         guard await self.applyGatewayLink(link, disconnectExistingGatewayForBootstrap: false) else { return }
-        _ = self.setupLinkStaging.take()
+        self.stagedGatewaySetupLink = nil
         self.setupCodeStatus = "Setup link applied. Connecting…"
         self.issue = .none
         self.connectMessage = "Connecting to \(link.host)…"
@@ -976,7 +968,8 @@ extension OnboardingWizardView {
     }
 
     private func clearStagedGatewaySetupLink() {
-        guard self.setupLinkStaging.cancel() else { return }
+        guard self.stagedGatewaySetupLink != nil else { return }
+        self.stagedGatewaySetupLink = nil
         self.pendingTargetSuppression.resumeAutoConnect(.setupLink, controller: self.gatewayController)
         let message = "Setup link cleared."
         self.localConnectionFailure = nil
@@ -1045,7 +1038,7 @@ extension OnboardingWizardView {
         self.qrCodeCompletion.cancel()
         self.invalidateSetupAttempt()
         let lease = self.gatewayController.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
-        _ = self.setupLinkStaging.cancel()
+        self.stagedGatewaySetupLink = nil
         self.pendingTargetSuppression.replace(owner: .qrScanner, lease: lease)
         self.scannerScanID = self.scannerResultHandoff.beginScan()
         self.connectingGateway = nil
@@ -1251,9 +1244,7 @@ extension OnboardingWizardView {
             if lastMode == .developerLocal {
                 self.developerModeEnabled = true
             }
-            if self.developerModeEnabled || lastMode != .developerLocal {
-                self.selectedMode = lastMode
-            }
+            self.selectedMode = lastMode
         }
         if self.selectedMode == .developerLocal, self.manualHost == "openclaw.local" {
             self.manualHost = "localhost"

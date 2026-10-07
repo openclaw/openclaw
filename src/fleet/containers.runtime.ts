@@ -59,39 +59,12 @@ type FleetContainerLogsOptions = {
   redactValues: readonly string[];
 };
 export type FleetContainerInspectResult =
-  | {
-      kind: "ok";
-      containerId: string;
-      state: string;
-      running: boolean;
-      labels: Record<string, string>;
-      environment: Record<string, string>;
-      imageId: string;
-      memory: string;
-      cpus: string;
-      pidsLimit: number | undefined;
-      storageOpt: Record<string, string>;
-      capDrop: string[];
-      // Podman-only top-level inspect field: null means every capability is
-      // dropped, a list means caps remain, and Docker omits the field entirely.
-      effectiveCaps: string[] | undefined;
-      securityOpt: string[];
-      init: boolean | undefined;
-      restartPolicy: string | undefined;
-      portBindings: Array<{ containerPort: string; hostIp: string; hostPort: string }>;
-      user?: string;
-      usernsMode?: string;
-    }
+  | ReturnType<typeof parseInspectOutput>
   | { kind: "missing"; state: "missing" }
   | { kind: "unavailable"; state: "unknown"; error: string };
 
 export type FleetNetworkInspectResult =
-  | {
-      kind: "ok";
-      labels: Record<string, string>;
-      attachedContainers: Array<{ id: string; name?: string }>;
-      internal: boolean;
-    }
+  | ReturnType<typeof parseNetworkInspectOutput>
   | { kind: "missing" }
   | { kind: "unavailable"; error: string };
 
@@ -257,7 +230,7 @@ function parseInspectRecord(stdout: string): Record<string, unknown> {
   return requireRecord(parsed[0]);
 }
 
-function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult, { kind: "ok" }> {
+function parseInspectOutput(stdout: string) {
   const inspected = parseInspectRecord(stdout);
   const state = requireRecord(inspected.State);
   const config = requireRecord(inspected.Config);
@@ -267,7 +240,7 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
   const usernsMode = readOptionalInspectString(hostConfig.UsernsMode);
 
   return {
-    kind: "ok",
+    kind: "ok" as const,
     containerId: requireString(inspected.Id),
     state: requireString(state.Status),
     running: requireBoolean(state.Running),
@@ -280,6 +253,7 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
     pidsLimit: readPidsLimit(hostConfig.PidsLimit),
     storageOpt: readStringRecord(hostConfig.StorageOpt),
     capDrop: readStringArray(hostConfig.CapDrop),
+    // Podman null means every capability is dropped; Docker omits this field.
     effectiveCaps:
       inspected.EffectiveCaps === undefined ? undefined : readStringArray(inspected.EffectiveCaps),
     securityOpt: readStringArray(hostConfig.SecurityOpt),
@@ -291,12 +265,10 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
   };
 }
 
-function parseNetworkInspectOutput(
-  stdout: string,
-): Extract<FleetNetworkInspectResult, { kind: "ok" }> {
+function parseNetworkInspectOutput(stdout: string) {
   const inspected = parseInspectRecord(stdout);
   return {
-    kind: "ok",
+    kind: "ok" as const,
     labels: Object.assign({}, readStringRecord(inspected.Labels ?? inspected.labels)),
     attachedContainers: readNetworkAttachments(inspected.Containers ?? inspected.containers),
     internal: readOptionalBoolean(inspected.Internal ?? inspected.internal) ?? false,
@@ -425,15 +397,11 @@ const defaultFleetContainerCommandExecutor: FleetContainerCommandExecutor = asyn
     timeoutMs: COMMAND_TIMEOUT_MS,
     maxOutputBytes: COMMAND_MAX_OUTPUT_BYTES,
   });
-  const normalized = {
+  return {
     stdout: result.stdout,
     stderr: redactEnvironmentValues(result.stderr, args, options.redactValues),
     code: result.code ?? 1,
   };
-  if (normalized.code !== 0 && !options.allowFailure) {
-    throw commandFailureError(runtime, args, normalized, options.redactValues);
-  }
-  return normalized;
 };
 
 const defaultFleetContainerStreamExecutor: FleetContainerStreamExecutor = (
@@ -509,18 +477,10 @@ function isMissingNetworkError(stderr: string): boolean {
   );
 }
 
-function validateNetworkName(networkName: string): string {
-  const normalized = networkName.trim();
+function validateResourceName(resource: "container" | "network", name: string): string {
+  const normalized = name.trim();
   if (!normalized || normalized.startsWith("-")) {
-    throw new Error("Fleet network name is invalid.");
-  }
-  return normalized;
-}
-
-function validateContainerName(containerName: string): string {
-  const normalized = containerName.trim();
-  if (!normalized || normalized.startsWith("-")) {
-    throw new Error("Fleet container name is invalid.");
+    throw new Error(`Fleet ${resource} name is invalid.`);
   }
   return normalized;
 }
@@ -547,7 +507,7 @@ function buildLogsArgs(containerName: string, options: FleetContainerLogsOptions
     }
     args.push("--since", options.since);
   }
-  args.push(validateContainerName(containerName));
+  args.push(validateResourceName("container", containerName));
   return args;
 }
 export function createFleetContainerRuntime(
@@ -627,7 +587,7 @@ export function createFleetContainerRuntime(
       const result = await inspectResource(
         runtime,
         "container",
-        validateContainerName(containerName),
+        validateResourceName("container", containerName),
         isMissingContainerError,
         parseInspectOutput,
       );
@@ -645,7 +605,7 @@ export function createFleetContainerRuntime(
       return await inspectResource(
         runtime,
         "network",
-        validateNetworkName(networkName),
+        validateResourceName("network", networkName),
         isMissingNetworkError,
         parseNetworkInspectOutput,
       );
@@ -686,24 +646,24 @@ export function createFleetContainerRuntime(
         "bridge",
         ...(options.internal ? ["--internal"] : []),
         ...labelArgs,
-        validateNetworkName(networkName),
+        validateResourceName("network", networkName),
       ]);
     },
 
     async removeNetwork(runtime: FleetContainerRuntimeName, networkName: string): Promise<void> {
-      await execute(runtime, ["network", "rm", validateNetworkName(networkName)]);
+      await execute(runtime, ["network", "rm", validateResourceName("network", networkName)]);
     },
 
     async start(runtime: FleetContainerRuntimeName, containerName: string): Promise<void> {
-      await execute(runtime, ["start", validateContainerName(containerName)]);
+      await execute(runtime, ["start", validateResourceName("container", containerName)]);
     },
 
     async stop(runtime: FleetContainerRuntimeName, containerName: string): Promise<void> {
-      await execute(runtime, ["stop", validateContainerName(containerName)]);
+      await execute(runtime, ["stop", validateResourceName("container", containerName)]);
     },
 
     async restart(runtime: FleetContainerRuntimeName, containerName: string): Promise<void> {
-      await execute(runtime, ["restart", validateContainerName(containerName)]);
+      await execute(runtime, ["restart", validateResourceName("container", containerName)]);
     },
 
     async logs(
@@ -740,7 +700,7 @@ export function createFleetContainerRuntime(
       await execute(runtime, [
         "rm",
         ...(force ? ["--force"] : []),
-        validateContainerName(containerName),
+        validateResourceName("container", containerName),
       ]);
     },
   };

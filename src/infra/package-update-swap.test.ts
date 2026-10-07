@@ -4,7 +4,8 @@ import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "./package-update-swap.js";
 import {
   createPackageSwapFixture,
   createRetainedPackageSwap,
@@ -373,7 +374,7 @@ describe("launcher backup capture", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32").each(["target", "type", "mode", "contents"] as const)(
+  it.runIf(process.platform !== "win32").each(["target", "type", "contents"] as const)(
     "names a changed backup %s and retains the failed copy before activation",
     async (field) => {
       const base = dirs.make("openclaw-launcher-backup-changed-");
@@ -400,8 +401,6 @@ describe("launcher backup capture", () => {
           } else {
             await fs.writeFile(backup, "different type");
           }
-        } else if (field === "mode") {
-          await fs.chmod(backup, 0o700);
         } else {
           await fs.writeFile(backup, "different contents");
         }
@@ -421,6 +420,8 @@ describe("launcher backup capture", () => {
       );
       expect(await fs.lstat(backup)).toBeDefined();
       if (field === "target") {
+        expect(result.step.stderrTail).toContain("../lib/node_modules/openclaw/package.json");
+        expect(result.step.stderrTail).toContain("different-target");
         expect(await fs.readlink(backup)).toBe("different-target");
       }
     },

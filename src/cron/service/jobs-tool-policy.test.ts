@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CronStoredJob } from "../types.js";
+import type { CronStoredJob, CronToolsAllowExecTarget } from "../types.js";
 import {
   cronJobMessageActionAuthorityInputsEqual,
   reconcileToolsAllowAuthority,
@@ -24,104 +24,51 @@ function toolJob(toolsAllow: string[] | undefined): CronStoredJob {
 }
 
 describe("reconcileToolsAllowAuthority exec pin", () => {
-  it("stamps the restrict-only pin only for exec-granting caps with the server fact", () => {
-    const job = toolJob(["exec", "read"]);
+  const gateway = { version: 1, host: "gateway" } satisfies CronToolsAllowExecTarget;
+  const pinned = { ...gateway, ask: "always" } satisfies CronToolsAllowExecTarget;
+  it.each<
+    [
+      name: string,
+      cap: string[] | undefined,
+      previous: CronToolsAllowExecTarget | undefined,
+      explicit: boolean,
+      captured: CronToolsAllowExecTarget | undefined,
+      expected: CronToolsAllowExecTarget | undefined,
+    ]
+  >([
+    ["stamps explicit exec", ["exec", "read"], undefined, true, pinned, pinned],
+    ["pins wildcard exec", ["*"], undefined, true, pinned, pinned],
+    ["excludes non-exec caps", ["read"], undefined, true, gateway, undefined],
+    ["clears rewritten caps without capture", ["exec"], pinned, true, undefined, undefined],
+    ["preserves untouched caps", ["exec"], pinned, false, undefined, pinned],
+    ["drops removed caps", undefined, gateway, false, gateway, undefined],
+  ])("%s", (_name, cap, previous, explicit, captured, expected) => {
+    const job = toolJob(cap);
+    if (previous) {
+      job.toolsAllowExecTarget = structuredClone(previous);
+      job.toolsAllowExecTargetRequirement = {
+        version: 1,
+        target: structuredClone(previous),
+        grantIndex: 0,
+      };
+    }
     reconcileToolsAllowAuthority({
       job,
       previouslyUsedToolRuntime: true,
-      explicitlyMutatesToolsAllow: true,
-      toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
+      explicitlyMutatesToolsAllow: explicit,
+      toolsAllowExecTarget: captured ? structuredClone(captured) : undefined,
     });
-    expect(job.toolsAllowExecTarget).toEqual({ version: 1, host: "gateway", ask: "always" });
-    expect(job.toolsAllowExecTargetRequirement).toEqual({
-      version: 1,
-      target: { version: 1, host: "gateway", ask: "always" },
-      grantIndex: 0,
-    });
-  });
-
-  it("keeps the creator's exec pin on a wildcard cap", () => {
-    const job = toolJob(["*"]);
-    reconcileToolsAllowAuthority({
-      job,
-      previouslyUsedToolRuntime: true,
-      explicitlyMutatesToolsAllow: true,
-      toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
-    });
-    expect(job.toolsAllowExecTarget).toEqual({ version: 1, host: "gateway", ask: "always" });
-    expect(job.toolsAllowExecTargetRequirement).toEqual({
-      version: 1,
-      target: { version: 1, host: "gateway", ask: "always" },
-      grantIndex: 0,
-    });
-  });
-
-  it("never stamps a pin onto a cap that does not grant exec", () => {
-    const job = toolJob(["read"]);
-    reconcileToolsAllowAuthority({
-      job,
-      previouslyUsedToolRuntime: true,
-      explicitlyMutatesToolsAllow: true,
-      toolsAllowExecTarget: { version: 1, host: "gateway" },
-    });
-    expect(job.toolsAllowExecTarget).toBeUndefined();
-    expect(job.toolsAllowExecTargetRequirement).toBeUndefined();
-  });
-
-  it("clears the pin when the cap is explicitly rewritten without the server fact", () => {
-    const job = toolJob(["exec"]);
-    job.toolsAllowExecTarget = { version: 1, host: "gateway", ask: "always" };
-    job.toolsAllowExecTargetRequirement = {
-      version: 1,
-      target: { version: 1, host: "gateway", ask: "always" },
-      grantIndex: 0,
-    };
-    reconcileToolsAllowAuthority({
-      job,
-      previouslyUsedToolRuntime: true,
-      explicitlyMutatesToolsAllow: true,
-    });
-    expect(job.toolsAllowExecTarget).toBeUndefined();
-    expect(job.toolsAllowExecTargetRequirement).toBeUndefined();
-  });
-
-  it("keeps the pin across edits that do not touch the cap", () => {
-    const job = toolJob(["exec"]);
-    job.toolsAllowExecTarget = { version: 1, host: "gateway", ask: "always" };
-    job.toolsAllowExecTargetRequirement = {
-      version: 1,
-      target: { version: 1, host: "gateway", ask: "always" },
-      grantIndex: 0,
-    };
-    reconcileToolsAllowAuthority({
-      job,
-      previouslyUsedToolRuntime: true,
-      explicitlyMutatesToolsAllow: false,
-    });
-    expect(job.toolsAllowExecTarget).toEqual({ version: 1, host: "gateway", ask: "always" });
-    expect(job.toolsAllowExecTargetRequirement).toEqual({
-      version: 1,
-      target: { version: 1, host: "gateway", ask: "always" },
-      grantIndex: 0,
-    });
-  });
-
-  it("drops the pin when the job stops using a tool runtime cap", () => {
-    const job = toolJob(undefined);
-    job.toolsAllowExecTarget = { version: 1, host: "gateway" };
-    job.toolsAllowExecTargetRequirement = {
-      version: 1,
-      target: { version: 1, host: "gateway" },
-      grantIndex: 0,
-    };
-    reconcileToolsAllowAuthority({
-      job,
-      previouslyUsedToolRuntime: true,
-      explicitlyMutatesToolsAllow: false,
-      toolsAllowExecTarget: { version: 1, host: "gateway" },
-    });
-    expect(job.toolsAllowExecTarget).toBeUndefined();
-    expect(job.toolsAllowExecTargetRequirement).toBeUndefined();
+    if (expected) {
+      expect(job.toolsAllowExecTarget).toEqual(expected);
+      expect(job.toolsAllowExecTargetRequirement).toEqual({
+        version: 1,
+        target: expected,
+        grantIndex: 0,
+      });
+    } else {
+      expect(job.toolsAllowExecTarget).toBeUndefined();
+      expect(job.toolsAllowExecTargetRequirement).toBeUndefined();
+    }
   });
 });
 

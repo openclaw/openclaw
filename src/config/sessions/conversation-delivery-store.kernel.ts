@@ -1,6 +1,10 @@
-import crypto from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { Selectable } from "kysely";
-import { executeSqliteQuerySync, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  createSqliteQueryCache,
+  executeSqliteQuerySync,
+  prepareSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -28,10 +32,6 @@ function normalizeOperationId(value: string): string {
     throw new Error("Conversation delivery operation id is required");
   }
   return operationId;
-}
-
-function hashMessage(message: string): string {
-  return crypto.createHash("sha256").update(message).digest("hex");
 }
 
 function normalizeStatus(value: string): ConversationDeliveryStatus {
@@ -88,7 +88,7 @@ function mapRow(row: ConversationDeliveryRow): ConversationDeliveryRecord {
 function assertConversationDeliveryInput(
   record: ConversationDeliveryRecord,
   input: ConversationDeliveryInput,
-  messageHash = hashMessage(input.message),
+  messageHash = sha256Hex(input.message),
 ): void {
   if (
     record.conversationRef !== input.conversationRef ||
@@ -102,7 +102,7 @@ function assertConversationDeliveryInput(
   }
 }
 
-function createOperationQuery(database: OpenClawAgentReadOnlyDatabase["db"]) {
+const operationQuery = createSqliteQueryCache((database) => {
   const db = getSessionKysely(database);
   return prepareSqliteQuerySync<string, ConversationDeliveryRow>(database, (parameter) =>
     // Session pruning removes only session_conversations. The canonical
@@ -123,23 +123,13 @@ function createOperationQuery(database: OpenClawAgentReadOnlyDatabase["db"]) {
         parameter((operationId) => operationId),
       ),
   );
-}
-
-const operationQueryByDatabase = new WeakMap<
-  OpenClawAgentReadOnlyDatabase["db"],
-  ReturnType<typeof createOperationQuery>
->();
+});
 
 function selectOperation(
   database: OpenClawAgentReadOnlyDatabase,
   operationId: string,
 ): ConversationDeliveryRecord | undefined {
-  let query = operationQueryByDatabase.get(database.db);
-  if (!query) {
-    query = createOperationQuery(database.db);
-    operationQueryByDatabase.set(database.db, query);
-  }
-  const row = query(operationId).rows[0];
+  const row = operationQuery(database.db)(operationId).rows[0];
   return row ? mapRow(row) : undefined;
 }
 
@@ -164,7 +154,7 @@ export function beginConversationDeliveryInDatabase(
 ): { created: boolean; record: ConversationDeliveryRecord } {
   const operationId = normalizeOperationId(params.operationId);
   const sourceSessionKey = params.sourceSessionKey?.trim() || undefined;
-  const messageHash = hashMessage(params.message);
+  const messageHash = sha256Hex(params.message);
   const existing = selectOperation(database, operationId);
   if (existing) {
     assertConversationDeliveryInput(existing, params, messageHash);

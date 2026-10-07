@@ -27,18 +27,18 @@ const log = createSubsystemLogger("auto-reply/commands-approve");
 const COMMAND_REGEX = /^\/?approve(?:\s|$)/i;
 const FOREIGN_COMMAND_MENTION_REGEX = /^\/approve@([^\s]+)(?:\s|$)/i;
 
-const DECISION_ALIASES: Record<string, "allow-once" | "allow-always" | "deny"> = {
-  allow: "allow-once",
-  once: "allow-once",
-  "allow-once": "allow-once",
-  allowonce: "allow-once",
-  always: "allow-always",
-  "allow-always": "allow-always",
-  allowalways: "allow-always",
-  deny: "deny",
-  reject: "deny",
-  block: "deny",
-};
+const DECISION_ALIASES = new Map<string, "allow-once" | "allow-always" | "deny">([
+  ["allow", "allow-once"],
+  ["once", "allow-once"],
+  ["allow-once", "allow-once"],
+  ["allowonce", "allow-once"],
+  ["always", "allow-always"],
+  ["allow-always", "allow-always"],
+  ["allowalways", "allow-always"],
+  ["deny", "deny"],
+  ["reject", "deny"],
+  ["block", "deny"],
+]);
 
 type ParsedApproveCommand =
   | { ok: true; id: string; decision: "allow-once" | "allow-always" | "deny" }
@@ -60,7 +60,7 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   if (!rest) {
     return { ok: false, error: APPROVE_USAGE_TEXT };
   }
-  const tokens = rest.split(/\s+/).filter(Boolean);
+  const tokens = rest.split(/\s+/);
   if (tokens.length < 2) {
     return { ok: false, error: APPROVE_USAGE_TEXT };
   }
@@ -68,21 +68,15 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   const first = normalizeLowercaseStringOrEmpty(tokens[0]);
   const second = normalizeLowercaseStringOrEmpty(tokens[1]);
 
-  // Decision tokens are chat-supplied, so inherited keys such as "constructor"
-  // or "__proto__" must not read through to Object.prototype.
-  const firstDecision = Object.hasOwn(DECISION_ALIASES, first)
-    ? DECISION_ALIASES[first]
-    : undefined;
+  const firstDecision = DECISION_ALIASES.get(first);
   if (firstDecision) {
     return {
       ok: true,
       decision: firstDecision,
-      id: tokens.slice(1).join(" ").trim(),
+      id: tokens.slice(1).join(" "),
     };
   }
-  const secondDecision = Object.hasOwn(DECISION_ALIASES, second)
-    ? DECISION_ALIASES[second]
-    : undefined;
+  const secondDecision = DECISION_ALIASES.get(second);
   if (secondDecision) {
     return {
       ok: true,
@@ -305,5 +299,3 @@ export async function handleApproveCommandFromContext(
 
   return commandReply(`✅ Approval ${parsed.decision} submitted for ${parsed.id}.`);
 }
-
-export const handleApproveCommand: CommandHandler = handleApproveCommandFromContext;

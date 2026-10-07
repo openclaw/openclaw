@@ -65,6 +65,7 @@ export function makeRestartRecoveryRun(
 export function useSubagentRestartRecoveryFixture() {
   const dispatchAgent = vi.fn();
   const gatewayRuntime: GatewayRecoveryRuntime = {
+    prepareRestartRecovery: () => undefined,
     dispatchSessionMethod: vi.fn(),
     dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
     waitForAgent: vi.fn(async () => ({
@@ -75,6 +76,7 @@ export function useSubagentRestartRecoveryFixture() {
   const activateGatewayRuntime = async () => {
     const gatewayContext = {
       recoveryRuntime: gatewayRuntime,
+      chatAbortControllers: new Map(),
       resolveGatewayContext: () => gatewayContext as never,
     };
     bindGatewayContextResolver(gatewayRuntime, gatewayContext.resolveGatewayContext);

@@ -137,7 +137,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
         }
         return result;
       });
-      const previous = runExclusiveSessionLifecycleMutation({
+      const previous = runExclusiveSessionLifecycleMutation("delete", {
         scope: storePath,
         identities: [current.sessionKey, current.sessionId],
         run: async () => {
@@ -214,12 +214,13 @@ describe("SQLite lifecycle cleanup reclamation", () => {
   it("keeps published history when the entry changes during final materialization", async () => {
     const current = scope("entry-materialization-run");
     const history = { ...current, sessionId: "entry-materialization-history" };
+    const updatedAt = Date.now();
     const events = [{ type: "session", id: current.sessionId, content: "original transcript" }];
-    await replaceSessionEntry(history, { sessionId: history.sessionId, updatedAt: 1 });
+    await replaceSessionEntry(history, { sessionId: history.sessionId, updatedAt });
     await replaceTranscriptEvents(history, [
       { type: "session", id: history.sessionId, content: "already published history" },
     ]);
-    await replaceSessionEntry(current, { sessionId: current.sessionId, updatedAt: 1 });
+    await replaceSessionEntry(current, { sessionId: current.sessionId, updatedAt });
     await replaceTranscriptEvents(current, events);
     const expectedEntry = loadSessionEntry(current);
     if (!expectedEntry) {
@@ -263,12 +264,21 @@ describe("SQLite lifecycle cleanup reclamation", () => {
       await replaceSessionEntry(history, {
         sessionId: "marker-scan-current",
         updatedAt: Date.now(),
+        skillsSnapshot: { prompt: "unrelated saved prompt".repeat(1024), skills: [] },
       });
       const before = structuredClone(loadSessionEntry(history));
       await closeOpenClawStateDatabaseAsync();
       const db = database();
       const failure = new Error("late native transcript read failure");
       const observed: unknown[] = [];
+      let snapshotReads = 0;
+      db.db.function("cleanup_snapshot_value", (valueJson) => {
+        snapshotReads += 1;
+        return valueJson;
+      });
+      db.db.exec(`CREATE TEMP VIEW session_entry_snapshots AS
+        SELECT session_key, field, cleanup_snapshot_value(value_json) AS value_json
+        FROM main.session_entry_snapshots`);
       let clock = 0;
       let advanceClock = true;
       vi.spyOn(performance, "now").mockImplementation(() => clock);
@@ -316,6 +326,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
           await expect(run()).resolves.toEqual(empty);
         }
         expect(workersStarted).toBe(0);
+        expect(snapshotReads).toBe(0);
         const records = await readArtifactPreparationLogs(logPath);
         expect(records).toHaveLength(1);
         expect(records[0]?.message).toBe(
@@ -329,7 +340,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
           orphanPlanningMs: 40,
           markerScanMs: 1200,
           nodeRows: 1,
-          windowRows: 2,
+          windowRows: 1,
           referenceIds: 1,
           selectedEntries: 0,
           markerWindows: 1,
@@ -342,10 +353,12 @@ describe("SQLite lifecycle cleanup reclamation", () => {
           advanceClock = false;
           await expect(run()).resolves.toEqual(empty);
           expect(await readArtifactPreparationLogs(logPath)).toEqual(records);
+          expect(snapshotReads).toBe(0);
         }
       } finally {
         channel("worker_threads").unsubscribe(onWorker);
         db.db.exec("DROP VIEW temp.transcript_events");
+        db.db.exec("DROP VIEW temp.session_entry_snapshots");
       }
       expect(workersStarted).toBe(0);
       expect(loadSessionEntry(history)).toEqual(before);

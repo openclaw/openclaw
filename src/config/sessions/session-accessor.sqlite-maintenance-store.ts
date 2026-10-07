@@ -43,6 +43,7 @@ import {
   type SessionMaintenancePreservationSnapshot,
 } from "./store-maintenance-preserve-snapshot.js";
 import { shouldRunSessionEntryMaintenance } from "./store-maintenance.js";
+import type { SessionEntry } from "./types.js";
 
 export function readSessionTranscriptJsonlBytesInDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
@@ -79,7 +80,7 @@ export function refreshSessionPlannerStatisticsInDatabase(database: OpenClawAgen
 
 export function emptySessionEntryMaintenancePlan(): SessionEntryMaintenancePlan {
   return {
-    archivedSessionKeys: [],
+    archivedEntries: [],
     entryRemovals: [],
     stateDeletePlans: [],
     archived: 0,
@@ -111,26 +112,33 @@ function canSkipSessionEntryMaintenanceInDatabase(
   );
 }
 
-/** Inline callers already hold their transaction; workers prepare before write admission. */
+/** Inline callers already hold their transaction; workers prepare before the write transaction. */
 export function applySessionEntryMaintenanceInDatabase(
   database: OpenClawAgentDatabase,
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
   readPreservation: () => SessionMaintenancePreservationSnapshot,
+  onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void,
+  refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot,
 ): SessionEntryMaintenancePlan {
   let preservation: SessionMaintenancePreservationSnapshot | undefined;
   return prepareSessionEntryMaintenanceInDatabase(
     database,
     params,
     () => (preservation ??= readPreservation()),
-  )(database);
+    refreshCandidates,
+  )(database, onArchived);
 }
 
-/** Prepare outside write admission; compare only selected rows and protection dependencies inside it. */
+/** Prepare before the write transaction; compare selected rows and protection dependencies inside it. */
 export function prepareSessionEntryMaintenanceInDatabase(
   reader: Pick<OpenClawAgentDatabase, "db">,
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
   readPreservation: () => SessionMaintenancePreservationSnapshot,
-): (database: OpenClawAgentDatabase) => SessionEntryMaintenancePlan {
+  refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot,
+): (
+  database: OpenClawAgentDatabase,
+  onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void,
+) => SessionEntryMaintenancePlan {
   const maintenance = params.maintenance;
   if (maintenance.mode === "warn") {
     return emptySessionEntryMaintenancePlan;
@@ -170,7 +178,6 @@ export function prepareSessionEntryMaintenanceInDatabase(
   };
   const { store, archived, capArchived, modelRunPruned, pruned, capped } =
     planSessionEntryMaintenance({
-      profile: "write",
       maintenance,
       initialUnarchivedCount: entryCount,
       forceMaintenance: params.forceMaintenance,
@@ -228,7 +235,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
     };
   };
   const expected = selectedKeys.length > 0 ? readInputs(reader) : undefined;
-  return (database) => {
+  return (database, onArchived) => {
     if (
       expected &&
       (!isDeepStrictEqual(expected, readInputs(database)) ||
@@ -261,7 +268,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
         );
       }
       const currentPreserveKeys = resolveSessionMaintenancePreserveKeys({
-        snapshot: readPreservation(),
+        snapshot: refreshCandidates ? refreshCandidates(selectedKeys) : readPreservation(),
         store: selectedEntries,
         baseKeys: currentBaseKeys,
       });
@@ -271,8 +278,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
         );
       }
     }
-    const archivedSessionKeys: string[] = [];
-    const archivedWorktrees: NonNullable<SessionEntryMaintenancePlan["archivedWorktrees"]> = [];
+    const archivedEntries: SessionEntryMaintenancePlan["archivedEntries"] = [];
     for (const key of archivedKeys) {
       const previousEntry = selectedEntries[key];
       const planned = store[key];
@@ -286,14 +292,8 @@ export function prepareSessionEntryMaintenanceInDatabase(
       };
       delete entry.archivedBy;
       writeSessionEntry(database, key, entry, { canonicalPreviousEntry: previousEntry });
-      archivedSessionKeys.push(key);
-      if (entry.worktree) {
-        archivedWorktrees.push({
-          entry: structuredClone(entry),
-          sessionKey: key,
-          storePath: params.storePath,
-        });
-      }
+      onArchived?.(key, previousEntry, entry);
+      archivedEntries.push({ sessionKey: key, sessionId: entry.sessionId });
     }
     const removals = [...removalReasons].flatMap(([sessionKey, maintenanceReason]) => {
       const expectedEntry = selectedEntries[sessionKey];
@@ -302,8 +302,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
     stageSessionEntryMaintenanceAgeFact(database.db, ageFact);
     if (removals.length === 0) {
       return {
-        archivedSessionKeys,
-        ...(archivedWorktrees.length ? { archivedWorktrees } : {}),
+        archivedEntries,
         entryRemovals: [],
         stateDeletePlans: [],
         archived,
@@ -345,8 +344,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
       }
     }
     return {
-      archivedSessionKeys,
-      ...(archivedWorktrees.length ? { archivedWorktrees } : {}),
+      archivedEntries,
       entryRemovals: removals,
       stateDeletePlans: deletePlans,
       archived,

@@ -103,7 +103,7 @@ async function fixture(
         ],
       })
     : undefined;
-  const pins = seedSkillLibrarySelection(authority);
+  const pins = await seedSkillLibrarySelection(authority);
   const sessionKey = "agent:main:node-skills";
   const sessionId = "node-skills";
   const entry = {
@@ -127,7 +127,7 @@ async function fixture(
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "test");
   const admitted = await admission.admit("plugin-harness");
   const capability = options.authoring
-    ? prepareGatewaySkillAuthoring(owner, sessionKey, true)
+    ? await prepareGatewaySkillAuthoring(owner, sessionKey, true)
     : undefined;
   capability?.bind(admitted);
   const snapshot = options.managed
@@ -520,7 +520,7 @@ async function call(method,params,id){const r=await fetch(config.mcpServers.open
         type: "string",
         enum: expect.arrayContaining(["create", "update"]),
       });
-      const entries = listSkillLibrary(f.authority).entries;
+      const entries = (await listSkillLibrary(f.authority)).entries;
       expect(entries).toHaveLength(1);
       const published = await readSkillLibrary(f.authority, entries[0]!.skillId);
       expect(published.content).toBe(content + "Updated on node.\n");
@@ -579,7 +579,7 @@ async function call(method,params,id){const r=await fetch(config.mcpServers.open
         }
         resume.resolve();
         await running.catch(() => undefined);
-        expect(listSkillLibrary(f.authority).entries).toEqual([]);
+        expect((await listSkillLibrary(f.authority)).entries).toEqual([]);
       } finally {
         resume.resolve();
         await running?.catch(() => undefined);

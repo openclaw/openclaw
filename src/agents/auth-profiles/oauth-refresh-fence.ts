@@ -1,8 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
+import { retainCurrentWorkerNativeSection } from "@openclaw/worker-runtime/worker";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { toErrorObject } from "../../infra/errors.js";
-import { retainCurrentWorkerNativeSection } from "../../infra/worker-task-native-sections.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import {

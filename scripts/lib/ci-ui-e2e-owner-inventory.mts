@@ -172,300 +172,133 @@ const pageStyles = {
 // Route entries select their probes; leaves use declared component ownership and direct runtime imports.
 // These roots supplement transitive test/helper imports; unlisted cases retain hourly/release proof.
 // watchGlobs also record stylesheet edges omitted by the JavaScript import graph.
-export const UI_E2E_OWNER_WATCHES: readonly {
+type UiE2eOwnerWatch = {
   testFile: string;
   ownerRoots: readonly string[];
   watchGlobs: readonly string[];
-}[] = [
-  {
-    testFile: "ui/src/e2e/activity-answer-candidates.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/activity/route.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/activity/route.ts",
-      "ui/src/pages/chat/route.ts",
-      ...pageStyles["activity"],
-      ...pageStyles["chat"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/activity-current-work.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/activity/route.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/activity/route.ts",
-      "ui/src/pages/chat/route.ts",
-      ...pageStyles["activity"],
-      ...pageStyles["chat"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/activity-polish.e2e.test.ts",
-    ownerRoots: [
+};
+
+const sessionMenuOwnerRoots = [
+  "ui/src/components/modal-dialog.ts",
+  "ui/src/components/session-menu.ts",
+  "ui/src/lib/sessions/session-capability.ts",
+  "ui/src/pages/chat/components/chat-header-session-menu.ts",
+] as const;
+
+function pageWatch(
+  testFile: string,
+  pages: readonly (keyof typeof pageStyles)[],
+  ownerRoots: readonly string[] = [],
+): UiE2eOwnerWatch {
+  const routes = pages.map((page) => `ui/src/pages/${page}/route.ts`);
+  return {
+    testFile,
+    ownerRoots: [...routes, ...ownerRoots].toSorted(),
+    watchGlobs: [...routes, ...pages.flatMap<string>((page) => pageStyles[page])],
+  };
+}
+
+export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
+  pageWatch("ui/src/e2e/activity-answer-candidates.e2e.test.ts", ["activity", "chat"]),
+  pageWatch("ui/src/e2e/activity-current-work.e2e.test.ts", ["activity", "chat"]),
+  pageWatch(
+    "ui/src/e2e/activity-polish.e2e.test.ts",
+    ["activity"],
+    [
       "ui/src/components/image-lightbox.ts",
       "ui/src/lib/session-pull-requests.ts",
       "ui/src/pages/activity/activity-page.ts",
-      "ui/src/pages/activity/route.ts",
     ],
-    watchGlobs: ["ui/src/pages/activity/route.ts", ...pageStyles["activity"]],
-  },
-  {
-    testFile: "ui/src/e2e/activity-session-feed.capture.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/activity/activity-page.ts",
-      "ui/src/pages/activity/route.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/cron/route.ts",
-      "ui/src/pages/profile/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/activity/route.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/cron/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["activity"],
-      ...pageStyles["chat"],
-      ...pageStyles["cron"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/activity-session-git.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/activity-session-feed.capture.e2e.test.ts",
+    ["activity", "chat", "cron", "profile"],
+    ["ui/src/pages/activity/activity-page.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/activity-session-git.e2e.test.ts",
+    ["activity"],
+    [
       "ui/src/components/link-reader-panel.ts",
       "ui/src/lib/session-pull-requests.ts",
       "ui/src/pages/activity/activity-page.ts",
-      "ui/src/pages/activity/route.ts",
       "ui/src/pages/activity/session-activity-git.ts",
     ],
-    watchGlobs: ["ui/src/pages/activity/route.ts", ...pageStyles["activity"]],
-  },
-  {
-    testFile: "ui/src/e2e/activity-session-recaps.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/activity/route.ts"],
-    watchGlobs: ["ui/src/pages/activity/route.ts", ...pageStyles["activity"]],
-  },
-  {
-    testFile: "ui/src/e2e/activity-session-subagents.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/activity/activity-page.ts", "ui/src/pages/activity/route.ts"],
-    watchGlobs: ["ui/src/pages/activity/route.ts", ...pageStyles["activity"]],
-  },
-  {
-    testFile: "ui/src/e2e/activity-summaries.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/activity/activity-page.ts",
-      "ui/src/pages/activity/route.ts",
-      "ui/src/pages/config/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/activity/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["activity"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/agent-channel-runtime-status.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/channels/route.ts",
-      "ui/src/pages/config/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/channels/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["agents-home"],
-      ...pageStyles["agents"],
-      ...pageStyles["channels"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/agent-config-save.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch("ui/src/e2e/activity-session-recaps.e2e.test.ts", ["activity"]),
+  pageWatch(
+    "ui/src/e2e/activity-session-subagents.e2e.test.ts",
+    ["activity"],
+    ["ui/src/pages/activity/activity-page.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/activity-summaries.e2e.test.ts",
+    ["activity", "config"],
+    ["ui/src/pages/activity/activity-page.ts"],
+  ),
+  pageWatch("ui/src/e2e/agent-channel-runtime-status.e2e.test.ts", [
+    "agents-home",
+    "agents",
+    "channels",
+    "config",
+  ]),
+  pageWatch(
+    "ui/src/e2e/agent-config-save.e2e.test.ts",
+    ["agents-home", "agents", "config", "skills"],
+    [
       "ui/src/components/select-picker.ts",
       "ui/src/components/settings-save-indicator.ts",
-      "ui/src/pages/agents-home/route.ts",
       "ui/src/pages/agents/agents-page.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/skills/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/skills/route.ts",
-      ...pageStyles["agents-home"],
-      ...pageStyles["agents"],
-      ...pageStyles["config"],
-      ...pageStyles["skills"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/agent-file-lifecycle.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/agent-file-lifecycle.e2e.test.ts",
+    ["agents-home", "agents", "config"],
+    [
       "ui/src/components/agent-select-registration.ts",
       "ui/src/components/modal-dialog.ts",
       "ui/src/components/tooltip.ts",
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["agents-home"],
-      ...pageStyles["agents"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/agent-identity-reconnect.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["agents-home"],
-      ...pageStyles["agents"],
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/agent-model-fallback-ownership.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch("ui/src/e2e/agent-identity-reconnect.e2e.test.ts", [
+    "agents-home",
+    "agents",
+    "chat",
+    "config",
+  ]),
+  pageWatch(
+    "ui/src/e2e/agent-model-fallback-ownership.e2e.test.ts",
+    ["agents-home", "agents", "config"],
+    [
       "ui/src/components/agent-select-registration.ts",
       "ui/src/components/multi-select-registration.ts",
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["agents-home"],
-      ...pageStyles["agents"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/agent-select-avatar-timeout.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/agent-select-registration.ts",
-      "ui/src/components/agent-select.ts",
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["agents-home"],
-      ...pageStyles["agents"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/agent-select-layout.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/agent-select-registration.ts",
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["agents-home"],
-      ...pageStyles["agents"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/agent-selection-persistence.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/agent-switch-roster.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/agents-set-default-persistence.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["agents-home"],
-      ...pageStyles["agents"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/app-chrome-interaction.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/usage/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/usage/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-      ...pageStyles["usage"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/appearance-accent-selection.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/config/route.ts"],
-    watchGlobs: ["ui/src/pages/config/route.ts", ...pageStyles["config"]],
-  },
-  {
-    testFile: "ui/src/e2e/appearance-control-layout.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/config/route.ts"],
-    watchGlobs: ["ui/src/pages/config/route.ts", ...pageStyles["config"]],
-  },
-  {
-    testFile: "ui/src/e2e/appearance-settings-defaults.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/custom-theme-import.ts",
-      "ui/src/pages/config/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
+  ),
+  pageWatch(
+    "ui/src/e2e/agent-select-avatar-timeout.e2e.test.ts",
+    ["agents-home", "agents", "config"],
+    ["ui/src/components/agent-select-registration.ts", "ui/src/components/agent-select.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/agent-select-layout.e2e.test.ts",
+    ["agents-home", "agents", "config"],
+    ["ui/src/components/agent-select-registration.ts"],
+  ),
+  pageWatch("ui/src/e2e/agent-selection-persistence.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/agent-switch-roster.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
+  pageWatch("ui/src/e2e/agents-set-default-persistence.e2e.test.ts", [
+    "agents-home",
+    "agents",
+    "config",
+  ]),
+  pageWatch("ui/src/e2e/app-chrome-interaction.e2e.test.ts", ["chat", "config", "usage"]),
+  pageWatch("ui/src/e2e/appearance-accent-selection.e2e.test.ts", ["config"]),
+  pageWatch("ui/src/e2e/appearance-control-layout.e2e.test.ts", ["config"]),
+  pageWatch(
+    "ui/src/e2e/appearance-settings-defaults.e2e.test.ts",
+    ["chat", "config"],
+    ["ui/src/pages/config/custom-theme-import.ts"],
+  ),
   {
     testFile: "ui/src/e2e/approval-bootstrap.e2e.test.ts",
     ownerRoots: ["ui/src/components/sidebar-attention.ts", "ui/src/pages/chat/route.ts"],
@@ -501,11 +334,7 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["chat"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/attachment-file-styles.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
+  pageWatch("ui/src/e2e/attachment-file-styles.e2e.test.ts", ["chat"]),
   {
     testFile: "ui/src/e2e/avatar-initial-emoji.e2e.test.ts",
     ownerRoots: [
@@ -528,381 +357,142 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["usage"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/browser-dictation-status.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/tooltip.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-      ...pageStyles["model-providers"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/browser-panel-width.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/browser-screenshot-body-cancel.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/browser-stream-startup.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/connection/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/connection/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["connection"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/browser-tab-preview-urls.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/components/browser-tab-card.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/browser-talk-ordering.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/browser-talk-start-stop.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/config/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/browser-talk-voice-selection.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/settings-save-indicator.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/browser-talk-webkit-error.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/config/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/channel-wizard-option-contrast.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/select-picker.ts",
-      "ui/src/pages/channels/route.ts",
-      "ui/src/pages/config/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/channels/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["channels"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/channels-whatsapp-logout.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/select-picker.ts",
-      "ui/src/pages/channels/route.ts",
-      "ui/src/pages/config/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/channels/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["channels"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-active-cursor-replay.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-agent-run-transcript.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-async-questions.e2e.test.ts",
-    ownerRoots: [
+  pageWatch(
+    "ui/src/e2e/browser-dictation-status.e2e.test.ts",
+    ["chat", "config", "model-providers", "new-session"],
+    ["ui/src/components/tooltip.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/browser-panel-width.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/components/chat-header-session-menu.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/browser-screenshot-body-cancel.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/components/chat-header-session-menu.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/browser-stream-startup.e2e.test.ts",
+    ["chat", "connection"],
+    ["ui/src/pages/chat/components/chat-header-session-menu.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/browser-tab-preview-urls.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/components/browser-tab-card.ts"],
+  ),
+  pageWatch("ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/browser-talk-ordering.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/browser-talk-start-stop.e2e.test.ts", ["chat", "config"]),
+  pageWatch("ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/browser-talk-voice-selection.e2e.test.ts",
+    ["chat", "config"],
+    ["ui/src/components/settings-save-indicator.ts"],
+  ),
+  pageWatch("ui/src/e2e/browser-talk-webkit-error.e2e.test.ts", ["chat", "config"]),
+  pageWatch(
+    "ui/src/e2e/channel-wizard-option-contrast.e2e.test.ts",
+    ["channels", "config"],
+    ["ui/src/components/select-picker.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/channels-whatsapp-logout.e2e.test.ts",
+    ["channels", "config"],
+    ["ui/src/components/modal-dialog.ts", "ui/src/components/select-picker.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-active-cursor-replay.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-agent-run-transcript.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-async-questions.e2e.test.ts",
+    ["chat"],
+    [
       "ui/src/lib/chat/chat-types.ts",
       "ui/src/lib/chat/composer-draft-store.runtime.ts",
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/components/chat-question-card.ts",
-      "ui/src/pages/chat/route.ts",
     ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-attachment-announcement.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-attachment-containment.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/new-session/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-attachment-focus.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-attachment-remove.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/image-lightbox.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-attachment-spacing.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/profile/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-attributed-identity.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/viewer-facepile.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/profile/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-background-invalidation.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/chat-state-host.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-boot-optional-requests.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/login-gate.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-cli-history-redaction.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-collaborator-scroll.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/profile/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-collapsed-reply-reveal.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-comment-lifecycle.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/lib/toast.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/plugins/control-ui-view.runtime.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-comment-pane-retirement.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/chat-page.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-composer-accessory-focus.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-composer-capability-menu-height.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/skills/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/skills/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-      ...pageStyles["skills"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-composer-capability-menu.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/skills/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/skills/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-      ...pageStyles["skills"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-composer-catalog.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-      ...pageStyles["model-providers"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-composer-focus.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch("ui/src/e2e/chat-attachment-announcement.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-attachment-containment.e2e.test.ts", ["chat", "new-session"]),
+  pageWatch("ui/src/e2e/chat-attachment-focus.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-attachment-remove.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/components/image-lightbox.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-attachment-spacing.e2e.test.ts", ["chat", "profile"]),
+  pageWatch(
+    "ui/src/e2e/chat-attributed-identity.e2e.test.ts",
+    ["chat", "config", "profile"],
+    ["ui/src/components/viewer-facepile.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-background-invalidation.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/chat-state-host.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-boot-optional-requests.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/components/login-gate.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-cli-history-redaction.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-collaborator-scroll.e2e.test.ts", ["chat", "profile"]),
+  pageWatch("ui/src/e2e/chat-collapsed-reply-reveal.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-comment-lifecycle.e2e.test.ts",
+    ["chat"],
+    ["ui/src/lib/toast.ts", "ui/src/plugins/control-ui-view.runtime.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-comment-pane-retirement.e2e.test.ts",
+    ["chat"],
+    [...sessionMenuOwnerRoots, "ui/src/pages/chat/chat-page.ts", "ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-composer-accessory-focus.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-composer-capability-menu-height.e2e.test.ts", [
+    "chat",
+    "config",
+    "skills",
+  ]),
+  pageWatch(
+    "ui/src/e2e/chat-composer-capability-menu.e2e.test.ts",
+    ["chat", "config", "skills"],
+    ["ui/src/components/modal-dialog.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-composer-catalog.e2e.test.ts",
+    ["chat", "config", "model-providers"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-composer-focus.e2e.test.ts",
+    ["chat", "new-session"],
+    [
       "ui/src/components/agent-select-registration.ts",
       "ui/src/components/browser/browser-panel.ts",
       "ui/src/components/desktop/desktop-panel.ts",
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-composer-input-measurement.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-composer-outbox.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-composer-picker-layout.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-composer-redesign.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
+  ),
+  pageWatch("ui/src/e2e/chat-composer-input-measurement.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-composer-outbox.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-composer-picker-layout.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/components/chat-header-session-menu.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-composer-redesign.e2e.test.ts", ["chat"]),
   {
     testFile: "ui/src/e2e/chat-context-attachment.e2e.test.ts",
     ownerRoots: [
@@ -916,639 +506,244 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["chat"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/chat-continue-in-terminal.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route-draft-focus-handoff.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-error-details.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-external-pending-input.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/profile/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-file-copy-retirement.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/components/chat-detail-panel.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-file-editor-recovery.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/components/chat-detail-panel.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-flow.active-run-follow-ups.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/config/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-flow.composer-shortcuts.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/config/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-flow.dynamic-catalog.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/new-session-page-entry.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-flow.history-issuance.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/panel-loading-skeleton.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-flow.history-recovery.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/lib/chat/chat-types.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["sessions"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-flow.image-handoff.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/chat-send-contract.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-flow.local-media-dollar-home.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/components/chat-audio-player.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-flow.local-media-policy.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/components/chat-audio-player.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-flow.media-files.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-flow.model-picker-refresh.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-      ...pageStyles["model-providers"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-flow.model-switch-reasoning.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-flow.models-reasoning.e2e.test.ts",
-    ownerRoots: [
+  pageWatch(
+    "ui/src/e2e/chat-continue-in-terminal.e2e.test.ts",
+    ["chat"],
+    [
+      ...sessionMenuOwnerRoots,
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/route-draft-focus-handoff.ts",
-      "ui/src/pages/chat/route.ts",
     ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-flow.pending-settings.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-flow.queue-edit.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/config/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-flow.queue-reorder.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/lib/chat/chat-types.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-flow.reactions.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/components/chat-message-reactions.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-flow.session-start.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-flow.sidebar-presentation.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-flow.stream-reconciliation.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/usage/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/usage/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["usage"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-follow-maintenance.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-goal-elapsed.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-goal-recovery.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-guardian-review.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-header-axis.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/workspace-icon.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-header-owner-presence.capture.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/profile/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-header-session-lineage.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-header-session-outcomes.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["sessions"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-heartbeat-activity-rollup.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-history-activity-anchor.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-history-loading.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-history-prepend-anchor.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-history-stale-geometry.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/chat/session-snapshot-database.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-image-approval-loading.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-image-loading.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-image-virtual-remount.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-interrupted-reply.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-live-final-order.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-markdown-alignment.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-mention-cache.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/profile/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-mention-popover.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/profile/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-mermaid-load-errors.e2e.test.ts",
-    ownerRoots: ["ui/src/components/markdown-mermaid.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-metadata-observation.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-mobile-bubble-margin.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-model-picker-composition.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-model-selection-recovery.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-motion.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-native-runtime-recovery.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-nested-tool-presentation.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-offline-session-title.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-omitted-image-placeholder.e2e.test.ts",
-    ownerRoots: ["ui/src/components/image-lightbox.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-only-model.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-outbox-agent-scope.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-outbox-capacity.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/lib/chat/outbox-store.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-outbox-payloads.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/lib/chat/chat-types.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-panel-layout.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch("ui/src/e2e/chat-error-details.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-external-pending-input.e2e.test.ts", ["chat", "profile"]),
+  pageWatch(
+    "ui/src/e2e/chat-file-copy-retirement.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/components/chat-detail-panel.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-file-editor-recovery.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/components/chat-detail-panel.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-flow.active-run-follow-ups.e2e.test.ts", ["chat", "config"]),
+  pageWatch("ui/src/e2e/chat-flow.composer-shortcuts.e2e.test.ts", ["chat", "config"]),
+  pageWatch(
+    "ui/src/e2e/chat-flow.dynamic-catalog.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/pages/new-session/new-session-page-entry.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-flow.history-issuance.e2e.test.ts",
+    ["chat"],
+    ["ui/src/components/panel-loading-skeleton.ts", "ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-flow.history-recovery.e2e.test.ts",
+    ["chat", "sessions"],
+    ["ui/src/lib/chat/chat-types.ts", "ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-flow.image-handoff.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/chat-send-contract.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-flow.local-media-dollar-home.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/components/chat-audio-player.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-flow.local-media-policy.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/components/chat-audio-player.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-flow.media-files.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/components/chat-header-session-menu.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-flow.model-picker-refresh.e2e.test.ts",
+    ["chat", "config", "model-providers"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-flow.model-switch-reasoning.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-flow.models-reasoning.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route-draft-focus-handoff.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-flow.pending-settings.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-flow.queue-edit.e2e.test.ts", ["chat", "config"]),
+  pageWatch(
+    "ui/src/e2e/chat-flow.queue-reorder.e2e.test.ts",
+    ["chat"],
+    ["ui/src/lib/chat/chat-types.ts", "ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-flow.reactions.e2e.test.ts",
+    ["chat", "profile"],
+    ["ui/src/pages/chat/components/chat-message-reactions.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-flow.session-start.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-flow.sidebar-presentation.e2e.test.ts",
+    ["chat"],
+    [...sessionMenuOwnerRoots, "ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-flow.stream-reconciliation.e2e.test.ts",
+    ["chat", "usage"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-follow-maintenance.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-goal-elapsed.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-goal-recovery.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-guardian-review.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-header-axis.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/components/workspace-icon.ts", "ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-header-owner-presence.capture.e2e.test.ts", ["chat", "profile"]),
+  pageWatch("ui/src/e2e/chat-header-session-lineage.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
+  pageWatch(
+    "ui/src/e2e/chat-header-session-outcomes.e2e.test.ts",
+    ["chat", "sessions"],
+    ["ui/src/components/session-menu.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-heartbeat-activity-rollup.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-history-activity-anchor.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-history-loading.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-history-prepend-anchor.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-history-stale-geometry.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/session-snapshot-database.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-image-approval-loading.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-image-loading.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-image-virtual-remount.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-interrupted-reply.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-live-final-order.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-markdown-alignment.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-mention-cache.e2e.test.ts", ["chat", "profile"]),
+  pageWatch("ui/src/e2e/chat-mention-popover.e2e.test.ts", ["chat", "new-session", "profile"]),
+  pageWatch(
+    "ui/src/e2e/chat-mermaid-load-errors.e2e.test.ts",
+    ["chat"],
+    ["ui/src/components/markdown-mermaid.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-metadata-observation.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-mobile-bubble-margin.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-model-picker-composition.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-model-selection-recovery.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-motion.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-native-runtime-recovery.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/components/modal-dialog.ts", "ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-nested-tool-presentation.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-offline-session-title.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
+  pageWatch(
+    "ui/src/e2e/chat-omitted-image-placeholder.e2e.test.ts",
+    ["chat"],
+    ["ui/src/components/image-lightbox.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-only-model.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-outbox-agent-scope.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-outbox-capacity.e2e.test.ts",
+    ["chat", "config"],
+    ["ui/src/lib/chat/outbox-store.ts", "ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-outbox-payloads.e2e.test.ts",
+    ["chat"],
+    ["ui/src/lib/chat/chat-types.ts", "ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-panel-layout.e2e.test.ts",
+    ["chat", "terminal"],
+    [
       "ui/src/components/terminal/terminal-panel-registration.ts",
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/terminal/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/terminal/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["terminal"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-panel-reflow.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-permission-refresh.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-picker-interaction-contract.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-placement-recovery.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/device/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/device/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["device"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-position-rail-layout.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-position-rail-split.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-position-rail.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/chat/sidebar-layout.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/question/question-page-registration.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-prepared-identity.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-provider-policy-notice.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-provider-review.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-queue-edit-conflict-recovery.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-queue-reorder-recovery.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-quota-pill-93041.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/usage/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/usage/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["usage"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-rail-columns.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-panel-reflow.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/components/chat-header-session-menu.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-permission-refresh.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-picker-interaction-contract.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-placement-recovery.e2e.test.ts", ["chat", "device"]),
+  pageWatch("ui/src/e2e/chat-position-rail-layout.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-position-rail-split.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-position-rail.e2e.test.ts",
+    ["chat", "config"],
+    ["ui/src/pages/chat/sidebar-layout.ts", "ui/src/pages/question/question-page-registration.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-prepared-identity.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-provider-policy-notice.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-provider-review.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-queue-edit-conflict-recovery.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-queue-reorder-recovery.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-quota-pill-93041.e2e.test.ts",
+    ["chat", "usage"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-rail-columns.e2e.test.ts",
+    ["chat", "terminal"],
+    [
       "ui/src/components/tooltip.ts",
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
       "ui/src/pages/chat/components/chat-session-rail.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/terminal/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/terminal/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["terminal"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-reasoning-visibility.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-recovered-search.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-reply-attribution.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/profile/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-reply-preview-recovery.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-reasoning-visibility.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-recovered-search.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-reply-attribution.e2e.test.ts", ["chat", "profile"]),
+  pageWatch("ui/src/e2e/chat-reply-preview-recovery.e2e.test.ts", ["chat"]),
   {
     testFile: "ui/src/e2e/chat-retained-pane-escape.e2e.test.ts",
     ownerRoots: [
@@ -1562,167 +757,115 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["chat"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/chat-retained-pane-eviction.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-run-lifecycle.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-scroll-dock.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/lib/session-pull-requests.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/chat/scroll.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-scroll.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/chat/scroll.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-selection-to-main.e2e.test.ts",
-    ownerRoots: [
+  pageWatch(
+    "ui/src/e2e/chat-retained-pane-eviction.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-run-lifecycle.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-scroll-dock.e2e.test.ts",
+    ["chat"],
+    ["ui/src/lib/session-pull-requests.ts", "ui/src/pages/chat/scroll.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-scroll.e2e.test.ts", ["chat"], ["ui/src/pages/chat/scroll.ts"]),
+  pageWatch(
+    "ui/src/e2e/chat-selection-to-main.e2e.test.ts",
+    ["chat"],
+    [
       "ui/src/lib/chat/outbox-store.ts",
       "ui/src/pages/chat/components/chat-sent-comments.ts",
       "ui/src/pages/chat/components/chat-session-rail.ts",
-      "ui/src/pages/chat/route.ts",
     ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-send-ack-ownership.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/config/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-send-pending-handoff.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-session-activity.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-session-companion-clear.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch("ui/src/e2e/chat-send-ack-ownership.e2e.test.ts", ["chat", "config"]),
+  pageWatch(
+    "ui/src/e2e/chat-send-pending-handoff.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-session-activity.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-session-companion-clear.e2e.test.ts",
+    ["chat"],
+    [
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
       "ui/src/pages/chat/components/chat-session-rail.ts",
-      "ui/src/pages/chat/route.ts",
     ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-session-companion-composer.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-session-companion-composer.e2e.test.ts",
+    ["chat"],
+    [
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
       "ui/src/pages/chat/components/chat-session-rail.ts",
-      "ui/src/pages/chat/route.ts",
     ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-session-companion-focus.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-session-companion-focus.e2e.test.ts",
+    ["chat"],
+    [
+      ...sessionMenuOwnerRoots,
       "ui/src/components/command-palette.ts",
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
       "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
       "ui/src/pages/chat/components/chat-session-rail.ts",
-      "ui/src/pages/chat/route.ts",
     ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-session-companion-manual-open-focus.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-session-companion-manual-open-focus.e2e.test.ts",
+    ["chat", "config"],
+    [
       "ui/src/components/command-palette.ts",
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-session-companion-retry.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-session-companion-retry.e2e.test.ts",
+    ["chat"],
+    [
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
       "ui/src/pages/chat/components/chat-session-rail.ts",
-      "ui/src/pages/chat/route.ts",
     ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-session-diff.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-session-diff.e2e.test.ts",
+    ["chat"],
+    [
       "ui/src/components/panel-loading-skeleton.ts",
       "ui/src/lib/session-pull-requests.ts",
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
       "ui/src/pages/chat/components/session-diff-menus.ts",
-      "ui/src/pages/chat/route.ts",
     ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-session-entry.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-session-prefetch-gating.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-side-chat-typography.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-session-entry.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-session-prefetch-gating.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-side-chat-typography.e2e.test.ts",
+    ["chat"],
+    [
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
       "ui/src/pages/chat/components/chat-session-rail.ts",
-      "ui/src/pages/chat/route.ts",
     ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-side-panel-clearance.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-side-panel-clearance.e2e.test.ts",
+    ["chat", "sessions"],
+    [
       "ui/src/pages/chat/components/chat-detail-panel.ts",
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["sessions"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-sidebar-panel-contract.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-sidebar-panel-contract.e2e.test.ts",
+    ["chat"],
+    [
       "ui/src/components/browser/browser-panel.ts",
       "ui/src/components/desktop/desktop-client.ts",
       "ui/src/components/desktop/desktop-panel.ts",
@@ -1730,30 +873,15 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       "ui/src/components/panel-loading-skeleton.ts",
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
     ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-skill-library.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-skill-references.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-slash-command-ranking.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/plugin/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/plugin/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["plugin"],
-    ],
-  },
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-skill-library.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-skill-references.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-slash-command-ranking.e2e.test.ts", ["chat", "plugin"]),
   {
     testFile: "ui/src/e2e/chat-split-close-focus.e2e.test.ts",
     ownerRoots: [
@@ -1768,212 +896,84 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["chat"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/chat-split-narrow.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-split-saved-owner.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/chat/split-layout-types.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-startup-priority.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/new-session-page-entry.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/profile/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-startup-progress.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-stop-response-ownership.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/chat-page.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-submit-responsiveness.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-swarm-history.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/chat-page.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-swarm-lifecycle.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/lib/sessions/swarm-roster.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-text-attachment.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/components/chat-detail-panel.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-thinking-arguments.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-tool-output-fidelity.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/components/chat-tool-output.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-tool-steering-skip.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-tool-turn-outcome.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/terminal/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/terminal/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["terminal"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-transcript-disclosure-anchor.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-transcript-focus.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-user-avatar-alignment.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/profile/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-user-bubble-disclosure.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-video-gallery.e2e.test.ts",
-    ownerRoots: ["ui/src/components/image-lightbox.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-widget-autosize.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-widget-sandbox.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/connection/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/connection/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["connection"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/chat-worked-for-visualization.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/browser-tab-card.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-workspace-directory-race.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chat-workspace-files.e2e.test.ts",
-    ownerRoots: [
+  pageWatch(
+    "ui/src/e2e/chat-split-narrow.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-split-saved-owner.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/split-layout-types.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-startup-priority.e2e.test.ts",
+    ["chat", "new-session", "profile"],
+    ["ui/src/pages/new-session/new-session-page-entry.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-startup-progress.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-stop-response-ownership.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-page.ts", "ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-submit-responsiveness.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-swarm-history.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-page.ts", "ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-swarm-lifecycle.e2e.test.ts",
+    ["chat"],
+    ["ui/src/lib/sessions/swarm-roster.ts", "ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-text-attachment.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/components/chat-detail-panel.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-thinking-arguments.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-tool-output-fidelity.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/components/chat-tool-output.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-tool-steering-skip.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-tool-turn-outcome.e2e.test.ts", ["chat", "terminal"]),
+  pageWatch("ui/src/e2e/chat-transcript-disclosure-anchor.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-transcript-focus.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-user-avatar-alignment.e2e.test.ts", ["chat", "profile"]),
+  pageWatch("ui/src/e2e/chat-user-bubble-disclosure.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-video-gallery.e2e.test.ts",
+    ["chat"],
+    ["ui/src/components/image-lightbox.ts"],
+  ),
+  pageWatch("ui/src/e2e/chat-widget-autosize.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/chat-widget-sandbox.e2e.test.ts", ["chat", "connection"]),
+  pageWatch(
+    "ui/src/e2e/chat-worked-for-visualization.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/components/browser-tab-card.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-workspace-directory-race.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/components/chat-header-session-menu.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/chat-workspace-files.e2e.test.ts",
+    ["chat", "search"],
+    [
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
       "ui/src/pages/chat/components/session-diff-menus.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/search/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/search/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["search"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/child-session-load-errors.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/chrome-extension-status.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/config/route.ts", "ui/src/pages/device/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/device/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["device"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/cloud-reconciliation-followup.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
+  ),
+  pageWatch("ui/src/e2e/child-session-load-errors.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
+  pageWatch("ui/src/e2e/chrome-extension-status.e2e.test.ts", ["config", "device"]),
+  pageWatch("ui/src/e2e/cloud-reconciliation-followup.e2e.test.ts", ["chat"]),
   {
     testFile: "ui/src/e2e/cloud-session-placement-identity.e2e.test.ts",
     ownerRoots: [
@@ -1988,209 +988,76 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["chat"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/cloud-workers-snapshots.e2e.test.ts",
-    ownerRoots: [
+  pageWatch(
+    "ui/src/e2e/cloud-workers-snapshots.e2e.test.ts",
+    ["cloud-workers", "config"],
+    [
       "ui/src/components/modal-dialog.ts",
       "ui/src/pages/cloud-workers/cloud-worker-snapshot-rows.ts",
-      "ui/src/pages/cloud-workers/route.ts",
-      "ui/src/pages/config/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/cloud-workers/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["cloud-workers"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/cloud-workspace-conflict.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/codex-sessions.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/command-palette-avatars.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/profile/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/command-palette-composition.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/command-palette-create.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/agent-select-registration.ts",
-      "ui/src/components/command-palette.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/device/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/device/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-      ...pageStyles["device"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/command-palette-first-open.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/command-palette.ts",
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/command-palette-images.e2e.test.ts",
-    ownerRoots: ["ui/src/components/command-palette.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/command-palette-mentions.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/command-palette.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/composer-text-readability.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/new-session/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/config-enum-controls.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/config/route.ts"],
-    watchGlobs: ["ui/src/pages/config/route.ts", ...pageStyles["config"]],
-  },
-  {
-    testFile: "ui/src/e2e/config-form-defaults.e2e.test.ts",
-    ownerRoots: ["ui/src/components/settings-save-indicator.ts", "ui/src/pages/config/route.ts"],
-    watchGlobs: ["ui/src/pages/config/route.ts", ...pageStyles["config"]],
-  },
-  {
-    testFile: "ui/src/e2e/config-form-integrity.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/settings-save-indicator.ts",
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["agents-home"],
-      ...pageStyles["agents"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/config-number-controls.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/config/route.ts"],
-    watchGlobs: ["ui/src/pages/config/route.ts", ...pageStyles["config"]],
-  },
-  {
-    testFile: "ui/src/e2e/config-open-file-feedback.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/config/route.ts"],
-    watchGlobs: ["ui/src/pages/config/route.ts", ...pageStyles["config"]],
-  },
-  {
-    testFile: "ui/src/e2e/config-quick-thinking-persistence.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/config/route.ts", "ui/src/pages/model-providers/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["model-providers"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/config-raw-save.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/config/route.ts"],
-    watchGlobs: ["ui/src/pages/config/route.ts", ...pageStyles["config"]],
-  },
-  {
-    testFile: "ui/src/e2e/config-safe-write.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/settings-save-indicator.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/connection/route.ts",
-      "ui/src/pages/labs/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/connection/route.ts",
-      "ui/src/pages/labs/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["connection"],
-      ...pageStyles["labs"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/connection-settings.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/connection/connection-page.ts",
-      "ui/src/pages/connection/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/connection/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["connection"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/control-ui-route-readiness.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route-draft-focus-handoff.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
+  ),
+  pageWatch("ui/src/e2e/cloud-workspace-conflict.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/codex-sessions.e2e.test.ts",
+    ["chat", "profile"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/command-palette-avatars.e2e.test.ts", ["chat", "profile"]),
+  pageWatch("ui/src/e2e/command-palette-composition.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/command-palette-create.e2e.test.ts",
+    ["chat", "config", "device"],
+    ["ui/src/components/agent-select-registration.ts", "ui/src/components/command-palette.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/command-palette-first-open.e2e.test.ts",
+    ["chat", "config"],
+    ["ui/src/components/command-palette.ts", "ui/src/components/modal-dialog.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/command-palette-images.e2e.test.ts",
+    ["chat"],
+    ["ui/src/components/command-palette.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/command-palette-mentions.e2e.test.ts",
+    ["chat", "profile"],
+    ["ui/src/components/command-palette.ts"],
+  ),
+  pageWatch("ui/src/e2e/composer-text-readability.e2e.test.ts", ["chat", "new-session"]),
+  pageWatch("ui/src/e2e/config-enum-controls.e2e.test.ts", ["config"]),
+  pageWatch(
+    "ui/src/e2e/config-form-defaults.e2e.test.ts",
+    ["config"],
+    ["ui/src/components/settings-save-indicator.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/config-form-integrity.e2e.test.ts",
+    ["agents-home", "agents", "config"],
+    ["ui/src/components/settings-save-indicator.ts"],
+  ),
+  pageWatch("ui/src/e2e/config-number-controls.e2e.test.ts", ["config"]),
+  pageWatch("ui/src/e2e/config-open-file-feedback.e2e.test.ts", ["config"]),
+  pageWatch("ui/src/e2e/config-quick-thinking-persistence.e2e.test.ts", [
+    "config",
+    "model-providers",
+  ]),
+  pageWatch("ui/src/e2e/config-raw-save.e2e.test.ts", ["config"]),
+  pageWatch(
+    "ui/src/e2e/config-safe-write.e2e.test.ts",
+    ["config", "connection", "labs"],
+    ["ui/src/components/settings-save-indicator.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/connection-settings.e2e.test.ts",
+    ["config", "connection"],
+    ["ui/src/pages/connection/connection-page.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/control-ui-route-readiness.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route-draft-focus-handoff.ts"],
+  ),
   {
     testFile: "ui/src/e2e/cron-agent-ownership.e2e.test.ts",
     ownerRoots: [
@@ -2206,11 +1073,7 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["cron"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/cron-descriptions.e2e.test.ts",
-    ownerRoots: ["ui/src/lib/cron/types.ts", "ui/src/pages/cron/route.ts"],
-    watchGlobs: ["ui/src/pages/cron/route.ts", ...pageStyles["cron"]],
-  },
+  pageWatch("ui/src/e2e/cron-descriptions.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
   {
     testFile: "ui/src/e2e/cron-filters.e2e.test.ts",
     ownerRoots: [
@@ -2224,70 +1087,30 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["cron"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/cron-heartbeat-scratch.e2e.test.ts",
-    ownerRoots: ["ui/src/lib/cron/types.ts", "ui/src/pages/cron/route.ts"],
-    watchGlobs: ["ui/src/pages/cron/route.ts", ...pageStyles["cron"]],
-  },
-  {
-    testFile: "ui/src/e2e/cron-history-recovery.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/lib/cron/types.ts",
-      "ui/src/pages/cron/cron-page.ts",
-      "ui/src/pages/cron/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/cron/route.ts", ...pageStyles["cron"]],
-  },
-  {
-    testFile: "ui/src/e2e/cron-job-link.e2e.test.ts",
-    ownerRoots: ["ui/src/lib/cron/types.ts", "ui/src/pages/cron/route.ts"],
-    watchGlobs: ["ui/src/pages/cron/route.ts", ...pageStyles["cron"]],
-  },
-  {
-    testFile: "ui/src/e2e/cron-pacing.e2e.test.ts",
-    ownerRoots: ["ui/src/lib/cron/types.ts", "ui/src/pages/cron/route.ts"],
-    watchGlobs: ["ui/src/pages/cron/route.ts", ...pageStyles["cron"]],
-  },
-  {
-    testFile: "ui/src/e2e/cron-remove.e2e.test.ts",
-    ownerRoots: ["ui/src/lib/cron/types.ts", "ui/src/pages/cron/route.ts"],
-    watchGlobs: ["ui/src/pages/cron/route.ts", ...pageStyles["cron"]],
-  },
-  {
-    testFile: "ui/src/e2e/cron-run-completion.e2e.test.ts",
-    ownerRoots: ["ui/src/lib/cron/types.ts", "ui/src/pages/cron/route.ts"],
-    watchGlobs: ["ui/src/pages/cron/route.ts", ...pageStyles["cron"]],
-  },
-  {
-    testFile: "ui/src/e2e/cron-run-feedback.e2e.test.ts",
-    ownerRoots: ["ui/src/lib/cron/types.ts", "ui/src/pages/cron/route.ts"],
-    watchGlobs: ["ui/src/pages/cron/route.ts", ...pageStyles["cron"]],
-  },
-  {
-    testFile: "ui/src/e2e/cron-run-filter-typography.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/cron/route.ts"],
-    watchGlobs: ["ui/src/pages/cron/route.ts", ...pageStyles["cron"]],
-  },
-  {
-    testFile: "ui/src/e2e/cron-run-suppression.e2e.test.ts",
-    ownerRoots: ["ui/src/lib/cron/types.ts", "ui/src/pages/cron/route.ts"],
-    watchGlobs: ["ui/src/pages/cron/route.ts", ...pageStyles["cron"]],
-  },
-  {
-    testFile: "ui/src/e2e/cron-search.e2e.test.ts",
-    ownerRoots: ["ui/src/lib/cron/types.ts", "ui/src/pages/cron/route.ts"],
-    watchGlobs: ["ui/src/pages/cron/route.ts", ...pageStyles["cron"]],
-  },
-  {
-    testFile: "ui/src/e2e/cron-trigger-authoring.e2e.test.ts",
-    ownerRoots: ["ui/src/lib/cron/types.ts", "ui/src/pages/cron/route.ts"],
-    watchGlobs: ["ui/src/pages/cron/route.ts", ...pageStyles["cron"]],
-  },
-  {
-    testFile: "ui/src/e2e/cron-trigger-filter.e2e.test.ts",
-    ownerRoots: ["ui/src/lib/cron/types.ts", "ui/src/pages/cron/route.ts"],
-    watchGlobs: ["ui/src/pages/cron/route.ts", ...pageStyles["cron"]],
-  },
+  pageWatch(
+    "ui/src/e2e/cron-heartbeat-scratch.e2e.test.ts",
+    ["cron"],
+    ["ui/src/lib/cron/types.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/cron-history-recovery.e2e.test.ts",
+    ["cron"],
+    ["ui/src/lib/cron/types.ts", "ui/src/pages/cron/cron-page.ts"],
+  ),
+  pageWatch("ui/src/e2e/cron-job-link.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
+  pageWatch("ui/src/e2e/cron-pacing.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
+  pageWatch("ui/src/e2e/cron-remove.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
+  pageWatch("ui/src/e2e/cron-run-completion.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
+  pageWatch("ui/src/e2e/cron-run-feedback.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
+  pageWatch("ui/src/e2e/cron-run-filter-typography.e2e.test.ts", ["cron"]),
+  pageWatch("ui/src/e2e/cron-run-suppression.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
+  pageWatch("ui/src/e2e/cron-search.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
+  pageWatch(
+    "ui/src/e2e/cron-trigger-authoring.e2e.test.ts",
+    ["cron"],
+    ["ui/src/lib/cron/types.ts"],
+  ),
+  pageWatch("ui/src/e2e/cron-trigger-filter.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
   {
     testFile: "ui/src/e2e/csp-jitless.e2e.test.ts",
     ownerRoots: ["src/gateway/control-ui-csp.ts", "ui/src/main.ts", "ui/src/pages/chat/route.ts"],
@@ -2304,23 +1127,11 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["chat"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/curated-settings-defaults.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/settings-save-indicator.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/labs/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/labs/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["labs"],
-      ...pageStyles["model-providers"],
-    ],
-  },
+  pageWatch(
+    "ui/src/e2e/curated-settings-defaults.e2e.test.ts",
+    ["config", "labs", "model-providers"],
+    ["ui/src/components/settings-save-indicator.ts"],
+  ),
   {
     testFile: "ui/src/e2e/custodian-event-nudge.e2e.test.ts",
     ownerRoots: [
@@ -2336,128 +1147,64 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["custodian"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/dashboards-list-demand.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/dashboards/dashboards-page.ts",
-      "ui/src/pages/dashboards/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/dashboards/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["dashboards"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/debug-diagnostics.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/debug/route.ts",
-      "ui/src/pages/devices/view.types.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/debug/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-      ...pageStyles["debug"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/debug-overlay-position.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/debug/route.ts", "ui/src/pages/devices/view.types.ts"],
-    watchGlobs: ["ui/src/pages/debug/route.ts", ...pageStyles["debug"]],
-  },
-  {
-    testFile: "ui/src/e2e/debug-tray-polling.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/debug/route.ts", "ui/src/pages/devices/view.types.ts"],
-    watchGlobs: ["ui/src/pages/debug/route.ts", ...pageStyles["debug"]],
-  },
-  {
-    testFile: "ui/src/e2e/decision-model-settings.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/select-picker.ts",
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      ...pageStyles["agents-home"],
-      ...pageStyles["agents"],
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-      ...pageStyles["model-providers"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/desktop-panel-abandonment.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/desktop/desktop-client.ts",
-      "ui/src/components/desktop/desktop-panel.ts",
-      "ui/src/pages/activity/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/activity/route.ts", ...pageStyles["activity"]],
-  },
-  {
-    testFile: "ui/src/e2e/desktop-panel-credentials.e2e.test.ts",
-    ownerRoots: [
+  pageWatch(
+    "ui/src/e2e/dashboards-list-demand.e2e.test.ts",
+    ["chat", "dashboards", "new-session"],
+    ["ui/src/pages/dashboards/dashboards-page.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/debug-diagnostics.e2e.test.ts",
+    ["chat", "config", "debug"],
+    ["ui/src/pages/devices/view.types.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/debug-overlay-position.e2e.test.ts",
+    ["debug"],
+    ["ui/src/pages/devices/view.types.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/debug-tray-polling.e2e.test.ts",
+    ["debug"],
+    ["ui/src/pages/devices/view.types.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/decision-model-settings.e2e.test.ts",
+    ["agents-home", "agents", "chat", "config", "model-providers"],
+    ["ui/src/components/select-picker.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/desktop-panel-abandonment.e2e.test.ts",
+    ["activity"],
+    ["ui/src/components/desktop/desktop-client.ts", "ui/src/components/desktop/desktop-panel.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/desktop-panel-credentials.e2e.test.ts",
+    ["activity"],
+    [
       "ui/src/components/command-palette.ts",
       "ui/src/components/desktop/desktop-client.ts",
       "ui/src/components/desktop/desktop-panel.ts",
-      "ui/src/pages/activity/route.ts",
     ],
-    watchGlobs: ["ui/src/pages/activity/route.ts", ...pageStyles["activity"]],
-  },
-  {
-    testFile: "ui/src/e2e/desktop-panel-fullscreen.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/desktop-panel-fullscreen.e2e.test.ts",
+    ["activity", "terminal"],
+    [
       "ui/src/components/command-palette.ts",
       "ui/src/components/desktop/desktop-client.ts",
       "ui/src/components/desktop/desktop-panel.ts",
-      "ui/src/pages/activity/route.ts",
-      "ui/src/pages/terminal/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/activity/route.ts",
-      "ui/src/pages/terminal/route.ts",
-      ...pageStyles["activity"],
-      ...pageStyles["terminal"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/desktop-panel.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/desktop-panel.e2e.test.ts",
+    ["activity", "chat", "terminal"],
+    [
       "ui/src/components/command-palette.ts",
       "ui/src/components/desktop/desktop-client.ts",
       "ui/src/components/desktop/desktop-panel.ts",
-      "ui/src/pages/activity/route.ts",
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/terminal/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/activity/route.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/terminal/route.ts",
-      ...pageStyles["activity"],
-      ...pageStyles["chat"],
-      ...pageStyles["terminal"],
-    ],
-  },
+  ),
   {
     testFile: "ui/src/e2e/desktop-picture-in-picture.e2e.test.ts",
     ownerRoots: [
@@ -2468,34 +1215,16 @@ export const UI_E2E_OWNER_WATCHES: readonly {
     ],
     watchGlobs: ["ui/src/styles/native-embed.css"],
   },
-  {
-    testFile: "ui/src/e2e/device-alias-rename.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/devices/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/devices/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["devices"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/device-binding-state.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/settings-save-indicator.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/devices/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/devices/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["devices"],
-    ],
-  },
+  pageWatch(
+    "ui/src/e2e/device-alias-rename.e2e.test.ts",
+    ["config", "devices"],
+    ["ui/src/components/modal-dialog.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/device-binding-state.e2e.test.ts",
+    ["config", "devices"],
+    ["ui/src/components/settings-save-indicator.ts"],
+  ),
   {
     testFile: "ui/src/e2e/device-scope-upgrade.e2e.test.ts",
     ownerRoots: [
@@ -2520,66 +1249,31 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["new-session"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/dynamic-route-loader-count.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/plugins/route.ts"],
-    watchGlobs: ["ui/src/pages/plugins/route.ts", ...pageStyles["plugins"]],
-  },
-  {
-    testFile: "ui/src/e2e/favicon-status.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-history-events.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/file-drop-guard.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/gateway-foreground-recovery.e2e.test.ts",
-    ownerRoots: ["ui/src/app/gateway-page-activation.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/gateway-status.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/new-session/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/guest-self-profile.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/profile/route.ts"],
-    watchGlobs: ["ui/src/pages/profile/route.ts", ...pageStyles["profile"]],
-  },
-  {
-    testFile: "ui/src/e2e/guest-session-controls.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
+  pageWatch("ui/src/e2e/dynamic-route-loader-count.e2e.test.ts", ["plugins"]),
+  pageWatch(
+    "ui/src/e2e/favicon-status.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-history-events.ts"],
+  ),
+  pageWatch("ui/src/e2e/file-drop-guard.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/gateway-foreground-recovery.e2e.test.ts",
+    ["chat"],
+    ["ui/src/app/gateway-page-activation.ts"],
+  ),
+  pageWatch("ui/src/e2e/gateway-status.e2e.test.ts", ["chat", "new-session"]),
+  pageWatch("ui/src/e2e/guest-self-profile.e2e.test.ts", ["profile"]),
+  pageWatch(
+    "ui/src/e2e/guest-session-controls.e2e.test.ts",
+    ["chat", "sessions"],
+    [
+      ...sessionMenuOwnerRoots,
       "ui/src/lib/sessions/route-navigation.ts",
-      "ui/src/lib/sessions/session-capability.ts",
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/chat-state-host.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["sessions"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/home-attention.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
+  ),
+  pageWatch("ui/src/e2e/home-attention.e2e.test.ts", ["chat"]),
   {
     testFile: "ui/src/e2e/home-command-recovery.e2e.test.ts",
     ownerRoots: [
@@ -2596,11 +1290,7 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["chat"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/identity-config-refresh.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
+  pageWatch("ui/src/e2e/identity-config-refresh.e2e.test.ts", ["chat"]),
   {
     testFile: "ui/src/e2e/inference-setup-gate.e2e.test.ts",
     ownerRoots: [
@@ -2626,369 +1316,126 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["new-session"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/keyboard-shortcuts-focus.e2e.test.ts",
-    ownerRoots: [
+  pageWatch(
+    "ui/src/e2e/keyboard-shortcuts-focus.e2e.test.ts",
+    ["chat"],
+    [
       "ui/src/components/keyboard-shortcuts-dialog.ts",
-      "ui/src/pages/chat/route.ts",
       "ui/src/pages/new-session/new-session-page-entry.ts",
     ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/lazy-route-error-layout.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/link-favicons.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/lobster-pet-dismiss-menu-overflow.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/lobster-pet.runtime.ts",
-      "ui/src/components/menu-surface.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/lobster-pet.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/lobster-pet-plans.ts",
-      "ui/src/components/lobster-pet.runtime.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/logs-autofollow.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/logs/logs-page.ts", "ui/src/pages/logs/route.ts"],
-    watchGlobs: ["ui/src/pages/logs/route.ts", ...pageStyles["logs"]],
-  },
-  {
-    testFile: "ui/src/e2e/logs-layout.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/config/route.ts", "ui/src/pages/logs/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/logs/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["logs"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/managed-media-base-path.e2e.test.ts",
-    ownerRoots: ["ui/src/app/public-assets.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/markdown-progress-adversarial.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/memory-settings-defaults.e2e.test.ts",
-    ownerRoots: ["ui/src/components/settings-save-indicator.ts", "ui/src/pages/config/route.ts"],
-    watchGlobs: ["ui/src/pages/config/route.ts", ...pageStyles["config"]],
-  },
-  {
-    testFile: "ui/src/e2e/memory-settings-engine.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/config/memory-page.ts", "ui/src/pages/config/route.ts"],
-    watchGlobs: ["ui/src/pages/config/route.ts", ...pageStyles["config"]],
-  },
-  {
-    testFile: "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/mobile-shell-geometry.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/lib/session-pull-requests.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/model-agent-scoping.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/debug/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/debug/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["debug"],
-      ...pageStyles["model-providers"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/model-alias-display.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/select-picker.ts",
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/agents-page.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["agents-home"],
-      ...pageStyles["agents"],
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/model-defaults-recovery.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/agent-select-registration.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["model-providers"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/model-provider-usage-outcomes.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/agent-select-registration.ts",
-      "ui/src/components/select-picker.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["model-providers"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/model-providers-layout.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/agent-select-registration.ts",
-      "ui/src/components/select-picker.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["model-providers"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/model-providers-profile-outcomes.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/agent-select-registration.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["model-providers"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/model-providers.discovery.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      "ui/src/pages/model-setup/model-setup-page.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["model-providers"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/model-setup-activation-feedback.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      "ui/src/pages/model-setup/model-setup-page.ts",
-      "ui/src/pages/model-setup/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      "ui/src/pages/model-setup/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["model-providers"],
-      ...pageStyles["model-setup"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/model-setup-cancel.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/connection/route.ts",
-      "ui/src/pages/custodian/route.ts",
-      "ui/src/pages/model-setup/model-setup-page.ts",
-      "ui/src/pages/model-setup/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/connection/route.ts",
-      "ui/src/pages/custodian/route.ts",
-      "ui/src/pages/model-setup/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["connection"],
-      ...pageStyles["custodian"],
-      ...pageStyles["model-setup"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/model-setup-explicit.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      "ui/src/pages/model-setup/model-setup-page.ts",
-      "ui/src/pages/model-setup/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      "ui/src/pages/model-setup/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["model-providers"],
-      ...pageStyles["model-setup"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/model-setup-llamacpp.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/select-picker.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      "ui/src/pages/model-setup/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      "ui/src/pages/model-setup/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["model-providers"],
-      ...pageStyles["model-setup"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/model-setup-lmstudio.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/select-picker.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      "ui/src/pages/model-setup/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      "ui/src/pages/model-setup/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["model-providers"],
-      ...pageStyles["model-setup"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/model-setup-recovery.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/select-picker.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      "ui/src/pages/model-setup/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      "ui/src/pages/model-setup/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["model-providers"],
-      ...pageStyles["model-setup"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/model-setup-replacement.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/select-picker.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      "ui/src/pages/model-setup/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/model-providers/route.ts",
-      "ui/src/pages/model-setup/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["model-providers"],
-      ...pageStyles["model-setup"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/model-sign-in-unresponsive-gateway.e2e.test.ts",
-    ownerRoots: ["ui/src/components/modal-dialog.ts", "ui/src/pages/model-setup/route.ts"],
-    watchGlobs: ["ui/src/pages/model-setup/route.ts", ...pageStyles["model-setup"]],
-  },
+  ),
+  pageWatch(
+    "ui/src/e2e/lazy-route-error-layout.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/link-favicons.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/lobster-pet-dismiss-menu-overflow.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/components/lobster-pet.runtime.ts", "ui/src/components/menu-surface.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/lobster-pet.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/components/lobster-pet-plans.ts", "ui/src/components/lobster-pet.runtime.ts"],
+  ),
+  pageWatch("ui/src/e2e/logs-autofollow.e2e.test.ts", ["logs"], ["ui/src/pages/logs/logs-page.ts"]),
+  pageWatch("ui/src/e2e/logs-layout.e2e.test.ts", ["config", "logs"]),
+  pageWatch(
+    "ui/src/e2e/managed-media-base-path.e2e.test.ts",
+    ["chat"],
+    ["ui/src/app/public-assets.ts"],
+  ),
+  pageWatch("ui/src/e2e/markdown-progress-adversarial.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/memory-settings-defaults.e2e.test.ts",
+    ["config"],
+    ["ui/src/components/settings-save-indicator.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/memory-settings-engine.e2e.test.ts",
+    ["config"],
+    ["ui/src/pages/config/memory-page.ts"],
+  ),
+  pageWatch("ui/src/e2e/mobile-chat-session-menu.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
+  pageWatch(
+    "ui/src/e2e/mobile-shell-geometry.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/lib/session-pull-requests.ts"],
+  ),
+  pageWatch("ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
+  pageWatch("ui/src/e2e/model-agent-scoping.e2e.test.ts", ["config", "debug", "model-providers"]),
+  pageWatch(
+    "ui/src/e2e/model-alias-display.e2e.test.ts",
+    ["agents-home", "agents", "chat", "config"],
+    ["ui/src/components/select-picker.ts", "ui/src/pages/agents/agents-page.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/model-defaults-recovery.e2e.test.ts",
+    ["config", "model-providers"],
+    ["ui/src/components/agent-select-registration.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/model-provider-usage-outcomes.e2e.test.ts",
+    ["config", "model-providers"],
+    ["ui/src/components/agent-select-registration.ts", "ui/src/components/select-picker.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/model-providers-layout.e2e.test.ts",
+    ["config", "model-providers"],
+    ["ui/src/components/agent-select-registration.ts", "ui/src/components/select-picker.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/model-providers-profile-outcomes.e2e.test.ts",
+    ["config", "model-providers"],
+    ["ui/src/components/agent-select-registration.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/model-providers.discovery.e2e.test.ts",
+    ["config", "model-providers"],
+    ["ui/src/pages/model-setup/model-setup-page.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/model-setup-activation-feedback.e2e.test.ts",
+    ["config", "model-providers", "model-setup"],
+    ["ui/src/components/modal-dialog.ts", "ui/src/pages/model-setup/model-setup-page.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/model-setup-cancel.e2e.test.ts",
+    ["config", "connection", "custodian", "model-setup"],
+    ["ui/src/components/modal-dialog.ts", "ui/src/pages/model-setup/model-setup-page.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/model-setup-explicit.e2e.test.ts",
+    ["config", "model-providers", "model-setup"],
+    ["ui/src/components/modal-dialog.ts", "ui/src/pages/model-setup/model-setup-page.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/model-setup-llamacpp.e2e.test.ts",
+    ["config", "model-providers", "model-setup"],
+    ["ui/src/components/modal-dialog.ts", "ui/src/components/select-picker.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/model-setup-lmstudio.e2e.test.ts",
+    ["config", "model-providers", "model-setup"],
+    ["ui/src/components/modal-dialog.ts", "ui/src/components/select-picker.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/model-setup-recovery.e2e.test.ts",
+    ["config", "model-providers", "model-setup"],
+    ["ui/src/components/modal-dialog.ts", "ui/src/components/select-picker.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/model-setup-replacement.e2e.test.ts",
+    ["config", "model-providers", "model-setup"],
+    ["ui/src/components/modal-dialog.ts", "ui/src/components/select-picker.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/model-sign-in-unresponsive-gateway.e2e.test.ts",
+    ["model-setup"],
+    ["ui/src/components/modal-dialog.ts"],
+  ),
   {
     testFile: "ui/src/e2e/mount-recovery.e2e.test.ts",
     ownerRoots: ["ui/src/main.ts", "ui/src/pages/chat/route.ts"],
@@ -3005,703 +1452,255 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["chat"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/native-gateway-health.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/new-session/route.ts"],
-    watchGlobs: ["ui/src/pages/new-session/route.ts", ...pageStyles["new-session"]],
-  },
-  {
-    testFile: "ui/src/e2e/native-session-discovery-settings.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/plugins/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/plugins/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-      ...pageStyles["plugins"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/native-session-sidebar.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/catalog-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/terminal/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/terminal/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["terminal"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.agent-identity.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/agent-select-registration.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.attachment-url-lifecycle.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/new-session/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.capability-menu.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/skills/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/skills/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-      ...pageStyles["skills"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.catalog-reconnect.e2e.test.ts",
-    ownerRoots: [
+  pageWatch("ui/src/e2e/native-gateway-health.e2e.test.ts", ["new-session"]),
+  pageWatch("ui/src/e2e/native-session-discovery-settings.e2e.test.ts", [
+    "chat",
+    "config",
+    "plugins",
+  ]),
+  pageWatch(
+    "ui/src/e2e/native-session-sidebar.e2e.test.ts",
+    ["chat", "terminal"],
+    ["ui/src/components/catalog-session-menu.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/new-session-page.agent-identity.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/components/agent-select-registration.ts"],
+  ),
+  pageWatch("ui/src/e2e/new-session-page.attachment-url-lifecycle.e2e.test.ts", [
+    "chat",
+    "new-session",
+  ]),
+  pageWatch("ui/src/e2e/new-session-page.capability-menu.e2e.test.ts", [
+    "chat",
+    "new-session",
+    "skills",
+  ]),
+  pageWatch(
+    "ui/src/e2e/new-session-page.catalog-reconnect.e2e.test.ts",
+    ["chat", "new-session", "terminal"],
+    [
       "ui/src/components/agent-select-registration.ts",
       "ui/src/components/terminal/terminal-panel-registration.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/terminal/route.ts",
       "ui/src/pages/terminal/terminal-page.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/terminal/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-      ...pageStyles["terminal"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.cloud-dispatch.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/cloud-profile-discovery.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.cloud-os.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/new-session/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.cloud-size.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/new-session/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.cloud-startup.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/agent-select-registration.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/profile/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.cloud-startup.recovery.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/new-session-page.cloud-dispatch.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/components/session-menu.ts", "ui/src/pages/new-session/cloud-profile-discovery.ts"],
+  ),
+  pageWatch("ui/src/e2e/new-session-page.cloud-os.e2e.test.ts", ["chat", "new-session"]),
+  pageWatch("ui/src/e2e/new-session-page.cloud-size.e2e.test.ts", ["chat", "new-session"]),
+  pageWatch(
+    "ui/src/e2e/new-session-page.cloud-startup.e2e.test.ts",
+    ["chat", "new-session", "profile"],
+    ["ui/src/components/agent-select-registration.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/new-session-page.cloud-startup.recovery.e2e.test.ts",
+    ["chat", "new-session", "profile"],
+    [
       "ui/src/lib/sessions/session-placement-recovery-storage-key.ts",
       "ui/src/lib/sessions/session-placement-recovery.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/profile/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
+    ["chat", "config", "profile"],
+    [
       "ui/src/components/modal-dialog.ts",
       "ui/src/lib/sessions/session-placement-recovery-storage-key.ts",
       "ui/src/lib/sessions/session-placement-recovery.ts",
       "ui/src/lib/toast.ts",
       "ui/src/pages/chat/chat-state-host.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/profile/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.config-startup.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/new-session/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.connect-machine.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.device-dispatch.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch("ui/src/e2e/new-session-page.config-startup.e2e.test.ts", ["chat", "new-session"]),
+  pageWatch(
+    "ui/src/e2e/new-session-page.connect-machine.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/components/modal-dialog.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/new-session-page.device-dispatch.e2e.test.ts",
+    ["chat", "device", "new-session"],
+    [
       "ui/src/components/agent-select-registration.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/device/route.ts",
       "ui/src/pages/new-session/cloud-profile-discovery.ts",
-      "ui/src/pages/new-session/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/device/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["device"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.device-stop.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/device/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/device/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["device"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.draft-handoff.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/new-session-page-entry.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.durable-write-teardown.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/new-session-page-entry.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.empty-workspace.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/new-session/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.environment-metadata.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/tooltip.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/new-session-page-entry.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.environment-picker-loading.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/new-session/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.fast-mode-preferences.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/new-session/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.github-projects.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/new-session/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.incognito-navigation.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/new-session/new-session-page-entry.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.instant-thread.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch("ui/src/e2e/new-session-page.device-stop.e2e.test.ts", [
+    "chat",
+    "device",
+    "new-session",
+  ]),
+  pageWatch(
+    "ui/src/e2e/new-session-page.draft-handoff.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/pages/new-session/new-session-page-entry.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/new-session-page.durable-write-teardown.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/pages/new-session/new-session-page-entry.ts"],
+  ),
+  pageWatch("ui/src/e2e/new-session-page.empty-workspace.e2e.test.ts", ["chat", "new-session"]),
+  pageWatch(
+    "ui/src/e2e/new-session-page.environment-metadata.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/components/tooltip.ts", "ui/src/pages/new-session/new-session-page-entry.ts"],
+  ),
+  pageWatch("ui/src/e2e/new-session-page.environment-picker-loading.e2e.test.ts", [
+    "chat",
+    "new-session",
+  ]),
+  pageWatch("ui/src/e2e/new-session-page.fast-mode-preferences.e2e.test.ts", [
+    "chat",
+    "new-session",
+  ]),
+  pageWatch("ui/src/e2e/new-session-page.github-projects.e2e.test.ts", ["chat", "new-session"]),
+  pageWatch(
+    "ui/src/e2e/new-session-page.incognito-navigation.e2e.test.ts",
+    ["chat", "config", "new-session"],
+    ["ui/src/pages/new-session/new-session-page-entry.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/new-session-page.instant-thread.e2e.test.ts",
+    ["chat", "new-session"],
+    [
       "ui/src/pages/chat/chat-page.ts",
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/pending-session-create.ts",
-      "ui/src/pages/chat/route.ts",
       "ui/src/pages/new-session/new-session-page-entry.ts",
-      "ui/src/pages/new-session/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.model-catalog.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/new-session-page-entry.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["agents-home"],
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.operator-scopes.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/new-session/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.place-preferences.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/new-session/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.places-live.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/tooltip.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.places.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/agent-select-registration.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.projects-places.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/new-session/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.provisional-navigation.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/new-session-page.model-catalog.e2e.test.ts",
+    ["agents-home", "chat", "new-session"],
+    ["ui/src/pages/new-session/new-session-page-entry.ts"],
+  ),
+  pageWatch("ui/src/e2e/new-session-page.operator-scopes.e2e.test.ts", ["chat", "new-session"]),
+  pageWatch("ui/src/e2e/new-session-page.place-preferences.e2e.test.ts", ["chat", "new-session"]),
+  pageWatch(
+    "ui/src/e2e/new-session-page.places-live.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/components/tooltip.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/new-session-page.places.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/components/agent-select-registration.ts"],
+  ),
+  pageWatch("ui/src/e2e/new-session-page.projects-places.e2e.test.ts", ["chat", "new-session"]),
+  pageWatch(
+    "ui/src/e2e/new-session-page.provisional-navigation.e2e.test.ts",
+    ["about", "chat", "new-session"],
+    [
       "ui/src/pages/about/about-page.ts",
-      "ui/src/pages/about/route.ts",
       "ui/src/pages/chat/chat-page.ts",
       "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/about/route.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["about"],
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.responsive-welcome.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/profile/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.saved-split.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch("ui/src/e2e/new-session-page.responsive-welcome.e2e.test.ts", [
+    "chat",
+    "new-session",
+    "profile",
+  ]),
+  pageWatch(
+    "ui/src/e2e/new-session-page.saved-split.e2e.test.ts",
+    ["chat", "new-session"],
+    [
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/pending-session-create.ts",
-      "ui/src/pages/chat/route.ts",
       "ui/src/pages/chat/split-layout-types.ts",
-      "ui/src/pages/new-session/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.title.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/new-session/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.transition-cancel.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.transition.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch("ui/src/e2e/new-session-page.title.e2e.test.ts", ["chat", "new-session"]),
+  pageWatch("ui/src/e2e/new-session-page.transition-cancel.e2e.test.ts", [
+    "chat",
+    "config",
+    "new-session",
+  ]),
+  pageWatch(
+    "ui/src/e2e/new-session-page.transition.e2e.test.ts",
+    ["chat", "new-session"],
+    [
       "ui/src/components/image-lightbox.ts",
       "ui/src/components/modal-dialog.ts",
       "ui/src/pages/chat/chat-page.ts",
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/pending-session-create.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.workspace-memory.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/new-session-page-entry.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/new-session-page.workspace-validation.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/new-session-page-entry.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/operator-admin.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/new-session-page.workspace-memory.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/pages/new-session/new-session-page-entry.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/new-session-page.workspace-validation.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/new-session/new-session-page-entry.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/operator-admin.e2e.test.ts",
+    ["agents-home", "agents", "config", "devices", "skill-workshop", "skills"],
+    [
       "ui/src/components/agent-select-registration.ts",
       "ui/src/components/modal-dialog.ts",
-      "ui/src/pages/agents-home/route.ts",
       "ui/src/pages/agents/agents-page.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/devices/route.ts",
-      "ui/src/pages/skill-workshop/route.ts",
-      "ui/src/pages/skills/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/devices/route.ts",
-      "ui/src/pages/skill-workshop/route.ts",
-      "ui/src/pages/skills/route.ts",
-      ...pageStyles["agents-home"],
-      ...pageStyles["agents"],
-      ...pageStyles["config"],
-      ...pageStyles["devices"],
-      ...pageStyles["skill-workshop"],
-      ...pageStyles["skills"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/placement-error-unicode.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/new-session/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/plugin-bundled-view-recovery.e2e.test.ts",
-    ownerRoots: ["ui/src/app/stale-chunk-reload.ts", "ui/src/pages/plugin/route.ts"],
-    watchGlobs: ["ui/src/pages/plugin/route.ts", ...pageStyles["plugin"]],
-  },
-  {
-    testFile: "ui/src/e2e/plugins-config-mutation.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/multi-select-registration.ts",
-      "ui/src/lib/plugins/index.ts",
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/plugins/route.ts",
-      "ui/src/pages/workboard/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/agents-home/route.ts",
-      "ui/src/pages/agents/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/plugins/route.ts",
-      "ui/src/pages/workboard/route.ts",
-      ...pageStyles["agents-home"],
-      ...pageStyles["agents"],
-      ...pageStyles["config"],
-      ...pageStyles["plugins"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/plugins-schema-controls.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch("ui/src/e2e/placement-error-unicode.e2e.test.ts", ["chat", "new-session"]),
+  pageWatch(
+    "ui/src/e2e/plugin-bundled-view-recovery.e2e.test.ts",
+    ["plugin"],
+    ["ui/src/app/stale-chunk-reload.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/plugins-config-mutation.e2e.test.ts",
+    ["agents-home", "agents", "config", "plugins", "workboard"],
+    ["ui/src/components/multi-select-registration.ts", "ui/src/lib/plugins/index.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/plugins-schema-controls.e2e.test.ts",
+    ["config", "plugins", "workboard"],
+    [
       "ui/src/components/config-form.shared.ts",
       "ui/src/lib/plugins/index.ts",
-      "ui/src/pages/config/route.ts",
       "ui/src/pages/plugins/plugins-page.ts",
-      "ui/src/pages/plugins/route.ts",
-      "ui/src/pages/workboard/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/plugins/route.ts",
-      "ui/src/pages/workboard/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["plugins"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/plugins-settings-refresh.e2e.test.ts",
-    ownerRoots: ["ui/src/lib/config/runtime-config-capability.ts", "ui/src/pages/plugins/route.ts"],
-    watchGlobs: ["ui/src/pages/plugins/route.ts", ...pageStyles["plugins"]],
-  },
-  {
-    testFile: "ui/src/e2e/question-guest.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/components/chat-question-card.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/question-progress.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/chat/scroll.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/resize-handles.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/plugins-settings-refresh.e2e.test.ts",
+    ["plugins"],
+    ["ui/src/lib/config/runtime-config-capability.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/question-guest.e2e.test.ts",
+    ["chat", "profile"],
+    ["ui/src/pages/chat/components/chat-question-card.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/question-progress.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/scroll.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/resize-handles.e2e.test.ts",
+    ["chat"],
+    [
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
       "ui/src/pages/chat/sidebar-layout-types.ts",
     ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/route-css.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/chat-page.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/cron/route.ts",
-      "ui/src/pages/skills/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/cron/route.ts",
-      "ui/src/pages/skills/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["cron"],
-      ...pageStyles["skills"],
-    ],
-  },
+  ),
+  pageWatch(
+    "ui/src/e2e/route-css.e2e.test.ts",
+    ["chat", "cron", "skills"],
+    ["ui/src/pages/chat/chat-page.ts"],
+  ),
   {
     testFile: "ui/src/e2e/screen-requester-routing.e2e.test.ts",
     ownerRoots: [
@@ -3717,202 +1716,84 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["chat"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/session-catalog-pending-host.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/app-sidebar-session-navigation.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-color.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-dashboard-active-panel.e2e.test.ts",
-    ownerRoots: [
+  pageWatch(
+    "ui/src/e2e/session-catalog-pending-host.e2e.test.ts",
+    ["chat"],
+    ["ui/src/components/app-sidebar-session-navigation.ts"],
+  ),
+  pageWatch("ui/src/e2e/session-color.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
+  pageWatch(
+    "ui/src/e2e/session-dashboard-active-panel.e2e.test.ts",
+    ["chat", "terminal"],
+    [
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
       "ui/src/pages/chat/components/chat-session-rail.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/terminal/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/terminal/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["terminal"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-dashboard.grant-failure.e2e.test.ts",
-    ownerRoots: ["ui/src/lib/toast.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-kinds.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/cron/route.ts", "ui/src/pages/sessions/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/cron/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      ...pageStyles["cron"],
-      ...pageStyles["sessions"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-link-reconnect.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/activity/activity-page.ts",
-      "ui/src/pages/activity/route.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/activity/route.ts",
-      "ui/src/pages/chat/route.ts",
-      ...pageStyles["activity"],
-      ...pageStyles["chat"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-list-filter.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/agent-select-registration.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      "ui/src/pages/sessions/sessions-page.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["sessions"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-management.account-label.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["sessions"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-management.archive-batch.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/app-sidebar-session-navigation.ts",
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-management.archive.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/lib/toast.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["sessions"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-management.archived-actions.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
+  ),
+  pageWatch(
+    "ui/src/e2e/session-dashboard.grant-failure.e2e.test.ts",
+    ["chat"],
+    ["ui/src/lib/toast.ts"],
+  ),
+  pageWatch("ui/src/e2e/session-kinds.e2e.test.ts", ["cron", "sessions"]),
+  pageWatch(
+    "ui/src/e2e/session-link-reconnect.e2e.test.ts",
+    ["activity", "chat"],
+    ["ui/src/pages/activity/activity-page.ts", "ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/session-list-filter.e2e.test.ts",
+    ["chat", "sessions"],
+    ["ui/src/components/agent-select-registration.ts", "ui/src/pages/sessions/sessions-page.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/session-management.account-label.e2e.test.ts",
+    ["chat", "sessions"],
+    sessionMenuOwnerRoots,
+  ),
+  pageWatch(
+    "ui/src/e2e/session-management.archive-batch.e2e.test.ts",
+    ["chat"],
+    [...sessionMenuOwnerRoots, "ui/src/components/app-sidebar-session-navigation.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/session-management.archive.e2e.test.ts",
+    ["chat", "sessions"],
+    [...sessionMenuOwnerRoots, "ui/src/lib/toast.ts", "ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/session-management.archived-actions.e2e.test.ts",
+    ["chat"],
+    [
+      ...sessionMenuOwnerRoots,
       "ui/src/lib/session-pull-requests.ts",
-      "ui/src/lib/sessions/session-capability.ts",
       "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
     ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-management.bulk-delete-scope.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/app-sidebar-session-navigation.ts",
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-management.copy-session-id.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-management.created-sort.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-management.delete.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
+  ),
+  pageWatch(
+    "ui/src/e2e/session-management.bulk-delete-scope.e2e.test.ts",
+    ["chat"],
+    [...sessionMenuOwnerRoots, "ui/src/components/app-sidebar-session-navigation.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/session-management.copy-session-id.e2e.test.ts",
+    ["chat"],
+    sessionMenuOwnerRoots,
+  ),
+  pageWatch(
+    "ui/src/e2e/session-management.created-sort.e2e.test.ts",
+    ["chat"],
+    sessionMenuOwnerRoots,
+  ),
+  pageWatch(
+    "ui/src/e2e/session-management.delete.e2e.test.ts",
+    ["chat", "sessions", "worktrees"],
+    [
+      ...sessionMenuOwnerRoots,
       "ui/src/lib/chat/composer-draft-store.runtime.ts",
       "ui/src/lib/chat/outbox-store.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      "ui/src/pages/worktrees/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      "ui/src/pages/worktrees/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["sessions"],
-      ...pageStyles["worktrees"],
-    ],
-  },
+  ),
   {
     testFile: "ui/src/e2e/session-management.draft-indicator.e2e.test.ts",
     ownerRoots: ["ui/src/components/app-sidebar.ts", "ui/src/pages/chat/route.ts"],
@@ -3922,125 +1803,42 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["chat"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/session-management.filtered-errors.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      "ui/src/pages/sessions/sessions-page.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["sessions"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-management.group-identity.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["sessions"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-management.group-return.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-management.groups.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/cron/types.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["sessions"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-management.mutation-scope.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-data-controller.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-management.new-group.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-management.operator-scopes.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/sessions/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-      ...pageStyles["sessions"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-management.optimistic-pin.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
+  pageWatch(
+    "ui/src/e2e/session-management.filtered-errors.e2e.test.ts",
+    ["chat", "sessions"],
+    [...sessionMenuOwnerRoots, "ui/src/pages/sessions/sessions-page.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/session-management.group-identity.e2e.test.ts",
+    ["chat", "sessions"],
+    sessionMenuOwnerRoots,
+  ),
+  pageWatch(
+    "ui/src/e2e/session-management.group-return.e2e.test.ts",
+    ["chat"],
+    sessionMenuOwnerRoots,
+  ),
+  pageWatch(
+    "ui/src/e2e/session-management.groups.e2e.test.ts",
+    ["chat", "sessions"],
+    [...sessionMenuOwnerRoots, "ui/src/lib/cron/types.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/session-management.mutation-scope.e2e.test.ts",
+    ["chat"],
+    [...sessionMenuOwnerRoots, "ui/src/components/session-data-controller.ts"],
+  ),
+  pageWatch("ui/src/e2e/session-management.new-group.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
+  pageWatch(
+    "ui/src/e2e/session-management.operator-scopes.e2e.test.ts",
+    ["chat", "new-session", "sessions"],
+    [...sessionMenuOwnerRoots, "ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/session-management.optimistic-pin.e2e.test.ts",
+    ["chat"],
+    sessionMenuOwnerRoots,
+  ),
   {
     testFile: "ui/src/e2e/session-management.queue.e2e.test.ts",
     ownerRoots: [
@@ -4054,276 +1852,109 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["chat"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/session-management.rename-composition.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-management.rename-identity.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["sessions"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-management.trailing-state.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/session-pull-requests.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-manager-history.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/lib/toast.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/search/route.ts",
-      "ui/src/pages/sessions/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/search/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      ...pageStyles["search"],
-      ...pageStyles["sessions"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-mention-involvement.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-observer-model-catalog-recovery.e2e.test.ts",
-    ownerRoots: ["ui/src/components/select-picker.ts", "ui/src/pages/config/route.ts"],
-    watchGlobs: ["ui/src/pages/config/route.ts", ...pageStyles["config"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-owner-assignment.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
+  pageWatch(
+    "ui/src/e2e/session-management.rename-composition.e2e.test.ts",
+    ["chat"],
+    sessionMenuOwnerRoots,
+  ),
+  pageWatch(
+    "ui/src/e2e/session-management.rename-identity.e2e.test.ts",
+    ["chat", "sessions"],
+    sessionMenuOwnerRoots,
+  ),
+  pageWatch(
+    "ui/src/e2e/session-management.trailing-state.e2e.test.ts",
+    ["chat"],
+    [...sessionMenuOwnerRoots, "ui/src/lib/session-pull-requests.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/session-manager-history.e2e.test.ts",
+    ["search", "sessions"],
+    [...sessionMenuOwnerRoots, "ui/src/lib/toast.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/session-mention-involvement.e2e.test.ts",
+    ["chat", "profile"],
+    sessionMenuOwnerRoots,
+  ),
+  pageWatch(
+    "ui/src/e2e/session-observer-model-catalog-recovery.e2e.test.ts",
+    ["config"],
+    ["ui/src/components/select-picker.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/session-owner-assignment.e2e.test.ts",
+    ["chat", "sessions"],
+    [
+      ...sessionMenuOwnerRoots,
       "ui/src/components/viewer-facepile.ts",
-      "ui/src/lib/sessions/session-capability.ts",
       "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
       "ui/src/pages/sessions/sessions-page.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["sessions"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-owner-filter-empty-section.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-owner-filter-header.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/profile/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-owner-first.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-owner-warm-refresh.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-placement.move.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/device/route.ts",
-      "ui/src/pages/profile/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/device/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["device"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-prefetch.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-progress-disclosure.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/connection/connection-page.ts",
-      "ui/src/pages/connection/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/connection/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-      ...pageStyles["connection"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-progress-hovercard-catalog.e2e.test.ts",
-    ownerRoots: ["ui/src/components/catalog-session-menu.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-progress-hovercard.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch(
+    "ui/src/e2e/session-owner-filter-empty-section.e2e.test.ts",
+    ["chat", "profile"],
+    sessionMenuOwnerRoots,
+  ),
+  pageWatch("ui/src/e2e/session-owner-filter-header.e2e.test.ts", ["chat", "profile"]),
+  pageWatch("ui/src/e2e/session-owner-first.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/session-owner-warm-refresh.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/session-placement.move.e2e.test.ts",
+    ["chat", "device", "profile"],
+    ["ui/src/components/modal-dialog.ts", "ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/session-prefetch.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
+  pageWatch(
+    "ui/src/e2e/session-progress-disclosure.e2e.test.ts",
+    ["chat", "config", "connection"],
+    ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/connection/connection-page.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/session-progress-hovercard-catalog.e2e.test.ts",
+    ["chat"],
+    ["ui/src/components/catalog-session-menu.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/session-progress-hovercard.e2e.test.ts",
+    ["activity", "chat", "profile"],
+    [
       "ui/src/components/channel-avatar.ts",
       "ui/src/components/session-menu.ts",
       "ui/src/components/viewer-facepile.ts",
       "ui/src/lib/session-pull-requests.ts",
-      "ui/src/pages/activity/route.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/activity/route.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["activity"],
-      ...pageStyles["chat"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-progress-hovercard.navigation.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-progress-live-placement.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch("ui/src/e2e/session-progress-hovercard.navigation.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/session-progress-live-placement.e2e.test.ts",
+    ["chat", "config"],
+    [
       "ui/src/components/session-progress-card-controller.ts",
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-progress-motion.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-progress-polish.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-progress-preference.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/config/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-progress-refresh.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-progress-scroll.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-progress-startup.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-progress-submit.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
+  ),
+  pageWatch("ui/src/e2e/session-progress-motion.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/session-progress-polish.e2e.test.ts", ["chat"]),
+  pageWatch("ui/src/e2e/session-progress-preference.e2e.test.ts", ["chat", "config"]),
+  pageWatch(
+    "ui/src/e2e/session-progress-refresh.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/session-progress-scroll.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch("ui/src/e2e/session-progress-startup.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/session-progress-submit.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
   {
     testFile: "ui/src/e2e/session-progress-widget.e2e.test.ts",
     ownerRoots: [
@@ -4342,155 +1973,62 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["plugin"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/session-pull-requests.e2e.test.ts",
-    ownerRoots: ["ui/src/lib/session-pull-requests.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-reconnect-existence.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-roster-event-scope.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["sessions"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-runtime-freshness.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/app-sidebar-session-navigation.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-scoped-delivery.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-shortcuts.e2e.test.ts",
-    ownerRoots: [
+  pageWatch(
+    "ui/src/e2e/session-pull-requests.e2e.test.ts",
+    ["chat"],
+    ["ui/src/lib/session-pull-requests.ts"],
+  ),
+  pageWatch("ui/src/e2e/session-reconnect-existence.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/session-roster-event-scope.e2e.test.ts",
+    ["chat", "sessions"],
+    sessionMenuOwnerRoots,
+  ),
+  pageWatch(
+    "ui/src/e2e/session-runtime-freshness.e2e.test.ts",
+    ["chat"],
+    ["ui/src/components/app-sidebar-session-navigation.ts"],
+  ),
+  pageWatch("ui/src/e2e/session-scoped-delivery.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/session-shortcuts.e2e.test.ts",
+    ["chat"],
+    [
+      ...sessionMenuOwnerRoots,
       "ui/src/components/keyboard-shortcuts-dialog.ts",
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
       "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
       "ui/src/pages/new-session/new-session-page-entry.ts",
     ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/session-suggestions.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/profile/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["profile"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/session-viewer-presence.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/settings-config-recovery.e2e.test.ts",
-    ownerRoots: ["ui/src/components/settings-save-indicator.ts", "ui/src/pages/config/route.ts"],
-    watchGlobs: ["ui/src/pages/config/route.ts", ...pageStyles["config"]],
-  },
-  {
-    testFile: "ui/src/e2e/settings-message-width.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/config/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/settings-reload-devices-draft.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/settings-save-indicator.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/devices/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/devices/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["devices"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/settings-typography-search.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/app/typography.ts",
-      "ui/src/components/settings-sidebar.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/connection/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/connection/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["connection"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
-    ownerRoots: [
+  ),
+  pageWatch("ui/src/e2e/session-suggestions.e2e.test.ts", ["chat", "profile"]),
+  pageWatch("ui/src/e2e/session-viewer-presence.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/settings-config-recovery.e2e.test.ts",
+    ["config"],
+    ["ui/src/components/settings-save-indicator.ts"],
+  ),
+  pageWatch("ui/src/e2e/settings-message-width.e2e.test.ts", ["chat", "config"]),
+  pageWatch(
+    "ui/src/e2e/settings-reload-devices-draft.e2e.test.ts",
+    ["config", "devices"],
+    ["ui/src/components/settings-save-indicator.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/settings-typography-search.e2e.test.ts",
+    ["config", "connection"],
+    ["ui/src/app/typography.ts", "ui/src/components/settings-sidebar.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
+    ["about", "chat", "config"],
+    [
       "ui/src/components/menu-surface.ts",
       "ui/src/components/sidebar-build-chip.ts",
       "ui/src/components/tooltip.ts",
       "ui/src/components/viewer-facepile.ts",
-      "ui/src/pages/about/route.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
     ],
-    watchGlobs: [
-      "ui/src/pages/about/route.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["about"],
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/sidebar-agent-first.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-      ...pageStyles["new-session"],
-    ],
-  },
+  ),
+  pageWatch("ui/src/e2e/sidebar-agent-first.e2e.test.ts", ["chat", "config", "new-session"]),
   {
     testFile: "ui/src/e2e/sidebar-attention-scope.e2e.test.ts",
     ownerRoots: [
@@ -4511,23 +2049,16 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["new-session"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/sidebar-cached-list-stability.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/app-sidebar-session-navigation.ts",
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/sidebar-cron-inventory.e2e.test.ts",
-    ownerRoots: ["ui/src/lib/cron/types.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
+  pageWatch(
+    "ui/src/e2e/sidebar-cached-list-stability.e2e.test.ts",
+    ["chat"],
+    [...sessionMenuOwnerRoots, "ui/src/components/app-sidebar-session-navigation.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/sidebar-cron-inventory.e2e.test.ts",
+    ["chat"],
+    ["ui/src/lib/cron/types.ts"],
+  ),
   {
     testFile: "ui/src/e2e/sidebar-dev-branch.e2e.test.ts",
     ownerRoots: ["ui/src/components/app-sidebar.ts", "ui/src/pages/chat/route.ts"],
@@ -4538,111 +2069,32 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["chat"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/sidebar-inbox-latency.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/lib/cron/types.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/cron/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/cron/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["cron"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/sidebar-interactions.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/sidebar-agent-card.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/sidebar-name-marquee.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/sidebar-per-tab-visibility.capture.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/sidebar-plugin-order.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/workboard/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/workboard/route.ts",
-      ...pageStyles["chat"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/sidebar-refresh-availability.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/new-session/route.ts"],
-    watchGlobs: ["ui/src/pages/new-session/route.ts", ...pageStyles["new-session"]],
-  },
-  {
-    testFile: "ui/src/e2e/sidebar-restart-recovery.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/sidebar-roster-completeness.capture.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/sidebar-selection-overflow.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/sidebar-session-stability.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
+  pageWatch(
+    "ui/src/e2e/sidebar-inbox-latency.e2e.test.ts",
+    ["chat", "cron", "new-session"],
+    ["ui/src/lib/cron/types.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/sidebar-interactions.e2e.test.ts",
+    ["chat", "new-session"],
+    ["ui/src/components/sidebar-agent-card.ts"],
+  ),
+  pageWatch("ui/src/e2e/sidebar-name-marquee.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/sidebar-per-tab-visibility.capture.e2e.test.ts",
+    ["chat"],
+    sessionMenuOwnerRoots,
+  ),
+  pageWatch("ui/src/e2e/sidebar-plugin-order.e2e.test.ts", ["chat", "workboard"]),
+  pageWatch("ui/src/e2e/sidebar-refresh-availability.e2e.test.ts", ["new-session"]),
+  pageWatch("ui/src/e2e/sidebar-restart-recovery.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
+  pageWatch(
+    "ui/src/e2e/sidebar-roster-completeness.capture.e2e.test.ts",
+    ["chat"],
+    sessionMenuOwnerRoots,
+  ),
+  pageWatch("ui/src/e2e/sidebar-selection-overflow.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
+  pageWatch("ui/src/e2e/sidebar-session-stability.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   {
     testFile: "ui/src/e2e/sidebar-settings.e2e.test.ts",
     ownerRoots: [
@@ -4670,76 +2122,33 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["new-session"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/sidebar-transient-surfaces.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/session-menu.ts",
-      "ui/src/lib/sessions/session-capability.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/skill-workshop-revision-integrity.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/skill-workshop/route.ts", "ui/src/pages/skills/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/skill-workshop/route.ts",
-      "ui/src/pages/skills/route.ts",
-      ...pageStyles["skill-workshop"],
-      ...pageStyles["skills"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/skills-any-bin-requirements.e2e.test.ts",
-    ownerRoots: ["ui/src/components/modal-dialog.ts", "ui/src/pages/skills/route.ts"],
-    watchGlobs: ["ui/src/pages/skills/route.ts", ...pageStyles["skills"]],
-  },
-  {
-    testFile: "ui/src/e2e/skills-clawhub-external-install.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/skills/route.ts"],
-    watchGlobs: ["ui/src/pages/skills/route.ts", ...pageStyles["skills"]],
-  },
-  {
-    testFile: "ui/src/e2e/skills-library.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/components/tooltip.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/skills/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/skills/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["skills"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/skills-owner-selection.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/skills/route.ts"],
-    watchGlobs: ["ui/src/pages/skills/route.ts", ...pageStyles["skills"]],
-  },
-  {
-    testFile: "ui/src/e2e/solo-widget-chrome.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/spatial-fades.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
+  pageWatch(
+    "ui/src/e2e/sidebar-transient-surfaces.e2e.test.ts",
+    ["chat", "config"],
+    sessionMenuOwnerRoots,
+  ),
+  pageWatch("ui/src/e2e/skill-workshop-revision-integrity.e2e.test.ts", [
+    "skill-workshop",
+    "skills",
+  ]),
+  pageWatch(
+    "ui/src/e2e/skills-any-bin-requirements.e2e.test.ts",
+    ["skills"],
+    ["ui/src/components/modal-dialog.ts"],
+  ),
+  pageWatch("ui/src/e2e/skills-clawhub-external-install.e2e.test.ts", ["skills"]),
+  pageWatch(
+    "ui/src/e2e/skills-library.e2e.test.ts",
+    ["config", "skills"],
+    ["ui/src/components/modal-dialog.ts", "ui/src/components/tooltip.ts"],
+  ),
+  pageWatch("ui/src/e2e/skills-owner-selection.e2e.test.ts", ["skills"]),
+  pageWatch(
+    "ui/src/e2e/solo-widget-chrome.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/components/chat-header-session-menu.ts"],
+  ),
+  pageWatch("ui/src/e2e/spatial-fades.e2e.test.ts", ["chat"]),
   {
     testFile: "ui/src/e2e/stale-build-recovery.e2e.test.ts",
     ownerRoots: [
@@ -4749,84 +2158,42 @@ export const UI_E2E_OWNER_WATCHES: readonly {
     ],
     watchGlobs: ["ui/index.html", "ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
   },
-  {
-    testFile: "ui/src/e2e/subagent-task-notice.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/terminal-open.e2e.test.ts",
-    ownerRoots: [
+  pageWatch(
+    "ui/src/e2e/subagent-task-notice.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/terminal-open.e2e.test.ts",
+    ["chat"],
+    [
       "ui/src/components/terminal/terminal-panel-registration.ts",
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/route.ts",
     ],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/terminal-page.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/terminal/route.ts",
-      "ui/src/pages/terminal/terminal-page.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/new-session/route.ts",
-      "ui/src/pages/terminal/route.ts",
-      ...pageStyles["new-session"],
-      ...pageStyles["terminal"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/terminal-panel-layout.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/terminal/terminal-panel-registration.ts",
-      "ui/src/pages/activity/route.ts",
-    ],
-    watchGlobs: ["ui/src/pages/activity/route.ts", ...pageStyles["activity"]],
-  },
-  {
-    testFile: "ui/src/e2e/terminal-repaint.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/activity/route.ts"],
-    watchGlobs: ["ui/src/pages/activity/route.ts", ...pageStyles["activity"]],
-  },
-  {
-    testFile: "ui/src/e2e/theme-boot.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts", "ui/src/pages/config/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/config/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["config"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/theme-muted-contrast.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/select-picker.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/skill-workshop/route.ts",
-      "ui/src/pages/skills/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/skill-workshop/route.ts",
-      "ui/src/pages/skills/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["skill-workshop"],
-      ...pageStyles["skills"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/theme-selection-defaults.e2e.test.ts",
-    ownerRoots: ["ui/src/components/select-picker.ts", "ui/src/pages/config/route.ts"],
-    watchGlobs: ["ui/src/pages/config/route.ts", ...pageStyles["config"]],
-  },
-  {
-    testFile: "ui/src/e2e/tool-titles.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
+  ),
+  pageWatch(
+    "ui/src/e2e/terminal-page.e2e.test.ts",
+    ["new-session", "terminal"],
+    ["ui/src/pages/terminal/terminal-page.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/terminal-panel-layout.e2e.test.ts",
+    ["activity"],
+    ["ui/src/components/terminal/terminal-panel-registration.ts"],
+  ),
+  pageWatch("ui/src/e2e/terminal-repaint.e2e.test.ts", ["activity"]),
+  pageWatch("ui/src/e2e/theme-boot.e2e.test.ts", ["chat", "config"]),
+  pageWatch(
+    "ui/src/e2e/theme-muted-contrast.e2e.test.ts",
+    ["config", "skill-workshop", "skills"],
+    ["ui/src/components/select-picker.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/theme-selection-defaults.e2e.test.ts",
+    ["config"],
+    ["ui/src/components/select-picker.ts"],
+  ),
+  pageWatch("ui/src/e2e/tool-titles.e2e.test.ts", ["chat"]),
   {
     testFile: "ui/src/e2e/update-coalesced.e2e.test.ts",
     ownerRoots: [
@@ -4867,11 +2234,11 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["config"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/update-external-supervisor.e2e.test.ts",
-    ownerRoots: ["ui/src/components/modal-dialog.ts", "ui/src/pages/config/route.ts"],
-    watchGlobs: ["ui/src/pages/config/route.ts", ...pageStyles["config"]],
-  },
+  pageWatch(
+    "ui/src/e2e/update-external-supervisor.e2e.test.ts",
+    ["config"],
+    ["ui/src/components/modal-dialog.ts"],
+  ),
   {
     testFile: "ui/src/e2e/update-git-revisions.e2e.test.ts",
     ownerRoots: [
@@ -4911,11 +2278,7 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["config"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/update-stale-git-refresh-proof.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/config/route.ts"],
-    watchGlobs: ["ui/src/pages/config/route.ts", ...pageStyles["config"]],
-  },
+  pageWatch("ui/src/e2e/update-stale-git-refresh-proof.e2e.test.ts", ["config"]),
   {
     testFile: "ui/src/e2e/update-triage.e2e.test.ts",
     ownerRoots: [
@@ -4932,90 +2295,44 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["config"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/updates-settings.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/modal-dialog.ts",
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/new-session/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/new-session/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["new-session"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/uploads-policy.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/chat/route.ts"],
-    watchGlobs: ["ui/src/pages/chat/route.ts", ...pageStyles["chat"]],
-  },
-  {
-    testFile: "ui/src/e2e/usage-calendar-boundaries.e2e.test.ts",
-    ownerRoots: ["ui/src/components/agent-select-registration.ts", "ui/src/pages/usage/route.ts"],
-    watchGlobs: ["ui/src/pages/usage/route.ts", ...pageStyles["usage"]],
-  },
-  {
-    testFile: "ui/src/e2e/usage-cost-analysis.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/components/agent-select-registration.ts",
-      "ui/src/pages/usage/route.ts",
-      "ui/src/pages/usage/usage-page.ts",
-    ],
-    watchGlobs: ["ui/src/pages/usage/route.ts", ...pageStyles["usage"]],
-  },
-  {
-    testFile: "ui/src/e2e/usage-known-zero-cost.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/usage/route.ts", "ui/src/pages/usage/types.ts"],
-    watchGlobs: ["ui/src/pages/usage/route.ts", ...pageStyles["usage"]],
-  },
-  {
-    testFile: "ui/src/e2e/usage-query-recovery.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/usage/route.ts", "ui/src/pages/usage/usage-page.ts"],
-    watchGlobs: ["ui/src/pages/usage/route.ts", ...pageStyles["usage"]],
-  },
-  {
-    testFile: "ui/src/e2e/usage-session-unicode.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/usage/route.ts", "ui/src/pages/usage/usage-page.ts"],
-    watchGlobs: ["ui/src/pages/usage/route.ts", ...pageStyles["usage"]],
-  },
-  {
-    testFile: "ui/src/e2e/usage-tool-count.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/usage/route.ts"],
-    watchGlobs: ["ui/src/pages/usage/route.ts", ...pageStyles["usage"]],
-  },
-  {
-    testFile: "ui/src/e2e/warm-boot.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-      "ui/src/pages/sessions/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/profile/route.ts",
-      "ui/src/pages/sessions/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["profile"],
-      ...pageStyles["sessions"],
-    ],
-  },
-  {
-    testFile: "ui/src/e2e/workboard-board-widget-layout.e2e.test.ts",
-    ownerRoots: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/plugin/route.ts",
-      "ui/src/pages/workboard/route.ts",
-    ],
-    watchGlobs: [
-      "ui/src/pages/chat/route.ts",
-      "ui/src/pages/plugin/route.ts",
-      "ui/src/pages/workboard/route.ts",
-      ...pageStyles["chat"],
-      ...pageStyles["plugin"],
-    ],
-  },
+  pageWatch(
+    "ui/src/e2e/updates-settings.e2e.test.ts",
+    ["config", "new-session"],
+    ["ui/src/components/modal-dialog.ts"],
+  ),
+  pageWatch("ui/src/e2e/uploads-policy.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/usage-calendar-boundaries.e2e.test.ts",
+    ["usage"],
+    ["ui/src/components/agent-select-registration.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/usage-cost-analysis.e2e.test.ts",
+    ["usage"],
+    ["ui/src/components/agent-select-registration.ts", "ui/src/pages/usage/usage-page.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/usage-known-zero-cost.e2e.test.ts",
+    ["usage"],
+    ["ui/src/pages/usage/types.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/usage-query-recovery.e2e.test.ts",
+    ["usage"],
+    ["ui/src/pages/usage/usage-page.ts"],
+  ),
+  pageWatch(
+    "ui/src/e2e/usage-session-unicode.e2e.test.ts",
+    ["usage"],
+    ["ui/src/pages/usage/usage-page.ts"],
+  ),
+  pageWatch("ui/src/e2e/usage-tool-count.e2e.test.ts", ["usage"]),
+  pageWatch("ui/src/e2e/warm-boot.e2e.test.ts", ["chat", "profile", "sessions"]),
+  pageWatch("ui/src/e2e/workboard-board-widget-layout.e2e.test.ts", [
+    "chat",
+    "plugin",
+    "workboard",
+  ]),
   {
     testFile: "ui/src/e2e/workspace-panel-startup.e2e.test.ts",
     ownerRoots: [
@@ -5040,16 +2357,7 @@ export const UI_E2E_OWNER_WATCHES: readonly {
       ...pageStyles["terminal"],
     ],
   },
-  {
-    testFile: "ui/src/e2e/worktrees.e2e.test.ts",
-    ownerRoots: ["ui/src/pages/config/route.ts", "ui/src/pages/worktrees/route.ts"],
-    watchGlobs: [
-      "ui/src/pages/config/route.ts",
-      "ui/src/pages/worktrees/route.ts",
-      ...pageStyles["config"],
-      ...pageStyles["worktrees"],
-    ],
-  },
+  pageWatch("ui/src/e2e/worktrees.e2e.test.ts", ["config", "worktrees"]),
 ];
 
 export const UI_E2E_SMOKE_TEST_FILES: readonly string[] = [

@@ -70,20 +70,37 @@ describe("reply tool authority", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["agent:agent:main", "global"])(
-    "distinguishes hidden allowlist intersections in steering authority for %s",
-    (sessionKey) => {
+  it.each([
+    ["agent allowlist intersection", "agent:agent:main", undefined, undefined],
+    ["global allowlist intersection", "global", undefined, undefined],
+    [
+      "provider",
+      undefined,
+      { provider: "openai", model: "gpt-test" },
+      { provider: "anthropic", model: "gpt-test" },
+    ],
+    [
+      "model",
+      undefined,
+      { provider: "openai", model: "gpt-primary" },
+      { provider: "openai", model: "gpt-fallback" },
+    ],
+  ] as const)(
+    "distinguishes %s in steering authority",
+    (_dimension, sessionKey, firstRoute, secondRoute) => {
       const first = createQueueTestRun({ prompt: "first" });
       const second = createQueueTestRun({ prompt: "second" });
-      for (const run of [first, second]) {
-        run.run.sessionKey = sessionKey;
-        run.run.config = { agents: { ownership: "explicit", entries: { agent: {}, other: {} } } };
+      if (sessionKey) {
+        for (const run of [first, second]) {
+          run.run.sessionKey = sessionKey;
+          run.run.config = { agents: { ownership: "explicit", entries: { agent: {}, other: {} } } };
+        }
+        first.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"]]);
+        second.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["message"]]);
       }
-      first.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"]]);
-      second.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["message"]]);
 
-      expect(resolveFollowupRunToolAuthorityFingerprint(first)).not.toBe(
-        resolveFollowupRunToolAuthorityFingerprint(second),
+      expect(resolveFollowupRunToolAuthorityFingerprint(first, firstRoute)).not.toBe(
+        resolveFollowupRunToolAuthorityFingerprint(second, secondRoute),
       );
     },
   );
@@ -165,103 +182,49 @@ describe("reply tool authority", () => {
     }));
 
   it.each([
-    {
-      name: "automatic rotation",
-      source: "auto",
-      nextSource: "auto",
-      nextProfile: "backup",
-      accepted: true,
-    },
-    {
-      name: "unchanged user pin",
-      source: "user",
-      nextSource: "user",
-      nextProfile: "primary",
-      accepted: true,
-    },
-    {
-      name: "changed user pin",
-      source: "user",
-      nextSource: "user",
-      nextProfile: "backup",
-      accepted: false,
-    },
-    {
-      name: "explicit pin replacing automatic selection",
-      source: "auto",
-      nextSource: "user",
-      nextProfile: "primary",
-      accepted: false,
-    },
-    {
-      name: "removed automatic selection",
-      source: "auto",
-      nextSource: undefined,
-      nextProfile: undefined,
-      accepted: false,
-    },
-    {
-      name: "permission change during automatic rotation",
-      source: "auto",
-      nextSource: "auto",
-      nextProfile: "backup",
-      accepted: false,
-      permissionMode: "guarded",
-    },
-  ] as const)("preserves steering admission for $name", async (selection) => {
-    const run = createQueueTestRun({ prompt: "running request" });
-    run.run.authProfileId = "openai:primary";
-    run.run.authProfileIdSource = selection.source;
-    run.run.permissionMode = "full";
-    const operation = createTestReplyOperation({ sessionId: "profile-steering" });
-    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
-    operation.bindToolAuthorityRoute(run.run);
-    const queueMessage = vi.fn(async () => {});
-    operation.attachBackend({ kind: "embedded", cancel: vi.fn(), queueMessage });
-    operation.setPhase("running");
-    const incoming = {
-      ...run,
-      run: {
-        ...run.run,
-        authProfileId: selection.nextProfile ? `openai:${selection.nextProfile}` : undefined,
-        authProfileIdSource: selection.nextSource,
-        permissionMode:
-          "permissionMode" in selection ? selection.permissionMode : run.run.permissionMode,
-      },
-    };
+    ["automatic rotation", "auto", "auto", "backup", "full", true],
+    ["unchanged user pin", "user", "user", "primary", "full", true],
+    ["changed user pin", "user", "user", "backup", "full", false],
+    ["explicit pin replacing automatic selection", "auto", "user", "primary", "full", false],
+    ["removed automatic selection", "auto", undefined, undefined, "full", false],
+    ["permission change during automatic rotation", "auto", "auto", "backup", "guarded", false],
+  ] as const)(
+    "preserves steering admission for %s",
+    async (_name, source, nextSource, nextProfile, permissionMode, accepted) => {
+      const run = createQueueTestRun({ prompt: "running request" });
+      run.run.authProfileId = "openai:primary";
+      run.run.authProfileIdSource = source;
+      run.run.permissionMode = "full";
+      const operation = createTestReplyOperation({ sessionId: "profile-steering" });
+      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+      operation.bindToolAuthorityRoute(run.run);
+      const queueMessage = vi.fn(async () => {});
+      operation.attachBackend({ kind: "embedded", cancel: vi.fn(), queueMessage });
+      operation.setPhase("running");
+      const incoming = {
+        ...run,
+        run: {
+          ...run.run,
+          authProfileId: nextProfile ? `openai:${nextProfile}` : undefined,
+          authProfileIdSource: nextSource,
+          permissionMode,
+        },
+      };
 
-    await expect(
-      queueCurrentReplyRunMessage("profile-steering", "change direction", {
-        isInboundUserMessage: true,
-        toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(incoming),
-      }),
-    ).resolves.toMatchObject(
-      selection.accepted
-        ? { status: "accepted" }
-        : { status: "rejected", reason: "tool_authority_mismatch" },
-    );
-    expect(queueMessage).toHaveBeenCalledTimes(selection.accepted ? 1 : 0);
-    expect(run.run.authProfileId).toBe("openai:primary");
-  });
-
-  it.each([
-    {
-      label: "provider",
-      first: { provider: "openai", model: "gpt-test" },
-      second: { provider: "anthropic", model: "gpt-test" },
+      await expect(
+        queueCurrentReplyRunMessage("profile-steering", "change direction", {
+          isInboundUserMessage: true,
+          toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(incoming),
+        }),
+      ).resolves.toMatchObject(
+        accepted
+          ? { status: "accepted" }
+          : { status: "rejected", reason: "tool_authority_mismatch" },
+      );
+      expect(queueMessage).toHaveBeenCalledTimes(accepted ? 1 : 0);
+      expect(run.run.authProfileId).toBe("openai:primary");
     },
-    {
-      label: "model",
-      first: { provider: "openai", model: "gpt-primary" },
-      second: { provider: "openai", model: "gpt-fallback" },
-    },
-  ])("distinguishes the concrete $label route in steering authority", ({ first, second }) => {
-    const run = createQueueTestRun({ prompt: "route authority" });
-
-    expect(resolveFollowupRunToolAuthorityFingerprint(run, first)).not.toBe(
-      resolveFollowupRunToolAuthorityFingerprint(run, second),
-    );
-  });
+  );
 
   it.each(["complete", "abortForRestart"] as const)(
     "requires a snapshot for route preparation and rejects it after %s",

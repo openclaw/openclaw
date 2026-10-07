@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { INBOUND_CONTEXT_MARKER } from "../auto-reply/reply/inbound-context-marker.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
@@ -107,18 +108,14 @@ function applyLegacyInboundLabelRewrites(text: string): string {
 }
 
 function normalizeLegacyInboundContextLabels(event: TranscriptEvent): boolean {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
+  if (!isRecord(event) || event.type !== "message") {
     return false;
   }
-  const entry = event as { message?: unknown; type?: unknown };
-  if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") {
-    return false;
-  }
-  const message = entry.message as { content?: unknown; role?: unknown };
+  const message = asOptionalObjectRecord(event.message);
   // Assistant turns can echo a context block into their output, and the shipped label-based strippers
   // removed those too (gateway/chat-sanitize.ts, replay-history.ts, session-cost-usage.ts). Skipping
   // them here would leave old assistant blocks unmarked, so they would leak on replay after upgrade.
-  if (message.role !== "user" && message.role !== "assistant") {
+  if (!message || (message.role !== "user" && message.role !== "assistant")) {
     return false;
   }
   if (typeof message.content === "string") {
@@ -134,16 +131,12 @@ function normalizeLegacyInboundContextLabels(event: TranscriptEvent): boolean {
   }
   let changed = false;
   for (const part of message.content) {
-    if (!part || typeof part !== "object" || Array.isArray(part)) {
+    if (!isRecord(part) || typeof part.text !== "string") {
       continue;
     }
-    const textPart = part as { text?: unknown };
-    if (typeof textPart.text !== "string") {
-      continue;
-    }
-    const normalized = applyLegacyInboundLabelRewrites(textPart.text);
-    if (normalized !== textPart.text) {
-      textPart.text = normalized;
+    const normalized = applyLegacyInboundLabelRewrites(part.text);
+    if (normalized !== part.text) {
+      part.text = normalized;
       changed = true;
     }
   }

@@ -12,10 +12,6 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
-import {
-  resolveSqliteScope,
-  toDatabaseOptions,
-} from "../config/sessions/session-accessor.sqlite-scope.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { persistInternalSourceReply } from "../gateway/internal-source-reply-persistence.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
@@ -25,7 +21,6 @@ import {
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { publishHeartbeatSessionReply } from "./heartbeat-session-publication.js";
 
@@ -93,12 +88,24 @@ describe("publishHeartbeatSessionReply", () => {
     "accepts the committed occurrence before queued %s and publishes a later occurrence once",
     async (change) => {
       await withTarget(async ({ params, scope, events }) => {
-        const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
         const controller = new AbortController();
         let ownerActive = true;
         let cancellationQueued = false;
         const updates: InternalSessionTranscriptUpdate[] = [];
-        const unsubscribe = onInternalSessionTranscriptUpdate((update) => updates.push(update));
+        const unsubscribe = onInternalSessionTranscriptUpdate((update) => {
+          updates.push(update);
+          if (update.messageId && !cancellationQueued) {
+            cancellationQueued = true;
+            // Queue cancellation from the real committed publication, after worker settlement.
+            queueMicrotask(() => {
+              if (change === "abort") {
+                controller.abort();
+              } else {
+                ownerActive = false;
+              }
+            });
+          }
+        });
         try {
           const first = await withOwnedSessionTranscriptWrites(
             {
@@ -108,17 +115,6 @@ describe("publishHeartbeatSessionReply", () => {
               assertCommitAllowed: () => {
                 if (!ownerActive) {
                   throw new Error("commit owner released");
-                }
-                if (database.db.isTransaction && !cancellationQueued) {
-                  cancellationQueued = true;
-                  // Use the real commit guard; do not replace persistence or the emitter.
-                  queueMicrotask(() => {
-                    if (change === "abort") {
-                      controller.abort();
-                    } else {
-                      ownerActive = false;
-                    }
-                  });
                 }
               },
               withTranscriptWrite: async (run) => await run(),

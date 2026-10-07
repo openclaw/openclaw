@@ -338,7 +338,7 @@ transition racing the list request is neither lost nor resurrected.
 
 The current wire version is `4`. General operator and WebChat clients must
 negotiate the exact current version with `minProtocol: 4` and `maxProtocol: 4`.
-Only authenticated node clients and lightweight probes have the N-1 acceptance
+Only authenticated node clients and lightweight checks have the N-1 acceptance
 window, currently protocol `3` through `4`.
 
 Protocol changes are additive first. `protocol.schema.json` includes `since`

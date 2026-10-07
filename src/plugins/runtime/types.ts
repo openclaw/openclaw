@@ -6,7 +6,11 @@ import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
-import type { RuntimeSessionFactsResult } from "./types-session-facts.js";
+import type {
+  RuntimeSessionFactsResult,
+  RuntimeSessionFactsSelection,
+  RuntimeSessionFactsSelectionResult,
+} from "./types-session-facts.js";
 
 export type { RuntimeLogger };
 
@@ -131,6 +135,12 @@ export type RuntimeGatewayRequestOptions = {
   timeoutMs?: number;
   /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
   scopes?: OperatorScope[];
+  /** Fence an in-process channel send to the exact current requester session incarnation. */
+  sessionDeliveryGeneration?: {
+    sessionKey: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+  };
 };
 
 /** Trusted in-process runtime surface injected into native plugins. */
@@ -144,10 +154,25 @@ export type PluginRuntime = PluginRuntimeCore & {
       params?: Record<string, unknown>,
       options?: RuntimeGatewayRequestOptions,
     ) => Promise<T>;
+    /** Open this plugin's native panel in the requesting Control UI, preserving caller authority. */
+    openPluginPanel: (params: {
+      panelId: string;
+      sessionKey: string;
+      agentId?: string;
+    }) => Promise<{ ok: true }>;
     /** Bounded redacted facts for up to 40 sessions; excludes incognito and rechecks the bound caller/lifecycle. */
     readSessionFacts: (params: {
       sessionKeys: readonly string[];
     }) => Promise<RuntimeSessionFactsResult>;
+    /** Select immutable current session facts, retaining caller authority through the consumer. */
+    withSessionFacts: <T>(
+      select: RuntimeSessionFactsSelection,
+      run: (snapshot: RuntimeSessionFactsSelectionResult) => Promise<T>,
+    ) => Promise<T>;
+    /** Keyed fact invalidations; callers own unsubscribe. Broad store changes are excluded. */
+    subscribeSessionChanges: (
+      listener: (event: { agentId: string; sessionKey: string; factsInvalidated?: string }) => void,
+    ) => () => void;
     withUserProfileIdentity?: <T>(
       params: {
         profileId: string;
@@ -156,6 +181,18 @@ export type PluginRuntime = PluginRuntimeCore & {
       },
       run: (assertCurrent: () => void) => Promise<T>,
     ) => Promise<T>;
+    /** Resolve public GitHub identity with the Gateway credential; never retry anonymously. */
+    resolveGitHubAccount?: (params: { login: string; signal?: AbortSignal }) => Promise<
+      | { accountId: number; login: string; error?: never }
+      | {
+          error: {
+            statusCode: number;
+            message: string;
+            retryAtMs?: number;
+            credentialConfigured: boolean;
+          };
+        }
+    >;
   };
   subagent: {
     /** Fresh, tool-free background inference under the existing subagent model policy. */
@@ -192,20 +229,11 @@ export type PluginRuntime = PluginRuntimeCore & {
       workspaceAccess: "none" | "ro" | "rw";
       confinementError?: string;
     };
-    prepareWorkspaceAuthority: (params: {
-      config: OpenClawConfig;
-      agentId?: string;
-      confinedToolNames?: readonly string[];
-      requiredToolNames?: readonly string[];
-      modelProvider?: string;
-      modelId?: string;
-      sessionKey: string;
-      workspaceDir: string;
-    }) => Promise<{
-      sandboxed: boolean;
-      workspaceAccess: "none" | "ro" | "rw";
-      confinementError?: string;
-    }>;
+    prepareWorkspaceAuthority: (
+      params: Parameters<PluginRuntime["sandbox"]["resolveWorkspaceAuthority"]>[0] & {
+        workspaceDir: string;
+      },
+    ) => Promise<ReturnType<PluginRuntime["sandbox"]["resolveWorkspaceAuthority"]>>;
   };
   worktrees: {
     resolveCheckoutRoot: (params: { path: string }) => Promise<string | undefined>;
@@ -243,5 +271,5 @@ export type CreatePluginRuntimeOptions = {
 /** Checked contract for both the path-loaded factory and its implementation. */
 export type PluginRuntimeFactory = (
   options?: CreatePluginRuntimeOptions,
-  base?: Pick<PluginRuntime, "config" | "state" | "system">,
+  base?: Pick<PluginRuntime, "capabilities" | "config" | "state" | "system">,
 ) => PluginRuntime;

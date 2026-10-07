@@ -25,8 +25,10 @@ import {
   resolveConfigEnvVars,
 } from "../config/env-substitution.js";
 import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import { formatCliCommand } from "./command-format.js";
 
@@ -43,12 +45,6 @@ type ConfigModelRefResolver = (params: {
   config: OpenClawConfig;
   ref: TouchedModelRef;
 }) => Promise<string | undefined>;
-
-type ConfigModelRefCheckResult = {
-  refsChecked: number;
-  refsTotal: number;
-  errors: string[];
-};
 
 function isPathPrefix(prefix: readonly string[], path: readonly string[]): boolean {
   return prefix.length <= path.length && prefix.every((segment, index) => path[index] === segment);
@@ -348,17 +344,9 @@ function expandInheritedDefaultRefs(
   const agentEntries = listAgentEntries(config);
   const defaultAgentId = tryResolveLegacyCompatibilityAgentId(config);
   const expanded: TouchedModelRef[] = [];
-  const seen = new Set<string>();
-  const push = (ref: TouchedModelRef) => {
-    const key = `${ref.path}\u0000${ref.agentId ?? ""}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      expanded.push(ref);
-    }
-  };
   for (const ref of refs) {
     if (ref.agentId !== undefined) {
-      push(ref);
+      expanded.push(ref);
       continue;
     }
     if (defaultAgentId) {
@@ -368,7 +356,7 @@ function expandInheritedDefaultRefs(
       const defaultAgentInherits =
         !defaultAgentConfigured || inheritsDefaultModelRef(config, defaultAgentId, ref);
       if (defaultAgentInherits) {
-        push(ref);
+        expanded.push(ref);
       }
     }
     for (const { id: agentId } of agentEntries) {
@@ -376,11 +364,11 @@ function expandInheritedDefaultRefs(
         continue;
       }
       if (inheritsDefaultModelRef(config, agentId, ref)) {
-        push({ ...ref, agentId });
+        expanded.push({ ...ref, agentId });
       }
     }
   }
-  return expanded;
+  return dedupeByKey(expanded, (ref) => `${ref.path}\u0000${ref.agentId ?? ""}`);
 }
 
 function validateModelRefSyntax(
@@ -485,16 +473,17 @@ function materializeValidationRoster(config: OpenClawConfig): OpenClawConfig {
     : (applyImplicitAgentRosterDefaults(config) as OpenClawConfig);
 }
 
+/** Checks authored mutations before admission, preserving legacy roster alias paths. */
 export async function checkTouchedTextModelRefs(params: {
-  config: OpenClawConfig;
-  previousConfig?: OpenClawConfig;
+  config: OpenClawConfigWithLegacyRoster;
+  previousConfig?: OpenClawConfigWithLegacyRoster;
   touchedPaths: readonly (readonly string[])[];
   env?: NodeJS.ProcessEnv;
   previousEnv?: NodeJS.ProcessEnv;
   resolveModelRef?: ConfigModelRefResolver;
   createModelRefResolver?: () => Promise<ConfigModelRefResolver>;
   redactDependencyValues?: boolean;
-}): Promise<ConfigModelRefCheckResult> {
+}) {
   const touchedPaths = params.touchedPaths;
   const modelDependenciesTouched = touchedPaths.some(
     (path) =>

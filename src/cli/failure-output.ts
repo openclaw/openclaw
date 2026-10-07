@@ -1,5 +1,7 @@
 // Shared root CLI failure formatting with debug stack gating and recovery hints.
+import { isInvalidConfigError } from "../config/io.invalid-config.js";
 import { isGatewayTransportError } from "../gateway/transport-error.js";
+import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
@@ -98,6 +100,7 @@ const EXPECTED_CLI_ERROR_NAMES = new Set([
   "AgentSelectionRequiredError",
   "ConfigReadOnlyError",
   "NixModeConfigMutationError",
+  "LocalStateOwnerError",
 ]);
 
 export function isExpectedCliError(error: unknown): error is Error {
@@ -193,10 +196,18 @@ function pushPrefixed(out: string[], value: string): void {
 
 export function formatCliFailureLines(options: FormatCliFailureOptions): string[] {
   const env = options.env ?? process.env;
+  const argv = options.argv ?? process.argv;
   const showDebugDetails = shouldShowDebugDetails(options.argv, env);
+  // Admission and argument failures can precede the updater marker.
+  const isUpdateCommand = getRootOptionAwareCommandPath(argv, 1)[0] === "update";
   // Update subprocesses use both marker values and retain captured reasons for recovery.
   const showUpdateDiagnostics = ["0", "1"].includes(env.OPENCLAW_UPDATE_IN_PROGRESS ?? "");
-  if (isGatewayTransportError(options.error) && !showDebugDetails && !showUpdateDiagnostics) {
+  if (
+    isGatewayTransportError(options.error) &&
+    !showDebugDetails &&
+    !showUpdateDiagnostics &&
+    !isUpdateCommand
+  ) {
     const error = options.error;
     return [
       error.kind === "timeout"
@@ -233,8 +244,17 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
       );
       return lines;
     }
+    // Config validation owns actionable file/field details; some startup paths have not printed them.
+    const showReason = isInvalidConfigError(options.error)
+      ? !options.error.diagnosticEmitted
+      : isUpdateCommand;
     return [
       `[openclaw] ${options.title}`,
+      ...(showReason
+        ? [
+            `[openclaw] Reason: ${formatCliOperatorError(options.error, { argv: options.argv, env })}`,
+          ]
+        : []),
       stateBusy
         ? "[openclaw] Another OpenClaw process is using your data. Wait for it to finish before trying again."
         : options.includeDoctorHint === false

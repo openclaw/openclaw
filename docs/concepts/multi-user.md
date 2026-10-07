@@ -25,11 +25,13 @@ Changing a session between **Shared**, **Read-only**, **Suggest**, and **Draft**
 controls signed-in people. None of those settings creates a public link.
 
 The session creator or a Gateway admin can explicitly enable **Public access**.
-Anyone with the resulting bearer URL can then read existing and future conversation
+Anyone with the normal thread URL can then read existing and future conversation
 text without signing in, while tools, reasoning, files, images, widgets, hidden
-messages, and internal metadata remain excluded. Assigning a different owner does
-not transfer this authority. Disable public access to revoke every URL for that
-publication, remembering that downloaded copies cannot be recalled. See
+messages, and internal metadata remain excluded. **Log in** returns to that same
+thread with the person's existing permissions. Assigning a different owner does
+not transfer publication authority. Disabling public access stops anonymous
+reads; enabling it again makes the same normal URL readable. Previously revoked
+token links remain invalid, and downloaded copies cannot be recalled. See
 [Share a session publicly](/web/control-ui/sessions-and-sidebar#share-a-session-publicly)
 for the user flow and [Public session transcripts](/web/urls#public-session-transcripts)
 for the security and deployment contract.
@@ -159,7 +161,7 @@ The card shows how long the person has been continuously connected, their report
 
 People presence is shared with operators who have read access (`operator.read`, also implied by `operator.write` or `operator.admin`). Those readers may see other people's online and activity timing and reported time zone whether or not the person is watching a session. Node and pairing-only connections receive neither the presence inventory nor its activity-driven events. This does not change cross-reader IP visibility or provide isolation for all Gateway metadata. See [Who can see presence](/concepts/presence#who-can-see-presence).
 
-**Viewing now** and **Recent sessions** link only to sessions available in your loaded session list. Recent sessions require the same recorded profile identity on both the viewer and the owner or creator. Matching raw IDs are not enough. They are not a complete history of the person's contributions. Session update times describe the session, not when that person last acted. Connection descriptions and time zones are client-reported hints, not verified physical locations.
+**Viewing now** and **Recent sessions** use a bounded, access-scoped session list independent of the sidebar's owner, **Involving me**, and status filters. Opening a card refreshes that list across configured agents; it includes active sessions only. Recent sessions require the same recorded profile identity on both the viewer and the owner or creator. Matching raw IDs are not enough. They are not a complete history of the person's contributions. Session update times describe the session, not when that person last acted. Connection descriptions and time zones are client-reported hints, not verified physical locations.
 
 The Gateway also filters watched-session references for each recipient using `sessions.list` visibility rules, across connect snapshots, presence RPC responses, and events. Hidden or missing references are omitted without counts or placeholders. Opening someone's card never borrows that person's session access.
 

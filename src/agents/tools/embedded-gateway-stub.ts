@@ -5,7 +5,6 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import type { SessionRowProjection } from "../../gateway/session-row-projection.js";
-import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { parseAgentSessionKey, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import {
@@ -157,18 +156,35 @@ async function handleChatHistory(params: Record<string, unknown>) {
   const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
   const requestedAgentId = agentId ?? parsedAgentId;
   const limit = readPositiveIntegerParam(params, "limit");
-  const offset = readOffsetParam(params) ?? 0;
-  const messageId = readToolStringParam(params, "messageId", {
+  const offset = readOffsetParam(params);
+  const wireMessageId = readToolStringParam(params, "messageId", {
     required: params.messageId !== undefined,
   });
-  const requestedSessionId = readToolStringParam(params, "sessionId", {
+  const wireSessionId = readToolStringParam(params, "sessionId", {
     required: params.sessionId !== undefined,
   });
-  if (params.offset !== undefined && messageId !== undefined) {
+  const cursor = readToolStringParam(params, "cursor", { required: params.cursor !== undefined });
+  const pageCursor = rt.decodeChatHistoryPageCursor(cursor);
+  if (pageCursor === null) {
+    throw new Error("invalid history page cursor");
+  }
+  if (offset !== undefined && wireMessageId !== undefined) {
     throw new Error("offset and messageId cannot be used together");
   }
-  if (requestedSessionId !== undefined && messageId === undefined) {
+  if (cursor !== undefined && (offset !== undefined || wireMessageId !== undefined)) {
+    throw new Error("cursor cannot be used with offset or messageId");
+  }
+  if (wireSessionId !== undefined && wireMessageId === undefined) {
     throw new Error("sessionId requires messageId");
+  }
+  if (cursor !== undefined && !pageCursor) {
+    throw new Error("delta cursors require a running gateway");
+  }
+  const messageId = pageCursor?.messageId ?? wireMessageId;
+  const requestedSessionId = pageCursor?.sessionId ?? wireSessionId;
+  const maxBytes = readPositiveIntegerParam(params, "maxBytes");
+  if (maxBytes !== undefined && maxBytes < 1024) {
+    throw new Error("maxBytes must be at least 1024");
   }
 
   const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
@@ -203,9 +219,9 @@ async function handleChatHistory(params: Record<string, unknown>) {
     requestedSessionId && requestedSessionId !== entry?.sessionId ? undefined : entry;
   const resolvedSessionModel = rt.resolveSessionModelRef(cfg, entry, sessionAgentId);
   const max = Math.min(1000, limit ?? 200);
-  const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
+  const maxHistoryBytes = Math.min(maxBytes ?? Infinity, rt.getMaxChatHistoryMessagesBytes());
   const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars();
-  const page = await rt.readChatHistoryPage({
+  const pageParams = {
     entry: historyEntry,
     provider: resolvedSessionModel.provider,
     sessionId,
@@ -214,56 +230,27 @@ async function handleChatHistory(params: Record<string, unknown>) {
     canonicalKey,
     max,
     maxHistoryBytes,
+    responseHistoryBytes: Math.min(512 * 1024, maxHistoryBytes),
     effectiveMaxChars,
-    offset: params.offset === undefined ? undefined : offset,
+    offset,
     messageId,
-  });
-
-  // Keep transport-level byte limits identical after the shared reader projects the page.
-  const perMessageHardCap = Math.min(rt.CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
-  const replaced = rt.replaceOversizedChatHistoryMessages({
-    messages: page.messages,
-    maxSingleMessageBytes: perMessageHardCap,
-  });
-  const capped = messageId
-    ? (rt.capChatHistoryAroundMessage({
-        messages: replaced.messages,
-        messageId,
-        // Reserve array framing and separators without evicting the requested anchor.
-        maxCost: maxHistoryBytes - 1,
-        messageCost: (message) => jsonUtf8Bytes(message) + 1,
-      }) ?? rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items)
-    : rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
-  const responseOffset = page.responseOffset ?? (params.offset === undefined ? undefined : offset);
-  const pagination = responseOffset === undefined ? undefined : page.pagination;
-  const nextOffset =
-    pagination !== undefined
-      ? rt.resolveChatHistoryNextOffset({
-          messages: capped,
-          totalMessages: pagination.totalMessages,
-          offset: pagination.offset,
-          rawPageMessages: pagination.rawPageMessages,
-          projected: page.messages,
-        })
-      : 0;
-  const hasMore =
-    pagination !== undefined &&
-    pagination.exhausted !== true &&
-    nextOffset < pagination.totalMessages;
+    ...(pageCursor ? { pageCursor } : {}),
+  };
+  const page = await rt.readChatHistoryPage(pageParams);
+  const {
+    messagesBytes: _messagesBytes,
+    responseHistoryBytes: _responseHistoryBytes,
+    omission: _omission,
+    ...response
+  } = rt.prepareChatHistoryResponsePage(page, pageParams);
+  const responseOffset = page.responseOffset ?? offset;
 
   return {
     sessionKey,
     sessionId,
-    messages: capped,
+    ...response,
     ...(page.windowReset ? { windowReset: true } : {}),
-    ...(responseOffset !== undefined
-      ? {
-          offset: responseOffset,
-          hasMore,
-          totalMessages: pagination?.totalMessages ?? page.messages.length,
-        }
-      : {}),
-    ...(hasMore ? { nextOffset } : {}),
+    ...(responseOffset !== undefined ? { offset: responseOffset } : {}),
     thinkingLevel: entry?.thinkingLevel,
     fastMode: normalizeFastMode(entry?.fastMode),
     verboseLevel: entry?.verboseLevel,

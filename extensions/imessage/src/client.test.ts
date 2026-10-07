@@ -7,6 +7,26 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { IMessagePrivateApiStatus } from "./private-api-status.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => {
+      const authority = actual.captureEffectAuthority();
+      const prepare = effectGate.prepare;
+      return prepare
+        ? {
+            ...authority,
+            initiate: async <T>(effect: () => T | Promise<T>) => {
+              await prepare();
+              return authority.initiate(effect);
+            },
+          }
+        : authority;
+    },
+  };
+});
 const runIMessageCliJsonCommandMock = vi.hoisted(() => vi.fn());
 const logVerboseMock = vi.hoisted(() => vi.fn());
 const contactsChangeDiagnostic =
@@ -77,6 +97,10 @@ afterAll(() => {
   vi.doUnmock("node:child_process");
   vi.doUnmock("./cli-output.js");
   vi.resetModules();
+});
+
+afterEach(() => {
+  effectGate.prepare = undefined;
 });
 
 describe("IMessageRpcClient LF framing", () => {
@@ -249,6 +273,68 @@ describe("IMessageRpcClient child stream error handling", () => {
     );
   });
 
+  it.each(["closed", "revoked"] as const)(
+    "refuses a %s RPC request after authority preparation without writing stdin",
+    async (outcome) => {
+      const preparing = Promise.withResolvers<void>();
+      const prepared = Promise.withResolvers<void>();
+      const refusal = new Error("scheduled request retired");
+      let current = true;
+      effectGate.prepare = async () => {
+        preparing.resolve();
+        await prepared.promise;
+      };
+      const written = Promise.withResolvers<void>();
+      const write = vi.fn(() => {
+        written.resolve();
+        return true;
+      });
+      child.stdin.write = write;
+      const client = new IMessageRpcClient({ cliPath: "imsg" });
+      await client.start();
+      const response = client
+        .request(
+          "send",
+          { text: "hello" },
+          {
+            assertCurrent: () => {
+              if (!current) {
+                throw refusal;
+              }
+            },
+          },
+        )
+        .catch((error: unknown) => error);
+      try {
+        await Promise.race([
+          preparing.promise,
+          written.promise.then(() => {
+            throw new Error("RPC handoff bypassed authority preparation");
+          }),
+        ]);
+        expect(write).not.toHaveBeenCalled();
+        if (outcome === "closed") {
+          child.emit("close", 0, null);
+        } else {
+          current = false;
+        }
+        prepared.resolve();
+        if (outcome === "revoked") {
+          expect(await response).toBe(refusal);
+        } else {
+          expect(await response).toMatchObject({
+            message: "imsg rpc process changed before request initiation",
+          });
+        }
+        expect(write).not.toHaveBeenCalled();
+      } finally {
+        prepared.resolve();
+        child.emit("close", 0, null);
+        await client.stop();
+      }
+    },
+  );
+
   it.each(
     (["stdout", "stderr", "stdin"] as const).flatMap((streamName) =>
       (["error event then close", "errored close only"] as const).map((notification) => ({
@@ -288,6 +374,7 @@ describe("IMessageRpcClient child stream error handling", () => {
   );
 
   it("propagates a synchronous stdin write failure as a terminal transport error", async () => {
+    vi.useFakeTimers();
     const writeError = new Error("write after end");
     child.stdin.write = () => {
       throw writeError;
@@ -295,7 +382,8 @@ describe("IMessageRpcClient child stream error handling", () => {
     const client = new IMessageRpcClient({ cliPath: "imsg" });
     await client.start();
 
-    await expect(client.request("ping", {}, { timeoutMs: 0 })).rejects.toBe(writeError);
+    await expect(client.request("ping", {}, { timeoutMs: 10 })).rejects.toBe(writeError);
+    expect(vi.getTimerCount()).toBe(0);
     await expect(client.waitForClose()).rejects.toBe(writeError);
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
 
@@ -653,6 +741,7 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -733,18 +822,22 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
   });
 
   // send.ts matches this timeout wording; a wrapper deadline is not a bridge stall.
-  it("leaves a client-side timeout undecorated", async () => {
+  it("leaves a client-side timeout undecorated without disturbing another pending request", async () => {
     vi.useFakeTimers();
     const client = new IMessageRpcClient({ cliPath: "/tmp/imsg-stall-clienttimeout" });
     await client.start();
     const pending = client.request("send", {}, { timeoutMs: 10 });
     pending.catch(() => {});
+    const untimed = client.request("ping", {}, { timeoutMs: -1 });
+    untimed.catch(() => {});
     await vi.advanceTimersByTimeAsync(20);
 
     const error = (await pending.catch((cause: unknown) => cause)) as Error;
-    vi.useRealTimers();
-    expect(/imsg rpc timeout \(send\)/i.test(error.message)).toBe(true);
+    expect(error.message).toBe("imsg rpc timeout (send)");
     expect(error.message).not.toContain("imsg launch");
+    child.stdout.emit("data", '{"id":1,"result":"late"}\n{"id":2,"result":"alive"}\n');
+    await expect(untimed).resolves.toBe("alive");
+    expect(vi.getTimerCount()).toBe(0);
 
     child.emit("close", 0, null);
     await client.stop();

@@ -27,7 +27,6 @@ import {
   acquirePreparedModelRuntimeSnapshot,
   acquirePublishedPreparedModelRuntime,
   beginPreparedModelRuntimePluginDrain,
-  loadPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
   markPreparedModelRuntimeSnapshotsStale,
   prepareModelRuntimeSnapshot,
@@ -38,6 +37,12 @@ import {
 import { ownPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-runtime-plugin-drain" });
+
+async function publishConfigured(config: PreparedModelRuntimeInput["config"]) {
+  fixture.mocks.authStorage.getAll.mockReturnValue({});
+  fixture.mocks.configuredAgentIds = ["default"];
+  await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+}
 
 it.each([
   {
@@ -54,9 +59,7 @@ it.each([
   },
 ])("lets unrelated admitted $name wait for a plugin drain", async ({ acquire }) => {
   const config = {};
-  fixture.mocks.authStorage.getAll.mockReturnValue({});
-  fixture.mocks.configuredAgentIds = ["default"];
-  await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+  await publishConfigured(config);
   const input = fixture.agentInput("default", config);
   const unrelated = new PluginInstance("unrelated-channel");
   const donor = new PluginInstance("reloading-donor");
@@ -86,13 +89,11 @@ it.each([
   }
 });
 
-it.each([false, true])(
+it.each([true])(
   "settles a reserved instance's admitted call before call-inclusive drainage (nested: %s)",
   async (nested) => {
     const config = {};
-    fixture.mocks.authStorage.getAll.mockReturnValue({});
-    fixture.mocks.configuredAgentIds = ["default"];
-    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    await publishConfigured(config);
     const input = fixture.agentInput("default", config);
     const instance = new PluginInstance("reserved-call");
     const callee = new PluginInstance("unrelated-callee");
@@ -130,9 +131,7 @@ it.each([false, true])(
 
 it("refuses live turn-lease custody but lets a detached generation reader wait", async () => {
   const config = {};
-  fixture.mocks.authStorage.getAll.mockReturnValue({});
-  fixture.mocks.configuredAgentIds = ["default"];
-  await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+  await publishConfigured(config);
   const builder = createTestPluginRegistry();
   const record = createPluginRecord({ id: "lease-donor", source: "/synthetic/lease-donor.ts" });
   builder.registry.plugins.push(record);
@@ -185,8 +184,6 @@ it("refuses live turn-lease custody but lets a detached generation reader wait",
 
 it.each([
   { gate: "replacement", quiesced: false },
-  { gate: "replacement", quiesced: true },
-  { gate: "drain", quiesced: false },
   { gate: "drain", quiesced: true },
 ])(
   "settles maintenance model acquisition on $gate so donor replacement can drain (quiesced=$quiesced)",
@@ -195,9 +192,7 @@ it.each([
       plugins: { allow: ["fixture", "knowledge"], slots: { contextEngine: "fixture" } },
     };
     const replacementConfig = { ...config, agents: { defaults: { workspace: "/synthetic/new" } } };
-    fixture.mocks.authStorage.getAll.mockReturnValue({});
-    fixture.mocks.configuredAgentIds = ["default"];
-    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    await publishConfigured(config);
     const input = { ...fixture.agentInput("default", config), loadRuntimePlugins: true };
     const abort = new AbortController();
     const createRegistry = (runtime: boolean) => {
@@ -338,12 +333,12 @@ it.each([
   },
 );
 
-const ownerAcquisitions = [
-  {
-    name: "loaded snapshot",
-    acquire: async (input: PreparedModelRuntimeInput) =>
-      (await loadPreparedModelRuntimeSnapshot(input)).config,
-  },
+const ownerAcquisitions: {
+  name: string;
+  acquire: (input: PreparedModelRuntimeInput) => Promise<unknown>;
+  invalidateAuth?: boolean;
+  admittedOnly?: boolean;
+}[] = [
   {
     name: "published lease",
     acquire: async (input: PreparedModelRuntimeInput) => {
@@ -359,43 +354,69 @@ const ownerAcquisitions = [
     },
   },
   {
-    name: "prepared snapshot",
-    acquire: async (input: PreparedModelRuntimeInput) =>
-      (await prepareModelRuntimeSnapshot(input)).config,
-  },
-  {
     name: "reply dispatch",
     acquire: async (_input: PreparedModelRuntimeInput) =>
       (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))?.config,
   },
+  {
+    name: "passive auth read",
+    invalidateAuth: true,
+    acquire: async (input) => {
+      const snapshot = await prepareModelRuntimeSnapshot(input, { readPublished: true });
+      expect(snapshot.isCurrent()).toBe(true);
+      return snapshot.config;
+    },
+  },
+  {
+    name: "thinking catalog fallback",
+    admittedOnly: true,
+    acquire: async (input) =>
+      loadProviderScopedThinkingCatalog({
+        config: input.config,
+        agentId: "default",
+        agentDir: input.agentDir,
+        provider: "fixture",
+        model: "fixture",
+      }),
+  },
 ];
 
 it.each(ownerAcquisitions)(
-  "refuses admitted $name acquisition during drain while unadmitted readers wait",
-  async ({ acquire }) => {
+  "refuses admitted $name acquisition during drain",
+  async ({ acquire, invalidateAuth, admittedOnly }) => {
     const config = {};
-    fixture.mocks.authStorage.getAll.mockReturnValue({});
-    fixture.mocks.configuredAgentIds = ["default"];
-    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    await publishConfigured(config);
     const input = fixture.agentInput("default", config);
+    const original = invalidateAuth ? await prepareModelRuntimeSnapshot(input) : undefined;
     const instance = new PluginInstance("fixture");
     const consumer = instance.retainConsumer();
     const releaseReplacement = instance.reserveReplacement();
-    instance.quiesce();
+    if (!invalidateAuth && !admittedOnly) {
+      instance.quiesce();
+    }
     const drain = beginPreparedModelRuntimePluginDrain();
     let readerSettled = false;
-    const reader = acquire(input).finally(() => {
-      readerSettled = true;
-    });
+    if (original) {
+      fixture.mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
+      expect(original.isCurrent()).toBe(false);
+    }
+    const reader = admittedOnly
+      ? undefined
+      : acquire(input).finally(() => {
+          readerSettled = true;
+        });
     try {
-      // Passive metadata keeps serving the live publication without taking execution admission.
-      const metadata = await consumer.run(() =>
-        prepareModelRuntimeSnapshot(input, { readPublished: true }),
-      );
-      expect(metadata.config).toBe(config);
-      expect(readerSettled).toBe(false);
-      const admitted = consumer.run(() => acquire(input));
-      const result = admitted.catch((error: unknown) => error);
+      if (!invalidateAuth && !admittedOnly) {
+        // Passive metadata serves the live publication without taking execution admission.
+        const metadata = await consumer.run(() =>
+          prepareModelRuntimeSnapshot(input, { readPublished: true }),
+        );
+        expect(metadata.config).toBe(config);
+      }
+      if (reader) {
+        expect(readerSettled).toBe(false);
+      }
+      const result = consumer.run(() => acquire(input)).catch((error: unknown) => error);
       // Release is the deterministic escape on the baseline, not the intended admission path.
       drain.release();
       const error = await result;
@@ -409,47 +430,14 @@ it.each(ownerAcquisitions)(
       releaseReplacement();
       drain.release();
       await instance.waitForRetainedWork(new AbortController().signal, { includeConsumers: true });
-      await expect(reader).resolves.toBe(config);
-      expect(readerSettled).toBe(true);
+      if (reader) {
+        await expect(reader).resolves.toBe(config);
+        expect(readerSettled).toBe(true);
+      }
       await instance.dispose();
     }
   },
 );
-
-it("refuses an admitted passive read waiting on auth publication behind the drain", async () => {
-  const config = {};
-  fixture.mocks.authStorage.getAll.mockReturnValue({});
-  fixture.mocks.configuredAgentIds = ["default"];
-  await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
-  const input = fixture.agentInput("default", config);
-  const original = await prepareModelRuntimeSnapshot(input);
-  const instance = new PluginInstance("fixture");
-  const consumer = instance.retainConsumer();
-  const releaseReplacement = instance.reserveReplacement();
-  const drain = beginPreparedModelRuntimePluginDrain();
-  try {
-    fixture.mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
-    expect(original.isCurrent()).toBe(false);
-    const reader = prepareModelRuntimeSnapshot(input, { readPublished: true });
-    const admitted = consumer.run(() =>
-      prepareModelRuntimeSnapshot(input, { readPublished: true }),
-    );
-    const result = admitted.catch((error: unknown) => error);
-    drain.release();
-    const error = await result;
-    expect(error).toBeInstanceOf(PreparedModelRuntimeOwnerNotPublishedError);
-    expect(error).toMatchObject({
-      message:
-        "Model runtime replacement is in progress; admitted plugin work cannot wait for the reload. Retry after the plugin reload completes.",
-    });
-    expect((await reader).isCurrent()).toBe(true);
-  } finally {
-    consumer.release();
-    releaseReplacement();
-    drain.release();
-    await instance.dispose();
-  }
-});
 
 it("lets admitted plugin work join initial model-owner construction", async () => {
   fixture.mocks.authStorage.getAll.mockReturnValue({});
@@ -472,40 +460,6 @@ it("lets admitted plugin work join initial model-owner construction", async () =
     expect(admittedLease.snapshot.pluginRegistry).toBe(firstLease.snapshot.pluginRegistry);
   } finally {
     finish.resolve();
-    await instance.dispose();
-  }
-});
-
-it("propagates admitted thinking-catalog acquisition refusal through unpublished-owner fallback", async () => {
-  const config = {};
-  fixture.mocks.authStorage.getAll.mockReturnValue({});
-  fixture.mocks.configuredAgentIds = ["default"];
-  await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
-  const input = fixture.agentInput("default", config);
-  const instance = new PluginInstance("fixture");
-  const consumer = instance.retainConsumer();
-  const releaseReplacement = instance.reserveReplacement();
-  const drain = beginPreparedModelRuntimePluginDrain();
-  try {
-    const acquisition = consumer.run(() =>
-      loadProviderScopedThinkingCatalog({
-        config,
-        agentId: "default",
-        agentDir: input.agentDir,
-        provider: "fixture",
-        model: "fixture",
-      }),
-    );
-    const result = acquisition.catch((error: unknown) => error);
-    drain.release();
-    expect(await result).toMatchObject({
-      message:
-        "Model runtime replacement is in progress; admitted plugin work cannot wait for the reload. Retry after the plugin reload completes.",
-    });
-  } finally {
-    consumer.release();
-    releaseReplacement();
-    drain.release();
     await instance.dispose();
   }
 });

@@ -115,6 +115,56 @@ describe("node bootstrap distribution", () => {
     }
   });
 
+  it("retains an external plugin's hidden runtime chunks under its dist directory", async () => {
+    const { root, pluginRoot, provider } = await fixture("external-plugin");
+    await write(
+      pluginRoot,
+      "dist/index.js",
+      'export { answer } from "./.setup/chunk-Q1w2E3.mjs";\n',
+    );
+    await write(
+      pluginRoot,
+      "dist/.setup/chunk-Q1w2E3.mjs",
+      'export const answer = "cloud-ready";\n',
+    );
+    await write(pluginRoot, "dist/.cache/credentials.json", {
+      token: "do-not-transfer-host-private-metadata",
+    });
+    await write(pluginRoot, "dist/.setup/.cache/credentials.json", {
+      token: "do-not-transfer-nested-host-private-metadata",
+    });
+    await write(
+      pluginRoot,
+      "dist/.setup/node_modules/private-dependency/index.js",
+      "export const unused = true;\n",
+    );
+    const artifact = await provider.prepare();
+    const installed = path.join(root, "node");
+    await fs.mkdir(installed);
+    await tar.extract({ file: artifact.tarballPath, cwd: installed });
+    const target = path.join(installed, "package");
+    expect(
+      await fs.readFile(
+        path.join(target, "dist/extensions/remote-runtime/dist/.setup/chunk-Q1w2E3.mjs"),
+        "utf8",
+      ),
+    ).toBe('export const answer = "cloud-ready";\n');
+    for (const excluded of [
+      ".env",
+      "dist/.cache/credentials.json",
+      "dist/.setup/.cache/credentials.json",
+      "dist/.setup/node_modules/private-dependency/index.js",
+    ]) {
+      await expect(
+        fs.access(path.join(target, "dist/extensions/remote-runtime", excluded)),
+      ).rejects.toHaveProperty("code", "ENOENT");
+    }
+    const { stdout } = await promisify(execFile)(process.execPath, [
+      path.join(target, "openclaw.mjs"),
+    ]);
+    expect(stdout.trim()).toBe("local-ai:cloud-ready");
+  });
+
   it.each(["source", "package", "external-plugin", "linked-package"] as const)(
     "runs an unpublished %s snapshot with its plugin and private JavaScript dependency",
     async (mode) => {
@@ -178,6 +228,9 @@ describe("node bootstrap distribution", () => {
         ),
       ).toBe(false);
       expect(entries.some((entry) => entry.startsWith("package/dist/worker/"))).toBe(false);
+      expect(entries.some((entry) => entry.startsWith("package/dist/worker-artifacts/"))).toBe(
+        false,
+      );
       expect(entries.some((entry) => entry.startsWith("package/dist/control-ui/"))).toBe(false);
       for (const [file, chunk] of Object.entries(privateChunks)) {
         expect(entries).not.toContain(`package/dist/${file}`);

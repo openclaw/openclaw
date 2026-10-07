@@ -276,7 +276,7 @@ function createDailyHarness(
         },
       }),
       ...(options.includeMainAgent
-        ? { agents: { list: [{ id: "main", workspace: workspaceDir }] } }
+        ? { agents: { entries: { main: { workspace: workspaceDir } } } }
         : {}),
       ...(options.memorySearchEnabled === false ? { memory: { search: { enabled: false } } } : {}),
     },
@@ -861,7 +861,7 @@ describe("memory-core dreaming phases", () => {
     });
 
     const excludedConfig: OpenClawConfig = {
-      agents: { list: [{ id: "main", workspace: workspaceDir }] },
+      agents: { entries: { main: { workspace: workspaceDir } } },
       plugins: {
         entries: {
           "memory-core": {
@@ -971,7 +971,7 @@ describe("memory-core dreaming phases", () => {
             rem: { enabled: phase === "rem", limit: 20, lookbackDays: 7 },
           },
         }),
-        agents: { list: [{ id: "main", workspace: workspaceDir }] },
+        agents: { entries: { main: { workspace: workspaceDir } } },
       };
       const prepared = createDeferred<string>();
       const publish = createDeferred<void>();

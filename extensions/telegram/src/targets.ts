@@ -53,46 +53,32 @@ export function normalizeTelegramLookupTarget(raw: string): string | undefined {
   if (!stripped) {
     return undefined;
   }
-  if (isNumericTelegramChatId(stripped)) {
+  if (TELEGRAM_NUMERIC_CHAT_ID_REGEX.test(stripped)) {
     return stripped;
   }
   const tmeMatch = /^(?:https?:\/\/)?t\.me\/([A-Za-z0-9_]+)$/i.exec(stripped);
   if (tmeMatch?.[1]) {
     return `@${tmeMatch[1]}`;
   }
-  if (stripped.startsWith("@")) {
-    const handle = stripped.slice(1);
-    if (!handle || !TELEGRAM_USERNAME_REGEX.test(handle)) {
-      return undefined;
-    }
-    return `@${handle}`;
-  }
-  if (TELEGRAM_USERNAME_REGEX.test(stripped)) {
-    return `@${stripped}`;
-  }
-  return undefined;
+  const handle = stripped.startsWith("@") ? stripped.slice(1) : stripped;
+  return TELEGRAM_USERNAME_REGEX.test(handle) ? `@${handle}` : undefined;
 }
 
-/**
- * Parse a Telegram delivery target into chatId and optional topic/thread ID.
- *
- * Supported formats:
- * - `chatId` (plain chat ID, t.me link, @username, or internal prefixes like `telegram:...`)
- * - `chatId:topicId` (numeric topic/thread ID)
- * - `chatId:topic:topicId` (explicit topic marker; preferred)
- * - `chatId:direct-topic:topicId` (channel Direct Messages topic)
- */
 function resolveTelegramChatType(chatId: string): "direct" | "group" | "unknown" {
   const trimmed = chatId.trim();
-  if (!trimmed) {
-    return "unknown";
-  }
-  if (isNumericTelegramChatId(trimmed)) {
+  if (TELEGRAM_NUMERIC_CHAT_ID_REGEX.test(trimmed)) {
     return trimmed.startsWith("-") ? "group" : "direct";
   }
   return "unknown";
 }
 
+/**
+ * Supported delivery targets:
+ * - `chatId` (plain chat ID, t.me link, @username, or internal prefixes like `telegram:...`)
+ * - `chatId:topicId` (numeric topic/thread ID)
+ * - `chatId:topic:topicId` (explicit topic marker; preferred)
+ * - `chatId:direct-topic:topicId` (channel Direct Messages topic)
+ */
 export function parseTelegramTarget(to: string): TelegramTarget {
   const normalized = stripTelegramInternalPrefixes(to);
   const match = TELEGRAM_TOPIC_SUFFIX_REGEX.exec(normalized);

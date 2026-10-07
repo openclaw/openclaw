@@ -41,19 +41,6 @@ type FinishUpdateOptions = {
   completed: boolean;
 };
 
-type TelegramUpdateTrackerState = {
-  highestAcceptedUpdateId: number | null;
-  highestPersistedAcceptedUpdateId: number | null;
-  highestCompletedUpdateId: number | null;
-  safeCompletedUpdateId: number | null;
-  pendingUpdateIds: number[];
-  failedUpdateIds: number[];
-};
-
-function sortedIds(ids: Set<number>): number[] {
-  return [...ids].toSorted((a, b) => a - b);
-}
-
 // Bound for per-id numeric dedupe when the persisted Bot API offset does not
 // advance (no onAcceptedUpdateId) or lags. Only the realistic in-process
 // redelivery window needs numeric retention; semantic keys + spool tombstones
@@ -81,10 +68,6 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
   let highestCompletedUpdateId: number | null = persistenceFloorUpdateId;
   let persistInFlight = false;
   let persistTargetUpdateId: number | null = null;
-
-  const skip = (key: string) => {
-    options.onSkip?.(key);
-  };
 
   // One prune rule: drop accepted ids at or below max(persisted offset,
   // highestAccepted - retention) unless still pending or failed. Persisted
@@ -185,14 +168,6 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     return safeCompletedUpdateId;
   }
 
-  const persistUpdateIdAfterAck = async (updateId: number) => {
-    const persistUpdateId =
-      ackPolicy === "after_agent_dispatch" ? resolveSafeCompletedUpdateId() : updateId;
-    if (persistUpdateId !== null) {
-      requestPersistAcceptedUpdateId(persistUpdateId);
-    }
-  };
-
   const ackUpdateAfterStage = (
     receiveContext: MessageReceiveContext<TelegramUpdateKeyContext> | undefined,
     stage: "receive_record" | "agent_dispatch",
@@ -213,17 +188,17 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
         failedUpdateIds.delete(updateId);
       } else if (initialUpdateId !== null && updateId <= initialUpdateId) {
         // Restored Bot API offset: suppress redelivery of already-persisted ids.
-        skip(`update:${updateId}`);
+        options.onSkip?.(`update:${updateId}`);
         return { accepted: false, reason: "accepted-watermark" };
       } else if (acceptedUpdateIds.has(updateId)) {
         // Same process already accepted this exact id (completed or in-flight).
-        skip(`update:${updateId}`);
+        options.onSkip?.(`update:${updateId}`);
         return { accepted: false, reason: "accepted-watermark" };
       }
     }
     if (updateKey) {
       if (activeHandledUpdateKeys.has(updateKey) || recentUpdates.peek(updateKey)) {
-        skip(updateKey);
+        options.onSkip?.(updateKey);
         return { accepted: false, reason: "semantic-dedupe" };
       }
       activeHandledUpdateKeys.set(updateKey, false);
@@ -237,7 +212,13 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
         channel: "telegram",
         message: ctx,
         ackPolicy,
-        onAck: () => persistUpdateIdAfterAck(updateId),
+        onAck: async () => {
+          const persistUpdateId =
+            ackPolicy === "after_agent_dispatch" ? resolveSafeCompletedUpdateId() : updateId;
+          if (persistUpdateId !== null) {
+            requestPersistAcceptedUpdateId(persistUpdateId);
+          }
+        },
       });
       ackUpdateAfterStage(receiveContext, "receive_record");
     }
@@ -290,7 +271,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     const handled = activeHandledUpdateKeys.get(key);
     if (handled != null) {
       if (handled) {
-        skip(key);
+        options.onSkip?.(key);
         return true;
       }
       activeHandledUpdateKeys.set(key, true);
@@ -298,24 +279,14 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     }
     const skipped = recentUpdates.peek(key);
     if (skipped) {
-      skip(key);
+      options.onSkip?.(key);
     }
     return skipped;
   };
 
-  const getState = (): TelegramUpdateTrackerState => ({
-    highestAcceptedUpdateId,
-    highestPersistedAcceptedUpdateId,
-    highestCompletedUpdateId,
-    safeCompletedUpdateId: resolveSafeCompletedUpdateId(),
-    pendingUpdateIds: sortedIds(pendingUpdateIds),
-    failedUpdateIds: sortedIds(failedUpdateIds),
-  });
-
   return {
     beginUpdate,
     finishUpdate,
-    getState,
     shouldSkipHandlerDispatch,
   };
 }

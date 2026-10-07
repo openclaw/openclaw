@@ -1,3 +1,4 @@
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
   getOpenClawStateDatabaseTerminalFailureAsync,
@@ -30,8 +31,9 @@ export function openOpenClawStateWorkerCleanupStore(
   databasePath: string,
   context: SqliteWorkerStateContext,
   assertOwned: () => void,
+  identity: DatabasePathIdentity,
 ) {
-  return owner().openCleanup(databasePath, context, assertOwned);
+  return owner().openCleanup(databasePath, context, assertOwned, identity);
 }
 
 export async function executeOpenClawStateWorker<Key extends keyof OpenClawStateWorkerOperations>(

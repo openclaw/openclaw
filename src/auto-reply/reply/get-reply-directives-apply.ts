@@ -3,6 +3,7 @@ import { modelKey } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import { resolveStickyModelSelectionScope } from "../../agents/sticky-model-selection.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
+import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
@@ -32,7 +33,6 @@ import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
-type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
 const commandsStatusLoader = createLazyImportLoader(() => import("./commands-status.runtime.js"));
 const directiveLevelsLoader = createLazyImportLoader(
@@ -113,7 +113,7 @@ export async function applyInlineDirectiveOverrides(params: {
   agentDir: string;
   workspaceDir: string;
   agentCfg: AgentDefaults;
-  agentEntry?: AgentEntry;
+  agentEntry?: AgentConfig;
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
@@ -140,32 +140,26 @@ export async function applyInlineDirectiveOverrides(params: {
   effectiveModelDirective?: string;
   typing: TypingController;
 }): Promise<ApplyDirectiveResult> {
+  const directiveParams = { ...params };
   const {
     ctx,
     cfg,
     agentId,
     agentDir,
-    workspaceDir,
     agentCfg,
     agentEntry,
     sessionEntry,
     sessionStore,
     sessionKey,
     storePath,
-    sessionScope,
     isGroup,
     allowTextCommands,
     command,
-    elevatedEnabled,
-    elevatedAllowed,
-    elevatedFailures,
     defaultProvider,
     defaultModel,
     aliasIndex,
     modelState,
     initialModelLabel,
-    formatModelSwitchEvent,
-    resolvedElevatedLevel,
     defaultActivation,
     typing,
     effectiveModelDirective,
@@ -256,7 +250,7 @@ export async function applyInlineDirectiveOverrides(params: {
     effectiveModelDirective &&
     isModelSelectionLocked(sessionEntry)
   ) {
-    const lockedModelResolution = resolveEffectiveModelSelection();
+    const lockedModelResolution = await resolveEffectiveModelSelection();
     if (lockedModelResolution.modelSelection) {
       typing.cleanup();
       return directiveRejection("model-selection-locked", MODEL_SELECTION_LOCKED_MESSAGE);
@@ -328,19 +322,8 @@ export async function applyInlineDirectiveOverrides(params: {
     const reply = await (
       await directiveImplLoader.load()
     ).handleDirectiveOnly({
-      cfg,
-      agentId,
+      ...directiveParams,
       directives,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      elevatedEnabled,
-      elevatedAllowed,
-      elevatedFailures,
-      defaultProvider,
-      defaultModel,
-      aliasIndex,
       modelPolicy: modelState.modelPolicy,
       operatorAuthority: modelState.operatorAuthority,
       allowedModelKeys: modelState.allowedModelKeys,
@@ -348,19 +331,15 @@ export async function applyInlineDirectiveOverrides(params: {
       resetModelOverride: modelState.resetModelOverride,
       provider,
       model,
-      initialModelLabel,
-      formatModelSwitchEvent,
       canPersistStickyModelSelection,
       ...(stickyModelSelectionTarget ? { stickyModelSelectionTarget } : {}),
       ...currentLevels,
       thinkingCatalog,
-      ctx,
       messageProvider: ctx.Provider,
       surface: ctx.Surface,
       gatewayClientScopes: ctx.GatewayClientScopes,
       commandAuthorized: command.isAuthorizedSender,
       senderIsOwner: command.senderIsOwner,
-      workspaceDir,
       onRejection: () => {
         rejected = true;
       },
@@ -377,7 +356,7 @@ export async function applyInlineDirectiveOverrides(params: {
     // Only the exact model-only case uses the focused service; mixed directives
     // fall through so their settings remain one broad atomic session transaction.
     if (hasOnlyModelDirective(directives) && effectiveModelDirective) {
-      const modelResolution = resolveEffectiveModelSelection();
+      const modelResolution = await resolveEffectiveModelSelection();
       if (modelResolution.errorText) {
         typing.cleanup();
         return directiveRejection("model-selection-rejected", modelResolution.errorText);
@@ -476,25 +455,17 @@ export async function applyInlineDirectiveOverrides(params: {
       const { buildStatusReply } = await commandsStatusLoader.load();
       const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
       statusReply = await buildStatusReply({
-        cfg,
-        agentId,
-        command,
+        ...directiveParams,
         sessionEntry: targetSessionEntry,
-        sessionKey,
         parentSessionKey: targetSessionEntry?.parentSessionKey ?? ctx.ParentSessionKey,
-        sessionScope,
-        storePath,
         provider,
         model,
         contextTokens,
         thinkingCatalog,
-        workspaceDir,
         resolvedThinkLevel: resolvedDefaultThinkLevel,
         resolvedVerboseLevel: currentVerboseLevel ?? "off",
         resolvedReasoningLevel: currentReasoningLevel ?? "off",
-        resolvedElevatedLevel,
         resolveDefaultThinkingLevel: async () => resolvedDefaultThinkLevel,
-        isGroup,
         defaultGroupActivation: defaultActivation,
         mediaDecisions: ctx.MediaUnderstandingDecisions,
       });

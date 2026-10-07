@@ -6,6 +6,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { hasLegacyAcpMigrationProvenanceColumn } from "../../state/openclaw-agent-legacy-acp-schema.js";
@@ -120,23 +121,17 @@ export function clearSessionCollaborationForKey(
 ): void {
   const presentTables = readSessionNodeArtifactTables(database);
   const db = getSessionKysely(database.db);
-  if (presentTables.has("session_members")) {
-    executeSqliteQuerySync(
-      database.db,
-      db.deleteFrom("session_members").where("session_key", "=", sessionKey),
-    );
-  }
-  if (options.clearSuggestions !== false && presentTables.has("session_suggestions")) {
-    executeSqliteQuerySync(
-      database.db,
-      db.deleteFrom("session_suggestions").where("session_key", "=", sessionKey),
-    );
-  }
-  if (options.clearSuggestions !== false && presentTables.has("session_reactions")) {
-    executeSqliteQuerySync(
-      database.db,
-      db.deleteFrom("session_reactions").where("session_key", "=", sessionKey),
-    );
+  const tables =
+    options.clearSuggestions === false
+      ? (["session_members"] as const)
+      : (["session_members", "session_suggestions", "session_reactions"] as const);
+  for (const table of tables) {
+    if (presentTables.has(table)) {
+      executeSqliteQuerySync(
+        database.db,
+        db.deleteFrom(table).where("session_key", "=", sessionKey),
+      );
+    }
   }
 }
 
@@ -431,11 +426,11 @@ export function deleteSessionDeliveryArtifacts(
         database.db,
         db.selectFrom("session_nodes").select("session_key"),
       ).rows.flatMap((row) =>
-        row.session_key === sessionKey ? [] : [normalizeStoreSessionKey(row.session_key.trim())],
+        row.session_key === sessionKey ? [] : [normalizeStoreSessionKey(row.session_key)],
       ),
     );
     sessionKeys = lookupKeys.filter(
-      (key) => key === sessionKey || !competingIdentities.has(normalizeStoreSessionKey(key.trim())),
+      (key) => key === sessionKey || !competingIdentities.has(normalizeStoreSessionKey(key)),
     );
   }
   const cache = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
@@ -491,7 +486,13 @@ export function deleteSessionNodeArtifacts(
   }
 }
 
-function readSessionNodeArtifactTables(database: Pick<OpenClawAgentDatabase, "db">): Set<string> {
+function readSessionNodeArtifactTables(
+  database: Pick<OpenClawAgentDatabase, "db">,
+): ReadonlySet<string> {
+  const schema = getAdmittedSqliteSchemaFacts(database.db);
+  if (schema) {
+    return schema.tables;
+  }
   const db = getSessionKysely(database.db);
   return new Set(
     executeSqliteQuerySync(

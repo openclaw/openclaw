@@ -1,11 +1,12 @@
-import { listAgentIds, resolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
+import { listAgentIds } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveRequestedSessionAgentInput } from "./session-request-agent.js";
 import { invalidSessionRequest } from "./session-request-error.js";
-import { resolveGatewaySessionStoreTarget, resolveSessionStoreKey } from "./session-utils.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import { resolveSessionStoreKey } from "./session-utils.js";
 
-export function resolveSessionResetTarget(
+export async function resolveSessionResetTarget(
   cfg: OpenClawConfig,
   params: { key: string; agentId?: string },
 ) {
@@ -32,14 +33,10 @@ export function resolveSessionResetTarget(
   ) {
     return invalidSessionRequest("session key agent does not match agentId");
   }
-  const target = resolveGatewaySessionStoreTarget({
+  const target = await resolveGatewaySessionStoreTargetInWorker({
     cfg,
     key: params.key,
     ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
   });
   return { ok: true as const, cfg, target, storePath: target.storePath, requestedAgentId };
-}
-
-export function resolveLifecycleAgentId(cfg: OpenClawConfig, agentId?: string): string {
-  return normalizeAgentId(agentId ?? resolveAmbientOwnerAgentId(cfg));
 }

@@ -60,24 +60,19 @@ func loadGatewayConfig(from configURL: URL) -> GatewayConfig {
         return GatewayConfig()
     }
 
-    var cfg = GatewayConfig()
-    if let gateway = json["gateway"] as? [String: Any] {
-        cfg.mode = gateway["mode"] as? String
-        cfg.bind = gateway["bind"] as? String
-        cfg.port = parseInt(gateway["port"])
-
-        if let auth = gateway["auth"] as? [String: Any] {
-            cfg.token = auth["token"] as? String
-            cfg.password = auth["password"] as? String
-        }
-        if let remote = gateway["remote"] as? [String: Any] {
-            cfg.remoteUrl = remote["url"] as? String
-            cfg.remotePort = parseInt(remote["remotePort"])
-            cfg.remoteToken = remote["token"] as? String
-            cfg.remotePassword = remote["password"] as? String
-        }
-    }
-    return cfg
+    let gateway = json["gateway"] as? [String: Any] ?? [:]
+    let auth = gateway["auth"] as? [String: Any] ?? [:]
+    let remote = gateway["remote"] as? [String: Any] ?? [:]
+    return GatewayConfig(
+        mode: gateway["mode"] as? String,
+        bind: gateway["bind"] as? String,
+        port: parseInt(gateway["port"]),
+        remoteUrl: remote["url"] as? String,
+        remotePort: parseInt(remote["remotePort"]),
+        token: auth["token"] as? String,
+        password: auth["password"] as? String,
+        remoteToken: remote["token"] as? String,
+        remotePassword: remote["password"] as? String)
 }
 
 func parseInt(_ value: Any?) -> Int? {
@@ -85,7 +80,7 @@ func parseInt(_ value: Any?) -> Int? {
     case let number as Int:
         number
     case let number as Double:
-        Int(number)
+        Int(exactly: number.rounded(.towardZero))
     case let raw as String:
         Int(raw.trimmingCharacters(in: .whitespacesAndNewlines))
     default:

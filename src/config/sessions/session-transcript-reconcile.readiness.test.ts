@@ -8,7 +8,10 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
+import * as transcriptMaintenance from "./session-transcript-index-maintenance.js";
+import { readSessionTranscriptIndexStatus } from "./session-transcript-projection-writer.js";
 import {
+  reconcileSessionTranscriptIndexes,
   startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptProjection,
@@ -26,7 +29,110 @@ vi.mock("node:timers/promises", async (importOriginal) => ({
 const observer = useReconcileWorkerObserver();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.each(["reader-import", "between-polls", "queued-status", "during-close"] as const)(
+it("observes foreground traversal completion while foreign writes continue", async () => {
+  const stateDir = tempDirs.make("openclaw-projection-backlog-admission-");
+  const options = { agentId: "main", env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+  const scope = { ...options, sessionId: "zz-late", sessionKey: "agent:main:zz-late" };
+  let restoreDrain: (() => void) | undefined;
+  try {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [transcriptMessage("late", null, { role: "user", content: "Late projection" })],
+      touchSessionEntry: false,
+    });
+    await waitForSessionTranscriptIndexReconcile(options);
+    const database = openOpenClawAgentDatabase(options);
+    database.db
+      .prepare(`WITH RECURSIVE candidates(n) AS (
+      VALUES (0) UNION ALL SELECT n + 1 FROM candidates WHERE n < 199
+    ) INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
+      SELECT printf('a-%03d', n), ?, 1, 1 FROM candidates`)
+      .run(scope.sessionKey);
+    database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
+    const foreignCommit = database.db.prepare(
+      "UPDATE session_windows SET updated_at = updated_at + 1 WHERE session_id = 'a-000'",
+    );
+    let dispatched = false;
+    let foreground = false;
+    let foregroundCompletions = 0;
+    let preflightBatches = 0;
+    let receipt:
+      | Awaited<ReturnType<typeof transcriptMaintenance.drainTranscriptIndexStatus>>
+      | undefined;
+    let firstTraversal: NonNullable<typeof receipt>["traversal"];
+    const drainStatus = transcriptMaintenance.drainTranscriptIndexStatus;
+    const drain = vi
+      .spyOn(transcriptMaintenance, "drainTranscriptIndexStatus")
+      .mockImplementation(async (maintain, previousTraversal) => {
+        if (foreground) {
+          const result = await drainStatus(maintain, previousTraversal);
+          expect(result).toMatchObject({ hasMore: true, traversalComplete: true });
+          foregroundCompletions++;
+          return result;
+        }
+        const next = async () => {
+          if (!dispatched) {
+            if (++preflightBatches > 8) {
+              throw new Error("Projection planning waited for foreign writes to stop");
+            }
+            foreignCommit.run();
+          }
+          receipt = await maintain();
+          if (!dispatched) {
+            foreignCommit.run();
+            foreground = true;
+            try {
+              await expect(readSessionTranscriptIndexStatus(options)).resolves.toBe(true);
+            } finally {
+              foreground = false;
+            }
+          }
+          return receipt;
+        };
+        // Return one genuine incomplete batch first; its remaining work must precede planning.
+        if (preflightBatches === 0) {
+          const first = await next();
+          const { traversal, ...status } = first;
+          expect(status).toEqual({ sessionIds: [], hasMore: true, traversalComplete: false });
+          expect(traversal).toBeDefined();
+          firstTraversal = traversal;
+          return first;
+        }
+        return drainStatus(next, previousTraversal);
+      });
+    restoreDrain = () => drain.mockRestore();
+    const worklists: string[][] = [];
+    observer.onTask = ({ input }) => {
+      if (input.mode === "disk") {
+        expect(drain.mock.calls.length).toBeGreaterThanOrEqual(2);
+        const { traversal, ...status } = receipt!;
+        expect(status).toEqual({
+          sessionIds: [scope.sessionId],
+          hasMore: true,
+          traversalComplete: false,
+        });
+        expect(traversal?.completedTraversals).toBeGreaterThan(firstTraversal!.completedTraversals);
+        expect(foregroundCompletions).toBeGreaterThan(0);
+        dispatched = true;
+        worklists.push([...input.sessionIds]);
+      }
+    };
+    await expect(reconcileSessionTranscriptIndexes(options)).resolves.toEqual({
+      reconciledSessions: 1,
+    });
+    expect(worklists).toEqual([[scope.sessionId]]);
+    expect(
+      database.db.prepare("SELECT needs_rebuild FROM session_transcript_index_state").all(),
+    ).toEqual([{ needs_rebuild: 0 }]);
+  } finally {
+    restoreDrain?.();
+    observer.onTask = undefined;
+    await waitForSessionTranscriptIndexReconcile(options);
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+  }
+});
+
+it.each(["between-polls", "queued-status", "during-close"] as const)(
   "preserves readiness lifetime and cancellation across %s",
   async (boundary) => {
     const stateDir = tempDirs.make("openclaw-projection-read-retirement-");
@@ -74,34 +180,7 @@ it.each(["reader-import", "between-polls", "queued-status", "during-close"] as c
         await closing;
         await waitForSessionTranscriptIndexReconcile(options);
       };
-      if (boundary === "reader-import") {
-        const runtime = await import("./session-transcript-worker-runtime.js");
-        const entered = createDeferred();
-        const continueImport = createDeferred();
-        vi.doMock("./session-transcript-worker-runtime.js", async () => {
-          entered.resolve();
-          await continueImport.promise;
-          return runtime;
-        });
-        try {
-          const outcome = waitForSessionTranscriptProjection(scope).then(
-            () => ({ ok: true as const }),
-            (error: unknown) => ({ ok: false as const, error }),
-          );
-          await entered.promise;
-          await retire();
-          continueImport.resolve();
-          await expect(outcome).resolves.toMatchObject({
-            ok: false,
-            error: expect.objectContaining({
-              message: "Agent database execution admission is closed",
-            }),
-          });
-        } finally {
-          continueImport.resolve();
-          vi.doUnmock("./session-transcript-worker-runtime.js");
-        }
-      } else if (boundary === "during-close") {
+      if (boundary === "during-close") {
         observer.onTask = undefined;
         const closing = closeOpenClawAgentDatabasesAsync();
         let scheduled: { ok: true } | { ok: false; error: unknown };
@@ -153,7 +232,7 @@ it.each(["reader-import", "between-polls", "queued-status", "during-close"] as c
           }, taskOptions);
         });
         const blocker = withSessionHistoryWorkerDatabase(options, (owner) =>
-          owner.readProjectionStatus({ env: options.env }),
+          owner.readProjectionStatus({ env: options.env, sessionId: scope.sessionId }),
         );
         const controller = new AbortController();
         const reason = new Error("cancel queued projection status");

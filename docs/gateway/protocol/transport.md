@@ -92,12 +92,24 @@ concurrent Control UI setup can queue without giving one connection the entire
 request allowance. The aggregate serialized-byte bound still applies.
 Small `sessions.messages.subscribe` requests without approval replay and
 `sessions.messages.unsubscribe` requests have separate bounded waiting capacity,
-including a per-connection limit. They keep the same FIFO order and yielding
-budget as other requests. Roster snapshots and approval replay retain the ordinary
-request budget.
+including a per-connection limit. All requests share the same yielding budget.
+Roster subscriptions, catalog reads, and message subscriptions with approval
+replay share four preparation slots. A slot remains occupied until its request
+settles, and each start yields to ready socket I/O. A request waiting for a
+preparation slot stays in the bounded queue while eligible requests start:
+`chat.history` and `sessions.list` reads can pass waiting preparations, as can
+ordinary requests on other connections. Other starts preserve FIFO order within
+each connection, including subscriptions and their later unsubscribe requests.
+WebSocket handshakes bypass the request queue, so reconnecting tabs cannot start
+an unbounded replay wave ahead of other clients' handshakes.
 When waiting capacity is exhausted, the Gateway returns retryable `UNAVAILABLE`
-before the method runs; retry within the request's budget. Started requests
-complete concurrently, so responses can arrive out of order.
+before the method runs; retry within the request's budget. Starts still waiting
+after 30 seconds also return retryable `UNAVAILABLE`, with
+`details.reason: "request-start-timeout"`. The deadline runs when the event loop
+can next make progress; it does not interrupt an already-started handler.
+Gateway RPC queue-wait diagnostics include the entire wait, including preparation
+capacity and timed-out starts. Started requests complete concurrently, so
+responses can arrive out of order.
 
 During cooperative suspension, identity reads (`agent.identity.get`) wait in the
 shared browser/CLI client for `gateway.suspension` with phase `accepting`. A

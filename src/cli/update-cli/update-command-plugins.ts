@@ -83,8 +83,6 @@ function isActionableSkippedPostUpdateOutcome(outcome: PluginUpdateOutcome): boo
 export async function updatePluginsAfterCoreUpdate(params: {
   root: string;
   assertCurrent?: () => void;
-  /** Requirements for this installation, supplied by its owner. Missing is not optional. */
-  pluginRequirements?: Readonly<Record<string, "optional" | "required">>;
   channel: UpdateChannel;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   configWriteOptions: ConfigWriteOptions;
@@ -99,27 +97,10 @@ export async function updatePluginsAfterCoreUpdate(params: {
   runtime?: RuntimeEnv;
 }): Promise<ProducedPluginUpdateResult> {
   if (!params.configSnapshot.valid) {
-    return await updatePluginsAfterCoreUpdateWithLease(params);
-  }
-  // Same-run migration receipts are facts from this lease. Keep their owner
-  // continuously held from cohort planning through final index/config publication.
-  return await withPluginLifecycleLease({ assertCurrent: params.assertCurrent }, (lease) =>
-    updatePluginsAfterCoreUpdateWithLease({
-      ...params,
-      assertCurrent: () => lease.assertOwned(),
-    }),
-  );
-}
-
-async function updatePluginsAfterCoreUpdateWithLease(
-  params: Parameters<typeof updatePluginsAfterCoreUpdate>[0],
-): Promise<ProducedPluginUpdateResult> {
-  params.assertCurrent?.();
-  const runtime = params.runtime ?? defaultRuntime;
-  const requirements = { ...params.pluginRequirements };
-  if (!params.configSnapshot.valid) {
+    params.assertCurrent?.();
     const invalid = buildInvalidConfigPostCoreUpdateResult(params.configSnapshot);
     if (!params.json) {
+      const runtime = params.runtime ?? defaultRuntime;
       runtime.log(theme.error(invalid.message));
       for (const line of invalid.guidance) {
         runtime.log(theme.muted(`  ${line}`));
@@ -130,7 +111,22 @@ async function updatePluginsAfterCoreUpdateWithLease(
       assessment: { kind: "core-critical", reason: invalid.result.reason },
     };
   }
+  // Same-run migration receipts are facts from this lease. Keep their owner
+  // continuously held from cohort planning through final index/config publication.
+  return await withPluginLifecycleLease({ assertCurrent: params.assertCurrent }, (lease) =>
+    updatePluginsAfterCoreUpdateWithLease(
+      { ...params, assertCurrent: () => lease.assertOwned() },
+      lease,
+    ),
+  );
+}
 
+async function updatePluginsAfterCoreUpdateWithLease(
+  params: Parameters<typeof updatePluginsAfterCoreUpdate>[0],
+  lease: PluginLifecycleLeaseContext,
+): Promise<ProducedPluginUpdateResult> {
+  params.assertCurrent?.();
+  const runtime = params.runtime ?? defaultRuntime;
   const referenceSource = prepareDoctorConfigReferenceSource(params.configSnapshot);
   const clawHubTrustNotices = new Set<string>();
   const loggedPluginWarnings = new Set<string>();
@@ -445,66 +441,57 @@ async function updatePluginsAfterCoreUpdateWithLease(
       params.configWriteOptions,
       params.assertCurrent,
     );
-    const commit = async (lease?: PluginLifecycleLeaseContext) => {
-      const assertCurrent = () => {
-        guardedWriteOptions.assertCurrent?.();
-        lease?.assertOwned();
-      };
-      assertCurrent();
-      await assertInstalledPluginIdRecoveryCurrent(
-        params.configSnapshot.sourceConfig,
-        installedPluginIdRecovery,
-        convergenceEnv,
-      );
-      assertCurrent();
-      await commitPluginInstallRecordsWithConfig({
-        beforePersistentEffect: assertCurrent,
-        previousInstallRecords: pluginInstallRecords,
-        nextInstallRecords,
-        nextConfig,
-        baseHash: params.configSnapshot.hash,
-        writeOptions: {
-          ...guardedWriteOptions,
-          observe: false,
-          assertCurrent,
-          beforeCommit: async () => {
-            assertCurrent();
-            await params.configWriteOptions.beforeCommit?.();
-            assertCurrent();
-            await assertInstalledPluginIdRecoveryCurrent(
-              params.configSnapshot.sourceConfig,
-              installedPluginIdRecovery,
-              convergenceEnv,
-            );
-            assertCurrent();
-          },
-          inputBase: "source",
-          skipPluginValidation: true,
-        },
-      });
+    const assertCurrent = () => {
+      guardedWriteOptions.assertCurrent?.();
+      lease.assertOwned();
     };
-    if (installedPluginIdRecovery.size > 0) {
-      await withPluginLifecycleLease({ assertCurrent: params.assertCurrent }, commit);
-    } else {
-      await commit();
-    }
+    assertCurrent();
+    await assertInstalledPluginIdRecoveryCurrent(
+      params.configSnapshot.sourceConfig,
+      installedPluginIdRecovery,
+      convergenceEnv,
+    );
+    assertCurrent();
+    await commitPluginInstallRecordsWithConfig({
+      beforePersistentEffect: assertCurrent,
+      previousInstallRecords: pluginInstallRecords,
+      nextInstallRecords,
+      nextConfig,
+      baseHash: params.configSnapshot.hash,
+      writeOptions: {
+        ...guardedWriteOptions,
+        observe: false,
+        assertCurrent,
+        beforeCommit: async () => {
+          assertCurrent();
+          await params.configWriteOptions.beforeCommit?.();
+          assertCurrent();
+          await assertInstalledPluginIdRecoveryCurrent(
+            params.configSnapshot.sourceConfig,
+            installedPluginIdRecovery,
+            convergenceEnv,
+          );
+          assertCurrent();
+        },
+        inputBase: "source",
+        skipPluginValidation: true,
+      },
+    });
     if (!params.json) {
       for (const change of convergence.configChanges) {
         runtime.log(theme.muted(change));
       }
     }
     params.assertCurrent?.();
-    await withPluginLifecycleLease({ assertCurrent: params.assertCurrent }, async (lease) =>
-      refreshPluginRegistryAfterConfigMutation({
-        configPath: params.configSnapshot.path,
-        reason: "source-changed",
-        workspaceDir: params.root,
-        installRecords: nextInstallRecords,
-        invalidateRuntimeCache: false,
-        logger: pluginLogger,
-        lease,
-      }),
-    );
+    await refreshPluginRegistryAfterConfigMutation({
+      configPath: params.configSnapshot.path,
+      reason: "source-changed",
+      workspaceDir: params.root,
+      installRecords: nextInstallRecords,
+      invalidateRuntimeCache: false,
+      logger: pluginLogger,
+      lease,
+    });
     params.assertCurrent?.();
   }
 
@@ -524,21 +511,14 @@ async function updatePluginsAfterCoreUpdateWithLease(
     // A failed cohort repair can disable a plugin before active smoke verification.
     // Keep that unavailable capability visible; prior failures that were re-enabled
     // by a successful repair remain diagnostic history only.
-    disabledPluginIds: [
-      ...new Set(
-        pluginUpdateOutcomes
-          .filter(
-            (outcome) =>
-              isDisabledAfterFailureOutcome(outcome) &&
-              pluginConfig.plugins?.entries?.[outcome.pluginId]?.enabled === false,
-          )
-          .map((outcome) => outcome.pluginId),
-      ),
-    ],
+    hasDisabledPlugin: pluginUpdateOutcomes.some(
+      (outcome) =>
+        isDisabledAfterFailureOutcome(outcome) &&
+        pluginConfig.plugins?.entries?.[outcome.pluginId]?.enabled === false,
+    ),
     errored: convergence.errored,
     outcomes: pluginUpdateOutcomes,
     integrityDrift: integrityDrifts.length > 0,
-    requirements,
   });
   // Keep the established caller status contract. Assessment is separate evidence;
   // consuming it to change restart/finalization requires a qualified caller cutover.

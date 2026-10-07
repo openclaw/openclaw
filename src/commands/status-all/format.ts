@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayServiceLoadState } from "../../daemon/service-types.js";
 import { projectGatewayUrlForDiagnostics } from "../../gateway/connection-details.js";
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
@@ -59,6 +60,7 @@ type StatusManagedService = {
     status?: string | null;
     pid?: number | null;
     detail?: string | null;
+    systemd?: GatewayServiceRuntime["systemd"];
   } | null;
 };
 
@@ -85,10 +87,7 @@ export function buildStatusUpdateSurface(params: {
   updateConfigChannel?: string | null;
   update: UpdateCheckResult;
 }) {
-  const channelInfo = resolveStatusUpdateChannelInfo({
-    updateConfigChannel: params.updateConfigChannel,
-    update: params.update,
-  });
+  const channelInfo = resolveStatusUpdateChannelInfo(params);
   return {
     channelInfo,
     channelLabel: channelInfo.label,
@@ -140,7 +139,7 @@ function formatStatusServiceValue(params: StatusManagedService): string {
         : undefined;
   const inspectionFailed = params.loadState?.status === "unknown" || Boolean(inspectionDetail);
   // A missing definition does not make a failed native inspection evidence of absence.
-  if (params.installed === false && !inspectionFailed) {
+  if (params.installed === false && !inspectionFailed && !params.runtime?.systemd?.startRefusal) {
     return `${params.label} not installed`;
   }
   const installedPrefix = params.managedByOpenClaw ? "installed · " : "";
@@ -158,21 +157,6 @@ function formatStatusServiceValue(params: StatusManagedService): string {
     : runtimeSuffix;
   const installationWarning = params.installationDrift ? ` · ${params.installationDrift}` : "";
   return `${params.label} ${installedPrefix}${loadedText}${runtimeText}${installationWarning}`;
-}
-
-function resolveStatusDashboardUrl(params: {
-  cfg: Pick<OpenClawConfig, "gateway">;
-}): string | null {
-  if (!(params.cfg.gateway?.controlUi?.enabled ?? true)) {
-    return null;
-  }
-  return resolveControlUiLinks({
-    port: resolveGatewayPort(params.cfg),
-    bind: params.cfg.gateway?.bind,
-    customBindHost: params.cfg.gateway?.customBindHost,
-    basePath: params.cfg.gateway?.controlUi?.basePath,
-    tlsEnabled: params.cfg.gateway?.tls?.enabled === true,
-  }).httpUrl;
 }
 
 export function buildStatusOverviewSurfaceRows(params: {
@@ -215,23 +199,47 @@ export function buildStatusOverviewSurfaceRows(params: {
   });
   const decorateOk = params.decorateOk ?? ((value: string) => value);
   const decorateWarn = params.decorateWarn ?? ((value: string) => value);
-  const gatewaySummary = buildGatewayStatusSummaryParts(params);
+  const displayUrl = projectGatewayUrlForDiagnostics(params.gatewayConnection.url);
+  const targetText = params.remoteUrlMissing ? `fallback ${displayUrl}` : displayUrl;
+  const targetTextWithSource = params.gatewayConnection.urlSource
+    ? `${targetText} (${params.gatewayConnection.urlSource})`
+    : targetText;
+  const reachText = params.remoteUrlMissing
+    ? "misconfigured (remote.url missing)"
+    : params.gatewayProbe?.startupPhase
+      ? `still starting (phase ${params.gatewayProbe.startupPhase})`
+      : params.gatewayReachable
+        ? `reachable ${formatDurationPrecise(params.gatewayProbe?.connectLatencyMs ?? 0)}`
+        : params.gatewayProbe?.error
+          ? `unreachable (${params.gatewayProbe.error})`
+          : "unreachable";
+  const authText = params.gatewayReachable
+    ? `auth ${formatGatewayAuthUsed(params.gatewayProbeAuth)}`
+    : "";
+  const modeLabel = `${params.gatewayMode}${params.remoteUrlMissing ? " (remote.url missing)" : ""}`;
   const gatewaySelfValue = formatGatewaySelfSummary(params.gatewaySelf);
   const gatewayValue =
     params.nodeOnlyGateway?.gatewayValue ??
-    `${gatewaySummary.modeLabel} · ${gatewaySummary.targetTextWithSource} · ${
+    `${modeLabel} · ${targetTextWithSource} · ${
       params.remoteUrlMissing
-        ? decorateWarn(gatewaySummary.reachText)
+        ? decorateWarn(reachText)
         : params.gatewayReachable
-          ? decorateOk(gatewaySummary.reachText)
-          : decorateWarn(gatewaySummary.reachText)
+          ? decorateOk(reachText)
+          : decorateWarn(reachText)
     }${
-      params.gatewayReachable && !params.remoteUrlMissing && gatewaySummary.authText
-        ? ` · ${gatewaySummary.authText}`
-        : ""
+      params.gatewayReachable && !params.remoteUrlMissing && authText ? ` · ${authText}` : ""
     }${gatewaySelfValue ? ` · ${gatewaySelfValue}` : ""}`;
   const dashboardUrl =
-    params.advertisedControlUiLinks?.httpUrl ?? resolveStatusDashboardUrl({ cfg: params.cfg });
+    params.advertisedControlUiLinks?.httpUrl ??
+    ((params.cfg.gateway?.controlUi?.enabled ?? true)
+      ? resolveControlUiLinks({
+          port: resolveGatewayPort(params.cfg),
+          bind: params.cfg.gateway?.bind,
+          customBindHost: params.cfg.gateway?.customBindHost,
+          basePath: params.cfg.gateway?.controlUi?.basePath,
+          tlsEnabled: params.cfg.gateway?.tls?.enabled === true,
+        }).httpUrl
+      : null);
   const gatewayServiceValue = formatStatusServiceValue(params.gatewayService);
   const nodeServiceValue = formatStatusServiceValue(params.nodeService);
   const tailscaleValue = formatStatusTailscaleValue({
@@ -307,64 +315,17 @@ function formatGatewaySelfSummary(gatewaySelf: StatusGatewaySelf): string | null
     : null;
 }
 
-function buildGatewayStatusSummaryParts(params: {
-  gatewayMode: "local" | "remote";
-  remoteUrlMissing: boolean;
-  gatewayConnection: StatusGatewayConnection;
-  gatewayReachable: boolean;
-  gatewayProbe: StatusGatewayProbe;
-  gatewayProbeAuth: StatusGatewayProbeAuth;
-}): {
-  targetText: string;
-  targetTextWithSource: string;
-  reachText: string;
-  authText: string;
-  modeLabel: string;
-} {
-  const displayUrl = projectGatewayUrlForDiagnostics(params.gatewayConnection.url);
-  const targetText = params.remoteUrlMissing ? `fallback ${displayUrl}` : displayUrl;
-  const targetTextWithSource = params.gatewayConnection.urlSource
-    ? `${targetText} (${params.gatewayConnection.urlSource})`
-    : targetText;
-  const reachText = params.remoteUrlMissing
-    ? "misconfigured (remote.url missing)"
-    : params.gatewayProbe?.startupPhase
-      ? `still starting (phase ${params.gatewayProbe.startupPhase})`
-      : params.gatewayReachable
-        ? `reachable ${formatDurationPrecise(params.gatewayProbe?.connectLatencyMs ?? 0)}`
-        : params.gatewayProbe?.error
-          ? `unreachable (${params.gatewayProbe.error})`
-          : "unreachable";
-  const authText = params.gatewayReachable
-    ? `auth ${formatGatewayAuthUsed(params.gatewayProbeAuth)}`
-    : "";
-  const modeLabel = `${params.gatewayMode}${params.remoteUrlMissing ? " (remote.url missing)" : ""}`;
-  return {
-    targetText,
-    targetTextWithSource,
-    reachText,
-    authText,
-    modeLabel,
-  };
-}
-
-export function buildGatewayStatusJsonPayload(params: {
-  gatewayMode: "local" | "remote";
-  gatewayConnection: StatusGatewayConnection;
-  remoteUrlMissing: boolean;
-  gatewayReachable: boolean;
-  gatewayProbe:
-    | {
-        connectLatencyMs?: number | null;
-        error?: string | null;
-        health?: unknown;
-        startupPhase?: string;
-      }
-    | null
-    | undefined;
-  gatewaySelf: StatusGatewaySelf;
-  gatewayProbeAuthWarning?: string | null;
-}) {
+export function buildGatewayStatusJsonPayload(
+  params: Pick<
+    Parameters<typeof buildStatusOverviewSurfaceRows>[0],
+    | "gatewayMode"
+    | "gatewayConnection"
+    | "remoteUrlMissing"
+    | "gatewayReachable"
+    | "gatewaySelf"
+    | "gatewayProbeAuthWarning"
+  > & { gatewayProbe: StatusGatewayProbe | undefined },
+) {
   return {
     mode: params.gatewayMode,
     url: projectGatewayUrlForDiagnostics(params.gatewayConnection.url),

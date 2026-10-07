@@ -10,7 +10,7 @@ import { applyQueueDropPolicy, countPendingQueueItems } from "../../../utils/que
 import {
   createOverflowSummaryRetrySource,
   resolveFollowupAuthorizationKey,
-  resolveFollowupDeliveryContextKey,
+  resolveFollowupDeliveryStorageKey,
 } from "./delivery-context.js";
 import {
   clearFollowupDrainCallback,
@@ -74,56 +74,6 @@ function isRunAlreadyQueued(run: FollowupRun, items: FollowupRun[]): boolean {
   return false;
 }
 
-function appendQueueItem(params: {
-  key: string;
-  queue: ReturnType<typeof getFollowupQueue>;
-  run: FollowupRun;
-  recentMessageIdKey?: string;
-  runFollowup?: (run: FollowupRun) => Promise<void>;
-  restartIfIdle: boolean;
-  front: boolean;
-}): void {
-  params.queue.lastEnqueuedAt = Date.now();
-  params.queue.lastRun = params.run.run;
-  params.run.queueAbortSignal = params.queue.abortController.signal;
-  params.queue.items[params.front ? "unshift" : "push"](params.run);
-  if (params.recentMessageIdKey) {
-    recordRecentQueueMessageId(params.run, params.recentMessageIdKey);
-  }
-  const runFollowup = params.runFollowup;
-  if (runFollowup) {
-    rememberFollowupDrainCallback(params.key, runFollowup);
-  }
-  const signal = resolveFollowupAbortSignal({
-    abortSignal: params.run.abortSignal,
-    operatorAuthority: params.run.operatorAuthority,
-  });
-  const lifecycle = params.run.turnAdoptionLifecycle;
-  if (signal && lifecycle && runFollowup) {
-    const onAbort = () => {
-      const queue = getExistingFollowupQueue(params.key);
-      if (queue) {
-        // Cancellation must release pending ownership even while normal draining is dormant.
-        void dropAbortedFollowups(queue, runFollowup).catch((error: unknown) => {
-          defaultRuntime.error?.(`followup queue cancellation failed: ${String(error)}`);
-        });
-      }
-    };
-    const onSettled = lifecycle.onSettled;
-    lifecycle.onSettled = () => {
-      signal.removeEventListener("abort", onAbort);
-      onSettled?.();
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
-    }
-  }
-  if (params.restartIfIdle && !params.queue.draining) {
-    kickFollowupDrainIfIdle(params.key);
-  }
-}
-
 export function enqueueFollowupRun(
   key: string,
   run: FollowupRun,
@@ -180,15 +130,45 @@ export function enqueueFollowupRun(
   } else if (!applyFollowupQueueOverflow(queue, run)) {
     return false;
   }
-  appendQueueItem({
-    key,
-    queue,
-    run,
-    recentMessageIdKey,
-    runFollowup,
-    restartIfIdle,
-    front: options.position === "front" && (!deferOverflow || options.steerCandidate === true),
+  const front = options.position === "front" && (!deferOverflow || options.steerCandidate === true);
+  queue.lastEnqueuedAt = Date.now();
+  queue.lastRun = run.run;
+  run.queueAbortSignal = queue.abortController.signal;
+  queue.items[front ? "unshift" : "push"](run);
+  if (recentMessageIdKey) {
+    recordRecentQueueMessageId(run, recentMessageIdKey);
+  }
+  if (runFollowup) {
+    rememberFollowupDrainCallback(key, runFollowup);
+  }
+  const signal = resolveFollowupAbortSignal({
+    abortSignal: run.abortSignal,
+    operatorAuthority: run.operatorAuthority,
   });
+  const lifecycle = run.turnAdoptionLifecycle;
+  if (signal && lifecycle && runFollowup) {
+    const onAbort = () => {
+      const currentQueue = getExistingFollowupQueue(key);
+      if (currentQueue) {
+        // Cancellation must release pending ownership even while normal draining is dormant.
+        void dropAbortedFollowups(currentQueue, runFollowup).catch((error: unknown) => {
+          defaultRuntime.error?.(`followup queue cancellation failed: ${String(error)}`);
+        });
+      }
+    };
+    const onSettled = lifecycle.onSettled;
+    lifecycle.onSettled = () => {
+      signal.removeEventListener("abort", onAbort);
+      onSettled?.();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    }
+  }
+  if (restartIfIdle && !queue.draining) {
+    kickFollowupDrainIfIdle(key);
+  }
   return true;
 }
 
@@ -232,7 +212,7 @@ function applyFollowupQueueOverflow(
         if (summaryLine === undefined) {
           throw new Error("followup queue summary source lost its elided line");
         }
-        const contextKey = resolveFollowupDeliveryContextKey(item);
+        const contextKey = resolveFollowupDeliveryStorageKey(item);
         const lastElision = queue.summaryElisions.at(-1);
         const compactSource = createOverflowSummaryRetrySource(item);
         if (lastElision?.contextKey === contextKey) {

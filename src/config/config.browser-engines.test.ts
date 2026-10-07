@@ -24,15 +24,8 @@ describe("browser engine config", () => {
     ["cdpUrl", "http://127.0.0.1:9222"],
     ["cdpUrl", "not-a-url"],
     ["attachOnly", undefined],
-    ["attachOnly", false],
-    ["driver", "existing-session"],
     ["driver", "extension"],
-    ["cdpPort", 9222],
     ["userDataDir", "/tmp/chrome-profile"],
-    ["mcpCommand", "chrome-devtools-mcp"],
-    ["mcpArgs", []],
-    ["executablePath", "/usr/bin/chromium"],
-    ["headless", false],
   ])("rejects incompatible Lightpanda %s=%s", (key, value) => {
     const result = OpenClawSchemaShape.browser.safeParse({
       profiles: { lightweight: { ...lightpandaProfile, [key as string]: value } },

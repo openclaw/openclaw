@@ -203,7 +203,6 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
   const options = {
     runnerBackend: "hybrid",
     dedicatedUiE2e: true,
-    includeReleaseOnlyToolingShards: false,
     includeReleaseOnlyRuntimeTests: false,
   };
   const shards = createChangedNodeTestShards(paths, options);
@@ -435,9 +434,7 @@ it("keeps new-plugin, core, and manifest changes within the complete PR matrix c
     createChangedNodeTestShards(changedPaths, {
       runnerBackend: "hybrid",
       compactNodeJobCap: 130,
-      dedicatedCoreTypeChecks: true,
       dedicatedBuildArtifacts: false,
-      includeReleaseOnlyToolingShards: false,
       includeReleaseOnlyRuntimeTests: false,
       includePrExemptRuntimeTests: false,
       dedicatedUiE2e: true,

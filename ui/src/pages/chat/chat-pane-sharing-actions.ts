@@ -1,5 +1,6 @@
-import { buildControlUiPublicSessionSharePath } from "@openclaw/session-url-contract/public-share";
+import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { SessionPublicShareSetResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type { SessionsCompanionResetResult } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type {
   GatewaySessionRow,
   SessionMembersListEvidenceResult as SessionSharingResult,
@@ -17,7 +18,6 @@ import {
 import { showToast } from "../../lib/toast.ts";
 import type { ChatPaneConnectionScope } from "./chat-pane-shared.ts";
 import { ChatPaneSidePanels } from "./chat-pane-side-panels.ts";
-import { resetSessionCompanion } from "./chat-session-companion.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import {
   canManageChatSessionSharing,
@@ -35,7 +35,15 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     }
     const agentId = resolveChatAgentId(scope.state);
     await this.sessionCompanionThreads
-      .reset(key, (sessionKey) => resetSessionCompanion(scope.client, sessionKey, agentId), agentId)
+      .reset(
+        key,
+        (sessionKey) =>
+          scope.client.request<SessionsCompanionResetResult>("sessions.companion.reset", {
+            sessionKey,
+            ...(agentId ? { agentId } : {}),
+          }),
+        agentId,
+      )
       .catch((error: unknown) => {
         if (
           this.presented &&
@@ -260,10 +268,17 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       const linkBase = controlUiUrl ?? scope.client.gatewayUrl ?? gateway.connection.gatewayUrl;
       const url = new URL(linkBase || window.location.href);
       url.protocol = url.protocol.replace(/^ws/u, "http");
-      const path = buildControlUiPublicSessionSharePath({
+      const path = buildControlUiSessionPath({
+        namespace: "chat",
+        sessionKey: currentRow.key,
+        fallbackAgentId: this.sessionSharingAgentId(currentRow.key),
         basePath: controlUiUrl ? url.pathname : scope.context.basePath,
-        token: share.token,
+        displayName: currentRow.label || currentRow.displayName,
+        shortIdLength: 32,
       });
+      if (!path) {
+        return;
+      }
       const copied = await copyToClipboard(new URL(path, url.origin).href, isCurrent);
       if (isCurrent()) {
         showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });

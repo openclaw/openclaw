@@ -23,7 +23,7 @@ function createContext(seq = 0) {
       agentRunSeq,
       broadcast,
       nodeSendToSession,
-      getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+      getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
     },
     order,
     deleteSpy,

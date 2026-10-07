@@ -13,7 +13,6 @@ export type AgentsRouteData = AgentsRouteLocation & {
   settingsAgentSelection: ApplicationContext["settingsAgentSelection"];
   selectionIntentRevision: number;
   agentsList: AgentsListResult | null;
-  error: string | null;
 };
 
 async function loadAgentsRouteData(
@@ -34,7 +33,6 @@ async function loadAgentsRouteData(
     settingsAgentSelection,
     selectionIntentRevision,
     agentsList,
-    error: context.agents.state.agentsError,
   };
 }
 

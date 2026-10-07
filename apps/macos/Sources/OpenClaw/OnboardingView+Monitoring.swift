@@ -292,16 +292,11 @@ extension OnboardingView {
         } else {
             nil
         }
-        await MainActor.run {
-            guard let desc else {
-                self.localGatewayProbe = nil
-                return
-            }
-            let command = desc.command.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.localGatewayProbe = LocalGatewayProbe(
+        self.localGatewayProbe = desc.map { desc in
+            LocalGatewayProbe(
                 port: port,
                 pid: desc.pid,
-                command: command,
+                command: desc.command.trimmingCharacters(in: .whitespacesAndNewlines),
                 profile: .current,
                 managedServicePID: managedServicePID)
         }

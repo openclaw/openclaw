@@ -1208,6 +1208,14 @@ CREATE INDEX IF NOT EXISTS idx_acp_sessions_state_activity
 CREATE INDEX IF NOT EXISTS idx_acp_sessions_agent_activity
   ON acp_sessions(agent, last_activity_at DESC, session_key);
 
+CREATE INDEX IF NOT EXISTS idx_acp_sessions_resume_agent
+  ON acp_sessions(trim(json_extract(CASE WHEN json_valid(identity_json) THEN identity_json END, '$.agentSessionId'),
+    char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279)));
+
+CREATE INDEX IF NOT EXISTS idx_acp_sessions_resume_acpx
+  ON acp_sessions(trim(json_extract(CASE WHEN json_valid(identity_json) THEN identity_json END, '$.acpxSessionId'),
+    char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279)));
+
 CREATE TABLE IF NOT EXISTS acp_replay_sessions (
   session_id TEXT NOT NULL PRIMARY KEY,
   session_key TEXT NOT NULL,
@@ -1278,7 +1286,8 @@ CREATE TABLE IF NOT EXISTS agent_database_leases (
   path TEXT NOT NULL,
   owner_pid INTEGER NOT NULL,
   owner_start_time INTEGER,
-  opened_at INTEGER NOT NULL
+  opened_at INTEGER NOT NULL,
+  provenance TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS plugin_state_entries (
@@ -1589,7 +1598,7 @@ CREATE INDEX IF NOT EXISTS idx_delivery_queue_pending
   ON delivery_queue_entries(queue_name, status, enqueued_at, id);
 
 CREATE INDEX IF NOT EXISTS idx_delivery_queue_failed
-  ON delivery_queue_entries(queue_name, status, failed_at, id);
+  ON delivery_queue_entries(status, queue_name, failed_at, id);
 
 CREATE INDEX IF NOT EXISTS idx_delivery_queue_session
   ON delivery_queue_entries(queue_name, status, session_key, enqueued_at, id)
@@ -1788,6 +1797,10 @@ CREATE TABLE IF NOT EXISTS meeting_transcript_utterances (
     REFERENCES meeting_transcript_sessions(session_id, started_at)
     ON DELETE CASCADE
 ) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_utterances_id
+  ON meeting_transcript_utterances(session_id, session_started_at, utterance_id)
+  WHERE utterance_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS meeting_transcript_summaries (
   session_id TEXT NOT NULL,

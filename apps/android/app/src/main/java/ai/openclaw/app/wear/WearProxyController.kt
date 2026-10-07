@@ -1,5 +1,6 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.node.asArrayOrNull
 import ai.openclaw.app.parseGatewayModelCatalog
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
@@ -34,12 +35,6 @@ internal class WearProxyGatewayException(
   override val message: String,
 ) : IllegalStateException(message)
 
-internal data class WearProxyAgent(
-  val id: String,
-  val name: String?,
-  val emoji: String?,
-)
-
 internal class WearProxyController(
   private val requestGateway: suspend (method: String, params: JsonObject) -> JsonElement,
   private val isGatewayConnected: () -> Boolean,
@@ -50,7 +45,7 @@ internal class WearProxyController(
   private val activeAgentId: () -> String? = { null },
   private val activeSessionKey: () -> String? = { null },
   private val selectedModelRef: () -> String? = { null },
-  private val agents: () -> List<WearProxyAgent> = { emptyList() },
+  private val agents: () -> List<GatewayAgentSummary> = { emptyList() },
   private val selectGatewayAgent: suspend (agentId: String) -> Boolean = { false },
   private val selectSessionModel: suspend (sessionKey: String, modelRef: String) -> Boolean = { _, _ -> false },
   private val connectGateway: suspend () -> Unit = {},

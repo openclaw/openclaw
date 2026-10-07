@@ -50,6 +50,33 @@ function uniquePaths(paths: readonly string[][]): string[][] {
   return [...new Map(paths.map((path) => [JSON.stringify(path), path])).values()];
 }
 
+/** Empty plugin config has no settings; opaque legacy values still belong to their owner. */
+export function hasDeferredPluginMigrationConfig(
+  config: unknown,
+  pending: DeferredPluginMigration,
+): boolean {
+  if (
+    (pending.validationExcludedPaths ?? []).some(
+      (segments) => readPathValue(config, segments) !== undefined,
+    )
+  ) {
+    return true;
+  }
+  const pluginConfigPath = ["plugins", "entries", pending.pluginId, "config"];
+  return [...(pending.configPaths ?? []), pluginConfigPath].some((segments) => {
+    const value = readPathValue(config, segments);
+    return (
+      value !== undefined &&
+      !(
+        segments.length === pluginConfigPath.length &&
+        segments.every((segment, index) => segment === pluginConfigPath[index]) &&
+        isRecord(value) &&
+        Object.keys(value).length === 0
+      )
+    );
+  });
+}
+
 /** Preserve only current source inputs owned by the deferred plugin or the shared session locator. */
 export function resolveDeferredPluginMigrationConfigPaths(params: {
   config: unknown;

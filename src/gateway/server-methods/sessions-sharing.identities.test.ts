@@ -8,13 +8,19 @@ import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { setDisplayName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  bindSessionRowProjection,
+  getSessionRowProjection,
+} from "../session-row-projection-access.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
 import { authorizeResolvedSessionMutation } from "../session-sharing.js";
+import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import {
   callSessionSharingHandler as call,
   identifiedClient,
@@ -24,6 +30,42 @@ import {
 afterEach(() => vi.restoreAllMocks());
 
 describe("session member picker identities", () => {
+  it("lists sharing evidence independently of placement display failures", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:sharing-display-failure";
+      const scope = { agentId: "main", sessionKey };
+      replaceSessionEntrySync(scope, { sessionId: "sharing-display-failure", updatedAt: 1 });
+      addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 1 });
+      const requestContext = context(vi.fn());
+      const placements = createWorkerSessionPlacementStore();
+      const projection = await createSessionRowProjection({
+        cfg: requestContext.getRuntimeConfig(),
+        modelCatalog: [],
+        placementFactsReader: placements,
+      });
+      bindSessionRowProjection(requestContext, () => projection);
+      try {
+        await projection.ensureMaterialized();
+        const expected = await call("session.members.listEvidence", { sessionKey }, requestContext);
+        expect(expected[0]?.[1]).toMatchObject({
+          members: [{ identityId: "guest", addedBy: "owner", addedAt: 1 }],
+        });
+        vi.spyOn(placements, "readProjection").mockRejectedValue(
+          new Error("placement display unavailable"),
+        );
+        sessionChanges.emit({ all: true, scope: "worker-placements" });
+        expect(await call("session.members.listEvidence", { sessionKey }, requestContext)).toEqual(
+          expected,
+        );
+        expect(await call("session.members.list", { sessionKey }, requestContext)).toEqual(
+          expected,
+        );
+      } finally {
+        projection.dispose();
+      }
+    });
+  });
+
   it("limits creators to the current combined-store scope across configuration changes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const stores = [state.path("picker-selected.sqlite"), state.path("picker-other.sqlite")];

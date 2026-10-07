@@ -15,7 +15,7 @@ import { isEmbeddedAgentRunActive } from "../../embedded-agent-runner/runs.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 export { resolveQueueSettings } from "../../../auto-reply/reply/queue.js";
 export { resolveExternalBestEffortDeliveryTarget } from "../../../infra/outbound/best-effort-delivery.js";
-export { createBoundDeliveryRouter } from "../../../infra/outbound/bound-delivery-router.js";
+export { resolveBoundDeliveryDestination } from "../../../infra/outbound/bound-delivery-router.js";
 export { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
 export { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 export { getRuntimeConfig as getSubagentAnnounceRuntimeConfig } from "../../../config/config.js";

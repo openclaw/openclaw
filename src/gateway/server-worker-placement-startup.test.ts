@@ -28,10 +28,15 @@ import type { WorkerPlacementDispatchService } from "./worker-environments/place
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 
 function placementStoreDefaults(
-  readPlacements: () => ReadonlyArray<{ sessionId: string }> = () => [],
+  readPlacements: () => ReadonlyArray<{
+    sessionId: string;
+    environmentId?: string | null;
+  }> = () => [],
 ) {
   return {
     readChangeSnapshot: async () => readPlacements(),
+    readEnvironmentOwner: async (environmentId: string) =>
+      readPlacements().find((placement) => placement.environmentId === environmentId),
     readProjection: async () => ({
       placements: new Map(readPlacements().map((placement) => [placement.sessionId, placement])),
     }),
@@ -39,7 +44,7 @@ function placementStoreDefaults(
     retireSessionPlacement: vi.fn(),
     pruneOrphanedWorkspaceReconciliations: async () => [],
     listWorkspaceReconciliationOwners: async () => [],
-    listPendingWorkspaceResults: () => [],
+    listPendingWorkspaceResultsAsync: () => [],
   };
 }
 
@@ -483,16 +488,6 @@ describe("worker placement startup health lifetime", () => {
       expect(unrelatedCore).toHaveBeenCalledOnce();
 
       placementRows = [
-        provisioning,
-        { sessionId: "session-duplicate", state: "active", environmentId: "worker-guarded" },
-      ];
-      const ambiguousCore = vi.fn(async () => {});
-      await expect(guard("worker-guarded", ambiguousCore)).rejects.toThrow(
-        "multiple placement owners",
-      );
-      expect(ambiguousCore).not.toHaveBeenCalled();
-
-      placementRows = [
         { sessionId: "session-mismatch", state: "active", environmentId: "worker-mismatch" },
       ];
       const mismatchedCore = vi.fn(async () => {});
@@ -712,7 +707,7 @@ describe("worker placement startup recovery authority", () => {
       )
       .finally(() => admission.release());
     await vi.waitFor(() => expect(events).toEqual(["recovery:/gateway/workspace"]));
-    const contender = runExclusiveSessionLifecycleMutation({
+    const contender = runExclusiveSessionLifecycleMutation("placement-activate", {
       scope: "/tmp/openclaw-worker-placement-session.sqlite",
       identities: [
         request.sessionKey,

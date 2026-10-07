@@ -87,16 +87,6 @@ export function resolveRefreshAgentDirs(
   return uniqueStrings([...context.explicitAgentDirs, ...configDerived]);
 }
 
-function resolveCandidateAgentDirs(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv | Record<string, string | undefined>;
-  agentDirs?: string[];
-}): string[] {
-  return params.agentDirs?.length
-    ? uniqueStrings(params.agentDirs.map((entry) => resolveUserPath(entry, params.env)))
-    : collectCandidateAgentDirs(params.config, params.env);
-}
-
 /**
  * Creates empty web-tool metadata for snapshots that do not need secret resolution.
  */
@@ -198,11 +188,9 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
   const sourceConfig = cloneConfigWithResolutionFacts(params.config);
   const resolvedConfig = cloneConfigWithResolutionFacts(params.config);
   const includeAuthStoreRefs = params.includeAuthStoreRefs ?? true;
-  const candidateDirs = resolveCandidateAgentDirs({
-    config: resolvedConfig,
-    env: runtimeEnv,
-    agentDirs: params.agentDirs,
-  });
+  const candidateDirs = params.agentDirs?.length
+    ? uniqueStrings(params.agentDirs.map((entry) => resolveUserPath(entry, runtimeEnv)))
+    : collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
   let authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
   if (includeAuthStoreRefs) {
     if (!params.loadAuthStore) {

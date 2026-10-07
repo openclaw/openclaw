@@ -31,15 +31,23 @@ import {
   OPENAI_GPT_56_SOL_MODEL_ID,
 } from "./model-route-contract.js";
 import { isOpenAIGptLiveModel, isSupportedOpenAIGptLiveModel } from "./realtime-quicksilver.js";
+import { resolveOpenAIModelServiceTiers } from "./service-tier-policy.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 
 export { resolveModelAuthPolicy } from "./model-auth-policy.js";
+
+export function resolveServiceTiers(
+  ctx: ProviderFastModePolicyContext,
+): readonly string[] | undefined {
+  return ctx.runtimeId === "openclaw" ? resolveOpenAIModelServiceTiers(ctx) : undefined;
+}
 
 export function resolveFastModeSupport(ctx: ProviderFastModePolicyContext): boolean | undefined {
   if (!ctx.api || !ctx.baseUrl || ctx.runtimeId !== "openclaw") {
     return undefined;
   }
   return (
+    (resolveOpenAIModelServiceTiers(ctx)?.includes("priority") ?? true) &&
     normalizeOpenAIServiceTier(ctx.params?.serviceTier ?? ctx.params?.service_tier) === undefined &&
     supportsOpenAIResponsesFastMode(ctx)
   );
@@ -157,6 +165,7 @@ export function projectRealtimeVoicePublicProjection(ctx: {
       clientHints: {
         gatewayRelaySupported:
           ctx.config.consultRouting !== "force-agent-consult" &&
+          !normalizeOptionalString(ctx.providerConfig.baseUrl) &&
           !normalizeOptionalString(ctx.providerConfig.azureEndpoint) &&
           !normalizeOptionalString(ctx.providerConfig.azureDeployment),
       },

@@ -20,7 +20,6 @@ import {
 } from "./session-transcript-fts.js";
 import {
   prepareSessionTranscriptProjectionAppend,
-  type PreparedSessionTranscriptProjectionAppend,
   type SessionTranscriptProjectionCursor,
   type TranscriptIndexEntry,
 } from "./session-transcript-projection-append.js";
@@ -243,51 +242,36 @@ export function createTranscriptIndexAppenderInTransaction(
   let insertFts: ReturnType<typeof createSessionTranscriptFtsInserter> | undefined;
   let updateWatermark: ReturnType<typeof createWatermarkWriter> | undefined;
   return (params) => {
-    if (!watermark) {
-      if (params.seq !== 0) {
-        // Pre-existing rows without index state (e.g. doctor-migrated
-        // transcripts): stay unindexed until reconcile rebuilds the session.
-        return true;
-      }
-      const append = prepareSessionTranscriptProjectionAppend({
-        ...params,
-        cursor: {
-          activeEventCount: 0,
-          activeMessageCount: 0,
-          indexedSeq: -1,
-          leafEventId: null,
-        },
-      });
-      if (!append) {
-        return true;
-      }
-      applyForwardIndex(params.createdAt, append);
-      return false;
-    }
-    if (watermark.needsRebuild) {
+    // Existing unindexed rows need a rebuild; only sequence zero initializes a projection.
+    if ((!watermark && params.seq !== 0) || watermark?.needsRebuild) {
       return true;
     }
-    if ((hasUnclassifiedEvents ??= hasUnclassifiedSessionTranscriptEvents(db, sessionId))) {
+    if (
+      watermark &&
+      (hasUnclassifiedEvents ??= hasUnclassifiedSessionTranscriptEvents(db, sessionId))
+    ) {
       // Out-of-band or older writers left incomplete projection facts. Once checked,
       // this batch's own forward rows all carry an explicit context classification.
       watermark = markSessionTranscriptIndexDirtyInTransaction(db, sessionId);
       return true;
     }
-    const append = prepareSessionTranscriptProjectionAppend({ ...params, cursor: watermark });
+    const append = prepareSessionTranscriptProjectionAppend({
+      ...params,
+      cursor: watermark ?? {
+        activeEventCount: 0,
+        activeMessageCount: 0,
+        indexedSeq: -1,
+        leafEventId: null,
+      },
+    });
     if (!append) {
       // Out-of-band writes, branch changes, and legacy/canonical transitions
       // need the full visible-tree resolver rather than append-time inference.
-      watermark = markSessionTranscriptIndexDirtyInTransaction(db, sessionId);
+      if (watermark) {
+        watermark = markSessionTranscriptIndexDirtyInTransaction(db, sessionId);
+      }
       return true;
     }
-    applyForwardIndex(params.createdAt, append);
-    return false;
-  };
-
-  function applyForwardIndex(
-    createdAt: number,
-    append: PreparedSessionTranscriptProjectionAppend,
-  ): void {
     if (append.ftsRow) {
       insertFts ??= createSessionTranscriptFtsInserter(db, sessionId);
       insertFts(append.ftsRow);
@@ -299,7 +283,7 @@ export function createTranscriptIndexAppenderInTransaction(
     const nextWatermark = {
       ...append.cursor,
       needsRebuild: false,
-      updatedAt: createdAt,
+      updatedAt: params.createdAt,
     };
     // Initialization still upserts; this synchronous batch owns all subsequent updates.
     const write = watermark
@@ -307,7 +291,8 @@ export function createTranscriptIndexAppenderInTransaction(
       : createWatermarkWriter(db, sessionId);
     write(nextWatermark);
     watermark = nextWatermark;
-  }
+    return false;
+  };
 }
 
 /** Marks one session for lazy rebuild without touching its FTS rows. */
@@ -494,6 +479,8 @@ export function reconcileSessionTranscriptIndexInTransaction(
   return true;
 }
 
+// Native synchronous SDK callbacks and operator maintenance retain their owning connection.
+// Runtime disk reconciliation consumes the publication worker's maintained facts.
 function selectSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync) {
   const kysely = getIndexKysely(db);
   return (
@@ -550,16 +537,6 @@ function selectSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync) {
   );
 }
 
-/** Search needs only one pending session; the reconcile owner selects its complete work list. */
-export function hasSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync): boolean {
-  return (
-    executeSqliteQueryTakeFirstSync(
-      db,
-      selectSessionsNeedingTranscriptIndexReconcile(db).limit(1),
-    ) !== undefined
-  );
-}
-
 /**
  * Sessions whose index needs reconcile work: flagged rebuilds, transcripts
  * that gained rows without index state (doctor imports), and watermarks
@@ -576,39 +553,28 @@ const transcriptIndexTables = [
   "session_transcript_index_state",
 ] as const;
 
-/** Orphan-only cleanup is independent of live sessions' projection watermarks. */
-export function hasOrphanedTranscriptIndexRows(db: DatabaseSync): boolean {
+function selectOrphanedTranscriptOwners(
+  db: DatabaseSync,
+  table: (typeof transcriptIndexTables)[number],
+) {
   const kysely = getIndexKysely(db);
-  return transcriptIndexTables.some(
-    (table) =>
-      executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom(table)
-          .select("session_id")
-          .where(
-            "session_id",
-            "not in",
-            kysely.selectFrom("transcript_events").select("session_id").distinct(),
-          )
-          .limit(1),
-      ) !== undefined,
+  return (
+    kysely
+      .selectFrom(table)
+      .select("session_id")
+      .distinct()
+      .except(kysely.selectFrom("transcript_events").select("session_id").distinct())
+      // Older SQLite needs ordering to merge owner sets and skip duplicate keys.
+      .orderBy("session_id")
   );
 }
 
-/** Drops index rows for sessions whose transcript rows are gone. */
 export function deleteOrphanedTranscriptIndexRowsInTransaction(db: DatabaseSync): void {
   const kysely = getIndexKysely(db);
   for (const table of transcriptIndexTables) {
     executeSqliteQuerySync(
       db,
-      kysely
-        .deleteFrom(table)
-        .where(
-          "session_id",
-          "not in",
-          kysely.selectFrom("transcript_events").select("session_id").distinct(),
-        ),
+      kysely.deleteFrom(table).where("session_id", "in", selectOrphanedTranscriptOwners(db, table)),
     );
   }
 }

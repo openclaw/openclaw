@@ -1,9 +1,5 @@
 // Implements text-to-speech commands and persisted voice preferences.
 import crypto from "node:crypto";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
 import { readLatestAssistantTextFromSessionTranscript } from "../../config/sessions.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -11,11 +7,7 @@ import {
   isUnscopedSessionKeySentinel,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
-import {
-  canonicalizeSpeechProviderId,
-  getSpeechProvider,
-  listSpeechProviders,
-} from "../../tts/provider-registry.js";
+import { getSpeechProvider, listSpeechProviders } from "../../tts/provider-registry.js";
 import {
   getResolvedSpeechProviderConfig,
   getLastTtsAttempt,
@@ -67,10 +59,10 @@ function parseTtsCommand(normalized: string): ParsedTtsCommand | null {
   if (rest === null) {
     return null;
   }
-  const [action, ...tail] = (rest || "status").split(/\s+/);
+  const [action = "", ...tail] = (rest || "status").split(/\s+/);
   return {
-    action: normalizeOptionalLowercaseString(action) ?? "",
-    args: normalizeOptionalString(tail.join(" ")) ?? "",
+    action: action.toLowerCase(),
+    args: tail.join(" "),
   };
 }
 
@@ -397,8 +389,7 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
         return ttsUsage();
       }
 
-      const nextProvider =
-        canonicalizeSpeechProviderId(requested, params.cfg) ?? resolvedProvider.id;
+      const nextProvider = resolvedProvider.id;
       setTtsProvider(prefsPath, nextProvider);
       return stopWithText(`✅ TTS provider set to ${nextProvider}.`);
     }

@@ -8,6 +8,7 @@ import {
   type TextScaleStop,
 } from "../../app/settings.ts";
 import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
+import { normalizeTerminalFontFamily } from "../../app/terminal-font.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import {
   loadTypefaceSpecimens,
@@ -61,7 +62,7 @@ const ACCENT_PRESETS = [
 /* Builtin cards preview their real palette (chip colors live in config.css,
    mirrored from the base.css theme blocks). The custom card only has real
    colors while active — its chips read the live CSS variables — so it falls
-   back to the spark icon otherwise. */
+   back to the download icon otherwise. */
 function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
   if ((id === "custom" || id.includes("/")) && activeTheme !== id) {
     return html`<span class="settings-theme-card__icon" aria-hidden="true"
@@ -84,20 +85,12 @@ function importedThemeName(props: Pick<ConfigProps, "hasCustomTheme" | "customTh
 }
 
 function focusCustomThemeImportInput() {
-  const schedule =
-    typeof requestAnimationFrame === "function"
-      ? requestAnimationFrame
-      : (cb: FrameRequestCallback) => window.setTimeout(() => cb(0), 0);
-  schedule(() => {
-    const input = globalThis.document?.querySelector<HTMLInputElement>(
-      "[data-custom-theme-import-input]",
-    );
+  requestAnimationFrame(() => {
+    const input = document.querySelector<HTMLInputElement>("[data-custom-theme-import-input]");
     if (!input) {
       return;
     }
-    if (typeof input.scrollIntoView === "function") {
-      input.scrollIntoView({ block: "center", behavior: resolveScrollBehavior() });
-    }
+    input.scrollIntoView({ block: "center", behavior: resolveScrollBehavior() });
     input.focus();
     input.select();
   });
@@ -150,6 +143,43 @@ function renderTypography(props: ConfigProps, theme: { id: ThemeName; label: str
                 (isUi ? props.setFontUi : props.setFontChat)(normalizeTypefaceOverride(value)),
             }),
           });
+        })}
+        ${renderSettingsRow({
+          title: t("configView.appearance.fonts.terminal"),
+          description: html`${t("configView.appearance.fonts.terminalHint")}<br />${t("configView.appearance.fonts.terminalLigatures")}`,
+          stacked: true,
+          control: html`
+            <input
+              class="settings-input"
+              data-settings-terminal-font
+              aria-label=${t("configView.appearance.fonts.terminal")}
+              placeholder=${t("configView.appearance.fonts.terminalDefault")}
+              maxlength="100"
+              spellcheck="false"
+              .value=${props.terminalFontFamily ?? ""}
+              @input=${(event: Event & { currentTarget: HTMLInputElement }) => event.currentTarget.setCustomValidity("")}
+              @change=${(event: Event & { currentTarget: HTMLInputElement }) => {
+                const input = event.currentTarget;
+                const family = normalizeTerminalFontFamily(input.value);
+                if (input.value.trim() && !family) {
+                  input.setCustomValidity(t("configView.appearance.fonts.terminalInvalid"));
+                  input.reportValidity();
+                  return;
+                }
+                input.setCustomValidity("");
+                input.value = family ?? "";
+                props.setTerminalFontFamily(family);
+              }}
+            />
+            <button
+              class="btn btn--sm"
+              type="button"
+              ?disabled=${!props.terminalFontFamily}
+              @click=${() => props.setTerminalFontFamily(undefined)}
+            >
+              ${t("configView.appearance.fonts.terminalReset")}
+            </button>
+          `,
         })}
         <div class="settings-row settings-row--stacked">
           <div class="settings-typography-preview">

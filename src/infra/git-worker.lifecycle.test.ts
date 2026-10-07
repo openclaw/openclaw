@@ -11,10 +11,16 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeGitWorktreeOperation } from "../agents/worktrees/git-worktree-operations.runtime.js";
 import * as worktreeGit from "../agents/worktrees/git.js";
 import { ensureStagedInputDirectory, stagedInputDirectory } from "../media/staged-inputs.js";
+import { emitChildProcessSpawnSample } from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
+import {
+  onDiagnosticEvent,
+  setDiagnosticsEnabledForProcess,
+  type DiagnosticEventPayload,
+} from "./diagnostic-events.js";
 import * as gitExec from "./git-exec.js";
 import { installUnknownDirentFixture } from "./git-worker-dir.test-support.js";
 import { runGitWorkerOperation, type GitWorkerOperationOptions } from "./git-worker.js";
@@ -159,6 +165,52 @@ function waitForLifecyclePoint(
 }
 
 describe("Git operation host lifecycle", () => {
+  it("uses local PR statistics when Git supports disabling lazy fetches", async () => {
+    const root = tempDirs.make("openclaw-pr-facts-partial-clone-");
+    const localOnly = (await gitResult(root, ["--no-lazy-fetch", "version"])).code === 0;
+    const { clone, commit } = await partialClone(root);
+    const blob = await git(clone, "rev-parse", `${commit}:README.md`);
+    await git(clone, "read-tree", commit);
+    const feature = await git(
+      clone,
+      "commit-tree",
+      `${commit}^{tree}`,
+      "-p",
+      commit,
+      "-m",
+      "feature",
+    );
+    await git(clone, "update-ref", "refs/heads/feature", feature);
+    await git(clone, "symbolic-ref", "HEAD", "refs/heads/feature");
+    await git(clone, "update-ref", "refs/remotes/origin/feature", feature);
+    // Same-size dirty content also exercises Git's stat-unmatch refresh path.
+    await fs.writeFile(path.join(clone, "README.md"), "work\n");
+    const trace = path.join(root, "git-trace.jsonl");
+    vi.stubEnv("GIT_TRACE2_EVENT", trace);
+    const readFacts = () =>
+      runGitWorkerOperation({
+        type: "pull-request.branch-facts",
+        input: {
+          root: clone,
+          branch: "feature",
+          defaultBranch: "main",
+          mergedHeads: [],
+          refreshIndex: true,
+        },
+      });
+
+    const stats = { additions: 1, deletions: 1, changedFiles: 1 };
+    expect(await readFacts()).toEqual({ creatable: true, stats: localOnly ? null : stats });
+    expect(await traceStarts(trace, "fetch")).toHaveLength(localOnly ? 0 : 1);
+
+    await git(clone, "fetch", "--no-tags", "--no-write-fetch-head", "origin", blob);
+    expect(await readFacts()).toEqual({
+      creatable: true,
+      stats,
+    });
+    expect(await traceStarts(trace, "fetch")).toHaveLength(localOnly ? 0 : 1);
+  });
+
   it("bounds ignored dependency output during snapshot without losing private staged inputs", async () => {
     const root = tempDirs.make("openclaw-ignored-inventory-");
     const repo = await repository(root);
@@ -199,7 +251,7 @@ describe("Git operation host lifecycle", () => {
         },
       },
       {
-        onEffect: (effect) => (effect.type === "worktree.snapshot-provisioned" ? [] : undefined),
+        onEffect: () => undefined,
       },
     );
     expect(await git(repo, "show", `${snapshot.snapshotRef}:${input}`)).toBe("retain task input");
@@ -243,8 +295,7 @@ describe("Git operation host lifecycle", () => {
             },
           },
           {
-            onEffect: (effect) =>
-              effect.type === "worktree.snapshot-provisioned" ? [] : undefined,
+            onEffect: () => undefined,
           },
         ),
       ).rejects.toThrow("nested git repositories cannot be snapshotted losslessly");
@@ -312,6 +363,18 @@ describe("Git operation host lifecycle", () => {
     const peerRoot = path.join(root, "peer");
     await fs.mkdir(peerRoot);
     const peer = await repository(peerRoot);
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    setDiagnosticsEnabledForProcess(false);
+    emitChildProcessSpawnSample();
+    setDiagnosticsEnabledForProcess(true);
+    const spawns: Extract<DiagnosticEventPayload, { type: "diagnostic.child_process.spawn" }>[] =
+      [];
+    const stop = onDiagnosticEvent((event) => {
+      if (event.type === "diagnostic.child_process.spawn") {
+        spawns.push(event);
+      }
+    });
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const realRun = worktreeGit.runGitBytes;
@@ -358,7 +421,18 @@ describe("Git operation host lifecycle", () => {
     } finally {
       release.resolve();
       await Promise.all(pending);
+      now = 60_000;
+      emitChildProcessSpawnSample();
+      stop();
+      setDiagnosticsEnabledForProcess(false);
+      emitChildProcessSpawnSample();
     }
+    expect(
+      spawns
+        .map(({ operation }) => operation ?? "unknown")
+        .toSorted((left, right) => left.localeCompare(right)),
+    ).toEqual(["checkout.diff", "repository.branches"]);
+    expect(spawns.every(({ family, count }) => family === "git" && count > 0)).toBe(true);
   });
 
   it.each(["cleanup-inspection", "snapshot"] as const)(
@@ -402,8 +476,7 @@ describe("Git operation host lifecycle", () => {
                 input: { kind: "nested-repository", checkoutPath: repo },
               },
           {
-            onEffect: (effect) =>
-              effect.type === "worktree.snapshot-provisioned" ? [] : undefined,
+            onEffect: () => undefined,
           },
         );
       const first = settle(startMaintenance());
@@ -432,9 +505,18 @@ describe("Git operation host lifecycle", () => {
             type: "worktree.directory-size",
             input: { root: peer, excludeGit: true },
           }),
+          runGitWorkerOperation({
+            type: "worktree.eviction-source",
+            input: {
+              sourceRoot: peer,
+              commonDir: path.join(peer, ".git"),
+              requiredPaths: [],
+              records: [{ id: "preparation-source", path: peer, repoRoot: peer }],
+            },
+          }),
         ]);
         pending.push(settle(preparation));
-        const [gitBytes, provisioned, transition, directoryBytes] = await within(
+        const [gitBytes, provisioned, transition, directoryBytes, source] = await within(
           preparation,
           "Worktree preparation waited behind maintenance Git requests",
         );
@@ -446,6 +528,7 @@ describe("Git operation host lifecycle", () => {
           requiresFullCheckout: false,
         });
         expect(directoryBytes).toBe(43);
+        expect(source).toEqual({ worktreeIds: ["preparation-source"], complete: true });
         expect(heldRequests).toBe(1);
       } finally {
         release.resolve();
@@ -694,9 +777,6 @@ describe("Git operation host lifecycle", () => {
             await release.promise;
           }
         }
-        if (effect.type === "worktree.snapshot-provisioned") {
-          return [];
-        }
         return undefined;
       };
       let completed = 0;
@@ -736,11 +816,9 @@ describe("Git operation host lifecycle", () => {
         const result = await within(pending);
         expect(result.rejected).toBe(true);
         if (ending === "worker-error") {
-          expect(
-            result.rejected &&
-              result.error instanceof Error &&
-              result.error.message.includes("provisioned path entered Git snapshot"),
-          ).toBe(true);
+          expect(result.rejected && result.error).toMatchObject({
+            message: "provisioned path is now tracked: README.md",
+          });
         }
         expect(await exists(temporaryDirectory)).toBe(false);
         expect((await fs.readFile(neighbor)).length).toBe(4);
@@ -812,9 +890,6 @@ describe("Git operation host lifecycle", () => {
                 effect.input.purpose === "worktree safety snapshot index"
               ) {
                 temporaryDirectory = effect.input.demands[0]?.path ?? "";
-              }
-              if (effect.type === "worktree.snapshot-provisioned") {
-                return [];
               }
               return undefined;
             },

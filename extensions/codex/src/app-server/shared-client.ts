@@ -16,9 +16,6 @@ import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerPreparedAuthProfileSnapshot,
   reconcileCodexComputerUseStartArtifacts,
-  type CodexAppServerPreparedAuth,
-  type CodexAppServerAuthRequirement,
-  type CodexAppServerResolvedPreparedAuth,
 } from "./auth-bridge.js";
 import {
   resolveCodexAppServerFallbackApiKeyCacheKey,
@@ -33,6 +30,7 @@ import {
   resolveCodexAppServerAuthProfileStore,
 } from "./auth-profile.js";
 import { resolveCodexAppServerUserHomeDir } from "./auth-start-options.js";
+import type * as codexAuth from "./auth-types.js";
 import {
   ensureCodexAppServerClientRuntime,
   recordCodexAppServerAuthHandoff,
@@ -65,6 +63,7 @@ import {
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import { createCodexResponsesOAuth, isCodexResponsesOAuth } from "./responses-oauth.js";
+import { codexPrewriteRejectionCause } from "./rpc-error.js";
 import {
   notifyDesktopGenerationDrainChecks,
   retainSharedClientEntry,
@@ -93,7 +92,6 @@ import {
 } from "./spawn-identity.js";
 import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
 
-export type { CodexAppServerPreparedAuth } from "./auth-bridge.js";
 export type { CodexAppServerAcquireObservation } from "./shared-client-lifecycle.js";
 
 export {
@@ -216,13 +214,12 @@ class CodexAppServerStartSelectionChangedError extends Error {
 }
 
 /** Cross-bundle-safe check for a managed executable selection retry. */
-export function isCodexAppServerStartSelectionChangedError(
-  error: unknown,
-): error is CodexAppServerStartSelectionChangedError {
+export function isCodexAppServerStartSelectionChangedError(error: unknown): boolean {
+  const cause = codexPrewriteRejectionCause(error);
   return (
-    error instanceof Error &&
-    "code" in error &&
-    error.code === "CODEX_APP_SERVER_START_SELECTION_CHANGED"
+    cause instanceof Error &&
+    "code" in cause &&
+    cause.code === "CODEX_APP_SERVER_START_SELECTION_CHANGED"
   );
 }
 
@@ -293,8 +290,8 @@ export type CodexAppServerClientOptions = {
   runtimeArtifactMode?: "capture";
   /** Previously minted exact runtime required before the process may start. */
   expectedRuntimeArtifact?: AgentHarnessRuntimeArtifactBinding;
-  preparedAuth?: CodexAppServerPreparedAuth;
-  authRequirement?: CodexAppServerAuthRequirement;
+  preparedAuth?: codexAuth.CodexAppServerPreparedAuth;
+  authRequirement?: codexAuth.CodexAppServerAuthRequirement;
   agentId?: string;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
@@ -403,7 +400,7 @@ async function resolveCodexAppServerClientStartContext(options?: CodexAppServerC
       `Prepared Codex auth profile "${preparedAuth.profileId}" is unusable. Repair or replace the selected OpenAI profile, then retry.`,
     );
   }
-  const resolvedPreparedAuth: CodexAppServerResolvedPreparedAuth | undefined =
+  const resolvedPreparedAuth: codexAuth.CodexAppServerResolvedPreparedAuth | undefined =
     preparedAuth?.kind === "api-key"
       ? { kind: "api-key", apiKey: preparedApiKey as string }
       : preparedAuthProfileSnapshot && authProfileId && authProfileStore
@@ -888,7 +885,6 @@ async function startInitializedCodexAppServerClientOnce(
     : params.lifetime.controller.signal;
   const waitForStartup = <T>(
     operation: () => Promise<T>,
-    timeoutMessage = CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE,
     timeoutErrorFactory?: () => CodexAppServerStartupError,
   ) => {
     if (abandonSignal.aborted) {
@@ -898,7 +894,7 @@ async function startInitializedCodexAppServerClientOnce(
       resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
       ownCodexStartup(params.lifetime, operation()),
       abandonSignal,
-      timeoutMessage,
+      CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE,
       timeoutErrorFactory,
     );
   };
@@ -1039,7 +1035,6 @@ async function startInitializedCodexAppServerClientOnce(
       try {
         await waitForStartup(
           () => client.initialize(),
-          CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE,
           () => buildCodexAppServerInitializeTimeoutError(client),
         );
       } catch (error) {

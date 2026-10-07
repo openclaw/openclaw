@@ -6,7 +6,11 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionWorkAdmission,
+  getSessionWorkAdmissionRelease,
+  interruptSessionWorkAdmissions,
+} from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -21,6 +25,8 @@ const generate = vi.hoisted(() =>
 vi.mock("../../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback: generate,
 }));
+
+const settledTurn = () => ({ released: Promise.resolve(false), settled: Promise.resolve() });
 
 it.each([
   { titleSource: undefined, expectedSource: "Original release plan" },
@@ -68,7 +74,7 @@ it.each([
             context,
             request: { rawMessage: "A later follow-up", normalizedAttachments: [] },
           },
-          Promise.resolve(),
+          settledTurn(),
         );
         await Promise.race([started.promise, failed.promise]);
         released = getSessionWorkAdmissionRelease({
@@ -90,3 +96,130 @@ it.each([
     });
   },
 );
+
+it("falls back after one label attempt when naming starts after its turn settled", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
+    };
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:settled-title",
+      sessionId: "settled-title-session",
+      storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+    };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const started = createDeferredCore();
+    const label = createDeferredCore<string>();
+    generate.mockReset().mockImplementation(async () => {
+      started.resolve();
+      return await label.promise;
+    });
+    scheduleChatDashboardSessionTitle(
+      {
+        ...scope,
+        admittedSessionId: scope.sessionId,
+        cfg,
+        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+        request: { rawMessage: "Plan the release", normalizedAttachments: [] },
+      },
+      settledTurn(),
+    );
+    await started.promise;
+    const released = getSessionWorkAdmissionRelease({
+      scope: scope.storePath,
+      identities: [scope.sessionKey, scope.sessionId],
+    });
+    expect(released).toBeDefined();
+    label.reject(new Error("conversation label generation failed (primary fallback)"));
+    await released;
+    expect(generate).toHaveBeenCalledOnce();
+    expect(loadSessionEntry(scope)?.displayName).toMatch(/^[a-z]+-[a-z]+$/);
+  });
+});
+
+it("does not hold session admission across an unresolved dashboard title gate", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
+    };
+    await state.writeConfig(cfg);
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:rollover-title-gate",
+      sessionId: "rollover-title-gate-session",
+      storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+    };
+    await replaceSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+    });
+    await appendTranscriptMessage(scope, {
+      cwd: state.workspaceDir,
+      message: { role: "user", content: "Original release plan", timestamp: 1 },
+    });
+    const ready = createDeferredCore<boolean>();
+    const started = createDeferredCore();
+    const generation = createDeferredCore<string>();
+    const failed = createDeferredCore<never>();
+    generate.mockReset().mockImplementation(async () => {
+      started.resolve();
+      return await generation.promise;
+    });
+    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    context.logGateway.warn = (message) => failed.reject(new Error(message));
+    const admissionQuery = {
+      scope: scope.storePath,
+      identities: [scope.sessionKey, scope.sessionId],
+    };
+    let released: Promise<void> | undefined;
+    let competing: { release: () => void } | undefined;
+    try {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      scheduleChatDashboardSessionTitle(
+        {
+          ...scope,
+          admittedSessionId: scope.sessionId,
+          cfg,
+          context,
+          request: { rawMessage: "A later follow-up", normalizedAttachments: [] },
+        },
+        { released: ready.promise, settled: Promise.resolve() },
+      );
+      for (let step = 0; step < 8; step += 1) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(getSessionWorkAdmissionRelease(admissionQuery)).toBeUndefined();
+      const titleDrain = interruptSessionWorkAdmissions({ ...admissionQuery, timeoutMs: 0 });
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(titleDrain).resolves.toBe(true);
+
+      competing = await beginSessionWorkAdmission({
+        scope: scope.storePath,
+        identities: ["agent:main:dashboard:competing-title-lease"],
+        assertAllowed: () => {},
+      });
+      const competingDrain = interruptSessionWorkAdmissions({
+        scope: scope.storePath,
+        identities: ["agent:main:dashboard:competing-title-lease"],
+        timeoutMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(competingDrain).resolves.toBe(false);
+
+      ready.resolve(true);
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.race([started.promise, failed.promise]);
+      released = getSessionWorkAdmissionRelease(admissionQuery);
+      expect(released).toBeDefined();
+      expect(generate).toHaveBeenCalledOnce();
+    } finally {
+      competing?.release();
+      ready.resolve(true);
+      generation.resolve("Original release plan");
+      await released;
+      vi.useRealTimers();
+    }
+    expect(loadSessionEntry(scope)?.displayName).toBe("Original release plan");
+  });
+});

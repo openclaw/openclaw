@@ -1,7 +1,12 @@
 import path from "node:path";
 import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/internal/openai";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  captureAnthropicRequest,
+  registerParityHostLifecycle,
+} from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
 import { resolveResponsesContinuationRequest } from "../../../../packages/ai/src/transports/openai-responses-continuation.js";
 import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
@@ -24,7 +29,16 @@ import {
 import type { AgentMessage } from "../../runtime/index.js";
 import { convertToLlm } from "../../sessions/messages.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import {
+  clearEmbeddedSessionPromptStates,
+  getEmbeddedSessionPromptState,
+  prepareSessionSystemPrompt,
+} from "../session-prompt-state.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
+import {
+  attachSteeringRuntimeContext,
+  buildRuntimeContextCustomMessage,
+} from "./runtime-context-prompt.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-99495-boundary-");
 const TS = 1717570800000;
@@ -113,6 +127,84 @@ describe("prompt-cache boundary regressions", () => {
     setTestEnvValue("OPENCLAW_PROMPT_CACHE_ASSERT", "1");
   });
   afterEach(() => env.restore());
+
+  describe("Claude in-history prompt updates", () => {
+    registerParityHostLifecycle();
+
+    it("keeps the first request's system and messages as an exact prefix after a stable section changes", async () => {
+      const sessionId = "claude-prefix-update";
+      const transcript: AgentMessage[] = [];
+      const state = getEmbeddedSessionPromptState(sessionId);
+      const requests: Awaited<ReturnType<typeof captureAnthropicRequest>>[] = [];
+      try {
+        for (const [index, workspace] of ["Old instructions.", "Updated instructions."].entries()) {
+          const projection = prepareSessionSystemPrompt({
+            state,
+            routeKey: "anthropic/claude-opus-5/anthropic-messages",
+            systemPrompt: `## Workspace\n${workspace}${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+            entries: [],
+          });
+          projection.commit();
+          transcript.push(user(`Turn ${index + 1}`, TS + index * 60000));
+          if (projection.update) {
+            transcript.push(projection.update);
+          }
+          transcript.push(
+            expectDefined(
+              buildRuntimeContextCustomMessage(`Facts ${index + 1}`, undefined, true),
+              "runtime carrier",
+            ),
+          );
+          requests.push(
+            await captureAnthropicRequest("transport", {
+              model: { id: "claude-opus-5" },
+              cacheRetention: "none",
+              context: {
+                systemPrompt: projection.systemPrompt,
+                messages: convertToLlm(
+                  normalizeMessagesForLlmBoundary(transcript, {
+                    inHistorySystemUpdates: true,
+                    includeTimestamp: false,
+                  }),
+                ),
+              },
+            }),
+          );
+          transcript.push({
+            ...answer,
+            api: "anthropic-messages",
+            provider: "anthropic",
+            model: "claude-opus-5",
+          });
+        }
+        const first = expectDefined(requests[0], "first request").payload;
+        const second = expectDefined(requests[1], "second request").payload;
+        expect(second.system).toEqual(first.system);
+        const before = first.messages;
+        const after = second.messages;
+        if (!Array.isArray(before) || !Array.isArray(after)) {
+          throw new Error("Expected request message arrays");
+        }
+        expect(after.slice(0, before.length)).toEqual(before);
+        expect(after.slice(-3)).toMatchObject([
+          { role: "user" },
+          {
+            role: "system",
+            content: [
+              {
+                type: "text",
+                text: expect.stringContaining("## Workspace\nUpdated instructions."),
+              },
+            ],
+          },
+          { role: "system", clear_at: "next_user_message" },
+        ]);
+      } finally {
+        clearEmbeddedSessionPromptStates([sessionId]);
+      }
+    });
+  });
+
   it("rejects unknown session projection versions before submitting history", () => {
     expect(() => normalizeMessagesForLlmBoundary([], { sessionVersion: 99 })).toThrow(
       "Unsupported session prompt projection version",
@@ -307,6 +399,42 @@ describe("prompt-cache boundary regressions", () => {
         next,
       ).continuationStatus,
     ).toBe("history_changed");
+  });
+
+  it("keeps batched steering context with its owning user through Responses conversion", async () => {
+    const firstSteering = user("first steering user", TS + 60000);
+    attachSteeringRuntimeContext(firstSteering, {
+      text: "first steering context",
+      fragments: [{ kind: "conversation-data", text: "first steering context" }],
+    });
+    const secondSteering = user("second steering user", TS + 120000);
+    attachSteeringRuntimeContext(secondSteering, {
+      text: "second steering context",
+      fragments: [{ kind: "conversation-data", text: "second steering context" }],
+    });
+
+    const request = await capture("openai-responses", [
+      carrier("original context"),
+      user("original question"),
+      { ...answer, api: "openai-responses", provider: model.provider, model: model.id },
+      firstSteering,
+      secondSteering,
+    ]);
+    const input = JSON.stringify(request.input);
+    const orderedText = [
+      "original question",
+      "I understand.",
+      "first steering user",
+      "first steering context",
+      "second steering user",
+      "second steering context",
+    ];
+    let previousIndex = -1;
+    for (const text of orderedText) {
+      const index = input.indexOf(text);
+      expect(index, text).toBeGreaterThan(previousIndex);
+      previousIndex = index;
+    }
   });
 
   it("keeps persisted group sender bytes identical from the active array form to historical replay", () => {

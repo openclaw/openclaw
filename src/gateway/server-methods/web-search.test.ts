@@ -41,6 +41,11 @@ async function invoke(options: GatewayRequestHandlerOptions) {
   await webSearchHandlers[options.req.method]!(options);
   return vi.mocked(options.respond);
 }
+async function expectResult(options: GatewayRequestHandlerOptions, result: unknown) {
+  const respond = await invoke(options);
+  expect(respond).toHaveBeenCalledWith(true, result, undefined);
+  return respond;
+}
 async function expectFailure(
   options: GatewayRequestHandlerOptions,
   code: "INVALID_REQUEST" | "UNAVAILABLE",
@@ -77,11 +82,7 @@ beforeEach(() => {
 
 describe("Search settings Gateway boundary", () => {
   it("returns settings and rejects incomplete or unknown request fields", async () => {
-    expect(await invoke(request("webSearch.status"))).toHaveBeenCalledWith(
-      true,
-      searchStatus,
-      undefined,
-    );
+    await expectResult(request("webSearch.status"), searchStatus);
     for (const params of [
       { modelId: "model" },
       { modelProvider: "local", modelId: " " },
@@ -91,50 +92,54 @@ describe("Search settings Gateway boundary", () => {
     }
   });
 
-  it("tests the selected provider through the search owner with cache bypass and displays normalized sources", async () => {
-    const respond = await invoke(request("webSearch.test", { query: " source query " }));
-    expect(mocks.search).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providerId: "example",
-        agentDir: "/synthetic/agent",
-        preferInputConfig: true,
-        args: { query: "source query", count: 5 },
-        signal: expect.any(AbortSignal),
-        config: { tools: { web: { search: { provider: "example", cacheTtlMinutes: 0 } } } },
-      }),
-    );
-    expect(config.tools?.web?.search?.cacheTtlMinutes).toBe(15);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        provider: "example",
-        status: "ok",
-        latencyMs: expect.any(Number),
-        cached: false,
-        results: [{ title: "A source", url: "https://example.com/source", snippet: "A snippet" }],
-      }),
-      undefined,
-    );
-  });
-
-  it("returns grounded answers with normalized citations", async () => {
-    mocks.search.mockResolvedValue({
-      provider: "example",
-      result: {
-        content: "A grounded answer",
-        citations: [{ url: "https://example.com/source", title: "Source" }, "javascript:alert(1)"],
-      },
-    });
-    expect(await invoke(request("webSearch.test", { query: "query" }))).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        status: "ok",
-        content: "A grounded answer",
-        citations: [{ url: "https://example.com/source", title: "Source" }],
-      }),
-      undefined,
-    );
-  });
+  it.each(["sources", "answer"])(
+    "normalizes %s through the search owner with cache bypass",
+    async (kind) => {
+      if (kind === "answer") {
+        mocks.search.mockResolvedValue({
+          provider: "example",
+          result: {
+            content: "A grounded answer",
+            citations: [
+              { url: "https://example.com/source", title: "Source" },
+              "javascript:alert(1)",
+            ],
+          },
+        });
+      }
+      const query = kind === "sources" ? " source query " : "query";
+      await expectResult(
+        request("webSearch.test", { query }),
+        expect.objectContaining({
+          provider: "example",
+          status: "ok",
+          latencyMs: expect.any(Number),
+          cached: false,
+          ...(kind === "sources"
+            ? {
+                results: [
+                  { title: "A source", url: "https://example.com/source", snippet: "A snippet" },
+                ],
+              }
+            : {
+                content: "A grounded answer",
+                citations: [{ url: "https://example.com/source", title: "Source" }],
+              }),
+        }),
+      );
+      expect(mocks.search).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerId: "example",
+          agentDir: "/synthetic/agent",
+          preferInputConfig: true,
+          args: { query: query.trim(), count: 5 },
+          signal: expect.any(AbortSignal),
+          config: { tools: { web: { search: { provider: "example", cacheTtlMinutes: 0 } } } },
+        }),
+      );
+      expect(config.tools?.web?.search?.cacheTtlMinutes).toBe(15);
+    },
+  );
 
   it("tests only the explicitly named configured managed service beside an external harness", async () => {
     searchStatus.route = {
@@ -152,49 +157,42 @@ describe("Search settings Gateway boundary", () => {
       "INVALID_REQUEST",
     );
     expect(mocks.search).not.toHaveBeenCalled();
-    expect(
-      await invoke(request("webSearch.test", { query: "query", providerId: "example" })),
-    ).toHaveBeenCalledWith(
-      true,
+    await expectResult(
+      request("webSearch.test", { query: "query", providerId: "example" }),
       expect.objectContaining({ provider: "example", status: "ok" }),
-      undefined,
     );
   });
 
-  it("does not deliver status after read authority is revoked", async () => {
-    const options = request("webSearch.status");
-    mocks.prepare.mockImplementationOnce(async () => {
-      options.client!.invalidated = true;
-      return { status: searchStatus, config };
-    });
-    await expectFailure(options, "UNAVAILABLE");
-  });
-
-  it("does not start a provider test after the authenticated account changes", async () => {
-    mocks.profile.mockReturnValue("original");
-    mocks.prepare.mockImplementationOnce(async () => {
-      mocks.assertProfile.mockImplementation(() => {
-        throw new Error("profile authority changed");
+  it.each(["read", "profile", "admin"])(
+    "requires current %s authority across preparation",
+    async (authority) => {
+      if (authority === "admin") {
+        const readOnly = request("webSearch.test", { query: "query" });
+        readOnly.client!.connect.scopes = ["operator.read"];
+        await invoke(readOnly);
+        expect(mocks.prepare).not.toHaveBeenCalled();
+      }
+      if (authority === "profile") {
+        mocks.profile.mockReturnValue("original");
+      }
+      const revoked = request(
+        authority === "read" ? "webSearch.status" : "webSearch.test",
+        authority === "read" ? {} : { query: "query" },
+      );
+      mocks.prepare.mockImplementationOnce(async () => {
+        if (authority === "profile") {
+          mocks.assertProfile.mockImplementation(() => {
+            throw new Error("profile authority changed");
+          });
+        } else {
+          revoked.client!.invalidated = true;
+        }
+        return { status: searchStatus, config, agentDir: "/synthetic/agent" };
       });
-      return { status: searchStatus, config, agentDir: "/synthetic/agent" };
-    });
-    await expectFailure(request("webSearch.test", { query: "query" }), "UNAVAILABLE");
-    expect(mocks.search).not.toHaveBeenCalled();
-  });
-
-  it("requires current administrator authority before and after asynchronous preparation", async () => {
-    const readOnly = request("webSearch.test", { query: "query" });
-    readOnly.client!.connect.scopes = ["operator.read"];
-    await invoke(readOnly);
-    expect(mocks.prepare).not.toHaveBeenCalled();
-    const revoked = request("webSearch.test", { query: "query" });
-    mocks.prepare.mockImplementationOnce(async () => {
-      revoked.client!.invalidated = true;
-      return { status: searchStatus, config, agentDir: "/synthetic/agent" };
-    });
-    await expectFailure(revoked, "UNAVAILABLE");
-    expect(mocks.search).not.toHaveBeenCalled();
-  });
+      await expectFailure(revoked, "UNAVAILABLE");
+      expect(mocks.search).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects configuration changes before invoking the provider and discards results after access is revoked", async () => {
     const original = config;
@@ -222,11 +220,9 @@ describe("Search settings Gateway boundary", () => {
     "reports actionable failures without reflected provider diagnostics: $expected",
     async ({ failure, expected }) => {
       mocks.search.mockRejectedValueOnce(failure);
-      const respond = await invoke(request("webSearch.test", { query: "query" }));
-      expect(respond).toHaveBeenCalledWith(
-        true,
+      const respond = await expectResult(
+        request("webSearch.test", { query: "query" }),
         expect.objectContaining({ status: "error", error: expect.stringContaining(expected) }),
-        undefined,
       );
       expect(JSON.stringify(respond.mock.calls)).not.toContain("reflected-private-key");
     },
@@ -238,11 +234,9 @@ describe("Search settings Gateway boundary", () => {
       { debug: "private-value" },
     ]) {
       mocks.search.mockResolvedValueOnce({ provider: "example", result });
-      const respond = await invoke(request("webSearch.test", { query: "query" }));
-      expect(respond).toHaveBeenCalledWith(
-        true,
+      const respond = await expectResult(
+        request("webSearch.test", { query: "query" }),
         expect.objectContaining({ status: "error" }),
-        undefined,
       );
       expect(JSON.stringify(respond.mock.calls)).not.toContain("private-value");
     }

@@ -1,12 +1,11 @@
 /**
- * Application keybinding definitions and user-config migration helpers.
+ * Application keybinding definitions and user-config loading.
  *
  * Wraps pi-tui keybindings with OpenClaw-specific actions and per-agent overrides.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  type Keybinding,
   type KeybindingDefinitions,
   type KeybindingsConfig,
   type KeyId,
@@ -14,6 +13,7 @@ import {
   KeybindingsManager as TuiKeybindingsManager,
 } from "@earendil-works/pi-tui";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createInvalidConfigError } from "../../config/io.invalid-config.js";
 import { getAgentDir } from "../config.js";
 
 /** OpenClaw-specific key ids added to the shared pi-tui keybinding registry. */
@@ -165,7 +165,7 @@ const KEYBINDINGS = {
   },
 } as const satisfies KeybindingDefinitions;
 
-const KEYBINDING_NAME_MIGRATIONS = {
+const RETIRED_KEYBINDING_NAMES = {
   cursorUp: "tui.editor.cursorUp",
   cursorDown: "tui.editor.cursorDown",
   cursorLeft: "tui.editor.cursorLeft",
@@ -225,25 +225,32 @@ const KEYBINDING_NAME_MIGRATIONS = {
   renameSession: "app.session.rename",
   deleteSession: "app.session.delete",
   deleteSessionNoninvasive: "app.session.deleteNoninvasive",
-} as const satisfies Record<string, Keybinding>;
+} as const satisfies Record<string, keyof typeof KEYBINDINGS>;
 
-function isLegacyKeybindingName(key: string): key is keyof typeof KEYBINDING_NAME_MIGRATIONS {
-  return Object.hasOwn(KEYBINDING_NAME_MIGRATIONS, key);
-}
-
-/** Migrates legacy keybinding names and orders known entries ahead of unknown extras. */
-function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): KeybindingsConfig {
+/** Validates bindings and orders known entries ahead of unknown extras. */
+function parseKeybindingsConfig(
+  rawConfig: Record<string, unknown>,
+  configPath: string,
+): KeybindingsConfig {
+  const retired = Object.entries(RETIRED_KEYBINDING_NAMES)
+    .filter(([name]) => Object.hasOwn(rawConfig, name))
+    .map(([name, current]) => `${name}: use ${current}`);
+  if (retired.length > 0) {
+    throw createInvalidConfigError(
+      configPath,
+      `Retired keybinding names: ${retired.join("; ")}. ` +
+        "Preserve the original file and replace the retired names, keeping existing canonical bindings when both names occur. " +
+        "OpenClaw 2026.9.7 retains the former keybinding reader for a staged upgrade. " +
+        "See https://docs.openclaw.ai/gateway/doctor/config-migrations#session-settings.",
+      { recovery: "manual" },
+    );
+  }
   const config = new Map<string, KeyId | KeyId[]>();
   for (const [key, binding] of Object.entries(rawConfig)) {
-    const nextKey = isLegacyKeybindingName(key) ? KEYBINDING_NAME_MIGRATIONS[key] : key;
-    if (key !== nextKey && Object.hasOwn(rawConfig, nextKey)) {
-      // New names win even when their configured value is invalid.
-      continue;
-    }
     if (typeof binding === "string") {
-      config.set(nextKey, binding as KeyId);
+      config.set(key, binding as KeyId);
     } else if (Array.isArray(binding) && binding.every((entry) => typeof entry === "string")) {
-      config.set(nextKey, binding as KeyId[]);
+      config.set(key, binding as KeyId[]);
     }
   }
   return orderKeybindingsConfig(Object.fromEntries(config));
@@ -287,12 +294,13 @@ export class KeybindingsManager extends TuiKeybindingsManager {
   }
 
   private static loadFromFile(path: string): KeybindingsConfig {
+    let parsed: unknown;
     try {
-      const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
-      return isRecord(parsed) ? migrateKeybindingsConfig(parsed) : {};
+      parsed = JSON.parse(readFileSync(path, "utf-8"));
     } catch {
       return {};
     }
+    return isRecord(parsed) ? parseKeybindingsConfig(parsed, path) : {};
   }
 }
 

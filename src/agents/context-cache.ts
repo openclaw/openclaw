@@ -33,13 +33,6 @@ export function replaceDiscoveredContextTokenCache(cache: Map<string, number>): 
   CONTEXT_WINDOW_CACHE_STATE.discoveredTokenCache = cache;
 }
 
-/** Clear the current process-global cache generation. */
-export function clearContextWindowCaches(): void {
-  CONTEXT_WINDOW_CACHE_STATE.configuredTokenCache.clear();
-  CONTEXT_WINDOW_CACHE_STATE.discoveredTokenCache.clear();
-  CONTEXT_WINDOW_CACHE_STATE.contextWindowCache.clear();
-}
-
 const PROVIDER_CONTEXT_TOKEN_CACHE_PREFIX = "\0provider:";
 
 /** Internal cache key for discovery metadata with verified provider ownership. */

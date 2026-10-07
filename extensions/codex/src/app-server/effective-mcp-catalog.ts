@@ -4,18 +4,12 @@ import {
   type McpToolCatalog,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  normalizeMcpCodexToolAnnotations,
-  readMcpAppIcons,
-  readMcpAppSettingsCapability,
-  readMcpAppToolExtensions,
-} from "openclaw/plugin-sdk/codex-mcp-projection";
-import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { parseCodexPluginMarketplaceId } from "../plugin-marketplace-discovery.js";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
+import { projectCodexMcpServerMetadata, projectCodexMcpToolMetadata } from "./mcp-tool-metadata.js";
 import type { CodexMcpServerStatus } from "./protocol.js";
 import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
@@ -33,9 +27,7 @@ function catalogTool(params: {
 }): McpToolCatalog["tools"][number] {
   const raw = asOptionalRecord(params.raw);
   const description = normalizeOptionalString(raw?.description);
-  const title =
-    normalizeOptionalString(raw?.title) ??
-    normalizeOptionalString(asOptionalRecord(raw?.annotations)?.title);
+  const { title, ...metadata } = projectCodexMcpToolMetadata(params.toolName, raw);
   const ui = asOptionalRecord(asOptionalRecord(raw?._meta)?.ui);
   return {
     serverName: params.serverName,
@@ -44,10 +36,7 @@ function catalogTool(params: {
     ...(title ? { title } : {}),
     ...(description ? { description } : {}),
     inputSchema: (asOptionalRecord(raw?.inputSchema) ?? { type: "object" }) as never,
-    fallbackDescription: description ?? params.toolName,
-    appExtensions: readMcpAppToolExtensions(raw ?? {}),
-    codexAnnotations: normalizeMcpCodexToolAnnotations(raw?.annotations),
-    uiResourceUri: normalizeOptionalString(ui?.resourceUri),
+    ...metadata,
     ...(Array.isArray(ui?.visibility)
       ? {
           uiVisibility: ui.visibility.filter(
@@ -91,11 +80,7 @@ function buildCodexEffectiveMcpCatalog(
         raw,
         ...(deniedBySession ? { deniedBySession } : {}),
       });
-      if (deniedBySession) {
-        sessionDeniedTools.push(tool);
-      } else {
-        tools.push(tool);
-      }
+      (deniedBySession ? sessionDeniedTools : tools).push(tool);
     }
     for (const toolName of [...deniedNames].toSorted()) {
       if (observedNames.has(toolName)) {
@@ -113,19 +98,8 @@ function buildCodexEffectiveMcpCatalog(
     serverEntries.push([
       status.name,
       {
-        serverName: status.name,
+        ...projectCodexMcpServerMetadata(status),
         safeServerName,
-        launchSummary: "Codex native MCP connection",
-        ...(status.pluginId
-          ? {
-              pluginId:
-                parseCodexPluginMarketplaceId(status.pluginId)?.pluginName ?? status.pluginId,
-              marketplace: parseCodexPluginMarketplaceId(status.pluginId)?.marketplaceName,
-            }
-          : {}),
-        title: status.serverInfo?.title ?? undefined,
-        icons: readMcpAppIcons(status.serverInfo?.icons),
-        settings: readMcpAppSettingsCapability(status.serverCapabilities),
         toolCount:
           observedNames.size + [...deniedNames].filter((name) => !observedNames.has(name)).length,
       },
@@ -227,17 +201,6 @@ export async function acquireCodexMcpAppRuntime(
   const acquired = retained;
   const admittedBinding = binding;
   try {
-    params.assertCurrent();
-    const current = options.bindingStore.read(identity);
-    if (
-      !current ||
-      current.clientId !== binding.clientId ||
-      current.threadId !== binding.threadId
-    ) {
-      throw new Error("Native MCP session binding changed");
-    }
-    const { createNativeMcpRuntime } = await import("./native-mcp-app.js");
-    params.assertCurrent();
     const assertBinding = () => {
       const latest = options.bindingStore.read(identity);
       if (
@@ -248,6 +211,10 @@ export async function acquireCodexMcpAppRuntime(
         throw new Error("Native MCP session binding changed");
       }
     };
+    params.assertCurrent();
+    assertBinding();
+    const { createNativeMcpRuntime } = await import("./native-mcp-app.js");
+    params.assertCurrent();
     const runtime = createNativeMcpRuntime({
       client: retained.client,
       threadId: binding.threadId,

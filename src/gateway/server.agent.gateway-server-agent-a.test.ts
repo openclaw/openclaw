@@ -403,7 +403,7 @@ describe("gateway server agent", () => {
     await expect(fs.stat(media?.[0]?.path ?? "")).resolves.toMatchObject({
       isFile: expect.any(Function),
     });
-    const pending = listSessionPendingInputs({
+    const pending = await listSessionPendingInputs({
       agentId: "main",
       sessionId: "sess-main-offloaded-media",
       sessionKey: String(call.sessionKey),
@@ -423,10 +423,10 @@ describe("gateway server agent", () => {
   test("agent validates first image attachment against per-agent model for fresh sessions", async () => {
     testState.agentConfig = { model: { primary: "ollama-cloud/deepseek-v4-flash" } };
     testState.agentsConfig = {
-      list: [
-        { id: "main", default: true },
-        { id: "vision", model: "ollama-cloud/gemma4:31b" },
-      ],
+      entries: {
+        main: {},
+        vision: { model: "ollama-cloud/gemma4:31b" },
+      },
     };
     await setGatewayModelCatalogForTest([TEXT_ONLY_AGENT_MODEL, VISION_AGENT_MODEL]);
 

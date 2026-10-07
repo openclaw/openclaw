@@ -61,10 +61,12 @@ struct ChatSessionSidebarRowFacts {
         let session = node.session
         let nowMs = now.timeIntervalSince1970 * 1000
         let rows = session.isArchived ? [] : node.previewSessions.filter { !$0.isArchived }
-        self.unreadDescendants = !session.isArchived && node.children.contains(where: \.badges.hasUnread)
-        self.failedDescendants = !session.isArchived && node.children.contains { $0.badges.failedCount > 0 }
+        self.unreadDescendants = rows.dropFirst().contains { $0.unread == true }
+        self.failedDescendants = rows.dropFirst().contains { ["failed", "timeout"].contains($0.status ?? "") }
         let request = session.isArchived ? nil : attention
-        let declaration = rows.compactMap { Self.declaration($0, now: nowMs) }.first { $0.attention != nil }
+        let declaration = rows.compactMap {
+            ChatSessionSidebarModel.activeAgentStatus($0.agentStatus, now: nowMs)
+        }.first { $0.attention != nil }
         let failed = rows.first {
             ["failed", "timeout"].contains($0.status ?? "") && ($0.lastReadAt == nil ||
                 ($0.lastReadAt ?? 0) < ($0.endedAt ?? $0.updatedAt ?? 0))
@@ -104,7 +106,7 @@ struct ChatSessionSidebarRowFacts {
         self.unread = !session.isArchived && session.unread == true && !running &&
             (attentionIcon != nil || custom != nil || !isChild)
 
-        let declared = Self.declaration(session, now: nowMs)
+        let declared = ChatSessionSidebarModel.activeAgentStatus(session.agentStatus, now: nowMs)
         let digest = session.observerDigest.flatMap { digest in
             if ownRun { return session.activeRunIds?.contains(digest.runId ?? "") == true ? digest : nil }
             return ["done", "failed"].contains(digest.health) && (session.lastReadAt ?? 0) < digest.updatedAt
@@ -149,18 +151,19 @@ struct ChatSessionSidebarRowFacts {
         self.badges = badges
     }
 
+    // ui/src/components/session-icon-glyph-registry.ts:9 maps the six wire glyphs.
+    static let iconGlyphs = [
+        ("braces", "curlybraces"),
+        ("book", "book"),
+        ("monitor", "desktopcomputer"),
+        ("bot", "cpu"),
+        ("kanban", "rectangle.split.3x1"),
+        ("coins", "dollarsign.circle"),
+    ]
+
     static func icon(_ value: String) -> Glyph {
-        // ui/src/components/session-icon-glyph-registry.ts:9 maps the six wire glyphs.
         // Native never executes SVG; unsupported artwork gets a visible default glyph.
-        let symbols = [
-            "braces": "curlybraces",
-            "book": "book",
-            "monitor": "desktopcomputer",
-            "bot": "cpu",
-            "kanban": "rectangle.split.3x1",
-            "coins": "dollarsign.circle",
-        ]
-        if let symbol = symbols[value] { return .symbol(symbol) }
+        if let glyph = self.iconGlyphs.first(where: { $0.0 == value }) { return .symbol(glyph.1) }
         if value.count == 1, value.unicodeScalars.contains(where: \.properties.isEmoji),
            value.utf16.count > 1 || value.unicodeScalars.contains(where: { $0.value > 127 })
         {
@@ -195,13 +198,7 @@ struct ChatSessionSidebarRowFacts {
         "hourglass": "circle",
     ]
 
-    private static func declaration(_ row: OpenClawChatSessionEntry, now: Double) -> OpenClawChatSessionAgentStatus? {
-        row.agentStatus.flatMap { $0.expiresAt > now && !$0.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? $0 : nil
-        }
-    }
-
-    private static func isRunning(_ row: OpenClawChatSessionEntry) -> Bool {
+    static func isRunning(_ row: OpenClawChatSessionEntry) -> Bool {
         // src/shared/session-run-state.ts: terminal status wins, then explicit liveness.
         if let status = row.status, status != "queued", status != "running" { return false }
         return row.hasActiveRun ?? (row.status == "running" || row.status == "queued")
@@ -224,7 +221,7 @@ struct ChatSessionSidebarRowFacts {
         return Badge(glyph: .symbol(symbol), label: label, tone: tone)
     }
 
-    private static func workspaceConflicts(_ session: OpenClawChatSessionEntry) -> Int {
+    static func workspaceConflicts(_ session: OpenClawChatSessionEntry) -> Int {
         let conflict = session.placement?.workspaceResultConflict?.value as? [String: AnyCodable]
         return max(
             (conflict?["paths"]?.value as? [AnyCodable])?.count ?? 0,

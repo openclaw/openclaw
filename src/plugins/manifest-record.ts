@@ -3,7 +3,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeOptionalTrimmedStringList,
-  uniqueStrings,
+  normalizeUniqueTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -252,18 +252,6 @@ function mergePackageChannelMetaIntoChannelConfigs(params: {
   return merged;
 }
 
-function mergeContractLists(
-  left: readonly string[] | undefined,
-  right: readonly string[] | undefined,
-): string[] | undefined {
-  const merged = uniqueStrings(
-    [...(left ?? []), ...(right ?? [])]
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0),
-  );
-  return merged.length > 0 ? merged : undefined;
-}
-
 function mergeManifestContracts(
   manifestContracts: PluginManifestContracts | undefined,
   catalogContracts: PluginManifestContracts | undefined,
@@ -273,8 +261,11 @@ function mergeManifestContracts(
   }
   const contracts: PluginManifestContracts = {};
   for (const key of PLUGIN_MANIFEST_CONTRACT_KEYS) {
-    const merged = mergeContractLists(manifestContracts?.[key], catalogContracts[key]);
-    if (merged) {
+    const merged = normalizeUniqueTrimmedStringList([
+      ...(manifestContracts?.[key] ?? []),
+      ...(catalogContracts[key] ?? []),
+    ]);
+    if (merged.length > 0) {
       contracts[key] = merged;
     }
   }

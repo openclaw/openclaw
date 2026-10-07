@@ -237,6 +237,34 @@ it("yields a pollable process and releases foreground callbacks", async () => {
   expect(text(poll)).toContain("before\nafter");
 });
 
+it("awaits terminal shell results past the yield window without enabling notifications", async () => {
+  const tool = createTool({ notifyOnExit: false, sessionKey });
+  let execution: ReturnType<typeof execute> | undefined;
+  let settled = false;
+  await supervisorExit.withHeldSupervisorExit(
+    async (exit) => {
+      execution = execute(tool, `${shellEcho("before")}; ${shellEcho("after")}`, {
+        awaitResults: true,
+        yieldMs: 10,
+      }).then((result) => {
+        settled = true;
+        return result;
+      });
+      await Promise.race([exit.waitStarted, execution]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(settled).toBe(false);
+    },
+    () => waitForExecScope(scopeKey),
+  );
+  await expect(execution).resolves.toMatchObject({
+    details: { status: "completed", exitCode: 0, aggregated: "before\nafter" },
+  });
+  expect(peekSystemEvents(sessionKey)).toEqual([]);
+  await expect(
+    execute(tool, shellEcho("detached"), { awaitResults: true, background: true }),
+  ).rejects.toThrow("cannot be detached");
+});
+
 it("rejects elevated requests when not allowed", async () => {
   const tool = createTool({
     elevated: { enabled: true, allowed: false, defaultLevel: "off" },

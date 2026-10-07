@@ -1,11 +1,12 @@
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
+import { type SelectedAgentSource, watchSelectedAgent } from "../agents/watch-selected-agent.ts";
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import type { SessionCreateOutcome } from "./create.ts";
-import { subscribeAgentSelection, type SessionAgentSelection } from "./session-agent-selection.ts";
 import type { SessionCapability, SessionGateway, SessionState } from "./session-capability.ts";
 import { createSessionDeletions } from "./session-deletions.ts";
 import { createSessionEventSubscriptionOwner } from "./session-event-subscription.ts";
@@ -60,7 +61,7 @@ export type {
 
 export function createSessionCapability(
   gateway: SessionGateway,
-  agentSelection: SessionAgentSelection,
+  agentSelection: SelectedAgentSource,
   cacheOptions: SessionRosterCacheOptions & {
     connectionBootstrap?: ConnectionBootstrapCoordinator;
   } = {},
@@ -484,6 +485,7 @@ export function createSessionCapability(
         agentId: state.resultCached ? state.agentId : null,
         loading: false,
         error: null,
+        startupPending: false,
         deletedSessions: [],
       });
       return;
@@ -523,7 +525,7 @@ export function createSessionCapability(
     }
   });
 
-  const stopSelection = subscribeAgentSelection(agentSelection, (nextAgentId, foreground) => {
+  const stopSelection = watchSelectedAgent(agentSelection, (nextAgentId, foreground) => {
     retirePresentation();
     notifySubscribers();
     // Selection publishes before Gateway hydration. A new connection bootstraps
@@ -652,9 +654,7 @@ export function createSessionCapability(
       if (!roster.isPrimaryList(scope)) {
         return roster.subscribeList(scope, listener);
       }
-      const notify = () => listener(roster.listSnapshot(scope));
-      listeners.add(notify);
-      return () => listeners.delete(notify);
+      return registerListener(listeners, () => listener(roster.listSnapshot(scope)));
     },
     refreshList: roster.refreshList,
     reconcile,
@@ -696,14 +696,8 @@ export function createSessionCapability(
     groupsRename: groups.rename,
     groupsUpdate: groups.update,
     groupsDelete: groups.delete,
-    subscribeCreated(listener) {
-      createdListeners.add(listener);
-      return () => createdListeners.delete(listener);
-    },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribeCreated: (listener) => registerListener(createdListeners, listener),
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       retirePresentation();
       cacheLifecycle.dispose();

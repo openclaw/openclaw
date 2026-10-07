@@ -206,7 +206,11 @@ async function writeBundledSchedulerPlugin(bundledRoot: string): Promise<void> {
   id: ${JSON.stringify(PLUGIN_ID)},
   register(api) {
     const scheduleSessionTurn = api.session.workflow.scheduleSessionTurn;
+    const cronReady = new Promise((resolve) => {
+      api.on("cron_reconciled", () => resolve());
+    });
     api.registerGatewayMethod(${JSON.stringify(SCHEDULE_METHOD)}, async ({ params, respond }) => {
+      await cronReady;
       const name = typeof params?.name === "string" ? params.name : "";
       const message = typeof params?.message === "string" ? params.message : "";
       const sessionKey = typeof params?.sessionKey === "string" ? params.sessionKey : "";
@@ -501,27 +505,27 @@ describe("plugin cron registry ownership e2e", () => {
           slots: { memory: "none" },
         },
         agents: {
+          ownership: "explicit",
           defaults: {
             workspace: mainWorkspace,
+            systemAgent: { agentId: "main" },
             model: { primary: modelRef },
+            modelPolicy: { allow: [modelRef] },
             models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
             skills: [],
           },
-          list: [
-            {
-              id: "main",
-              default: true,
+          entries: {
+            main: {
               workspace: mainWorkspace,
               model: { primary: modelRef },
               skills: [],
             },
-            {
-              id: "worker",
+            worker: {
               workspace: workerWorkspace,
               model: { primary: modelRef },
               skills: [],
             },
-          ],
+          },
         },
         tools: { profile: "minimal" },
         models: {
