@@ -2720,7 +2720,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server-methods/nodes.pending-work.test.ts",
   "src/gateway/server-methods/nodes.test.ts",
   "src/gateway/server-methods/plugin-approval.agent-runtime.test.ts",
-  "src/gateway/server-methods/plugin-approval.scope.test.ts",
   "src/gateway/server-methods/plugin-approval.test.ts",
   "src/gateway/server-methods/plugins.decisions.test.ts",
   "src/gateway/server-methods/plugins.lifecycle-contention.test.ts",
