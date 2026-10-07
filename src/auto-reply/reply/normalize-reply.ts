@@ -15,9 +15,9 @@ import {
   isSilentReplyPayloadText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
-  stripMixedSilentReplyTokens,
 } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
+import { stripMixedSilentReplyTokens } from "./mixed-silent-reply-tokens.js";
 import type {
   NormalizeReplyOutcome as PayloadNormalizationOutcome,
   NormalizeReplySkipReason,

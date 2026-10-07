@@ -2,13 +2,9 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import {
-  isSilentReplyPayloadText,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-  stripMixedSilentReplyTokens,
-} from "../tokens.js";
+import { isSilentReplyPayloadText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import { stripInternalMetadataForDisplay } from "./display-text-sanitize.js";
+import { stripMixedSilentReplyTokens } from "./mixed-silent-reply-tokens.js";
 
 // A delivered or discarded final must lose the whole record. Keeping this list
 // centralized prevents new ownership fields from leaving a phantom pending delivery.
