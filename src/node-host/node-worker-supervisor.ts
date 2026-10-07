@@ -356,7 +356,6 @@ class NodeWorkerSupervisor {
       workerEnv: homeDir ? snapshotNodeWorkerEnv(this.workerEnv, homeDir) : this.workerEnv,
       input,
       descriptor,
-      planHash: claimInput.planHash,
       supervisor,
       signal,
       claim: claimInput,

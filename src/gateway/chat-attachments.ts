@@ -1,5 +1,8 @@
 import { MAX_IMAGE_BYTES, type MediaKind } from "@openclaw/media-core/constants";
 import { extensionForMime, kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import type { Static } from "typebox";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { ChatAttachmentSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
@@ -18,16 +21,8 @@ import { registerMediaCleanupDrain } from "./server-media-cleanup-lifecycle.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { formatForLog } from "./ws-log.js";
 
-export type ChatAttachment = {
-  type?: string;
-  mimeType?: string;
-  fileName?: string;
+export type ChatAttachment = SchemaContract<Omit<Static<typeof ChatAttachmentSchema>, "origin">> & {
   origin?: MediaFact["origin"];
-  content?: unknown;
-  sizeBytes?: number;
-  durationMs?: number;
-  width?: number;
-  height?: number;
 };
 
 export type ChatImageContent = {

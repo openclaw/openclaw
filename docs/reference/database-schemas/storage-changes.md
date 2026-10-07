@@ -27,6 +27,13 @@ A committed finalization returns its session change to the host for notification
 refused or rolled-back finalization publishes no readiness notification. Unknown
 write outcomes are never replayed.
 
+Restart recovery hands a cloned transcript's projection repair to the admitted
+host after confirmed native commit, including when result delivery fails after
+commit. If that owner retires, repair remains pending for the next admitted reader
+without replacing the committed recovery outcome. A stale activity-summary commit predicate refuses the patch and lets its
+host reader retry and repair; SQLite workers never schedule that maintenance.
+Transcript bytes, session recovery rows, schemas, and update behavior are unchanged.
+
 Global projection preflight and search readiness use the projection maintenance
 owner's connection-local facts. Transactional TEMP triggers queue affected sessions
 for appends, rewrites, projection publication, deletion, cold-storage moves, and raw

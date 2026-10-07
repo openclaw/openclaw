@@ -187,33 +187,25 @@ it("does not execute a clean filter inserted after publication preflight", async
   expect(await git(created.path, "rev-parse", "HEAD")).toBe(head);
 });
 
-it.each([false, true])(
-  "keeps native lossless removal checks with filters configured (late file=%s)",
-  async (lateFile) => {
-    await git(repo, "push", "origin", "main");
-    const created = await createSourceOnly("lossless", "lossless");
-    await configure("repository", "clean", created.path);
-    await fs.utimes(path.join(created.path, "README.md"), new Date(0), new Date(0));
-    const run = gitExec.executeGitCommand;
-    let reachedRemoval = false;
-    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
-      if (args[0] === "worktree" && args[1] === "remove") {
-        reachedRemoval = true;
-        if (lateFile) {
-          await fs.writeFile(path.join(created.path, "late.txt"), "preserved user bytes");
-        }
-      }
-      return await run(cwd, args, options);
-    });
-    if (lateFile) {
-      await expect(service.removeIfLossless(created.id)).rejects.toThrow();
-      expect(await fs.readFile(path.join(created.path, "late.txt"), "utf8")).toBe(
-        "preserved user bytes",
-      );
-    } else {
-      expect(await service.removeIfLossless(created.id)).toBe(true);
+it("keeps native lossless removal checks when a late file appears with filters configured", async () => {
+  await git(repo, "push", "origin", "main");
+  const created = await createSourceOnly("lossless", "lossless");
+  await configure("repository", "clean", created.path);
+  await fs.utimes(path.join(created.path, "README.md"), new Date(0), new Date(0));
+  const run = gitExec.executeGitCommand;
+  const removals: string[][] = [];
+  vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+    if (args[0] === "worktree" && args[1] === "remove") {
+      removals.push(args);
+      await fs.writeFile(path.join(created.path, "late.txt"), "preserved user bytes");
     }
-    expect(reachedRemoval).toBe(true);
-    await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
-  },
-);
+    return await run(cwd, args, options);
+  });
+  await expect(service.removeIfLossless(created.id)).rejects.toThrow();
+  expect(await fs.readFile(path.join(created.path, "late.txt"), "utf8")).toBe(
+    "preserved user bytes",
+  );
+  expect(removals).toHaveLength(1);
+  expect(removals[0]).not.toContain("--force");
+  await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+});

@@ -506,7 +506,6 @@ extensions/matrix/src/matrix/sdk/crypto-bootstrap.ts	1
 extensions/matrix/src/matrix/sdk/crypto-facade.ts	1
 extensions/matrix/src/matrix/sdk/crypto-node.runtime.ts	1
 extensions/matrix/src/matrix/sdk/decrypt-bridge.ts	1
-extensions/matrix/src/matrix/sdk/event-helpers.ts	1
 extensions/matrix/src/matrix/sdk/fake-indexeddb-prune.ts	4
 extensions/matrix/src/matrix/sdk/idb-persistence.ts	3
 extensions/matrix/src/matrix/sdk/transport.ts	2

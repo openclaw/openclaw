@@ -109,6 +109,10 @@ their existing strict checks.
 
 The deferred open lends only revocable runtime admission. A successful background
 full check can establish durable verification through that same admitted writer.
+The queued check retains an executor borrow through scanning and proof publication,
+so idle retirement and opening another agent cannot close its original writer.
+Completion, failure, cancellation, and superseded requests release that borrow;
+explicit close and revocation still prevent stale publication.
 The verifier must check the admitted physical file, and the original writer must
 still hold valid admission with an unchanged connection-local `data_version`
 since admission. Its own writes preserve that value; a commit from any other

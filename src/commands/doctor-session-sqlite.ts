@@ -15,7 +15,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   DeferredPluginMigrationConflictError,
   readDeferredPluginMigrations,
-  recordDeferredPluginMigrations,
   withDeferredPluginMigrationsCurrent,
   type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
@@ -51,7 +50,6 @@ import {
   readSqliteEntryCount,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
-import { normalizePluginId, normalizePluginsConfig } from "../plugins/config-state.js";
 import { prepareActiveSqliteTranscriptSettlement } from "./doctor-session-sqlite-active.js";
 import {
   archiveImportedLegacySessionStores,
@@ -138,34 +136,13 @@ export async function runDoctorSessionSqlite(
   const env = options.env ?? process.env;
   const cfg = resolveDoctorSessionSqliteConfig(options);
   const configuredAgentIds = new Set(listAgentIds(cfg));
-  let pendingPlugins = readDeferredPluginMigrations({ env });
+  const pendingPlugins = readDeferredPluginMigrations({ env });
   const verifyMissingIndex = createMissingSessionIndexVerifier({ cfg, env });
   const {
     targets: candidates,
     knownTargets,
     repairEntryStates,
   } = await prepareDoctorSessionSqliteTargets({ ...options, cfg, env, authority });
-  if (options.mode === "import" || options.mode === "recover") {
-    const plugins = normalizePluginsConfig(cfg.plugins);
-    const disabled = pendingPlugins
-      .filter(({ pluginId }) => {
-        const id = normalizePluginId(pluginId);
-        return (
-          !plugins.enabled || plugins.entries[id]?.enabled === false || plugins.deny.includes(id)
-        );
-      })
-      .map(({ pluginId }) => pluginId);
-    if (disabled.length > 0) {
-      authority?.assertCurrent();
-      pendingPlugins =
-        (await recordDeferredPluginMigrations({
-          env,
-          pending: [],
-          resolvedPluginIds: disabled,
-          expectedPending: pendingPlugins,
-        })) ?? pendingPlugins;
-    }
-  }
   const settlements =
     options.mode === "import" || options.mode === "recover"
       ? await settleDuplicateSessionSqliteArchives({

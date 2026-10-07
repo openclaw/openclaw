@@ -19,6 +19,8 @@ import { createPluginModuleLoader } from "./loader-module-runtime.js";
 import * as pluginLoader from "./loader.js";
 import {
   createPluginCache,
+  getPluginCache,
+  invalidatePluginCacheMetadata,
   resetPluginCache,
   retirePluginCache,
   withPluginCache,
@@ -108,7 +110,41 @@ describe("native plugin alias preparation", () => {
     expect(resolvePluginNativeAliasForParent(specifier, f.entry)).toBe(f.used);
     expect(aliases.getAliasMap()[specifier]).toBe(jitiTarget);
     expect(resolvePluginNativeAliasForParent(specifier, f.entry)).toBe(f.used);
-    expect(createRequire(f.entry).resolve(specifier)).toBe(f.used);
+    const requirePlugin = createRequire(f.entry);
+    expect(requirePlugin.resolve(specifier)).toBe(f.used);
+    const resolve = vi.spyOn(path, "resolve");
+    const repeated = [
+      resolvePluginNativeAliasForParent(specifier, f.entry),
+      resolvePluginNativeAliasForParent(specifier, f.entry),
+    ];
+    const resolveCalls = resolve.mock.calls.length;
+    resolve.mockRestore();
+    expect(repeated).toEqual([f.used, f.used]);
+    expect(resolveCalls).toBe(0);
+  });
+
+  it("refreshes canonical parent boundaries with metadata invalidation", () => {
+    const f = fixture();
+    const outside = fixture();
+    const parent = path.join(path.dirname(f.entry), "linked-parent.cjs");
+    fs.symlinkSync(f.entry, parent);
+    installOpenClawPluginSdkNativeResolver({
+      pluginModulePath: f.entry,
+      devSourceRoot: f.root,
+      pluginSdkResolution: "dist",
+    });
+    const requirePlugin = createRequire(parent);
+    const specifier = "@openclaw/plugin-sdk/used";
+    expect(requirePlugin.resolve(specifier)).toBe(f.used);
+    fs.unlinkSync(parent);
+    fs.symlinkSync(outside.entry, parent);
+    expect(requirePlugin.resolve(specifier)).toBe(f.used);
+    invalidatePluginCacheMetadata(getPluginCache());
+    expect(() => requirePlugin.resolve(specifier)).toThrow();
+    fs.unlinkSync(parent);
+    fs.symlinkSync(f.entry, parent);
+    invalidatePluginCacheMetadata(getPluginCache());
+    expect(requirePlugin.resolve(specifier)).toBe(f.used);
   });
 
   it.each([

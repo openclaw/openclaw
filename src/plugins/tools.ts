@@ -47,6 +47,11 @@ import {
   createPluginToolFactoryResolver,
 } from "./tool-factory-runtime.js";
 import { createPluginToolAllowlist, type PluginToolAllowlist } from "./tool-grant-allowlist.js";
+import {
+  createPluginToolInspection,
+  inspectionToolOwners,
+  samePluginToolSource,
+} from "./tool-inspection-state.js";
 import { setPluginToolMeta } from "./tool-metadata.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
@@ -312,28 +317,6 @@ export type PluginToolInspectionScope = Omit<
   "preparedRuntime"
 >;
 
-const inspectionToolOwners = new WeakMap<
-  PluginRegistry,
-  { manifests: ReadonlyMap<string, PluginManifestRecord>; assertCurrent: () => void }
->();
-
-function samePluginToolSource(
-  left: PluginManifestRecord | undefined,
-  right: PluginManifestRecord | undefined,
-): boolean {
-  return Boolean(
-    left &&
-    right &&
-    left.origin === right.origin &&
-    left.rootDir === right.rootDir &&
-    left.source === right.source &&
-    left.setupSource === right.setupSource &&
-    (left.sourcePreferred === true) === (right.sourcePreferred === true) &&
-    (left.packageManifest?.build?.bundledDist === false) ===
-      (right.packageManifest?.build?.bundledDist === false),
-  );
-}
-
 /** One inspection owns registration; each selected agent still invokes its own tool factories. */
 export async function acquirePluginToolInspectionRegistry(params: {
   loadContext: PluginRuntimeLoadContext;
@@ -363,9 +346,6 @@ export async function acquirePluginToolInspectionRegistry(params: {
       selected.set(id, manifest);
     }
   }
-  if (selected.size === 0) {
-    return { release: async () => {} };
-  }
   const acquisition = await acquirePluginRegistryForInspection(
     buildPluginRuntimeLoadOptions(params.loadContext, {
       onlyPluginIds: [...selected.keys()].toSorted(),
@@ -378,18 +358,7 @@ export async function acquirePluginToolInspectionRegistry(params: {
   );
   try {
     setPluginRuntimeLoadContext(acquisition.registry, params.loadContext);
-    const current = capturePluginLifecycleAuthority(acquisition.registry, undefined, {
-      scopedRuntime: true,
-    });
-    inspectionToolOwners.set(acquisition.registry, {
-      manifests: selected,
-      assertCurrent: () => {
-        if (!current?.()) {
-          throw new Error("Plugin tool inspection has been released");
-        }
-      },
-    });
-    return acquisition;
+    return createPluginToolInspection(acquisition, selected);
   } catch (error) {
     try {
       await acquisition.release();

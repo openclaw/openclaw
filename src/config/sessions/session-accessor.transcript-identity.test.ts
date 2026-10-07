@@ -23,7 +23,7 @@ import * as transcriptTargets from "./session-accessor.transcript-target.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { withSessionStoreTarget } from "./session-store-target-runtime.js";
-import { historyLane } from "./session-transcript-worker-resources.js";
+import { projectionLane } from "./session-transcript-worker-resources.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
 describe("transcript turn physical identity", () => {
@@ -78,9 +78,9 @@ describe("transcript turn physical identity", () => {
       });
       await closeOpenClawAgentDatabaseByPathAsync(original.path, original.agentId);
       await closeOpenClawAgentDatabaseByPathAsync(replacement.path, replacement.agentId);
-      const run = historyLane.pool.run.bind(historyLane.pool);
+      const run = projectionLane.pool.run.bind(projectionLane.pool);
       let replaced = false;
-      vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+      vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
         const reply = await run(...args);
         if (
           reply.ok &&
@@ -109,9 +109,9 @@ describe("transcript turn physical identity", () => {
       const target = { ...scope(), storePath: `${fixture.storePath()}.custom.json` };
       const databaseOptions = toDatabaseOptions(resolveSqliteScope(target));
       const shared = openOpenClawStateDatabase();
-      const run = historyLane.pool.run.bind(historyLane.pool);
+      const run = projectionLane.pool.run.bind(projectionLane.pool);
       let reads = 0;
-      vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+      vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
         const reply = await run(...args);
         if (
           reply.ok &&

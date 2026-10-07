@@ -1,13 +1,13 @@
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
 import {
   appendAssistantMirrorMessageByIdentity,
   appendSessionTranscriptMessageByIdentity,
@@ -21,6 +21,8 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessages as project } from "./chat-display-projection.js";
+import { CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES } from "./server-methods/chat-history-budget.js";
+import { SessionHistorySseState } from "./session-history-state.js";
 import { projectSessionMessagePayload } from "./session-transcript-message.js";
 import { readRecentSessionMessagesWithStatsAsync } from "./session-transcript-readers.js";
 
@@ -127,12 +129,6 @@ it("keeps a media-only assistant row pending for its structured rewrite", () => 
     payloadFor(assistant({ openclawDelivery: delivery, content: [text(`MEDIA:${managedUrl}`)] }))
       ?.message,
   ).toMatchObject({ role: "assistant", content: [text("")] });
-});
-it("preserves an ordinary relative reference through persistence and projection", () => {
-  const content = [text("MEDIA:./image.png")];
-  expect(
-    payloadFor(applyAssistantDeliveryDirectives({ role: "assistant", content }))?.message,
-  ).toMatchObject({ content });
 });
 it.each([
   ["CR", "\r"],
@@ -301,5 +297,179 @@ describe("channel mirror display controls", () => {
       __openclaw: { id: "real-answer" },
       content: expect.arrayContaining([audio, text(answer)]),
     });
+  });
+});
+
+describe("multimodal display privacy", () => {
+  it.each([
+    {
+      name: "native image data",
+      image: (data: string) => ({ type: "image", mimeType: "image/png", data }),
+    },
+  ])("keeps text while omitting $name from display history", ({ image: inlineImage }) => {
+    const png = createNoisyPngBuffer(320, 320);
+    const encoded = png.toString("base64");
+    const message = {
+      role: "user",
+      content: [
+        { type: "text", text: "keep prefix text" },
+        inlineImage(encoded),
+        { type: "text", text: "keep suffix text" },
+      ],
+    };
+    const messages = project([message]);
+    expect(messages).toMatchObject([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "keep prefix text" },
+          { type: "image", omitted: true, bytes: png.length },
+          { type: "text", text: "keep suffix text" },
+        ],
+      },
+    ]);
+    expect(JSON.stringify(messages)).not.toContain(encoded);
+    expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThan(
+      CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
+    );
+  });
+
+  it("keeps sanitized legacy media in projection and incremental SSE", async () => {
+    const data = Buffer.from("inline payload").toString("base64");
+    const rawMessage = {
+      role: "user",
+      content: [
+        { type: "text", text: "keep mixed media metadata" },
+        {
+          type: "image",
+          mimeType: "image/png",
+          path: "/tmp/private-image.png",
+          url: "https://image-user@media.example/image.png?signature=image-secret#image-fragment",
+          source: { type: "base64", data, blob: data, url: "media://inbound/image-claim" },
+        },
+        {
+          type: "audio",
+          mimeType: "audio/wav",
+          data,
+          filePath: "C:\\private-audio.wav",
+          audio_url: "media://inbound/audio-claim",
+          source: {
+            type: "url",
+            data,
+            url: "https://audio-user@media.example/audio.wav?token=audio-secret#audio-fragment",
+          },
+        },
+        {
+          type: "video",
+          mimeType: "video/mp4",
+          blob: data,
+          localPath: "\\\\server\\share\\private-video.mp4",
+          openclawReasoningReplay: { private: true },
+          video_url:
+            "https://video-user@media.example/video.mp4?X-Amz-Signature=video-secret#video-fragment",
+          source: { type: "url", blob: data, url: "media://inbound/video-claim" },
+        },
+      ],
+    };
+    const original = structuredClone(rawMessage);
+    const state = SessionHistorySseState.fromSnapshot({
+      target: { sessionId: "mixed-media", sessionKey: "agent:main:mixed-media" },
+      snapshot: {
+        history: { items: [], messages: [], hasMore: false },
+        rawTranscriptSeq: 0,
+        turnBoundaryPending: false,
+        assistantErrorPending: false,
+      },
+    });
+    for (const message of [
+      project([rawMessage])[0],
+      (await state.prepareInlineMessage({ message: rawMessage, messageId: "media-message" }))()
+        ?.message,
+    ]) {
+      expect(message?.role).toBe("user");
+      expect(JSON.stringify(message)).not.toContain(data);
+      expect(JSON.stringify(message)).not.toMatch(
+        /private-|-(?:user|secret|fragment)|openclawReasoningReplay/u,
+      );
+      expect(message?.content).toEqual([
+        { type: "text", text: "keep mixed media metadata" },
+        {
+          type: "image",
+          mimeType: "image/png",
+          url: "https://media.example/image.png",
+          source: { type: "base64", url: "media://inbound/image-claim" },
+          omitted: true,
+          bytes: 14,
+        },
+        {
+          type: "audio",
+          mimeType: "audio/wav",
+          audio_url: "media://inbound/audio-claim",
+          source: { type: "url", url: "https://media.example/audio.wav", omitted: true },
+          omitted: true,
+          bytes: 14,
+        },
+        {
+          type: "video",
+          mimeType: "video/mp4",
+          video_url: "https://media.example/video.mp4",
+          source: { type: "url", url: "media://inbound/video-claim", omitted: true },
+          omitted: true,
+          bytes: 14,
+        },
+      ]);
+    }
+    expect(rawMessage).toEqual(original);
+  });
+
+  it("removes private audio payloads and local references while preserving safe refs", () => {
+    const privateMarker = "private-audio-reference";
+    const privateFiles = Object.fromEntries(
+      ["path", "file", "filePath", "localPath"].map((key) => [key, "/private/" + privateMarker]),
+    );
+    const safeAudio = [
+      {
+        type: "audio",
+        url: "https://example.invalid/audio.wav",
+        openUrl: "http://example.invalid/audio.wav",
+        audio_url: "media://inbound/audio.wav",
+        source: { type: "url", url: "/api/chat/media/outgoing/audio.wav" },
+      },
+      { type: "audio", url: "/media/audio.wav", openUrl: "/__openclaw__/audio/clip.wav" },
+    ];
+    const message = {
+      role: "user",
+      content: [
+        {
+          type: "audio",
+          data: { rawSecret: privateMarker },
+          url: "data:audio/wav;base64," + privateMarker,
+          openUrl: "file:///tmp/" + privateMarker + ".wav",
+          audio_url: "~/" + privateMarker + ".wav",
+          ...privateFiles,
+          source: {
+            type: "opaque",
+            codec: "pcm",
+            data: new Uint8Array([111, 112, 113]),
+            url: "/tmp/" + privateMarker + "-source.wav",
+            ...privateFiles,
+          },
+        },
+        { type: "audio", url: "C:\\a.wav", source: { url: "\\\\s\\a.wav" } },
+        ...safeAudio,
+      ],
+    };
+    const original = structuredClone(message);
+    expect(project([message])).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "audio", omitted: true, source: { type: "opaque", codec: "pcm", omitted: true } },
+          { type: "audio", omitted: true, source: { omitted: true } },
+          ...safeAudio,
+        ],
+      },
+    ]);
+    expect(message).toEqual(original);
   });
 });

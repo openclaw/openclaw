@@ -3,6 +3,11 @@ import path from "node:path";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -109,6 +114,57 @@ it("exposes a prepared generation only after registration publication and keeps 
     expect(() => claim!.assertCurrent()).toThrow(/released/);
   } finally {
     await execution.release();
+  }
+});
+
+it("preserves a fresh borrower when config revokes a completed native open", async () => {
+  const options = fixture();
+  const previousConfig = getRuntimeConfigSnapshot();
+  setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
+  readOpenClawAgentDatabaseRegistryToken({ env: options.env });
+  const original = captureOpenClawAgentDatabaseExecution(options);
+  let fresh: ReturnType<typeof captureOpenClawAgentDatabaseExecution> | undefined;
+  let preparingFresh: Promise<void> | undefined;
+  let originalIncarnation: string | undefined;
+  let publishedConfig = false;
+  const requestSource = source();
+  requestSource.onRegistryChange = () => {
+    if (publishedConfig || !original.fileIdentity) {
+      return;
+    }
+    publishedConfig = true;
+    originalIncarnation = original.captureGenerationClaim().incarnation;
+    setRuntimeConfigSnapshot({
+      agents: { entries: { main: {} } },
+      session: {
+        store: path.join(options.env.OPENCLAW_STATE_DIR, "relocated", "{agentId}.sqlite"),
+      },
+    });
+    fresh = captureOpenClawAgentDatabaseExecution(options);
+    expect(fresh.capturePreparedGenerationClaim()).toBeUndefined();
+    preparingFresh = fresh.prepare(source());
+    void preparingFresh.catch(() => {});
+  };
+  try {
+    await expect(original.prepare(requestSource)).rejects.toThrow("admission is closed");
+    assert(fresh);
+    assert(preparingFresh);
+    assert(originalIncarnation);
+    await preparingFresh;
+    const claim = fresh.capturePreparedGenerationClaim();
+    assert(claim);
+    expect(claim.incarnation).not.toBe(originalIncarnation);
+    claim.assertCurrent();
+    expect(() => original.assertCurrent()).toThrow("admission is closed");
+  } finally {
+    await preparingFresh?.catch(() => {});
+    await original.release();
+    await fresh?.release();
+    if (previousConfig) {
+      setRuntimeConfigSnapshot(previousConfig);
+    } else {
+      clearRuntimeConfigSnapshot();
+    }
   }
 });
 

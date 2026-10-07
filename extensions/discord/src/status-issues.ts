@@ -9,6 +9,7 @@ import {
   resolveEnabledConfiguredAccountId,
 } from "openclaw/plugin-sdk/status-helpers";
 import {
+  asFiniteNumber,
   normalizeOptionalString,
   normalizeOptionalTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -21,10 +22,7 @@ function readDiscordPermissionsAuditSummary(value: unknown) {
   if (!isRecord(value)) {
     return {};
   }
-  const unresolvedChannels =
-    typeof value.unresolvedChannels === "number" && Number.isFinite(value.unresolvedChannels)
-      ? value.unresolvedChannels
-      : undefined;
+  const unresolvedChannels = asFiniteNumber(value.unresolvedChannels);
   const channelsRaw = value.channels;
   const channels = Array.isArray(channelsRaw)
     ? channelsRaw

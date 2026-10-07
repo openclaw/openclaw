@@ -109,12 +109,14 @@ export async function prepareMemoryFlushAttempt(params: {
           sessionEntry,
         )
       : undefined;
+  // The source turn's own attempt resolves the same lineage and owns the operator warning.
   if (sourceAudience?.status === "denied") {
     log.debug("memory flush skipped: source turn has no memory audience", {
       event: "memory_flush_no_audience",
       sourceSessionKey: sessionKey,
       sourceSessionId: sessionEntry.sessionId,
       pluginId: resolution.pluginId,
+      kind: sourceAudience.kind,
       reason: sourceAudience.reason,
     });
     return null;
