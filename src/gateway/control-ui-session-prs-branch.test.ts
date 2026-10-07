@@ -691,6 +691,82 @@ describe("session branch diff stats", () => {
     expect(result.branch).toBeUndefined();
   });
 
+  it.each([1, 2])(
+    "stops dependent comparisons after ancestry probe %s times out",
+    async (probe) => {
+      await initializeFeatureWork({ trackFeature: true });
+      const run = worktreeGit.runGitBytes;
+      let ancestryCalls = 0;
+      const reads = vi
+        .spyOn(worktreeGit, "runGitBytes")
+        .mockImplementation(async (cwd, args, options) => {
+          if (args[0] === "merge-base" && ++ancestryCalls >= probe) {
+            return {
+              stdout: Buffer.alloc(0),
+              stderr: Buffer.alloc(0),
+              code: null,
+              signal: "SIGTERM",
+              killed: true,
+              termination: "timeout",
+              timeoutMs: 120_000,
+              windowsEncoding: null,
+            };
+          }
+          return run(cwd, args, options);
+        });
+      try {
+        const result = await loadMergedBranchState("1".repeat(40));
+        expect(result.branch).toEqual({ owner: "openclaw", repo: "openclaw", branch: "feature" });
+        expect(ancestryCalls).toBe(probe);
+      } finally {
+        reads.mockRestore();
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "reads missing historical PR heads without transport (no-lazy-fetch=%s)",
+    async (noLazyFetch) => {
+      await initializeFeatureWork({ trackFeature: true });
+      await git("config", "extensions.partialClone", "origin");
+      await git("config", "remote.origin.promisor", "true");
+      await git("config", "remote.origin.url", path.join(root, "unavailable-remote"));
+      const tracePath = path.join(root, ".git", "trace.jsonl");
+      vi.stubEnv("GIT_TRACE2_EVENT", tracePath);
+      const run = worktreeGit.runGitBytes;
+      const reads = vi.spyOn(worktreeGit, "runGitBytes").mockImplementation((cwd, args, options) =>
+        run(
+          cwd,
+          args,
+          noLazyFetch
+            ? options
+            : {
+                ...options,
+                // Older Git ignores this variable; the transport policy must still hold.
+                env: { ...options?.env, GIT_NO_LAZY_FETCH: undefined },
+              },
+        ),
+      );
+      try {
+        const result = await loadMergedBranchState("1".repeat(40));
+        expect(result.branch).toMatchObject({ additions: 1, changedFiles: 1 });
+        const trace = await fs.readFile(tracePath, "utf8");
+        expect(
+          trace
+            .split("\n")
+            .filter(
+              (line) =>
+                line.includes('"event":"child_start"') &&
+                line.includes('"child_class":"transport/'),
+            ),
+        ).toEqual([]);
+      } finally {
+        reads.mockRestore();
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
   it("suppresses the Create PR row when the merged PR falls outside the display cap", async () => {
     const mergedHead = await initializeFeatureHead({ trackFeature: true });
     const closedPull = (n: number) =>

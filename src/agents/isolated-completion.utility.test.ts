@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   isolatedAssistant,
+  isolatedRequest,
   isolatedCompletionMocks as mocks,
   registerIsolatedHarness,
   resetIsolatedCompletionTestState,
@@ -13,6 +14,27 @@ import {
 const { prepareUtilityCompletionForAgent } = await import("./utility-completion.js");
 
 beforeEach(resetIsolatedCompletionTestState);
+
+it.each([undefined, "session-activity-summary", "conversation-label", "session-observer"] as const)(
+  "preserves isolated completion purpose %s without changing execution policy",
+  async (purpose) => {
+    mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+    mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "done" }] });
+    await runIsolatedCompletion({ ...isolatedRequest(), purpose });
+    expect(mocks.runCliAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isolatedCompletionPurpose: purpose ?? "isolated-completion",
+        executionMode: "side-question",
+        isolatedCompletion: true,
+        disableTools: true,
+        disableCliLiveSession: true,
+        timeoutMs: 1_000,
+        model: "gpt-test",
+      }),
+    );
+    expect(mocks.runCliAgent.mock.calls[0]?.[0].trigger).toBeUndefined();
+  },
+);
 
 it.each([false, true])(
   "routes an automatic utility completion with provider auth=%s",

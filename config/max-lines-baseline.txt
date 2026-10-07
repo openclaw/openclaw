@@ -408,7 +408,6 @@ src/flows/doctor-health-contributions.test.ts
 src/flows/model-picker.ts
 src/gateway/call.test.ts
 src/gateway/call.ts
-src/gateway/cli-session-history.test.ts
 src/gateway/client.test.ts
 src/gateway/config-reload.test.ts
 src/gateway/config-reload.ts

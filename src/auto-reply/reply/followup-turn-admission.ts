@@ -61,7 +61,7 @@ type FollowupSessionOwner = {
 } & ({ kind: "detached" } | { kind: "session"; key: string; storePath?: string });
 
 export type AdmittedFollowupTurn = {
-  runId: string;
+  readonly runId: string;
   queued: FollowupRun;
   operation: ReplyOperation;
   config: OpenClawConfig;

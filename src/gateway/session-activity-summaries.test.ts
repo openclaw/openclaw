@@ -265,6 +265,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     const first = complete.mock.calls[0]?.[0];
     const second = complete.mock.calls[1]?.[0];
     expect(first).toMatchObject({ model: "utility", provider: "test" });
+    expect(first?.purpose).toBe("session-activity-summary");
     expect(JSON.parse(first!.prompt).messages[0]).toContain("Outcome 0");
     expect(JSON.parse(first!.prompt).messages.at(-1)).toContain("Outcome 63");
     expect(JSON.parse(second!.prompt)).toMatchObject({ previousRecap: "Recap through batch 1." });

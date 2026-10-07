@@ -325,7 +325,7 @@ async function handleInternalSourceReplySendAction(
         input.workspaceDir ?? (agentId ? resolveAgentWorkspaceDir(input.cfg, agentId) : undefined),
     });
     throwIfAborted(input.abortSignal);
-    if (!recommendations.cards.length || !normalizeOptionalString(params.message)) {
+    if (!normalizeOptionalString(params.message)) {
       params.message = recommendations.text;
     }
   }
@@ -493,9 +493,7 @@ async function handleInternalSourceReplySendAction(
     ? cards
         .map((card) => `${card.name}: ${card.installed ? "Installed" : "Available to install"}.`)
         .join("\n")
-    : payload.sourceReply.channelData?.[CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY]
-      ? payload.sourceReply.text
-      : undefined;
+    : recommendations?.text;
   const { sourceReplyDeliveryMode, ...details } = payload;
   const toolResult = textResult(
     `${receipt}${recommendationSummary ? `\n${recommendationSummary}` : ""}`,

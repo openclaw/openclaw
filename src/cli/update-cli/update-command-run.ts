@@ -1,6 +1,10 @@
+import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
-import { formatUnsupportedNodeVersionMessage } from "../../../node-version.mjs";
+import {
+  formatUnsupportedNodeVersionMessage,
+  SUPPORTED_NODE_VERSION_RANGE,
+} from "../../../node-version.mjs";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/config.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayNativeServiceIdentityConflict } from "../../daemon/constants.js";
@@ -21,6 +25,7 @@ import {
   UPDATE_RUN_ID_ENV,
 } from "../../infra/update-control-plane-sentinel.js";
 import { readDevUpdateTarget } from "../../infra/update-dev-target.js";
+import { createUpdatePreflightDiagnostics } from "../../infra/update-failure-facts.js";
 import { normalizeUpdateFailureResult } from "../../infra/update-failure-result.js";
 import {
   createFreeBsdPkgOwnershipInspection,
@@ -576,7 +581,17 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
     ? null
     : nodeRuntimeFailure(process.versions.node, await detectCurrentSqliteCapabilities());
   if (runtimeFailure) {
-    const error = `${runtimeFailure}\n${formatUnsupportedNodeVersionMessage(process.versions.node)}`;
+    const root = await resolveUpdateRoot();
+    const diagnostics = createUpdatePreflightDiagnostics({
+      check: "node-runtime",
+      code: "node-runtime-preflight",
+      required: `Node ${SUPPORTED_NODE_VERSION_RANGE}`,
+      detected: `Node ${process.versions.node} at ${process.execPath}`,
+      installRoot: root,
+      binaryPath: path.join(root, "openclaw.mjs"),
+      remedy: `${formatUnsupportedNodeVersionMessage(process.versions.node)}\n${runtimeFailure}`,
+    });
+    const error = diagnostics.message;
     if (opts.json) {
       defaultRuntime.writeJson({
         status: "error",

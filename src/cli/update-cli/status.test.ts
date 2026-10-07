@@ -759,7 +759,18 @@ describe("update status abandoned-run reporting", () => {
       }
       expect(getUpdateRun(run.runId)).toEqual(history);
 
-      await recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: [pending.pluginId] });
+      await recordDeferredPluginMigrations({
+        pending: [],
+        settlements: [
+          {
+            pluginId: pending.pluginId,
+            status: json ? "superseded" : "completed",
+            reason: json
+              ? "Superseded by the verified successor migration."
+              : "No protected config remains.",
+          },
+        ],
+      });
       runtime.log.mockClear();
       runtime.writeJson.mockClear();
       await updateStatusCommand({ json });

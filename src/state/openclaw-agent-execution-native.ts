@@ -2,13 +2,9 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Result } from "@openclaw/normalization-core/result";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import {
-  createSqliteLifecycleAggregateError,
-  throwSqliteLifecycleErrors,
-} from "../infra/sqlite-lifecycle-errors.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { publishSqliteWalCheckpointObservation } from "../infra/sqlite-wal-checkpoint.js";
 import type { SqliteWorkerCloseReceipt } from "../infra/sqlite-worker-contract.js";
 import {
@@ -29,9 +25,14 @@ import {
   runSqliteWorkerStoreOperation,
   type SqliteWorkerStore,
 } from "../infra/sqlite-worker-store.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
 import { captureAgentDatabasePreparationJournal } from "./agent-database-admission.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
-import { captureOpenClawAgentDatabaseRegistration } from "./openclaw-agent-db-registry-listing.js";
+import {
+  captureOpenClawAgentDatabaseRegistration,
+  settleAgentRegistration,
+  type AgentDatabaseRegistration,
+} from "./openclaw-agent-db-registry-listing.js";
 import {
   captureOpenClawAgentDatabaseAdmissionPublication,
   getOpenClawAgentDatabaseValidationForTransfer,
@@ -52,39 +53,6 @@ import { publishOpenClawStateDatabaseWorkerAdmission } from "./openclaw-state-db
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 type Store = SqliteWorkerStore<AgentDatabaseOperations>;
-type Registration = ReturnType<typeof captureOpenClawAgentDatabaseRegistration> & {
-  nativeSettlement?: Promise<SqliteWorkerOperationSettlement>;
-};
-
-async function settleAgentRegistration<T>(
-  registration: Registration,
-  operation: () => Promise<T>,
-): Promise<T> {
-  let result: Result<T, unknown>;
-  try {
-    result = { ok: true, value: await operation() };
-  } catch (error) {
-    result = { ok: false, error };
-  }
-  try {
-    // Native exit and queued receipts settle before registration publication.
-    registration.finish(await registration.nativeSettlement);
-  } catch (error) {
-    if (!result.ok) {
-      throw createSqliteLifecycleAggregateError(
-        [result.error, error],
-        "Agent open and registration publication failed",
-        result.error,
-      );
-    }
-    throw error;
-  }
-  if (!result.ok) {
-    throw result.error;
-  }
-  return result.value;
-}
-
 /** A logical execution owner can replace this generation only after its native close settles. */
 export function createAgentDatabaseNativeGeneration(
   agentId: string,
@@ -112,6 +80,7 @@ export function createAgentDatabaseNativeGeneration(
   let opening: Promise<Store | undefined> | undefined;
   let openedStore: Store | undefined;
   let openingFailure: "open-refused" | "native" | undefined;
+  let closedOpeningRefusal: Error | undefined;
   let openingAdmission:
     | {
         admission: ReturnType<SqliteWorkerAdmissionFactory>["admission"];
@@ -138,7 +107,7 @@ export function createAgentDatabaseNativeGeneration(
   const admission =
     (
       source: AgentDatabaseRequestExecutionSource,
-      registration?: Registration,
+      registration?: AgentDatabaseRegistration,
       assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     ): SqliteWorkerAdmissionFactory =>
     (operation) => {
@@ -462,11 +431,17 @@ export function createAgentDatabaseNativeGeneration(
             cause: cleanupError,
           });
         }
+        if (error instanceof AgentDatabaseExecutionAdmissionClosedError) {
+          closedOpeningRefusal = error;
+        }
         throw error;
       }
     })()
       .catch(async (error: unknown) => {
-        openingFailure = "native";
+        openingFailure =
+          closedOpeningRefusal !== undefined && error === closedOpeningRefusal
+            ? "open-refused"
+            : "native";
         if (openingAdmission) {
           const { admission: captured, settled } = openingAdmission;
           const outcome = await settled;
@@ -487,6 +462,7 @@ export function createAgentDatabaseNativeGeneration(
       })
       .finally(() => {
         openingAdmission = undefined;
+        closedOpeningRefusal = undefined;
       });
     const attempt = opening;
     return attempt.then((store) => {

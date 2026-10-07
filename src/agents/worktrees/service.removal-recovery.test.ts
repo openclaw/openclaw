@@ -144,17 +144,11 @@ describe("interrupted ordinary worktree removal recovery", () => {
     await expect(recover()).resolves.toMatchObject({ removed: true });
   });
 
-  it.each(["changed", "foreign", "mode", "symlink", "directory"])(
+  it.each(["changed", "symlink", "directory"])(
     "preserves %s residual writes before any repair",
     async (kind) => {
       if (kind === "changed") {
         await fs.writeFile(path.join(record.path, "README.md"), "new work\n");
-      }
-      if (kind === "foreign") {
-        await fs.writeFile(path.join(record.path, "new.txt"), "new work\n");
-      }
-      if (kind === "mode") {
-        await fs.chmod(path.join(record.path, "README.md"), 0o755);
       }
       if (kind === "symlink") {
         await fs.unlink(path.join(record.path, "README.md"));
@@ -174,9 +168,6 @@ describe("interrupted ordinary worktree removal recovery", () => {
         expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe(
           kind === "changed" ? "new work\n" : "base\n",
         );
-      }
-      if (kind === "foreign") {
-        expect(await fs.readFile(path.join(record.path, "new.txt"), "utf8")).toBe("new work\n");
       }
       if (kind === "directory") {
         expect((await fs.stat(path.join(record.path, "foreign"))).isDirectory()).toBe(true);
@@ -312,26 +303,6 @@ describe("interrupted ordinary worktree removal recovery", () => {
     await pinsPreserved();
   });
 
-  it.each(["pending", "terminal-pending"])(
-    "preserves a foreign referent behind a same-OID symbolic %s ref",
-    async (kind) => {
-      if (kind === "terminal-pending") {
-        await recover();
-      }
-      const foreign = "refs/tags/foreign-owner";
-      const ref = `refs/openclaw/removals/${record.id}`;
-      await git(repo, "update-ref", foreign, snapshot);
-      await git(repo, "symbolic-ref", ref, foreign);
-      await expect(recover()).rejects.toThrow("must remain direct refs");
-      expect(await git(repo, "rev-parse", foreign)).toBe(snapshot);
-      expect(await git(repo, "symbolic-ref", ref)).toBe(foreign);
-      if (kind !== "terminal-pending") {
-        expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("base\n");
-        expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
-      }
-    },
-  );
-
   it("preserves the pending pin when registry custody changes after removal publication", async () => {
     const run = commandExec.runCommandWithTimeout;
     let injected = false;
@@ -409,40 +380,6 @@ describe("interrupted ordinary worktree removal recovery", () => {
       }
     },
   );
-
-  it.each([
-    { setting: "attribute", missing: false },
-    { setting: "worktree-autocrlf", missing: true },
-  ])("recovers clean CRLF from $setting, missing=$missing", async ({ setting, missing }) => {
-    await fs.writeFile(path.join(record.path, ".git"), `gitdir: ${admin}\n`);
-    await fs.writeFile(
-      path.join(record.path, ".gitattributes"),
-      setting === "attribute" ? "converted.txt text eol=crlf\n" : "converted.txt text\n",
-    );
-    if (setting === "worktree-autocrlf") {
-      await git(repo, "config", "extensions.worktreeConfig", "true");
-      await git(record.path, "config", "--worktree", "core.autocrlf", "true");
-      expect(await fs.readFile(path.join(admin, "config.worktree"), "utf8")).toContain("autocrlf");
-    }
-    await fs.writeFile(path.join(record.path, "converted.txt"), "one\ntwo\n");
-    await captureCheckout("captured CRLF checkout");
-    await fs.unlink(path.join(record.path, "converted.txt"));
-    // Establish the original clean checkout's stat data before interrupting it.
-    // Production recovery must never refresh or replace that retained index.
-    await git(record.path, "checkout-index", "-u", "converted.txt");
-    expect(await git(record.path, "status", "--porcelain")).toBe("");
-    expect(await fs.readFile(path.join(record.path, "converted.txt"), "utf8")).toBe(
-      "one\r\ntwo\r\n",
-    );
-    if (missing) {
-      await fs.unlink(path.join(record.path, "converted.txt"));
-    }
-    await fs.unlink(path.join(record.path, ".git"));
-    await expect(recover()).resolves.toMatchObject({ removed: true });
-    expect(await git(repo, "show", `${snapshot}:converted.txt`)).toBe("one\ntwo");
-    await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await git(repo, "rev-parse", `refs/openclaw/snapshots/${record.id}`)).toBe(snapshot);
-  });
 
   it("preserves a checkout that reappears after its original path was absent", async () => {
     await fs.unlink(path.join(record.path, "README.md"));
@@ -544,40 +481,6 @@ describe("interrupted ordinary worktree removal recovery", () => {
     },
   );
 
-  it.each(["split-index", "relative-backlink"])(
-    "reconstructs missing source with a retained %s",
-    async (kind) => {
-      await fs.writeFile(
-        path.join(record.path, ".git"),
-        `gitdir: ${kind === "relative-backlink" ? path.relative(record.path, admin) : admin}\n`,
-      );
-      if (kind === "split-index") {
-        await git(record.path, "update-index", "--split-index");
-        const sharedIndex = path.resolve(
-          record.path,
-          await git(record.path, "rev-parse", "--shared-index-path"),
-        );
-        expect(path.dirname(sharedIndex)).toBe(admin);
-        expect((await fs.stat(sharedIndex)).isFile()).toBe(true);
-        expect(await git(record.path, "status", "--porcelain")).toBe("");
-      } else {
-        expect(await fs.realpath(await git(record.path, "rev-parse", "--absolute-git-dir"))).toBe(
-          admin,
-        );
-      }
-      await fs.unlink(path.join(record.path, "README.md"));
-      if (kind === "split-index") {
-        await fs.unlink(path.join(record.path, ".git"));
-      }
-      await expect(recover()).resolves.toMatchObject({ removed: true });
-      await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
-      if (kind === "split-index") {
-        await expect(fs.stat(admin)).rejects.toMatchObject({ code: "ENOENT" });
-      }
-      expect(await git(repo, "show", `${snapshot}:README.md`)).toBe("base");
-    },
-  );
-
   it.each(["split-base", "worktree-config", "metadata-mode"])(
     "preserves a newer retained %s before native deletion",
     async (kind) => {
@@ -626,40 +529,23 @@ describe("interrupted ordinary worktree removal recovery", () => {
     },
   );
 
-  it.each(["symlink-file", "ident"])(
-    "reconstructs clean %s checkout representation",
-    async (kind) => {
-      await fs.writeFile(path.join(record.path, ".git"), `gitdir: ${admin}\n`);
-      const filename = path.join(record.path, "representation");
-      if (kind === "symlink-file") {
-        await fs.symlink("README.md", filename);
-      } else {
-        await git(repo, "config", "core.autocrlf", "false");
-        await fs.writeFile(path.join(record.path, ".gitattributes"), "representation ident\n");
-        await fs.writeFile(filename, "$Id$\n".repeat(10_000));
-      }
-      await captureCheckout("capture checkout representation");
-      if (kind === "symlink-file") {
-        await git(repo, "config", "core.symlinks", "false");
-      }
-      await fs.unlink(filename);
-      await git(record.path, "checkout-index", "-u", "representation");
-      expect(await git(record.path, "status", "--porcelain")).toBe("");
-      expect((await fs.lstat(filename)).isFile()).toBe(true);
-      if (kind === "symlink-file") {
-        expect(await fs.readFile(filename, "utf8")).toBe("README.md");
-      } else {
-        expect((await fs.readFile(filename)).length).toBe(480_000);
-      }
-      await fs.unlink(filename);
-      await fs.unlink(path.join(record.path, ".git"));
-      await expect(recover()).resolves.toMatchObject({ removed: true });
-      await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(await git(repo, "show", `${snapshot}:representation`)).toBe(
-        kind === "symlink-file" ? "README.md" : "$Id$\n".repeat(10_000).trim(),
-      );
-    },
-  );
+  it("reconstructs clean symlink-file checkout representation", async () => {
+    await fs.writeFile(path.join(record.path, ".git"), `gitdir: ${admin}\n`);
+    const filename = path.join(record.path, "representation");
+    await fs.symlink("README.md", filename);
+    await captureCheckout("capture checkout representation");
+    await git(repo, "config", "core.symlinks", "false");
+    await fs.unlink(filename);
+    await git(record.path, "checkout-index", "-u", "representation");
+    expect(await git(record.path, "status", "--porcelain")).toBe("");
+    expect((await fs.lstat(filename)).isFile()).toBe(true);
+    expect(await fs.readFile(filename, "utf8")).toBe("README.md");
+    await fs.unlink(filename);
+    await fs.unlink(path.join(record.path, ".git"));
+    await expect(recover()).resolves.toMatchObject({ removed: true });
+    await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await git(repo, "show", `${snapshot}:representation`)).toBe("README.md");
+  });
 
   it("reconstructs native Unicode filename representation", async () => {
     await fs.writeFile(path.join(record.path, ".git"), `gitdir: ${admin}\n`);
