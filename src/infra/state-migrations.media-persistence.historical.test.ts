@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync as NativeDatabaseSync, type DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-lease.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
@@ -116,6 +118,64 @@ function createHistoricalFixture() {
 }
 
 describe("legacy media persistence Doctor migration from historical schemas", () => {
+  it("migrates the exact v2026.7.2-beta.4 schema without losing its session or media", async () => {
+    expect(createHash("sha256").update(historicalV14AgentSchemaSql()).digest("hex")).toBe(
+      "955889668707fbccab70b80b5058af5a1587fd35ae32a80f8605179a68fb5117",
+    );
+    const { databasePath, env } = createHistoricalFixture();
+    const pristinePath = path.join(makeTempDir(tempDirs, "historical-source-"), "v14.sqlite");
+    fs.copyFileSync(databasePath, pristinePath);
+    const pristineBytes = fs.readFileSync(pristinePath);
+
+    const result = await migrateLegacyMediaPersistence({ env });
+    expect(result.warnings).toEqual([]);
+    expect(
+      listSessionEntriesCore({ agentId: "main", env }).map(({ entry, sessionKey }) => ({
+        sessionId: entry.sessionId,
+        sessionKey,
+      })),
+    ).toContainEqual({
+      sessionId: "historical-v14",
+      sessionKey: "agent:main:historical-v14",
+    });
+    closeOpenClawAgentDatabasesForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const migrated = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(migrated.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
+      expect(
+        migrated.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
+      expect(migrated.prepare("SELECT * FROM session_transcript_cold_archives").all()).toEqual([]);
+      expect(
+        migrated
+          .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
+          .get("agent:main:historical-v14"),
+      ).toEqual({ entry_valid: 1 });
+      expect(
+        migrated.prepare("SELECT main_key FROM session_key_contract WHERE id = 1").get(),
+      ).toEqual({
+        main_key: "main",
+      });
+      const row = migrated
+        .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? AND seq = 0")
+        .get("historical-v14") as { event_json: string };
+      const message = (JSON.parse(row.event_json) as { message: Record<string, unknown> }).message;
+      expect(message).not.toHaveProperty("MediaPath");
+      expect(message["__openclaw"]).toMatchObject({
+        media: [expect.objectContaining({ path: "/media/v14.png" })],
+      });
+      expect(migrated.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      expect(migrated.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      migrated.close();
+    }
+    expect(fs.readFileSync(pristinePath)).toEqual(pristineBytes);
+  });
+
   it("preserves an unreleased session database and its misplaced copy before Doctor repairs", async () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-unreleased-session-");
     const env = { OPENCLAW_STATE_DIR: stateDir };

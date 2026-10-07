@@ -252,7 +252,7 @@ describe("snapshot execution approvals", () => {
     });
   }
 
-  it.each([""])(
+  it.each(["", ".doctor-importing"])(
     "rehearses conflicting exec approvals from the copied policy%s without modifying source",
     async (suffix) => {
       const source = path.join(root, "source");

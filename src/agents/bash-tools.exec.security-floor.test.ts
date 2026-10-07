@@ -597,4 +597,30 @@ describe("exec security floor", () => {
       await firstRun.catch(() => undefined);
     }
   });
+  it("defers to human approval when the default reviewer import fails", async () => {
+    const loadReviewer = vi.fn(() => {
+      throw new Error("synthetic reviewer import failure");
+    });
+    vi.doMock("./exec-auto-reviewer.js", loadReviewer);
+    vi.mocked(callGatewayTool).mockResolvedValue({ decision: "deny" });
+    try {
+      const tool = createAutoTool({
+        messageProvider: "webchat",
+      });
+      const result = await tool.execute("default-review-import-failure", {
+        command: "node --version",
+      });
+      expect(loadReviewer).toHaveBeenCalled();
+      expect(result.details).toMatchObject({
+        status: "failed",
+        approvalReviewOutcome: "denied",
+        approvalReviews: [
+          { riskLevel: "unknown", rationale: expect.stringContaining("exec reviewer failed:") },
+        ],
+      });
+      expect(reviewerRuntime.prepare).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock("./exec-auto-reviewer.js");
+    }
+  });
 });

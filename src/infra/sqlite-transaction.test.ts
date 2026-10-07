@@ -354,37 +354,48 @@ describe("runSqliteImmediateTransactionSync", () => {
     expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
   });
 
-  it("fences the connection when the commit owner fails after COMMIT", () => {
-    const databasePath = path.join(tempDirs.make("openclaw-commit-owner-"), "state.sqlite");
-    const { DatabaseSync } = requireNodeSqlite();
-    const db = new DatabaseSync(databasePath);
-    openDatabases.push(db);
-    db.exec("CREATE TABLE entries (id TEXT PRIMARY KEY, value TEXT)");
-    const ownerError = new Error("commit owner failed after commit");
-    const withCommit = (commit: () => void) => {
-      commit();
-      throw ownerError;
-    };
-    const publish = vi.fn();
-    const operation = vi.fn(() => {
-      db.prepare("INSERT INTO entries VALUES ('committed', 'durable')").run();
-      deferSqlitePostCommitPublication(db, publish);
-    });
+  it.each(["throw", "promise"] as const)(
+    "fences the connection when the commit owner fails after COMMIT (%s)",
+    (failure) => {
+      const databasePath = path.join(tempDirs.make("openclaw-commit-owner-"), "state.sqlite");
+      const { DatabaseSync } = requireNodeSqlite();
+      const db = new DatabaseSync(databasePath);
+      openDatabases.push(db);
+      db.exec("CREATE TABLE entries (id TEXT PRIMARY KEY, value TEXT)");
+      const ownerError = new Error("commit owner failed after commit");
+      const withCommit =
+        failure === "throw"
+          ? (commit: () => void) => {
+              commit();
+              throw ownerError;
+            }
+          : async (commit: () => void) => {
+              commit();
+            };
+      const publish = vi.fn();
+      const operation = vi.fn(() => {
+        db.prepare("INSERT INTO entries VALUES ('committed', 'durable')").run();
+        deferSqlitePostCommitPublication(db, publish);
+      });
 
-    expect(() =>
-      withSqlitePostCommitPublications(db, () =>
-        runSqliteImmediateTransactionSync(db, operation, { withCommit }),
-      ),
-    ).toThrow(ownerError);
-    expect(operation).toHaveBeenCalledOnce();
-    expect(publish).not.toHaveBeenCalled();
-    expect(db.isOpen).toBe(false);
-    expect(() => runSqliteImmediateTransactionSync(db, operation)).toThrow(ownerError);
-    expect(operation).toHaveBeenCalledOnce();
-    const reopened = new DatabaseSync(databasePath);
-    openDatabases.push(reopened);
-    expect(readEntries(reopened)).toEqual(["committed"]);
-  });
+      expect(() =>
+        withSqlitePostCommitPublications(db, () =>
+          // oxlint-disable-next-line typescript/no-misused-promises -- Deliberately violates the synchronous commit-owner contract.
+          runSqliteImmediateTransactionSync(db, operation, { withCommit }),
+        ),
+      ).toThrow(failure === "throw" ? ownerError : "must be synchronous");
+      expect(operation).toHaveBeenCalledOnce();
+      expect(publish).not.toHaveBeenCalled();
+      expect(db.isOpen).toBe(false);
+      expect(() => runSqliteImmediateTransactionSync(db, operation)).toThrow(
+        failure === "throw" ? ownerError : "must be synchronous",
+      );
+      expect(operation).toHaveBeenCalledOnce();
+      const reopened = new DatabaseSync(databasePath);
+      openDatabases.push(reopened);
+      expect(readEntries(reopened)).toEqual(["committed"]);
+    },
+  );
 
   it.each(["ROLLBACK", "ROLLBACK TO SAVEPOINT"])(
     "disposes failed %s cleanup even when a rollback observer throws",

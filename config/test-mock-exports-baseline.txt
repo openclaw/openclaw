@@ -2207,6 +2207,7 @@
 ["src/agents/bash-tools.exec.resolve-env-hook.test.ts","./bash-tools.exec-host-node.js","a8167d8f8764b0d5169e2afe608c9f71935227efa492cc975a94063a2bc39715",1]
 ["src/agents/bash-tools.exec.script-preflight.test.ts","../utils/delivery-context.shared.js","adfe206801d50f5fc9de0092d075a73de785ae34901060215cb32cf92798a445",1]
 ["src/agents/bash-tools.exec.script-preflight.test.ts","./bash-tools.exec-host-node.js","73bcd54f5dac2858558c6a6954fc5401d2549699984cfab83525f36f40d5657e",1]
+["src/agents/bash-tools.exec.security-floor.test.ts","./exec-auto-reviewer.js","1a7b34f97a7bc50dcfba37daad65786d702183d434e1316cbe41c5ccb0a90113",1]
 ["src/agents/bash-tools.exec.security-floor.test.ts","./simple-completion-runtime.js","11c6614e9c7060a25edfa4a29a06f6a0ab70e57353164a41582219c2118f976d",1]
 ["src/agents/bash-tools.exec.security-floor.test.ts","./tools/gateway.js","88d8fc35c2b800a9c737d433573b120cc7589c5348f10a6e6aead6ecfcf45794",1]
 ["src/agents/bash-tools.exec.store-env.test.ts","../infra/shell-env.js","8470cab07e2a645804c4f83510ae6c5cdb527025bfd6b87b2a640ab188e4678b",1]
