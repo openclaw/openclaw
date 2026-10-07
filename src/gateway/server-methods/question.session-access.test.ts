@@ -6,7 +6,7 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { releaseAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -523,22 +523,24 @@ it.each([
       owner.send.mockClear();
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const run = historyLane.pool.run.bind(historyLane.pool);
+      const run = projectionLane.pool.run.bind(projectionLane.pool);
       let held = false;
-      const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (input, options) => {
-        let exact = false;
-        const result = await run(async () => {
-          const request = typeof input === "function" ? await input() : input;
-          exact = request.kind === "session-exact-entries";
-          return request;
-        }, options);
-        if (exact && !held) {
-          held = true;
-          entered.resolve();
-          await release.promise;
-        }
-        return result;
-      });
+      const spy = vi
+        .spyOn(projectionLane.pool, "run")
+        .mockImplementation(async (input, options) => {
+          let exact = false;
+          const result = await run(async () => {
+            const request = typeof input === "function" ? await input() : input;
+            exact = request.kind === "session-exact-entries";
+            return request;
+          }, options);
+          if (exact && !held) {
+            held = true;
+            entered.resolve();
+            await release.promise;
+          }
+          return result;
+        });
       const answer = { answers: { destination: ["Committed"] } };
       const observation = manager.observe("ordinary-question")!;
       const releaseAccess =
@@ -649,8 +651,8 @@ it.each([
       }
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const run = historyLane.pool.run.bind(historyLane.pool);
-      const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+      const run = projectionLane.pool.run.bind(projectionLane.pool);
+      const spy = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
         const result = await run(...args);
         entered.resolve();
         await release.promise;
@@ -730,7 +732,7 @@ it.each(["admin", "narrow"] as const)(
           canReceiveSessionEvent: fallback,
         }).broadcast,
       );
-      const spy = vi.spyOn(historyLane.pool, "run").mockRejectedValue(failure);
+      const spy = vi.spyOn(projectionLane.pool, "run").mockRejectedValue(failure);
       try {
         const client = kind === "narrow" ? f.producer : adminRequestClient;
         const request = f.call(

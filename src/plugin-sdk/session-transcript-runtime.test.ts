@@ -5,7 +5,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import * as sqliteSessionScope from "../config/sessions/session-accessor.sqlite-scope.js";
-import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
@@ -247,9 +247,9 @@ describe("session transcript runtime SDK", () => {
     const releaseFirst = createDeferredCore();
     const secondTargetRead = createDeferredCore();
     const secondQueued = createDeferredCore();
-    const read = historyLane.pool.run.bind(historyLane.pool);
+    const read = projectionLane.pool.run.bind(projectionLane.pool);
     let targetReads = 0;
-    vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+    vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
       const reply = await read(...args);
       if (
         reply.ok &&

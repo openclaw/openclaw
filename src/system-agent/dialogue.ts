@@ -58,7 +58,7 @@ export async function resolveSystemAgentOperation(
       plan &&
       !(await resolveSystemAgentVerifiedInferenceRoute(opts.verifiedInference, opts.deps))
     ) {
-      throw new SystemAgentInferenceUnavailableError("planner");
+      throw new SystemAgentInferenceUnavailableError("planner", [], "route-changed");
     }
   } catch (error) {
     if (error instanceof SystemAgentInferenceUnavailableError) {

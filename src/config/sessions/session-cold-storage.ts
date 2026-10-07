@@ -59,7 +59,10 @@ import type {
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
-import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
+import {
+  projectionLane,
+  withSessionHistoryWorkerReadCandidates,
+} from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { listConfiguredSessionStoreAgentIds } from "./targets.js";
@@ -428,32 +431,36 @@ export async function restoreSessionColdTranscript(
       }
       const source = createOpenClawAgentDatabasePathMatcher();
       source(target.path, target.path);
-      return await withSessionHistoryWorkerDatabase(options, async (owner) => {
-        const assertAllowed = () => {
-          assertPreparedCurrent();
-          owner.assertCurrent();
-          if (!source.isCurrent()) {
-            throw new Error(
-              "Session store changed while preparing its metadata. Retry the request.",
-            );
-          }
-        };
-        return await restoreSessionColdTranscript(
-          captured,
-          assertAllowed,
-          {
-            target,
-            readMetadata: async () => {
-              const metadata = await owner.readColdMetadata({
-                sessionId: target.sessionId,
-                env: captured.env,
-              });
-              return metadata.archive;
+      return await withSessionHistoryWorkerDatabase(
+        options,
+        async (owner) => {
+          const assertAllowed = () => {
+            assertPreparedCurrent();
+            owner.assertCurrent();
+            if (!source.isCurrent()) {
+              throw new Error(
+                "Session store changed while preparing its metadata. Retry the request.",
+              );
+            }
+          };
+          return await restoreSessionColdTranscript(
+            captured,
+            assertAllowed,
+            {
+              target,
+              readMetadata: async () => {
+                const metadata = await owner.readColdMetadata({
+                  sessionId: target.sessionId,
+                  env: captured.env,
+                });
+                return metadata.archive;
+              },
             },
-          },
-          turnGuard,
-        );
-      });
+            turnGuard,
+          );
+        },
+        projectionLane,
+      );
     }
   }
   const options = toDatabaseOptions(resolved);

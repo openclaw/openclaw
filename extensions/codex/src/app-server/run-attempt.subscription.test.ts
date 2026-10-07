@@ -25,7 +25,10 @@ import {
   userMessage,
 } from "./run-attempt-test-harness.js";
 import * as runAttemptTurnRequest from "./run-attempt-turn-request.js";
-import { createContextEngine } from "./run-attempt.context-engine.test-support.js";
+import {
+  createContextEngine,
+  requestMethodsExcludingSkillDiscovery,
+} from "./run-attempt.context-engine.test-support.js";
 import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
@@ -416,7 +419,7 @@ describe("Codex attempt subscription recovery", () => {
         "Codex ran out of room in the model's context window",
       );
       expect(compact).not.toHaveBeenCalled();
-      expect(harness.requests.map((request) => request.method)).toEqual([
+      expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
         "config/read",
         "configRequirements/read",
         "thread/read",

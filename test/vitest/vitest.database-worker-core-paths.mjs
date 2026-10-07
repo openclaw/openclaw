@@ -233,6 +233,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/worker/worker-fault-injection.cleanup.test.ts",
   "src/worker/worker.chat-abort.test.ts",
   "src/worker/worker.fault-injection.test.ts",
+  "src/worker/worker.transcript-failure.test.ts",
   "test/helpers/desktop-resize-real-fixture.test.ts",
   "src/agents/mcp-oauth-writes.test.ts",
   "src/infra/sqlite-worker-operation-attachment.test.ts",

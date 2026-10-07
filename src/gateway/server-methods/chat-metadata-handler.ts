@@ -175,6 +175,7 @@ export const handleChatMetadataRequest = createPreparedReadHandler(
       }
       if (params.includeModels === false) {
         scope.includeModels = false;
+        scope.ifRevision = params.ifRevision;
       }
       const readScope = scope;
       const assertCurrent = () => {

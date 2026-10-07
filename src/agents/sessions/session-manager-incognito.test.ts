@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
 import { withIncognitoSessionActor } from "../../config/sessions/session-incognito-binding.js";
+import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-transcript-context-read.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
@@ -253,6 +254,65 @@ it("settles accepted branch hydration after its retained admission closes", asyn
     release.resolve();
     await Promise.allSettled([held, branching]);
   }
+});
+
+it("reads missing actor context as empty and rejects a row created during consumption", async () => {
+  const target = {
+    agentId: "main",
+    env,
+    storePath: actor.path,
+    sessionKey: "agent:main:dashboard:incognito-missing-context",
+    sessionId: "missing-context",
+  };
+  await withIncognitoSessionActor(actor, async () => {
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+    try {
+      expect(
+        await SessionManager.readSessionContextAsync(target, (messages, header) => ({
+          messages: [...messages],
+          header,
+        })),
+      ).toEqual({ messages: [], header: undefined });
+      expect(await readSessionManagerModelContextAsync(target, {}, (context) => context)).toEqual({
+        events: [],
+        version: { generation: null, rawSeq: null, updatedAt: null },
+      });
+      expect(await readSessionTranscriptModelContextAsync(target, (context) => context)).toEqual({
+        events: [],
+        version: { generation: null, rawSeq: null, updatedAt: null },
+      });
+      for (const kind of ["full", "model"] as const) {
+        const current = {
+          ...target,
+          sessionKey: `${target.sessionKey}-${kind}`,
+          sessionId: `${target.sessionId}-${kind}`,
+        };
+        const createDuringRead = async () => {
+          await actor.sessions.create(authority, {
+            sessionKey: current.sessionKey,
+            entry: { sessionId: current.sessionId, updatedAt: 1, incognito: true },
+          });
+        };
+        const reading =
+          kind === "full"
+            ? SessionManager.readSessionContextAsync(current, async (messages) => {
+                expect([...messages]).toEqual([]);
+                await createDuringRead();
+              })
+            : readSessionManagerModelContextAsync(current, {}, async (context) => {
+                expect(context.events).toEqual([]);
+                await createDuringRead();
+              });
+        await expect(reading).rejects.toThrow("generation is no longer current");
+      }
+      expect(prepare).not.toHaveBeenCalled();
+      expect(exec).not.toHaveBeenCalled();
+    } finally {
+      prepare.mockRestore();
+      exec.mockRestore();
+    }
+  });
 });
 
 it("reads full context without caller SQL and rejects a changed source after an awaited consumer", async () => {
