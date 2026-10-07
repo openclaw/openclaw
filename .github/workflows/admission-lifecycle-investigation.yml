@@ -11,7 +11,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          fetch-depth: 0
+          fetch-depth: 1
       - uses: ./.github/actions/setup-node-env
         with:
           node-version: "26.10.0"
@@ -22,6 +22,7 @@ jobs:
           owner=src/agents/harness/context-engine-turn-attempt.ts
           cp "$owner" /tmp/admission-owner-after.ts
           trap 'cp /tmp/admission-owner-after.ts "$owner"' EXIT
+          git fetch --no-tags --depth=1 origin d9813e3489766284c105907f30065a83ff798a11
           git show d9813e3489766284c105907f30065a83ff798a11:"$owner" > "$owner"
           set +e
           pnpm test src/agents/harness/context-engine-turn-outbox.test.ts --maxWorkers=1 -t 'reports only equality booleans' > /tmp/admission-before.log 2>&1

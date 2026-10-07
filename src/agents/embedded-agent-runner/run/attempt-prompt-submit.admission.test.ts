@@ -2,11 +2,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
-import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { ContextEngineLogicalTurnLease } from "../../harness/context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "../../harness/context-engine-turn-attempt.js";
-import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
@@ -144,7 +144,8 @@ describe("embedded provider dispatch admission", () => {
         });
         const engine: ContextEngine = {
           info: {
-            id: "test", name: "Test",
+            id: "test",
+            name: "Test",
             transcriptSemantics: {
               currentTurnFence: "before-current-turn-entry-v1",
               turnAdvancementIdempotency: "atomic-idempotent-v1",
@@ -156,25 +157,42 @@ describe("embedded provider dispatch admission", () => {
           commitTurn: async () => ({ status: "committed" }),
         };
         const lease: ContextEngineLogicalTurnLease = {
-          engine, effectiveEngine: engine, effectiveEngineId: "test",
-          effectiveEnginePluginId: undefined, degraded: false, degradedReason: undefined,
-          selectForHost: vi.fn(), degradeBeforeStart: vi.fn(), begin: vi.fn(),
-          deferDisposalUntil: vi.fn(), dispose: vi.fn(async () => undefined),
+          engine,
+          effectiveEngine: engine,
+          effectiveEngineId: "test",
+          effectiveEnginePluginId: undefined,
+          degraded: false,
+          degradedReason: undefined,
+          selectForHost: vi.fn(),
+          degradeBeforeStart: vi.fn(),
+          begin: vi.fn(),
+          deferDisposalUntil: vi.fn(),
+          dispose: vi.fn(async () => undefined),
         };
-        const prepared = field === "matching" ? target : {
-          ...target,
-          [field]: field === "storePath"
-            ? path.join(state.agentDir("other"), "openclaw-agent.sqlite")
-            : field === "agentId" ? "other" : `synthetic-other-${field}`,
-        };
+        const prepared =
+          field === "matching"
+            ? target
+            : {
+                ...target,
+                [field]:
+                  field === "storePath"
+                    ? path.join(state.agentDir("other"), "openclaw-agent.sqlite")
+                    : field === "agentId"
+                      ? "other"
+                      : `synthetic-other-${field}`,
+              };
         await drainPendingContextEngineTurnsBeforeRun({ lease, recorder, sessionTarget: prepared });
         expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
         streamMocks.streamSimple.mockImplementation((model) =>
           createAssistantResultStream(createAssistant(model, [{ type: "text", text: "done" }])),
         );
-        const sessionManager = guardSessionManager(SessionManager.open(target, state.workspaceDir), {
-          preparedUserTurnMessage: message, preparedUserTurnTranscriptRecorder: recorder,
-        });
+        const sessionManager = guardSessionManager(
+          SessionManager.open(target, state.workspaceDir),
+          {
+            preparedUserTurnMessage: message,
+            preparedUserTurnTranscriptRecorder: recorder,
+          },
+        );
         const { session } = await createTestSession({ sessionManager });
         expect(recorder.getAdmissionReceipt()).toBeUndefined();
         await submitEmbeddedAttemptPrompt({
@@ -197,7 +215,9 @@ describe("embedded provider dispatch admission", () => {
           promptActiveSession: (prompt, options) => session.prompt(prompt, options),
         });
         expect(recorder.getAdmissionReceipt()).toMatchObject({
-          agentId: target.agentId, sessionId: target.sessionId, sessionKey: target.sessionKey,
+          agentId: target.agentId,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
           storePath: target.storePath,
         });
         if (field === "matching") {
@@ -206,14 +226,23 @@ describe("embedded provider dispatch admission", () => {
         } else {
           expect(streamMocks.streamSimple).not.toHaveBeenCalled();
           const expected = {
-            agentIdMatches: field !== "agentId", sessionIdMatches: field !== "sessionId",
-            sessionKeyMatches: field !== "sessionKey", storePathMatches: field !== "storePath",
+            agentIdMatches: field !== "agentId",
+            sessionIdMatches: field !== "sessionId",
+            sessionKeyMatches: field !== "sessionKey",
+            storePathMatches: field !== "storePath",
           };
-          const diagnostic = "context-engine transcript target changed before provider dispatch " +
+          const diagnostic =
+            "context-engine transcript target changed before provider dispatch " +
             JSON.stringify(expected);
-          await expect(recorder.waitForRuntimePersistence()).rejects.toHaveProperty("message", diagnostic);
+          await expect(recorder.waitForRuntimePersistence()).rejects.toHaveProperty(
+            "message",
+            diagnostic,
+          );
+          console.info("runtime-dispatch-admission", diagnostic, "providerCalls=0");
           expect(session.messages.at(-1)).toMatchObject({
-            role: "assistant", stopReason: "error", errorMessage: expect.stringContaining(diagnostic),
+            role: "assistant",
+            stopReason: "error",
+            errorMessage: expect.stringContaining(diagnostic),
           });
         }
       });
