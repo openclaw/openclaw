@@ -5,6 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readSessionNodesGeneration } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runWithAgentCreationClaim } from "./agent-creation-claim.js";
@@ -18,6 +19,7 @@ import {
   releaseOpenClawAgentDatabaseLease,
 } from "./openclaw-agent-db-lease.js";
 import { closeCachedOpenClawAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
+import { refreshOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import {
   getOpenClawAgentDatabaseValidation,
   getOpenClawAgentDatabaseValidationForTransfer,
@@ -78,6 +80,27 @@ function expectAdmittedSchemaObjects(database: DatabaseSync) {
   });
   return facts;
 }
+
+it("retains the schema receipt after first-use TEMP generation tracking", () => {
+  const options = {
+    agentId: "main",
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-temp-receipt-") },
+  };
+  const database = openOpenClawAgentDatabase(options);
+  const schema = getOpenClawAgentDatabaseValidation(database)?.schema;
+  expect(schema).toBeDefined();
+  expect(readSessionNodesGeneration(database.db)).toBe(0);
+  const observed = observeCallerSchemaInspections(database.path);
+  try {
+    refreshOpenClawAgentDatabaseSchema(database, () => {});
+    expect(readSessionNodesGeneration(database.db)).toBe(0);
+    openOpenClawAgentDatabase(options);
+    expect(observed.inspections).toEqual([]);
+    expect(Atomics.load(new Int32Array(schema!.valid), 0)).toBe(1);
+  } finally {
+    observed.restore();
+  }
+});
 
 it("keeps a worker recreation private until its host creation claim joins native close", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-admit-creation-") };
