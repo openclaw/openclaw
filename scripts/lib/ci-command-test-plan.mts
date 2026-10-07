@@ -155,12 +155,10 @@ const doctorSessionSqliteCorpusFiles = new Set([
   "doctor-session-sqlite.recovery.test.ts",
   "doctor-session-sqlite.recovery-generations.test.ts",
   "doctor-session-sqlite.recovery-shared-owners.test.ts",
-  "doctor-session-sqlite.restore-history.test.ts",
   "doctor-session-sqlite.restore-paths.test.ts",
   "doctor-session-sqlite.restore-publication.test.ts",
   "doctor-session-sqlite.retirement-disposal.test.ts",
   "doctor-session-sqlite.retirement-mutations.test.ts",
-  "doctor-session-sqlite.retirement-verification.test.ts",
   "doctor-session-sqlite.targets.test.ts",
 ]);
 

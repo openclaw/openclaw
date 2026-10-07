@@ -7,6 +7,7 @@ import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restor
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
   importLegacyStore,
+  type TestStore,
   readMigrationManifest,
   requireMigrationManifestPath,
   trustedMigrationTarget,
@@ -48,10 +49,24 @@ async function createRestoreFixture(tempRoot?: string) {
   };
 }
 
+function restoreAll(store: TestStore) {
+  return runDoctorSessionSqlite({ allAgents: true, cfg: {}, env: store.env, mode: "restore" });
+}
+
+async function importWithIndexArchive(store: TestStore) {
+  const imported = await importLegacyStore(store);
+  const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+  const manifest = readMigrationManifest(manifestPath);
+  const indexArchive = expectDefined(
+    manifest.targets[0]?.plannedMoves.find((move) => move.kind === "legacy-store"),
+    "legacy archive move",
+  ).archivePath;
+  return { manifestPath, manifest, indexArchive };
+}
+
 describe("runDoctorSessionSqlite", () => {
   it.skipIf(process.platform === "win32").each([
     { version: 1, location: "ancestor" },
-    { version: 3, location: "ancestor" },
     { version: 3, location: "source" },
     { version: 3, location: "archive" },
     { version: 3, location: "entry" },
@@ -216,5 +231,114 @@ describe("runDoctorSessionSqlite", () => {
       sourcePath: transcriptPath,
     });
     expect(fs.readFileSync(store.transcriptPath, "utf-8")).toBe('{"type":"event","id":"new"}\n');
+  });
+
+  it.each(["empty", "distinct", "missing", "invalid"] as const)(
+    "selects an original index safely across later migrations (%s)",
+    async (state) => {
+      const store = createLegacyStore();
+      const original = fs.readFileSync(store.storePath, "utf8");
+      const { indexArchive: firstArchive } = await importWithIndexArchive(store);
+      if (state === "missing") {
+        fs.rmSync(firstArchive);
+      } else if (state === "invalid") {
+        fs.writeFileSync(firstArchive, "{broken", { mode: 0o600 });
+      }
+      const laterIndex =
+        state === "distinct"
+          ? `${JSON.stringify({ "agent:main:later": { channel: "cli", chatType: "direct", sessionFile: "session-2.jsonl", sessionId: "session-2", sessionStartedAt: 3000, updatedAt: 4000 } })}\n`
+          : "{}\n";
+      const laterArchives: string[] = [];
+      // Archive names have collision handling; selection must not depend on elapsed milliseconds.
+      for (let run = 0; run < (state === "empty" ? 2 : 1); run++) {
+        fs.writeFileSync(store.storePath, laterIndex, { mode: 0o600 });
+        laterArchives.push((await importWithIndexArchive(store)).indexArchive);
+      }
+      const restore = await restoreAll(store);
+      const restored = expectDefined(
+        restore.targets.find((target) => target.restore)?.restore,
+        "aggregate restore report",
+      );
+      for (const archive of laterArchives) {
+        expect(fs.readFileSync(archive, "utf8")).toBe(laterIndex);
+      }
+      if (state === "empty") {
+        expect(fs.readFileSync(store.storePath, "utf8")).toBe(original);
+        expect(restored.conflicts).toEqual([]);
+        expect(restore.totals.issues).toBe(0);
+        return;
+      }
+      expect(fs.existsSync(store.storePath)).toBe(false);
+      const conflicts = restored.conflicts.filter((conflict) =>
+        [firstArchive, ...laterArchives].includes(conflict.archivePath),
+      );
+      expect(conflicts).toHaveLength(2);
+      if (state === "distinct") {
+        expect(new Set(conflicts.map((conflict) => conflict.reason))).toEqual(
+          new Set([
+            "multiple distinct nonempty session indexes require explicit archive selection",
+          ]),
+        );
+        expect(fs.readFileSync(firstArchive, "utf8")).toBe(original);
+        expect(restore.totals.issues).toBeGreaterThan(0);
+      } else {
+        if (state === "invalid") {
+          expect(fs.readFileSync(firstArchive, "utf8")).toBe("{broken");
+        }
+        expect(conflicts.map((conflict) => conflict.reason)).toEqual(
+          expect.arrayContaining([
+            state === "missing"
+              ? "archive is missing without a recorded prior restore; refusing another candidate"
+              : "session index archive is not valid JSON; refusing automatic selection",
+            "another archive for this source is unavailable without prior restore evidence; refusing automatic selection",
+          ]),
+        );
+      }
+    },
+  );
+
+  it("keeps restore clean when a later migration re-archived an already restored path", async () => {
+    const store = createLegacyStore();
+    const { manifestPath: firstManifestPath, indexArchive: firstArchive } =
+      await importWithIndexArchive(store);
+    const sourcePaths = readMigrationManifest(firstManifestPath).targets[0]!.plannedMoves.map(
+      (move) => move.sourcePath,
+    );
+    await restoreAll(store);
+    expect(readMigrationManifest(firstManifestPath).restore?.consumedArchives).toContain(
+      firstArchive,
+    );
+    // Shipped manifests recorded only restored source paths. Exercise the additive-field upgrade
+    // path instead of relying only on provenance written by this version.
+    const shippedManifest = readMigrationManifest(firstManifestPath);
+    if (shippedManifest.restore) {
+      delete shippedManifest.restore.consumedArchives;
+    }
+    fs.writeFileSync(firstManifestPath, `${JSON.stringify(shippedManifest, null, 2)}\n`, {
+      mode: 0o600,
+    });
+    const { manifestPath: secondManifestPath, indexArchive: secondArchive } =
+      await importWithIndexArchive(store);
+
+    const restore = await restoreAll(store);
+
+    // The first run's archives were consumed by the first restore, so only the second run can
+    // reclaim these paths. The spent moves must not report as missing-archive failures.
+    expect(restore.targets[0]?.restore?.conflicts).toEqual([]);
+    expect(restore.totals.issues).toBe(0);
+    expect(restore.targets[0]?.restore?.restoredFiles).toContain(
+      canonicalTestPath(store.storePath),
+    );
+    expect(fs.readFileSync(store.storePath, "utf-8")).toContain("agent:main:main");
+    expect(readMigrationManifest(firstManifestPath).restore?.consumedArchives).toContain(
+      firstArchive,
+    );
+    expect(readMigrationManifest(secondManifestPath).restore?.consumedArchives).toContain(
+      secondArchive,
+    );
+    const repeated = await restoreAll(store);
+    expect(repeated.totals.issues).toBe(0);
+    expect(repeated.targets[0]?.restore?.restoredFiles).toEqual([]);
+    expect(repeated.targets[0]?.restore?.skippedFiles).toEqual(expect.arrayContaining(sourcePaths));
   });
 });

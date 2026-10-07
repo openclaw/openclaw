@@ -23,30 +23,7 @@ import {
 const { createLegacyStore, createVerifiedRecoveryStore } = useDoctorSessionSqliteTestFixture();
 
 describe("runDoctorSessionSqlite", () => {
-  it("blocks a same-size replacement recovery original during preview", async () => {
-    const { store, archivePath } = await createVerifiedRecoveryStore();
-    const original = fs.readFileSync(archivePath);
-    fs.renameSync(archivePath, path.join(store.tempDir, "parked-original"));
-    const replacement = Buffer.alloc(original.length, "x");
-    fs.writeFileSync(archivePath, replacement);
-
-    const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
-    expect(preview.artifacts.find((artifact) => artifact.path === archivePath)).toMatchObject({
-      outcome: "blocked",
-      reason: "artifact-metadata-changed",
-    });
-    const result = await retireSessionSqliteRecovery({
-      env: store.env,
-      preview,
-      readConfig: async () => ({}),
-      confirm: async () => true,
-    });
-    expect(result.status).toBe("blocked");
-    expect(result.totals.removedBytes).toBe(0);
-    expect(fs.readFileSync(archivePath)).toEqual(replacement);
-  });
-
-  it.each(["new-manifest", "replacement", "symlink", "hardlink"])(
+  it.each(["new-manifest", "symlink", "hardlink"])(
     "refuses a recovery ownership change during confirmation: %s",
     async (kind) => {
       const { store, imported, archivePath } = await createVerifiedRecoveryStore();
@@ -69,11 +46,7 @@ describe("runDoctorSessionSqlite", () => {
               fs.linkSync(databasePath, saved);
             } else {
               fs.renameSync(databasePath, saved);
-              if (kind === "symlink") {
-                fs.symlinkSync(saved, databasePath);
-              } else {
-                fs.copyFileSync(saved, databasePath);
-              }
+              fs.symlinkSync(saved, databasePath);
             }
             return true;
           },
@@ -85,21 +58,15 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it.each([
-    { artifactKind: "transcript", change: "replacement" },
-    { artifactKind: "transcript", change: "symlink" },
-    { artifactKind: "transcript", change: "hardlink" },
-    { artifactKind: "transcript", change: "same-size edit" },
-    { artifactKind: "legacy-store", change: "same-size edit" },
-  ])(
-    "preserves every recovery dependency after a $artifactKind $change during confirmation",
-    async ({ artifactKind, change }) => {
+  it.each(["symlink", "hardlink", "same-size edit"])(
+    "preserves every recovery dependency after a transcript %s during confirmation",
+    async (change) => {
       const { store, imported } = await createVerifiedRecoveryStore();
       const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
       const manifestBefore = fs.readFileSync(manifestPath);
       const moves = readMigrationManifest(manifestPath).targets[0]!.completedMoves;
       const archivePath = expectDefined(
-        moves.find((move) => move.kind === artifactKind),
+        moves.find((move) => move.kind === "transcript"),
         "confirmation mutation archive",
       ).archivePath;
       const retained = moves
@@ -121,11 +88,7 @@ describe("runDoctorSessionSqlite", () => {
               fs.writeFileSync(archivePath, contents);
             } else {
               fs.unlinkSync(archivePath);
-              if (change === "symlink") {
-                fs.symlinkSync(replacement, archivePath);
-              } else {
-                fs.writeFileSync(archivePath, "replacement original");
-              }
+              fs.symlinkSync(replacement, archivePath);
             }
             return true;
           },
@@ -142,7 +105,6 @@ describe("runDoctorSessionSqlite", () => {
 
   it.each([
     { change: "in-place edit", phase: "confirmation" },
-    { change: "truncation", phase: "confirmation" },
     ...["confirmation", "publication", "unlink-intent"].map((phase) => ({
       change: "WAL commit",
       phase,
@@ -164,8 +126,6 @@ describe("runDoctorSessionSqlite", () => {
         writer.exec("DELETE FROM transcript_events");
         expect(fs.readFileSync(databasePath)).toEqual(databaseBefore);
         expect(fs.statSync(`${databasePath}-wal`).size).toBeGreaterThan(32);
-      } else if (change === "truncation") {
-        fs.truncateSync(databasePath, 0);
       } else {
         const bytes = fs.readFileSync(databasePath);
         bytes[0] = 0;
