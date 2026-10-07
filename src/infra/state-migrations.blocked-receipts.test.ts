@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { assertDoctorPreflightMigrationsComplete } from "../commands/doctor-config-preflight-migrations.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
@@ -11,6 +12,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import * as stateDatabase from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { expectPlanReceiptDescriptorsToMatch } from "./state-migrations.caller-mode.test-helpers.js";
@@ -298,5 +300,56 @@ describe("blocked migration receipt provenance", () => {
     expect(
       result.stepReceipts.findIndex((receipt) => receipt.id === "exec-approvals"),
     ).toBeGreaterThan(blockerIndex);
+  });
+
+  it("names the originating refusal for workspace setup Doctor did not import", async () => {
+    const { root, stateDir, configPath, params } = fixture();
+    const workspaceDir = path.join(root, "workspace");
+    const setupPath = path.join(workspaceDir, "openclaw-workspace-state.json");
+    const setupRaw = JSON.stringify({ version: 1, setupCompletedAt: "2026-07-01T00:00:00.000Z" });
+    fs.mkdirSync(workspaceDir);
+    fs.writeFileSync(setupPath, setupRaw);
+    const cfg = {
+      agents: { ownership: "explicit" as const, entries: { main: { workspace: workspaceDir } } },
+    };
+    const result = await autoMigrateLegacyState({
+      ...params,
+      cfg,
+      doctorOnlyStateMigrations: true,
+      legacySessionSurfaces: { surfaces: [], failures: ["Session migration owner is unavailable"] },
+    });
+    expect(result.stepReceipts.find((receipt) => receipt.id === "workspace-state")).toMatchObject({
+      outcome: "refused",
+      originatingRefusal: { stepId: "plugin-migration-preparation" },
+    });
+
+    const warnings: string[] = [];
+    await withEnvAsync(
+      {
+        HOME: root,
+        USERPROFILE: root,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+      },
+      () =>
+        expect(
+          assertDoctorPreflightMigrationsComplete({
+            cfg,
+            stepReceipts: result.stepReceipts,
+            report: (messages) => warnings.push(...messages.warnings),
+          }),
+        ).rejects.toBeInstanceOf(DoctorStateMigrationRefusalError),
+    );
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(
+      `Legacy workspace setup state requires migration at ${setupPath}`,
+    );
+    expect(warnings[0]).toContain(
+      'not imported because migration step "plugin-migration-preparation" refused first',
+    );
+    expect(warnings[0]).toContain("openclaw doctor --fix");
+    expect(warnings[0]).not.toMatch(/cannot repair|retained setup file|verified backup/u);
+    expect(fs.readFileSync(setupPath, "utf8")).toBe(setupRaw);
   });
 });

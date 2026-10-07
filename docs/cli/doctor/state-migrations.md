@@ -169,7 +169,10 @@ path and one line per differing milestone (`legacy=... canonical=...`), which
 Doctor also prints. With no canonical setup record, Doctor imports the legacy
 milestones normally. A successful repair removes the runtime blocker; the next
 run has no workspace setup migration to repeat. Invalid files and workspace
-identity/version conflicts remain blocked for inspection.
+identity/version conflicts remain blocked for inspection. When an earlier
+migration step refuses, the import does not run: Doctor leaves the setup files in
+place and its workspace warning names that step. Resolve that refusal, then rerun
+`openclaw doctor --fix` to import them.
 
 Update rehearsals write only inside their copied state directory. Workspace
 files are not copied by the rehearsal, so absolute paths retained in proposal,
