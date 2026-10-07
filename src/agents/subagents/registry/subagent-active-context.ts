@@ -41,11 +41,24 @@ function hasOutstandingCompletion(entry: SubagentRunRecord): boolean {
   if (entry.requesterSettleWake) {
     return true;
   }
-  return (
-    entry.completion?.required === true &&
-    entry.delivery?.disposition !== "intentional_non_delivery" &&
-    ["pending", "in_progress", "failed", "suspended"].includes(entry.delivery?.status ?? "pending")
-  );
+  if (entry.completion?.required !== true) {
+    return false;
+  }
+  if (entry.delivery?.disposition === "intentional_non_delivery") {
+    return false;
+  }
+  const status = entry.delivery?.status ?? "pending";
+  // A give-up terminal `failed` row is drained, not outstanding. The announce
+  // finaliser writes `failed` once the retry budget is exhausted and then completes
+  // cleanup bookkeeping; from that point `resumeSubagentRun` refuses to advance the
+  // row, so the result can never be delivered and must stop re-rendering into
+  // "## Child results awaiting delivery" on every later requester turn, forever and
+  // across gateway restarts (#154834). A `failed` row whose cleanup has not completed
+  // is still resumable and stays outstanding.
+  if (status === "failed") {
+    return !Number.isFinite(entry.cleanupCompletedAt);
+  }
+  return status === "pending" || status === "in_progress" || status === "suspended";
 }
 
 function formatPendingResult(entry: SubagentRunRecord): string {

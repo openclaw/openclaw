@@ -386,3 +386,60 @@ describe("buildActiveSubagentRuntimeContext", () => {
     expect(laterParentTurn).toContain('taskName_json="summarize_inbox"');
   });
 });
+
+describe("give-up terminal failed delivery (#154834)", () => {
+  it("drops a drained give-up terminal failed delivery from awaiting-delivery context", async () => {
+    const endedAt = Date.now() - 20_000;
+    seedSubagentRunForReadTest({
+      runId: "run-giveup-drained",
+      childSessionKey: "agent:main:subagent:giveup-drained",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "deliver the abandoned report",
+      expectsCompletionMessage: true,
+      execution: { status: "terminal", endedAt },
+      completion: { required: true, resultText: "dead give-up result" },
+      // Give-up terminal marker: the announce finaliser wrote delivery failed and
+      // then completed cleanup bookkeeping, so resumeSubagentRun hard-stops this row.
+      cleanupCompletedAt: endedAt + 1_000,
+      delivery: { status: "failed", lastError: "delivery path none did not complete" },
+    } satisfies SubagentRunRecordOverrides);
+
+    const prompt = await buildActiveSubagentRuntimeContext({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+    });
+
+    // The unbounded leak was the per-turn re-render of the drained result into the
+    // awaiting-delivery block; that block (and the dead result text) must be gone.
+    expect(prompt ?? "").not.toContain("## Child results awaiting delivery");
+    expect(prompt ?? "").not.toContain("dead give-up result");
+  });
+
+  it("keeps a still-retrying failed delivery (no completed cleanup) awaiting delivery", async () => {
+    const endedAt = Date.now() - 20_000;
+    seedSubagentRunForReadTest({
+      runId: "run-still-retrying",
+      childSessionKey: "agent:main:subagent:still-retrying",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "deliver the retryable report",
+      expectsCompletionMessage: true,
+      execution: { status: "terminal", endedAt },
+      completion: { required: true, resultText: "still-retrying result" },
+      // A transient failure between retries has not finished cleanup bookkeeping,
+      // so the requester must still see it as awaiting delivery.
+      delivery: { status: "failed", lastError: "transient send error" },
+    } satisfies SubagentRunRecordOverrides);
+
+    const prompt = await buildActiveSubagentRuntimeContext({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+    });
+
+    expect(prompt ?? "").toContain("## Child results awaiting delivery");
+    expect(prompt ?? "").toContain("still-retrying result");
+  });
+});
