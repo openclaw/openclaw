@@ -32,11 +32,12 @@ type PortProcess = Awaited<ReturnType<typeof forceFreePortAndWait>>["killed"][nu
 describe("gateway --force helpers", () => {
   let originalKill: typeof process.kill;
   let originalPlatform: NodeJS.Platform;
+  const defaultKillMock = vi.fn<typeof process.kill>();
 
   beforeEach(() => {
     vi.clearAllMocks();
     originalKill = process.kill.bind(process);
-    process.kill = vi.fn().mockReturnValue(true);
+    process.kill = defaultKillMock.mockReturnValue(true);
     originalPlatform = process.platform;
     probePortUsageMock.mockReset();
     probePortUsageMock.mockResolvedValue("busy");
@@ -134,7 +135,7 @@ describe("gateway --force helpers", () => {
       ["-k", "-TERM", "18789/tcp"],
       expect.anything(),
     );
-    expect(process.kill).not.toHaveBeenCalled();
+    expect(defaultKillMock).not.toHaveBeenCalled();
   });
 
   it("kills each listener and returns metadata", async () => {
@@ -210,16 +211,17 @@ describe("gateway --force helpers", () => {
       }
 
       await expect(
-        forceFreePortAndWait(18789, {
-          ...(source === "beforeSignal" ? { beforeSignal: rejectSignal } : {}),
-        }),
+        forceFreePortAndWait(
+          18789,
+          source === "beforeSignal" ? { beforeSignal: rejectSignal } : {},
+        ),
       ).rejects.toThrow(source === "beforeSignal" ? denied : /failed to kill pid 42/);
 
       expect(rejectSignal).toHaveBeenCalledOnce();
       expect(probePortUsageMock).not.toHaveBeenCalled();
       expect(execFileSyncMock).toHaveBeenCalledOnce();
       if (source === "beforeSignal") {
-        expect(process.kill).not.toHaveBeenCalled();
+        expect(defaultKillMock).not.toHaveBeenCalled();
       }
     },
   );
@@ -471,11 +473,12 @@ describe("gateway --force helpers", () => {
 describe("gateway --force helpers (Windows netstat path)", () => {
   let originalKill: typeof process.kill;
   let originalPlatform: NodeJS.Platform;
+  const defaultKillMock = vi.fn<typeof process.kill>();
 
   beforeEach(() => {
     vi.clearAllMocks();
     originalKill = process.kill.bind(process);
-    process.kill = vi.fn().mockReturnValue(true);
+    process.kill = defaultKillMock.mockReturnValue(true);
     originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
   });
@@ -496,7 +499,7 @@ describe("gateway --force helpers (Windows netstat path)", () => {
   it("deduplicates PIDs that appear multiple times", async () => {
     execFileSyncMock.mockReturnValueOnce(makeNetstatOutput(18789, 42, 42)).mockReturnValue("");
     expect((await forceFreePortAndWait(18789)).killed).toEqual<PortProcess[]>([{ pid: 42 }]);
-    expect(process.kill).toHaveBeenCalledExactlyOnceWith(42, "SIGTERM");
+    expect(defaultKillMock).toHaveBeenCalledExactlyOnceWith(42, "SIGTERM");
   });
 
   it("throws a descriptive error when netstat fails", async () => {
