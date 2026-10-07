@@ -1,6 +1,7 @@
 /** Serializes run-owned transcript callbacks and bounds teardown settlement. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject } from "../../../infra/errors.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { settlesWithin } from "../../../shared/settle-within.js";
 import { log } from "../logger.js";
 
@@ -114,10 +115,8 @@ export function createEmbeddedAttemptTranscriptLifecycle(
     }
 
     const previous = lifecycle;
-    let release!: () => void;
-    lifecycle = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise, resolve: release } = createDeferredCore();
+    lifecycle = promise;
     await previous;
     const owner = createLifecycleOwner();
     try {

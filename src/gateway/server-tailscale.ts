@@ -1,5 +1,3 @@
-// Gateway Tailscale exposure helper.
-// Applies Serve/Funnel routes and returns optional shutdown cleanup.
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   claimTailscaleRoute,

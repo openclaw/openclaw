@@ -12,11 +12,11 @@ import type {
   SessionCreatedActor,
   SessionOwner,
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
+import type { SessionRowAttention } from "../lib/session-attention.ts";
 import type { SessionChannelPresentation } from "../lib/session-channel.ts";
 import type { SessionWorkContext } from "../lib/session-display.ts";
 import {
@@ -41,11 +41,9 @@ type SidebarAttentionRequest = {
 };
 
 export type SidebarSessionAttention =
-  | { kind: "none" }
+  | SessionRowAttention
   | { kind: "question"; requests: readonly SidebarAttentionRequest[] }
-  | { kind: "approval"; requests: readonly SidebarAttentionRequest[] }
-  | { kind: "agent"; note: string; icon: SessionAgentAttentionIconId }
-  | { kind: "error"; reason: string; childLabel?: string };
+  | { kind: "approval"; requests: readonly SidebarAttentionRequest[] };
 
 export const SIDEBAR_SESSION_NO_ATTENTION: SidebarSessionAttention = { kind: "none" };
 

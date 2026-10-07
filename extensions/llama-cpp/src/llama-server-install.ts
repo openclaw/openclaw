@@ -50,6 +50,11 @@ function compareVersion(left: string, right: string): number {
   return 0;
 }
 
+/** The verified build cannot run on this host; rerunning setup cannot change that. */
+export class UnsupportedLlamaServerHostError extends Error {
+  override name = "UnsupportedLlamaServerHostError";
+}
+
 function assertSupportedLinuxRuntime(asset: LlamaServerAsset): void {
   if (asset.platform !== "linux") {
     return;
@@ -57,16 +62,43 @@ function assertSupportedLinuxRuntime(asset: LlamaServerAsset): void {
   const header = asOptionalRecord(asOptionalRecord(process.report?.getReport())?.header);
   const glibc = typeof header?.glibcVersionRuntime === "string" ? header.glibcVersionRuntime : "";
   if (!glibc) {
-    throw new Error(
+    throw new UnsupportedLlamaServerHostError(
       "The verified Ubuntu llama-server build requires glibc and cannot run on musl/Alpine. Install llama-server manually for this host and configure its absolute path.",
     );
   }
   const minimum = asset.arch === "arm64" ? "2.38" : "2.34";
   if (compareVersion(glibc, minimum) < 0) {
-    throw new Error(
+    throw new UnsupportedLlamaServerHostError(
       `The verified llama-server build requires glibc ${minimum}+ on Linux ${asset.arch}; this host has ${glibc}. Install a compatible llama-server manually and configure its absolute path.`,
     );
   }
+}
+
+// The verified macOS archives link Accelerate's ILP64 LAPACK interface, added in macOS 13.3.
+const MACOS_MINIMUM = "13.3";
+
+async function assertSupportedMacosRuntime(
+  asset: LlamaServerAsset,
+  signal?: AbortSignal,
+  cause?: unknown,
+): Promise<void> {
+  if (asset.platform !== "darwin") {
+    return;
+  }
+  const version = await runServerCommand("/usr/bin/sw_vers", ["-productVersion"], signal).catch(
+    () => {
+      signal?.throwIfAborted();
+      // An unreadable version leaves the post-extraction launch check as the guard.
+      return "";
+    },
+  );
+  if (!/^\d+\.\d+(?:\.\d+)?$/u.test(version) || compareVersion(version, MACOS_MINIMUM) >= 0) {
+    return;
+  }
+  throw new UnsupportedLlamaServerHostError(
+    `The verified llama-server ${LLAMA_SERVER_RELEASE} build requires macOS ${MACOS_MINIMUM}+; this Mac runs macOS ${version}. Build llama-server for this Mac and set models.providers.llama-cpp.localService.command to its absolute path, or use a remote model or embedding provider.`,
+    cause === undefined ? undefined : { cause },
+  );
 }
 
 function assetUrl(asset: Pick<LlamaServerArchive, "name" | "url">): string {
@@ -392,9 +424,16 @@ async function installLlamaServer(
       .then((stat) => stat.isFile())
       .catch(() => false)
   ) {
-    await validateInstalledServer(command, asset, options.signal);
+    // A build that validates is reused on any macOS, including one built for an older release.
+    try {
+      await validateInstalledServer(command, asset, options.signal);
+    } catch (error) {
+      await assertSupportedMacosRuntime(asset, options.signal, error);
+      throw error;
+    }
     return command;
   }
+  await assertSupportedMacosRuntime(asset, options.signal);
   const dataDir = resolveLlamaCppDataDir();
   const archivePath = path.join(dataDir, `.download-${randomUUID()}-${asset.name}`);
   const extractDir = path.join(dataDir, `.extract-${randomUUID()}`);

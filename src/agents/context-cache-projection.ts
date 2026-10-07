@@ -1,3 +1,4 @@
+import { setImmediate as yieldToGateway } from "node:timers/promises";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type ContextWindowCacheState, providerContextTokenCacheKey } from "./context-cache.js";
@@ -140,12 +141,6 @@ function resolveDiscoveredAnthropicFixedContextWindow(
   return inferredProvider === "claude-cli"
     ? resolveAnthropicFixedContextWindow(inferredProvider, inferredModel)
     : undefined;
-}
-
-function yieldToGateway(): Promise<void> {
-  return new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
 }
 
 async function projectModels(params: {

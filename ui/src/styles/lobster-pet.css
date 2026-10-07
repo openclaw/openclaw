@@ -201,6 +201,34 @@ openclaw-lobster-pet[data-dex-complete]::after {
   --lob-glint: #cfe3ff;
 }
 
+.lobster-pet--palette-clawnstantine {
+  --lob-glint: #ffe09a;
+}
+
+.lobster-pet--palette-clawiestardust {
+  --lob-glint: #8be9fd;
+}
+
+.lobster-pet--palette-taylorpinch {
+  --lob-glint: #d5c4f2;
+}
+
+.lobster-pet--palette-clawtoodeetoo {
+  --lob-glint: #8cd8ff;
+}
+
+.lobster-pet--palette-leonardodepinchy {
+  --lob-glint: #e5bd68;
+}
+
+.lobster-pet--palette-shellvis {
+  --lob-glint: #f4ce7e;
+}
+
+.lobster-pet--palette-alexandergrahamshell {
+  --lob-glint: #dec58e;
+}
+
 .lobster-pet--palette-clawtron {
   --lob-glint: #ffb020;
 }
@@ -845,10 +873,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
     opacity: 0.75;
     transform: scale(1);
   }
-  70% {
-    opacity: 0;
-    transform: scale(1.25);
-  }
+  70%,
   100% {
     opacity: 0;
     transform: scale(1.25);
