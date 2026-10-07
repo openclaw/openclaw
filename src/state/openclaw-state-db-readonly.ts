@@ -21,6 +21,11 @@ import {
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
+  artifactPreservingReads,
+  isArtifactPreservingStateRead,
+  withArtifactPreservingStateReads,
+} from "./artifact-preserving-state-reads.js";
+import {
   captureOpenClawStateDatabaseReadAdmission,
   openClawStateDatabaseCache,
 } from "./openclaw-state-db-cache.js";
@@ -66,10 +71,10 @@ import type {
 } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 
-const artifactPreservingReads = resolveGlobalSingleton(
-  Symbol.for("openclaw.artifactPreservingStateReads"),
-  () => new AsyncLocalStorage<boolean>(),
-);
+export {
+  isArtifactPreservingStateRead,
+  withArtifactPreservingStateReads,
+} from "./artifact-preserving-state-reads.js";
 
 const disposableStateReads = resolveGlobalSingleton(
   Symbol.for("openclaw.disposableStateReads"),
@@ -220,15 +225,6 @@ function requiresArtifactPreservingSnapshot(pathname: string): boolean {
     isArtifactPreservingStateRead() &&
     !disposableStateReads.getStore()?.some((scope) => scope.active && scope.path === pathname)
   );
-}
-
-/** Admission scopes every nested reader without changing normal live-read semantics. */
-export function withArtifactPreservingStateReads<T>(operation: () => T): T {
-  return artifactPreservingReads.run(true, operation);
-}
-
-export function isArtifactPreservingStateRead(): boolean {
-  return artifactPreservingReads.getStore() === true;
 }
 
 type ScopedRead = ReturnType<typeof openOpenClawStateReadOnlyLocation>;

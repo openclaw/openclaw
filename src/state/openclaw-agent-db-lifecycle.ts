@@ -10,11 +10,14 @@ import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import {
   deferSqlitePostCommitPublication,
   hasSqlitePostCommitScope,
 } from "../infra/sqlite-post-commit.js";
+import { SqliteSnapshotCleanupError } from "../infra/sqlite-readonly-location-cleanup.js";
 import { readSqliteDataVersion, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
@@ -27,6 +30,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { releaseAgentCreationClaimHandle } from "./agent-creation-claim.js";
 import { releaseAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
+import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -52,8 +56,8 @@ import {
 } from "./openclaw-agent-db-resources.js";
 import {
   assertSupportedAgentSchemaVersion,
-  readExistingAgentSchemaMeta,
-} from "./openclaw-agent-db-schema-helpers.js";
+  inspectOpenClawAgentDatabaseOwnerInDatabase,
+} from "./openclaw-agent-db-schema-read.js";
 import {
   clearOpenClawAgentDatabaseValidationCache,
   getOpenClawAgentDatabaseValidation,
@@ -696,11 +700,15 @@ export function inspectOpenClawAgentDatabaseOwner(
   pathname: string,
 ): OpenClawAgentDatabaseOwnerInspection {
   let db: DatabaseSync | undefined;
+  let snapshot: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
+  let outcome: { value: OpenClawAgentDatabaseOwnerInspection } | { error: unknown };
   try {
     // Failed opens retain a disposal-only handle whose agentId is the request,
     // not a verified owner. Only admitted handles can answer from cache.
     const resolvedPath = path.resolve(pathname);
-    const opened = cache.databases.get(resolvedPath);
+    const opened = isArtifactPreservingStateRead("agent")
+      ? undefined
+      : cache.databases.get(resolvedPath);
     if (opened?.db.isOpen && !cache.failures.has(resolvedPath)) {
       runSqliteReadOperationSync(
         opened.db,
@@ -708,24 +716,30 @@ export function inspectOpenClawAgentDatabaseOwner(
         "fresh",
       );
       refreshAgentDatabaseIdleTimer(opened);
-      return { status: "owned", agentId: opened.agentId };
+      outcome = { value: { status: "owned", agentId: opened.agentId } };
+    } else {
+      snapshot = isArtifactPreservingStateRead("agent")
+        ? prepareSqliteReadOnlyLocationSync(pathname)
+        : undefined;
+      db = openNodeSqliteDatabase(snapshot?.location ?? pathname, { readOnly: true });
+      setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
+      outcome = { value: inspectOpenClawAgentDatabaseOwnerInDatabase(db, pathname) };
     }
-    db = openNodeSqliteDatabase(pathname, { readOnly: true });
-    setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
-    assertSupportedAgentSchemaVersion(db, pathname);
-    const existing = readExistingAgentSchemaMeta(db);
-    if (!existing) {
-      return { status: "unowned" };
-    }
-    if (existing.role !== "agent" || !existing.agentId) {
-      return { status: "unreadable" };
-    }
-    return { status: "owned", agentId: normalizeAgentId(existing.agentId) };
-  } catch {
-    return { status: "unreadable" };
-  } finally {
-    db?.close();
+  } catch (error) {
+    outcome = { error };
   }
+  try {
+    db?.close();
+    if (snapshot && !snapshot.cleanup()) {
+      throw new SqliteSnapshotCleanupError("Agent owner inspection snapshot cleanup failed.");
+    }
+  } catch (cleanupError) {
+    throwSqliteLifecycleErrors(
+      "error" in outcome ? [outcome.error, cleanupError] : [cleanupError],
+      "Agent owner inspection and cleanup failed.",
+    );
+  }
+  return "value" in outcome ? outcome.value : { status: "unreadable" };
 }
 
 /** Lists process-held incognito databases without opening new sentinel handles. */

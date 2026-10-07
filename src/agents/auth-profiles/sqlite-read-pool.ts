@@ -14,11 +14,18 @@ import {
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { setSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
+import { runWithSqliteCleanup } from "../../infra/sqlite-lifecycle-errors.js";
+import {
+  retainSnapshotTempDirectory,
+  SqliteSnapshotCleanupError,
+} from "../../infra/sqlite-readonly-location-cleanup.js";
+import { prepareSqliteReadOnlyLocationSync } from "../../infra/sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import {
   registerSqliteCacheExitClose,
   runInSqliteMaintenanceContext,
 } from "../../infra/sqlite-wal.js";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 
@@ -114,8 +121,51 @@ export function isMissingDatabasePath(pathname: string): boolean {
   }
 }
 
+/** Inspection owns its private reader through native close and snapshot disposal. */
+export function withAuthProfileReadDatabase<T>(
+  pathname: string,
+  read: (acquired: ReturnType<typeof acquireAuthProfileReadDatabase>, inspectedPath: string) => T,
+): T {
+  if (!isArtifactPreservingStateRead("agent")) {
+    return read(acquireAuthProfileReadDatabase(pathname), pathname);
+  }
+  const sourcePath = path.resolve(pathname);
+  if (isDeletedAgentDatabasePath(sourcePath) || isMissingDatabasePath(sourcePath)) {
+    return read({ status: "missing" }, sourcePath);
+  }
+  let snapshot: ReturnType<typeof prepareSqliteReadOnlyLocationSync>;
+  try {
+    snapshot = prepareSqliteReadOnlyLocationSync(sourcePath);
+  } catch (error) {
+    if (error instanceof SqliteSnapshotCleanupError) {
+      throw error;
+    }
+    return read(
+      { status: isMissingDatabasePath(sourcePath) ? "missing" : "unreadable" },
+      sourcePath,
+    );
+  }
+  const release = retainSnapshotTempDirectory(
+    snapshot.cleanupRoot ?? path.dirname(snapshot.location),
+  );
+  return runWithSqliteCleanup(
+    {
+      release() {
+        closeAuthProfileReadDatabase(snapshot.location);
+        release();
+        if (!snapshot.cleanup()) {
+          throw new SqliteSnapshotCleanupError("Auth profile inspection snapshot cleanup failed.");
+        }
+      },
+    },
+    "Auth profile inspection",
+    () => read(acquireAuthProfileReadDatabase(snapshot.location, true), snapshot.location),
+  );
+}
+
 export function acquireAuthProfileReadDatabase(
   pathname: string,
+  inspectionSnapshot = false,
 ): { status: "missing" } | { status: "unreadable" } | { status: "readable"; db: DatabaseSync } {
   const resolvedPath = path.resolve(pathname);
   if (isDeletedAgentDatabasePath(resolvedPath)) {
@@ -131,11 +181,12 @@ export function acquireAuthProfileReadDatabase(
   if (cached) {
     closeAuthProfileReadDatabase(resolvedPath);
   }
-  // A failed candidate close must be retried before another handle is opened.
-  // This bounds custody to the pool plus one unadmitted candidate.
-  for (const [pendingPath, entry] of authProfileReadDatabases) {
-    if (!entry.ready) {
-      closeAuthProfileReadDatabase(pendingPath);
+  // Live acquisition settles failed candidates; private inspection must not close source handles.
+  if (!inspectionSnapshot) {
+    for (const [pendingPath, entry] of authProfileReadDatabases) {
+      if (!entry.ready) {
+        closeAuthProfileReadDatabase(pendingPath);
+      }
     }
   }
   let db: DatabaseSync;
@@ -163,12 +214,14 @@ export function acquireAuthProfileReadDatabase(
     return { status: "unreadable" };
   }
   try {
-    while (authProfileReadDatabases.size > AUTH_PROFILE_READ_HANDLE_CAP) {
-      const oldestPath = authProfileReadDatabases.keys().next().value;
-      if (oldestPath === undefined) {
-        break;
+    if (!inspectionSnapshot) {
+      while (authProfileReadDatabases.size > AUTH_PROFILE_READ_HANDLE_CAP) {
+        const oldestPath = authProfileReadDatabases.keys().next().value;
+        if (oldestPath === undefined) {
+          break;
+        }
+        closeAuthProfileReadDatabase(oldestPath);
       }
-      closeAuthProfileReadDatabase(oldestPath);
     }
   } catch (error) {
     try {

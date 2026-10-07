@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
@@ -6,6 +7,11 @@ import { isDeletedAgentDatabasePath } from "../infra/agent-database-readers.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
+import {
+  retainSnapshotTempDirectory,
+  SqliteSnapshotCleanupError,
+} from "../infra/sqlite-readonly-location-cleanup.js";
 import {
   admitSqliteSchema,
   getAdmittedSqliteSchemaFacts,
@@ -13,7 +19,9 @@ import {
   runSqliteReadOperationSync,
 } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
+import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
@@ -171,13 +179,38 @@ export function openOpenClawAgentDatabaseReadOnly(
   // Lock policy belongs to the open: node:sqlite has no busy handler until one
   // is set, so a later PRAGMA leaves every earlier statement unprotected.
   let db: DatabaseSync;
+  let snapshot: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
+  let releaseSnapshot: (() => void) | undefined;
+  const cleanupSnapshot = () => {
+    releaseSnapshot?.();
+    if (snapshot && !snapshot.cleanup()) {
+      throw new SqliteSnapshotCleanupError(
+        `Agent database inspection snapshot cleanup failed: ${snapshot.cleanupRoot ?? snapshot.location}`,
+      );
+    }
+  };
   try {
-    db = openNodeSqliteDatabase(pathname, {
+    if (isArtifactPreservingStateRead("agent")) {
+      snapshot = prepareSqliteReadOnlyLocationSync(pathname);
+      releaseSnapshot = retainSnapshotTempDirectory(
+        snapshot.cleanupRoot ?? path.dirname(snapshot.location),
+      );
+    }
+    db = openNodeSqliteDatabase(snapshot?.location ?? pathname, {
       readOnly: true,
       timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
       ...(behavior.allowExtension ? { allowExtension: true } : {}),
     });
   } catch (error) {
+    try {
+      cleanupSnapshot();
+    } catch (cleanupError) {
+      throw createSqliteLifecycleAggregateError(
+        [error, cleanupError],
+        "Agent reader open and snapshot cleanup failed.",
+        error,
+      );
+    }
     recordOpenClawAgentDatabaseReadOpenFailure(error);
     throw error;
   }
@@ -189,12 +222,13 @@ export function openOpenClawAgentDatabaseReadOnly(
     if (db.isOpen) {
       db.close();
     }
+    cleanupSnapshot();
     closed = true;
   };
   try {
     enableNodeSqliteKyselyStatementCache(db);
     registerOpenClawAgentDatabaseIdentity(db);
-    const database = { agentId, db, path: pathname, close };
+    const database = { agentId, db, path: snapshot?.location ?? pathname, close };
     const hasSchema = runSqliteReadOperationSync(db, () => {
       admitSqliteSchema(db);
       return hasAdmittedAgentReadOnlySchema(database);
@@ -209,7 +243,18 @@ export function openOpenClawAgentDatabaseReadOnly(
     }
     return { found: true, database };
   } catch (error) {
-    close();
+    try {
+      close();
+    } catch (cleanupError) {
+      if (!snapshot) {
+        throw cleanupError;
+      }
+      throw createSqliteLifecycleAggregateError(
+        [error, cleanupError],
+        "Agent reader admission and cleanup failed.",
+        error,
+      );
+    }
     recordOpenClawAgentDatabaseReadOpenFailure(error);
     throw error;
   }

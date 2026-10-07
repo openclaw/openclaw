@@ -10,6 +10,7 @@ import {
 } from "../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
+import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
@@ -149,11 +150,24 @@ export async function loadPersistedPluginModelCatalogs(
         }
       },
     });
-    reading = runSqliteReadOnlyOperation(
-      options.path,
-      { type: "pluginCatalog.read", input: { agentId: options.agentId, pluginIds } },
-      { source: "canonical", expectedIdentity: identity.key, env, signal: controller.signal },
-    );
+    reading = isArtifactPreservingStateRead("agent")
+      ? (async () => {
+          // CLI inspection keeps original-path quarantine admission in the agent
+          // reader, which owns the private snapshot and its native lifetime.
+          const { readPluginModelCatalogEntries, PLUGIN_MODEL_CATALOG_CACHE_SCOPE } =
+            await import("./plugin-model-catalog.kernel.js");
+          assertCurrent();
+          return readPluginModelCatalogEntries(
+            options,
+            PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
+            pluginIds,
+          );
+        })()
+      : runSqliteReadOnlyOperation(
+          options.path,
+          { type: "pluginCatalog.read", input: { agentId: options.agentId, pluginIds } },
+          { source: "canonical", expectedIdentity: identity.key, env, signal: controller.signal },
+        );
     const catalogs = await reading;
     assertCurrent();
     return catalogs;

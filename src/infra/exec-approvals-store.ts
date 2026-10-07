@@ -16,6 +16,7 @@ import {
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import {
   executeExistingOpenClawStateRead,
+  isArtifactPreservingStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -88,6 +89,9 @@ function readExecApprovalsSnapshotWithOptions(
   options: OpenClawStateDatabaseOptions = {},
 ): ExecApprovalsSnapshot {
   try {
+    if (isArtifactPreservingStateRead()) {
+      return readExecApprovalsSnapshotFromDatabaseReadOnly(options);
+    }
     assertNoPendingLegacyExecApprovals();
     return snapshotFromExecApprovalsDatabase(openOpenClawStateDatabase(options).db);
   } catch (error) {

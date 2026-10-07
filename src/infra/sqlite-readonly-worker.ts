@@ -9,6 +9,7 @@ import { resolveStateDir } from "../config/state-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getSpawnBroker } from "../process/spawn-broker/context.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { hasErrnoCode } from "./errno.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import {
@@ -347,6 +348,23 @@ export function runSqliteReadOnlyWorker(
   pathname: string,
   options: SqliteReadOnlyWorkerOptions,
 ): Promise<SqliteReadOnlyWorkerValue> {
+  if (
+    options.mode === "auth-profile-rows" &&
+    options.source === "canonical" &&
+    isArtifactPreservingStateRead("agent")
+  ) {
+    const captured = { ...options, env: { ...options.env } };
+    return runScopedSqliteInspection(captured.signal, async (signal) => {
+      // Keep copying and disposal inside admission, before the recursive read queue.
+      const { readArtifactPreservingAuthRows } =
+        await import("./sqlite-readonly-auth-inspection.js");
+      return readArtifactPreservingAuthRows(
+        pathname,
+        { ...captured, signal },
+        (location, readOptions) => runSqliteReadOnlyWorker(location, readOptions),
+      );
+    });
+  }
   if (options.mode === "reclaim") {
     // Shared reclamation belongs to the allocation owner, not its first caller's scope.
     return readOnlyWorkerScope.exit(() => runSqliteReadOnlyWorkerOnce(pathname, options));

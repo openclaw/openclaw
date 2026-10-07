@@ -110,8 +110,9 @@ export async function runDoctorLintCliInProcess(
     reported = execution;
   };
   try {
-    const execution = await withArtifactPreservingStateReads(() =>
-      prepareDoctorLintExecution(runtime, opts, reportBeforeDisposal ? report : undefined),
+    const execution = await withArtifactPreservingStateReads(
+      () => prepareDoctorLintExecution(runtime, opts, reportBeforeDisposal ? report : undefined),
+      { agentDatabases: true },
     );
     if (!reported) {
       report(execution);
@@ -134,8 +135,9 @@ export async function runDoctorLintCliInProcess(
 export async function collectDoctorFindings(
   runtime: RuntimeEnv,
 ): Promise<readonly HealthFinding[]> {
-  const execution = await withArtifactPreservingStateReads(() =>
-    prepareDoctorLintExecution(runtime, { severityMin: "info" }),
+  const execution = await withArtifactPreservingStateReads(
+    () => prepareDoctorLintExecution(runtime, { severityMin: "info" }),
+    { agentDatabases: true },
   );
   return execution.findings;
 }

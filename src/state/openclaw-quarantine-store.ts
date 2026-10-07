@@ -19,8 +19,15 @@ import {
   type SqliteFileGeneration,
 } from "../infra/sqlite-file-generation.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
+import {
+  retainSnapshotTempDirectory,
+  SqliteSnapshotCleanupError,
+} from "../infra/sqlite-readonly-location-cleanup.js";
+import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { VERSION } from "../version.js";
+import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import {
@@ -142,14 +149,39 @@ export function readOpenClawAgentIntegrityVerification(
     return undefined;
   }
   let database: DatabaseSync | undefined;
+  let inspection: ReturnType<typeof openQuarantineInspection> | undefined;
+  let outcome: { value: OpenClawAgentIntegrityVerification | undefined } | { error: unknown };
   try {
-    database = openNodeSqliteDatabase(storePath, { readOnly: true });
-    return read(database);
-  } catch {
-    return undefined;
-  } finally {
-    database?.close();
+    if (isArtifactPreservingStateRead()) {
+      inspection = openQuarantineInspection(storePath);
+    }
+    database = inspection?.database.db ?? openNodeSqliteDatabase(storePath, { readOnly: true });
+    outcome = { value: read(database) };
+  } catch (error) {
+    outcome = { error };
   }
+  try {
+    if (inspection) {
+      if (!inspection.close()) {
+        throw new SqliteSnapshotCleanupError("Quarantine integrity snapshot cleanup failed.");
+      }
+    } else {
+      database?.close();
+    }
+  } catch (cleanupError) {
+    throwSqliteLifecycleErrors(
+      "error" in outcome ? [outcome.error, cleanupError] : [cleanupError],
+      "Quarantine integrity inspection and cleanup failed.",
+    );
+  }
+  if (
+    "error" in outcome &&
+    (outcome.error instanceof OpenClawQuarantineReadCleanupError ||
+      outcome.error instanceof SqliteSnapshotCleanupError)
+  ) {
+    throw outcome.error;
+  }
+  return "value" in outcome ? outcome.value : undefined;
 }
 
 export function canReuseOpenClawAgentIntegrityVerification(
@@ -387,6 +419,37 @@ function withQuarantineWriter<T>(env: NodeJS.ProcessEnv, operation: (db: Databas
   }
 }
 
+function openQuarantineInspection(storePath: string) {
+  const snapshot = prepareSqliteReadOnlyLocationSync(storePath);
+  const release = retainSnapshotTempDirectory(
+    snapshot.cleanupRoot ?? path.dirname(snapshot.location),
+  );
+  let db: DatabaseSync;
+  try {
+    db = openNodeSqliteDatabase(snapshot.location, {
+      readOnly: true,
+      timeout: OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS,
+    });
+  } catch (error) {
+    release();
+    if (!snapshot.cleanup()) {
+      throw new OpenClawQuarantineReadCleanupError([
+        error,
+        new SqliteSnapshotCleanupError("Quarantine snapshot cleanup failed."),
+      ]);
+    }
+    throw error;
+  }
+  return {
+    database: { db },
+    close() {
+      db.close();
+      release();
+      return snapshot.cleanup();
+    },
+  };
+}
+
 /** Read one authoritative quarantine decision without creating the store. */
 function readOpenClawDatabaseQuarantine(
   pathname: string,
@@ -397,9 +460,12 @@ function readOpenClawDatabaseQuarantine(
   if (!existsSync(storePath)) {
     return undefined;
   }
-  const database = openNodeSqliteDatabase(storePath, {
-    timeout: OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS,
-  });
+  const inspection = isArtifactPreservingStateRead()
+    ? openQuarantineInspection(storePath)
+    : undefined;
+  const database =
+    inspection?.database.db ??
+    openNodeSqliteDatabase(storePath, { timeout: OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS });
   let outcome: { value: OpenClawDatabaseQuarantine | undefined } | { error: unknown };
   try {
     outcome = { value: readQuarantineDecision(database, pathname, storePath) };
@@ -407,7 +473,13 @@ function readOpenClawDatabaseQuarantine(
     outcome = { error };
   }
   try {
-    database.close();
+    if (inspection) {
+      if (!inspection.close()) {
+        throw new SqliteSnapshotCleanupError("Quarantine decision snapshot cleanup failed.");
+      }
+    } else {
+      database.close();
+    }
   } catch (closeError) {
     throw new OpenClawQuarantineReadCleanupError(
       "error" in outcome ? [outcome.error, closeError] : [closeError],

@@ -7,6 +7,7 @@ import {
   createRetainedOperation,
   type RetainedOperation,
 } from "@openclaw/worker-runtime/lifecycle";
+import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { prepareSqliteSnapshotFromLiveOwner } from "./sqlite-live-snapshot.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import {
@@ -50,16 +51,18 @@ export async function prepareSqliteReadOnlyLocation(
   } = {},
 ): Promise<PreparedSqliteReadOnlyLocation> {
   const signal = resolveSqliteInspectionSignal(options.signal);
+  const preserveSourceArtifacts =
+    options.preserveSourceArtifacts === true || isArtifactPreservingStateRead("agent");
   try {
     signal?.throwIfAborted();
-    if (!options.preserveSourceArtifacts && options.allowLiveOwner !== false) {
+    if (!preserveSourceArtifacts && options.allowLiveOwner !== false) {
       const owned = prepareSqliteSnapshotFromLiveOwner(pathname, signal);
       if (owned) {
         return await owned;
       }
     }
     // The worker path preserves cleanup failures ahead of cancellation.
-    return prepareWorkerSnapshot(pathname, options, signal);
+    return prepareWorkerSnapshot(pathname, { ...options, preserveSourceArtifacts }, signal);
   } catch (error) {
     signal?.throwIfAborted();
     throw error;
@@ -77,7 +80,8 @@ export function startSqliteReadOnlyLocationAsync(
   const signal = resolveSqliteInspectionSignal(options.signal);
   signal?.throwIfAborted();
   const pathname = path.resolve(inputPathname);
-  const preserveSourceArtifacts = options.preserveSourceArtifacts === true;
+  const preserveSourceArtifacts =
+    options.preserveSourceArtifacts === true || isArtifactPreservingStateRead("agent");
   const expectedSourceIdentity =
     options.expectedSourceIdentity === undefined
       ? undefined
