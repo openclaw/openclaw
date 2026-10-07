@@ -348,7 +348,10 @@ export async function handleTelegramAction(
       }
       const allowed =
         reactions ??
-        TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST.map((emoji) => ({ type: "emoji" as const, emoji }));
+        TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST.map((value) => ({
+          type: "emoji" as const,
+          emoji: value,
+        }));
       // Preserve portable alternatives when Telegram returns custom reactions first.
       const emojis = allowed
         .filter((reaction) => reaction.type === "emoji")
