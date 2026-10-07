@@ -1,4 +1,6 @@
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { expect } from "vitest";
 
 type Claude5ContractCase = {
   defaultLevel?: "medium" | "high";
@@ -117,3 +119,31 @@ export const claude5ContractCases: Claude5ContractCase[] = [
     restoresMissingCost: true,
   },
 ];
+
+const requireRecord = createRequireRecord("object", "expected-label");
+
+export function createModelRegistry(models: ProviderRuntimeModel[]) {
+  return {
+    find(providerId: string, modelId: string) {
+      return (
+        models.find(
+          (model) =>
+            model.provider === providerId && model.id.toLowerCase() === modelId.toLowerCase(),
+        ) ?? null
+      );
+    },
+  };
+}
+
+export function expectFields(value: unknown, fields: Record<string, unknown>) {
+  const record = requireRecord(value, "record");
+  for (const [key, expected] of Object.entries(fields)) {
+    expect(record[key]).toEqual(expected);
+  }
+}
+
+export function levelIds(profile: unknown): Array<unknown> {
+  const levels = requireRecord(profile, "thinking profile").levels;
+  expect(Array.isArray(levels), "thinking levels").toBe(true);
+  return (levels as Array<{ id?: unknown }>).map((level) => level.id);
+}
