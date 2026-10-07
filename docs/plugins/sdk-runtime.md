@@ -34,6 +34,16 @@ enabling behavior that depends on it; equal product versions and tool names do
 not establish support. These process-stable facts do not grant caller authority,
 and they remain unavailable during metadata-only registration.
 
+`sender-workspace-only-read-v1` advertises support for the additive, runtime-only
+`groups.resolveToolPolicy` restriction `workspaceOnlyRead: true`. This narrows
+ordinary reads to the sender workspace and suppresses skill/attachment resource
+exceptions and installed instruction readers; it grants no new access. The
+existing requester-policy owner records the restrictive fact with admitted
+hidden helpers and keeps it across nested helpers and session generations.
+A plugin that requires this containment must refuse optional guest ingress on
+older hosts, not substitute an empty skill selection. Normal tool policies and
+ordinary selected-skill reads are unchanged.
+
 `sender-restricted-hidden-helpers-v1` guarantees that sender-restricted requesters
 can start only hidden helpers of the same agent, retaining their restricted tool
 surface and session root. Channels may use this capability to enable helper

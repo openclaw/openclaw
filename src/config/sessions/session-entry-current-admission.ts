@@ -26,6 +26,7 @@ function decodeSessionEntryCurrentFacts(
       subagentControlScope: value.subagentControlScope,
       inheritedToolPolicyVersion: value.inheritedToolPolicyVersion,
       inheritedToolPolicySource: value.inheritedToolPolicySource,
+      inheritedWorkspaceOnlyRead: value.inheritedWorkspaceOnlyRead,
       inheritedToolAllow: value.inheritedToolAllow,
       inheritedToolDeny: value.inheritedToolDeny,
     };

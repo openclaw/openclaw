@@ -118,7 +118,7 @@ describe("profile-owned skill publication and selection", () => {
       prepareSkillCommandsForAgents,
     } = await import("../discovery/chat-commands.js");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const cfg = { agents: { defaults: { skills: [] } } };
+      const cfg = { plugins: { enabled: false }, skills: { allowBundled: ["fixture-no-bundled"] } };
       const discover = (
         overrides: Partial<Parameters<typeof listSkillCommandsForWorkspace>[0]> = {},
       ) =>
@@ -127,6 +127,7 @@ describe("profile-owned skill publication and selection", () => {
           cfg,
           agentId: "main",
           sessionEntry: { skillLibrarySelections: pins },
+          skillFilter: [],
           ...overrides,
         });
       const commands = discover({ skillFilter: [saved.entry.name] });
@@ -146,10 +147,8 @@ describe("profile-owned skill publication and selection", () => {
       expect(discover({ sessionEntry: undefined, skillFilter: [saved.entry.name] })).toEqual([]);
       const agentParams = {
         cfg: {
-          agents: {
-            defaults: { skills: [saved.entry.name] },
-            entries: { main: { workspace: stateDir } },
-          },
+          ...cfg,
+          agents: { entries: { main: { workspace: stateDir } } },
         },
         agentIds: ["main"],
         sessionEntry: { skillLibrarySelections: pins },

@@ -328,7 +328,7 @@ describe("plugin cron registry ownership e2e", () => {
           defaults: {
             workspace: path.join(fixtureDir, "workspace"),
             model: { primary: "cron-owner/default" },
-            skills: [],
+
             ...(route === "subagent"
               ? {
                   subagents: {
@@ -512,18 +512,15 @@ describe("plugin cron registry ownership e2e", () => {
             model: { primary: modelRef },
             modelPolicy: { allow: [modelRef] },
             models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
-            skills: [],
           },
           entries: {
             main: {
               workspace: mainWorkspace,
               model: { primary: modelRef },
-              skills: [],
             },
             worker: {
               workspace: workerWorkspace,
               model: { primary: modelRef },
-              skills: [],
             },
           },
         },

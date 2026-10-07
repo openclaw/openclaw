@@ -171,7 +171,6 @@ describe("role and team creation through persisted configuration", () => {
       const config = await readConfig();
       expect(config.agents?.entries?.editor?.identity).toEqual(template.identity);
       expect(config.agents?.entries?.editor?.subagents).toEqual({ allowAgents: [] });
-      expect(config.agents?.entries?.editor?.skills).toBeUndefined();
       await expect(fs.access(path.join(workspace, "BOOTSTRAP.md"))).rejects.toMatchObject({
         code: "ENOENT",
       });

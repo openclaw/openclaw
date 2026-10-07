@@ -26,6 +26,7 @@ type InheritedSessionToolPolicy = Pick<
   SessionEntry,
   | "inheritedToolPolicyVersion"
   | "inheritedToolPolicySource"
+  | "inheritedWorkspaceOnlyRead"
   | "inheritedToolAllow"
   | "inheritedToolDeny"
 >;
@@ -40,6 +41,9 @@ export function preserveSessionInheritedToolPolicy(
       : {}),
     ...(entry?.inheritedToolPolicySource
       ? { inheritedToolPolicySource: entry.inheritedToolPolicySource }
+      : {}),
+    ...(entry?.inheritedWorkspaceOnlyRead === true
+      ? { inheritedWorkspaceOnlyRead: true as const }
       : {}),
     ...(entry?.inheritedToolAllow ? { inheritedToolAllow: [...entry.inheritedToolAllow] } : {}),
     ...(entry?.inheritedToolDeny ? { inheritedToolDeny: [...entry.inheritedToolDeny] } : {}),

@@ -370,7 +370,7 @@ struct IOSGatewayChatTransportTests {
         #expect(IOSGatewayChatTransport.composerAgentID(for: canonical) == "ops")
     }
 
-    @Test func `composer skill projection keeps agent filtering session enableable`() {
+    @Test func `composer skill projection retains global eligibility gates`() {
         let skill = SkillStatus(
             name: "Weather",
             description: "Forecasts",
@@ -383,7 +383,6 @@ struct IOSGatewayChatTransportTests {
             homepage: nil,
             always: false,
             disabled: false,
-            blockedByAgentFilter: true,
             eligible: false,
             requirements: SkillRequirements(bins: [], env: [], config: []),
             missing: SkillMissing(bins: [], env: [], config: []),
@@ -393,7 +392,6 @@ struct IOSGatewayChatTransportTests {
         let projected = IOSGatewayChatTransport.composerSkill(skill)
 
         #expect(projected.baseEnabled)
-        #expect(projected.agentFiltered)
         #expect(!projected.blocked)
     }
 

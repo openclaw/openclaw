@@ -34,6 +34,7 @@ export function applyLegacyCompatibilityStep(params: {
   state: DoctorConfigMutationState;
   issueLines: string[];
   changeLines: string[];
+  warnings?: string[];
   partiallyValid?: boolean;
   blocksWrite?: boolean;
 } {
@@ -109,6 +110,7 @@ export function applyLegacyCompatibilityStep(params: {
     },
     issueLines: [...issueLines, ...(warnings ?? [])],
     changeLines: changes,
+    ...(warnings?.length ? { warnings } : {}),
     partiallyValid: partiallyValid === true ? true : undefined,
   };
 }

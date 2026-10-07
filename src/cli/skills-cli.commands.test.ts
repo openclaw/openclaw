@@ -41,7 +41,7 @@ const mocks = vi.hoisted(() => {
         always: false,
         disabled: false,
         blockedByAllowlist: false,
-        blockedByAgentFilter: false,
+
         eligible: true,
         platformIncompatible: false,
         modelVisible: true,
@@ -401,7 +401,7 @@ describe("skills cli commands", () => {
     expect(mocks.errors).toEqual([]);
   });
   it("does not bootstrap configured skills during update all", async () => {
-    mocks.config.mockReturnValueOnce({ agents: { defaults: { skills: ["apple-notes"] } } });
+    mocks.config.mockReturnValueOnce({ skills: { entries: { "apple-notes": { enabled: true } } } });
     await runCommand(["update", "--all"]);
     expect(mocks.tracked).toHaveBeenCalledWith("/tmp/workspace");
     expect(mocks.update).not.toHaveBeenCalled();

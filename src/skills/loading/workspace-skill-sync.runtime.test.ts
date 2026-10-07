@@ -105,6 +105,39 @@ afterAll(async () => {
 });
 
 describe("syncWorkspaceSkills", () => {
+  it("syncs automatically discovered skills without copying disabled or ineligible siblings", async () => {
+    const sourceWorkspace = await createCaseDir("eligible-source");
+    const targetWorkspace = await createCaseDir("eligible-target");
+    for (const name of ["new-workflow", "disabled", "needs-env"]) {
+      await writeSkill({
+        dir: path.join(sourceWorkspace, "skills", name),
+        name,
+        description: "Eligibility fixture",
+        ...(name === "needs-env"
+          ? { metadata: '{"openclaw":{"requires":{"env":["OPENCLAW_TEST_SYNC_MISSING_ENV"]}}}' }
+          : {}),
+      });
+    }
+    await withEnvAsync({ OPENCLAW_TEST_SYNC_MISSING_ENV: undefined }, async () => {
+      await syncWorkspaceSkills({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        config: { skills: { entries: { disabled: { enabled: false } } } },
+        managedSkillsDir: path.join(sourceWorkspace, ".managed"),
+        bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
+      });
+    });
+    expect(await pathExists(path.join(targetWorkspace, "skills", "new-workflow", "SKILL.md"))).toBe(
+      true,
+    );
+    expect(await pathExists(path.join(targetWorkspace, "skills", "disabled", "SKILL.md"))).toBe(
+      false,
+    );
+    expect(await pathExists(path.join(targetWorkspace, "skills", "needs-env", "SKILL.md"))).toBe(
+      false,
+    );
+  });
+
   const buildPrompt = async (
     workspaceDir: string,
     opts?: Parameters<typeof buildWorkspaceSkillsPrompt>[1],
@@ -643,7 +676,7 @@ describe("syncWorkspaceSkills", () => {
     },
   );
 
-  it("syncs the explicit agent skill subset instead of inherited defaults", async () => {
+  it("syncs an explicit session skill subset without an agent name-list base", async () => {
     const sourceWorkspace = await createCaseDir("source");
     const targetWorkspace = await createCaseDir("target");
     await writeSkill({
@@ -661,14 +694,8 @@ describe("syncWorkspaceSkills", () => {
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
       agentId: "alpha",
-      config: {
-        agents: {
-          defaults: {
-            skills: ["foo_bar", "foo.dot"],
-          },
-          entries: { alpha: { skills: ["foo_bar"] } },
-        },
-      },
+      config: { agents: { entries: { alpha: {} } } },
+      skillFilter: ["foo_bar"],
       bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
       managedSkillsDir: path.join(sourceWorkspace, ".managed"),
     });
@@ -834,9 +861,6 @@ describe("syncWorkspaceSkills", () => {
       agentId: "alpha",
       config: {
         agents: {
-          defaults: {
-            skills: ["remote-only"],
-          },
           entries: { alpha: {} },
         },
       },

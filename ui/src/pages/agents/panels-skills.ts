@@ -1,62 +1,32 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { html, nothing } from "lit";
 import type { SkillStatusReport } from "../../api/types.ts";
 import {
   renderSettingsEmpty,
   renderSettingsRow,
   renderSettingsSection,
-  renderSettingsToggle,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { resolveAgentConfig, resolveAgentSkillsFilter } from "../../lib/agents/display.ts";
 import { groupSkills } from "../../lib/skills-grouping.ts";
 import {
   computeSkillMissing,
   computeSkillReasons,
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
-import { renderAgentConfigActions, type AgentConfigActions } from "./config-actions.ts";
 
 registerSettingsEnglish();
 
-export function renderAgentSkills(
-  params: AgentConfigActions & {
-    agentId: string;
-    report: SkillStatusReport | null;
-    loading: boolean;
-    error: string | null;
-    activeAgentId: string | null;
-    configForm: Record<string, unknown> | null;
-    filter: string;
-    canPatchConfig: boolean;
-    onFilterChange: (next: string) => void;
-    onRefresh: () => void;
-    onToggle: (agentId: string, skillName: string, enabled: boolean) => void;
-    onClear: (agentId: string) => void;
-    onDisableAll: (agentId: string) => void;
-  },
-) {
-  const editable =
-    params.canUpdateConfig &&
-    Boolean(params.configForm) &&
-    !params.configLoading &&
-    !params.configSaving;
-  const config = resolveAgentConfig(params.configForm, params.agentId);
-  const explicitAllowlist = Array.isArray(config.entry?.skills)
-    ? normalizeStringEntries(config.entry.skills)
-    : undefined;
-  const allowlist = resolveAgentSkillsFilter(params.configForm, params.agentId);
-  const allowSet = new Set(allowlist ?? []);
-  const usingAllowlist = allowlist !== undefined;
-  const inheritedAllowlist = explicitAllowlist === undefined && usingAllowlist;
-  const canClear =
-    params.canPatchConfig &&
-    explicitAllowlist !== undefined &&
-    Boolean(params.configForm) &&
-    !params.configLoading &&
-    !params.configSaving;
+export function renderAgentSkills(params: {
+  agentId: string;
+  report: SkillStatusReport | null;
+  loading: boolean;
+  error: string | null;
+  activeAgentId: string | null;
+  filter: string;
+  onFilterChange: (next: string) => void;
+  onRefresh: () => void;
+}) {
   const reportReady = Boolean(params.report && params.activeAgentId === params.agentId);
   const rawSkills = reportReady ? (params.report?.skills ?? []) : [];
   const filter = normalizeLowercaseStringOrEmpty(params.filter);
@@ -68,28 +38,10 @@ export function renderAgentSkills(
       )
     : rawSkills;
   const groups = groupSkills(filtered);
-  const enabledCount = usingAllowlist
-    ? rawSkills.filter((skill) => allowSet.has(skill.name)).length
-    : rawSkills.length;
   const totalCount = rawSkills.length;
 
   return html`
-    ${
-      !params.configForm
-        ? html`<div class="callout info">${t("agents.skillsPanel.loadConfig")}</div>`
-        : nothing
-    }
-    ${
-      usingAllowlist
-        ? html`<div class="callout info">
-            ${t(
-              inheritedAllowlist
-                ? "agents.skillsPanel.inheritedAllowlist"
-                : "agents.skillsPanel.customAllowlist",
-            )}
-          </div>`
-        : html`<div class="callout info">${t("agents.skillsPanel.allEnabled")}</div>`
-    }
+    <div class="callout info">${t("agents.skillsPanel.allEligible")}</div>
     ${
       !reportReady && !params.loading
         ? html`<div class="callout info">${t("agents.skillsPanel.loadAgent")}</div>`
@@ -99,32 +51,15 @@ export function renderAgentSkills(
     ${renderSettingsSection(
       {
         title: t("agents.skillsPanel.title"),
-        description: html`${t("agents.skillsPanel.subtitle")}
-        ${totalCount > 0 ? html`<span class="mono">${enabledCount}/${totalCount}</span>` : nothing}`,
-        actions: html`
-          <button
-            class="btn btn--sm"
-            ?disabled=${!editable}
-            @click=${() => params.onDisableAll(params.agentId)}
-          >
-            ${t("agentTools.disableAll")}
-          </button>
-          <button
-            class="btn btn--sm"
-            ?disabled=${!canClear}
-            @click=${() => params.onClear(params.agentId)}
-          >
-            ${t("common.reset")}
-          </button>
-          ${renderAgentConfigActions(
-            params,
-            html`
-              <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
-                ${params.loading ? t("common.loading") : t("common.refresh")}
-              </button>
-            `,
-          )}
-        `,
+        description: html`${t("agents.skillsPanel.inventorySubtitle")}
+        ${totalCount > 0 ? html`<span class="mono">${totalCount}</span>` : nothing}`,
+        actions: html`<button
+          class="btn btn--sm"
+          ?disabled=${params.loading}
+          @click=${params.onRefresh}
+        >
+          ${params.loading ? t("common.loading") : t("common.refresh")}
+        </button>`,
       },
       html`
         ${renderSettingsRow({
@@ -164,7 +99,6 @@ export function renderAgentSkills(
                         </summary>
                         <div class="list skills-grid">
                           ${group.skills.map((skill) => {
-                            const enabled = !usingAllowlist || allowSet.has(skill.name);
                             const missing = computeSkillMissing(skill);
                             const reasons = computeSkillReasons(skill);
                             return html`
@@ -189,15 +123,6 @@ export function renderAgentSkills(
                                         </span>`
                                       : nothing
                                   }
-                                </div>
-                                <div class="settings-row__control">
-                                  ${renderSettingsToggle({
-                                    checked: enabled,
-                                    disabled: !editable,
-                                    ariaLabel: skill.name,
-                                    onChange: (checked) =>
-                                      params.onToggle(params.agentId, skill.name, checked),
-                                  })}
                                 </div>
                               </div>
                             `;

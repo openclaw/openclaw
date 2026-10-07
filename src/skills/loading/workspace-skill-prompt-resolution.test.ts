@@ -350,48 +350,4 @@ describe("resolveSkillsPrompt", () => {
 
     expect(prompt).not.toContain("/app/skills/hidden-skill/SKILL.md");
   });
-
-  it("inherits agents.defaults.skills when rebuilding prompt for an agent", async () => {
-    const visible: SkillEntry = createEntry("github", "GitHub");
-    const hidden: SkillEntry = createEntry("hidden-skill", "Hidden");
-
-    const prompt = await resolveSkillsPrompt({
-      entries: [visible, hidden],
-      config: {
-        agents: {
-          defaults: {
-            skills: ["github"],
-          },
-          entries: { writer: {} },
-        },
-      },
-      workspaceDir: "/tmp/openclaw",
-      agentId: "writer",
-    });
-
-    expect(prompt).toContain("/app/skills/github/SKILL.md");
-    expect(prompt).not.toContain("/app/skills/hidden-skill/SKILL.md");
-  });
-
-  it("uses agents.entries.<id>.skills as a full replacement for defaults", async () => {
-    const inheritedEntry: SkillEntry = createEntry("weather", "Weather");
-    const explicitEntry: SkillEntry = createEntry("docs-search", "Docs");
-
-    const prompt = await resolveSkillsPrompt({
-      entries: [inheritedEntry, explicitEntry],
-      config: {
-        agents: {
-          defaults: {
-            skills: ["weather"],
-          },
-          entries: { writer: { skills: ["docs-search"] } },
-        },
-      },
-      workspaceDir: "/tmp/openclaw",
-      agentId: "writer",
-    });
-
-    expect(prompt).not.toContain("/app/skills/weather/SKILL.md");
-    expect(prompt).toContain("/app/skills/docs-search/SKILL.md");
-  });
 });

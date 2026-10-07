@@ -496,6 +496,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
         ? admittedSessionSettings.permissionMode
         : preparedSessionState.sessionEntry?.permissionMode,
       sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
+      workspaceOnlyRead: preparedSessionState.sessionEntry?.inheritedWorkspaceOnlyRead,
       config: cfg,
       toolOverrides: admittedSessionSettings
         ? admittedSessionSettings.toolOverrides

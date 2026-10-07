@@ -10,11 +10,11 @@ read_when:
 
 <AccordionGroup>
   <Accordion title="How do I customize skills without keeping the repo dirty?">
-    Use managed overrides instead of editing the repo copy. Put changes in `~/.openclaw/skills/<name>/SKILL.md` (or add a folder via `skills.load.extraDirs` in `~/.openclaw/openclaw.json`). Precedence: `<workspace>/skills` -> `<workspace>/.agents/skills` -> `~/.agents/skills` -> `~/.openclaw/skills` -> bundled -> `skills.load.extraDirs`, so managed overrides win over bundled skills without touching git. To install globally but limit visibility to some agents, keep the shared copy in `~/.openclaw/skills` and control visibility with `agents.defaults.skills` / `agents.entries.*.skills`. Only upstream-worthy edits should go out as PRs against the repo copy.
+    Use managed overrides instead of editing the repo copy. Put changes in `~/.openclaw/skills/<name>/SKILL.md` (or add a folder via `skills.load.extraDirs` in `~/.openclaw/openclaw.json`). Precedence: `<workspace>/skills` -> `<workspace>/.agents/skills` -> `~/.agents/skills` -> `~/.openclaw/skills` -> bundled -> `skills.load.extraDirs`, so managed overrides win over bundled skills without touching git. Shared managed skills are discovered by all eligible agents. Use agent-owned workspace or Workshop roots when a skill belongs to one agent. Only upstream-worthy edits should go out as PRs against the repo copy.
   </Accordion>
 
   <Accordion title="Can I load skills from a custom folder?">
-    Yes: add directories via `skills.load.extraDirs` in `~/.openclaw/openclaw.json` (lowest precedence in the order above). `clawhub` installs into `./skills` by default, which OpenClaw treats as `<workspace>/skills` on the next session. To limit visibility to certain agents, pair with `agents.defaults.skills` or `agents.entries.*.skills`.
+    Yes: add directories via `skills.load.extraDirs` in `~/.openclaw/openclaw.json` (lowest precedence in the order above). `clawhub` installs into `./skills` by default, which OpenClaw treats as `<workspace>/skills` on the next session. Configured roots discover all otherwise-eligible skills; use agent-owned roots for agent-specific content.
   </Accordion>
 
   <Accordion title="How can I use different models or settings for different tasks?">
@@ -163,7 +163,7 @@ read_when:
     openclaw skills check
     ```
 
-    Native `openclaw skills install` writes into the active workspace `skills/` directory by default. Add `--global` to install into the shared managed skills directory for all local agents. Install the separate `clawhub` CLI only to publish or sync your own skills. Use `agents.defaults.skills` or `agents.entries.*.skills` to narrow which agents see shared skills.
+    Native `openclaw skills install` writes into the active workspace `skills/` directory by default. Add `--global` to install into the shared managed skills directory for all local agents. Install the separate `clawhub` CLI only to publish or sync your own skills. Use individual global disables or session selection to narrow the visible set; shared roots are not agent-specific.
 
   </Accordion>
 
@@ -223,7 +223,7 @@ read_when:
     openclaw skills update --all
     ```
 
-    Native installs land in the active workspace `skills/` directory; use `--global` for all local agents, or configure `agents.defaults.skills` / `agents.entries.*.skills` to limit visibility. Some skills expect Homebrew-installed binaries; on Linux that means Linuxbrew.
+    Native installs land in the active workspace `skills/` directory; use `--global` for all local agents, or use an agent-owned root for agent-specific content. Some skills expect Homebrew-installed binaries; on Linux that means Linuxbrew.
 
     See [Skills](/tools/skills), [Skills config](/tools/skills-config), [ClawHub](/clawhub).
 

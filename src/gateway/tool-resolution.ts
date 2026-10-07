@@ -447,6 +447,7 @@ export async function resolveGatewayScopedTools(
     inheritedToolAllowlist,
     inheritedToolDenylist,
     inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,
+    inheritedWorkspaceOnlyRead: requesterPolicies.inheritedWorkspaceOnlyRead,
   };
   const openClawTools = await createOpenClawToolsAsync(openClawToolOptions, { assertCurrent });
   assertCurrent();

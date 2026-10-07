@@ -93,7 +93,6 @@ config.agents.defaults = {
   ...config.agents.defaults,
   heartbeat: { every: "0m" },
   skipBootstrap: true,
-  skills: [],
   modelPolicy: {},
   systemAgent: { agentId: "main" },
 };

@@ -21,6 +21,7 @@ import { preparePluginLoaderAliases } from "../../../plugins/sdk-alias.js";
 import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
 import { resolveChannelAccountBindingRepairInput } from "./legacy-config-binding-repair-input.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
+import { collectAgentSkillAllowlistRetirementWarnings } from "./legacy-config-migrations.runtime.skills.js";
 import { collectToolPolicyConflictWarnings } from "./legacy-config-migrations.runtime.tool-policy-conflicts.js";
 import { migrateLegacyContextBudgetConfig } from "./legacy-context-budget.js";
 import { removeLegacyCopilotDiscovery } from "./legacy-copilot-discovery.js";
@@ -119,6 +120,7 @@ export function applyLegacyDoctorMigrations(
       : { config: compat.next, changes: [] };
   changes.push(...ownership.changes);
   const warnings = [
+    ...collectAgentSkillAllowlistRetirementWarnings(original),
     ...contextBudget.warnings.map(({ message }) => message),
     ...(compat.warnings ?? []),
     ...(ownership.warnings ?? []),

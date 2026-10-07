@@ -19,7 +19,6 @@ import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
-  resolveAgentSkillsFilter,
   modelFallbackOverrideFromAvailability,
   resolveEffectiveModelFallbacks,
   resolveModelFallbackAvailability,
@@ -1360,44 +1359,4 @@ describe("resolveAgentIdByWorkspacePath", () => {
   });
 });
 
-describe("resolveAgentSkillsFilter", () => {
-  it("inherits agents.defaults.skills when the agent omits skills", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          skills: ["github", "weather"],
-        },
-        entries: { writer: {} },
-      },
-    };
-
-    expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual(["github", "weather"]);
-  });
-
-  it("uses agents.entries skills as a full replacement", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          skills: ["github", "weather"],
-        },
-        entries: { writer: { skills: ["docs-search"] } },
-      },
-    };
-
-    expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual(["docs-search"]);
-  });
-
-  it("keeps explicit empty agent skills as no skills", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          skills: ["github", "weather"],
-        },
-        entries: { writer: { skills: [] } },
-      },
-    };
-
-    expect(resolveAgentSkillsFilter(cfg, "writer")).toStrictEqual([]);
-  });
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

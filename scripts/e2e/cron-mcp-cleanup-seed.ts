@@ -84,7 +84,6 @@ async function main() {
           },
           skipBootstrap: true,
           contextInjection: "never",
-          skills: [],
           subagents: {
             runTimeoutSeconds: 8,
           },

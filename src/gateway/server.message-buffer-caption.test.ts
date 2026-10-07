@@ -220,7 +220,7 @@ it(
               workspace,
               mediaMaxMb: 1 / 1024,
               skipBootstrap: true,
-              skills: [],
+
               model: { primary: "openai/buffer-proof", fallbacks: [] },
               models: { "openai/buffer-proof": { agentRuntime: { id: "openclaw" } } },
             },

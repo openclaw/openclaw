@@ -685,12 +685,11 @@ internal fun skillReady(skill: GatewaySkillSummary): Boolean =
   !skill.disabled &&
     skill.eligible &&
     !skill.blockedByAllowlist &&
-    !skill.blockedByAgentFilter &&
     skill.missingCount == 0
 
 private fun skillNeedsSetup(skill: GatewaySkillSummary): Boolean =
   !skill.disabled &&
-    (skill.blockedByAllowlist || skill.blockedByAgentFilter || !skill.eligible || skill.missingCount > 0)
+    (skill.blockedByAllowlist || !skill.eligible || skill.missingCount > 0)
 
 private fun skillStatusText(skill: GatewaySkillSummary): String =
   when {
@@ -711,7 +710,6 @@ private fun skillSubtitle(skill: GatewaySkillSummary): String {
     when {
       skill.disabled -> nativeString("Disabled")
       skill.blockedByAllowlist -> nativeString("Blocked")
-      skill.blockedByAgentFilter -> nativeString("Not available to this agent")
       skill.missingCount > 0 -> skillMissingItemsText(skill.missingCount)
       !skill.eligible -> nativeString("Needs setup")
       else -> null
@@ -723,7 +721,6 @@ private fun skillConfigurationText(skill: GatewaySkillSummary): String =
   when {
     skill.disabled -> nativeString("This skill is disabled on the gateway. Enable it here when the current connection has operator.admin.")
     skill.blockedByAllowlist -> nativeString("This skill is blocked by the gateway allowlist. Allowlist changes stay on desktop or CLI.")
-    skill.blockedByAgentFilter -> nativeString("This skill is installed but not available to the current agent. Agent filters stay on desktop or CLI.")
     skill.missingCount > 0 -> skillMissingConfigurationText(skill.missingCount)
     !skill.eligible -> nativeString("This skill is installed but not currently eligible to run. Use desktop or CLI for configuration changes.")
     else -> nativeString("Ready on this gateway. Android can enable or disable it globally; setup and configuration stay on desktop or CLI.")

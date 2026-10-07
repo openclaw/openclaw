@@ -18,7 +18,6 @@ import type {
   SkillEntry,
   SkillSnapshot,
 } from "../types.js";
-import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { sanitizeSkillCommandName, SKILL_COMMAND_MAX_LENGTH } from "./command-name.js";
 import { recordSkillCommandFileHost } from "./skill-command-provenance.js";
 import { isSkillPromptVisible, isSkillUserInvocable } from "./skill-index.js";
@@ -62,6 +61,7 @@ type WorkspaceSkillCommandOptions = {
   librarySelections?: SkillSnapshot["librarySelections"];
   agentId?: string;
   skillFilter?: string[];
+  /** Ignore focused selection for explicit user invocation; never bypass eligibility. */
   includeAllowlistHidden?: boolean;
   eligibility?: SkillEligibilityContext;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
@@ -76,10 +76,7 @@ function resolveCommandSkillLoadOptions(opts?: WorkspaceSkillCommandOptions) {
     bundledSkillsDir: opts?.bundledSkillsDir,
     librarySelections: opts?.librarySelections,
     agentId: opts?.agentId,
-    agentSkillFilter: opts?.includeAllowlistHidden ? ("ignore" as const) : ("apply" as const),
-    skillFilter: opts?.includeAllowlistHidden
-      ? undefined
-      : (opts?.skillFilter ?? resolveEffectiveAgentSkillFilter(opts?.config, opts?.agentId)),
+    skillFilter: opts?.includeAllowlistHidden ? undefined : opts?.skillFilter,
     eligibility: opts?.eligibility,
     pluginMetadataSnapshot: opts?.pluginMetadataSnapshot,
   };

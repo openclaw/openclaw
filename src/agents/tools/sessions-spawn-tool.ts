@@ -579,6 +579,7 @@ export function createSessionsSpawnTool(
           inheritedToolAllowlist: opts?.inheritedToolAllowlist,
           inheritedToolDenylist: opts?.inheritedToolDenylist,
           inheritedToolPolicySource: opts?.inheritedToolPolicySource,
+          inheritedWorkspaceOnlyRead: opts?.inheritedWorkspaceOnlyRead,
         });
 
         if (runtime === "acp") {

@@ -11,7 +11,7 @@ import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import { resolveEmbeddedRunSkillEntries } from "../runtime/embedded-run-entries.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
-import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
+import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
@@ -85,6 +85,7 @@ const CUSTODIAN_SKILL_NAMES = [
 ] as const;
 
 async function writeCustodianSkillFixture(workspaceDir: string): Promise<void> {
+  await fs.mkdir(path.join(workspaceDir, ".bundled"), { recursive: true });
   for (const name of CUSTODIAN_SKILL_NAMES) {
     await writeSkill({
       dir: path.join(workspaceDir, "custodian-skills", name),
@@ -189,16 +190,21 @@ describe("buildSkillSnapshot", () => {
       agentId: "ops",
     });
     const writerSnapshot = await buildAgentSnapshot({ workspaceDir, config, agentId: "writer" });
-    const custodianStatus = buildWorkspaceSkillStatus(workspaceDir, {
-      config,
-      agentId: "ops",
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-    });
-    const writerStatus = buildWorkspaceSkillStatus(workspaceDir, {
-      config,
-      agentId: "writer",
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-    });
+    const [custodianStatus, writerStatus] = await withEnvAsync(
+      { OPENCLAW_BUNDLED_SKILLS_DIR: path.join(workspaceDir, ".bundled") },
+      async () => [
+        buildWorkspaceSkillStatus(workspaceDir, {
+          config,
+          agentId: "ops",
+          managedSkillsDir: path.join(workspaceDir, ".managed"),
+        }),
+        buildWorkspaceSkillStatus(workspaceDir, {
+          config,
+          agentId: "writer",
+          managedSkillsDir: path.join(workspaceDir, ".managed"),
+        }),
+      ],
+    );
 
     expect(firstCustodianSnapshot.skills.map((skill) => skill.name)).toEqual(CUSTODIAN_SKILL_NAMES);
     expect(firstCustodianSnapshot.resolvedSkills?.map((skill) => skill.source)).toEqual(
@@ -359,7 +365,7 @@ describe("buildSkillSnapshot", () => {
   );
 
   it.each([false, true].flatMap((split) => [false, true].map((override) => ({ split, override }))))(
-    "honors session skill policy before agent filtering (split=$split, override=$override)",
+    "honors session skill policy across execution roots (split=$split, override=$override)",
     async ({ split, override }) => {
       const workspaceDir = await fixtureSuite.createCaseDir("session-policy-agent");
       const executionWorkspaceDir = split
@@ -378,9 +384,9 @@ describe("buildSkillSnapshot", () => {
               workspaceDir,
               executionWorkspaceDir,
               agentId: "main",
-              config: { agents: { defaults: { skills: [] } } },
+              config: {},
               ...(override
-                ? { skillOverrides: { "session-enabled": true } }
+                ? { skillFilter: [], skillOverrides: { "session-enabled": true } }
                 : { skillFilter: ["session-enabled"] }),
               watch: false,
             })
@@ -619,32 +625,5 @@ describe("buildSkillSnapshot", () => {
 
     expect(snapshot.prompt).toContain("⚠️ Skills truncated");
     expect(snapshot.prompt.length).toBeLessThan(2000);
-  });
-
-  it("uses agents.entries.<id>.skills as a full replacement for inherited defaults", async () => {
-    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
-    await writeWorkspaceSkills(workspaceDir, [
-      { name: "github", description: "GitHub" },
-      { name: "weather", description: "Weather" },
-      { name: "docs-search", description: "Docs" },
-    ]);
-
-    const snapshot = await buildSnapshot(workspaceDir, {
-      agentId: "writer",
-      config: {
-        agents: {
-          defaults: {
-            skills: ["github", "weather"],
-          },
-          entries: { writer: { skills: ["docs-search", "github"] } },
-        },
-      },
-    });
-
-    expect(snapshot.skills.map((skill) => skill.name).toSorted()).toEqual([
-      "docs-search",
-      "github",
-    ]);
-    expect(snapshot.skillFilter).toEqual(["docs-search", "github"]);
   });
 });

@@ -89,7 +89,6 @@ export type ResolvedAgentConfig = {
   bootstrapMaxChars?: AgentEntry["bootstrapMaxChars"];
   bootstrapTotalMaxChars?: AgentEntry["bootstrapTotalMaxChars"];
   experimental?: AgentDefaultsConfig["experimental"];
-  skills?: AgentEntry["skills"];
   memory?: AgentEntry["memory"];
   humanDelay?: AgentEntry["humanDelay"];
   typingMode?: AgentEntry["typingMode"];
@@ -425,7 +424,6 @@ export function resolveAgentConfig(
       typeof entry.experimental === "object" && entry.experimental
         ? { ...agentDefaults?.experimental, ...entry.experimental }
         : agentDefaults?.experimental,
-    skills: Array.isArray(entry.skills) ? entry.skills : undefined,
     memory: entry.memory,
     humanDelay: entry.humanDelay,
     typingMode: entry.typingMode ?? agentDefaults?.typingMode,

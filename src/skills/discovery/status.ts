@@ -30,7 +30,6 @@ import type {
   SkillsInstallPreferences,
   SkillSnapshot,
 } from "../types.js";
-import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import {
   isSkillPromptVisible,
   isSkillUserInvocable,
@@ -175,7 +174,6 @@ type SkillRequirementsContext = {
 type BuildSkillStatusContext = Readonly<
   SkillRequirementsContext & {
     prefs: SkillsInstallPreferences;
-    agentSkillSet: ReadonlySet<string> | undefined;
     files: WorkspaceSkillStatusFacts["files"];
   }
 >;
@@ -221,13 +219,12 @@ function buildSkillRequirements(entry: SkillEntry, context: SkillRequirementsCon
 }
 
 function buildSkillStatus(entry: SkillEntry, context: BuildSkillStatusContext): SkillStatusEntry {
-  const { prefs, agentSkillSet } = context;
+  const { prefs } = context;
   const { required, ...requirements } = buildSkillRequirements(entry, context);
-  const blockedByAgentFilter = agentSkillSet !== undefined && !agentSkillSet.has(entry.skill.name);
   const skillSource = resolveSkillSource(entry.skill);
   // Loader provenance owns bundled status; a matching name cannot establish source.
   const bundled = skillSource === "openclaw-bundled" || skillSource === "openclaw-custodian";
-  const availableToAgent = requirements.eligible && !blockedByAgentFilter;
+  const availableToAgent = requirements.eligible;
   const userInvocable = isSkillUserInvocable(entry);
 
   const fileFacts = context.files.find(
@@ -249,7 +246,6 @@ function buildSkillStatus(entry: SkillEntry, context: BuildSkillStatusContext): 
     baseDir: entry.skill.baseDir,
     ...requirements,
     primaryEnv: entry.metadata?.primaryEnv,
-    blockedByAgentFilter,
     // The evaluator includes remote OS eligibility.
     platformIncompatible: requirements.missing.os.length > 0,
     modelVisible: availableToAgent && isSkillPromptVisible(entry),
@@ -282,19 +278,14 @@ function prepareWorkspaceSkillRequirements(
       "Bundled skills directory could not be resolved; built-in skills may be missing.",
     );
   }
-  const agentSkillFilter = opts?.agentId
-    ? resolveEffectiveAgentSkillFilter(opts.config, opts.agentId)
-    : undefined;
   // Status reports every skill (disabled/ineligible included) with flags, so
   // the loader must stay unfiltered; node-hosted skills merge in separately.
   const skillEntries = mergeRemoteNodeSkillEntries(
     opts?.entries ??
       loadWorkspaceSkills(workspaceDir, {
         config: opts?.config,
-        // agentId scopes custodian-source discovery only; the "ignore" mode
-        // keeps the entry list unfiltered per the invariant above.
+        // agentId scopes agent-owned skill source discovery.
         agentId: opts?.agentId,
-        agentSkillFilter: "ignore",
         managedSkillsDir,
         bundledSkillsDir,
       }),
@@ -317,7 +308,6 @@ function prepareWorkspaceSkillRequirements(
   };
   return {
     managedSkillsDir,
-    agentSkillFilter,
     skillEntries,
     context: {
       config: opts?.config,
@@ -340,7 +330,7 @@ export async function prepareWorkspaceSkillStatus(
   const { eligibility: _eligibility, ...loadOptions } = opts ?? {};
   const sources = await prepareWorkspaceSkillEntries(workspaceDir, {
     ...loadOptions,
-    agentSkillFilter: "ignore",
+
     status: { skillCardKey: opts?.skillCardKey },
   });
   if (sources.runtime && !sources.status) {
@@ -388,8 +378,10 @@ export function buildWorkspaceSkillStatus(
     runtime?: WorkspaceSkillSources["runtime"];
   },
 ): SkillStatusReport {
-  const { managedSkillsDir, agentSkillFilter, skillEntries, context } =
-    prepareWorkspaceSkillRequirements(workspaceDir, opts);
+  const { managedSkillsDir, skillEntries, context } = prepareWorkspaceSkillRequirements(
+    workspaceDir,
+    opts,
+  );
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   const files =
     opts?.files ??
@@ -401,14 +393,12 @@ export function buildWorkspaceSkillStatus(
   const statusContext: BuildSkillStatusContext = {
     ...context,
     prefs,
-    agentSkillSet: agentSkillFilter === undefined ? undefined : new Set(agentSkillFilter),
     files,
   };
   return {
     workspaceDir,
     managedSkillsDir,
     agentId: opts?.agentId,
-    agentSkillFilter,
     skills: skillEntries.map((entry) => buildSkillStatus(entry, statusContext)),
   };
 }

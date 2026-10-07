@@ -134,6 +134,7 @@ describe("spawnSubagentDirect workspace inheritance", () => {
         {
           ...context,
           inheritedToolPolicySource: "sender",
+          ...(sandboxed ? {} : { inheritedWorkspaceOnlyRead: true as const }),
           inheritedToolAllowlist: ["read", "sessions_spawn"],
           inheritedToolDenylist: ["exec"],
           sessionPermissionPolicy: { mode: "read-only", root: "/tmp/requester-workspace/project" },
@@ -146,6 +147,7 @@ describe("spawnSubagentDirect workspace inheritance", () => {
         sessionRoot: "/tmp/requester-workspace/project",
         permissionMode: "read-only",
         inheritedToolPolicySource: "sender",
+        ...(sandboxed ? {} : { inheritedWorkspaceOnlyRead: true as const }),
         inheritedToolAllow: ["read", "sessions_spawn"],
         inheritedToolDeny: ["exec"],
       });
@@ -161,7 +163,7 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     async (selection) => {
       const result = await spawnSubagentDirect(
         { task: "inspect", ...selection },
-        { ...context, inheritedToolPolicySource: "sender" },
+        { ...context, inheritedToolPolicySource: "sender", inheritedWorkspaceOnlyRead: true },
       );
       expect(result).toMatchObject({
         status: "forbidden",
@@ -171,6 +173,20 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       expect(callGatewayMock).not.toHaveBeenCalled();
     },
   );
+
+  it("refuses a repository-only helper's sandbox expansion before launch", async () => {
+    const result = await spawnSubagentDirect(
+      { task: "inspect", sandbox: "require" },
+      {
+        ...context,
+        inheritedToolPolicySource: "sender",
+        inheritedWorkspaceOnlyRead: true,
+      },
+    );
+    expect(result).toMatchObject({ status: "forbidden" });
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
 
   it("rejects cwd overrides for sandboxed children before launch", async () => {
     resolveSandboxRuntimeStatusMock.mockImplementation(({ sessionKey }) => ({

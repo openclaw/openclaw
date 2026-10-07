@@ -397,6 +397,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     inheritedToolPolicyVersion?: 1;
     /** Sender/channel restriction provenance retained with the inherited tool snapshot. */
     inheritedToolPolicySource?: "sender";
+    /** Sender-bound read containment; may only narrow resource access. */
+    inheritedWorkspaceOnlyRead?: true;
     /** Session-scoped tool deny entries inherited from the caller that created this session. */
     inheritedToolDeny?: string[];
     /** Session-scoped tool allow entries inherited from the caller that created this session. */

@@ -161,8 +161,7 @@ extension IOSGatewayChatTransport {
             name: skill.name,
             baseEnabled: !skill.disabled,
             missingDependencies: missingDependencies,
-            blocked: skill.blockedByAllowlist == true || skill.platformIncompatible == true,
-            agentFiltered: skill.blockedByAgentFilter == true)
+            blocked: skill.blockedByAllowlist == true || skill.platformIncompatible == true)
     }
 
     static func composerToolsByServer(

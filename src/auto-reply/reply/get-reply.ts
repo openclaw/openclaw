@@ -6,7 +6,6 @@ import {
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { projectConversationToolNames } from "../../agents/conversation-tool-policy-pipeline.js";
@@ -44,6 +43,7 @@ import {
 } from "../../sessions/model-overrides.js";
 import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { normalizeSkillFilter } from "../../skills/discovery/filter.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
   sessionDeliveryChannel,
@@ -107,7 +107,6 @@ import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js"
 import { prepareReplySessionDiffBaseline } from "./session-diff-baseline.js";
 import { SessionResetCleanupError } from "./session-reset-cleanup.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
-import { mergeSkillFilters } from "./skill-filter.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 import { isStaleHeartbeatAutoFallbackOverride } from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
@@ -315,11 +314,8 @@ export async function getReplyFromConfig(
         attributes: traceAttributes,
       }),
     );
-  const mergedSkillFilter = resolverTiming.measureSync("reply.resolve_skill_filter", () =>
-    mergeSkillFilters(opts?.skillFilter, resolveAgentSkillsFilter(cfg, agentId)),
-  );
-  const optsWithSkillFilter =
-    mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
+  const skillFilter = normalizeSkillFilter(opts?.skillFilter);
+  const optsWithSkillFilter = skillFilter === undefined ? opts : { ...opts, skillFilter };
   let extractedFileImages: ExtractedFileImage[] | undefined;
   let enableLocalPathSelfServe: ApplyMediaUnderstandingResult["enableLocalPathSelfServe"];
   const agentCfg = cfg.agents?.defaults;
@@ -415,7 +411,7 @@ export async function getReplyFromConfig(
         preparedModelCatalog,
         typing,
         opts: optsWithSkillFilter,
-        skillFilter: mergedSkillFilter,
+        skillFilter,
       }),
   );
   if (nativeSlashCommandFastReply.handled) {
@@ -505,7 +501,7 @@ export async function getReplyFromConfig(
             agentId,
             existingSnapshot: entry?.skillsSnapshot,
             librarySelections: selectedSkills,
-            skillFilter: mergedSkillFilter,
+            skillFilter,
             skillOverrides: entry?.toolOverrides?.skills,
           })
         ).snapshot
@@ -898,7 +894,7 @@ export async function getReplyFromConfig(
       hasResolvedHeartbeatModelOverride,
       typing,
       opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
-      skillFilter: mergedSkillFilter,
+      skillFilter,
       preparedModelCatalog,
     }),
   );
@@ -1017,7 +1013,7 @@ export async function getReplyFromConfig(
       contextTokens,
       directiveAck,
       abortedLastRun,
-      skillFilter: mergedSkillFilter,
+      skillFilter,
     }),
   );
   await maybeEmitMissingResetHooks();

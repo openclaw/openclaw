@@ -10,9 +10,11 @@ import { resolveToolFsConfig } from "./tool-fs-policy.js";
 type CoreToolPolicyOptions = Pick<
   OpenClawCodingToolsOptions,
   | "config"
+  | "conversationCapabilityProfile"
   | "agentId"
   | "sessionPermissionPolicy"
   | "requireWorkspaceOnly"
+  | "workspaceOnlyRead"
   | "trigger"
   | "memoryFlushWritePath"
   | "modelProvider"
@@ -29,7 +31,11 @@ export function prepareCoreToolPolicy(
   const sessionPolicy = options.sessionPermissionPolicy
     ? resolveSessionPermissionCoreToolPolicy(options.sessionPermissionPolicy)
     : undefined;
+  const workspaceOnlyRead =
+    options.workspaceOnlyRead === true ||
+    options.conversationCapabilityProfile?.policy.workspaceOnlyRead === true;
   const workspaceOnly =
+    workspaceOnlyRead ||
     options.requireWorkspaceOnly === true ||
     options.trigger === "memory" ||
     (sessionPolicy?.workspaceOnly ??
@@ -44,6 +50,7 @@ export function prepareCoreToolPolicy(
       : "config";
   return {
     workspaceOnly,
+    ...(workspaceOnlyRead ? { workspaceOnlyRead: true as const } : {}),
     readOnly,
     applyPatchEnabled:
       !readOnly &&

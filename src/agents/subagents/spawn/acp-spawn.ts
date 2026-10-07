@@ -142,6 +142,8 @@ type SpawnAcpContext = {
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
   inheritedToolPolicySource?: "sender";
+  /** Sender-bound read containment; may only narrow resource access. */
+  inheritedWorkspaceOnlyRead?: true;
   workspaceDir?: string;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
 };
@@ -516,6 +518,9 @@ export async function spawnAcpDirect(
               : {}),
             ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
             ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
+            ...(ctx.inheritedWorkspaceOnlyRead
+              ? { inheritedWorkspaceOnlyRead: true as const }
+              : {}),
             ...(senderRestricted
               ? {
                   spawnedWorkspaceDir: ctx.workspaceDir ?? requesterRoot,

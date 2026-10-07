@@ -5,19 +5,17 @@ const {
   resolveNodeExecEligibilityMock,
   getRemoteSkillEligibilityMock,
   resolveReusableWorkspaceSkillSnapshotMock,
-  resolveEffectiveAgentSkillFilterMock,
 } = vi.hoisted(() => ({
   resolveNodeExecEligibilityMock: vi.fn().mockReturnValue({ canExec: false }),
   getRemoteSkillEligibilityMock: vi.fn(),
   resolveReusableWorkspaceSkillSnapshotMock: vi.fn(),
-  resolveEffectiveAgentSkillFilterMock: vi.fn(),
 }));
 
+// mock-isolation: Keep node probing and filesystem snapshot preparation outside this unit test.
 vi.mock("./cron-snapshot.runtime.js", () => ({
   resolveNodeExecEligibility: resolveNodeExecEligibilityMock,
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
   resolveReusableWorkspaceSkillSnapshot: resolveReusableWorkspaceSkillSnapshotMock,
-  resolveEffectiveAgentSkillFilter: resolveEffectiveAgentSkillFilterMock,
 }));
 
 const { resolveCronSkillsSnapshot } = await import("./cron-snapshot.js");
@@ -25,7 +23,7 @@ const { resolveCronSkillsSnapshot } = await import("./cron-snapshot.js");
 describe("resolveCronSkillsSnapshot", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resolveEffectiveAgentSkillFilterMock.mockReturnValue(undefined);
+
     getRemoteSkillEligibilityMock.mockReturnValue({
       platforms: [],
       hasBin: () => false,
@@ -38,9 +36,7 @@ describe("resolveCronSkillsSnapshot", () => {
     });
   });
 
-  it("refreshes when the cached skill filter changes", async () => {
-    resolveEffectiveAgentSkillFilterMock.mockReturnValue(["docs-search", "github"]);
-
+  it("refreshes a legacy cached selection without an agent name-list base", async () => {
     const result = await resolveCronSkillsSnapshot({
       workspaceDir: "/tmp/workspace",
       config: {} as never,

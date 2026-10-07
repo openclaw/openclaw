@@ -43,7 +43,7 @@ async function runCustomSetup(scenario: Scenario) {
     gateway: { mode: "local" },
     plugins: { slots: { memory: "none" } },
     agents: {
-      defaults: { workspace, skipBootstrap: true, skills: [], model: "prior/working-model" },
+      defaults: { workspace, skipBootstrap: true, model: "prior/working-model" },
     },
     models: {
       providers: {

@@ -2,6 +2,7 @@ import { isPathInsideWithRealpath } from "@openclaw/fs-safe/path";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { OpenClawCodingToolsOptions } from "../agent-tools.options.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { pickSandboxToolPolicy } from "../sandbox-tool-policy.js";
 import { cloneHostSnapshot as cloneSnapshot } from "./host-snapshot.js";
 
 export function captureRequiredWorkspaceToolFloor(
@@ -14,7 +15,10 @@ export function captureRequiredWorkspaceToolFloor(
       apply: (options?: OpenClawCodingToolsOptions) => Partial<OpenClawCodingToolsOptions>;
     }
   | undefined {
-  if (attempt.requireWorkspaceOnly !== true) {
+  const workspaceOnlyRead =
+    attempt.workspaceOnlyRead === true ||
+    pickSandboxToolPolicy(attempt.conversationToolPolicy)?.workspaceOnlyRead === true;
+  if (attempt.requireWorkspaceOnly !== true && !workspaceOnlyRead) {
     return undefined;
   }
   const requiredWorkspace = {
@@ -50,6 +54,7 @@ export function captureRequiredWorkspaceToolFloor(
       cwd: requiredWorkspace.cwd,
       sandbox: requiredWorkspace.sandbox,
       requireWorkspaceOnly: true,
+      ...(workspaceOnlyRead ? { workspaceOnlyRead: true as const } : {}),
       sessionPermissionPolicy:
         requiredWorkspace.permissionMode || options?.sessionPermissionPolicy
           ? {

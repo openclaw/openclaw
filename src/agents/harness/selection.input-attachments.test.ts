@@ -23,6 +23,7 @@ import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import { registerAgentWorkspaceAccess } from "../workspace-access.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
+import { runAgentHarnessAttempt } from "./selection.js";
 import { createHarnessAttemptParams } from "./selection.test-support.js";
 import type { AgentHarness } from "./types.js";
 
@@ -55,6 +56,46 @@ afterEach(async () => {
 });
 
 describe("registered harness input attachment preparation", () => {
+  it.each(["sender", "inherited"] as const)(
+    "projects %s repository reads into required-root native execution",
+    async (source) => {
+      const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+        makeEmbeddedRunnerAttempt({ agentHarnessId: "codex" }),
+      );
+      registerAgentHarness(
+        {
+          id: "codex",
+          label: "Codex",
+          supports: () => ({ supported: true, priority: 100 }),
+          runAttempt,
+          conversationToolPolicySupport: "exact",
+        },
+        { ownerPluginId: "codex" },
+      );
+      const params = createAttemptParams({
+        models: {
+          providers: {
+            codex: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "codex" },
+              models: [],
+            },
+          },
+        },
+      });
+      if (source === "sender") {
+        const policy = { allow: ["read"], workspaceOnlyRead: true as const };
+        params.conversationToolPolicy = policy;
+      } else {
+        params.workspaceOnlyRead = true;
+      }
+      await runAgentHarnessAttempt(params);
+      expect(runAttempt.mock.calls[0]?.[0].requireWorkspaceOnly).toBe(true);
+      expect(runAttempt.mock.calls[0]?.[0]).not.toHaveProperty("workspaceOnlyRead");
+      expect(params.requireWorkspaceOnly).toBeUndefined();
+    },
+  );
+
   it.each([
     { operation: "prepare", when: "before" },
     { operation: "prepare", when: "during" },

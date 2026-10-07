@@ -184,16 +184,17 @@ OpenClaw never appends a work-session link to a guest reply.
 
 Tool names alone do not confine filesystem reads. Configure the X front-door
 agent's `cwd` and `workspace` to the OpenClaw clone and enable the core's
-workspace-only file guard. The supported guest setup also disables selected
-skills and Docker/remote sandbox mode: skill directories and sandbox mounts are
-explicit read exceptions in core and can expose files outside that clone.
+workspace-only file guard. The host's sender-bound read authority suppresses
+skill, cached instruction, and attachment read exceptions for guests and their
+hidden descendants; ordinary reads still work inside the repository. Skill
+catalog selection is not resource authority. Docker/remote sandbox mode remains
+unsupported because mounts can expose files outside the clone.
 For example, add these fields to the agent selected by your X binding:
 
 ```json5 validate=false
 {
   workspace: "/srv/openclaw",
   cwd: "/srv/openclaw",
-  skills: [],
   sandbox: { mode: "off" },
   tools: { fs: { workspaceOnly: true } },
 }
@@ -202,8 +203,9 @@ For example, add these fields to the agent selected by your X binding:
 The effective filesystem setting is
 `agents.entries.<agentId>.tools.fs.workspaceOnly`, falling back to
 `tools.fs.workspaceOnly`. The X plugin refuses guests before thread expansion
-when that setting is absent or false, skills are enabled, or sandbox mode is
-active. Channel status reports the required correction as
+when that setting is absent or false, sandbox mode is active, or the host lacks
+`sender-workspace-only-read-v1` support. Older hosts must be updated before
+admitting guests. Channel status reports the required correction as
 `guestModeBlockedReason`; maintainer mentions continue normally.
 
 Guest mode also requires a queue mode that cannot steer or interrupt an active

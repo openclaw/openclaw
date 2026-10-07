@@ -1,7 +1,52 @@
 import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
-import { deleteRetiredPath } from "./legacy-config-record-shared.js";
+import { visitAgentConfigScopes, deleteRetiredPath } from "./legacy-config-record-shared.js";
+
+/** Operator-visible policy-change warnings; the normal Doctor writer owns backups. */
+export function collectAgentSkillAllowlistRetirementWarnings(
+  raw: Record<string, unknown>,
+): string[] {
+  const warnings: string[] = [];
+  visitAgentConfigScopes(raw, (scope, path) => {
+    if (!Array.isArray(scope.skills) || !scope.skills.every((name) => typeof name === "string")) {
+      return;
+    }
+    warnings.push(
+      "Agent skill name allowlist is retired. " +
+        "All currently and future otherwise-eligible skills become discoverable; " +
+        "prior agent-specific restrictions are not preserved, and an old [] no longer disables all skills. " +
+        "Global skill disables, prerequisites, bundled-skill controls, and session selections remain effective. " +
+        "Recover the original selection from the normal pre-migration config backup. Retired path: " +
+        path +
+        ".skills.",
+    );
+  });
+  return warnings;
+}
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[] = [
+  {
+    id: "agents.skills-allowlists-retired",
+    legacyRules: [
+      {
+        path: ["agents"],
+        message:
+          'Agent skill name allowlists are retired; run "openclaw doctor --fix" to remove them and review the changed discovery behavior.',
+        match: (_value, root) => collectAgentSkillAllowlistRetirementWarnings(root).length > 0,
+      },
+    ],
+    apply: (raw, changes) => {
+      visitAgentConfigScopes(raw, (scope, path) => {
+        if (
+          !Array.isArray(scope.skills) ||
+          !scope.skills.every((name) => typeof name === "string")
+        ) {
+          return;
+        }
+        delete scope.skills;
+        changes.push("Removed retired " + path + ".skills name allowlist.");
+      });
+    },
+  },
   {
     id: "skills.workshop.autonomous.enabled->mode",
     legacyRules: [

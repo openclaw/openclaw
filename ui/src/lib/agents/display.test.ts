@@ -16,7 +16,6 @@ import {
   listSelectableAgents,
   normalizeAgentLabel,
   normalizeAgentTargetLabel,
-  resolveAgentSkillsFilter,
   resolveEffectiveModelFallbacks,
 } from "./display.ts";
 
@@ -506,36 +505,6 @@ describe("resolveChatAvatarRenderUrl", () => {
   });
 });
 
-describe("resolveAgentSkillsFilter", () => {
-  it("inherits the default filter when the agent has no override", () => {
-    expect(
-      resolveAgentSkillsFilter(
-        {
-          agents: {
-            defaults: { skills: [" github ", "weather"] },
-            entries: { main: {} },
-          },
-        },
-        "main",
-      ),
-    ).toEqual(["github", "weather"]);
-  });
-
-  it("prefers an explicit empty agent filter over inherited defaults", () => {
-    expect(
-      resolveAgentSkillsFilter(
-        {
-          agents: {
-            defaults: { skills: ["github"] },
-            entries: { main: { skills: [] } },
-          },
-        },
-        "main",
-      ),
-    ).toEqual([]);
-  });
-});
-
 describe("buildAgentContext", () => {
   it("falls back to agent payload workspace/model when config form is unavailable", () => {
     const context = buildAgentContext(
@@ -585,12 +554,12 @@ describe("buildAgentContext", () => {
     expect(context.runtime).toBe("-");
   });
 
-  it("shows inherited skill filters in the agent context", () => {
+  it("shows automatic eligible skill discovery in the agent context", () => {
     const context = buildAgentContext(
       { id: "main" },
       {
         agents: {
-          defaults: { skills: ["github", "weather"] },
+          defaults: {},
           entries: { main: {} },
         },
       },
@@ -599,7 +568,7 @@ describe("buildAgentContext", () => {
       null,
     );
 
-    expect(context.skillsLabel).toBe("2 selected");
+    expect(context.skillsLabel).toBe("All eligible skills");
   });
 
   it("prefers per-agent configured identity over runtime global identity in agent panels", () => {

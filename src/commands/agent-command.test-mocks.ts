@@ -294,10 +294,6 @@ vi.mock("../plugins/bundle-commands.js", () => ({
   loadEnabledClaudeBundleCommands: vi.fn(() => []),
 }));
 
-vi.mock("../skills/discovery/agent-filter.js", () => ({
-  resolveEffectiveAgentSkillFilter: vi.fn(() => undefined),
-}));
-
 vi.mock("../skills/runtime/session-snapshot.js", () => ({
   resolveReusableWorkspaceSkillSnapshot: vi.fn(
     (params?: { existingSnapshot?: unknown; skillFilter?: string[] }) => ({

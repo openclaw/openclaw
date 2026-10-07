@@ -374,7 +374,6 @@ describe("sessions_send across prepared runtime reload", () => {
           defaults: {
             workspace,
             skipBootstrap: true,
-            skills: [],
             model: { primary: MODEL_A },
             models: { [MODEL_A]: {}, [MODEL_B]: {} },
           },

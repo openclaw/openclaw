@@ -59,7 +59,7 @@ function skillStatus(eligible: boolean) {
         always: false,
         disabled: false,
         blockedByAllowlist: false,
-        blockedByAgentFilter: false,
+
         eligible,
         platformIncompatible: false,
         modelVisible: eligible,

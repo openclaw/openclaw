@@ -11,6 +11,8 @@ export type { SandboxDockerConfig } from "./types.docker.js";
 export const SANDBOX_DEFAULT_TOOL_ALLOW = Symbol.for("openclaw.sandbox.defaultToolAllow");
 
 export type SandboxToolPolicy = {
+  /** Trusted channel resource restriction, inherited by admitted helpers. */
+  workspaceOnlyRead?: true;
   [SANDBOX_DEFAULT_TOOL_ALLOW]?: readonly string[];
   allow?: string[];
   deny?: string[];

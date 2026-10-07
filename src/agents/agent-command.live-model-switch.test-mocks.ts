@@ -86,7 +86,7 @@ export function createTestAgentScope(
     resolveEffectiveModelFallbacks: params.resolveEffectiveModelFallbacksMock,
     resolveSessionAgentIds: () => ({ defaultAgentId: "default", sessionAgentId: "default" }),
     resolveSessionAgentId: () => "default",
-    resolveAgentSkillsFilter: () => undefined,
+
     resolveAgentWorkspaceDir: () => "/tmp/workspace",
   };
 }

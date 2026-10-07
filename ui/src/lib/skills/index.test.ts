@@ -121,7 +121,7 @@ function createSkillCardReport(installedVersion?: string, installedAt = 123): Sk
         always: false,
         disabled: false,
         blockedByAllowlist: false,
-        blockedByAgentFilter: false,
+
         eligible: true,
         platformIncompatible: false,
         modelVisible: true,

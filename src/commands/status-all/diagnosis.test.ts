@@ -163,7 +163,7 @@ describe("status-all diagnosis port checks", () => {
       agentId: "qa",
       config: {
         plugins: { enabled: false },
-        agents: { entries: { qa: { skills: ["fixture"] } } },
+        agents: { entries: { qa: {} } },
         skills: {
           allowBundled: ["other-fixture"],
           entries: { fixture: { enabled: state !== "disabled" } },

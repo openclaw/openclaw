@@ -105,7 +105,7 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
               thinkingDefault: "low",
               heartbeat: { every: "0m" },
               skipBootstrap: true,
-              skills: [],
+
               timeoutSeconds: 240,
             },
             entries: { main: {} },

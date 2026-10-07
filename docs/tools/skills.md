@@ -4,7 +4,7 @@ sidebarTitle: "Skills"
 summary: "Skills teach your agent how to use tools. Learn how they load, how precedence works, and how to configure gating, allowlists, and environment injection."
 read_when:
   - Adding or modifying skills
-  - Changing skill gating, allowlists, or load rules
+  - Changing skill eligibility, selection, or load rules
   - Understanding skill precedence and snapshot behavior
 ---
 
@@ -22,7 +22,7 @@ binary presence.
     Review and approve agent-drafted skill proposals.
   </Card>
   <Card title="Skills config" href="/tools/skills-config" icon="gear">
-    Full `skills.*` config schema and agent allowlists.
+    Full `skills.*` config schema and automatic agent discovery.
   </Card>
   <Card title="ClawHub" href="/clawhub" icon="cloud">
     Browse and install community skills.
@@ -221,46 +221,29 @@ must not be committed with a project.
 
 <a id="agent-skill-allowlists" />
 
-## Agent allowlists
+<a id="agent-allowlists" />
 
-Skill **location** (precedence) and skill **visibility** (which agent can use
-it) are separate controls. Use allowlists to restrict which skills an agent sees,
-regardless of where they are loaded from.
+## Automatic agent discovery
 
-```json5
-{
-  agents: {
-    ownership: "explicit",
-    defaults: {
-      skills: ["github", "weather"], // shared baseline
-      heartbeat: { agentId: "writer" },
-      systemAgent: { agentId: "writer" },
-      authInheritance: { agentId: "writer" },
-    },
-    entries: {
-      writer: { workspace: "~/.openclaw/workspace" }, // inherits github, weather
-      docs: { skills: ["docs-search"] }, // replaces defaults entirely
-      "locked-down": { skills: [] }, // no skills
-    },
-  },
-  talk: { agentId: "writer" },
-}
-```
+Agents discover all otherwise-eligible skills in their configured roots automatically,
+including newly applied Workshop skills. Agent-owned roots remain isolated;
+source precedence and metadata, platform, plugin, prerequisite, and disable gates
+still apply. Use global per-skill `skills.entries.<key>.enabled: false` for an
+individual disable, or session skill selection for a focused session. The separate
+`skills.allowBundled` control only affects bundled skills.
 
-<AccordionGroup>
-  <Accordion title="Allowlist rules">
-    - Omit `agents.defaults.skills` to leave all skills unrestricted by default.
-    - Omit `agents.entries.*.skills` to inherit `agents.defaults.skills`.
-    - Set `agents.entries.*.skills: []` to expose no skills for that agent.
-    - A non-empty `agents.entries.*.skills` list is the **final** set — it does not
-      merge with defaults.
-    - The effective allowlist applies across prompt building, slash-command
-      discovery, sandbox sync, and skill snapshots.
-    - This is not a host shell authorization boundary. If the same agent can
-      use `exec`, constrain that shell separately with sandboxing, OS-user
-      isolation, exec deny/allowlists, and per-resource credentials.
-  </Accordion>
-</AccordionGroup>
+**Upgrade policy change:** `agents.defaults.skills`, `agents.entries.*.skills`,
+and their historical `agents.list` entry forms are retired. Doctor and normal
+updates remove old name lists and visibly warn for each former selection.
+**Prior agent-specific restrictions are not preserved:** all currently **and
+future** otherwise-eligible skills become discoverable; an old `[]` no longer
+disables all skills. Existing global per-skill disables and session selections
+remain effective. The original arrays are recoverable from the normal
+pre-migration config backup, not an active runtime filter. No agent exclusion is
+converted into a global disable that would affect other agents.
+
+Skill discovery is not execution authorization. Tool permissions, credentials,
+sandbox/OS isolation, and exec approval policy remain separate and unchanged.
 
 ## Plugins and skills
 
@@ -981,7 +964,7 @@ read every admitted skill. Native harnesses retain their own prompt policy.
     Proposal queue for agent-drafted skills.
   </Card>
   <Card title="Skills config" href="/tools/skills-config" icon="gear">
-    Full `skills.*` config schema and agent allowlists.
+    Full `skills.*` config schema and automatic agent discovery.
   </Card>
   <Card title="Slash commands" href="/tools/slash-commands" icon="terminal">
     How skill slash commands are registered and routed.

@@ -305,6 +305,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             installedSkills: params.installedSkills,
             preparedModelRuntime: attempt.preparedModelRuntime,
             requireWorkspaceOnly: attempt.requireWorkspaceOnly,
+            workspaceOnlyRead: attempt.workspaceOnlyRead,
             sessionReadScopeKey: attempt.sessionReadScopeKey,
             sessionConfigSource: attempt.oneShotCliRun ? "pinned" : "runtime",
             webSearchEnabled: attempt.toolOverrides?.webSearch !== false,

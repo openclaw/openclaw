@@ -67,6 +67,7 @@ export async function resolveWorkerToolAuthority(params: {
   const corePolicy = prepareCoreToolPolicy({
     ...turn,
     agentId: capabilityProfile.policy.agentId,
+    conversationCapabilityProfile: capabilityProfile,
     sessionPermissionPolicy: turn.permissionMode
       ? { mode: turn.permissionMode, root: turn.workspaceDir }
       : undefined,

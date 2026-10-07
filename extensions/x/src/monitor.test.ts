@@ -155,7 +155,7 @@ describe("X account monitor", () => {
               ...config,
               messages: { queue: { mode: "collect" } },
               agents: {
-                entries: { maintainer: { skills: [], tools: { fs: { workspaceOnly: true } } } },
+                entries: { maintainer: { tools: { fs: { workspaceOnly: true } } } },
               },
               channels: {
                 x: {

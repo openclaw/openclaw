@@ -53,30 +53,30 @@ Optional repository root shown in the system prompt's Runtime line. If unset, Op
 }
 ```
 
-## `agents.defaults.skills`
+<a id="agents.defaults.skills" />
+<a id="agents-defaults-skills" />
 
-Optional default skill allowlist for agents that do not set
-`agents.entries.*.skills`.
+## Skill discovery
 
-```json5
-{
-  agents: {
-    ownership: "explicit",
-    defaults: { skills: ["github", "weather"] },
-    entries: {
-      writer: {}, // inherits github, weather
-      docs: { skills: ["docs-search"] }, // replaces defaults
-      "locked-down": { skills: [] }, // no skills
-    },
-  },
-}
-```
+Agents discover all otherwise-eligible skills in their configured roots automatically,
+including newly applied Workshop skills. Agent-owned roots remain isolated;
+source precedence and metadata, platform, plugin, prerequisite, and disable gates
+still apply. Use global per-skill `skills.entries.<key>.enabled: false` for an
+individual disable, or session skill selection for a focused session. The separate
+`skills.allowBundled` control only affects bundled skills.
 
-- Omit `agents.defaults.skills` for unrestricted skills by default.
-- Omit `agents.entries.*.skills` to inherit the defaults.
-- Set `agents.entries.*.skills: []` for no skills.
-- A non-empty `agents.entries.*.skills` list is the final set for that agent; it
-  does not merge with defaults.
+**Upgrade policy change:** `agents.defaults.skills`, `agents.entries.*.skills`,
+and their historical `agents.list` entry forms are retired. Doctor and normal
+updates remove old name lists and visibly warn for each former selection.
+**Prior agent-specific restrictions are not preserved:** all currently **and
+future** otherwise-eligible skills become discoverable; an old `[]` no longer
+disables all skills. Existing global per-skill disables and session selections
+remain effective. The original arrays are recoverable from the normal
+pre-migration config backup, not an active runtime filter. No agent exclusion is
+converted into a global disable that would affect other agents.
+
+Skill discovery is not execution authorization. Tool permissions, credentials,
+sandbox/OS isolation, and exec approval policy remain separate and unchanged.
 
 ## `agents.defaults.skipBootstrap`
 

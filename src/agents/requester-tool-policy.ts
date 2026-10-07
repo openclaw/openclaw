@@ -40,6 +40,7 @@ type RequesterToolPolicyResolution = {
   subagentPolicy?: SandboxToolPolicy;
   inheritedToolPolicy?: SandboxToolPolicy;
   inheritedToolPolicySource?: "sender";
+  inheritedWorkspaceOnlyRead?: true;
   subagentStore?: SessionCapabilityStore;
 };
 
@@ -82,8 +83,13 @@ function policyFromEnvelope(
   if (!envelope) {
     return undefined;
   }
-  return envelope.inheritedToolAllow.length > 0 || envelope.inheritedToolDeny.length > 0
+  return envelope.inheritedWorkspaceOnlyRead === true ||
+    envelope.inheritedToolAllow.length > 0 ||
+    envelope.inheritedToolDeny.length > 0
     ? {
+        ...(envelope.inheritedWorkspaceOnlyRead === true
+          ? { workspaceOnlyRead: true as const }
+          : {}),
         ...(envelope.inheritedToolAllow.length > 0 ? { allow: envelope.inheritedToolAllow } : {}),
         ...(envelope.inheritedToolDeny.length > 0 ? { deny: envelope.inheritedToolDeny } : {}),
       }
@@ -100,6 +106,7 @@ function resolveDelegatedPolicy(
       source: Exclude<RequesterToolPolicySource, "current-request">;
       policy?: SandboxToolPolicy;
       inheritedToolPolicySource?: "sender";
+      inheritedWorkspaceOnlyRead?: true;
     } {
   const provenance = normalizeInputProvenance(params.inputProvenance);
   const hasExternalRequester =
@@ -165,6 +172,7 @@ function resolveDelegatedPolicy(
           entry.inheritedToolAllow.toSorted(),
           entry.inheritedToolDeny.toSorted(),
           entry.inheritedToolPolicySource,
+          entry.inheritedWorkspaceOnlyRead,
         ]);
       if (
         !envelope ||
@@ -249,6 +257,7 @@ export function resolveRequesterToolPolicies(
       subagentPolicy,
       inheritedToolPolicy: delegatedPolicy.policy,
       inheritedToolPolicySource: delegatedPolicy.inheritedToolPolicySource,
+      inheritedWorkspaceOnlyRead: delegatedPolicy.policy?.workspaceOnlyRead,
       subagentStore,
     };
   }
@@ -297,10 +306,16 @@ export function resolveRequesterToolPolicies(
     senderPolicy,
     inheritedToolPolicySource:
       inheritedEnvelope?.inheritedToolPolicySource === "sender" ||
+      groupPolicy?.workspaceOnlyRead === true ||
+      senderPolicy?.workspaceOnlyRead === true ||
       toolPolicyRestrictsTools(groupPolicy) ||
       toolPolicyRestrictsTools(senderPolicy)
         ? "sender"
         : undefined,
+    inheritedWorkspaceOnlyRead:
+      groupPolicy?.workspaceOnlyRead ||
+      senderPolicy?.workspaceOnlyRead ||
+      (inheritedEnvelope?.inheritedWorkspaceOnlyRead === true ? true : undefined),
     subagentPolicy,
     inheritedToolPolicy: resolveInheritedToolPolicyForSession(params.config, subagentSessionKey, {
       store: subagentStore,

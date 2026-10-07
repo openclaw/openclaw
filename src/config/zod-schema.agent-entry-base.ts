@@ -112,7 +112,6 @@ export const AgentEntryBaseSchema = z.strictObject({
       localModelLean: z.boolean().optional(),
     })
     .optional(),
-  skills: z.array(z.string()).optional(),
   subagents: z
     .strictObject({
       delegationMode: z.enum(["suggest", "prefer"]).optional(),

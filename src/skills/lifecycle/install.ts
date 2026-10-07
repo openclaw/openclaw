@@ -15,7 +15,7 @@ import { resolveUserPath } from "../../utils.js";
 import { hasBinary, resolveSkillsInstallPreferences } from "../loading/config.js";
 import { resolveSkillKey } from "../loading/frontmatter.js";
 import { resolveSkillSource } from "../loading/source.js";
-import { prepareWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import { prepareWorkspaceSkillEntries } from "../loading/workspace-skill-loader.js";
 import type { SkillInstallSpec, SkillsInstallPreferences } from "../types.js";
 import { installDownloadSpec } from "./install-download.js";
 import { formatInstallFailureMessage } from "./install-output.js";
@@ -427,11 +427,10 @@ export async function resolveInstallerKindReadiness(kind: string): Promise<Skill
 export async function installSkill(params: SkillInstallRequest): Promise<SkillInstallResult> {
   const timeoutMs = Math.min(Math.max(params.timeoutMs ?? 300_000, 1_000), 900_000);
   const workspaceDir = resolveUserPath(params.workspaceDir);
-  // Match status inventory: operators can install dependencies for hidden skills.
-  const entries = await prepareWorkspaceSkills(workspaceDir, {
+  // Match status inventory: dependency installation needs skills not yet eligible.
+  const { entries } = await prepareWorkspaceSkillEntries(workspaceDir, {
     config: params.config,
     agentId: params.agentId,
-    agentSkillFilter: "ignore",
   });
   const entry = entries.find((item) => item.skill.name === params.skillName);
   if (!entry) {

@@ -20,8 +20,7 @@ import {
 } from "../../components/panel-refresh-status.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
-import { t } from "../../i18n/index.ts";
-import { resolveAgentSkillsFilter, selectableAgentsList } from "../../lib/agents/display.ts";
+import { selectableAgentsList } from "../../lib/agents/display.ts";
 import {
   loadToolsCatalog,
   loadToolsEffective,
@@ -82,7 +81,7 @@ import {
 } from "./route-navigation.ts";
 import type { AgentsRouteData } from "./route.ts";
 import { AgentSelectionDrafts } from "./selection-drafts.ts";
-import { clearAgentSkillFilter, loadAgentSkills } from "./skills.ts";
+import { loadAgentSkills } from "./skills.ts";
 import { renderAgents, renderAgentsPageHeader } from "./view.ts";
 
 type AgentsRequestSources = Partial<Pick<ApplicationContext, "agents" | "agentIdentity">>;
@@ -923,35 +922,6 @@ class AgentsPage
     );
   }
 
-  private clearAgentSkills(agentId: string) {
-    if (!this.canCall("config.patch", "operator.admin")) {
-      return;
-    }
-    const client = this.client;
-    const generation = this.requestGeneration;
-    const agents = this.context.agents;
-    const runtimeConfig = this.context.runtimeConfig;
-    if (!client) {
-      return;
-    }
-    const canDispatch = () =>
-      this.context.runtimeConfig === runtimeConfig &&
-      this.isCurrentRequest(client, generation, agentId, { agents }) &&
-      this.canCall("config.patch", "operator.admin");
-    void clearAgentSkillFilter(runtimeConfig, agentId, canDispatch).then((updated) => {
-      if (!canDispatch()) {
-        return;
-      }
-      if (!updated) {
-        this.agentSkillsError =
-          runtimeConfig.state.lastError ?? t("agents.skillsPanel.updateError");
-        return;
-      }
-      this.agentSkillsError = null;
-      void loadAgentSkills(this, agentId);
-    });
-  }
-
   private runCronJobNow(jobId: string) {
     if (!this.canCall("cron.run", "operator.admin")) {
       return;
@@ -1101,46 +1071,6 @@ class AgentsPage
             onSkillsRefresh: () => {
               if (selectedAgentId) {
                 void loadAgentSkills(this, selectedAgentId);
-              }
-            },
-            onAgentSkillToggle: (agentId, skillName, enabled) => {
-              if (
-                agentId !== this.agentsSelectedId ||
-                !this.canCall("config.set", "operator.admin")
-              ) {
-                return;
-              }
-              const target = this.context.runtimeConfig.agentEntry(agentId, { ensure: true });
-              if (!target || !skillName.trim()) {
-                return;
-              }
-              const base =
-                resolveAgentSkillsFilter(
-                  currentConfigObject(this.context.runtimeConfig.state),
-                  agentId,
-                ) ??
-                this.agentSkillsReport?.agentSkillFilter ??
-                this.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ??
-                [];
-              const next = new Set(base);
-              if (enabled) {
-                next.add(skillName.trim());
-              } else {
-                next.delete(skillName.trim());
-              }
-              this.context.runtimeConfig.patchForm([...target.path, "skills"], [...next]);
-            },
-            onAgentSkillsClear: (agentId) => this.clearAgentSkills(agentId),
-            onAgentSkillsDisableAll: (agentId) => {
-              if (
-                agentId !== this.agentsSelectedId ||
-                !this.canCall("config.set", "operator.admin")
-              ) {
-                return;
-              }
-              const target = this.context.runtimeConfig.agentEntry(agentId, { ensure: true });
-              if (target) {
-                this.context.runtimeConfig.patchForm([...target.path, "skills"], []);
               }
             },
             ...createAgentModelActions({

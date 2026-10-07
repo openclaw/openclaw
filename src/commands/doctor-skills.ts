@@ -25,7 +25,7 @@ function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
     fileExists: existsSync,
   };
   const githubSkill = skills.find((skill) => skill.name === "github");
-  if (!githubSkill?.eligible || githubSkill.blockedByAgentFilter) {
+  if (!githubSkill?.eligible) {
     return [];
   }
   const result = detectGhConfigDirMismatch(discoveryInput);
@@ -61,9 +61,7 @@ function collectFleetUnavailableSkills(
 ): SkillStatusEntry[] {
   const healthyKeys = new Set(
     reports.flatMap(({ skills }) =>
-      skills
-        .filter((skill) => skill.eligible && !skill.blockedByAgentFilter)
-        .map((skill) => skill.skillKey),
+      skills.filter((skill) => skill.eligible).map((skill) => skill.skillKey),
     ),
   );
   const candidates = new Map<string, SkillStatusEntry>();

@@ -328,7 +328,7 @@ describe("update repair with a local model provider", () => {
                     models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
                     systemAgent: { agentId: "operator" },
                     skipBootstrap: true,
-                    skills: [],
+
                     sandbox: { mode: "off" },
                   },
                   entries: { operator: {} },

@@ -58,7 +58,7 @@ describe("registered native command routing through the message pipeline", () =>
     });
     const cfg: OpenClawConfig = {
       commands: { native: true, nativeSkills: true },
-      agents: { entries: { main: { workspace, skills: ["export-session"] } } },
+      agents: { entries: { main: { workspace } } },
       channels: {
         telegram: {
           commands: { native: true, nativeSkills: true },
@@ -378,7 +378,7 @@ describe("registered native command routing through the message pipeline", () =>
     try {
       for (const name of ["alpha", "beta"]) {
         await writeSkill({
-          dir: path.join(workspace, "skills", `${name}-skill`),
+          dir: path.join(workspace, name, "skills", `${name}-skill`),
           name: `${name}-skill`,
           description: `${name} skill`,
         });
@@ -389,8 +389,8 @@ describe("registered native command routing through the message pipeline", () =>
           ownership: "explicit",
           defaults: { systemAgent: { agentId: "alpha" } },
           entries: {
-            alpha: { workspace, skills: ["alpha-skill"] },
-            beta: { workspace, skills: ["beta-skill"] },
+            alpha: { workspace: path.join(workspace, "alpha") },
+            beta: { workspace: path.join(workspace, "beta") },
           },
         },
         bindings: [{ agentId: "beta", match: { channel: "telegram", accountId: "bot-a" } }],

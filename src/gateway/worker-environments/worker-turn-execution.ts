@@ -374,6 +374,9 @@ export async function executeWorkerTurn(
           params.environments.createGatewayTools?.({
             identity,
             inheritedToolPolicySource: capabilityProfile.policy.inheritedToolPolicySource,
+            inheritedWorkspaceOnlyRead: capabilityProfile.policy.workspaceOnlyRead
+              ? true
+              : undefined,
             skillWorkshop,
             portalAvailable,
             prepareTools: async (adapters) => {

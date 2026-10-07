@@ -233,6 +233,7 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
       subagentPolicy,
       inheritedToolPolicy,
       inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,
+      workspaceOnlyRead: requesterPolicies.inheritedWorkspaceOnlyRead === true,
       delegated: requesterPolicies.delegated,
       requesterPolicySource: requesterPolicies.requesterPolicySource,
       runtimeToolPolicyForInheritance,

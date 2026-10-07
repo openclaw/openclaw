@@ -38,7 +38,7 @@ function createSkill(overrides: Partial<SkillStatusEntry>): SkillStatusEntry {
     always: false,
     disabled: false,
     blockedByAllowlist: false,
-    blockedByAgentFilter: false,
+
     eligible: true,
     platformIncompatible: false,
     modelVisible: true,
@@ -156,7 +156,6 @@ describe("doctor skills", () => {
       createSkill({ name: "ready" }),
       unavailable,
       createSkill({ name: "disabled", eligible: false, disabled: true }),
-      createSkill({ name: "agent-filtered", eligible: true, blockedByAgentFilter: true }),
       createSkill({ name: "bundled-blocked", eligible: false, blockedByAllowlist: true }),
     ]);
 

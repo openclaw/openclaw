@@ -33,7 +33,6 @@ function guestConfig(enabled = true): OpenClawConfig {
       entries: {
         maintainer: {
           workspace: "/synthetic/openclaw",
-          skills: [],
           tools: { fs: { workspaceOnly: true } },
         },
       },
@@ -91,6 +90,7 @@ describe("X guest turns", () => {
       expect(turn.ctxPayload.BodyForAgent?.match(/context \d+/g)).toHaveLength(1);
       expect(turn.ctxPayload.ConversationToolPolicy).toEqual({
         allow: ["read", "ls", "sessions_spawn", "sessions_yield", "subagents"],
+        workspaceOnlyRead: true,
         deny: ["skills_read"],
       });
       expect(turn.route.sessionKey).toBe("agent:maintainer:x:group:500:guest:501");
@@ -143,15 +143,14 @@ describe("X guest turns", () => {
     const running = test.start();
     try {
       await done.promise;
-      expect(test.dispatch).toHaveBeenCalledOnce();
-      const turn = test.dispatch.mock.calls[0]![0];
-      expect(turn.ctxPayload.ConversationToolPolicy).toEqual(
-        helperOnly ? { deny: ["*"] } : { allow: ["read", "ls"], deny: ["skills_read"] },
-      );
-      expect(turn.ctxPayload.BodyForAgent).toContain("this host supports read-only guest answers");
-      expect(turn.ctxPayload.BodyForAgent).not.toContain("hidden helpers must use");
+      expect(test.dispatch).not.toHaveBeenCalled();
+      expect(test.api.searchConversation).not.toHaveBeenCalled();
       expect(running.status()).toMatchObject({
-        guests: { enabled: true, helpersAvailable: false },
+        guests: {
+          enabled: true,
+          helpersAvailable: false,
+          blockedReason: expect.stringContaining("sender-workspace-only-read-v1"),
+        },
       });
       expect(
         xPlugin.groups!.resolveToolPolicy!({
@@ -202,16 +201,13 @@ describe("X guest turns", () => {
     }
   });
 
-  it.each(["filesystem", "skills", "sandbox"] as const)(
+  it.each(["filesystem", "sandbox"] as const)(
     "drops guests before thread reads when %s containment is absent",
     async (missing) => {
       const cfg = guestConfig();
       const agent = cfg.agents!.entries!.maintainer!;
       if (missing === "filesystem") {
         agent.tools = {};
-      }
-      if (missing === "skills") {
-        agent.skills = ["outside-repository"];
       }
       if (missing === "sandbox") {
         agent.sandbox = { mode: "all" };
@@ -284,13 +280,14 @@ describe("X guest turns", () => {
     await store.remove("default", "30");
     expect(policy("30")).toEqual({
       allow: ["read", "ls", "sessions_spawn", "sessions_yield", "subagents"],
+      workspaceOnlyRead: true,
       deny: ["skills_read"],
     });
     const revoked = await resolveXIngress("default", post("502", "30"), cfg);
     expect(revoked.tier).toBe("guest");
     expect(revoked.ingress.senderAccess.allowed).toBe(true);
     cfg.channels!.x!.guests = { enabled: true, tools: { allow: [], deny: ["read"] } };
-    expect(policy("99")).toEqual({ deny: ["*"] });
+    expect(policy("99")).toEqual({ workspaceOnlyRead: true, deny: ["*"] });
     expect(XConfigSchema.safeParse({ guests: { tools: { allow: ["exec"] } } }).success).toBe(false);
     const helperTools = {
       allow: ["sessions_spawn", "sessions_yield", "subagents"] as const,
@@ -303,6 +300,7 @@ describe("X guest turns", () => {
     };
     expect(policy("99")).toEqual({
       allow: ["sessions_spawn", "sessions_yield", "subagents"],
+      workspaceOnlyRead: true,
       deny: ["skills_read", "subagents"],
     });
     expect(

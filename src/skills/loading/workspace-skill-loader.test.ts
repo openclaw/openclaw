@@ -142,17 +142,17 @@ describe.each(["prompt", "runtime"] as const)("%s asynchronous binary preparatio
     ]);
   }
 
-  it("does not probe skills excluded by agent selection and preserves session overrides", async () => {
+  it("does not probe skills excluded by session selection and preserves session overrides", async () => {
     const skillOverrides: Record<string, boolean> = {};
+    const selectedSkills: string[] = [];
     const { binDir, config, resolve } = await fixture(
       [
         { name: "allowed", metadata: { requires: { bins: ["allowed-tool"] } } },
         { name: "excluded", metadata: { requires: { bins: ["excluded-tool"] } } },
       ],
-      { agentId: "operator", skillOverrides },
+      { agentId: "operator", skillOverrides, skillFilter: selectedSkills },
     );
-    const selectedSkills: string[] = [];
-    config.agents = { defaults: { skills: selectedSkills }, entries: { operator: {} } };
+    config.agents = { entries: { operator: {} } };
     for (const name of ["allowed", "excluded"]) {
       await fs.writeFile(path.join(binDir, `${name}-tool`), "fixture", { mode: 0o755 });
     }
@@ -936,44 +936,7 @@ description: Broken skill
     }
   });
 
-  it("applies agent skill filters and replacement semantics", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    await writeWorkspaceSkills(workspaceDir, [
-      { name: "github", description: "GitHub" },
-      { name: "weather", description: "Weather" },
-      { name: "docs-search", description: "Docs" },
-    ]);
-
-    const defaultEntries = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        agents: {
-          defaults: {
-            skills: ["github"],
-          },
-          entries: { writer: {} },
-        },
-      },
-      agentId: "writer",
-    });
-
-    expect(defaultEntries.map((entry) => entry.skill.name)).toEqual(["github"]);
-
-    const replacementEntries = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        agents: {
-          defaults: {
-            skills: ["github"],
-          },
-          entries: { writer: { skills: ["docs-search"] } },
-        },
-      },
-      agentId: "writer",
-    });
-
-    expect(replacementEntries.map((entry) => entry.skill.name)).toEqual(["docs-search"]);
-  });
-
-  it("keeps remote-eligible skills when agent filtering is active", async () => {
+  it("keeps remote-eligible skills during session selection", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "remote-only"),
@@ -985,13 +948,11 @@ description: Broken skill
     const entries = loadTestWorkspaceSkills(workspaceDir, {
       config: {
         agents: {
-          defaults: {
-            skills: ["remote-only"],
-          },
           entries: { writer: {} },
         },
       },
       agentId: "writer",
+      skillFilter: ["remote-only"],
       eligibility: {
         remote: {
           platforms: ["linux"],

@@ -105,9 +105,6 @@ const state = vi.hoisted(() => ({
   resolveAcpExplicitTurnPolicyErrorMock: vi.fn(),
   runWithModelFallbackMock: vi.fn(),
   runAgentAttemptMock: vi.fn(),
-  resolveAgentSkillsFilterMock: vi.fn(
-    (_cfg?: unknown, _agentId?: string): string[] | undefined => undefined,
-  ),
   resolveEffectiveModelFallbacksMock: vi.fn().mockReturnValue(undefined),
   hasLegacyAutoFallbackWithoutOriginMock: vi.fn((_entry: unknown) => false),
   isModelSelectionLockedMock: vi.fn(
@@ -412,12 +409,12 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Model-switch ingress supplies fixture commands without filesystem discovery.
 vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
   expandExplicitSkillReferences: ({ text }: { text: string }) => ({ body: text, skills: [] }),
   hasSkillReferenceCandidate: () => true,
   prepareSkillCommandsForWorkspace: async (params: unknown) =>
     state.listSkillCommandsForWorkspaceMock(params),
-  resolveEffectiveAgentSkillFilter: () => undefined,
 }));
 
 vi.mock("../config/runtime-snapshot.js", async () => {
@@ -679,11 +676,6 @@ vi.mock("./provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => ({}),
   resolveProviderIdForAuth: (provider: string) =>
     provider.trim().toLowerCase() === "codex-cli" ? "openai" : provider.trim().toLowerCase(),
-}));
-
-vi.mock("../skills/discovery/agent-filter.js", () => ({
-  resolveEffectiveAgentSkillFilter: (_cfg: unknown, agentId: string) =>
-    state.resolveAgentSkillsFilterMock(_cfg, agentId),
 }));
 
 vi.mock("../skills/runtime/remote.js", () => ({
@@ -1041,7 +1033,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       ({ level }: { level?: string }) => level,
     );
     state.resolveThinkingDefaultMock.mockReturnValue("low");
-    state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
     manifestMetadataSnapshot = createPluginMetadataSnapshotFixture();
     state.resolvePluginMetadataSnapshotMock.mockReturnValue(manifestMetadataSnapshot);

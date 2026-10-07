@@ -141,7 +141,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
-  const configRepairWarnings: string[] = [];
+  const configRepairWarnings: string[] = [...(preflight.warnings ?? [])];
   const applyConfigMutation = (
     mutation: DoctorConfigMutationResult & { warnings?: string[] },
     options: { fixHint: string; sanitize?: boolean; emitWarnings?: boolean },
@@ -174,6 +174,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }),
   );
   state = legacyStep.state;
+  configRepairWarnings.push(...(legacyStep.warnings ?? []));
   const legacyDefaultAgentId =
     preflight.rosterMigrationOwnerId ??
     tryGetLegacyDefaultAgentId(state.candidate) ??

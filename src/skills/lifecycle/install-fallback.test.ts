@@ -23,9 +23,14 @@ vi.mock("../../plugins/install-security-scan.js", () => ({
   evaluateSkillInstallPolicy: vi.fn(async () => undefined),
 }));
 
+// mock-isolation: Bootstrap fallback tests supply recipe entries without filesystem discovery.
 vi.mock("../loading/workspace-skill-loader.js", () => {
   return {
-    prepareWorkspaceSkills: skillsMocks.loadWorkspaceSkills,
+    prepareWorkspaceSkillEntries: async (
+      ...args: Parameters<
+        typeof import("../loading/workspace-skill-loader.js").prepareWorkspaceSkillEntries
+      >
+    ) => ({ entries: await skillsMocks.loadWorkspaceSkills(...args) }),
   };
 });
 

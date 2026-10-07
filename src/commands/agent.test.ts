@@ -61,7 +61,6 @@ import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-ha
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { interruptSessionWorkAdmissions } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import {
   loadVisibleSkills,
   loadWorkspaceSkills,
@@ -954,26 +953,6 @@ describe("agentCommand", () => {
 
       const skillFile = path.join(home, "openclaw", "skills", "release-notes", "SKILL.md");
       expect(getLastEmbeddedCall()?.prompt).toContain(`- release-notes (SKILL.md: ${skillFile})`);
-    });
-  });
-
-  it("rejects an explicitly referenced skill hidden by the agent allowlist", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const cfg = mockConfig(home, store);
-      cfg.agents!.defaults!.skills = ["allowed-skill"];
-      vi.mocked(resolveEffectiveAgentSkillFilter).mockReturnValueOnce(["allowed-skill"]);
-      mockUserInvocableSkills({ home, skills: [{ name: "hidden-skill" }] });
-
-      await expect(
-        agentCommandFromIngress(
-          { message: "$hidden_skill", agentId: "main", allowModelOverride: false },
-          runtime,
-        ),
-      ).rejects.toThrow(
-        'Skill "hidden-skill" is not available for this agent. Update the skill allowlist or choose an allowed skill.',
-      );
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
     });
   });
 

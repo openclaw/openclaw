@@ -280,7 +280,7 @@ class ClawHubSkillRuntimeTest {
     if (!installed) {
       """{"managedSkillsDir":"/tmp/skills","skills":[]}"""
     } else {
-      """{"managedSkillsDir":"/tmp/skills","skills":[{"skillKey":"custom-frontmatter-key","name":"Installed skill","source":"openclaw-managed","disabled":false,"eligible":true,"blockedByAllowlist":false,"blockedByAgentFilter":false,"bundled":false,"clawhub":{"status":"linked","valid":true,"slug":"registry-slug","installedVersion":"1.2.3"}}]}"""
+      """{"managedSkillsDir":"/tmp/skills","skills":[{"skillKey":"custom-frontmatter-key","name":"Installed skill","source":"openclaw-managed","disabled":false,"eligible":true,"blockedByAllowlist":false,"bundled":false,"clawhub":{"status":"linked","valid":true,"slug":"registry-slug","installedVersion":"1.2.3"}}]}"""
     }
 
   private fun createTestRuntime(): NodeRuntime {

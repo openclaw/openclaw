@@ -112,7 +112,7 @@ describe("resolveEmbeddedRunSkillEntries (integration)", () => {
     });
     const config: OpenClawConfig = {
       skills: { limits: { maxSkillsInPrompt: 1 } },
-      agents: { defaults: { skills: [agentSkillName, executionSkillName] } },
+      agents: { defaults: {} },
     };
     const snapshotPrompt = (
       await resolveReusableWorkspaceSkillSnapshot({

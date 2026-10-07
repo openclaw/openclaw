@@ -132,7 +132,12 @@ export type ChannelSecretsAdapter = {
 
 export type ChannelGroupAdapter = {
   resolveRequireMention?: (params: ChannelGroupContext) => boolean | undefined;
-  resolveToolPolicy?: (params: ChannelGroupContext) => GroupToolPolicyConfig | undefined;
+  resolveToolPolicy?: (params: ChannelGroupContext) =>
+    | (GroupToolPolicyConfig & {
+        /** Restrict reads to the sender workspace, without skill/attachment exceptions. */
+        workspaceOnlyRead?: true;
+      })
+    | undefined;
 };
 export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unknown> = {
   defaultRuntime?: ChannelAccountSnapshot;

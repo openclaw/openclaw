@@ -142,7 +142,12 @@ export function fixture(options: {
     version: "2026.9.8",
     ...(options.capabilities === null
       ? {}
-      : { capabilities: options.capabilities ?? ["sender-restricted-hidden-helpers-v1"] }),
+      : {
+          capabilities: options.capabilities ?? [
+            "sender-restricted-hidden-helpers-v1",
+            "sender-workspace-only-read-v1",
+          ],
+        }),
     state: {
       openKeyedStore,
       resolveStateDir: () => stateDir,

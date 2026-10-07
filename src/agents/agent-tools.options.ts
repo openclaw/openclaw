@@ -66,6 +66,8 @@ export type OpenClawCodingToolsOptions = {
   workspaceDir?: string;
   /** Additional containment for a trusted scheduled workspace; never weakens configured policy. */
   requireWorkspaceOnly?: true;
+  /** Restrictive owner-prepared resource floor, including sender-bound helpers. */
+  workspaceOnlyRead?: true;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   abortSignal?: AbortSignal;
   /** Disable hook-owned diagnostics when an outer runtime owns tool diagnostics. */

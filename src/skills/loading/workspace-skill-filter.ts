@@ -1,9 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  isSessionSkillEnabled,
-  resolveEffectiveAgentSkillFilter,
-} from "../discovery/agent-filter.js";
+import { isSessionSkillEnabled } from "../discovery/agent-filter.js";
 import { normalizeSkillFilter } from "../discovery/filter.js";
 import { assertUnambiguousManagedSkillNames } from "../library/command-name.js";
 import type { SkillEligibilityContext, SkillEntry } from "../types.js";
@@ -40,19 +37,4 @@ export function filterSkillEntries(
     );
   }
   return filtered;
-}
-
-export function resolveEffectiveWorkspaceSkillFilter(opts?: {
-  config?: OpenClawConfig;
-  agentId?: string;
-  agentSkillFilter?: "apply" | "ignore";
-  skillFilter?: string[];
-}): string[] | undefined {
-  if (opts?.skillFilter !== undefined) {
-    return normalizeSkillFilter(opts.skillFilter);
-  }
-  if (opts?.agentSkillFilter === "ignore" || !opts?.config || !opts.agentId) {
-    return undefined;
-  }
-  return resolveEffectiveAgentSkillFilter(opts.config, opts.agentId);
 }

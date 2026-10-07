@@ -58,7 +58,7 @@ function trackedSkill(owner: string, skillRegistry = registry, requestedReferenc
     name: "Same display name",
     disabled: false,
     eligible: true,
-    blockedByAgentFilter: false,
+
     clawhub: {
       valid: true,
       registry: skillRegistry,

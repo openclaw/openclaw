@@ -34,6 +34,8 @@ export type SpawnedToolContext = {
   inheritedToolDenylist?: string[];
   /** Restrictive requester policy originated at trusted sender/channel ingress. */
   inheritedToolPolicySource?: "sender";
+  /** Sender-bound read containment; may only narrow resource access. */
+  inheritedWorkspaceOnlyRead?: true;
 };
 
 type NormalizedSpawnedRunMetadata = {

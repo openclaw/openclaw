@@ -59,22 +59,22 @@ describe("applyMergePatch", () => {
     const base = {
       agents: {
         list: [
-          { id: "primary", skills: ["a", "b"] },
-          { id: "secondary", skills: ["c"] },
+          { id: "primary", tools: { allow: ["a", "b"] } },
+          { id: "secondary", tools: { allow: ["c"] } },
         ],
       },
     };
-    const patch = { agents: { list: [{ id: "primary", skills: ["a"] }] } };
+    const patch = { agents: { list: [{ id: "primary", tools: { allow: ["a"] } }] } };
     expect(
       applyMergePatch(base, patch, {
         mergeObjectArraysById: true,
-        replaceArrayPaths: new Set(["agents.list[].skills"]),
+        replaceArrayPaths: new Set(["agents.list[].tools.allow"]),
       }),
     ).toEqual({
       agents: {
         list: [
-          { id: "primary", skills: ["a"] },
-          { id: "secondary", skills: ["c"] },
+          { id: "primary", tools: { allow: ["a"] } },
+          { id: "secondary", tools: { allow: ["c"] } },
         ],
       },
     });

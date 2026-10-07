@@ -47,7 +47,6 @@ metadata: '{"openclaw":{"requires":{"bins":["openclaw-test-missing-skill-bin"]}}
       agents: {
         defaults: {
           workspace: tmp,
-          skills: ["missing-tool"],
         },
       },
     };

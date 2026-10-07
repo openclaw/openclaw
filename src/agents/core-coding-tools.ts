@@ -180,6 +180,7 @@ type CoreCodingToolsOptions = {
   includeBaseCodingTools: boolean;
   shellTools: "disabled" | "patch-only" | "full";
   workspaceOnly: boolean;
+  workspaceOnlyRead?: boolean;
   readOnly: boolean;
   sandbox?: SandboxContext;
   skillsSnapshot?: SkillSnapshot;
@@ -212,9 +213,12 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     throw new Error("Sandbox filesystem bridge is unavailable.");
   }
 
-  const skillReadResources = options.skillReadResources ?? options.skillsSnapshot?.resolvedSkills;
+  const skillReadResources = options.workspaceOnlyRead
+    ? undefined
+    : (options.skillReadResources ?? options.skillsSnapshot?.resolvedSkills);
   const skillReadRoots = sandboxRoot ? undefined : resolveSkillReadRoots(skillReadResources);
-  const attachmentReadRoot = !sandboxRoot ? options.attachmentReadRoot : undefined;
+  const attachmentReadRoot =
+    !sandboxRoot && !options.workspaceOnlyRead ? options.attachmentReadRoot : undefined;
   const hostReadRoots = [
     ...(skillReadRoots ?? []),
     ...(attachmentReadRoot && fs.existsSync(attachmentReadRoot) ? [attachmentReadRoot] : []),
@@ -250,7 +254,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     : [];
   // Declared mount read exceptions do not grant writes or enumeration outside
   // the container workspace. Both sets reuse the same effective selection.
-  const sandboxReadMounts = sandboxFileMounts;
+  const sandboxReadMounts = options.workspaceOnlyRead ? sandboxWorkspaceMounts : sandboxFileMounts;
 
   const guardWorkspaceTool = (tool: AnyAgentTool) =>
     options.workspaceOnly
@@ -358,8 +362,10 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
           imageSanitization: options.imageSanitization,
           cwd: options.codingRoot,
           containerWorkdir: sandbox?.containerWorkdir,
-          instructionPaths: options.skillInstructionPaths,
-          instructionDeliveryCache: options.skillInstructionDeliveryCache,
+          instructionPaths: options.workspaceOnlyRead ? undefined : options.skillInstructionPaths,
+          instructionDeliveryCache: options.workspaceOnlyRead
+            ? undefined
+            : options.skillInstructionDeliveryCache,
         },
       ),
     );

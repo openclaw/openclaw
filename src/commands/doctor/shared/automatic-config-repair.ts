@@ -35,6 +35,7 @@ type AutomaticConfigRepairPlan = {
   config: OpenClawConfig;
   snapshot: ConfigFileSnapshot;
   changes: string[];
+  warnings: string[];
   writeConfig: OpenClawConfig;
 };
 
@@ -144,6 +145,7 @@ function planConfigRepair(
     config,
     writeConfig,
     changes: [...migration.changes, ...(migration.warnings ?? [])],
+    warnings: migration.warnings ?? [],
     snapshot: {
       ...snapshot,
       sourceConfig: config,

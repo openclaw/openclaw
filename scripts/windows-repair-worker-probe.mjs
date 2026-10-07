@@ -131,7 +131,6 @@ function repairConfig(baseUrl) {
         models: { [model]: { agentRuntime: { id: "openclaw" } } },
         systemAgent: { agentId: "operator" },
         skipBootstrap: true,
-        skills: [],
         sandbox: { mode: "off" },
       },
       entries: { operator: {} },

@@ -29,7 +29,7 @@ agents.defaults.mediaModels agents.defaults.model.primary agents.defaults.modelP
 agents.defaults.pdfModel.primary agents.defaults.sandbox.browser.enabled
 agents.defaults.sandbox.docker.network agents.defaults.sandbox.mode
 agents.defaults.sandbox.sessionToolsVisibility agents.defaults.sandbox.workspaceAccess
-agents.defaults.skills agents.defaults.subagents.allowAgents agents.defaults.subagents.requireAgentId
+agents.defaults.subagents.allowAgents agents.defaults.subagents.requireAgentId
 agents.defaults.subagents.model agents.defaults.subagents.model.primary
 agents.defaults.sandbox.ssh.workspaceRoot
 agents.defaults.sandbox.workspaceRoot

@@ -45,6 +45,7 @@ import type { PreparedModelThinkingCapability } from "../../model-catalog-lookup
 import type { ReplyDeliveryObserver, ReplyExpectation } from "../../reply-completion.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
+import type { SandboxToolPolicy } from "../../sandbox/types.js";
 import type { TrustedSubagentCompletionHandoff } from "../../subagents/announce/subagent-announce-handoff.js";
 import type { SilentReplyPromptMode, PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
@@ -92,7 +93,7 @@ export type RunEmbeddedAgentParams = {
   /** Thread/topic identifier for routing replies to the originating thread. */
   messageThreadId?: string | number;
   /** Trusted channel-configured policy for the admitted conversation turn. */
-  conversationToolPolicy?: GroupToolPolicyConfig;
+  conversationToolPolicy?: GroupToolPolicyConfig & Pick<SandboxToolPolicy, "workspaceOnlyRead">;
   /** Trusted provider role ids for the requester in this group turn. */
   memberRoleIds?: string[];
   /** Whether workspaceDir points at the canonical agent workspace for bootstrap purposes. */
@@ -153,6 +154,8 @@ export type RunEmbeddedAgentParams = {
   requireWritableSandbox?: true;
   permissionMode?: SessionEntry["permissionMode"];
   sessionRoot?: string;
+  /** Owner-prepared sender resource restriction; never a model argument. */
+  workspaceOnlyRead?: true;
   /** Context supplied by internal producers, separate from inbound prompt text. */
   runtimeContextFragments?: import("../../internal-runtime-context.js").RuntimeContextFragment[];
   /** Finalizes caller-owned guidance after the submitted tool surface is known. */

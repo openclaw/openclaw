@@ -1241,8 +1241,8 @@ describe("gateway config methods", () => {
       ...(original.config.agents as Record<string, unknown> | undefined),
       ownership: "explicit",
       entries: {
-        main: { skills: ["alpha", "beta"] },
-        worker: { skills: ["gamma"] },
+        main: { tools: { allow: ["alpha", "beta"] } },
+        worker: { tools: { allow: ["gamma"] } },
       },
     };
     const seed = await sendConfigApply(
@@ -1254,9 +1254,9 @@ describe("gateway config methods", () => {
       const before = await getCurrentConfigObject();
       const beforeEntries = (before.config.agents as { entries?: Record<string, unknown> }).entries;
       const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
-        raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
+        raw: JSON.stringify({ agents: { entries: { main: { tools: { allow: ["alpha"] } } } } }),
         baseHash: before.hash,
-        replacePaths: ["agents.entries.main.skills"],
+        replacePaths: ["agents.entries.main.tools.allow"],
       });
 
       expect(res.ok, res.error?.message).toBe(true);
@@ -1265,7 +1265,7 @@ describe("gateway config methods", () => {
         ...beforeEntries,
         main: {
           ...(beforeEntries?.main as Record<string, unknown> | undefined),
-          skills: ["alpha"],
+          tools: { allow: ["alpha"] },
         },
       });
     } finally {
@@ -1692,8 +1692,8 @@ describe("gateway noncommitting config RPCs", () => {
         ...(original.config.agents as Record<string, unknown> | undefined),
         ownership: "explicit",
         entries: {
-          main: { skills: ["alpha", "beta"] },
-          worker: { skills: ["gamma"] },
+          main: { tools: { allow: ["alpha", "beta"] } },
+          worker: { tools: { allow: ["gamma"] } },
         },
       };
 
@@ -1705,14 +1705,14 @@ describe("gateway noncommitting config RPCs", () => {
         const beforeEntries = (before.config.agents as { entries?: Record<string, unknown> })
           .entries;
         const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
-          raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
+          raw: JSON.stringify({ agents: { entries: { main: { tools: { allow: ["alpha"] } } } } }),
           baseHash: before.hash,
           replacePaths: ["agents"],
         });
 
         expect(res.ok).toBe(false);
         expect(res.error?.message ?? "").toContain(
-          "config.patch would remove entries from array path(s): agents.entries.main.skills",
+          "config.patch would remove entries from array path(s): agents.entries.main.tools.allow",
         );
         const after = await getCurrentConfigObject();
         expect(after.hash).toBe(before.hash);

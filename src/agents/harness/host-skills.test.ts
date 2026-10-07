@@ -178,73 +178,100 @@ it("confines cached and retargeted skill instructions to the required root at re
   }
 });
 
-it("keeps the host-owned skill root when plugin options widen placement or replace the catalog", async () => {
-  const parent = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-skills-")),
-  );
-  const root = path.join(parent, "workspace");
-  await fs.mkdir(root);
-  const inside = path.join(root, "SKILL.md");
-  const outside = path.join(parent, "outside.md");
-  await fs.writeFile(inside, "Inside instructions");
-  await fs.writeFile(outside, "Outside instructions");
-  const candidates = [inside, outside].map((filePath, index) =>
-    Object.assign(
-      createCanonicalFixtureSkill({
-        name: index === 0 ? "inside" : "outside",
-        description: "Instructions",
-        filePath,
-        baseDir: path.dirname(filePath),
-        source: "workspace",
-      }),
-      { readContent: "Cached outside instructions" },
-    ),
-  );
-  const host = await createAdmittedHostCapabilityTestFixture({
-    runId: "required-root-skills",
-    workspaceDir: root,
-    cwd: root,
-    sessionRoot: root,
-    requireWorkspaceOnly: true,
-    config: { plugins: { enabled: false } },
-    skillsSnapshot: {
-      prompt: "",
-      skills: candidates.map(({ name }) => ({ name, skillKey: name })),
-      discoverySkills: candidates,
-    },
-  });
-  try {
-    const createTools = expectDefined(host.hostCapabilities.createToolSurface, "host tools");
-    const tools = createTools({
-      workspaceDir: parent,
-      cwd: parent,
-      requireWorkspaceOnly: undefined,
-      sandbox: null,
-      installedSkills: [
-        {
-          name: "outside",
-          description: "Plugin replacement",
-          location: outside,
-          source: { filePath: outside, readContent: "Plugin outside instructions" },
-        },
-      ],
+it.each(["required", "sender"] as const)(
+  "keeps the %s host-owned skill root when plugin options widen placement or replace the catalog",
+  async (scope) => {
+    const parent = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-skills-")),
+    );
+    const root = path.join(parent, "workspace");
+    await fs.mkdir(root);
+    const inside = path.join(root, "SKILL.md");
+    const outside = path.join(parent, "outside.md");
+    await fs.writeFile(inside, "Inside instructions");
+    await fs.writeFile(outside, "Outside instructions");
+    const candidates = [inside, outside].map((filePath, index) =>
+      Object.assign(
+        createCanonicalFixtureSkill({
+          name: index === 0 ? "inside" : "outside",
+          description: "Instructions",
+          filePath,
+          baseDir: path.dirname(filePath),
+          source: "workspace",
+        }),
+        { readContent: "Cached outside instructions" },
+      ),
+    );
+    const host = await createAdmittedHostCapabilityTestFixture({
+      runId: "required-root-skills",
+      workspaceDir: root,
+      cwd: root,
+      sessionRoot: root,
+      requireWorkspaceOnly: scope === "required" ? true : undefined,
+      conversationToolPolicy:
+        scope === "sender"
+          ? { workspaceOnlyRead: true as const, allow: ["read", "ls"] }
+          : undefined,
+      config: { plugins: { enabled: false } },
+      skillsSnapshot: {
+        prompt: "",
+        skills: candidates.map(({ name }) => ({ name, skillKey: name })),
+        discoverySkills: candidates,
+      },
     });
-    const read = expectDefined(
-      tools.find((tool) => tool.name === "skills_read"),
-      "skill reader",
-    );
-    expect((await read.execute("inside", { name: "inside" })).content).toEqual([
-      { type: "text", text: "Inside instructions" },
-    ]);
-    await expect(read.execute("outside", { name: "outside" })).rejects.toThrow(
-      "is not available to this agent",
-    );
-    expect(() => createTools({ sessionPermissionPolicy: { root: parent, mode: "full" } })).toThrow(
-      "escapes the captured required workspace",
-    );
-  } finally {
-    host.closeHost();
-    host.closeAdmission();
-    await fs.rm(parent, { recursive: true, force: true });
-  }
-});
+    try {
+      const createTools = expectDefined(host.hostCapabilities.createToolSurface, "host tools");
+      const tools = createTools({
+        workspaceDir: parent,
+        cwd: parent,
+        requireWorkspaceOnly: undefined,
+        sandbox: null,
+        installedSkills: [
+          {
+            name: "outside",
+            description: "Plugin replacement",
+            location: outside,
+            source: { filePath: outside, readContent: "Plugin outside instructions" },
+          },
+        ],
+      });
+      if (scope === "required") {
+        const read = expectDefined(
+          tools.find((tool) => tool.name === "skills_read"),
+          "skill reader",
+        );
+        expect((await read.execute("inside", { name: "inside" })).content).toEqual([
+          { type: "text", text: "Inside instructions" },
+        ]);
+        await expect(read.execute("outside", { name: "outside" })).rejects.toThrow(
+          "is not available to this agent",
+        );
+      } else {
+        expect(
+          tools.some((tool) => tool.name === "skills_read" || tool.name === "skills_search"),
+        ).toBe(false);
+        const read = expectDefined(
+          tools.find((tool) => tool.name === "read"),
+          "ordinary reader",
+        );
+        expect((await read.execute("inside", { path: inside })).content).toEqual([
+          { type: "text", text: "Inside instructions" },
+        ]);
+        await expect(read.execute("outside", { path: outside })).rejects.toThrow();
+      }
+      expect(() =>
+        createTools({ sessionPermissionPolicy: { root: parent, mode: "full" } }),
+      ).toThrow("escapes the captured required workspace");
+      const retainedRead = expectDefined(
+        tools.find((tool) => tool.name === "read"),
+        "retained reader",
+      );
+      host.closeHost();
+      await expect(retainedRead.execute("closed", { path: inside })).rejects.toThrow();
+    } finally {
+      host.closeHost();
+      host.closeAdmission();
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  },
+);

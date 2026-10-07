@@ -439,6 +439,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     bootstrapWorkspaceDir,
     permissionMode: params.permissionMode,
     requireWorkspaceOnly: params.requireWorkspaceOnly,
+    workspaceOnlyRead: params.workspaceOnlyRead,
     requireWritableSandbox: params.requireWritableSandbox,
     agentDir,
     preparedModelRuntime: runInput.preparedModelRuntime,

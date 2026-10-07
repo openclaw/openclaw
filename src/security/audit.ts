@@ -4,7 +4,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { tryResolveDefaultAgentId } from "../agents/agent-scope.js";
-import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
@@ -42,11 +41,6 @@ import {
   inspectPathPermissions,
 } from "./audit-fs.js";
 import { collectGatewayConfigFindings } from "./audit-gateway-config.js";
-import {
-  readBoundedMcporterRegistry,
-  type McporterRegistryReadOutcome,
-  type McporterRegistryRejectReason,
-} from "./audit-mcporter-registry.js";
 import type {
   SecurityAuditFinding,
   SecurityAuditReport,
@@ -64,21 +58,6 @@ type SecurityAuditExplicitGatewayAuth = {
   password?: string;
 };
 type SecurityAuditGatewayAuthOverride = Pick<GatewayAuthConfig, "mode" | "token" | "password">;
-type McpServerSourceSummary = {
-  label: string;
-  names: string[];
-};
-type AgentSkillMcpBoundaryScope = {
-  id: string;
-  skillSource: string;
-  execHost: string;
-  execSecurity: string;
-  execAsk: string;
-};
-type AgentSkillMcpBoundaryCandidate =
-  | { kind: "defaults"; id: "agents.defaults"; skillSource: string }
-  | { kind: "agent"; id: string; skillSource: string; agentId: string };
-
 export type { SecurityAuditReport } from "./audit.types.js";
 
 type SecurityAuditOptions = {
@@ -794,184 +773,6 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   return findings;
 }
 
-function formatNamesPreview(names: readonly string[]): string {
-  const visible = names.slice(0, 6);
-  const suffix = names.length > visible.length ? `, +${names.length - visible.length} more` : "";
-  return `${visible.join(", ")}${suffix}`;
-}
-
-function listConfiguredMcpServerNames(cfg: OpenClawConfig): string[] {
-  return Object.entries(cfg.mcp?.servers ?? {})
-    .filter(([, server]) => server?.enabled !== false)
-    .map(([name]) => name)
-    .toSorted();
-}
-
-type GlobalMcporterRegistrySummary =
-  | { status: "source"; summary: McpServerSourceSummary }
-  | { status: "absent" }
-  | Extract<McporterRegistryReadOutcome, { status: "rejected" }>;
-
-async function readGlobalMcporterRegistrySummary(
-  stateDir: string,
-): Promise<GlobalMcporterRegistrySummary> {
-  const outcome = await readBoundedMcporterRegistry(stateDir);
-  if (outcome.status === "missing") {
-    return { status: "absent" };
-  }
-  if (outcome.status === "rejected") {
-    return outcome;
-  }
-  const mcpServers = asNullableRecord(asNullableRecord(outcome.value)?.mcpServers);
-  if (!mcpServers) {
-    return { status: "absent" };
-  }
-  const names = Object.entries(mcpServers)
-    .filter(([, value]) => asNullableRecord(value)?.enabled !== false)
-    .map(([name]) => name)
-    .toSorted();
-  return names.length > 0
-    ? { status: "source", summary: { label: "skills/config/mcporter.json", names } }
-    : { status: "absent" };
-}
-
-function describeMcporterRegistryRejection(reason: McporterRegistryRejectReason): string {
-  switch (reason) {
-    case "oversized":
-      return "larger than the 16 MiB audit cap";
-    case "unreadable":
-      return "unreadable";
-    case "non-regular":
-      return "not a regular file";
-    case "malformed":
-      return "not valid JSON";
-    default: {
-      const exhaustive: never = reason;
-      return exhaustive;
-    }
-  }
-}
-
-function hasOwnSkillsAllowlist(entry: object | undefined): boolean {
-  return Boolean(entry && Object.hasOwn(entry, "skills"));
-}
-
-function collectAgentSkillMcpBoundaryScopes(cfg: OpenClawConfig): AgentSkillMcpBoundaryScope[] {
-  const agents = listAgentEntries(cfg);
-  const defaultsHaveSkillAllowlist = hasOwnSkillsAllowlist(cfg.agents?.defaults);
-  const candidates: AgentSkillMcpBoundaryCandidate[] = [
-    ...(defaultsHaveSkillAllowlist
-      ? [
-          {
-            kind: "defaults" as const,
-            id: "agents.defaults" as const,
-            skillSource: "agents.defaults.skills",
-          },
-        ]
-      : []),
-    ...agents
-      .filter((entry) => typeof entry.id === "string")
-      .flatMap((entry) => {
-        const ownsSkills = hasOwnSkillsAllowlist(entry);
-        if (!ownsSkills && !defaultsHaveSkillAllowlist) {
-          return [];
-        }
-        return [
-          {
-            kind: "agent" as const,
-            id: entry.id,
-            skillSource: ownsSkills
-              ? "agents.entries.*.skills"
-              : "agents.defaults.skills (inherited)",
-            agentId: entry.id,
-          },
-        ];
-      }),
-  ];
-
-  return candidates.flatMap((candidate) => {
-    const agentId = candidate.kind === "agent" ? candidate.agentId : undefined;
-    const sandboxMode = resolveSandboxConfigForAgent(cfg, agentId).mode;
-    const exec = resolveExecDefaults({
-      cfg,
-      ...(candidate.kind === "defaults" ? { scope: { kind: "defaults" as const } } : { agentId }),
-      sandboxAvailable: sandboxMode !== "off",
-    });
-    if (exec.security === "deny" || exec.effectiveHost === "sandbox") {
-      return [];
-    }
-    return [
-      {
-        id: candidate.id,
-        skillSource: candidate.skillSource,
-        execHost: exec.effectiveHost,
-        execSecurity: exec.security,
-        execAsk: exec.ask,
-      },
-    ];
-  });
-}
-
-async function collectAgentSkillMcpBoundaryFindings(params: {
-  cfg: OpenClawConfig;
-  stateDir: string;
-}): Promise<SecurityAuditFinding[]> {
-  const scopes = collectAgentSkillMcpBoundaryScopes(params.cfg);
-  if (scopes.length === 0) {
-    return [];
-  }
-
-  const findings: SecurityAuditFinding[] = [];
-  const sources: McpServerSourceSummary[] = [];
-  const configServerNames = listConfiguredMcpServerNames(params.cfg);
-  if (configServerNames.length > 0) {
-    sources.push({ label: "mcp.servers", names: configServerNames });
-  }
-  const globalMcporterRegistry = await readGlobalMcporterRegistrySummary(params.stateDir);
-  if (globalMcporterRegistry.status === "rejected") {
-    // An existing registry that cannot be inspected must not silently vanish
-    // from the audit; tell the operator the MCP boundary check is incomplete.
-    findings.push({
-      checkId: "tools.exec.mcporter_registry_inspection_incomplete",
-      severity: "warn",
-      title: "Global mcporter registry could not be inspected",
-      detail:
-        `skills/config/mcporter.json exists but could not be safely inspected (${describeMcporterRegistryRejection(globalMcporterRegistry.reason)}). ` +
-        "The MCP boundary inspection is incomplete: the audit could not verify which MCP servers a host exec process can reach.",
-      remediation:
-        "Repair or remove skills/config/mcporter.json so the audit can inspect it: keep it a regular file readable by the gateway user, valid JSON, and below the 16 MiB audit cap.",
-    });
-  } else if (globalMcporterRegistry.status === "source") {
-    sources.push(globalMcporterRegistry.summary);
-  }
-  if (sources.length === 0) {
-    return findings;
-  }
-
-  findings.push({
-    checkId: "tools.exec.agent_skill_mcp_boundary_drift",
-    severity: "warn",
-    title: "Agent skill allowlists do not constrain host exec MCP clients",
-    detail:
-      `Detected agent skill allowlists on host-exec-capable scopes:\n${scopes
-        .slice(0, 8)
-        .map(
-          (scope) =>
-            `- ${scope.id}: ${scope.skillSource}, exec.host=${scope.execHost}, security=${scope.execSecurity}, ask=${scope.execAsk}`,
-        )
-        .join("\n")}` +
-      (scopes.length > 8 ? `\n- +${scopes.length - 8} more scopes.` : "") +
-      `\nMCP server registries visible to the gateway configuration/state:\n${sources
-        .map((source) => `- ${source.label}: ${formatNamesPreview(source.names)}`)
-        .join("\n")}\n` +
-      "agents.*.skills filters OpenClaw skill visibility and snapshots; it is not a shell-time authorization boundary. " +
-      "A host exec process can run external MCP clients or read a global mcporter registry unless sandbox, filesystem, network, or MCP credential boundaries block it.",
-    remediation:
-      'For agents that need per-agent MCP isolation, set their exec policy to security="deny" or a tight allowlist, run them in sandbox/container/OS-user isolation where the global MCP registry is not readable, split sensitive MCP servers into a separate gateway/trust boundary, or require per-agent MCP credentials at the server layer.',
-  });
-  return findings;
-}
-
 function collectOpenExecSurfacePaths(cfg: OpenClawConfig): string[] {
   const channels = asNullableRecord(cfg.channels);
   if (!channels) {
@@ -1103,7 +904,6 @@ export async function runSecurityAuditCore(
   findings.push(...(await collectPluginSecurityAuditFindings(context)));
   findings.push(...collectElevatedFindings(cfg));
   findings.push(...collectExecRuntimeFindings(cfg));
-  findings.push(...(await collectAgentSkillMcpBoundaryFindings({ cfg, stateDir })));
   const hooksGatewayAuthCfg = shouldMaterializeHooksGatewayAuthRefs(cfg)
     ? await materializeAuditGatewayAuthRefs({
         cfg,

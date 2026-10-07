@@ -21,7 +21,7 @@ export function createSkill(overrides: Partial<SkillStatusEntry> = {}): SkillSta
     always: false,
     disabled: false,
     blockedByAllowlist: false,
-    blockedByAgentFilter: false,
+
     eligible: true,
     platformIncompatible: false,
     modelVisible: true,

@@ -387,7 +387,7 @@ describe("buildStatusAllReportData", () => {
             defaults: { systemAgent: { agentId: "beta" } },
             entries: {
               alpha: { workspace: "/tmp/alpha" },
-              beta: { workspace: workspaceDir, skills: [] },
+              beta: { workspace: workspaceDir },
             },
           },
         },

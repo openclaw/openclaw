@@ -76,6 +76,7 @@ type WorkerGatewayToolsDependencies = {
   skillWorkshop?: AnyAgentTool;
   portalAvailable?: boolean;
   inheritedToolPolicySource?: "sender";
+  inheritedWorkspaceOnlyRead?: true;
   prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[] | Promise<AnyAgentTool[]>;
 };
 
@@ -381,6 +382,7 @@ export function createWorkerSessionToolExecutor(
       inheritedToolAllowlist: authorizedTools,
       inheritedToolDenylist: [],
       inheritedToolPolicySource: params.inheritedToolPolicySource,
+      inheritedWorkspaceOnlyRead: params.inheritedWorkspaceOnlyRead,
       callGateway: gatewayCall,
       expectedParentSessionId: operation.source.sessionId,
       ...(operation.signal ? { signal: operation.signal } : {}),

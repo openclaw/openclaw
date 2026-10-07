@@ -34,7 +34,7 @@ it.each([
       skills: { limits },
       agents: {
         entries: {
-          alpha: { workspace: state.workspaceDir, skills: [] },
+          alpha: { workspace: state.workspaceDir },
           beta: { workspace: state.workspaceDir },
         },
       },

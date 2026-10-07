@@ -385,12 +385,10 @@ export async function prepareAgentCommandExecution(
         expandExplicitSkillReferences,
         hasSkillReferenceCandidate,
         prepareSkillCommandsForWorkspace,
-        resolveEffectiveAgentSkillFilter,
       } = await import("../../skills/discovery/chat-commands.runtime.js");
       const hasExplicitSkillCandidate =
         message.trimStart().startsWith("/") || hasSkillReferenceCandidate(message);
       if (hasExplicitSkillCandidate) {
-        const skillFilter = resolveEffectiveAgentSkillFilter(cfg, sessionAgentId);
         const commandParams = {
           workspaceDir,
           cfg,
@@ -398,7 +396,6 @@ export async function prepareAgentCommandExecution(
           sessionEntry: sessionEntryRaw,
           sessionKey,
           ...(preparedMetadataSnapshot ? { pluginMetadataSnapshot: preparedMetadataSnapshot } : {}),
-          ...(skillFilter ? { skillFilter } : {}),
         };
         const lifecycleGeneration = opts.lifecycleGeneration;
         const assertCurrent =
@@ -406,12 +403,7 @@ export async function prepareAgentCommandExecution(
             ? () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration)
             : undefined;
         const skillCommands = await prepareSkillCommandsForWorkspace(commandParams, assertCurrent);
-        const allSkillCommands = skillFilter
-          ? await prepareSkillCommandsForWorkspace(
-              { ...commandParams, includeAllowlistHidden: true },
-              assertCurrent,
-            )
-          : skillCommands;
+        const allSkillCommands = skillCommands;
         const expansion = expandExplicitSkillReferences({
           text: message,
           skillCommands,

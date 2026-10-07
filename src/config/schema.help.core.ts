@@ -303,16 +303,12 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Per-surface message policy overrides keyed by the resolved delivery surface id. Use this only when one deployed surface needs stricter silent-reply handling than the agent default.",
   "surfaces.*.silentReply":
     "Overrides group silent-reply policy for one resolved delivery surface. Unset fields inherit agents.defaults.silentReply. Direct chats and internal sessions always require a reply.",
-  "agents.entries.*.skills":
-    "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
   agents:
     "Agent runtime configuration root. Root siblings own infrastructure and cross-agent defaults; agents.defaults owns agent-loop behavior; agent entries may override either where supported.",
   "agents.ownership":
     'Durable multi-agent ownership generation marker. "explicit" means ambient channels, heartbeat, system-agent consults, Talk, cron, and bare CLI operations must resolve a surface-specific owner or fail closed. OpenClaw stamps this automatically when creating or migrating a fleet; omit it for a sole agent.',
   "agents.defaults":
     "Shared default settings inherited by agents unless overridden per entry in agents.entries. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
-  "agents.defaults.skills":
-    "Optional default skill allowlist inherited by agents that omit agents.entries.*.skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.entries.*.skills replaces this default instead of merging with it.",
   "agents.defaults.subagents.delegationMode":
     'Prompt-only sub-agent delegation strength. Defaults to "prefer" in each agent\'s main session and "suggest" elsewhere; "prefer" strongly instructs the agent to delegate non-trivial work via sessions_spawn.',
   "agents.entries.*.subagents.delegationMode":

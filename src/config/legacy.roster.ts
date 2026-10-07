@@ -7,6 +7,8 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 
 /** Retired entry fields read only by Doctor, pre-admission migrations, and raw-input compatibility. */
 type RetiredAgentEntryFields = {
+  /** Doctor retires name allowlists with a visible discovery-policy warning. */
+  skills?: string[];
   /** Doctor materializes explicit surface owners before removing this marker. */
   default?: boolean;
   /** Doctor requires an intermediate upgrade; current policy is per-model `models[ref].agentRuntime`. */
@@ -17,6 +19,8 @@ type RetiredAgentEntryFields = {
 
 /** Retired defaults fields read only by Doctor, pre-admission migrations, and raw-input compatibility. */
 type RetiredAgentDefaultsFields = {
+  /** Doctor retires inherited name allowlists with a visible discovery-policy warning. */
+  skills?: string[];
   /** Doctor moves this selection to `agents.defaults.mediaModels.image`. */
   imageGenerationModel?: AgentToolModelConfig;
   /** Doctor moves this selection to `agents.defaults.mediaModels.video`. */

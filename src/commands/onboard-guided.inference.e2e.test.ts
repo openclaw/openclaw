@@ -79,7 +79,6 @@ describe("guided onboarding inference composition", () => {
             defaults: {
               ...(!team ? { workspace } : {}),
               skipBootstrap: true,
-              skills: [],
             },
           },
           models: {

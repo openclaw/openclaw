@@ -193,9 +193,6 @@ extension OpenClawChatViewModel {
         if let disabledReason = self.composerSkillDisabledReason(skill) {
             return disabledReason
         }
-        if skill.agentFiltered, self.composerToolOverrides.skills[skill.key] == nil {
-            return String(localized: "Not enabled for this agent. Enable for this session.")
-        }
         return nil
     }
 
@@ -225,7 +222,7 @@ extension OpenClawChatViewModel {
 
     func composerSkillEnabled(_ skill: OpenClawChatComposerSkill) -> Bool {
         guard skill.baseEnabled, !skill.missingDependencies, !skill.blocked else { return false }
-        return self.composerToolOverrides.skills[skill.key] ?? !skill.agentFiltered
+        return self.composerToolOverrides.skills[skill.key] ?? true
     }
 
     func composerConnectorEnabled(_ connector: OpenClawChatComposerConnector) -> Bool {
@@ -324,8 +321,7 @@ extension OpenClawChatViewModel {
         else { return }
         var next = self.composerToolOverrides
         let desired = !self.composerSkillEnabled(skill)
-        let baseEnabled = !skill.agentFiltered
-        next.skills[skill.key] = desired == baseEnabled ? nil : desired
+        next.skills[skill.key] = desired ? nil : false
         self.patchComposerToolOverrides(next)
     }
 

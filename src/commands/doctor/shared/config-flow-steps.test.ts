@@ -93,6 +93,21 @@ describe("doctor config flow steps", () => {
     expect(result.state.pendingChanges).toBe(true);
   });
 
+  it("retains policy migration warnings separately for typed update receipts", () => {
+    const warnings = ["Prior agent-specific restrictions are not preserved."];
+    migrateLegacyConfigMock.mockReturnValueOnce({
+      config: {},
+      changes: ["Retired selection."],
+      warnings,
+    });
+    const result = createLegacyStepResult({
+      parsed: { agents: { defaults: { skills: [] } } },
+      legacyIssues: [{ path: "agents", message: "retired selection" }],
+    });
+    expect(result).toHaveProperty("warnings", warnings);
+    expect(result.issueLines).toContain(warnings[0]);
+  });
+
   it("migrates the resolved config so single-file include values are repairable", () => {
     const sourceConfig = {
       mcp: { servers: { local: { command: "node", disabled: true } } },

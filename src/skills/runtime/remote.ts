@@ -402,7 +402,6 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
     const entries = loadWorkspaceSkills(workspaceDir, {
       config: params.cfg,
       agentId,
-      agentSkillFilter: "ignore",
     });
     for (const bin of collectRequiredBins(entries, "darwin")) {
       requiredBins.add(bin);

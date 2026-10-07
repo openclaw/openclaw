@@ -74,7 +74,6 @@ public struct OpenClawChatComposerSkill: Identifiable, Equatable, Sendable {
     public let baseEnabled: Bool
     public let missingDependencies: Bool
     public let blocked: Bool
-    public let agentFiltered: Bool
 
     public var id: String {
         self.key
@@ -85,15 +84,13 @@ public struct OpenClawChatComposerSkill: Identifiable, Equatable, Sendable {
         name: String,
         baseEnabled: Bool,
         missingDependencies: Bool,
-        blocked: Bool,
-        agentFiltered: Bool = false)
+        blocked: Bool)
     {
         self.key = key
         self.name = name
         self.baseEnabled = baseEnabled
         self.missingDependencies = missingDependencies
         self.blocked = blocked
-        self.agentFiltered = agentFiltered
     }
 }
 

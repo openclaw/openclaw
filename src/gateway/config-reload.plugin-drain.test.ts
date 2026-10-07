@@ -141,7 +141,7 @@ describe("plugin drain recovery", () => {
     try {
       await harness.reloader.ready;
       await flushWatcherChange(harness);
-      config = { ...config, agents: { entries: { main: { skills: [] } } } };
+      config = { ...config, agents: { entries: { main: { model: "openai/fixture-hot-reload" } } } };
       await flushWatcherChange(harness);
       expect(harness.onHotReload).toHaveBeenCalledOnce();
       expect(harness.onConfigApplied).not.toHaveBeenCalled();

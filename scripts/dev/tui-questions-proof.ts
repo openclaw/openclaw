@@ -326,7 +326,6 @@ async function runProof(outputDir: string) {
           defaults: {
             workspace: path.join(modeDir, "workspace"),
             skipBootstrap: true,
-            skills: [],
             model: { primary: "question-proof/gpt-5.6-luna" },
             models: {
               "question-proof/gpt-5.6-luna": {
@@ -335,7 +334,7 @@ async function runProof(outputDir: string) {
               },
             },
           },
-          entries: { main: { skills: [] } },
+          entries: { main: {} },
         },
         models: {
           mode: "replace",

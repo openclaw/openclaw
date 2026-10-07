@@ -204,7 +204,7 @@ it(
             defaults: {
               workspace,
               skipBootstrap: true,
-              skills: [],
+
               model: { primary: "openai/canonical-proof", fallbacks: [] },
               models: { "openai/canonical-proof": { agentRuntime: { id: "openclaw" } } },
             },

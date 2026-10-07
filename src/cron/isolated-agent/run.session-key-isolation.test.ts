@@ -25,7 +25,6 @@ import {
   dispatchCronDeliveryMock,
   lookupModelContextTokensMock,
   logWarnMock,
-  resolveAgentSkillsFilterMock,
   resolveAllowedModelRefMock,
   resolveEffectiveAgentRuntimeMock,
   runWithModelFallbackMock,
@@ -310,15 +309,13 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     });
   });
 
-  it("reuses cached snapshot when version and normalized skillFilter are unchanged", async () => {
-    resolveAgentSkillsFilterMock.mockReturnValue([" weather ", "meme-factory", "weather"]);
+  it("reuses cached snapshot when version and session selection are unchanged", async () => {
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         sessionEntry: makeCronSessionEntry({
           skillsSnapshot: {
             prompt: "<available_skills><skill>weather</skill></available_skills>",
             skills: [{ name: "weather" }],
-            skillFilter: ["meme-factory", "weather"],
             version: 42,
           },
         }),
@@ -326,7 +323,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     );
 
     await runSkillFilterCase({
-      cfg: { agents: { entries: { "weather-bot": { skills: ["weather", "meme-factory"] } } } },
+      cfg: { agents: { entries: { "weather-bot": {} } } },
       agentId: "weather-bot",
     });
     expect(buildWorkspaceSkillSnapshotMock).not.toHaveBeenCalled();

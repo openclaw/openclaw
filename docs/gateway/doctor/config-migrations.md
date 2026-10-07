@@ -28,6 +28,28 @@ the same transforms before candidate config validation, through the existing
 backup and include-aware write flow. Ordinary reads leave the authored values
 untouched so Doctor can report and persist the repair.
 
+## Agent skill name list retirement
+
+Agents discover all otherwise-eligible skills in their configured roots automatically,
+including newly applied Workshop skills. Agent-owned roots remain isolated;
+source precedence and metadata, platform, plugin, prerequisite, and disable gates
+still apply. Use global per-skill `skills.entries.<key>.enabled: false` for an
+individual disable, or session skill selection for a focused session. The separate
+`skills.allowBundled` control only affects bundled skills.
+
+**Upgrade policy change:** `agents.defaults.skills`, `agents.entries.*.skills`,
+and their historical `agents.list` entry forms are retired. Doctor and normal
+updates remove old name lists and visibly warn for each former selection.
+**Prior agent-specific restrictions are not preserved:** all currently **and
+future** otherwise-eligible skills become discoverable; an old `[]` no longer
+disables all skills. Existing global per-skill disables and session selections
+remain effective. The original arrays are recoverable from the normal
+pre-migration config backup, not an active runtime filter. No agent exclusion is
+converted into a global disable that would affect other agents.
+
+Skill discovery is not execution authorization. Tool permissions, credentials,
+sandbox/OS isolation, and exec approval policy remain separate and unchanged.
+
 ## Retention policy
 
 OpenClaw supports migrations from formats written by shipped releases on or after

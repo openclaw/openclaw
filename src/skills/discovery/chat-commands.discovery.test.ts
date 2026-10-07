@@ -46,8 +46,8 @@ describe("skill command discovery through workspace loading", () => {
         plugins: { enabled: false },
         agents: {
           entries: {
-            first: { workspace: firstWorkspace, skills: [firstName] },
-            second: { workspace: secondWorkspace, skills: [secondName] },
+            first: { workspace: firstWorkspace },
+            second: { workspace: secondWorkspace },
           },
         },
         skills: { allowBundled: [] },
@@ -79,7 +79,8 @@ describe("skill command discovery through workspace loading", () => {
     });
     const cfg = {
       plugins: { enabled: false },
-      agents: { entries: { main: { workspace: gateway, skills: ["hello"] } } },
+      agents: { entries: { main: { workspace: gateway } } },
+      skills: { allowBundled: ["fixture-no-bundled"] },
     } satisfies OpenClawConfig;
     const release = registerAgentWorkspaceAccess(gateway, {
       bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
@@ -180,7 +181,7 @@ describe("skill command discovery through workspace loading", () => {
   });
 
   it.each(["workspace", "workshop"] as const)(
-    "reports allowlist-hidden %s skills without loading another agent's skills",
+    "reports session-focused %s skills without loading another agent's skills",
     async (source) => {
       const root = tempDirs.make("openclaw-skill-command-discovery-");
       const workspaceDir = path.join(root, "workspace");
@@ -191,7 +192,6 @@ describe("skill command discovery through workspace loading", () => {
             alpha: {
               agentDir: path.join(root, "alpha"),
               workspace: workspaceDir,
-              skills: ["allowed"],
             },
             beta: { agentDir: path.join(root, "beta"), workspace: workspaceDir },
           },
@@ -225,14 +225,17 @@ describe("skill command discovery through workspace loading", () => {
         { OPENCLAW_STATE_DIR: root, OPENCLAW_BUNDLED_SKILLS_DIR: bundledSkillsDir },
         async () => {
           const params = { workspaceDir, cfg: config, agentId: "alpha" };
-          const skillCommands = listSkillCommandsForWorkspace(params);
+          const skillCommands = listSkillCommandsForWorkspace({
+            ...params,
+            skillFilter: ["allowed"],
+          });
           const allSkillCommands = listSkillCommandsForWorkspace({
             ...params,
             includeAllowlistHidden: true,
           });
           expect(skillCommands.map((command) => command.skillName)).toEqual(["allowed"]);
           expect(await prepareSkillCommandsForAgents({ cfg: config, agentIds: ["alpha"] })).toEqual(
-            skillCommands,
+            allSkillCommands,
           );
           expect(allSkillCommands.map((command) => command.skillName)).toEqual([
             "allowed",
@@ -248,7 +251,7 @@ describe("skill command discovery through workspace loading", () => {
             ).toEqual({
               body: text,
               error:
-                'Skill "hidden" is not available for this agent. Update the skill allowlist or choose an allowed skill.',
+                'Skill "hidden" is not available for this agent. Update the session skill selection or choose a selected skill.',
               skills: [],
             });
           }

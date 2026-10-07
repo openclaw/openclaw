@@ -585,7 +585,7 @@ describe("buildWorkspaceSkillStatus", () => {
         always: true,
         disabled: false,
         blockedByAllowlist: false,
-        blockedByAgentFilter: false,
+
         eligible: false,
         platformIncompatible: true,
         modelVisible: false,
@@ -694,7 +694,7 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(skill?.commandVisible).toBe(true);
   });
 
-  it("preserves source, custom keys, order, and agent exclusion in status", () => {
+  it("preserves source, custom keys, order, and eligibility in status", () => {
     const workspaceDir = tempDirs.make("openclaw-skill-status-");
     const report = buildWorkspaceSkillStatus(workspaceDir, {
       managedSkillsDir: path.join(workspaceDir, ".managed"),
@@ -714,29 +714,25 @@ describe("buildWorkspaceSkillStatus", () => {
         }),
       ],
       agentId: "specialist",
-      config: { agents: { entries: { specialist: { skills: ["workspace"] } } } },
+      config: { agents: { entries: { specialist: {} } } },
     });
 
     expect(report.agentId).toBe("specialist");
-    expect(report.agentSkillFilter).toEqual(["workspace"]);
     expect(
-      report.skills.map(
-        ({ name, source, skillKey, bundled, blockedByAgentFilter, modelVisible }) => ({
-          name,
-          source,
-          skillKey,
-          bundled,
-          blockedByAgentFilter,
-          modelVisible,
-        }),
-      ),
+      report.skills.map(({ name, source, skillKey, bundled, modelVisible }) => ({
+        name,
+        source,
+        skillKey,
+        bundled,
+        modelVisible,
+      })),
     ).toEqual([
       {
         name: "workspace",
         source: "openclaw-workspace",
         skillKey: "workspace-key",
         bundled: false,
-        blockedByAgentFilter: false,
+
         modelVisible: true,
       },
       {
@@ -744,16 +740,14 @@ describe("buildWorkspaceSkillStatus", () => {
         source: "openclaw-custodian",
         skillKey: "custodian",
         bundled: true,
-        blockedByAgentFilter: true,
-        modelVisible: false,
+        modelVisible: true,
       },
       {
         name: "bundle",
         source: "openclaw-bundled",
         skillKey: "bundle",
         bundled: true,
-        blockedByAgentFilter: true,
-        modelVisible: false,
+        modelVisible: true,
       },
     ]);
   });
@@ -763,21 +757,6 @@ describe("buildWorkspaceSkillStatus", () => {
     const report = buildWorkspaceSkillStatus("/tmp/ws", {
       agentId: "specialist",
       config: {
-        agents: {
-          entries: {
-            specialist: {
-              skills: [
-                "ready",
-                "needs-bin",
-                "needs-env",
-                "prompt-hidden",
-                "slash-hidden",
-                "disabled",
-                "bundled-blocked",
-              ],
-            },
-          },
-        },
         skills: {
           allowBundled: ["some-other-bundled-skill"],
           entries: {
@@ -820,22 +799,13 @@ describe("buildWorkspaceSkillStatus", () => {
             disableModelInvocation: false,
           },
         }),
-        createEntry("agent-filtered"),
+        createEntry("discovered"),
         createEntry("disabled"),
         createEntry("bundled-blocked", { source: "openclaw-bundled" }),
       ],
     });
 
     const byName = skillStatusByName(report.skills);
-    expect(report.agentSkillFilter).toEqual([
-      "ready",
-      "needs-bin",
-      "needs-env",
-      "prompt-hidden",
-      "slash-hidden",
-      "disabled",
-      "bundled-blocked",
-    ]);
     expectStatusFlags(requireSkillStatus(byName, "ready"), {
       eligible: true,
       modelVisible: true,
@@ -884,13 +854,12 @@ describe("buildWorkspaceSkillStatus", () => {
       commandVisible: false,
     });
     expect(slashHidden.userInvocable).toBe(false);
-    const agentFiltered = requireSkillStatus(byName, "agent-filtered");
-    expectStatusFlags(agentFiltered, {
+    const discovered = requireSkillStatus(byName, "discovered");
+    expectStatusFlags(discovered, {
       eligible: true,
-      modelVisible: false,
-      commandVisible: false,
+      modelVisible: true,
+      commandVisible: true,
     });
-    expect(agentFiltered.blockedByAgentFilter).toBe(true);
     const disabled = requireSkillStatus(byName, "disabled");
     expectStatusFlags(disabled, {
       eligible: false,

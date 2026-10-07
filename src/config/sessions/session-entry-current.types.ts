@@ -15,6 +15,7 @@ export type SessionEntryCurrentFacts = {
   subagentControlScope?: unknown;
   inheritedToolPolicyVersion?: unknown;
   inheritedToolPolicySource?: unknown;
+  inheritedWorkspaceOnlyRead?: unknown;
   inheritedToolAllow?: unknown;
   inheritedToolDeny?: unknown;
   subagentRecovery?: {

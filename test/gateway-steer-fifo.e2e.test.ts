@@ -502,11 +502,11 @@ function createConfig(params: {
             params: { transport: "sse", openaiWsWarmup: false },
           },
         },
-        skills: [],
+
         skipBootstrap: true,
       },
       entries: {
-        main: { model: { primary: provider.modelRef }, skills: [] },
+        main: { model: { primary: provider.modelRef } },
       },
     },
     tools: steeringTools

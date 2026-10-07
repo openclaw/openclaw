@@ -121,36 +121,13 @@ read_when:
 
   </Accordion>
 
-  <Accordion title="Restrict skills per agent">
-    Use `agents.defaults.skills` for a shared baseline, then override specific
-    agents with `agents.entries.*.skills`:
-
-    ```json5
-    {
-      agents: {
-        ownership: "explicit",
-        defaults: {
-          skills: ["github", "weather"],
-          heartbeat: { agentId: "writer" },
-          systemAgent: { agentId: "writer" },
-          authInheritance: { agentId: "writer" },
-        },
-        entries: {
-          writer: { workspace: "~/.openclaw/workspace" }, // inherits github, weather
-          docs: { skills: ["docs-search"] }, // replaces defaults
-          "locked-down": { skills: [] }, // no skills
-        },
-      },
-      talk: { agentId: "writer" },
-    }
-    ```
-
-    - Omit `agents.defaults.skills` for unrestricted skills by default.
-    - Omit `agents.entries.*.skills` to inherit the defaults.
-    - Set `agents.entries.*.skills: []` for no skills.
-    - See [Skills](/tools/skills), [Skills config](/tools/skills-config), and
-      the [Configuration Reference](/gateway/config-agents/workspace-and-bootstrap#agents-defaults-skills).
-
+  <Accordion title="Choose skill availability">
+    Agents automatically discover all otherwise-eligible skills in their configured
+    roots, including new Workshop skills. Disable individual skills globally with
+    `skills.entries.<key>.enabled: false`, or focus a session with chat skill selection.
+    Retired agent name lists are removed by Doctor with an explicit warning; their
+    prior restrictions, including `[]`, no longer apply. See
+    [Skills config](/tools/skills-config#agent-discovery-and-retired-name-lists).
   </Accordion>
 
   <Accordion title="Configure per-channel health monitoring">

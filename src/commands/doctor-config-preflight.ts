@@ -93,6 +93,7 @@ async function runDoctorConfigPreflightOperation(
   await measurePreflightStep("stale-update-runs", () =>
     noteStaleUpdateRuns({ migrateState: stateMigrationsRequested }),
   );
+  const configRepairWarnings: string[] = [];
   let modelBillingRouteMigrationSource: OpenClawConfig | undefined;
   const cronCodexRuntimePolicyTargets: CronCodexRuntimePolicyTarget[] = [];
   const stateMigrationStepReceipts: LegacyStateMigrationStepReceipt[] = [];
@@ -360,6 +361,7 @@ async function runDoctorConfigPreflightOperation(
       `Migrated legacy config keys in the active openclaw.json:\n${automaticConfigRepair.changes.map((entry) => `- ${entry}`).join("\n")}`,
       "Doctor changes",
     );
+    configRepairWarnings.push(...automaticConfigRepair.warnings);
     configSnapshotRead = await readConfigSnapshotForPreflight(false);
     snapshot = configSnapshotRead.snapshot;
     baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
@@ -369,6 +371,7 @@ async function runDoctorConfigPreflightOperation(
     snapshot,
     baseConfig,
     rosterMigrationSource,
+    ...(configRepairWarnings.length ? { warnings: configRepairWarnings } : {}),
     ...(rosterMigrationOwnerId ? { rosterMigrationOwnerId } : {}),
     ...(deferredPluginMigrations.length > 0 ? { deferredPluginMigrations } : {}),
     ...(modelBillingRouteMigrationSource ? { modelBillingRouteMigrationSource } : {}),

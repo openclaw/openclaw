@@ -180,7 +180,7 @@ command on the Gateway host.
 
 Use routing bindings to pin inbound channel traffic to a specific agent.
 
-If you also want different visible skills per agent, configure `agents.defaults.skills` and `agents.entries.*.skills` in `openclaw.json`. See [Skills config](/tools/skills-config) and [Configuration reference](/gateway/config-agents/workspace-and-bootstrap#agents-defaults-skills).
+Agents automatically discover all otherwise-eligible skills in their configured roots. Use separate roots for agent-owned skills, global per-skill disables, and session selection for focus. See [Skills config](/tools/skills-config).
 
 List bindings:
 

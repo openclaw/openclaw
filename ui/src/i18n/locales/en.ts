@@ -1145,7 +1145,7 @@ export const en: TranslationMap & {
       thinkingDefault: "Thinking Default",
       identityName: "Identity Name",
       identityAvatar: "Identity Avatar",
-      skillsFilter: "Skills Filter",
+      skills: "Skills",
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
@@ -1154,7 +1154,6 @@ export const en: TranslationMap & {
     overview: {
       title: "Overview",
       subtitle: "Workspace paths and identity metadata.",
-      selectedSkills: "{count} selected",
       allSkills: "all skills",
       unsavedConfig: "You have unsaved config changes.",
       modelSelection: "Model Selection",
@@ -1214,11 +1213,9 @@ export const en: TranslationMap & {
     },
     skillsPanel: {
       title: "Skills",
-      subtitle: "Per-agent skill allowlist and workspace skills.",
-      loadConfig: "Load the gateway config to set per-agent skills.",
-      customAllowlist: "This agent uses a custom skill allowlist.",
-      inheritedAllowlist: "This agent inherits the default skill allowlist.",
-      allEnabled: "All skills are enabled. Disabling any skill will create a per-agent allowlist.",
+      inventorySubtitle: "Discovered skills and their eligibility.",
+      allEligible:
+        "All otherwise-eligible skills are discoverable automatically, including new skills. Individual disables and prerequisites still apply. Manage global disables in Skills settings; use chat skill selection for a session.",
       loadAgent: "Load skills for this agent to view workspace-specific entries.",
       filter: "Filter",
       searchPlaceholder: "Search skills",
@@ -1226,7 +1223,6 @@ export const en: TranslationMap & {
       empty: "No skills found.",
       missing: "Missing: {items}",
       reason: "Reason: {items}",
-      updateError: "Could not update the agent skill allowlist.",
     },
     channels: {
       title: "Channels",
@@ -1604,7 +1600,6 @@ export const en: TranslationMap & {
     blocked: "blocked",
     disabled: "disabled",
     blockedAllowlist: "blocked by allowlist",
-    blockedAgentFilter: "blocked by agent filter",
   },
   nav: {
     gateway: {

@@ -32,7 +32,7 @@ async function fixture(shadowWorkspace: boolean) {
     skills: { load: { extraDirs: [gatewaySkills] } },
     agents: {
       entries: {
-        main: { workspace, skills: ["gateway-command", "workspace-command"] },
+        main: { workspace },
       },
     },
   };

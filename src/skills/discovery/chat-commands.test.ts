@@ -9,7 +9,7 @@ let listSkillCommandsForWorkspace: typeof import("./chat-commands.js").listSkill
 let expandExplicitSkillReferences: typeof import("./chat-commands.js").expandExplicitSkillReferences;
 let resolveSkillCommandInvocation: typeof import("./chat-commands.js").resolveSkillCommandInvocation;
 let lastCommandBuildOptions:
-  | { pluginMetadataSnapshot?: unknown; librarySelections?: unknown }
+  | { agentId?: string; pluginMetadataSnapshot?: unknown; librarySelections?: unknown }
   | undefined;
 
 function resolveSkillReferenceInvocations(
@@ -44,8 +44,8 @@ function listMainResearchSkillCommands(params: {
     cfg: {
       agents: {
         entries: {
-          main: { workspace: params.mainWorkspace, skills: ["demo-skill"] },
-          research: { workspace: params.researchWorkspace, skills: ["extra-skill"] },
+          main: { workspace: params.mainWorkspace },
+          research: { workspace: params.researchWorkspace },
         },
       },
     },
@@ -113,12 +113,7 @@ function buildWorkspaceSkillCommandSpecs(
   for (const reserved of opts?.reservedNames ?? []) {
     used.add(reserved.toLowerCase());
   }
-  const agentSkills = opts?.agentId ? opts.config?.agents?.entries?.[opts.agentId] : undefined;
-  const filter =
-    opts?.skillFilter ??
-    (agentSkills && Object.hasOwn(agentSkills, "skills")
-      ? agentSkills.skills
-      : opts?.config?.agents?.defaults?.skills);
+  const filter = opts?.skillFilter;
   const entries =
     filter === undefined
       ? resolveWorkspaceSkills(workspaceDir)
@@ -147,24 +142,6 @@ vi.mock("../runtime/remote.js", () => ({
 
 vi.mock("../../agents/exec-defaults.js", () => ({
   resolveNodeExecEligibility: resolveNodeExecEligibilityMock,
-}));
-
-vi.mock("./agent-filter.js", () => ({
-  resolveEffectiveAgentSkillFilter: (
-    cfg: {
-      agents?: {
-        defaults?: { skills?: string[] };
-        entries?: Record<string, { skills?: string[] }>;
-      };
-    },
-    agentId: string,
-  ) => {
-    const agent = cfg.agents?.entries?.[agentId];
-    if (agent && Object.hasOwn(agent, "skills")) {
-      return agent.skills;
-    }
-    return cfg.agents?.defaults?.skills;
-  },
 }));
 
 beforeAll(async () => {
@@ -460,17 +437,18 @@ describe("listSkillCommandsForAgents", () => {
     const commands = listSkillCommandsForAgents({
       cfg: {
         agents: {
-          entries: { research: { workspace: researchWorkspace, skills: ["extra-skill"] } },
+          entries: { research: { workspace: researchWorkspace } },
         },
       },
       agentIds: ["research"],
     });
 
-    expect(commands.map((entry) => entry.name)).toEqual(["extra_skill"]);
-    expect(commands.map((entry) => entry.skillName)).toEqual(["extra-skill"]);
+    expect(lastCommandBuildOptions?.agentId).toBe("research");
+    expect(commands.map((entry) => entry.name)).toEqual(["demo_skill", "extra_skill"]);
+    expect(commands.map((entry) => entry.skillName)).toEqual(["demo-skill", "extra-skill"]);
   });
 
-  it("prevents cross-agent skill leakage when each agent has an allowlist", async () => {
+  it("keeps command discovery scoped to separate agent workspaces", async () => {
     const { mainWorkspace, researchWorkspace } =
       await createMainAndResearchWorkspaces("openclaw-skills-leak-");
 
@@ -479,7 +457,7 @@ describe("listSkillCommandsForAgents", () => {
     expectDemoAndExtraSkillCommands(commands);
   });
 
-  it("merges allowlists for agents that share one workspace", async () => {
+  it("discovers the shared workspace once for each agent context", async () => {
     const baseDir = tempDirs.make("openclaw-skills-shared-");
     const sharedWorkspace = await createWorkspace(baseDir, "research");
 
@@ -495,7 +473,7 @@ describe("listSkillCommandsForAgents", () => {
     ]);
   });
 
-  it("deduplicates overlapping allowlists for shared workspace", async () => {
+  it("deduplicates commands for agents sharing a workspace", async () => {
     const baseDir = tempDirs.make("openclaw-skills-overlap-");
     const sharedWorkspace = await createWorkspace(baseDir, "research");
 
@@ -503,20 +481,20 @@ describe("listSkillCommandsForAgents", () => {
       cfg: {
         agents: {
           entries: {
-            "agent-a": { workspace: sharedWorkspace, skills: ["extra-skill"] },
-            "agent-b": { workspace: sharedWorkspace, skills: ["extra-skill", "demo-skill"] },
+            "agent-a": { workspace: sharedWorkspace },
+            "agent-b": { workspace: sharedWorkspace },
           },
         },
       },
       agentIds: ["agent-a", "agent-b"],
     });
 
-    // Both agents allowlist "extra-skill"; it should appear once, not twice.
+    // Shared skill roots produce one command per skill, not one per agent.
     expect(commands.map((entry) => entry.skillName)).toEqual(["demo-skill", "extra-skill"]);
     expect(commands.map((entry) => entry.name)).toEqual(["demo_skill", "extra_skill"]);
   });
 
-  it("keeps workspace unrestricted when one co-tenant agent has no skills filter", async () => {
+  it("discovers all skills for co-tenant agents", async () => {
     const baseDir = tempDirs.make("openclaw-skills-unfiltered-");
     const sharedWorkspace = await createWorkspace(baseDir, "research");
 
@@ -524,7 +502,7 @@ describe("listSkillCommandsForAgents", () => {
       cfg: {
         agents: {
           entries: {
-            restricted: { workspace: sharedWorkspace, skills: ["extra-skill"] },
+            restricted: { workspace: sharedWorkspace },
             unrestricted: { workspace: sharedWorkspace },
           },
         },
@@ -535,51 +513,6 @@ describe("listSkillCommandsForAgents", () => {
     const skillNames = commands.map((entry) => entry.skillName);
     expect(skillNames).toContain("demo-skill");
     expect(skillNames).toContain("extra-skill");
-  });
-
-  it("uses inherited defaults for agents that share one workspace", async () => {
-    const baseDir = tempDirs.make("openclaw-skills-defaults-");
-    const sharedWorkspace = await createWorkspace(baseDir, "shared-defaults");
-
-    const commands = listSkillCommandsForAgents({
-      cfg: {
-        agents: {
-          defaults: {
-            skills: ["alpha-skill"],
-          },
-          entries: {
-            alpha: { workspace: sharedWorkspace },
-            beta: { workspace: sharedWorkspace, skills: ["beta-skill"] },
-            gamma: { workspace: sharedWorkspace },
-          },
-        },
-      },
-      agentIds: ["alpha", "beta", "gamma"],
-    });
-
-    expect(commands.map((entry) => entry.skillName)).toEqual(["alpha-skill", "beta-skill"]);
-  });
-
-  it("does not inherit defaults when an agent sets an explicit empty skills list", async () => {
-    const baseDir = tempDirs.make("openclaw-skills-defaults-empty-");
-    const sharedWorkspace = await createWorkspace(baseDir, "shared-defaults");
-
-    const commands = listSkillCommandsForAgents({
-      cfg: {
-        agents: {
-          defaults: {
-            skills: ["alpha-skill", "hidden-skill"],
-          },
-          entries: {
-            alpha: { workspace: sharedWorkspace, skills: [] },
-            beta: { workspace: sharedWorkspace, skills: ["beta-skill"] },
-          },
-        },
-      },
-      agentIds: ["alpha", "beta"],
-    });
-
-    expect(commands.map((entry) => entry.skillName)).toEqual(["beta-skill"]);
   });
 
   it("skips agents with missing workspaces gracefully", async () => {
@@ -606,7 +539,7 @@ describe("listSkillCommandsForAgents", () => {
 });
 
 describe("listSkillCommandsForWorkspace", () => {
-  it("inherits defaults when agentId is provided without an explicit skill filter", async () => {
+  it("honors an explicit session filter while retaining exec eligibility", async () => {
     const baseDir = tempDirs.make("openclaw-skills-workspace-defaults-");
     const sharedWorkspace = await createWorkspace(baseDir, "shared-defaults");
 
@@ -614,13 +547,11 @@ describe("listSkillCommandsForWorkspace", () => {
       workspaceDir: sharedWorkspace,
       cfg: {
         agents: {
-          defaults: {
-            skills: ["alpha-skill"],
-          },
           entries: { alpha: { workspace: sharedWorkspace } },
         },
       },
       agentId: "alpha",
+      skillFilter: ["alpha-skill"],
       sessionEntry: { execHost: "node", execNode: "build-node" },
       sessionKey: "agent:alpha:main",
       execOverrides: { security: "allowlist" },

@@ -191,7 +191,11 @@ function* assembleOpenClawCodingTools(
       : undefined;
   const sessionPermissionPolicy = options?.sessionPermissionPolicy;
   const coreToolPolicy =
-    preparedSurface?.policy ?? prepareCoreToolPolicy({ ...options, agentId }, execConfig);
+    preparedSurface?.policy ??
+    prepareCoreToolPolicy(
+      { ...options, agentId, conversationCapabilityProfile: capabilityProfile },
+      execConfig,
+    );
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
@@ -235,7 +239,9 @@ function* assembleOpenClawCodingTools(
   const fsPolicy = {
     workspaceOnly: coreToolPolicy.workspaceOnly,
     ...(sessionPermissionPolicy ? { root: sessionPermissionPolicy.root } : {}),
-    ...(attachmentReadRoot ? { readOnlyRoots: [attachmentReadRoot] } : {}),
+    ...(!coreToolPolicy.workspaceOnlyRead && attachmentReadRoot
+      ? { readOnlyRoots: [attachmentReadRoot] }
+      : {}),
   };
   options?.recordToolPrepStage?.("workspace-policy");
   const execDefaults = options?.exec ?? {};
@@ -485,6 +491,7 @@ function* assembleOpenClawCodingTools(
             inheritedToolAllowlist,
             inheritedToolDenylist,
             inheritedToolPolicySource: capabilityProfile.policy.inheritedToolPolicySource,
+            inheritedWorkspaceOnlyRead: coreToolPolicy.workspaceOnlyRead,
             processScopeKey: scopeKey,
           },
         )

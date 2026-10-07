@@ -77,7 +77,7 @@ function createSkill(): SkillStatusEntry {
     always: false,
     disabled: false,
     blockedByAllowlist: false,
-    blockedByAgentFilter: false,
+
     eligible: false,
     platformIncompatible: false,
     modelVisible: false,
@@ -184,7 +184,6 @@ describe("CORE_HEALTH_CHECKS", () => {
       agents: {
         defaults: {
           workspace: "/tmp/openclaw-test-workspace",
-          skills: ["missing-tool"],
         },
       },
     };

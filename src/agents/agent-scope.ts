@@ -38,7 +38,6 @@ import {
 } from "./agent-scope-config.js";
 import { resolveCanonicalWorkspacePath } from "./workspace-state-identity.js";
 export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
-export { resolveEffectiveAgentSkillFilter as resolveAgentSkillsFilter } from "../skills/discovery/agent-filter.js";
 export {
   listAgentEntries,
   listAgentEntriesWithSource,

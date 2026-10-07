@@ -24,7 +24,7 @@ function codingAgentSkill(missingAnyBins: string[]) {
     always: false,
     disabled: false,
     blockedByAllowlist: false,
-    blockedByAgentFilter: false,
+
     eligible: missingAnyBins.length === 0,
     platformIncompatible: false,
     modelVisible: missingAnyBins.length === 0,

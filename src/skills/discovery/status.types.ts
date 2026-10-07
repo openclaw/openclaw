@@ -23,7 +23,6 @@ export type SkillStatusEntry = {
   always: boolean;
   disabled: boolean;
   blockedByAllowlist: boolean;
-  blockedByAgentFilter: boolean;
   eligible: boolean;
   /**
    * True when the skill declares an OS requirement that does not include the
@@ -47,7 +46,6 @@ export type SkillStatusReport = {
   workspaceDir: string;
   managedSkillsDir: string;
   agentId?: string;
-  agentSkillFilter?: string[];
   skills: SkillStatusEntry[];
 };
 

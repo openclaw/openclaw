@@ -8246,43 +8246,6 @@ struct ChatViewModelTests {
         ])
     }
 
-    @Test func `agent filtered skill can be enabled for the current session`() async throws {
-        let skill = OpenClawChatComposerSkill(
-            key: "weather",
-            name: "Weather",
-            baseEnabled: true,
-            missingDependencies: false,
-            blocked: false,
-            agentFiltered: true)
-        let catalog = OpenClawChatComposerCapabilityCatalog(
-            sessionSettingsAvailable: true,
-            skills: [skill],
-            skillsAvailable: true,
-            toolOverrideMutationAvailable: true)
-        let (transport, vm) = await makeViewModel(
-            historyResponses: [historyPayload(sessionId: "sess-main")],
-            sessionsResponses: [sessionsResponse([
-                sessionEntry(key: "main", updatedAt: 1, sessionId: "sess-main"),
-            ])],
-            composerCapabilityCatalog: catalog)
-        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        await vm.loadComposerCapabilities()
-
-        #expect(await MainActor.run { !vm.composerSkillEnabled(skill) })
-        #expect(await MainActor.run { vm.composerSkillDisabledReason(skill) } == nil)
-        #expect(await MainActor.run { vm.composerSkillStatusMessage(skill) } ==
-            "Not enabled for this agent. Enable for this session.")
-
-        await MainActor.run { vm.toggleComposerSkill(skill) }
-        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
-        #expect(await transport.sessionSettingsPatches().count == 1)
-        #expect(await MainActor.run { !vm.composerCapabilityMutationDisabled })
-
-        let patch = try #require(await transport.sessionSettingsPatches().first)
-        #expect((patch.toolOverrides ?? nil)?.skills["weather"] == true)
-        #expect(await MainActor.run { vm.composerSkillEnabled(skill) })
-    }
-
     @Test func `old gateway hides capability controls and rejects their mutations`() async throws {
         let skill = OpenClawChatComposerSkill(
             key: "weather",

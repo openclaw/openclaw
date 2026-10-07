@@ -43,8 +43,12 @@ export function resolveXGuestToolPolicy(account: ResolvedXAccount) {
   );
   // An empty allow array means unrestricted to core; an empty guest selection means no tools.
   return allow.length
-    ? { allow, deny: ["skills_read", ...(configured?.deny ?? [])] }
-    : { deny: ["*"] };
+    ? {
+        workspaceOnlyRead: true as const,
+        allow,
+        deny: ["skills_read", ...(configured?.deny ?? [])],
+      }
+    : { workspaceOnlyRead: true as const, deny: ["*"] };
 }
 
 export function formatXSenderLine(tier: XSenderTier, authorId: string, user?: XUser): string {

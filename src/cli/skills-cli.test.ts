@@ -21,7 +21,7 @@ function skill(name: string, overrides: Partial<SkillStatusEntry> = {}): SkillSt
     always: false,
     disabled: false,
     blockedByAllowlist: false,
-    blockedByAgentFilter: false,
+
     eligible: true,
     platformIncompatible: false,
     modelVisible: true,
@@ -30,10 +30,8 @@ function skill(name: string, overrides: Partial<SkillStatusEntry> = {}): SkillSt
     ...createEmptyInstallChecks(),
     ...overrides,
   };
-  entry.modelVisible = overrides.modelVisible ?? (entry.eligible && !entry.blockedByAgentFilter);
-  entry.commandVisible =
-    overrides.commandVisible ??
-    (entry.eligible && !entry.blockedByAgentFilter && entry.userInvocable);
+  entry.modelVisible = overrides.modelVisible ?? entry.eligible;
+  entry.commandVisible = overrides.commandVisible ?? (entry.eligible && entry.userInvocable);
   return entry;
 }
 function report(skills: SkillStatusEntry[]): SkillStatusReport {
@@ -59,11 +57,12 @@ describe("skills formatting", () => {
     }
   });
 
-  it("renders readiness and filters agent-excluded skills out of the eligible list", () => {
+  it("renders readiness and filters skills blocked by the bundled allowlist", () => {
     const mixed = report([
       skill("ready", { emoji: "📸" }),
       skill("agent-excluded", {
-        blockedByAgentFilter: true,
+        blockedByAllowlist: true,
+        eligible: false,
         homepage: undefined,
         emoji: undefined,
       }),
@@ -78,7 +77,7 @@ describe("skills formatting", () => {
       "1/4 ready",
       "📸",
       "✓",
-      "excluded",
+      "blocked",
       "disabled",
       "needs setup",
       "anyBins",
@@ -87,8 +86,7 @@ describe("skills formatting", () => {
       expect(output).toContain(text);
     }
     const info = formatSkillInfo(mixed, "agent-excluded", {});
-    expect(info).toContain("Excluded by agent allowlist");
-    expect(info).toContain("excludes this skill");
+    expect(info).toContain("Blocked by allowlist");
     const eligible = formatSkillsList(mixed, { eligible: true });
     expect(eligible).toContain("ready");
     for (const name of ["agent-excluded", "disabled-skill", "needs-stuff"]) {
@@ -138,46 +136,38 @@ describe("skills formatting", () => {
         skill("ready", { emoji: "🎛\uFE0E" }),
         skill("prompt-hidden", { modelVisible: false }),
         skill("slash-hidden", { userInvocable: false }),
-        skill("agent-filtered", { blockedByAgentFilter: true }),
-        skill("excluded-missing", { eligible: false, blockedByAgentFilter: true, missing }),
+        skill("discovered"),
+        skill("excluded-missing", { eligible: false, missing }),
         skill("missing-bin", { eligible: false, missing, emoji: "🎙\uFE0E" }),
         skill("disabled", {
           eligible: false,
           disabled: true,
           blockedByAllowlist: true,
-          blockedByAgentFilter: true,
+
           missing,
         }),
         skill("blocked-bundled", {
           eligible: false,
           blockedByAllowlist: true,
-          blockedByAgentFilter: true,
+
           missing,
         }),
       ]),
       agentId: "specialist",
-      agentSkillFilter: ["ready", "prompt-hidden", "slash-hidden", "missing-bin"],
     };
     const parsed = JSON.parse(formatSkillsCheck(mixed, { json: true }));
     expect(parsed.summary).toEqual({
       total: 8,
       eligible: 4,
-      modelVisible: 2,
-      commandVisible: 2,
+      modelVisible: 3,
+      commandVisible: 3,
       disabled: 1,
       blocked: 1,
-      agentFiltered: 4,
       notInjected: 1,
       missingRequirements: 2,
     });
-    expect(parsed.modelVisible).toEqual(["ready", "slash-hidden"]);
-    expect(parsed.commandVisible).toEqual(["ready", "prompt-hidden"]);
-    expect(parsed.agentFiltered).toEqual([
-      "agent-filtered",
-      "excluded-missing",
-      "disabled",
-      "blocked-bundled",
-    ]);
+    expect(parsed.modelVisible).toEqual(["ready", "slash-hidden", "discovered"]);
+    expect(parsed.commandVisible).toEqual(["ready", "prompt-hidden", "discovered"]);
     expect(parsed.disabled).toEqual(["disabled"]);
     expect(parsed.blocked).toEqual(["blocked-bundled"]);
     expect(parsed.notInjected).toEqual([
@@ -196,9 +186,6 @@ describe("skills formatting", () => {
       "prompt-hidden (skill hides its instructions from the model; commands/cron may still use it)",
     ]) {
       expect(human).toContain(text);
-    }
-    for (const name of parsed.agentFiltered) {
-      expect(human).toContain(`${name} (loaded, but this agent is not allowed to see/use it)`);
     }
   });
 

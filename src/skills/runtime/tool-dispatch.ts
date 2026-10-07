@@ -199,6 +199,7 @@ export async function resolveSkillDispatchTools(
     inheritedToolAllowlist,
     inheritedToolDenylist: explicitDenylist,
     inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,
+    inheritedWorkspaceOnlyRead: requesterPolicies.inheritedWorkspaceOnlyRead,
   });
   const policyFiltered = applyToolPolicyPipeline({
     tools,

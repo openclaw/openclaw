@@ -168,7 +168,6 @@ function config(url: string): OpenClawConfig {
         model: { primary: MODEL_REF },
         models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
         skipBootstrap: true,
-        skills: [],
       },
     },
     tools: {

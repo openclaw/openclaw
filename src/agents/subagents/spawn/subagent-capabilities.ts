@@ -46,6 +46,8 @@ type PersistedSubagentToolPolicyEnvelope = {
   inheritedToolAllow: string[];
   inheritedToolDeny: string[];
   inheritedToolPolicySource?: "sender";
+  /** Sender-bound read containment; may only narrow resource access. */
+  inheritedWorkspaceOnlyRead?: true;
 };
 
 function normalizeSubagentRole(value: unknown): SubagentSessionRole | undefined {
@@ -309,6 +311,9 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
     sessionKey: normalizedSessionKey,
     spawnedBy,
     ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
+    ...(entry.inheritedWorkspaceOnlyRead === true
+      ? { inheritedWorkspaceOnlyRead: true as const }
+      : {}),
     inheritedToolAllow: normalizeInheritedToolAllowlist(entry.inheritedToolAllow),
     inheritedToolDeny: normalizeInheritedToolDenylist(entry.inheritedToolDeny),
     ...(entry.inheritedToolPolicySource === "sender"

@@ -20,7 +20,7 @@ import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import { hasBinary } from "../loading/config.js";
 import {
   loadWorkspaceSkills,
-  prepareWorkspaceSkills,
+  prepareWorkspaceSkillEntries,
   readWorkspaceSkillSources,
 } from "../loading/workspace-skill-loader.js";
 import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
@@ -50,7 +50,7 @@ vi.mock("../loading/workspace-skill-loader.js", async (importOriginal) => {
   return {
     ...actual,
     loadWorkspaceSkills: vi.fn(actual.loadWorkspaceSkills),
-    prepareWorkspaceSkills: vi.fn(actual.prepareWorkspaceSkills),
+    prepareWorkspaceSkillEntries: vi.fn(actual.prepareWorkspaceSkillEntries),
   };
 });
 const originalLoadWorkspaceSkills = (() => {
@@ -61,7 +61,9 @@ const originalLoadWorkspaceSkills = (() => {
   return implementation;
 })();
 
-const originalPrepareWorkspaceSkills = vi.mocked(prepareWorkspaceSkills).getMockImplementation()!;
+const originalPrepareWorkspaceSkillEntries = vi
+  .mocked(prepareWorkspaceSkillEntries)
+  .getMockImplementation()!;
 
 // Prefix-specific checks replace the shared mkdir spy; retain the real function to avoid recursion.
 const realMkdir = fs.mkdir.bind(fs);
@@ -134,7 +136,7 @@ beforeAll(async () => {
 afterAll(async () => {
   resetGlobalHookRunner();
   vi.mocked(loadWorkspaceSkills).mockReset();
-  vi.mocked(prepareWorkspaceSkills).mockReset();
+  vi.mocked(prepareWorkspaceSkillEntries).mockReset();
   vi.mocked(hasBinary).mockReset();
   vi.mocked(resolveBrewExecutable).mockReset();
   vi.mocked(isContainerEnvironment).mockReset();
@@ -194,11 +196,11 @@ describe("installSkill before_install hooks", () => {
     resetGlobalHookRunner();
     runCommandWithTimeoutMock.mockClear();
     vi.mocked(loadWorkspaceSkills).mockReset().mockImplementation(loadTestWorkspaceSkillEntries);
-    vi.mocked(prepareWorkspaceSkills)
+    vi.mocked(prepareWorkspaceSkillEntries)
       .mockReset()
-      .mockImplementation(async (workspaceDir, options) =>
-        loadWorkspaceSkills(workspaceDir, options),
-      );
+      .mockImplementation(async (workspaceDir, options) => ({
+        entries: loadWorkspaceSkills(workspaceDir, options),
+      }));
     vi.mocked(hasBinary).mockReset();
     vi.mocked(resolveBrewExecutable).mockReset();
     vi.mocked(isContainerEnvironment).mockReset();
@@ -247,7 +249,9 @@ describe("installSkill before_install hooks", () => {
       vi.spyOn(os, "tmpdir").mockReturnValue(workspaceDir);
       const hostDir = path.join(workspaceDir, "host");
       await fs.mkdir(hostDir, { recursive: true });
-      vi.mocked(prepareWorkspaceSkills).mockImplementation(originalPrepareWorkspaceSkills);
+      vi.mocked(prepareWorkspaceSkillEntries).mockImplementation(
+        originalPrepareWorkspaceSkillEntries,
+      );
       const skillName = "host-dependency";
       for (const [dir, packageName] of [
         [workspaceDir, "stale-gateway-package"],
@@ -287,7 +291,7 @@ describe("installSkill before_install hooks", () => {
         plugins: { enabled: false },
         agents: {
           ownership: "explicit",
-          entries: { ops: { workspace: workspaceDir, skills: [] } },
+          entries: { ops: { workspace: workspaceDir } },
         },
       };
       try {
@@ -330,7 +334,9 @@ describe("installSkill before_install hooks", () => {
         const hostDir = path.join(workspaceDir, "policy-host");
         await fs.mkdir(hostDir, { recursive: true });
         await writeInstallableSkill(hostDir, "policy-host");
-        vi.mocked(prepareWorkspaceSkills).mockImplementation(originalPrepareWorkspaceSkills);
+        vi.mocked(prepareWorkspaceSkillEntries).mockImplementation(
+          originalPrepareWorkspaceSkillEntries,
+        );
         let inspectedPath: string | undefined;
         const policy = vi.fn(async (event: { sourcePath: string }) => {
           inspectedPath = event.sourcePath;
@@ -403,7 +409,7 @@ describe("installSkill before_install hooks", () => {
       await writeInstallableSkill(workspaceDir, "gateway-owned");
       const entries = loadTestWorkspaceSkillEntries(workspaceDir);
       recordSkillFileHost(entries[0]!.skill, "gateway");
-      vi.mocked(prepareWorkspaceSkills).mockResolvedValue(entries);
+      vi.mocked(prepareWorkspaceSkillEntries).mockResolvedValue({ entries });
       const hostInstall = vi.fn(async () => ({
         ok: true,
         message: "Installed",
@@ -533,7 +539,7 @@ describe("installSkill before_install hooks", () => {
         agents: {
           ownership: "explicit",
           entries: {
-            ops: { workspace: workspaceDir, skills: [] },
+            ops: { workspace: workspaceDir },
             research: { workspace: workspaceDir },
           },
         },

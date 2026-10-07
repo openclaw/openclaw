@@ -395,7 +395,9 @@ export function createOpenClawTools(
     : null;
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
   const tools: AnyAgentTool[] = [
-    ...createInstalledSkillTools(options?.installedSkills ?? []),
+    ...createInstalledSkillTools(
+      options?.inheritedWorkspaceOnlyRead ? [] : (options?.installedSkills ?? []),
+    ),
     createDashboardTool({
       agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
       agentId: sessionAgentId,

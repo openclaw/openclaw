@@ -100,7 +100,7 @@ or deletes an array, the Gateway rejects the write unless that exact array path
 appears in `replacePaths`. Deleting a containing object requires its contained
 array paths, including empty arrays. Deleting a whole array requires only its own
 path, not paths to arrays nested inside its entries. Use exact record keys, such
-as `agents.entries.main.skills`. For ID-merged entry updates, nested array paths
+as `agents.entries.main.subagents.allowAgents`. For ID-merged entry updates, nested array paths
 use `[]`, such as `models.providers.custom.models[].input`. Parent paths and `*`
 wildcards do not authorize descendant arrays. This prevents truncated
 `config.get` snapshots from silently clobbering routing or allowlist arrays. Use

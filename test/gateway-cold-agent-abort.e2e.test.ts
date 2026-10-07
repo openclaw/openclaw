@@ -71,7 +71,6 @@ it(
           defaults: {
             model: { primary: provider.modelRef, fallbacks: [] },
             models: { [provider.modelRef]: { agentRuntime: { id: "openclaw" } } },
-            skills: [],
           },
         },
         tools: { profile: "minimal" },

@@ -18,6 +18,7 @@ type PersistedSessionCapabilityEntry = Pick<
   | "completionOwnerSessionKey"
   | "inheritedToolPolicyVersion"
   | "inheritedToolPolicySource"
+  | "inheritedWorkspaceOnlyRead"
   | "inheritedToolAllow"
   | "inheritedToolDeny"
 >;

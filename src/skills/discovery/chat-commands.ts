@@ -18,7 +18,6 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { prepareRemoteSkillConnections } from "../runtime/remote-skills.js";
 import { getRemoteSkillEligibility } from "../runtime/remote.js";
 import type { SkillCommandSpec } from "../types.js";
-import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { listReservedChatSlashCommandNames } from "./chat-command-invocation.js";
 import {
   buildWorkspaceSkillCommandSpecs,
@@ -151,7 +150,6 @@ function* resolveAgentSkillCommandWorkspaces(params: AgentSkillCommandParams, al
   const workspaceAgents: Array<{
     agentId: string;
     workspaceDir: string;
-    skillFilter?: string[];
     gatewayOnly: boolean;
   }> = [];
   for (const agentId of agentIds) {
@@ -175,11 +173,10 @@ function* resolveAgentSkillCommandWorkspaces(params: AgentSkillCommandParams, al
       agentId,
       workspaceDir,
       gatewayOnly: remote && !allowRemote,
-      skillFilter: resolveEffectiveAgentSkillFilter(params.cfg, agentId),
     });
   }
 
-  for (const { agentId, workspaceDir, skillFilter, gatewayOnly } of workspaceAgents) {
+  for (const { agentId, workspaceDir, gatewayOnly } of workspaceAgents) {
     yield {
       workspaceDir,
       options: {
@@ -187,7 +184,6 @@ function* resolveAgentSkillCommandWorkspaces(params: AgentSkillCommandParams, al
           cfg: params.cfg,
           agentId,
           workspaceDir,
-          skillFilter,
           ...(hasSingleAgentContext
             ? {
                 sessionEntry: params.sessionEntry,

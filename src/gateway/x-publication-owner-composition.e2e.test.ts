@@ -200,7 +200,7 @@ describe("X publication production-owner composition", () => {
           ...getRuntimeConfig().agents?.defaults,
           model: { primary: "x-proof/proof-model" },
         },
-        entries: { main: { skills: [], tools: { fs: { workspaceOnly: true } } } },
+        entries: { main: { tools: { fs: { workspaceOnly: true } } } },
       },
       channels,
       messages: { queue: { mode: "collect" }, inbound: { debounceMs: 0 } },

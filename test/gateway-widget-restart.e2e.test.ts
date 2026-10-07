@@ -275,7 +275,7 @@ it.skipIf(process.platform === "win32")(
                     },
                     heartbeat: { every: "0m" },
                     skipBootstrap: true,
-                    skills: [],
+
                     timeoutSeconds: 120,
                   },
                   entries: { main: {} },

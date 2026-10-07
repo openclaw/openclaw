@@ -12,7 +12,7 @@ Custodian skills are release-versioned operational playbooks shipped with OpenCl
 
 When that setting is absent, OpenClaw falls back to a retained legacy default owner, the sole configured agent, or legacy `main` when no explicit agent roster exists. If several agents are configured without a system agent or retained legacy owner, no agent receives the library. For every other agent, Custodian skills are absent from discovery, snapshots, slash-command catalogs, sandbox sync, and the model-facing skills prompt.
 
-Normal skill controls still apply. `skills.entries.<name>.enabled: false` disables an individual Custodian skill, and agent skill allowlists can narrow the final set. See [Skills config](/tools/skills-config).
+Normal skill controls still apply. `skills.entries.<name>.enabled: false` disables an individual Custodian skill, while session selection can narrow a session’s set. See [Skills config](/tools/skills-config).
 
 ## Workflow contract
 

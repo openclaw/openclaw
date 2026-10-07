@@ -46,6 +46,7 @@ function gateway(beforeWrite?: () => Promise<void>, configOverride?: OpenClawCon
   );
   const stateDir = `synthetic-x-admin-${gatewaySequence++}`;
   const runtime = {
+    capabilities: ["sender-restricted-hidden-helpers-v1", "sender-workspace-only-read-v1"],
     state: {
       openKeyedStore: createKeyedState(undefined, beforeWrite),
       resolveStateDir: () => stateDir,
@@ -229,8 +230,8 @@ describe("X allowlist Gateway methods", () => {
         messages: { queue: { byChannel: { x: "followup" } } },
         agents: {
           entries: {
-            front: { skills: [], tools: { fs: { workspaceOnly: route !== "default route" } } },
-            thread: { skills: [], tools: { fs: { workspaceOnly: false } } },
+            front: { tools: { fs: { workspaceOnly: route !== "default route" } } },
+            thread: { tools: { fs: { workspaceOnly: false } } },
           },
         },
         bindings: [
@@ -289,7 +290,7 @@ describe("X allowlist Gateway methods", () => {
       const { invoke } = gateway(undefined, {
         messages: { queue: { mode, byChannel } },
         agents: {
-          entries: { front: { skills: [], tools: { fs: { workspaceOnly: true } } } },
+          entries: { front: { tools: { fs: { workspaceOnly: true } } } },
         },
         bindings: [{ agentId: "front", match: { channel: "x" } }],
         channels: { x: { userId: "100", username: "example_bot", guests: { enabled: true } } },
@@ -310,7 +311,7 @@ describe("X allowlist Gateway methods", () => {
       agents: {
         ownership: "explicit",
         entries: {
-          front: { skills: [], tools: { fs: { workspaceOnly: true } } },
+          front: { tools: { fs: { workspaceOnly: true } } },
           other: {},
         },
       },

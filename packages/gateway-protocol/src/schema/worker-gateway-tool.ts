@@ -107,6 +107,7 @@ export const WorkerToolSurfaceSchema = closedObject({
   ),
   policy: closedObject({
     workspaceOnly: Type.Boolean(),
+    workspaceOnlyRead: Type.Optional(Type.Literal(true)),
     readOnly: Type.Boolean(),
     applyPatchEnabled: Type.Boolean(),
     applyPatchWorkspaceOnly: Type.Boolean(),

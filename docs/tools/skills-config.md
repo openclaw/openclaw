@@ -1,7 +1,7 @@
 ---
 title: "Skills config"
 sidebarTitle: "Skills config"
-summary: "Full reference for the skills.* config schema, agent allowlists, workshop settings, and sandbox env var handling."
+summary: "Full reference for the skills.* config schema, agent discovery, workshop settings, and sandbox env var handling."
 read_when:
   - Configuring skill loading, install, or gating behavior
   - Setting per-agent skill visibility
@@ -10,7 +10,7 @@ read_when:
 
 Most skills configuration lives under `skills` in
 `~/.openclaw/openclaw.json`. Agent-specific visibility lives under
-`agents.defaults.skills` and `agents.entries.*.skills`.
+automatic discovery from configured agent roots.
 
 ```json5
 {
@@ -314,54 +314,27 @@ Keys under `entries` match the skill `name` by default. If a skill defines
   Optional bag for custom per-skill configuration fields.
 </ParamField>
 
-## Agent allowlists (`agents`)
+## Agent discovery and retired name lists
 
-Use agent config when you want the same machine/workspace skill roots but a
-different visible skill set per agent.
+Agents discover all otherwise-eligible skills in their configured roots automatically,
+including newly applied Workshop skills. Agent-owned roots remain isolated;
+source precedence and metadata, platform, plugin, prerequisite, and disable gates
+still apply. Use global per-skill `skills.entries.<key>.enabled: false` for an
+individual disable, or session skill selection for a focused session. The separate
+`skills.allowBundled` control only affects bundled skills.
 
-```json5
-{
-  agents: {
-    ownership: "explicit",
-    defaults: {
-      skills: ["github", "weather"], // shared baseline
-      heartbeat: { agentId: "writer" },
-      systemAgent: { agentId: "writer" },
-      authInheritance: { agentId: "writer" },
-    },
-    entries: {
-      writer: { workspace: "~/.openclaw/workspace" }, // inherits github, weather
-      docs: { skills: ["docs-search"] }, // replaces defaults entirely
-      "locked-down": { skills: [] }, // no skills
-    },
-  },
-  talk: { agentId: "writer" },
-}
-```
+**Upgrade policy change:** `agents.defaults.skills`, `agents.entries.*.skills`,
+and their historical `agents.list` entry forms are retired. Doctor and normal
+updates remove old name lists and visibly warn for each former selection.
+**Prior agent-specific restrictions are not preserved:** all currently **and
+future** otherwise-eligible skills become discoverable; an old `[]` no longer
+disables all skills. Existing global per-skill disables and session selections
+remain effective. The original arrays are recoverable from the normal
+pre-migration config backup, not an active runtime filter. No agent exclusion is
+converted into a global disable that would affect other agents.
 
-<ParamField path="agents.defaults.skills" type="string[]">
-  Shared baseline allowlist inherited by agents that omit
-  `agents.entries.*.skills`. Omit entirely to leave skills unrestricted by
-  default.
-</ParamField>
-
-<ParamField path="agents.entries.*.skills" type="string[]">
-  Explicit final skill set for that agent. Explicit lists **replace**
-  inherited defaults — they do not merge. Set to `[]` to expose no skills for
-  that agent.
-</ParamField>
-
-<Warning>
-  Agent skill allowlists are a visibility and loading filter for OpenClaw
-  skill discovery, prompts, slash-command discovery, sandbox sync, and skill
-  snapshots. They are not a shell-time authorization boundary. If an agent
-  can run host `exec`, that shell can still run external clients or read
-  host files that are visible to the execution user, including MCP client
-  registries such as `~/.openclaw/skills/config/mcporter.json`. For
-  per-agent MCP isolation, combine skill allowlists with sandbox/OS-user
-  isolation, deny or tightly allowlist host exec, and prefer per-agent
-  credentials at the MCP server.
-</Warning>
+Skill discovery is not execution authorization. Tool permissions, credentials,
+sandbox/OS isolation, and exec approval policy remain separate and unchanged.
 
 ## Workshop (`skills.workshop`)
 

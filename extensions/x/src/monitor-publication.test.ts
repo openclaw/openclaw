@@ -41,7 +41,7 @@ describe("X work-session publication admission", () => {
         cfg.channels!.x!.guests = { enabled: true };
         cfg.messages = { queue: { mode: "collect" } };
         cfg.agents = {
-          entries: { maintainer: { skills: [], tools: { fs: { workspaceOnly: true } } } },
+          entries: { maintainer: { tools: { fs: { workspaceOnly: true } } } },
         };
       }
       const test = fixture({

@@ -142,14 +142,14 @@ describe.skipIf(!LIVE || process.platform !== "linux")("live worker skill resour
                   defaults: {
                     ...cfg.agents?.defaults,
                     timeoutSeconds: 150,
-                    skills: [SKILL],
+
                     models: { [MODEL]: { agentRuntime: { id: "codex" } } },
                   },
                   entries: {
                     ...cfg.agents?.entries,
                     qa: {
                       ...cfg.agents?.entries?.qa,
-                      skills: [SKILL],
+
                       model: { primary: MODEL },
                       tools: { profile: "full" },
                     },

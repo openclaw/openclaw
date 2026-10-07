@@ -27,7 +27,6 @@ public struct SkillStatus: Codable, Identifiable, Sendable {
     public let always: Bool
     public let disabled: Bool
     public let blockedByAllowlist: Bool?
-    public let blockedByAgentFilter: Bool?
     public let platformIncompatible: Bool?
     public let eligible: Bool
     public let requirements: SkillRequirements
@@ -54,7 +53,6 @@ public struct SkillStatus: Codable, Identifiable, Sendable {
         always: Bool,
         disabled: Bool,
         blockedByAllowlist: Bool? = nil,
-        blockedByAgentFilter: Bool? = nil,
         platformIncompatible: Bool? = nil,
         eligible: Bool,
         requirements: SkillRequirements,
@@ -76,7 +74,6 @@ public struct SkillStatus: Codable, Identifiable, Sendable {
         self.always = always
         self.disabled = disabled
         self.blockedByAllowlist = blockedByAllowlist
-        self.blockedByAgentFilter = blockedByAgentFilter
         self.platformIncompatible = platformIncompatible
         self.eligible = eligible
         self.requirements = requirements

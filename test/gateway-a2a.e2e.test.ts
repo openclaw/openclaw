@@ -22,7 +22,6 @@ test("A2A completes correlated tasks under message-tool-only source policy", asy
               model: { primary: "a2a-proof/a2a-proof" },
               models: { "a2a-proof/a2a-proof": { agentRuntime: { id: "openclaw" } } },
               skipBootstrap: true,
-              skills: [],
             },
           },
           tools: { profile: "minimal", alsoAllow: ["message"] },

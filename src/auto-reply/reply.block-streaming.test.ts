@@ -26,7 +26,6 @@ vi.mock("../agents/agent-scope.js", async () => {
   return {
     ...actual,
     resolveSessionAgentId: vi.fn(() => "main"),
-    resolveAgentSkillsFilter: vi.fn(() => undefined),
   };
 });
 vi.mock("../agents/model-selection.js", async () => {

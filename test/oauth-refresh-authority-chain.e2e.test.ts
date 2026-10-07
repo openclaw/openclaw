@@ -337,7 +337,7 @@ function createConfig(pluginDir: string, providerBaseUrl: string) {
           [PEER_MODEL_REF]: { agentRuntime: { id: "openclaw" } },
         },
         workspace: "~/workspace",
-        skills: [],
+
         skipBootstrap: true,
         sandbox: { mode: "off" },
         timeoutSeconds: 60,

@@ -214,10 +214,10 @@ describe("Gateway queued session rotation", () => {
             model: { primary: modelRef },
             modelPolicy: { allow: [modelRef] },
             models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
-            skills: [],
+
             skipBootstrap: true,
           },
-          entries: { main: { model: { primary: modelRef }, skills: [] } },
+          entries: { main: { model: { primary: modelRef } } },
         },
         tools: { profile: "minimal" },
         models: {
@@ -315,10 +315,10 @@ describe("Gateway queued session rotation", () => {
             model: { primary: modelRef },
             modelPolicy: { allow: [modelRef] },
             models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
-            skills: [],
+
             skipBootstrap: true,
           },
-          entries: { main: { model: { primary: modelRef }, skills: [] } },
+          entries: { main: { model: { primary: modelRef } } },
         },
         tools: { profile: "minimal" },
         models: {

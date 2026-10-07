@@ -1,8 +1,10 @@
+import fs from "node:fs/promises";
 // Control UI E2E proves per-agent config writes use the canonical keyed shape.
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
@@ -324,27 +326,24 @@ suite.define(() => {
     });
   });
 
-  it("config.set stages skill changes from the inherited allowlist", async () => {
+  it("shows automatically discovered agent skills without name-list writes", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const config = {
-        agents: {
-          defaults: { skills: ["github"] },
-          entries: { main: {} },
-        },
-      };
-      const skill = (name: string, blockedByAgentFilter: boolean) => ({
+      const config = { agents: { entries: { main: {} } } };
+      const skill = (name: string, disabled = false) => ({
         name,
-        description: `${name} skill`,
-        source: "openclaw-managed",
+        description: name + " reusable workflow",
+        source: "openclaw-workshop",
         bundled: false,
-        filePath: `/tmp/skills/${name}/SKILL.md`,
-        baseDir: `/tmp/skills/${name}`,
+        filePath: "/synthetic/skills/" + name + "/SKILL.md",
+        baseDir: "/synthetic/skills/" + name,
         skillKey: name,
         always: false,
-        disabled: false,
+        disabled,
         blockedByAllowlist: false,
-        blockedByAgentFilter,
-        eligible: true,
+        eligible: !disabled,
+        modelVisible: !disabled,
+        userInvocable: true,
+        commandVisible: !disabled,
         requirements: { bins: [], anyBins: [], env: [], config: [], os: [] },
         missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
         configChecks: [],
@@ -364,45 +363,57 @@ suite.define(() => {
             config,
             sourceConfig: config,
             runtimeConfig: config,
-            hash: "agent-config-hash-1",
+            hash: "synthetic-hash",
             issues: [],
             raw: JSON.stringify(config),
             valid: true,
           },
           "skills.status": {
             agentId: "main",
-            agentSkillFilter: ["github"],
-            workspaceDir: "/tmp/workspace",
-            managedSkillsDir: "/tmp/skills",
-            skills: [skill("github", false), skill("weather", true)],
+            workspaceDir: "/synthetic/workspace",
+            managedSkillsDir: "/synthetic/skills",
+            skills: [
+              skill("release-checks"),
+              skill("new-workshop-skill"),
+              skill("disabled-workflow", true),
+            ],
           },
         },
       });
-
       const response = await page.goto(`${suite.server.baseUrl}settings/agents/main/skills`);
       expect(response?.status()).toBe(200);
-      await gateway.waitForRequest("config.get");
       await gateway.waitForRequest("skills.status");
-
-      await gateway.deferNext("config.set");
+      await expect.poll(() => page.locator(".agent-skill-row").count()).toBe(3);
+      expect(
+        await page.locator(".agent-skill-row", { hasText: "new-workshop-skill" }).textContent(),
+      ).toContain("eligible");
+      expect(
+        await page.locator(".agent-skill-row", { hasText: "disabled-workflow" }).textContent(),
+      ).toContain("disabled");
+      expect(await page.locator(".agent-skill-row wa-switch").count()).toBe(0);
+      expect(await page.getByRole("button", { name: "Disable All", exact: true }).count()).toBe(0);
+      expect(await page.getByRole("button", { name: "Reset", exact: true }).count()).toBe(0);
       await page
-        .locator(".agent-skill-row", { hasText: "github skill" })
-        .locator("wa-switch")
+        .getByRole("tabpanel", { name: "Skills" })
+        .getByRole("button", { name: "Refresh", exact: true })
         .click();
-
-      const request = await gateway.waitForRequest("config.set");
-      const params = requireRecord(request.params);
-      expect(JSON.parse(String(params.raw))).toEqual({
-        agents: {
-          defaults: { skills: ["github"] },
-          entries: { main: { skills: [] } },
-        },
-      });
-      expect(params.baseHash).toBe("agent-config-hash-1");
-      await gateway.resolveDeferred("config.set", {
-        config: JSON.parse(String(params.raw)),
-        hash: "agent-config-hash-2",
-      });
+      expect(await gateway.getRequests("config.set")).toHaveLength(0);
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      if (captureUiProof) {
+        for (const group of await page.locator(".agent-skills-group").all()) {
+          if ((await group.getAttribute("open")) === null) {
+            await group.locator("summary").click();
+          }
+        }
+        const row = page.locator(".agent-skill-row", { hasText: "new-workshop-skill" });
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator(".settings-workspace").last(),
+          [row],
+          { animations: "disabled", viewport: { width: 1280, height: 900 } },
+        );
+        await fs.writeFile(path.join(proofDir, "agent-skill-discovery.png"), frame.png);
+      }
     });
   });
 });

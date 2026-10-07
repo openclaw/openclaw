@@ -115,6 +115,19 @@ export async function resolveSubagentChildPlan(params: {
   const childRuntimeSandboxed =
     creationPolicy.sandbox === "required" ||
     resolveSandboxRuntimeStatus({ cfg: params.cfg, sessionKey: childSessionKey }).sandboxed;
+  if (
+    params.ctx.inheritedWorkspaceOnlyRead &&
+    (childRuntimeSandboxed || params.requesterSandboxed || params.sandboxMode === "require")
+  ) {
+    return {
+      ok: false as const,
+      result: {
+        status: "forbidden",
+        error:
+          "Repository-only sender helpers cannot use sandbox skill mounts. Keep the same unsandboxed repository workspace.",
+      } satisfies SpawnSubagentResult,
+    };
+  }
   const childCwd =
     requestedCwd ?? (senderRestricted && !childRuntimeSandboxed ? requesterRoot : undefined);
   const spawnedCwd = childCwd ? resolveUserPath(childCwd) : undefined;

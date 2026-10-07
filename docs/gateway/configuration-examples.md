@@ -235,7 +235,6 @@ This example leaves `agents.defaults.timeoutSeconds` unset, so ordinary agent ru
         "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
         "openai/gpt-5.4": { alias: "gpt" },
       },
-      skills: ["github", "weather"], // inherited by agents that omit entries.*.skills
       thinkingDefault: "low",
       verboseDefault: "off",
       toolProgressDetail: "explain",
@@ -299,7 +298,6 @@ This example leaves `agents.defaults.timeoutSeconds` unset, so ordinary agent ru
         fastModeDefault: false, // per-agent fast mode
       },
       quick: {
-        skills: [], // no skills for this agent
         fastModeDefault: true, // this agent always runs fast
         thinkingDefault: "off",
       },
@@ -503,22 +501,21 @@ example `~/.agents/skills/manager -> ~/path/to/skills`.
     ownership: "explicit",
     defaults: {
       workspace: "~/.openclaw/workspace",
-      skills: ["github", "weather"],
       heartbeat: { agentId: "main" },
       systemAgent: { agentId: "main" },
     },
     entries: {
       main: { workspace: "~/.openclaw/workspace" },
-      docs: { workspace: "~/.openclaw/workspace-docs", skills: ["docs-search"] },
+      docs: { workspace: "~/.openclaw/workspace-docs" },
     },
   },
   talk: { agentId: "main" },
 }
 ```
 
-- `agents.defaults.skills` is the shared baseline.
-- `agents.entries.*.skills` replaces that baseline for one agent.
-- Use `skills: []` when an agent should see no skills.
+- All otherwise-eligible skills are discovered automatically for each agent.
+- Doctor retires old agent name lists with a visible warning; their restrictions, including `[]`, no longer apply.
+- Global per-skill disables and session skill selections remain effective.
 
 ### Multi-platform setup
 

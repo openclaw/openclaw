@@ -119,7 +119,7 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
             },
           },
           skipBootstrap: true,
-          skills: [],
+
           compaction: {
             mode: "default",
             keepRecentTokens: 1,

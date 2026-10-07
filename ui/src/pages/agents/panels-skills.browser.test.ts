@@ -11,24 +11,13 @@ type Params = Parameters<typeof renderAgentSkills>[0];
 function skillsParams(skills: SkillStatusEntry[], overrides: Partial<Params> = {}): Params {
   return {
     agentId: "main",
-    canPatchConfig: true,
-    canUpdateConfig: true,
     report: { workspaceDir: "/tmp/workspace", managedSkillsDir: "/tmp/skills", skills },
     loading: false,
     error: null,
     activeAgentId: "main",
-    configForm: { agents: { entries: { main: {} } } },
-    configLoading: false,
-    configSaving: false,
-    configDirty: false,
     filter: "",
     onFilterChange: () => undefined,
     onRefresh: () => undefined,
-    onToggle: () => undefined,
-    onClear: () => undefined,
-    onDisableAll: () => undefined,
-    onConfigReload: () => undefined,
-    onConfigSave: () => undefined,
     ...overrides,
   };
 }
@@ -54,54 +43,32 @@ describe("agents skills panel (browser)", () => {
     );
   });
 
-  it.each(["inherited", "explicit without patch access"])(
-    "gates clearing a %s allowlist separately from staged edits",
-    async (mode) => {
-      const inherited = mode === "inherited";
-      const container = document.createElement("div");
-      const skills = inherited
-        ? [
-            createSkill({ name: "github", source: "openclaw-managed" }),
-            createSkill({
-              name: "weather",
-              source: "openclaw-managed",
-              blockedByAgentFilter: true,
-              modelVisible: false,
-              commandVisible: false,
-            }),
-          ]
-        : [];
-      render(
-        renderAgentSkills(
-          skillsParams(skills, {
-            canPatchConfig: inherited,
-            configForm: {
-              agents: inherited
-                ? { defaults: { skills: ["github"] }, entries: { main: {} } }
-                : { entries: { main: { skills: ["coding-agent"] } } },
-            },
+  it("shows eligibility without obsolete agent allowlist toggles", async () => {
+    const container = document.createElement("div");
+    render(
+      renderAgentSkills(
+        skillsParams([
+          createSkill({ name: "new-workshop-skill", source: "openclaw-workshop" }),
+          createSkill({
+            name: "disabled",
+            disabled: true,
+            eligible: false,
+            modelVisible: false,
+            commandVisible: false,
           }),
-        ),
-        container,
-      );
-      await Promise.resolve();
-      if (inherited) {
-        expect(container.querySelector(".callout.info")?.textContent).toContain(
-          "inherits the default skill allowlist",
-        );
-        expect(
-          Array.from(
-            container.querySelectorAll<HTMLElement & { checked: boolean }>(
-              ".agent-skill-row wa-switch",
-            ),
-          ).map((toggle) => toggle.checked),
-        ).toEqual([true, false]);
-      }
-      const buttons = container.querySelectorAll<HTMLButtonElement>("button");
-      expect(buttons[0]?.disabled).toBe(false);
-      expect(buttons[1]?.disabled).toBe(true);
-    },
-  );
+        ]),
+      ),
+      container,
+    );
+    await Promise.resolve();
+    expect(container.textContent).toContain("otherwise-eligible skills");
+    expect(container.textContent).toContain("new-workshop-skill");
+    expect(container.textContent).toContain("disabled");
+    expect(container.querySelector("wa-switch")).toBeNull();
+    expect(
+      Array.from(container.querySelectorAll("button"), (button) => button.textContent?.trim()),
+    ).toEqual(["Refresh"]);
+  });
 
   it("explains an unsatisfied one-of binary requirement", async () => {
     const container = document.createElement("div");

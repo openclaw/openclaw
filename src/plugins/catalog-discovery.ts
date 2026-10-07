@@ -570,7 +570,7 @@ async function readCatalogPage(params: {
           agentId,
           installed: skill !== undefined,
           enabled: skill !== undefined && !skill.disabled,
-          eligible: skill?.eligible === true && !skill.blockedByAgentFilter,
+          eligible: skill?.eligible === true,
           ...(skill ? { skillKey: skill.skillKey } : {}),
         },
       };

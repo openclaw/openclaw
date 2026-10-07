@@ -11,6 +11,7 @@ export const IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW = Symbol.for(
 );
 
 type SandboxToolPolicyConfig = {
+  workspaceOnlyRead?: true;
   allow?: string[];
   alsoAllow?: string[];
   deny?: string[];
@@ -30,10 +31,14 @@ export function pickSandboxToolPolicy(
   // `alsoAllow` extends defaults when no nonempty allow list was authored.
   const allow = extra?.length ? uniqueStrings([...(base?.length ? base : ["*"]), ...extra]) : base;
   const deny = Array.isArray(config.deny) ? config.deny : undefined;
-  if (!allow && !deny) {
+  if (!allow && !deny && !config.workspaceOnlyRead) {
     return undefined;
   }
-  const policy = { allow, deny } as SandboxToolPolicy & {
+  const policy = {
+    allow,
+    deny,
+    ...(config.workspaceOnlyRead ? { workspaceOnlyRead: true as const } : {}),
+  } as SandboxToolPolicy & {
     [IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW]?: true;
   };
   if (allowFromAlsoAllowOnly) {

@@ -53,6 +53,24 @@ export function registerAcpSpawnPolicyTests(fixture: {
     );
   });
 
+  it("refuses ACP when repository-only resource reads cannot be enforced", async () => {
+    const result = await fixture.spawn(
+      { task: "inspect", agentId: "codex" },
+      {
+        agentSessionKey: "agent:codex:main",
+        inheritedToolPolicySource: "sender",
+        inheritedWorkspaceOnlyRead: true,
+        workspaceDir: os.tmpdir(),
+      },
+    );
+    expect(result).toMatchObject({
+      status: "forbidden",
+      error: expect.stringContaining("repository-only"),
+    });
+    expect(fixture.initializeSessionMock).not.toHaveBeenCalled();
+    expect(fixture.upsertSessionEntryMock).not.toHaveBeenCalled();
+  });
+
   it("refuses ACP when a restricted helper's guarded root cannot be enforced", async () => {
     const result = await fixture.spawn(
       { task: "inspect", agentId: "codex" },

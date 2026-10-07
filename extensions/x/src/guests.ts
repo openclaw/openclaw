@@ -9,14 +9,14 @@ import { openXGuestUsage, XGuestUsageUnavailableError } from "./guest-usage.js";
 export function resolveXGuestContainmentError(
   cfg: OpenClawConfig,
   agentId: string,
+  runtime: Pick<PluginRuntime, "capabilities">,
 ): string | undefined {
   const agent = resolveAgentConfig(cfg, agentId);
   if ((agent?.tools?.fs?.workspaceOnly ?? cfg.tools?.fs?.workspaceOnly) !== true) {
     return `X guest mode requires agents.entries.${agentId}.tools.fs.workspaceOnly=true (or tools.fs.workspaceOnly=true) and the OpenClaw clone as the agent working directory.`;
   }
-  const skills = agent?.skills ?? cfg.agents?.defaults?.skills;
-  if (!skills || skills.length !== 0) {
-    return `X guest mode requires agents.entries.${agentId}.skills=[] so read cannot access external skill directories.`;
+  if (!runtime.capabilities?.includes("sender-workspace-only-read-v1")) {
+    return "X guest mode requires a host with sender-workspace-only-read-v1 support. Update OpenClaw before enabling guests; skill selections cannot authorize repository containment.";
   }
   const sandbox = agent?.sandbox;
   const defaults = cfg.agents?.defaults?.sandbox;
@@ -33,7 +33,8 @@ export function resolveXGuestContainmentError(
 function resolveXGuestReadinessError(
   cfg: OpenClawConfig,
   accountId: string,
-  routedAgentId?: string,
+  routedAgentId: string | undefined,
+  runtime: Pick<PluginRuntime, "capabilities">,
 ): string | undefined {
   // Include the default route and explicit X thread bindings; the router owns account matching.
   const peerIds = new Set([
@@ -61,7 +62,7 @@ function resolveXGuestReadinessError(
     return "X guest mode requires valid X agent bindings. Add a channel-wide X binding and correct any missing target agents.";
   }
   const failures = [...new Set(agentIds)].flatMap(
-    (id) => resolveXGuestContainmentError(cfg, id) ?? [],
+    (id) => resolveXGuestContainmentError(cfg, id, runtime) ?? [],
   );
   return failures.length ? failures.join(" ") : undefined;
 }
@@ -77,7 +78,7 @@ export async function getXGuestStatus(
   const { enabled, maxMentionsPerAuthorPerDay } = resolveXGuestSettings(account);
   const helpersAvailable = supportsXGuestHelpers(runtime);
   const blockedReason = enabled
-    ? resolveXGuestReadinessError(cfg, account.accountId, routedAgentId)
+    ? resolveXGuestReadinessError(cfg, account.accountId, routedAgentId, runtime)
     : undefined;
   try {
     return {

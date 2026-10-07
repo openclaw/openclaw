@@ -17,9 +17,6 @@ vi.mock("../subagents/registry/subagent-registry-read.js", () => ({
 vi.mock("../../sessions/session-state-events.js", () => ({
   recordSessionHumanDirectMessage: vi.fn(),
 }));
-vi.mock("../../skills/discovery/agent-filter.js", () => ({
-  resolveEffectiveAgentSkillFilter: () => undefined,
-}));
 vi.mock("./attempt-execution.shared.js", () => ({ persistAgentSession: vi.fn() }));
 vi.mock("./run-context.js", () => ({ resolveAgentRunContext: () => ({}) }));
 vi.mock("./runtime-loaders.js", () => ({

@@ -16,7 +16,6 @@ import { isSubagentCoordinationInputProvenance } from "../../sessions/input-prov
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
-import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
 import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
@@ -149,7 +148,6 @@ export async function prepareEmbeddedSessionState(params: {
   }
 
   let sessionEntry = params.sessionEntry;
-  const skillFilter = resolveEffectiveAgentSkillFilter(params.cfg, params.sessionAgentId);
   const currentSkillsSnapshot = sessionEntry?.skillsSnapshot;
   const [
     { getRemoteSkillEligibility, resolveReusableWorkspaceSkillSnapshot },
@@ -171,7 +169,6 @@ export async function prepareEmbeddedSessionState(params: {
     agentId: params.sessionAgentId,
     existingSnapshot: params.isNewSession ? undefined : currentSkillsSnapshot,
     librarySelections: sessionEntry?.skillLibrarySelections,
-    skillFilter,
     assertCurrent: () => assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration),
     resolveEligibility: () => ({
       nodeSkills: nodeSkillsEligibility,

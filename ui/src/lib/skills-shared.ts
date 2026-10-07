@@ -22,14 +22,11 @@ export function computeSkillReasons(skill: SkillStatusEntry): string[] {
   if (skill.blockedByAllowlist) {
     reasons.push(t("skillStatus.blockedAllowlist"));
   }
-  if (skill.blockedByAgentFilter) {
-    reasons.push(t("skillStatus.blockedAgentFilter"));
-  }
   return reasons;
 }
 
 export function isSkillAvailable(skill: SkillStatusEntry): boolean {
-  return skill.eligible && !skill.blockedByAgentFilter;
+  return skill.eligible;
 }
 
 export function renderSkillStatusChips(params: {

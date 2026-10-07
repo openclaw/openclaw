@@ -137,9 +137,6 @@ type AgentsProps = {
   onCronRunNow: (jobId: string) => void;
   onSkillsFilterChange: (next: string) => void;
   onSkillsRefresh: () => void;
-  onAgentSkillToggle: (agentId: string, skillName: string, enabled: boolean) => void;
-  onAgentSkillsClear: (agentId: string) => void;
-  onAgentSkillsDisableAll: (agentId: string) => void;
   onSetDefault: (agentId: string) => void;
 };
 
@@ -270,20 +267,9 @@ export function renderAgents(props: AgentsProps) {
           loading: props.agentSkills.agentSkillsLoading,
           error: props.agentSkills.agentSkillsError,
           activeAgentId: props.agentSkills.agentSkillsAgentId,
-          configForm: config,
-          configLoading: props.config.configLoading,
-          configSaving: props.config.configSaving,
-          configDirty: props.config.configFormDirty,
           filter: props.agentSkills.skillsFilter,
-          canPatchConfig: props.access.canPatchConfig,
-          canUpdateConfig: props.access.canUpdateConfig,
           onFilterChange: props.onSkillsFilterChange,
           onRefresh: props.onSkillsRefresh,
-          onToggle: props.onAgentSkillToggle,
-          onClear: props.onAgentSkillsClear,
-          onDisableAll: props.onAgentSkillsDisableAll,
-          onConfigReload: props.onConfigReload,
-          onConfigSave: props.onConfigSave,
         });
       case "channels":
         return renderAgentChannels({

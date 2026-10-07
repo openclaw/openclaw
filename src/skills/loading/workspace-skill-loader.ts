@@ -7,6 +7,7 @@ import { shouldRejectHardlinkedPluginFiles } from "../../plugins/hardlink-policy
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { normalizeSkillFilter } from "../discovery/filter.js";
 import { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
 import {
   captureSkillLibrarySelection,
@@ -38,10 +39,7 @@ import {
   warnInvalidSkill,
 } from "./skill-root-loader.js";
 import { tryRealpath } from "./symlink-targets.js";
-import {
-  filterSkillEntries,
-  resolveEffectiveWorkspaceSkillFilter,
-} from "./workspace-skill-filter.js";
+import { filterSkillEntries } from "./workspace-skill-filter.js";
 import { normalizeWorkspaceSkillRoots } from "./workspace-skill-roots.js";
 import {
   resolveCustodianSkillAgentId,
@@ -75,12 +73,6 @@ type WorkspaceSkillLoadOptions = {
   skillFilter?: string[];
   skillOverrides?: Record<string, boolean>;
   agentId?: string;
-  /**
-   * "ignore" keeps agentId scoping source discovery (custodian skills) without
-   * activating the agent allowlist filter — status/inventory views need the
-   * full entry list so excluded skills stay present-but-marked.
-   */
-  agentSkillFilter?: "apply" | "ignore";
   eligibility?: SkillEligibilityContext;
   workspaceOnly?: boolean;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
@@ -459,7 +451,7 @@ export async function resolveWorkspaceSkillPromptEntries(
   workspaceDir: string,
   opts?: Omit<
     WorkspaceSkillLoadOptions,
-    "bundledSkillName" | "pluginSkillsDir" | "agentSkillFilter" | "workspaceOnly"
+    "bundledSkillName" | "pluginSkillsDir" | "workspaceOnly"
   > & {
     entries?: SkillEntry[];
     assertCurrent?: () => void;
@@ -484,16 +476,12 @@ async function prepareWorkspaceSkillSelection(
   for (;;) {
     preparation.assertCurrent();
     const sourceVersion = getSkillsSourceVersion(workspaceDir, opts);
-    let skillFilter = mode === "prompt" ? resolveEffectiveWorkspaceSkillFilter(opts) : undefined;
+    let skillFilter = mode === "prompt" ? normalizeSkillFilter(opts?.skillFilter) : undefined;
     const sources = await prepareCapturedWorkspaceSkillEntries(workspaceDir, opts, preparation);
     preparation.assertCurrent();
     const entries = sources.entries;
     if (mode === "runtime") {
-      const selection = resolveWorkspaceSkillLoad(workspaceDir, opts, entries);
-      skillFilter = selection.effectiveSkillFilter;
-      if (!selection.shouldFilter) {
-        return { entries, skillFilter };
-      }
+      skillFilter = normalizeSkillFilter(opts?.skillFilter);
     }
     const probe = await prepareSkillBinaryProbe(
       entries,
@@ -535,7 +523,7 @@ function resolveWorkspaceSkillLoad(
   });
   const entries =
     preparedEntries ?? mergeSkillTiers(loadLocalSkillTiers(roots.agentWorkspaceDir, opts), opts);
-  const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
+  const effectiveSkillFilter = normalizeSkillFilter(opts?.skillFilter);
   return {
     entries,
     effectiveSkillFilter,
@@ -547,7 +535,7 @@ function resolveWorkspaceSkillLoad(
   };
 }
 
-/** Runtime preparation shares discovery and filtering with synchronous SDK inventory reads. */
+/** Runtime preparation always applies eligibility; raw inventories use prepareWorkspaceSkillEntries. */
 export async function prepareWorkspaceSkills(
   workspaceDir: string,
   opts?: WorkspaceSkillLoadOptions,
@@ -579,7 +567,7 @@ export function loadVisibleSkills(
   >,
 ): SkillEntry[] {
   const entries = mergeSkillTiers(loadLocalSkillTiers(workspaceDir, opts), opts);
-  const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
+  const effectiveSkillFilter = normalizeSkillFilter(opts?.skillFilter);
   return filterSkillEntries(entries, { ...opts, skillFilter: effectiveSkillFilter });
 }
 

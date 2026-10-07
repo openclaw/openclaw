@@ -192,7 +192,7 @@ export function expandExplicitSkillReferences(params: {
     }
   }
   const error = unavailable
-    ? `Skill "${unavailable.skillName}" is not available for this agent. Update the skill allowlist or choose an allowed skill.`
+    ? `Skill "${unavailable.skillName}" is not available for this agent. Update the session skill selection or choose a selected skill.`
     : available.length > MAX_EXPLICIT_SKILL_REFERENCES
       ? `Too many skill references. Use at most ${MAX_EXPLICIT_SKILL_REFERENCES} skills in one message.`
       : undefined;

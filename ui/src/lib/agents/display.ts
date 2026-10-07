@@ -6,7 +6,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import { parseModelPolicyWildcardRef } from "../../../../src/config/model-policy-ref.js";
@@ -45,10 +44,7 @@ type AgentDisplayTools = Pick<ToolsConfig, "allow" | "alsoAllow" | "deny"> & {
   github?: Partial<Pick<GitHubToolIdentityConfig, "profileId" | "gitAuthor">>;
 };
 
-type AgentConfigEntry = Pick<
-  AgentConfig,
-  "name" | "workspace" | "agentDir" | "decisionModel" | "skills"
-> & {
+type AgentConfigEntry = Pick<AgentConfig, "name" | "workspace" | "agentDir" | "decisionModel"> & {
   model?: unknown;
   models?: Record<string, { alias?: unknown }>;
   tools?: AgentDisplayTools;
@@ -56,10 +52,7 @@ type AgentConfigEntry = Pick<
 
 type ConfigSnapshot = {
   agents?: {
-    defaults?: Pick<
-      AgentConfigEntry,
-      "workspace" | "model" | "decisionModel" | "models" | "skills"
-    >;
+    defaults?: Pick<AgentConfigEntry, "workspace" | "model" | "decisionModel" | "models">;
     entries?: Record<string, AgentConfigEntry>;
   };
   tools?: AgentDisplayTools;
@@ -138,17 +131,6 @@ export function resolveAgentConfig(config: Record<string, unknown> | null, agent
   };
 }
 
-/** Resolves the effective skill allowlist, including inherited agent defaults. */
-export function resolveAgentSkillsFilter(config: Record<string, unknown> | null, agentId: string) {
-  const resolved = resolveAgentConfig(config, agentId);
-  if (Array.isArray(resolved.entry?.skills)) {
-    return normalizeStringEntries(resolved.entry.skills);
-  }
-  return Array.isArray(resolved.defaults?.skills)
-    ? normalizeStringEntries(resolved.defaults.skills)
-    : undefined;
-}
-
 export type AgentContext = {
   workspace: string;
   model: string;
@@ -194,16 +176,13 @@ export function buildAgentContext(
   const identityAvatar = resolveAgentAvatarUrl(agent, agentIdentity)
     ? "custom"
     : (resolveAgentTextAvatar(agent, agentIdentity) ?? "—");
-  const skillFilter = resolveAgentSkillsFilter(configForm, agent.id);
   return {
     workspace,
     model: modelLabel,
     runtime,
     identityName,
     identityAvatar,
-    skillsLabel: skillFilter
-      ? t("agents.overview.selectedSkills", { count: String(skillFilter.length) })
-      : t("agents.overview.allSkills"),
+    skillsLabel: t("agents.overview.allSkills"),
     isDefault: Boolean(defaultId && agent.id === defaultId),
   };
 }

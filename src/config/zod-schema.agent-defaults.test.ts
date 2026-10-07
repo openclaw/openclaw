@@ -22,6 +22,16 @@ function expectSchemaFailurePath(result: SchemaParseResult, prefix: string): voi
 }
 
 describe("agent defaults schema", () => {
+  it("rejects retired agent name lists without changing independent skill gates", () => {
+    expect(AgentDefaultsSchema.safeParse({ skills: ["weather"] }).success).toBe(false);
+    expect(AgentEntrySchema.safeParse({ id: "main", skills: [] }).success).toBe(false);
+    expect(
+      validateConfigObject({
+        skills: { allowBundled: ["weather"], entries: { github: { enabled: false } } },
+      }).ok,
+    ).toBe(true);
+  });
+
   it("accepts bounded explicit picker runtimes only on exact model refs", () => {
     const models = {
       "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" }, pickerRuntimes: ["codex"] },

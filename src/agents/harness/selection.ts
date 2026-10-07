@@ -47,6 +47,7 @@ import {
   resolvePluginHarnessToolPolicies,
   type ResolvedPluginHarnessToolPolicies,
 } from "./execution-environment.js";
+import { captureRequiredWorkspaceToolFloor } from "./host-capability-workspace.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import {
   runAgentHarnessLifecycleAttempt,
@@ -603,6 +604,7 @@ function withoutPluginHarnessPrivateState(
   const {
     admittedRunContext: _admittedRunContext,
     runtimePluginToolGrant: _runtimePluginToolGrant,
+    workspaceOnlyRead: _workspaceOnlyRead,
     assistantErrorTranscript: _assistantErrorTranscript,
     compactionCountOwner: _compactionCountOwner,
     completionCheck: _completionCheck,
@@ -619,7 +621,8 @@ function withoutPluginHarnessPrivateState(
   } = params as EmbeddedRunAttemptInternalParams & {
     __openclawSourceReplyDeliveryRuntime?: unknown;
   };
-  return pluginParams;
+  const requiredWorkspace = captureRequiredWorkspaceToolFloor(params, "", params.config);
+  return requiredWorkspace ? { ...pluginParams, requireWorkspaceOnly: true } : pluginParams;
 }
 
 function preparePluginHarnessParams(

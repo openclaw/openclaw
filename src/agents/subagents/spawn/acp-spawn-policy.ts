@@ -27,12 +27,18 @@ export function resolveAcpSpawnRuntimePolicyError(params: {
 export function resolveAcpSenderSpawnError(
   params: Pick<
     SpawnedToolContext,
-    "inheritedToolPolicySource" | "workspaceDir" | "sessionPermissionPolicy"
+    | "inheritedToolPolicySource"
+    | "inheritedWorkspaceOnlyRead"
+    | "workspaceDir"
+    | "sessionPermissionPolicy"
   > & { requesterAgentId: string; targetAgentId: string; cwd?: string },
 ): string | undefined {
   const targetError = resolveSenderRestrictedSpawnError(params);
   if (targetError) {
     return targetError;
+  }
+  if (params.inheritedWorkspaceOnlyRead) {
+    return 'ACP cannot enforce repository-only sender resource reads. Use runtime="subagent" in the same repository.';
   }
   if (params.inheritedToolPolicySource !== "sender") {
     return undefined;

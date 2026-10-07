@@ -60,6 +60,8 @@ export async function createInitialSubagentSession(params: {
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
   inheritedToolPolicySource?: "sender";
+  /** Sender-bound read containment; may only narrow resource access. */
+  inheritedWorkspaceOnlyRead?: true;
   modelPatch: Partial<
     Extract<
       Awaited<ReturnType<typeof resolveSubagentModelAndThinkingPlan>>,
@@ -75,6 +77,7 @@ export async function createInitialSubagentSession(params: {
     ...admissionPatch,
     ...(subagentRole ? { subagentRole } : {}),
     inheritedToolPolicyVersion: 1,
+    ...(params.inheritedWorkspaceOnlyRead ? { inheritedWorkspaceOnlyRead: true as const } : {}),
     ...(params.inheritedToolPolicySource
       ? { inheritedToolPolicySource: params.inheritedToolPolicySource }
       : {}),

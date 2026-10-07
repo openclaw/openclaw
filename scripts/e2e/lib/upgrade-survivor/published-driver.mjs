@@ -273,11 +273,17 @@ process.exitCode = await runCancelableCommand(async (signal) => {
         reload: { mode: "off" },
       },
       plugins: { enabled: false },
+      skills: { entries: { "disabled-fixture": { enabled: false } } },
       agents: {
-        defaults: { heartbeat: { every: "0m" } },
+        defaults: { heartbeat: { every: "0m" }, skills: ["existing-selection"] },
         list: [
-          { id: "main", default: true, workspace: path.join(runtime, "workspaces", "main") },
-          { id: "second", workspace: path.join(runtime, "workspaces", "second") },
+          {
+            id: "main",
+            default: true,
+            workspace: path.join(runtime, "workspaces", "main"),
+            skills: ["existing-selection"],
+          },
+          { id: "second", workspace: path.join(runtime, "workspaces", "second"), skills: [] },
         ],
       },
     };
@@ -462,6 +468,89 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     assert.equal(recorded.phase, "finished");
     assert.equal(recorded.status, "succeeded");
     assert.equal(result.after?.version, build.version);
+    const repairedConfig = readJson(env.OPENCLAW_CONFIG_PATH);
+    assert(
+      !Object.hasOwn(repairedConfig.agents.defaults, "skills"),
+      "Default skill name list survived update",
+    );
+    for (const agent of Object.values(repairedConfig.agents.entries)) {
+      assert(!Object.hasOwn(agent, "skills"), "Agent skill name list survived update");
+    }
+    assert.equal(repairedConfig.skills.entries["disabled-fixture"].enabled, false);
+    const backups = fs
+      .readdirSync(state)
+      .filter((name) => /^openclaw\.json\.bak(?:\.\d+)?$/u.test(name));
+    const selectionBackup = backups.find((name) => {
+      const saved = readJson(path.join(state, name));
+      return (
+        Array.isArray(saved.agents?.defaults?.skills) &&
+        saved.agents.defaults.skills.includes("existing-selection")
+      );
+    });
+    assert(selectionBackup, "Normal config backup did not retain retired skill selections");
+    assert.equal(
+      fs.statSync(path.join(state, selectionBackup)).mode & 0o077,
+      0,
+      "Config backup is not private",
+    );
+    writeJson("skill-discovery-migration", {
+      priorAgentRestrictionsRetired: true,
+      otherwiseEligibleDiscovery: "current-and-future",
+      globalDisablePreserved: true,
+      privateSelectionBackup: selectionBackup,
+    });
+    const migrationOutput =
+      fs.readFileSync(path.join(artifacts, "update.stdout"), "utf8") +
+      fs.readFileSync(path.join(artifacts, "update.stderr"), "utf8");
+    assert(
+      migrationOutput.includes("prior agent-specific restrictions are not preserved"),
+      "Update did not expose the skill discovery migration warning",
+    );
+    const proposalFile = path.join(runtime, "skill-proposal.md");
+    fs.writeFileSync(
+      proposalFile,
+      "# Upgrade Discovery Fixture\nUse this synthetic workflow after the update.\n",
+    );
+    await run("workshop-propose", "openclaw", [
+      "skills",
+      "workshop",
+      "propose-create",
+      "--agent",
+      "main",
+      "--name",
+      "post-upgrade-workshop",
+      "--description",
+      "Synthetic post-upgrade Workshop discovery",
+      "--proposal",
+      proposalFile,
+      "--json",
+    ]);
+    const proposed = output("workshop-propose");
+    await run("workshop-apply", "openclaw", [
+      "skills",
+      "workshop",
+      "apply",
+      proposed.record.id,
+      "--agent",
+      "main",
+      "--json",
+    ]);
+    const mainSkills = await gateway("main-skills-after-apply", "skills.status", {
+      agentId: "main",
+    });
+    const appliedSkill = mainSkills.skills.find((skill) => skill.name === "post-upgrade-workshop");
+    assert(
+      appliedSkill?.eligible && appliedSkill.modelVisible && appliedSkill.commandVisible,
+      "Applied Workshop skill remained hidden after update",
+    );
+    const otherSkills = await gateway("other-skills-after-apply", "skills.status", {
+      agentId: "second",
+    });
+    assert(
+      !otherSkills.skills.some((skill) => skill.name === "post-upgrade-workshop"),
+      "Workshop skill leaked into another agent",
+    );
+
     assert.deepEqual(readJson(path.join(packageRoot, "dist/build-info.json")), build);
     assert.equal(fs.readFileSync(orphanSidecar, "utf8"), orphanSidecarBytes);
     assert.notEqual(

@@ -376,28 +376,4 @@ describe("renderSkills", () => {
     row.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
     expect(onDetailOpen).toHaveBeenCalledWith("apple-notes");
   });
-
-  it("treats skills blocked by the selected agent filter as needing setup", async () => {
-    const container = createContainer();
-    installDialogMethod("showModal", function (this: HTMLDialogElement) {
-      this.setAttribute("open", "");
-    });
-    const report: SkillStatusReport = skillReport([createSkill({ blockedByAgentFilter: true })]);
-
-    renderView(container, { report, statusFilter: "ready" });
-    await Promise.resolve();
-
-    expect(container.querySelectorAll(".plugins-item")).toHaveLength(0);
-    expect(normalizeText(container)).toContain("Ready 0");
-    expect(normalizeText(container)).toContain("Needs Setup 1");
-
-    renderView(container, { report, statusFilter: "needs-setup", detailKey: "repo-skill" });
-    await Promise.resolve();
-
-    expect(container.querySelector(".plugins-item .settings-status--warn")).not.toBeNull();
-    expect(normalizeText(container)).toContain("Reason: blocked by agent filter");
-    expect(
-      Array.from(container.querySelectorAll(".chip")).map((chip) => normalizeText(chip)),
-    ).toContain("blocked");
-  });
 });

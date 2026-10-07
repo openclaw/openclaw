@@ -125,7 +125,7 @@ it.each([
   expect(save?.disabled).toBe(true);
 });
 
-it("shows inherited skills in the Agent Context overview", () => {
+it("shows automatic eligibility in the Agent Context overview", () => {
   const container = document.createElement("div");
   render(
     renderAgents(
@@ -133,7 +133,7 @@ it("shows inherited skills in the Agent Context overview", () => {
         config: {
           configForm: {
             agents: {
-              defaults: { skills: ["github", "weather"] },
+              defaults: {},
               entries: { beta: {} },
             },
           },
@@ -149,9 +149,9 @@ it("shows inherited skills in the Agent Context overview", () => {
   );
 
   const skillsFilterRow = Array.from(container.querySelectorAll("dt")).find(
-    (term) => term.textContent?.trim() === "Skills Filter",
+    (term) => term.textContent?.trim() === "Skills",
   )?.nextElementSibling;
-  expect(skillsFilterRow?.textContent?.trim()).toBe("2 selected");
+  expect(skillsFilterRow?.textContent?.trim()).toBe("All eligible skills");
 });
 
 describe("fallback field", () => {

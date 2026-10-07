@@ -65,7 +65,6 @@ const resolveAgentWorkspaceDirMock = vi.fn(
 const resolveEffectiveModelFallbacksMock = vi.fn();
 const resolveSubagentModelFallbacksOverrideMock = vi.fn();
 export const resolveAgentModelFallbacksOverrideMock = vi.fn();
-export const resolveAgentSkillsFilterMock = vi.fn();
 const getModelRefStatusMock = vi.fn();
 export const isCliProviderMock = vi.fn();
 export const resolveAllowedModelRefMock = vi.fn();
@@ -197,10 +196,10 @@ vi.mock("../../web-search/runtime.js", () => ({
   hasUsableWebSearchProvider: hasUsableWebSearchProviderMock,
 }));
 
+// mock-isolation: Cron session-state fixtures exclude real skill scans and node runtime.
 vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
   resolveNodeExecEligibility: vi.fn(() => ({ canExec: false })),
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
-  resolveEffectiveAgentSkillFilter: resolveAgentSkillsFilterMock,
   resolveReusableWorkspaceSkillSnapshot: (params: {
     workspaceDir: string;
     config?: unknown;
@@ -525,7 +524,6 @@ function resetRunConfigMocks(): void {
     return resolveOverride(selectedConfig);
   });
   resolveAgentModelFallbacksOverrideMock.mockReturnValue(undefined);
-  resolveAgentSkillsFilterMock.mockReturnValue(undefined);
   resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-5.4" });
   resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-5.4" } });
   resolveHooksGmailModelMock.mockReturnValue(null);

@@ -303,7 +303,7 @@ export function renderAgentOverview(
           <dd><code>${context.runtime}</code></dd>
           <dt>${t("agents.context.thinkingDefault")}</dt>
           <dd><code>${thinkingDefault}</code></dd>
-          <dt>${t("agents.context.skillsFilter")}</dt>
+          <dt>${t("agents.context.skills")}</dt>
           <dd>${context.skillsLabel}</dd>
         </dl>
       `,
@@ -418,7 +418,7 @@ export function renderAgentContextSection(
         <dd>${context.identityName}</dd>
         <dt>${t("agents.context.identityAvatar")}</dt>
         <dd>${context.identityAvatar}</dd>
-        <dt>${t("agents.context.skillsFilter")}</dt>
+        <dt>${t("agents.context.skills")}</dt>
         <dd>${context.skillsLabel}</dd>
         <dt>${t("agents.context.default")}</dt>
         <dd>${context.isDefault ? t("common.yes") : t("common.no")}</dd>

@@ -48,7 +48,7 @@ entry points at the page that now holds the content.
 - <a id="agents.defaults.workspace" /><a id="agents-defaults-workspace" />[`agents.defaults.workspace`](/gateway/config-agents/workspace-and-bootstrap#agents.defaults.workspace)
 - <a id="agents.defaults.cwd" /><a id="agents-defaults-cwd" />[`agents.defaults.cwd`](/gateway/config-agents/workspace-and-bootstrap#agents.defaults.cwd)
 - <a id="agents.defaults.reporoot" /><a id="agents-defaults-reporoot" />[`agents.defaults.repoRoot`](/gateway/config-agents/workspace-and-bootstrap#agents.defaults.reporoot)
-- <a id="agents.defaults.skills" /><a id="agents-defaults-skills" />[`agents.defaults.skills`](/gateway/config-agents/workspace-and-bootstrap#agents.defaults.skills)
+- <a id="agents.defaults.skills" /><a id="agents-defaults-skills" />[Skill discovery](/gateway/config-agents/workspace-and-bootstrap#agents.defaults.skills)
 - <a id="agents.defaults.skipbootstrap" /><a id="agents-defaults-skipbootstrap" />[`agents.defaults.skipBootstrap`](/gateway/config-agents/workspace-and-bootstrap#agents.defaults.skipbootstrap)
 - <a id="agents.defaults.skipoptionalbootstrapfiles" /><a id="agents-defaults-skipoptionalbootstrapfiles" />[`agents.defaults.skipOptionalBootstrapFiles`](/gateway/config-agents/workspace-and-bootstrap#agents.defaults.skipoptionalbootstrapfiles)
 - <a id="agents.defaults.contextinjection" /><a id="agents-defaults-contextinjection" />[`agents.defaults.contextInjection`](/gateway/config-agents/workspace-and-bootstrap#agents.defaults.contextinjection)

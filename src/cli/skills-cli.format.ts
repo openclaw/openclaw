@@ -47,11 +47,6 @@ function formatSkillStatus(skill: SkillStatusEntry, detailed = false): string {
   if (skill.blockedByAllowlist) {
     return theme.warn(decorativePrefix("🚫", detailed ? "Blocked by allowlist" : "blocked"));
   }
-  if (skill.blockedByAgentFilter) {
-    return theme.warn(
-      decorativePrefix("🚫", detailed ? "Excluded by agent allowlist" : "excluded"),
-    );
-  }
   if (skill.eligible) {
     return theme.success(detailed ? "✓ Ready" : "✓ ready");
   }
@@ -127,8 +122,7 @@ function formatSkillCheckSection(
 }
 
 export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
-  const isReadyForAgent = (skill: SkillStatusEntry) =>
-    skill.eligible && !skill.blockedByAgentFilter;
+  const isReadyForAgent = (skill: SkillStatusEntry) => skill.eligible;
   const skills = opts.eligible ? report.skills.filter(isReadyForAgent) : report.skills;
 
   if (opts.json) {
@@ -142,7 +136,6 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
         eligible: s.eligible,
         disabled: s.disabled,
         blockedByAllowlist: s.blockedByAllowlist,
-        blockedByAgentFilter: s.blockedByAgentFilter,
         modelVisible: s.modelVisible,
         userInvocable: s.userInvocable,
         commandVisible: s.commandVisible,
@@ -241,9 +234,6 @@ export function formatSkillInfo(
   lines.push(
     `${theme.muted("  Available as command:")} ${skill.commandVisible ? theme.success("yes") : theme.warn("no")}`,
   );
-  if (skill.blockedByAgentFilter) {
-    lines.push(`${theme.muted("  Agent allowlist:")} excludes this skill`);
-  }
   if (skill.primaryEnv) {
     lines.push(`${theme.muted("  Primary env:")} ${skill.primaryEnv}`);
   }
@@ -285,18 +275,13 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   const commandVisible = report.skills.filter((s) => s.commandVisible);
   const disabled = report.skills.filter((s) => s.disabled);
   const blocked = report.skills.filter((s) => s.blockedByAllowlist && !s.disabled);
-  // Agent exclusion is independent of readiness; report both when a skill needs setup.
-  const agentFiltered = report.skills.filter((s) => s.blockedByAgentFilter);
-  const promptHidden = report.skills.filter(
-    (s) => s.eligible && !s.blockedByAgentFilter && !s.modelVisible,
-  );
+  const promptHidden = report.skills.filter((s) => s.eligible && !s.modelVisible);
   const missingReqs = report.skills.filter(hasMissingSkillRequirements);
   const agentId = report.agentId ?? opts.agent;
 
   if (opts.json) {
     return formatSkillsJson({
       agentId,
-      agentSkillFilter: report.agentSkillFilter,
       workspaceDir: report.workspaceDir,
       managedSkillsDir: report.managedSkillsDir,
       summary: {
@@ -306,7 +291,6 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
         commandVisible: commandVisible.length,
         disabled: disabled.length,
         blocked: blocked.length,
-        agentFiltered: agentFiltered.length,
         notInjected: promptHidden.length,
         missingRequirements: missingReqs.length,
       },
@@ -315,7 +299,6 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
       commandVisible: commandVisible.map((s) => s.name),
       disabled: disabled.map((s) => s.name),
       blocked: blocked.map((s) => s.name),
-      agentFiltered: agentFiltered.map((s) => s.name),
       notInjected: promptHidden.map((s) => ({
         name: s.name,
         reason: "disable-model-invocation",
@@ -346,11 +329,6 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   lines.push(
     `${theme.warn(decorativePrefix("🚫", "Blocked by allowlist:"))} ${theme.muted(String(blocked.length))}`,
   );
-  if (agentId || agentFiltered.length > 0) {
-    lines.push(
-      `${theme.warn(decorativePrefix("🚫", "Excluded by agent allowlist:"))} ${theme.muted(String(agentFiltered.length))}`,
-    );
-  }
   if (promptHidden.length > 0) {
     lines.push(
       `${theme.warn("△")} ${theme.muted("Ready but hidden from model prompt:")} ${promptHidden.length}`,
@@ -362,7 +340,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
     lines.push("");
     lines.push(theme.heading("What this means:"));
     lines.push(
-      `  ${theme.muted("Eligible:")} installed and requirements pass; the agent may still exclude it.`,
+      `  ${theme.muted("Eligible:")} installed and requirements pass; session selections may narrow the set.`,
     );
     if (modelVisible.length > 0) {
       lines.push(
@@ -387,11 +365,6 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
       skill.commandVisible
         ? "skill hides its instructions from the model; commands/cron may still use it"
         : "skill hides its instructions from the model and is not exposed as a command",
-    ),
-    ...formatSkillCheckSection(
-      "Excluded by agent allowlist:",
-      agentFiltered,
-      () => "loaded, but this agent is not allowed to see/use it",
     ),
     ...formatSkillCheckSection("Missing requirements:", missingReqs, formatSkillMissingSummary),
   );
