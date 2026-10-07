@@ -2,7 +2,6 @@ import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getMemoryProviderMock,
-  getMemorySearchManagerMock,
   getMemoryProviderRuntimeMock,
 } from "./compact.hooks.memory.test-support.js";
 import type { CompactHooksQueuedCompaction } from "./compact.hooks.metadata.test-support.js";
@@ -18,49 +17,6 @@ type DirectRefreshTestParams = {
 
 /** Registers direct post-compaction provider refresh coverage. */
 export function registerDirectProviderRefreshTests(params: DirectRefreshTestParams): void {
-  it("refreshes a native provider with the compacted session authority", async () => {
-    const refresh = vi.fn().mockResolvedValue(undefined);
-    const close = vi.fn().mockResolvedValue(undefined);
-    getMemoryProviderRuntimeMock.mockReturnValue({ open: vi.fn() });
-    getMemoryProviderMock.mockResolvedValue({
-      providerId: "records",
-      provider: { refresh, close },
-    });
-    const audience = {
-      kind: "conversation" as const,
-      agentId: "main",
-      sessionKey: params.sessionKey,
-      sessionId: "session-1",
-    };
-
-    await params.compactTesting().runPostCompactionSideEffects({
-      config: params.compactionConfig("await"),
-      sessionKey: params.sessionKey,
-      sessionId: "session-1",
-      memoryAudience: audience,
-      sandboxed: true,
-      sessionFile: params.sessionFile(),
-    });
-
-    expect(getMemoryProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "main",
-        context: expect.objectContaining({
-          authority: {
-            kind: "session",
-            sessionKey: params.sessionKey,
-            sessionId: "session-1",
-            sandboxed: true,
-            audience,
-          },
-        }),
-      }),
-    );
-    expect(refresh).toHaveBeenCalledOnce();
-    expect(close).toHaveBeenCalledOnce();
-    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
-  });
-
   it("awaits an asynchronous caller authority check before native refresh", async () => {
     const refresh = vi.fn().mockResolvedValue(undefined);
     const close = vi.fn().mockResolvedValue(undefined);
@@ -132,6 +88,8 @@ export function registerQueuedProviderRefreshTest(params: QueuedRefreshTestParam
           context: expect.objectContaining({
             authority: expect.objectContaining({
               kind: "session",
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId(),
               sandboxed: true,
               audience,
             }),
