@@ -1,12 +1,11 @@
 import { expect, test, vi } from "vitest";
-import type * as AuthProfilesRuntime from "../../agents/auth-profiles.runtime.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { createModelSelectionState } from "./model-selection.js";
 
 vi.mock("../../agents/auth-profiles.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof AuthProfilesRuntime>()),
+  ...(await importOriginal<typeof import("../../agents/auth-profiles.runtime.js")>()),
   ensureAuthProfileStore: () => ({ version: 1, profiles: {} }),
 }));
 
