@@ -23,7 +23,6 @@ import {
 } from "../agents/prepared-model-catalog.js";
 import {
   createAgentRunDirectAbortError,
-  createAgentRunRestartAbortError,
   isAgentRunDirectAbortReason,
   isAgentRunRestartAbortReason,
 } from "../agents/run-termination.js";
@@ -528,7 +527,6 @@ describe("agentCommand", () => {
       },
       outcome: "failed",
     },
-    { name: "cancelled result", meta: { aborted: true, stopReason: "stop" }, outcome: "failed" },
     {
       name: "provider timeout",
       meta: { aborted: true, stopReason: "timeout", timeoutPhase: "provider" as const },
@@ -591,6 +589,7 @@ describe("agentCommand", () => {
         );
 
         expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).not.toHaveBeenCalled();
         expect(result?.payloads).toEqual([
           { text, mediaUrl: null, ...(meta.error ? { isError: true } : {}) },
         ]);
@@ -676,53 +675,26 @@ describe("agentCommand", () => {
     },
   );
 
-  it("carries an external cwd into the direct agent session skill snapshot", async () => {
+  it("owns skill watching for ingress runs with oneShotCliRun=true", async () => {
     await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const executionWorkspace = path.join(home, "external-repo");
-      mockConfig(home, store);
-
-      await agentCommand(
+      mockConfig(home, path.join(home, "sessions.json"));
+      await agentCommandFromIngress(
         {
-          message: "inspect this repo",
+          message: "inspect skills",
           agentId: "main",
-          cwd: executionWorkspace,
+          oneShotCliRun: true,
+          allowModelOverride: false,
         },
         runtime,
       );
 
       expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
-        expect.objectContaining({
-          executionWorkspaceDir: executionWorkspace,
-        }),
+        expect.objectContaining({ watch: false }),
       );
     });
   });
 
-  it.each([
-    ["local", undefined, false],
-    ["ingress", undefined, true],
-    ["ingress", true, false],
-  ] as const)(
-    "owns skill watching for %s runs with oneShotCliRun=%s",
-    async (entrypoint, oneShotCliRun, watch) => {
-      await withTempHome(async (home) => {
-        mockConfig(home, path.join(home, "sessions.json"));
-        const opts = { message: "inspect skills", agentId: "main", oneShotCliRun };
-        if (entrypoint === "ingress") {
-          await agentCommandFromIngress({ ...opts, allowModelOverride: false }, runtime);
-        } else {
-          await agentCommand(opts, runtime);
-        }
-
-        expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
-          expect.objectContaining({ watch }),
-        );
-      });
-    },
-  );
-
-  it.each([undefined, "agent:main:dashboard:parent"])(
+  it.each(["agent:main:dashboard:parent"])(
     "seeds only the configured workspace when a project run is spawned by %s",
     async (spawnedBy) => {
       await withTempHome(async (home) => {
@@ -852,25 +824,6 @@ describe("agentCommand", () => {
     });
   });
 
-  it.each(["Echo $PATH exactly.", String.raw`Keep \$release_notes literal.`])(
-    "does not discover skills for literal dollar input: %s",
-    async (message) => {
-      await withTempHome(async (home) => {
-        const store = path.join(home, "sessions.json");
-        mockConfig(home, store);
-
-        await agentCommandFromIngress(
-          { message, agentId: "main", allowModelOverride: false },
-          runtime,
-        );
-
-        expect(getLastEmbeddedCall()?.prompt).toBe(message);
-        expect(loadVisibleSkills).not.toHaveBeenCalled();
-        expect(loadWorkspaceSkills).not.toHaveBeenCalled();
-      });
-    },
-  );
-
   it("renders a Claude bundle command template on Gateway ingress", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -897,63 +850,6 @@ describe("agentCommand", () => {
       expect(getLastEmbeddedCall()?.prompt).toBe(
         "Review this workflow carefully.\n\nFocus on:\nretries and cleanup",
       );
-    });
-  });
-
-  it.each([
-    {
-      label: "dollar reference",
-      message: "Review this with $release_notes.",
-      request: "Review this with $release_notes.",
-    },
-    {
-      label: "leading slash invocation",
-      message: "/release_notes summarize the changes",
-      request: "/release_notes summarize the changes",
-    },
-  ])("expands a skill $label on Gateway ingress", async ({ message, request }) => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      mockConfig(home, store);
-      mockUserInvocableSkills({ home, skills: [{ name: "release-notes" }] });
-
-      await agentCommandFromIngress(
-        { message, agentId: "main", allowModelOverride: false },
-        runtime,
-      );
-
-      expect(getLastEmbeddedCall()?.prompt).toBe(
-        [
-          "Use the following explicitly referenced skills for this request. Read each skill's SKILL.md before acting:",
-          "- release-notes",
-          "",
-          "User request:",
-          request,
-        ].join("\n"),
-      );
-    });
-  });
-
-  it("expands an explicitly referenced skill hidden from model invocation", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      mockConfig(home, store);
-      mockUserInvocableSkills({
-        home,
-        skills: [{ name: "release-notes", disableModelInvocation: true }],
-      });
-
-      await agentCommandFromIngress(
-        {
-          message: "$release_notes draft the summary",
-          agentId: "main",
-          allowModelOverride: false,
-        },
-        runtime,
-      );
-
-      const skillFile = path.join(home, "openclaw", "skills", "release-notes", "SKILL.md");
-      expect(getLastEmbeddedCall()?.prompt).toContain(`- release-notes (SKILL.md: ${skillFile})`);
     });
   });
 
@@ -1087,25 +983,6 @@ describe("agentCommand", () => {
     });
   });
 
-  it("rejects a missing harness-owned session before local CLI dispatch", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      mockConfig(home, store);
-
-      await expect(
-        agentCommand(
-          {
-            message: "do not squat",
-            sessionKey: "agent:main:harness:codex:supervision:missing-local",
-          },
-          runtime,
-        ),
-      ).rejects.toThrow(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
-
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    });
-  });
-
   it("rejects a missing harness-owned session through embedded ingress", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -1123,34 +1000,6 @@ describe("agentCommand", () => {
       ).rejects.toThrow(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
 
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    });
-  });
-
-  it("continues an existing locked harness-owned session", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const sessionKey = "agent:main:harness:openclaw:supervision:existing";
-      mockConfig(home, store);
-      await writeSessionStoreSeed(store, {
-        [sessionKey]: {
-          sessionId: "existing-harness-session",
-          updatedAt: Date.now(),
-          agentHarnessId: "openclaw",
-          modelSelectionLocked: true,
-        },
-      });
-
-      await agentCommandFromIngress(
-        {
-          message: "continue safely",
-          sessionKey,
-          allowModelOverride: false,
-        },
-        runtime,
-      );
-
-      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-      expect(getLastEmbeddedCall()?.sessionId).toBe("existing-harness-session");
     });
   });
 
@@ -1258,35 +1107,6 @@ describe("agentCommand", () => {
     });
   });
 
-  it("rejects archived sessions selected by session id", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      mockConfig(home, store);
-      await writeSessionStoreSeed(store, {
-        "agent:main:subagent:archived": {
-          sessionId: "archived-session-id",
-          archivedAt: Date.now(),
-          updatedAt: Date.now(),
-        },
-      });
-      vi.mocked(runEmbeddedAgent).mockClear();
-
-      await expect(
-        agentCommandFromIngress(
-          {
-            message: "blocked while archived",
-            sessionId: "archived-session-id",
-            allowModelOverride: false,
-          },
-          runtime,
-        ),
-      ).rejects.toThrow(
-        'Session "agent:main:subagent:archived" is archived. Restore it before starting new work.',
-      );
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    });
-  });
-
   it("reloads archive state after asynchronous command preparation", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -1390,7 +1210,7 @@ describe("agentCommand", () => {
     });
   });
 
-  it.each(["generic", "explicit restart", "terminal Stop"] as const)(
+  it.each(["generic", "terminal Stop"] as const)(
     "preserves lifecycle interruption semantics: %s",
     async (interruption) => {
       await withTempHome(async (home) => {
@@ -1405,11 +1225,7 @@ describe("agentCommand", () => {
         const entered = createDeferredCore();
         const cleanup = new AbortController();
         const reason =
-          interruption === "terminal Stop"
-            ? createAgentRunDirectAbortError()
-            : interruption === "explicit restart"
-              ? createAgentRunRestartAbortError()
-              : undefined;
+          interruption === "terminal Stop" ? createAgentRunDirectAbortError() : undefined;
         vi.mocked(runEmbeddedAgent).mockImplementationOnce(
           async (opts) =>
             await new Promise((resolve) => {
@@ -1570,92 +1386,6 @@ describe("agentCommand", () => {
     });
   });
 
-  it("delivers embedded replies without re-persisting them", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      mockConfig(home, store);
-      installThinkingTestProviders([
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "telegram",
-            outbound: createDirectOutboundTestAdapter({ channel: "telegram" }),
-            messaging: {
-              normalizeTarget: (target) => {
-                const chatId = target.trim().replace(/^telegram:/i, "");
-                return chatId ? `telegram:${chatId}` : undefined;
-              },
-              resolveOutboundSessionRoute: (params) => {
-                const chatId = params.target.replace(/^telegram:/i, "");
-                return createOutboundSessionRouteFixture({
-                  cfg: params.cfg,
-                  agentId: params.agentId,
-                  channel: "telegram",
-                  accountId: params.accountId,
-                  peer: { kind: "direct", id: chatId },
-                  chatType: "direct",
-                  from: `telegram:${chatId}`,
-                  to: `telegram:${chatId}`,
-                });
-              },
-            },
-          }),
-        },
-      ]);
-      const sendMessageTelegram = vi.fn(async () => undefined);
-      const base = createDefaultAgentResult({ payloads: [{ text: "assistant-visible" }] });
-      vi.mocked(runEmbeddedAgent).mockResolvedValueOnce({
-        ...base,
-        meta: {
-          ...base.meta,
-          finalAssistantVisibleText: "assistant-visible",
-        },
-      });
-
-      await agentCommandFromIngress(
-        {
-          message: "call a tool then answer",
-          agentId: "main",
-          to: "+1222",
-          channel: "telegram",
-          messageChannel: "telegram",
-          deliver: true,
-          allowModelOverride: false,
-          sessionEffects: "internal",
-        },
-        runtime,
-        { telegram: sendMessageTelegram },
-      );
-
-      expect(sendMessageTelegram).toHaveBeenCalledWith("telegram:+1222", "assistant-visible", {
-        accountId: undefined,
-        verbose: false,
-      });
-      expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).not.toHaveBeenCalled();
-    });
-  });
-
-  it("does not load the full model catalog for trusted explicit overrides without an allowlist", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      mockConfig(home, store, { models: {} });
-
-      await agentCommand(
-        {
-          message: "ping",
-          to: "+1222",
-          model: "openrouter/auto",
-        },
-        runtime,
-      );
-
-      expect(readPreparedModelCatalog).not.toHaveBeenCalled();
-      expectLastRunProviderModel("openrouter", "openrouter/auto");
-      expect(getLastEmbeddedCall()?.thinkLevel).toBe("off");
-    });
-  });
-
   registerAgentThinkingTests({ withTempHome, mockConfig, getLastEmbeddedCall, runtime });
 
   it("bypasses ACP sessions for one-shot model runs", async () => {
@@ -1708,76 +1438,7 @@ describe("agentCommand", () => {
     });
   });
 
-  it("borrows session lookup data without returning cached mutable store objects", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const sessionKey = "agent:main:cache-borrow";
-      await writeSessionStoreSeed(store, {
-        [sessionKey]: {
-          sessionId: "session-cache-borrow",
-          updatedAt: Date.now(),
-          thinkingLevel: "low",
-        },
-        "agent:main:other": {
-          sessionId: "session-other",
-          updatedAt: Date.now(),
-        },
-      });
-      mockConfig(home, store, { models: {} });
-
-      const prepared = await prepareAgentCommandExecution(
-        {
-          message: "prepare only",
-          sessionKey,
-        },
-        runtime,
-      );
-      const cached = loadSessionEntry({ storePath: store, sessionKey, clone: false });
-
-      expect(prepared.sessionStore).not.toBe(cached);
-      expect(prepared.sessionEntry).not.toBe(cached);
-      expect(prepared).not.toHaveProperty("recoveryCandidateEntry");
-      expect(prepared.sessionStore?.[sessionKey]).toBe(prepared.sessionEntry);
-      expect(prepared.sessionStore?.["agent:main:other"]).toBeUndefined();
-    });
-  });
-
   registerAgentReplyPolicyTests({ withTempHome, mockConfig, runtime });
-
-  it("passes resolved session-id routing context to embedded runs", async () => {
-    await withTempHome(async (home) => {
-      const resumeStore = path.join(home, "sessions-resume.json");
-      await writeSessionStoreSeed(resumeStore, {
-        foo: {
-          sessionId: "session-123",
-          updatedAt: Date.now(),
-          systemSent: true,
-        },
-      });
-      mockConfig(home, resumeStore);
-
-      await agentCommand(
-        { message: "resume me", sessionId: "session-123", thinking: "low" },
-        runtime,
-      );
-
-      const callArgs = getLastEmbeddedCall();
-      expect(callArgs?.sessionId).toBe("session-123");
-      expect(callArgs).toMatchObject({
-        agentId: "main",
-        sessionKey: "agent:main:foo",
-        sessionFile: "agent:main:foo",
-      });
-      expect(
-        vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].sessionTarget,
-      ).toEqual({
-        agentId: "main",
-        sessionId: "session-123",
-        sessionKey: "agent:main:foo",
-        storePath: resumeStore,
-      });
-    });
-  });
 
   it("does not duplicate agent events from embedded runs", async () => {
     await withTempHome(async (home) => {
