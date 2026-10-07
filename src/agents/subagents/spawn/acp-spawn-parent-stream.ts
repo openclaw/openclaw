@@ -402,13 +402,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   };
 
   const noOutputWatcherTimer = setInterval(() => {
-    if (disposed) {
-      return;
-    }
-    if (stallNotified) {
-      return;
-    }
-    if (Date.now() - lastProgressAt < NO_OUTPUT_NOTICE_MS) {
+    if (disposed || stallNotified || Date.now() - lastProgressAt < NO_OUTPUT_NOTICE_MS) {
       return;
     }
     stallNotified = true;

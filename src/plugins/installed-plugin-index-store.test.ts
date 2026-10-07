@@ -8,10 +8,6 @@ import {
   setPluginInstallRecordMapEntry,
 } from "../config/plugin-install-record-map.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import {
-  acquireStartupMigrationLeaseWithWait,
-  STARTUP_MIGRATION_LEASE_TTL_MS,
-} from "../infra/startup-migration-checkpoint.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -27,7 +23,6 @@ import {
   refreshPersistedInstalledPluginIndex,
   restorePersistedInstalledPluginIndexIfCurrent,
   writePersistedInstalledPluginIndex,
-  writePersistedInstalledPluginIndexWithLeaseSync,
 } from "./installed-plugin-index-store-write.js";
 import {
   readPersistedInstalledPluginIndex,
@@ -284,51 +279,38 @@ describe("installed plugin index persistence", () => {
     }
   });
 
-  it("rejects a stale leased write without replacing the successor index", async () => {
+  it("rejects a stale caller's registry refresh without replacing the successor index", async () => {
     const stateDir = makeTempDir();
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const nowMs = Date.now();
-    const staleLease = await acquireStartupMigrationLeaseWithWait({
-      env,
-      now: () => nowMs,
-      owner: "stale",
-      timeoutMs: 0,
-    });
-    const successorLease = await acquireStartupMigrationLeaseWithWait({
-      env,
-      now: () => nowMs + STARTUP_MIGRATION_LEASE_TTL_MS + 1,
-      owner: "successor",
-      timeoutMs: 0,
-    });
-    const successorIndex = createIndex({
-      policyHash: "successor",
-      workspaceDir: "/agents/gadget/workspace",
-    });
-
-    try {
-      writePersistedInstalledPluginIndexWithLeaseSync(successorIndex, {
+    const staleLease = await withPluginLifecycleLease({ env }, async (lease) => lease);
+    await withPluginLifecycleLease({ env }, async (successorLease) => {
+      const successorIndex = await refreshPersistedInstalledPluginIndex({
         env,
         lease: successorLease,
+        reason: "manual",
+        candidates: [],
+        config: { plugins: { enabled: false } },
+        workspaceDir: "/agents/gadget/workspace",
       });
 
-      expect(() =>
-        writePersistedInstalledPluginIndexWithLeaseSync(createIndex({ policyHash: "stale" }), {
+      await expect(
+        refreshPersistedInstalledPluginIndex({
           env,
           lease: staleLease,
+          reason: "manual",
+          candidates: [],
+          config: { plugins: { enabled: true } },
         }),
-      ).toThrow("startup migration lease was lost");
+      ).rejects.toThrow("original live lease context");
       const persisted = requirePersisted(await readPersistedInstalledPluginIndex({ env }));
-      expect(persisted.policyHash).toBe("successor");
+      expect(persisted.policyHash).toBe(successorIndex.policyHash);
       expect(persisted.workspaceDir).toBe(successorIndex.workspaceDir);
       if (process.platform !== "win32") {
         expect(fs.statSync(resolveInstalledPluginIndexStorePath({ stateDir })).mode & 0o777).toBe(
           0o600,
         );
       }
-    } finally {
-      staleLease.release();
-      successorLease.release();
-    }
+    });
   });
 
   it("rereads install-record writes under their non-default policy", async () => {

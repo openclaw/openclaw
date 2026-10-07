@@ -79,18 +79,16 @@ export function resolveCodexAppServerSpawnEnv(
     (options.clearEnv ?? []).map((key) => normalizeKey(key.trim())).filter(Boolean),
   );
   for (const key of Object.keys(env)) {
-    if (keysToClear.has(normalizeKey(key)) || isCodexRuntimeInjectionEnvironmentKey(key)) {
+    const upperKey = key.toUpperCase();
+    const runtimeInjection =
+      RUNTIME_INJECTION_ENVIRONMENT_KEYS.has(upperKey) || upperKey.startsWith("DYLD_");
+    if (keysToClear.has(normalizeKey(key)) || runtimeInjection) {
       // Package managers and agent hosts may inject loader paths into their children. Codex does
       // not need them, so strip them before attestation and spawn instead of self-failing setup.
       delete env[key];
     }
   }
   return env;
-}
-
-function isCodexRuntimeInjectionEnvironmentKey(rawKey: string): boolean {
-  const key = rawKey.toUpperCase();
-  return RUNTIME_INJECTION_ENVIRONMENT_KEYS.has(key) || key.startsWith("DYLD_");
 }
 
 /** Spawns the Codex app-server process and returns the shared transport interface. */

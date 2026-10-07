@@ -49,7 +49,7 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { SessionManagerCore } from "./session-manager-core.js";
 import {
   captureSessionManagerIncognitoBinding,
-  assertSessionManagerIncognitoAdmission,
+  captureSessionManagerIncognitoAdmissionAssertion,
   withRetainedSessionManagerIncognitoActor,
 } from "./session-manager-incognito-scope.js";
 import { SessionTranscriptMessageCommittedError } from "./session-manager-message-error.js";
@@ -136,7 +136,7 @@ export async function withSessionManagerWrite<T>(
     assertCurrent();
   };
   if (incognitoBinding) {
-    assertSessionManagerIncognitoAdmission(incognitoBinding);
+    captureSessionManagerIncognitoAdmissionAssertion(incognitoBinding)();
     const actor = incognitoBinding.actor;
     const database: SessionManagerIncognitoDatabase = {
       path: actor.path,

@@ -229,18 +229,6 @@ function normalizeEndpointId(value: string, index: number): string {
   return trimmed ? trimmed.replace(/[^a-zA-Z0-9_.:-]/g, "-") : `endpoint-${index + 1}`;
 }
 
-function normalizeConfiguredEndpoint(
-  endpoint: CodexSupervisionEndpoint,
-  index: number,
-): NormalizedSupervisionEndpoint {
-  const rawId = endpoint.id ?? endpoint.label ?? "";
-  return {
-    id: normalizeEndpointId(rawId, index),
-    ...(endpoint.label?.trim() ? { label: endpoint.label.trim() } : {}),
-    configured: endpoint,
-  };
-}
-
 function parseEndpointRecord(value: unknown): CodexSupervisionEndpoint | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -291,19 +279,6 @@ function endpointFromToken(token: string, index: number): CodexSupervisionEndpoi
   return undefined;
 }
 
-function requireUniqueEndpointIds(
-  endpoints: NormalizedSupervisionEndpoint[],
-): NormalizedSupervisionEndpoint[] {
-  const seen = new Set<string>();
-  for (const endpoint of endpoints) {
-    if (seen.has(endpoint.id)) {
-      throw new Error(`duplicate Codex supervisor endpoint id: ${endpoint.id}`);
-    }
-    seen.add(endpoint.id);
-  }
-  return endpoints;
-}
-
 function readLegacyEnvEndpoints(env: NodeJS.ProcessEnv): CodexSupervisionEndpoint[] | undefined {
   const raw = env[LEGACY_CODEX_SUPERVISOR_ENDPOINTS_ENV]?.trim();
   if (!raw) {
@@ -326,16 +301,32 @@ function readLegacyEnvEndpoints(env: NodeJS.ProcessEnv): CodexSupervisionEndpoin
 
 function resolveEndpoints(
   pluginConfig: unknown,
-  env: NodeJS.ProcessEnv,
-  runtimeConfig: OpenClawConfig | undefined,
-  resolveAuthProfileId: CodexSupervisionToolsOptions["resolveAuthProfileId"],
-  resolveRuntimeOptions: CodexSupervisionToolsOptions["resolveRuntimeOptions"],
+  options: CodexSupervisionToolsOptions,
 ): ResolvedSupervisionEndpoint[] {
+  const env = options.env ?? process.env;
+  const runtimeConfig = options.getRuntimeConfig?.();
+  const { resolveAuthProfileId, resolveRuntimeOptions } = options;
   const configured = readCodexPluginConfig(pluginConfig).supervision?.endpoints;
   const endpoints = configured?.length ? configured : readLegacyEnvEndpoints(env);
-  const normalized = endpoints
-    ? requireUniqueEndpointIds(endpoints.map(normalizeConfiguredEndpoint))
+  const normalized: NormalizedSupervisionEndpoint[] = endpoints
+    ? endpoints.map((endpoint, index) => {
+        const entry: NormalizedSupervisionEndpoint = {
+          id: normalizeEndpointId(endpoint.id ?? endpoint.label ?? "", index),
+        };
+        if (endpoint.label?.trim()) {
+          entry.label = endpoint.label.trim();
+        }
+        entry.configured = endpoint;
+        return entry;
+      })
     : [{ id: "local", label: "local Codex app-server" }];
+  const seen = new Set<string>();
+  for (const endpoint of normalized) {
+    if (seen.has(endpoint.id)) {
+      throw new Error(`duplicate Codex supervisor endpoint id: ${endpoint.id}`);
+    }
+    seen.add(endpoint.id);
+  }
   return normalized.map((endpoint) =>
     Object.assign({}, endpoint, {
       connectionKey: supervisionEndpointConnectionKey({
@@ -831,13 +822,7 @@ function requireLiveToolPolicy(
   requireToolPolicy(pluginConfig, policy);
   return {
     pluginConfig,
-    endpoints: resolveEndpoints(
-      pluginConfig,
-      options.env ?? process.env,
-      options.getRuntimeConfig?.(),
-      options.resolveAuthProfileId,
-      options.resolveRuntimeOptions,
-    ),
+    endpoints: resolveEndpoints(pluginConfig, options),
   };
 }
 

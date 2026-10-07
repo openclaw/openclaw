@@ -54,15 +54,12 @@ function appendCapturedOutput(
 ): OutputCapture {
   const combined = `${current.text}${chunk}`;
   const overflowChars = Math.max(0, combined.length - maxOutputChars);
-  if (overflowChars === 0) {
-    return {
-      text: combined,
-      truncatedChars: current.truncatedChars,
-    };
-  }
-  const nextText = truncateTail
-    ? sliceUtf16Safe(combined, overflowChars)
-    : sliceUtf16Safe(combined, 0, maxOutputChars);
+  const nextText =
+    overflowChars === 0
+      ? combined
+      : truncateTail
+        ? sliceUtf16Safe(combined, overflowChars)
+        : sliceUtf16Safe(combined, 0, maxOutputChars);
   return {
     text: nextText,
     truncatedChars: current.truncatedChars + combined.length - nextText.length,

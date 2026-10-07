@@ -1064,7 +1064,11 @@ runtime caller receives its native handle. Concurrent acquisitions share that ex
 physical generation. Its validation receipt carries the admitted schema facts;
 later native handles compare committed schema markers and reuse those facts
 instead of repeating canonical table, index, trigger, and integrity scans.
-Local DDL revokes the shared schema proof, including rolled-back DDL. Revoked
+The session generation tracker declares its connection-local counter and increment
+triggers to the schema owner, which checks existing TEMP names and shapes once at
+installation before preserving the receipt. Mismatched objects, other TEMP objects,
+and ordinary local DDL still revoke the shared schema
+proof, including rolled-back DDL; a partial tracker installation also revokes it. Revoked
 facts on live handles and host-handle eviction return to the retained worker for admission and
 publication; stale proof never falls back to schema scans on the Gateway thread.
 The worker validates changed schemas before publishing replacement facts while

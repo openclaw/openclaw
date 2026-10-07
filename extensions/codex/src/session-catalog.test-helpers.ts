@@ -191,7 +191,12 @@ function asControlFactory(
 }
 
 export async function listCodexSessionCatalog(
-  params: Omit<Parameters<typeof createCodexSessionCatalogListOperation>[0], "control"> & {
+  params: Omit<
+    Parameters<typeof createCodexSessionCatalogListOperation>[0],
+    "control" | "localHomes"
+  > & {
+    includeLocal?: boolean;
+    localHomes?: CodexCatalogHome[];
     control:
       | CodexSessionCatalogControl
       | CodexSessionCatalogControlFactory
@@ -202,6 +207,7 @@ export async function listCodexSessionCatalog(
     hosts: await runCatalogListInline(
       createCodexSessionCatalogListOperation({
         ...params,
+        localHomes: params.localHomes ?? (params.includeLocal === false ? [] : [undefined]),
         control: asControlFactory(params.control),
       }),
     ),

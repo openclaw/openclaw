@@ -574,7 +574,7 @@ if (process.versions.bun) {
             loadInstalledPluginIndexInstallRecords,
           } from ${JSON.stringify(recordsModuleUrl)};
           import { readPersistedInstalledPluginIndex } from ${JSON.stringify(indexModuleUrl)};
-          import { writePersistedInstalledPluginIndexWithLeaseSync } from ${JSON.stringify(writeModuleUrl)};
+          import { writePersistedInstalledPluginIndex } from ${JSON.stringify(writeModuleUrl)};
           const [pluginId, stateDir, goMarker, releaseAlphaMarker] = process.argv.slice(2);
           process.env.OPENCLAW_STATE_DIR = stateDir;
           const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -602,7 +602,7 @@ if (process.versions.bun) {
             );
             process.stdout.write("held\\n");
           }
-          const operation = withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 5_000 }, async (lease) => {
+          const operation = withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 5_000 }, async () => {
             process.stdout.write("acquired\\n");
             if (pluginId === "alpha") {
               await waitForMarker(releaseAlphaMarker);
@@ -610,7 +610,7 @@ if (process.versions.bun) {
             const records = await loadInstalledPluginIndexInstallRecords();
             process.stdout.write("records:" + Object.keys(records).sort().join(",") + "\\n");
             // Reuse prepared fixture metadata; discovery can block the heartbeat during this race.
-            writePersistedInstalledPluginIndexWithLeaseSync({
+            await writePersistedInstalledPluginIndex({
               ...index,
               installRecords: {
                 ...records,
@@ -621,7 +621,7 @@ if (process.versions.bun) {
                   installPath: "/tmp/" + pluginId,
                 },
               },
-            }, { env, lease });
+            }, { env });
             process.stdout.write("written\\n");
           });
           process.stdout.write("attempted\\n");

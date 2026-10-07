@@ -574,14 +574,8 @@ export async function ensureSandboxWorkspaceForSession(params: {
   const selected = await prepareSandboxWorkspaceSelection(params, resolved);
   const { rawSessionKey, cfg } = selected;
 
-  const {
-    agentWorkspaceDir,
-    scopeKey,
-    skillsEligibility,
-    skillUsagePaths,
-    skillsWorkspaceDir,
-    workspaceDir,
-  } = await ensureSandboxWorkspaceLayout(params, selected);
+  const { agentWorkspaceDir, scopeKey, workspaceDir, ...workspace } =
+    await ensureSandboxWorkspaceLayout(params, selected);
 
   const containerWorkdir = getSandboxBackendWorkdirResolver(cfg.backend)?.({
     cfg,
@@ -589,14 +583,12 @@ export async function ensureSandboxWorkspaceForSession(params: {
     scopeKey,
     workspaceDir,
     agentWorkspaceDir,
-    skillsWorkspaceDir,
+    skillsWorkspaceDir: workspace.skillsWorkspaceDir,
   });
   return {
     workspaceDir,
     ...(containerWorkdir ? { containerWorkdir } : {}),
-    skillsWorkspaceDir,
-    ...(skillsEligibility ? { skillsEligibility } : {}),
-    ...(skillUsagePaths ? { skillUsagePaths } : {}),
+    ...workspace,
     workspaceAccess: cfg.workspaceAccess,
   };
 }

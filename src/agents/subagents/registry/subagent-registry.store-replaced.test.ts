@@ -20,7 +20,8 @@ import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import {
   blockSubagentCompletionDelivery,
-  settleRequesterCompletionBatch,
+  SubagentCompletionSourceChangedError,
+  mutateRequesterCompletionBatch,
 } from "../completion/subagent-completion-admission.store.js";
 import {
   admitCompletionFixtureDatabase,
@@ -47,9 +48,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function publishCommittedRecords(row: SubagentRunRecord): void {
   subagentRuns.set(row.runId, row);
-  const events: Array<() => void> = [];
-  publishSubagentRunsAfterAtomicStore(subagentRuns, [row.runId], events);
-  events.forEach((publish) => publish());
+  publishSubagentRunsAfterAtomicStore(subagentRuns, [row.runId])();
 }
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -215,12 +214,19 @@ it.each([false, true])(
           throw new Error("a replaced store must not admit a delivery attempt");
         },
         completeBatch: async (batch, _generation, outcome, onCommitted) => {
-          await settleRequesterCompletionBatch({
-            entries: batch.map((subagent) => ({
-              subagent,
-            })),
-            outcome: expectDefined(outcome, "store replacement disposition"),
-            isCurrent: () => batch.every((entry) => subagentRuns.get(entry.runId) === entry),
+          await mutateRequesterCompletionBatch({
+            entries: batch,
+            operation: {
+              kind: "settle",
+              outcome: expectDefined(outcome, "store replacement disposition"),
+            },
+            assertCurrent: () => {
+              if (!batch.every((entry) => subagentRuns.get(entry.runId) === entry)) {
+                throw new SubagentCompletionSourceChangedError(
+                  "Subagent completion owner changed before settlement",
+                );
+              }
+            },
           });
           onCommitted?.();
         },

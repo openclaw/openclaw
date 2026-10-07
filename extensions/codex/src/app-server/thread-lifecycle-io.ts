@@ -15,7 +15,6 @@ import {
   isCodexAppServerOverloadError,
   resolveCodexAppServerClientInstanceId,
 } from "./client.js";
-import { assertCodexInferenceRouteConfig } from "./inference-routing.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   attestCodexThreadToolSurface,
@@ -54,7 +53,7 @@ import type {
 } from "./thread-lifecycle-types.js";
 import { resolveCodexAppServerModelProvider } from "./thread-model-selection.js";
 import { CodexThreadPolicyHandoffError, refreshCodexThreadPolicy } from "./thread-policy.js";
-import { buildThreadResumeParams, buildThreadStartParams } from "./thread-requests.js";
+import { buildThreadStartParams } from "./thread-requests.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
 import { hasCodexAppServerSiblingRouteWork } from "./turn-router.js";
 
@@ -109,15 +108,12 @@ export async function resumeExistingCodexThread(
   const {
     binding: resumeBinding,
     bindingIdentity,
-    startModelSelection,
     startModelProvider,
     dynamicToolsFingerprint,
     webSearchThreadConfigFingerprint,
     ringZeroConfigFingerprint,
     ringZeroClientInstanceId,
-    hostSystemAgentActive,
     restrictedToolSurface,
-    restrictedToolSurfaceInheritedMcpServerNames,
     lifecycleTiming,
     normalizeBindingModelProvider,
     throwIfAborted,
@@ -185,17 +181,7 @@ export async function resumeExistingCodexThread(
       finalConfigPatch.configPatch,
     );
     const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
-      buildThreadResumeParams(params.params, {
-        ...params,
-        threadId: resumeBinding.threadId,
-        authProfileId,
-        model: startModelSelection.model,
-        modelProvider: startModelProvider,
-        preserveNativeModel: resumeBinding.preserveNativeModel === true,
-        config: resumeConfig,
-        hostSystemAgentActive,
-        restrictedToolSurfaceInheritedMcpServerNames,
-      }),
+      context.buildResumeParams(resumeBinding, authProfileId, resumeConfig),
     );
     const requestModelProvider =
       typeof resumeParams.modelProvider === "string" && resumeParams.modelProvider.trim()
@@ -216,15 +202,12 @@ export async function resumeExistingCodexThread(
         withCurrent: params.authority?.withCurrent,
         assertCurrent: () => {
           configuration.assertCurrent();
-          assertCodexInferenceRouteConfig(
-            params.client,
-            params.inferenceRoute,
+          context.assertInferenceConfig(
             resumeParams.config,
             requestModelProvider ??
               (resumeBinding.preserveNativeModel
                 ? (configuration.modelProvider ?? undefined)
                 : undefined),
-            params.inferenceProviderRoutes,
           );
         },
       }),
@@ -494,13 +477,7 @@ export async function startFreshCodexThread(
   };
   const assertInferenceCurrent = () => {
     assertCurrent();
-    assertCodexInferenceRouteConfig(
-      params.client,
-      params.inferenceRoute,
-      startParams.config,
-      requestModelProvider,
-      params.inferenceProviderRoutes,
-    );
+    context.assertInferenceConfig(startParams.config, requestModelProvider);
   };
   const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
     try {

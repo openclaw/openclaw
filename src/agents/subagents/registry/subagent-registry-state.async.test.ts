@@ -801,7 +801,7 @@ it.each(["refused mutation", "committed publication"] as const)(
         mutation = mutateAfterClose();
         await expect(mutation).rejects.toThrow("maintenance resource scope is closed");
       } else {
-        publishSubagentRunsAfterAtomicStore(current, ["one"], events);
+        events.push(publishSubagentRunsAfterAtomicStore(current, ["one"]));
       }
       expect(store.readSubagentRun(database, "one")?.model).toBe(committed ? "after" : "before");
       expect(

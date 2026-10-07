@@ -153,7 +153,9 @@ function resolveFsAccess(policy: ResolvedFsSandboxPolicy, rawPath: string): FsAc
   const target = normalizeSandboxAbsolutePath(rawPath, "fs path");
   let selected: { specificity: number; rank: number; access: FsAccessMode } | undefined;
   for (const entry of policy.entries) {
-    if (!fsSandboxEntryMatches(entry, target)) {
+    const matches =
+      entry.kind === "path" ? pathContains(entry.path, target) : entry.matcher.test(target);
+    if (!matches) {
       continue;
     }
     const prefix = entry.kind === "path" ? entry.path : entry.literalPrefix;
@@ -184,14 +186,19 @@ export function assertNoReadOnlyDescendant(
   }
   const target = normalizeSandboxAbsolutePath(rawPath, "fs path");
   const protectedDescendant = policy.entries.find((entry) => {
-    if (entry.access === "write" || !fsSandboxEntryCanAffectDescendant(entry, target)) {
+    if (entry.access === "write") {
       return false;
     }
     if (entry.kind === "glob") {
-      return true;
+      return pathContains(target, entry.literalPrefix) || pathContains(entry.literalPrefix, target);
     }
     const protectedPath = entry.path;
-    return protectedPath && resolveFsAccess(policy, protectedPath) !== "write";
+    return (
+      pathContains(target, protectedPath) &&
+      target !== protectedPath &&
+      protectedPath &&
+      resolveFsAccess(policy, protectedPath) !== "write"
+    );
   });
   if (protectedDescendant) {
     const protectedPath =
@@ -212,20 +219,6 @@ export function normalizeSandboxAbsolutePath(rawPath: string, label: string): st
 
 export function pathContains(root: string, target: string): boolean {
   return root === "/" || target === root || target.startsWith(`${root}/`);
-}
-
-function fsSandboxEntryMatches(entry: ResolvedFsSandboxEntry, target: string): boolean {
-  if (entry.kind === "path") {
-    return pathContains(entry.path, target);
-  }
-  return entry.matcher.test(target);
-}
-
-function fsSandboxEntryCanAffectDescendant(entry: ResolvedFsSandboxEntry, target: string): boolean {
-  if (entry.kind === "path") {
-    return pathContains(target, entry.path) && target !== entry.path;
-  }
-  return pathContains(target, entry.literalPrefix) || pathContains(entry.literalPrefix, target);
 }
 
 function normalizeSandboxGlobPattern(pattern: string): string {

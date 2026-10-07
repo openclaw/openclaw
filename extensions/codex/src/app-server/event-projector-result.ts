@@ -1,3 +1,4 @@
+import { AgentHarnessProjectionSettlement } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   classifyAgentHarnessTerminalOutcome,
   type AgentMessage,
@@ -5,7 +6,11 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentHarnessToolResultTelemetry } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { resolveCodexTtsProvenanceTransfer } from "openclaw/plugin-sdk/codex-mcp-projection";
-import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import {
+  attemptTerminal,
+  type AttemptFailureSource,
+  type EmbeddedRunAttemptResult,
+} from "./attempt-terminal.js";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
 import { CodexAsyncDeliveryProjection } from "./event-projector-async-delivery.js";
 import { CodexProjectionDiagnostics } from "./event-projector-diagnostics.js";
@@ -14,15 +19,15 @@ import { CodexGeneratedMediaProjection } from "./event-projector-media.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
 import type { CodexAppServerEventProjectorOptions } from "./event-projector-options.js";
 import { CodexReasoningProjection } from "./event-projector-reasoning.js";
-import { CodexProjectionSettlement } from "./event-projector-settlement.js";
 import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
-import { CodexTerminalFailureProjection } from "./event-projector-terminal-failure.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import { CodexToolSearchEvidenceProjection } from "./event-projector-tool-search-evidence.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
 import { CodexUsageProjection } from "./event-projector-usage.js";
-import type { CodexTurn } from "./protocol.js";
+import { readCodexProviderRefusal, type CodexProviderRefusal } from "./event-projector-values.js";
+import type { CodexTurn, JsonValue } from "./protocol.js";
 import { CodexTranscriptCheckpoint } from "./transcript-checkpoint.js";
+import { resolveCodexPromptError } from "./usage-limit-error.js";
 
 export type CodexAppServerToolTelemetry = Partial<
   Omit<AgentHarnessToolResultTelemetry, "confirmedMediaDeliveries">
@@ -40,6 +45,29 @@ export type CodexAppServerToolTelemetry = Partial<
       AgentHarnessToolResultTelemetry["confirmedMediaDeliveries"]
     >;
   } & Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">;
+
+class CodexProjectionSettlement extends AgentHarnessProjectionSettlement<EmbeddedRunAttemptParams> {
+  terminalReceipt: CodexTurn | undefined;
+  turnTainted = false;
+
+  constructor(params: EmbeddedRunAttemptParams, isActive: () => boolean) {
+    super(params, isActive, { label: "codex app-server" });
+  }
+
+  get completedAnswer() {
+    const turn = this.terminalReceipt;
+    // Codex 0.153.0 turn/completed carries the last assistant item as a summary.
+    const answer = turn?.items?.findLast(
+      (item) =>
+        item.type === "agentMessage" &&
+        item.phase !== "commentary" &&
+        item.delivery !== "async" &&
+        typeof item.text === "string" &&
+        item.text.trim().length > 0,
+    );
+    return turn?.status === "completed" && answer ? { turn, answer } : undefined;
+  }
+}
 
 /** Owns per-turn projection state and builds results from the same state. */
 export abstract class CodexTurnProjection {
@@ -63,7 +91,9 @@ export abstract class CodexTurnProjection {
   protected readonly projectionController = new AbortController();
   /** Structured overloads may continue once the exact settled transcript is captured. */
   settledTurnFailureFinalizationAllowed = false;
-  protected readonly terminalFailure = new CodexTerminalFailureProjection();
+  protected promptError: unknown;
+  protected promptErrorSource: AttemptFailureSource | null = null;
+  protected providerRefusal: CodexProviderRefusal | undefined;
   protected synthesizedMissingToolResultError: string | null = null;
   protected aborted = false;
   protected contextTokens: number | undefined;
@@ -168,12 +198,10 @@ export abstract class CodexTurnProjection {
       contextTokensSource,
       completedCompactionCount,
       synthesizedMissingToolResultError: previousMissingToolResultError,
-    } = this;
-    const {
       promptError: initialPromptError,
       promptErrorSource: initialPromptErrorSource,
       providerRefusal,
-    } = this.terminalFailure;
+    } = this;
     const upstreamUserText = this.options.upstreamUserText;
     const turnTainted = this.settlement.turnTainted;
     const observedItemCount = new Set([...this.observedItemIds, ...this.completedItemIds]).size;
@@ -349,6 +377,39 @@ export abstract class CodexTurnProjection {
       transferTtsProvenance?.(toolResult, result, toolAutoDeliveryMediaUrls ?? []);
     }
     return result;
+  }
+
+  protected recordTerminalFailure(params: {
+    message: string | undefined;
+    codexErrorInfo: JsonValue | null | undefined;
+    misalignment?: unknown;
+    nativeThreadId?: string;
+    nativeTurnId?: string;
+    rateLimits: JsonValue | undefined;
+    fallbackMessage: string;
+    promptErrorSource: AttemptFailureSource;
+  }): void {
+    const refusal = readCodexProviderRefusal(params.message, params.codexErrorInfo, params);
+    // Error notifications can precede a richer terminal snapshot for this same turn.
+    // Explicitly changed details also retire a previously valid continuation.
+    if (
+      !this.providerRefusal ||
+      (refusal?.category === "misalignment" &&
+        this.providerRefusal.category === "misalignment" &&
+        params.misalignment != null)
+    ) {
+      this.providerRefusal = refusal;
+    }
+    if (this.providerRefusal) {
+      return;
+    }
+    this.promptError =
+      resolveCodexPromptError({
+        message: params.message,
+        codexErrorInfo: params.codexErrorInfo,
+        rateLimits: params.rateLimits,
+      }) ?? params.fallbackMessage;
+    this.promptErrorSource = params.promptErrorSource;
   }
 
   protected emitAgentEvent(

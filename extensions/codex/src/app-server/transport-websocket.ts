@@ -213,10 +213,7 @@ export function createWebSocketTransport(
       callback();
     },
     final(callback) {
-      pendingLine += stdinDecoder.end();
-      if (pendingLine) {
-        sendFrame(pendingLine);
-      }
+      sendFrame(pendingLine + stdinDecoder.end());
       pendingLine = "";
       callback();
     },

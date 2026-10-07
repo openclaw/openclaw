@@ -272,13 +272,11 @@ export function readCodexDiagnosticsTargetsCooldownMessage(
       now,
     );
     if (cooldownMs > 0) {
-      if (options.includeThreadId === false) {
-        return `Codex diagnostics were already sent for one of these Codex threads recently. Try again in ${Math.ceil(
-          cooldownMs / 1000,
-        )}s.`;
-      }
-      const displayThreadId = formatCodexDisplayText(target.threadId);
-      return `Codex diagnostics were already sent for thread ${displayThreadId} recently. Try again in ${Math.ceil(
+      const subject =
+        options.includeThreadId === false
+          ? "one of these Codex threads"
+          : `thread ${formatCodexDisplayText(target.threadId)}`;
+      return `Codex diagnostics were already sent for ${subject} recently. Try again in ${Math.ceil(
         cooldownMs / 1000,
       )}s.`;
     }

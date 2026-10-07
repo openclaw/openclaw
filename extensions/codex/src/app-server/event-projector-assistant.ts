@@ -189,63 +189,53 @@ export class CodexAssistantProjection {
 
   recordItemCompleted(
     item: CodexThreadItem | undefined,
-    itemId: string | undefined,
-    activeItemIds: ReadonlySet<string>,
+    notification?: { itemId: string | undefined; activeItemIds: ReadonlySet<string> },
   ): { itemId: string; message: AssistantMessage; text: string } | undefined {
     this.adoptSteeringPrefixForCompletion(item);
-    if (itemId && item?.type === "agentMessage") {
-      this.steeringSegments.recordCompletion(itemId);
+    if (item?.type === "agentMessage" && (!notification || notification.itemId)) {
+      this.steeringSegments.recordCompletion(notification?.itemId ?? item.id);
     }
-    this.noteNativeWorkBarrier(item);
+    if (notification) {
+      this.noteNativeWorkBarrier(item);
+    }
     this.rememberAssistantPhase(item);
-    if (
-      item?.type === "agentMessage" &&
-      itemId &&
-      !this.isNonTerminalAssistantItem(itemId) &&
-      itemId !== this.pendingRawTerminalAssistantEchoItemId
-    ) {
-      this.pendingRawTerminalAssistantEchoItemId = undefined;
-    }
-    if (item?.type === "agentMessage" && !this.isNonTerminalAssistantItem(item.id)) {
-      this.markLatestTerminalAssistantCandidate(item.id, activeItemIds);
-      this.pendingRawTerminalAssistantEchoItemId = item.id;
-    } else if (itemId && !this.isNonTerminalAssistantItem(itemId)) {
-      this.markTerminalAssistantCandidateSupersededBy(itemId, {
-        preserveEarlierActiveItem: true,
-      });
-      if (this.latestTerminalAssistantCandidateSuperseded) {
+    if (notification) {
+      const { itemId, activeItemIds } = notification;
+      if (
+        item?.type === "agentMessage" &&
+        itemId &&
+        !this.isNonTerminalAssistantItem(itemId) &&
+        itemId !== this.pendingRawTerminalAssistantEchoItemId
+      ) {
         this.pendingRawTerminalAssistantEchoItemId = undefined;
+      }
+      if (item?.type === "agentMessage" && !this.isNonTerminalAssistantItem(item.id)) {
+        this.markLatestTerminalAssistantCandidate(item.id, activeItemIds);
+        this.pendingRawTerminalAssistantEchoItemId = item.id;
+      } else if (itemId && !this.isNonTerminalAssistantItem(itemId)) {
+        this.markTerminalAssistantCandidateSupersededBy(itemId, {
+          preserveEarlierActiveItem: true,
+        });
+        if (this.latestTerminalAssistantCandidateSuperseded) {
+          this.pendingRawTerminalAssistantEchoItemId = undefined;
+        }
       }
     }
     if (item?.type === "agentMessage" && typeof item.text === "string") {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
-      if (this.isCommentaryAssistantItem(item.id)) {
-        this.emitCommentaryProgress({ itemId: item.id, text: item.text, phase: "end" });
-        this.pendingRawCommentaryEchoes += 1;
-      } else if (
-        item.text &&
-        !this.isAsyncAssistantItem(item.id) &&
-        this.isFinalAnswerAssistantItem(item.id)
-      ) {
-        this.emitAnswerCandidate(item.id, "candidate");
+      if (notification) {
+        if (this.isCommentaryAssistantItem(item.id)) {
+          this.emitCommentaryProgress({ itemId: item.id, text: item.text, phase: "end" });
+          this.pendingRawCommentaryEchoes += 1;
+        } else if (
+          item.text &&
+          !this.isAsyncAssistantItem(item.id) &&
+          this.isFinalAnswerAssistantItem(item.id)
+        ) {
+          this.emitAnswerCandidate(item.id, "candidate");
+        }
       }
-      return this.createAsyncDelivery(item.id);
-    }
-    return undefined;
-  }
-
-  recordSnapshotItem(
-    item: CodexThreadItem,
-  ): { itemId: string; message: AssistantMessage; text: string } | undefined {
-    this.adoptSteeringPrefixForCompletion(item);
-    if (item.type === "agentMessage") {
-      this.steeringSegments.recordCompletion(item.id);
-    }
-    this.rememberAssistantPhase(item);
-    if (item.type === "agentMessage" && typeof item.text === "string") {
-      this.rememberAssistantItem(item.id);
-      this.assistantTextByItem.set(item.id, item.text);
       return this.createAsyncDelivery(item.id);
     }
     return undefined;

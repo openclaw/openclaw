@@ -309,26 +309,6 @@ function emitProcessClosed(managed: ManagedProcess, exitCode: number | null): vo
   notifyProcessWaiters(managed);
 }
 
-function limitProcessChunks(chunks: ProcessChunk[], maxBytes: number | undefined): ProcessChunk[] {
-  if (!maxBytes) {
-    return chunks;
-  }
-  const retained: ProcessChunk[] = [];
-  let retainedBytes = 0;
-  for (const chunk of chunks) {
-    const byteLength = Buffer.from(chunk.chunk, "base64").byteLength;
-    if (retained.length > 0 && retainedBytes + byteLength > maxBytes) {
-      break;
-    }
-    retained.push(chunk);
-    retainedBytes += byteLength;
-    if (retainedBytes >= maxBytes) {
-      break;
-    }
-  }
-  return retained;
-}
-
 export async function readProcess(
   processes: Map<string, ManagedProcess>,
   params: JsonValue | undefined,
@@ -344,10 +324,24 @@ export async function readProcess(
   if (!managed.closed && managed.nextSeq - 1 <= afterSeq && waitMs > 0) {
     await waitForProcessUpdate(managed, waitMs);
   }
-  const chunks = limitProcessChunks(
-    managed.chunks.filter((chunk) => chunk.seq > afterSeq),
-    typeof record.maxBytes === "number" && record.maxBytes > 0 ? record.maxBytes : undefined,
-  );
+  const maxBytes =
+    typeof record.maxBytes === "number" && record.maxBytes > 0 ? record.maxBytes : undefined;
+  const chunks: ProcessChunk[] = [];
+  let retainedBytes = 0;
+  for (const chunk of managed.chunks) {
+    if (!(chunk.seq > afterSeq)) {
+      continue;
+    }
+    const byteLength = maxBytes ? Buffer.from(chunk.chunk, "base64").byteLength : 0;
+    if (maxBytes && chunks.length > 0 && retainedBytes + byteLength > maxBytes) {
+      break;
+    }
+    chunks.push(chunk);
+    retainedBytes += byteLength;
+    if (maxBytes && retainedBytes >= maxBytes) {
+      break;
+    }
+  }
   const lastChunk = chunks.at(-1);
   return {
     chunks,

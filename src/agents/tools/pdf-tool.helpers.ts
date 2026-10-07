@@ -115,12 +115,8 @@ export function coercePdfModelConfig(cfg?: OpenClawConfig): PdfModelConfig {
   return modelConfig;
 }
 
-export function resolvePdfToolMaxTokens(
-  modelMaxTokens: number | undefined,
-  requestedMaxTokens = 4096,
-) {
-  const modelLimit = asPositiveFiniteNumber(modelMaxTokens);
-  return modelLimit === undefined ? requestedMaxTokens : Math.min(requestedMaxTokens, modelLimit);
+export function resolvePdfToolMaxTokens(modelMaxTokens: number | undefined) {
+  return Math.min(4096, asPositiveFiniteNumber(modelMaxTokens) ?? 4096);
 }
 
 const CODEX_PDF_INSTRUCTIONS =

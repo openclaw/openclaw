@@ -22,10 +22,6 @@ type MessageToolSchemaOptions = {
 const MESSAGE_TOOL_SEND_TEXT_DESCRIPTION =
   'Text for action="send". A send needs message or another send payload such as media, attachments, or presentation.';
 
-function buildMessageToolQuerySchemaProperties() {
-  return { query: Type.Optional(Type.String()) };
-}
-
 function buildRoutingSchema(options: { includeTeamId?: boolean }) {
   const props: Record<string, TSchema> = {
     channel: Type.Optional(Type.String()),
@@ -145,12 +141,7 @@ const presentationMessageSchema = Type.Object(
   },
 );
 
-function buildSendSchema(options: {
-  includeClawHub?: boolean;
-  includePresentation: boolean;
-  includeDeliveryPin: boolean;
-  includeBestEffort: boolean;
-}) {
+function buildSendSchema(options: MessageToolSchemaOptions) {
   const props: Record<string, TSchema> = {
     message: Type.Optional(Type.String({ description: MESSAGE_TOOL_SEND_TEXT_DESCRIPTION })),
     effectId: Type.Optional(
@@ -261,52 +252,12 @@ function buildSendSchema(options: {
   return props;
 }
 
-function buildReactionSchema() {
-  return {
-    messageId: Type.Optional(
-      Type.String({
-        description:
-          "Target read/react/edit/delete/pin/unpin id; reactions default current inbound.",
-      }),
-    ),
-    message_id: Type.Optional(
-      Type.String({
-        // Intentional duplicate alias for tool-schema discoverability in LLMs.
-        description: "snake_case alias of messageId; same defaults.",
-      }),
-    ),
-    emoji: Type.Optional(
-      Type.String({ description: "Unicode emoji; channels may also support custom emoji." }),
-    ),
-    remove: Type.Optional(Type.Boolean()),
-    trackToolCalls: Type.Optional(
-      Type.Boolean({
-        description: "Use the reacted message for this turn's status reaction lifecycle.",
-      }),
-    ),
-    track_tool_calls: Type.Optional(
-      Type.Boolean({
-        description: "snake_case alias of trackToolCalls.",
-      }),
-    ),
-    targetAuthor: Type.Optional(Type.String()),
-    targetAuthorUuid: Type.Optional(Type.String()),
-    groupId: Type.Optional(Type.String()),
-  };
-}
-
-function buildFetchSchema() {
-  return {
-    limit: optionalPositiveIntegerSchema({ description: "Maximum number of results to return." }),
-    pageSize: optionalPositiveIntegerSchema(),
-    pageToken: Type.Optional(Type.String()),
-    before: Type.Optional(Type.String()),
-    after: Type.Optional(Type.String()),
-    around: Type.Optional(Type.String()),
-    fromMe: Type.Optional(Type.Boolean()),
-    includeArchived: Type.Optional(Type.Boolean()),
-  };
-}
+const POLL_SCHEMA_BUILDERS = {
+  string: () => Type.Optional(Type.String()),
+  stringArray: () => Type.Optional(Type.Array(Type.String())),
+  positiveInteger: optionalPositiveIntegerSchema,
+  boolean: () => Type.Optional(Type.Boolean()),
+};
 
 function buildPollSchema() {
   const props: Record<string, TSchema> = {
@@ -343,141 +294,9 @@ function buildPollSchema() {
     if (!def) {
       continue;
     }
-    switch (def.kind) {
-      case "string":
-        props[name] = Type.Optional(Type.String());
-        break;
-      case "stringArray":
-        props[name] = Type.Optional(Type.Array(Type.String()));
-        break;
-      case "positiveInteger":
-        props[name] = optionalPositiveIntegerSchema();
-        break;
-      case "boolean":
-        props[name] = Type.Optional(Type.Boolean());
-        break;
-    }
+    props[name] = POLL_SCHEMA_BUILDERS[def.kind]();
   }
   return props;
-}
-
-function buildChannelTargetSchema() {
-  return {
-    channelId: Type.Optional(Type.String({ description: "Channel id filter." })),
-    chatId: Type.Optional(Type.String({ description: "Chat id for chat metadata." })),
-    channelIds: Type.Optional(Type.Array(Type.String({ description: "Channel id filter." }))),
-    memberId: Type.Optional(Type.String()),
-    memberIdType: Type.Optional(Type.String()),
-    guildId: Type.Optional(Type.String()),
-    userId: Type.Optional(
-      Type.String({
-        description:
-          "member-info/moderation/participant user id; member-info uses userId, not target.",
-      }),
-    ),
-    openId: Type.Optional(Type.String()),
-    unionId: Type.Optional(Type.String()),
-    authorId: Type.Optional(Type.String()),
-    authorIds: Type.Optional(Type.Array(Type.String())),
-    roleId: Type.Optional(Type.String()),
-    roleIds: Type.Optional(Type.Array(Type.String())),
-    participant: Type.Optional(Type.String()),
-    includeMembers: Type.Optional(Type.Boolean()),
-    members: Type.Optional(Type.Boolean()),
-    scope: Type.Optional(Type.String()),
-    kind: Type.Optional(Type.String()),
-  };
-}
-
-function buildStickerSchema() {
-  return {
-    fileId: Type.Optional(Type.String()),
-    emojiName: Type.Optional(Type.String({ description: "Name for an uploaded custom emoji." })),
-    stickerId: Type.Optional(Type.Array(Type.String())),
-    stickerName: Type.Optional(Type.String()),
-    stickerDesc: Type.Optional(Type.String()),
-    stickerTags: Type.Optional(Type.String()),
-  };
-}
-
-function buildThreadSchema() {
-  return {
-    threadName: Type.Optional(Type.String()),
-    autoArchiveMin: optionalPositiveIntegerSchema(),
-    appliedTags: Type.Optional(Type.Array(Type.String())),
-  };
-}
-
-function buildEventSchema() {
-  return {
-    eventName: Type.Optional(Type.String()),
-    eventType: Type.Optional(Type.String()),
-    startTime: Type.Optional(Type.String()),
-    endTime: Type.Optional(Type.String()),
-    desc: Type.Optional(Type.String()),
-    location: Type.Optional(Type.String()),
-    image: Type.Optional(Type.String({ description: "Event cover image URL/path." })),
-  };
-}
-
-function buildModerationSchema() {
-  return {
-    reason: Type.Optional(Type.String()),
-    deleteDays: optionalNonNegativeIntegerSchema({ maximum: 7 }),
-    durationMin: optionalNonNegativeIntegerSchema(),
-    until: Type.Optional(Type.String()),
-  };
-}
-
-function buildPresenceSchema() {
-  return {
-    activityType: Type.Optional(
-      Type.String({
-        description: "Activity type: playing, streaming, listening, watching, competing, custom.",
-      }),
-    ),
-    activityName: Type.Optional(
-      Type.String({
-        description: "Activity name shown in sidebar; ignored for custom.",
-      }),
-    ),
-    activityUrl: Type.Optional(
-      Type.String({
-        description: "Streaming URL; streaming type only.",
-      }),
-    ),
-    activityState: Type.Optional(
-      Type.String({
-        description: "State text; custom type uses as status text.",
-      }),
-    ),
-    status: Type.Optional(
-      Type.String({ description: "Bot status: online, dnd, idle, invisible." }),
-    ),
-  };
-}
-
-function buildChannelManagementSchema() {
-  return {
-    name: Type.Optional(Type.String()),
-    channelType: Type.Optional(
-      Type.Integer({
-        minimum: 0,
-        description: "Numeric channel type; avoids schema type collision.",
-      }),
-    ),
-    parentId: Type.Optional(Type.String()),
-    topic: Type.Optional(Type.String()),
-    position: optionalNonNegativeIntegerSchema(),
-    nsfw: Type.Optional(Type.Boolean()),
-    rateLimitPerUser: optionalNonNegativeIntegerSchema(),
-    categoryId: Type.Optional(Type.String()),
-    clearParent: Type.Optional(
-      Type.Boolean({
-        description: "Clear parent/category when supported.",
-      }),
-    ),
-  };
 }
 
 const MESSAGE_SCHEMA_GROUPS: ReadonlyArray<{
@@ -485,7 +304,37 @@ const MESSAGE_SCHEMA_GROUPS: ReadonlyArray<{
   actions: readonly ChannelMessageActionName[];
 }> = [
   {
-    build: buildReactionSchema,
+    build: () => ({
+      messageId: Type.Optional(
+        Type.String({
+          description:
+            "Target read/react/edit/delete/pin/unpin id; reactions default current inbound.",
+        }),
+      ),
+      message_id: Type.Optional(
+        Type.String({
+          // Intentional duplicate alias for tool-schema discoverability in LLMs.
+          description: "snake_case alias of messageId; same defaults.",
+        }),
+      ),
+      emoji: Type.Optional(
+        Type.String({ description: "Unicode emoji; channels may also support custom emoji." }),
+      ),
+      remove: Type.Optional(Type.Boolean()),
+      trackToolCalls: Type.Optional(
+        Type.Boolean({
+          description: "Use the reacted message for this turn's status reaction lifecycle.",
+        }),
+      ),
+      track_tool_calls: Type.Optional(
+        Type.Boolean({
+          description: "snake_case alias of trackToolCalls.",
+        }),
+      ),
+      targetAuthor: Type.Optional(Type.String()),
+      targetAuthorUuid: Type.Optional(Type.String()),
+      groupId: Type.Optional(Type.String()),
+    }),
     actions: [
       "react",
       "reactions",
@@ -500,7 +349,16 @@ const MESSAGE_SCHEMA_GROUPS: ReadonlyArray<{
     ],
   },
   {
-    build: buildFetchSchema,
+    build: () => ({
+      limit: optionalPositiveIntegerSchema({ description: "Maximum number of results to return." }),
+      pageSize: optionalPositiveIntegerSchema(),
+      pageToken: Type.Optional(Type.String()),
+      before: Type.Optional(Type.String()),
+      after: Type.Optional(Type.String()),
+      around: Type.Optional(Type.String()),
+      fromMe: Type.Optional(Type.Boolean()),
+      includeArchived: Type.Optional(Type.Boolean()),
+    }),
     actions: [
       "read",
       "reactions",
@@ -517,12 +375,36 @@ const MESSAGE_SCHEMA_GROUPS: ReadonlyArray<{
   {
     // Include only actions whose handlers read query. Discord event-list historically
     // advertised query through the event schema but ignores it at dispatch.
-    build: buildMessageToolQuerySchemaProperties,
+    build: () => ({ query: Type.Optional(Type.String()) }),
     actions: ["search", "sticker-search", "channel-list"],
   },
   { build: buildPollSchema, actions: ["poll", "poll-vote"] },
   {
-    build: buildChannelTargetSchema,
+    build: () => ({
+      channelId: Type.Optional(Type.String({ description: "Channel id filter." })),
+      chatId: Type.Optional(Type.String({ description: "Chat id for chat metadata." })),
+      channelIds: Type.Optional(Type.Array(Type.String({ description: "Channel id filter." }))),
+      memberId: Type.Optional(Type.String()),
+      memberIdType: Type.Optional(Type.String()),
+      guildId: Type.Optional(Type.String()),
+      userId: Type.Optional(
+        Type.String({
+          description:
+            "member-info/moderation/participant user id; member-info uses userId, not target.",
+        }),
+      ),
+      openId: Type.Optional(Type.String()),
+      unionId: Type.Optional(Type.String()),
+      authorId: Type.Optional(Type.String()),
+      authorIds: Type.Optional(Type.Array(Type.String())),
+      roleId: Type.Optional(Type.String()),
+      roleIds: Type.Optional(Type.Array(Type.String())),
+      participant: Type.Optional(Type.String()),
+      includeMembers: Type.Optional(Type.Boolean()),
+      members: Type.Optional(Type.Boolean()),
+      scope: Type.Optional(Type.String()),
+      kind: Type.Optional(Type.String()),
+    }),
     actions: [
       "search",
       "thread-list",
@@ -562,7 +444,14 @@ const MESSAGE_SCHEMA_GROUPS: ReadonlyArray<{
     ],
   },
   {
-    build: buildStickerSchema,
+    build: () => ({
+      fileId: Type.Optional(Type.String()),
+      emojiName: Type.Optional(Type.String({ description: "Name for an uploaded custom emoji." })),
+      stickerId: Type.Optional(Type.Array(Type.String())),
+      stickerName: Type.Optional(Type.String()),
+      stickerDesc: Type.Optional(Type.String()),
+      stickerTags: Type.Optional(Type.String()),
+    }),
     actions: [
       "sticker",
       "sticker-search",
@@ -573,13 +462,58 @@ const MESSAGE_SCHEMA_GROUPS: ReadonlyArray<{
       "upload-file",
     ],
   },
-  { build: buildThreadSchema, actions: ["thread-create", "thread-list", "thread-reply"] },
-  { build: buildEventSchema, actions: ["event-create", "event-list"] },
-  { build: buildModerationSchema, actions: ["timeout", "kick", "ban", "delete", "unsend"] },
+  {
+    build: () => ({
+      threadName: Type.Optional(Type.String()),
+      autoArchiveMin: optionalPositiveIntegerSchema(),
+      appliedTags: Type.Optional(Type.Array(Type.String())),
+    }),
+    actions: ["thread-create", "thread-list", "thread-reply"],
+  },
+  {
+    build: () => ({
+      eventName: Type.Optional(Type.String()),
+      eventType: Type.Optional(Type.String()),
+      startTime: Type.Optional(Type.String()),
+      endTime: Type.Optional(Type.String()),
+      desc: Type.Optional(Type.String()),
+      location: Type.Optional(Type.String()),
+      image: Type.Optional(Type.String({ description: "Event cover image URL/path." })),
+    }),
+    actions: ["event-create", "event-list"],
+  },
+  {
+    build: () => ({
+      reason: Type.Optional(Type.String()),
+      deleteDays: optionalNonNegativeIntegerSchema({ maximum: 7 }),
+      durationMin: optionalNonNegativeIntegerSchema(),
+      until: Type.Optional(Type.String()),
+    }),
+    actions: ["timeout", "kick", "ban", "delete", "unsend"],
+  },
   { build: gatewayCallOptionSchemaProperties, actions: [] },
   {
     // Keep every action that reads channel-management fields here; omission hides valid params.
-    build: buildChannelManagementSchema,
+    build: () => ({
+      name: Type.Optional(Type.String()),
+      channelType: Type.Optional(
+        Type.Integer({
+          minimum: 0,
+          description: "Numeric channel type; avoids schema type collision.",
+        }),
+      ),
+      parentId: Type.Optional(Type.String()),
+      topic: Type.Optional(Type.String()),
+      position: optionalNonNegativeIntegerSchema(),
+      nsfw: Type.Optional(Type.Boolean()),
+      rateLimitPerUser: optionalNonNegativeIntegerSchema(),
+      categoryId: Type.Optional(Type.String()),
+      clearParent: Type.Optional(
+        Type.Boolean({
+          description: "Clear parent/category when supported.",
+        }),
+      ),
+    }),
     actions: [
       "channel-create",
       "channel-edit",
@@ -593,7 +527,34 @@ const MESSAGE_SCHEMA_GROUPS: ReadonlyArray<{
       "setGroupIcon",
     ],
   },
-  { build: buildPresenceSchema, actions: ["set-presence", "set-profile", "voice-status"] },
+  {
+    build: () => ({
+      activityType: Type.Optional(
+        Type.String({
+          description: "Activity type: playing, streaming, listening, watching, competing, custom.",
+        }),
+      ),
+      activityName: Type.Optional(
+        Type.String({
+          description: "Activity name shown in sidebar; ignored for custom.",
+        }),
+      ),
+      activityUrl: Type.Optional(
+        Type.String({
+          description: "Streaming URL; streaming type only.",
+        }),
+      ),
+      activityState: Type.Optional(
+        Type.String({
+          description: "State text; custom type uses as status text.",
+        }),
+      ),
+      status: Type.Optional(
+        Type.String({ description: "Bot status: online, dnd, idle, invisible." }),
+      ),
+    }),
+    actions: ["set-presence", "set-profile", "voice-status"],
+  },
 ];
 
 export function buildMessageToolSchemaFromActions(

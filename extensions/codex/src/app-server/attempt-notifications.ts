@@ -29,7 +29,7 @@ export function updateActiveTurnItemIds(
   activeItemIds.delete(itemId);
 }
 
-export function readNotificationItemId(notification: CodexServerNotification): string | undefined {
+function readNotificationItemId(notification: CodexServerNotification): string | undefined {
   if (!isJsonObject(notification.params)) {
     return undefined;
   }
@@ -41,29 +41,28 @@ export function readNotificationItemId(notification: CodexServerNotification): s
   );
 }
 
-export function isPendingOpenClawDynamicToolCompletionNotification(
+export function completePendingOpenClawDynamicToolNotification(
   notification: CodexServerNotification,
-  pendingOpenClawDynamicToolCompletionIds: ReadonlySet<string>,
-): boolean {
+  pendingOpenClawDynamicToolCompletionIds: Set<string>,
+): void {
   if (notification.method !== "item/completed" || !isJsonObject(notification.params)) {
-    return false;
+    return;
   }
   const itemId = readNotificationItemId(notification);
   if (!itemId || !pendingOpenClawDynamicToolCompletionIds.has(itemId)) {
-    return false;
+    return;
   }
   const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
   const itemType = item ? readString(item, "type") : undefined;
-  return itemType === undefined || itemType === "dynamicToolCall";
+  if (itemType === undefined || itemType === "dynamicToolCall") {
+    pendingOpenClawDynamicToolCompletionIds.delete(itemId);
+  }
 }
 
 export function isRawFunctionToolOutputCompletionNotification(
   notification: CodexServerNotification,
 ): boolean {
-  if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
-    return false;
-  }
-  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  const item = readCompletedRawItem(notification);
   return item ? readString(item, "type") === "function_call_output" : false;
 }
 
@@ -76,13 +75,10 @@ export function isCodexTurnAbortMarkerNotification(
   notification: CodexServerNotification,
   options: { currentPromptText?: string } = {},
 ): boolean {
-  if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
-    return false;
-  }
-  const item = notification.params.item;
-  const role = isJsonObject(item) ? readString(item, "role") : undefined;
+  const item = readCompletedRawItem(notification);
+  const role = item ? readString(item, "role") : undefined;
   if (
-    !isJsonObject(item) ||
+    !item ||
     readString(item, "type") !== "message" ||
     (role !== "user" && role !== "developer")
   ) {
@@ -113,10 +109,7 @@ export function readCodexNotificationItem(
 export function readRawResponseToolCallId(
   notification: CodexServerNotification,
 ): string | undefined {
-  if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
-    return undefined;
-  }
-  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  const item = readCompletedRawItem(notification);
   if (!item) {
     return undefined;
   }
@@ -132,4 +125,11 @@ export function readRawResponseToolCallId(
     default:
       return undefined;
   }
+}
+
+function readCompletedRawItem(notification: CodexServerNotification) {
+  if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
+    return undefined;
+  }
+  return isJsonObject(notification.params.item) ? notification.params.item : undefined;
 }

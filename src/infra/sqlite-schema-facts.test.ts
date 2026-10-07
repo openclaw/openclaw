@@ -3,6 +3,7 @@ import { constants, DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readSessionNodesGeneration } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
 import { hasSqliteSessionOwnerColumns } from "../config/sessions/session-accessor.sqlite-owner-projection.js";
 import { assertCanonicalSessionValidationSchema } from "../state/openclaw-agent-canonical-validation-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
@@ -73,6 +74,69 @@ describe("admitted SQLite schema facts", () => {
     } finally {
       observation.restore();
     }
+  });
+
+  it.each([
+    "CREATE TEMP TABLE unexpected (id INTEGER)",
+    "CREATE TABLE unexpected (id INTEGER)",
+    "DROP TRIGGER temp.openclaw_session_nodes_cache_generation_update",
+    "ALTER TABLE temp.openclaw_session_nodes_cache_generation ADD COLUMN unexpected INTEGER",
+  ])("still revokes admission for ordinary DDL after tracker installation: %s", (sql) => {
+    const database = openDatabase("CREATE TABLE session_nodes (id INTEGER)");
+    readSessionNodesGeneration(database);
+    const schemaMutation = vi.fn();
+    registerSqliteSchemaMutationListener(database, schemaMutation);
+    database.exec(sql);
+    expect(schemaMutation).toHaveBeenCalled();
+  });
+
+  it("observes reentrant TEMP DDL during a declared tracker installation", () => {
+    const database = openDatabase("CREATE TABLE session_nodes (id INTEGER)");
+    const schemaMutation = vi.fn();
+    registerSqliteSchemaMutationListener(database, schemaMutation);
+    const nativeExec = DatabaseSync.prototype.exec.bind(database);
+    const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementationOnce((sql) => {
+      database.exec("CREATE TEMP TABLE unexpected (id INTEGER)");
+      return nativeExec(sql);
+    });
+    try {
+      readSessionNodesGeneration(database);
+      expect(schemaMutation).toHaveBeenCalled();
+    } finally {
+      exec.mockRestore();
+    }
+  });
+
+  it("revokes admission when tracker installation fails after creating its counter", () => {
+    const database = openDatabase();
+    const schemaMutation = vi.fn();
+    registerSqliteSchemaMutationListener(database, schemaMutation);
+    expect(() => readSessionNodesGeneration(database)).toThrow(/session_nodes/u);
+    expect(schemaMutation).toHaveBeenCalled();
+  });
+
+  it.each([
+    "CREATE TEMP TABLE openclaw_session_nodes_cache_generation (id INTEGER PRIMARY KEY, generation INTEGER)",
+    "CREATE TEMP TRIGGER openclaw_session_nodes_cache_generation_update AFTER INSERT ON main.session_nodes BEGIN SELECT 1; END",
+  ])("revokes admission for a preexisting mismatched tracker object: %s", (sql) => {
+    const database = openDatabase(`CREATE TABLE session_nodes (id INTEGER); ${sql}`);
+    const schemaMutation = vi.fn();
+    registerSqliteSchemaMutationListener(database, schemaMutation);
+    readSessionNodesGeneration(database);
+    expect(schemaMutation).toHaveBeenCalled();
+  });
+
+  it("retains readmitted facts when reinstalling the tracker's existing exact shapes", () => {
+    const database = openDatabase("CREATE TABLE session_nodes (id INTEGER)");
+    expect(readSessionNodesGeneration(database)).toBe(0);
+    database.exec("ALTER TABLE session_nodes ADD COLUMN value TEXT");
+    admitSqliteSchema(database);
+    const schemaMutation = vi.fn();
+    registerSqliteSchemaMutationListener(database, schemaMutation);
+    expect(readSessionNodesGeneration(database)).toBe(1);
+    expect(schemaMutation).not.toHaveBeenCalled();
+    database.exec("INSERT INTO session_nodes (id) VALUES (1)");
+    expect(readSessionNodesGeneration(database)).toBe(2);
   });
 
   it("refreshes writer admission after BEGIN despite an enclosing read operation", () => {

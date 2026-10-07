@@ -68,12 +68,15 @@ import {
   writeOpenClawPackageFixture,
 } from "./update-cli/update-cli-package.test-support.js";
 import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.test-support.js";
+import { registerWindowsTaskAdmissionTests } from "./update-cli/update-command-windows-preflight.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
   const nodeExecutable = resolveTestNodeExecPath();
   const fixture = createUpdateCliFixture();
+
+  registerWindowsTaskAdmissionTests(fixture);
 
   registerFailureSelectorTests({
     updateCommand,

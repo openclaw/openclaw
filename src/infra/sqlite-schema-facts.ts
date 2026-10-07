@@ -9,6 +9,10 @@ import {
   runSqlitePinnedReadSnapshotSync,
 } from "./sqlite-pinned-read-snapshot.js";
 import { findSqlCharacter } from "./sqlite-schema-sql.js";
+import {
+  prepareSqliteTempGenerationSchema,
+  type SqliteTempGenerationSchema,
+} from "./sqlite-temp-generation-schema.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 type NativeSqlite = Pick<typeof import("node:sqlite"), "DatabaseSync" | "StatementSync">;
@@ -42,6 +46,7 @@ type SchemaOwner = {
   scope?: SchemaScope;
   scopeRevision?: number;
   mutationListeners?: Set<() => void>;
+  installTempGenerationSchema?: (schema: SqliteTempGenerationSchema, advance: boolean) => void;
 };
 
 type SchemaScope = { key?: string; revision: number; users: number };
@@ -135,6 +140,19 @@ export function registerSqliteSchemaMutationListener(
   const listeners = (owner.mutationListeners ??= new Set());
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+/** Only the fixed counter/trigger shapes are non-revoking; ordinary TEMP DDL stays observed. */
+export function installSqliteTempGenerationSchema(
+  database: DatabaseSync,
+  schema: SqliteTempGenerationSchema,
+  advance: boolean,
+): void {
+  const owner = owners.get(database);
+  if (!owner?.admitted || owner.authorizerActive || !owner.installTempGenerationSchema) {
+    throw new Error("SQLite generation tracking requires admitted schema facts");
+  }
+  owner.installTempGenerationSchema(schema, advance);
 }
 
 // Conservative matching also covers multi-statement migration batches and catalog repairs.
@@ -282,6 +300,23 @@ function trackSchemaChanges(
       settle(Boolean(control));
       // Batches can probe an intermediate snapshot; implicit rollback also ends admission.
       finishReadScope(wasTransaction, expiresRead, succeeded);
+    }
+  };
+  owner.installTempGenerationSchema = (schema, advance) => {
+    const { sql, unexpected } = prepareSqliteTempGenerationSchema(database, schema, advance);
+    try {
+      // No suppression scope: native callbacks still execute through the ordinary observer.
+      // sqlite-allow-raw -- The schema owner generates only the declared connection-local counter shapes.
+      execute(
+        () => native.DatabaseSync.prototype.exec.call(database, sql),
+        unexpected,
+        undefined,
+        true,
+      );
+    } catch (error) {
+      // A failed batch may have installed only part of the declared schema.
+      invalidateSqliteSchemaFacts(database);
+      throw error;
     }
   };
   // Keep native prototype instrumentation visible after a connection or statement is retained.

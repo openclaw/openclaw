@@ -118,23 +118,21 @@ export function constrainRestartRecoveryDeliveryPayloads(
         },
       ),
     );
-    if (visibleReplyIndex >= 0) {
-      const visibleReply = constrained[visibleReplyIndex];
-      if (visibleReply) {
-        // Recovery owns the exact artifacts; merge them with the actual final
-        // reply so automatic delivery cannot emit a caption before its media.
-        const [mergedReply] =
-          mergeAttemptToolMediaPayloads({
-            payloads: [visibleReply],
-            toolMediaUrls: exactMediaUrls,
-            hostOwnedToolMediaUrls: exactMediaUrls,
-            toolTrustedLocalMedia: true,
-            sourceReplyDeliveryMode: "automatic",
-          }) ?? [];
-        if (mergedReply) {
-          constrained[visibleReplyIndex] = mergedReply;
-          return constrained;
-        }
+    const visibleReply = constrained[visibleReplyIndex];
+    if (visibleReply) {
+      // Recovery owns the exact artifacts; merge them with the actual final
+      // reply so automatic delivery cannot emit a caption before its media.
+      const [mergedReply] =
+        mergeAttemptToolMediaPayloads({
+          payloads: [visibleReply],
+          toolMediaUrls: exactMediaUrls,
+          hostOwnedToolMediaUrls: exactMediaUrls,
+          toolTrustedLocalMedia: true,
+          sourceReplyDeliveryMode: "automatic",
+        }) ?? [];
+      if (mergedReply) {
+        constrained[visibleReplyIndex] = mergedReply;
+        return constrained;
       }
     }
   }

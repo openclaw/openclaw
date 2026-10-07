@@ -98,7 +98,7 @@ export function createSubagentRegistryRestorer(config: {
   const { listSwarmRunsForGroup, startQueuedSubagentRun } = config;
   const { terminateAcceptedRestoredCollectorRun, cleanupCollectorLaunchResources } = config;
   const { settleFailedQueuedSubagentLaunch, completeCollectorLaunchCleanup } = config;
-  let restoreState: "idle" | "in-progress" | "succeeded" = "idle";
+  let restoreState: "idle" | "succeeded" = "idle";
   let activationRequested = false;
   let activated = false;
   // Transfer retries must not enqueue the same restored collectors again.
@@ -332,17 +332,17 @@ export function createSubagentRegistryRestorer(config: {
                 throw new Error("Restored collector launch lost its queued owner");
               }
               launchLifecycleGeneration = getAgentEventLifecycleGeneration();
-              const request = {
-                params: applySubagentLaunchAuthorization(launch.request, launch.authorization),
-                timeoutMs: launch.timeoutMs,
-              };
+              const request = applySubagentLaunchAuthorization(
+                launch.request,
+                launch.authorization,
+              );
               const gatewayRuntime = getGatewayContextResolver()?.()?.recoveryRuntime;
               if (!gatewayRuntime) {
                 throw new GatewayDrainingError();
               }
               const response = await gatewayRuntime.dispatchAgent(
-                request.params as Parameters<typeof gatewayRuntime.dispatchAgent>[0],
-                request.timeoutMs,
+                request as Parameters<typeof gatewayRuntime.dispatchAgent>[0],
+                launch.timeoutMs,
                 launch.authorization
                   ? { allowModelOverride: true, scopes: [ADMIN_SCOPE] }
                   : undefined,
@@ -440,7 +440,6 @@ export function createSubagentRegistryRestorer(config: {
     if (restoreState === "succeeded") {
       return Promise.resolve();
     }
-    restoreState = "in-progress";
     const originalGeneration = generation;
     const assertCurrent = () => {
       assertSubagentRegistryWriteSourceCurrent(stateContext);
@@ -521,6 +520,8 @@ export function createSubagentRegistryRestorer(config: {
     expectedSessionId?: string,
     expectedLifecycleRevision?: string,
   ): Promise<boolean> {
+    const warnCleanup = (message: string, failure: unknown) =>
+      warn(message, { runId, childSessionKey: entry.childSessionKey, error: failure });
     // Root custody includes the terminal commit and final cleanup publication.
     return runWithGatewayIndependentRootWorkAdmission(async () => {
       // Descriptorless restore failures enter here without onStartFailure; their
@@ -593,15 +594,14 @@ export function createSubagentRegistryRestorer(config: {
           { runs },
         );
       const ownsCleanup = () => ownsClaim() && ownsSessionEffects();
-      let sessionOwnershipChanged = false;
-      let sessionDeleted = false;
+      let sessionCleanup: Awaited<ReturnType<typeof deleteSubagentSessionForCleanup>> | undefined;
       try {
         const cleanupComplete = await (async () => {
           if (!ownsCleanup()) {
             return false;
           }
           if (!expectedSessionId || !expectedLifecycleRevision) {
-            sessionOwnershipChanged = true;
+            sessionCleanup = "changed";
             return true;
           }
           const cleanupSettled = await retrySubagentCleanup(
@@ -609,7 +609,7 @@ export function createSubagentRegistryRestorer(config: {
               if (!ownsCleanup()) {
                 return false;
               }
-              const outcome = await deleteSubagentSessionForCleanup({
+              sessionCleanup = await deleteSubagentSessionForCleanup({
                 callGateway: callSubagentRegistryGateway,
                 gatewayBinding: { resolveGatewayContext: getEntryGatewayContextResolver(entry) },
                 isCurrent: ownsCleanup,
@@ -620,30 +620,23 @@ export function createSubagentRegistryRestorer(config: {
                   throw cleanupError;
                 },
               });
-              sessionDeleted = outcome === "deleted";
-              sessionOwnershipChanged = outcome === "changed";
-              return outcome !== "failed";
+              return sessionCleanup !== "failed";
             },
             {
               shouldRetry: () => !launchTerminationConfirmed && ownsCleanup(),
               onError: (cleanupError) =>
-                warn("failed to delete restored collector session after launch failure", {
-                  runId,
-                  childSessionKey: entry.childSessionKey,
-                  error: cleanupError,
-                }),
+                warnCleanup(
+                  "failed to delete restored collector session after launch failure",
+                  cleanupError,
+                ),
             },
           );
-          if (!cleanupSettled || !ownsCleanup() || sessionOwnershipChanged) {
+          if (!cleanupSettled || !ownsCleanup() || sessionCleanup === "changed") {
             return cleanupSettled && ownsCleanup();
           }
           return await cleanupCollectorLaunchResources(entry, { isCurrent: ownsCleanup });
         })().catch((cleanupError: unknown) => {
-          warn("failed to clean restored collector after launch failure", {
-            runId,
-            childSessionKey: entry.childSessionKey,
-            error: cleanupError,
-          });
+          warnCleanup("failed to clean restored collector after launch failure", cleanupError);
           return false;
         });
 
@@ -666,11 +659,7 @@ export function createSubagentRegistryRestorer(config: {
           {
             shouldRetry: ownsClaim,
             onError: (persistError) =>
-              warn("failed to persist restored collector launch failure", {
-                runId,
-                childSessionKey: entry.childSessionKey,
-                error: persistError,
-              }),
+              warnCleanup("failed to persist restored collector launch failure", persistError),
           },
         );
         if (!failureSettled) {
@@ -678,7 +667,7 @@ export function createSubagentRegistryRestorer(config: {
         }
         await suppressRetiredSessionEffects();
         if (cleanupComplete && isSameSubagentRunOwner(currentEntry(), entry)) {
-          if (sessionDeleted && !sessionOwnershipChanged) {
+          if (sessionCleanup === "deleted") {
             emitSessionLifecycleEvent({
               sessionKey: entry.childSessionKey,
               reason: "delete",

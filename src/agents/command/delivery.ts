@@ -519,13 +519,16 @@ export async function deliverAgentCommandResult(
   } = deliveryRouting;
 
   let deliveryLoggedError = false;
-  const logDeliveryError = (err: unknown) => {
-    deliveryLoggedError = true;
-    const message = `Delivery failed (${deliveryChannel}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
+  const reportDeliveryError = (message: string) => {
     runtime.error?.(message);
     if (!runtime.error) {
       runtime.log(message);
     }
+  };
+  const logDeliveryError = (err: unknown) => {
+    deliveryLoggedError = true;
+    const message = `Delivery failed (${deliveryChannel}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
+    reportDeliveryError(message);
   };
   let strictPreDeliveryError: unknown;
   let deliveryStatus: AgentCommandDeliveryStatus | undefined;
@@ -703,12 +706,8 @@ export async function deliverAgentCommandResult(
     return deliveryRequested && suppressAutomaticDelivery
       ? completeDelivery(
           {
-            requested: true,
-            attempted: false,
-            status: "suppressed",
-            succeeded: true,
+            ...noVisiblePayloadStatus(),
             reason: "message_tool_only",
-            resultCount: 0,
           },
           true,
         )
@@ -785,10 +784,7 @@ export async function deliverAgentCommandResult(
       `(reason=${deliveryStatus?.reason ?? "none"} session=${effectiveSessionKey ?? "unknown"} ` +
       `channel=${deliveryChannel ?? "none"} target=${deliveryTarget ?? "none"} ` +
       `payloads=${deliveryPayloads.length})`;
-    runtime.error?.(message);
-    if (!runtime.error) {
-      runtime.log(message);
-    }
+    reportDeliveryError(message);
   }
 
   return completeDelivery(deliveryStatus, deliverySucceeded);
