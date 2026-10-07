@@ -356,7 +356,10 @@ export async function createCodexInferenceProxy(params: {
       let local: WebSocket | undefined;
       let proxyAgent: ReturnType<typeof createNodeProxyAgent>;
       let upstreamClosed = Promise.resolve();
-      const { promise: setupSettled, resolve: finishSetup } = Promise.withResolvers<void>();
+      let finishSetup = () => {};
+      const setupSettled = new Promise<void>((resolve) => {
+        finishSetup = resolve;
+      });
       let resident: ReturnType<typeof reserveResident> = null;
       const controller = new AbortController();
       const deadlineAtMs = Date.now() + HANDSHAKE_TIMEOUT_MS;
