@@ -61,7 +61,11 @@ import {
   resolveAbortedAgentStopReason,
   dispatchAgentRunFromGateway,
 } from "./agent-run-dispatch.js";
-import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
+import {
+  resolveChildRunDelegatedExecutionLineage,
+  resolveExecutionIdentitySpawnFacts,
+  runWithChildRunDelegatedExecutionLineage,
+} from "./agent-run-execution-lineage.js";
 import { settleUnstartedGatewayAgentTask } from "./agent-run-task-tracking.js";
 import {
   finalizePreparedAgentRunUserTurn,
@@ -374,11 +378,21 @@ export async function startAgentRunExecution(params: {
           sessionEntry: params.sessionEntry,
         });
         const agentRuntimeIdentity = params.client?.internal?.agentRuntimeIdentity;
+        const agentRuntimeIdentityCurrent =
+          agentRuntimeIdentity !== undefined &&
+          params.context.validateAgentRuntimeApprovalAuthority?.(agentRuntimeIdentity) === true;
         const executionIdentitySpawnFacts =
-          agentRuntimeIdentity &&
-          params.context.validateAgentRuntimeApprovalAuthority?.(agentRuntimeIdentity) === true
+          agentRuntimeIdentityCurrent && agentRuntimeIdentity
             ? resolveExecutionIdentitySpawnFacts(agentRuntimeIdentity)
             : undefined;
+        // Host ownership relation carried by the trusted Gateway identity. It is
+        // re-bound to this child run only after the identity above passed
+        // validation; a lineage carried by a stale identity fails closed rather
+        // than running the child as if it were unrelated (DIRECT).
+        const childRunDelegatedExecutionLineage = resolveChildRunDelegatedExecutionLineage({
+          identity: agentRuntimeIdentity,
+          identityCurrent: agentRuntimeIdentityCurrent,
+        });
         const restartRecoveryContext = resolveAgentRestartRecoveryContext({
           isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
           canUseInternalRuntimeHandoff: params.canUseInternalRuntimeHandoff,
@@ -441,193 +455,203 @@ export async function startAgentRunExecution(params: {
               )
             : undefined;
         finalizePreparedAgentRunUserTurn(prepared.userTurn);
-        const execution = dispatchAdmittedAgentRun(
-          withAgentRunDispatchExecutionIdentity(
-            {
-              assertCurrent: assertDispatchCurrent,
-              assertSettlementCurrent: assertTaskSettlementCurrent,
-              admittedRunEntry: abortEntry,
-              commandRuntimeContext: {
-                config: prepared.replyDispatchRuntime.config,
-                pluginGeneration: prepared.replyDispatchRuntime.pluginGeneration,
-              },
-              cronCreatorAuthority: prepared.cronCreatorAuthority,
-              ingressOpts: {
-                skillLibraryAuthoring,
-                message,
-                images: params.images,
-                imageOrder: params.imageOrder,
-                media: params.media,
-                agentId: ingressAgentId,
-                provider: prepared.effectiveProviderOverride,
-                model: prepared.effectiveModelOverride,
-                to: params.delivery.resolvedTo,
-                sessionId: params.resolvedSessionId,
-                sessionKey: params.resolvedSessionKey,
-                thinking: prepared.effectiveThinking,
-                deliver: params.delivery.deliver,
-                deliveryTargetMode: params.delivery.deliveryTargetMode,
-                // An unbound CLI turn must not acquire a provider from the internal delivery fallback.
-                channel: params.delivery.originMessageChannel
-                  ? params.delivery.resolvedChannel
-                  : undefined,
-                accountId: params.delivery.resolvedAccountId,
-                threadId: prepared.resolvedThreadId,
-                runContext,
-                ...(prepared.userTurn.bashElevated
-                  ? { bashElevated: prepared.userTurn.bashElevated }
-                  : {}),
-                ...(execApprovalContinuationPromptRange
-                  ? { execApprovalContinuationPromptRange }
-                  : {}),
-                ...(execApprovalContinuationTranscriptPromptRange
-                  ? { execApprovalContinuationTranscriptPromptRange }
-                  : {}),
-                groupId: params.groupId,
-                groupChannel: params.groupChannel,
-                groupSpace: params.groupSpace,
-                spawnedBy: params.spawnedBy,
-                timeout: params.request.timeout?.toString(),
-                bestEffortDeliver: params.bestEffortDeliver,
-                messageChannel: params.delivery.originMessageChannel,
-                runId: params.runId,
-                lane: params.request.lane,
-                modelRun: params.request.modelRun === true,
-                promptMode: params.request.promptMode,
-                extraSystemPrompt: params.request.extraSystemPrompt,
-                bootstrapContextMode: params.request.bootstrapContextMode,
-                bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
-                toolsAllow: pluginSubagentToolsAllow ?? params.restoredCronContinuation?.toolsAllow,
-                runtimePluginToolGrant,
-                trustedInternalHandoff: prepared.trustedInternalHandoff,
-                pinnedWidgetAuthoring: restartRecoveryContext?.pinnedWidgetAuthoring,
-                toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
-                scheduledToolPolicy: params.restoredCronContinuation
-                  ? resolveScheduledToolPolicyContext({
-                      toolsAllow: params.restoredCronContinuation.toolsAllow,
-                      scheduledToolPolicy: params.restoredCronContinuation.scheduledToolPolicy,
-                      callerOrigin: params.restoredCronContinuation.scheduledToolCallerOrigin,
-                      execTarget: params.restoredCronContinuation.toolsAllowExecTarget,
-                    })
-                  : undefined,
-                requireExplicitMessageTarget:
-                  params.restoredCronContinuation?.cliSessionBindingFacts
-                    ?.requireExplicitMessageTarget,
-                cliSessionBindingFacts: params.restoredCronContinuation?.cliSessionBindingFacts,
-                acpTurnSource: params.request.acpTurnSource,
-                internalEvents: params.request.internalEvents,
-                runtimeContextFragments: params.client?.internal?.runtimeContextFragments,
-                inputProvenance: params.inputProvenance,
-                senderIsOwner,
-                sessionEffects: params.sessionEffects,
-                skipInitialSessionTouch: params.skipAgentInitialSessionTouch,
-                preserveUserFacingSessionModelState:
-                  params.preserveUserFacingSessionModelState && !params.restoredCronContinuation,
-                sourceReplyDeliveryMode: params.restoredCronContinuation
-                  ? params.restoredCronContinuation.cliSessionBindingFacts?.sourceReplyDeliveryMode
-                  : params.request.sourceReplyDeliveryMode,
-                disableMessageTool: params.request.disableMessageTool,
-                swarmCollector: params.request.swarmCollector,
-                swarmOutputSchema: params.request.swarmOutputSchema,
-                forceRestartSafeTools: params.request.forceRestartSafeTools,
-                forceCodeModeTools: params.request.forceCodeModeTools,
-                ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
-                operationalRunInstance: prepared.operationalRunInstance,
-                operatorAuthority: prepared.operatorAuthority,
-                onAdmittedRunContext: (admittedRunContext) => {
-                  skillLibraryAuthoring?.bind(admittedRunContext);
-                  bindGatewayContextResolver(
-                    admittedRunContext,
-                    params.context.resolveGatewayContext,
-                  );
-                  const authority = getAdmittedRunDelegatedAuthority(admittedRunContext);
-                  if (!authority) {
-                    throw new Error("agent run delegated authority was not admitted");
-                  }
-                  // Sessionless runs intentionally have no abort-map owner. Their
-                  // prepared admission retains authority until agentCommand closes it.
-                  if (prepared.activeRunAbort.registered) {
-                    prepared.activeRunAbort.bindAgentRunDelegatedAuthority(authority);
-                  }
+        const dispatchChildRun = () =>
+          dispatchAdmittedAgentRun(
+            withAgentRunDispatchExecutionIdentity(
+              {
+                assertCurrent: assertDispatchCurrent,
+                assertSettlementCurrent: assertTaskSettlementCurrent,
+                admittedRunEntry: abortEntry,
+                commandRuntimeContext: {
+                  config: prepared.replyDispatchRuntime.config,
+                  pluginGeneration: prepared.replyDispatchRuntime.pluginGeneration,
                 },
-                internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
-                internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,
-                suppressPromptPersistence: prepared.userTurn.suppressPromptPersistence,
-                userTurnTranscriptRecorder,
-                cleanupBundleMcpOnRunEnd: params.request.cleanupBundleMcpOnRunEnd,
-                abortSignal: prepared.activeRunAbort.controller.signal,
-                lifecycleGeneration: params.lifecycleGeneration,
-                onExecutionStarted: () => {
-                  if (!prepared.activeRunAbort.markExecutionStarted()) {
-                    return;
-                  }
-                  params.io.emitExecutionStarted?.();
-                  if (params.resolvedSessionKey) {
-                    emitSessionsChanged(
-                      params.context,
-                      {
-                        sessionKey: params.resolvedSessionKey,
-                        agentId: params.agentId,
-                        reason: "agent.run.started",
-                      },
-                      { accessChanged: false },
-                    );
-                  }
-                },
-                onActiveModelSelected: createAgentRunModelSelectionHandler({
-                  context: params.context,
+                cronCreatorAuthority: prepared.cronCreatorAuthority,
+                ingressOpts: {
+                  skillLibraryAuthoring,
+                  message,
+                  images: params.images,
+                  imageOrder: params.imageOrder,
+                  media: params.media,
+                  agentId: ingressAgentId,
+                  provider: prepared.effectiveProviderOverride,
+                  model: prepared.effectiveModelOverride,
+                  to: params.delivery.resolvedTo,
+                  sessionId: params.resolvedSessionId,
+                  sessionKey: params.resolvedSessionKey,
+                  thinking: prepared.effectiveThinking,
+                  deliver: params.delivery.deliver,
+                  deliveryTargetMode: params.delivery.deliveryTargetMode,
+                  // An unbound CLI turn must not acquire a provider from the internal delivery fallback.
+                  channel: params.delivery.originMessageChannel
+                    ? params.delivery.resolvedChannel
+                    : undefined,
+                  accountId: params.delivery.resolvedAccountId,
+                  threadId: prepared.resolvedThreadId,
+                  runContext,
+                  ...(prepared.userTurn.bashElevated
+                    ? { bashElevated: prepared.userTurn.bashElevated }
+                    : {}),
+                  ...(execApprovalContinuationPromptRange
+                    ? { execApprovalContinuationPromptRange }
+                    : {}),
+                  ...(execApprovalContinuationTranscriptPromptRange
+                    ? { execApprovalContinuationTranscriptPromptRange }
+                    : {}),
+                  groupId: params.groupId,
+                  groupChannel: params.groupChannel,
+                  groupSpace: params.groupSpace,
+                  spawnedBy: params.spawnedBy,
+                  timeout: params.request.timeout?.toString(),
+                  bestEffortDeliver: params.bestEffortDeliver,
+                  messageChannel: params.delivery.originMessageChannel,
                   runId: params.runId,
-                  cfg: params.cfg,
-                  cfgForAgent: params.cfgForAgent,
-                  restoredCronContinuationLifecycleRevision:
-                    prepared.restoredCronContinuationLifecycleRevision,
-                  resolvedSessionKey: params.resolvedSessionKey,
-                  lifecycleStorePath: prepared.lifecycleStorePath,
-                  activeSessionAgentId: params.activeSessionAgentId,
+                  lane: params.request.lane,
+                  modelRun: params.request.modelRun === true,
+                  promptMode: params.request.promptMode,
+                  extraSystemPrompt: params.request.extraSystemPrompt,
+                  bootstrapContextMode: params.request.bootstrapContextMode,
+                  bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
+                  toolsAllow:
+                    pluginSubagentToolsAllow ?? params.restoredCronContinuation?.toolsAllow,
+                  runtimePluginToolGrant,
                   trustedInternalHandoff: prepared.trustedInternalHandoff,
-                }),
-                onSessionIdChanged: (sessionId) => {
-                  if (prepared.activeRunAbort.entry) {
-                    prepared.activeRunAbort.entry.sessionId = sessionId;
-                  }
-                },
-                workspaceDir: prepared.workspaceOverride,
-                cwd: resolveSessionRuntimeCwd({
-                  requestedCwd: params.request.cwd,
-                  sessionEntry: params.sessionEntry,
-                }),
-                allowGatewaySubagentBinding: true,
-                ...(params.mainRestartRecoveryOwnerLease
-                  ? { mainRestartRecoveryOwnerLease: params.mainRestartRecoveryOwnerLease }
-                  : {}),
-                ...(params.isRestartRecoveryResumeRun ? { mainRestartRecoveryAdmitted: true } : {}),
-                ...(params.request.internalExecutionIdentityRecoveryAttempt !== undefined
-                  ? {
-                      mainRestartRecoveryAttempt:
-                        params.request.internalExecutionIdentityRecoveryAttempt,
+                  pinnedWidgetAuthoring: restartRecoveryContext?.pinnedWidgetAuthoring,
+                  toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
+                  scheduledToolPolicy: params.restoredCronContinuation
+                    ? resolveScheduledToolPolicyContext({
+                        toolsAllow: params.restoredCronContinuation.toolsAllow,
+                        scheduledToolPolicy: params.restoredCronContinuation.scheduledToolPolicy,
+                        callerOrigin: params.restoredCronContinuation.scheduledToolCallerOrigin,
+                        execTarget: params.restoredCronContinuation.toolsAllowExecTarget,
+                      })
+                    : undefined,
+                  requireExplicitMessageTarget:
+                    params.restoredCronContinuation?.cliSessionBindingFacts
+                      ?.requireExplicitMessageTarget,
+                  cliSessionBindingFacts: params.restoredCronContinuation?.cliSessionBindingFacts,
+                  acpTurnSource: params.request.acpTurnSource,
+                  internalEvents: params.request.internalEvents,
+                  runtimeContextFragments: params.client?.internal?.runtimeContextFragments,
+                  inputProvenance: params.inputProvenance,
+                  senderIsOwner,
+                  sessionEffects: params.sessionEffects,
+                  skipInitialSessionTouch: params.skipAgentInitialSessionTouch,
+                  preserveUserFacingSessionModelState:
+                    params.preserveUserFacingSessionModelState && !params.restoredCronContinuation,
+                  sourceReplyDeliveryMode: params.restoredCronContinuation
+                    ? params.restoredCronContinuation.cliSessionBindingFacts
+                        ?.sourceReplyDeliveryMode
+                    : params.request.sourceReplyDeliveryMode,
+                  disableMessageTool: params.request.disableMessageTool,
+                  swarmCollector: params.request.swarmCollector,
+                  swarmOutputSchema: params.request.swarmOutputSchema,
+                  forceRestartSafeTools: params.request.forceRestartSafeTools,
+                  forceCodeModeTools: params.request.forceCodeModeTools,
+                  ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
+                  operationalRunInstance: prepared.operationalRunInstance,
+                  operatorAuthority: prepared.operatorAuthority,
+                  onAdmittedRunContext: (admittedRunContext) => {
+                    skillLibraryAuthoring?.bind(admittedRunContext);
+                    bindGatewayContextResolver(
+                      admittedRunContext,
+                      params.context.resolveGatewayContext,
+                    );
+                    const authority = getAdmittedRunDelegatedAuthority(admittedRunContext);
+                    if (!authority) {
+                      throw new Error("agent run delegated authority was not admitted");
                     }
-                  : {}),
-                allowModelOverride: prepared.effectiveAllowModelOverride,
+                    // Sessionless runs intentionally have no abort-map owner. Their
+                    // prepared admission retains authority until agentCommand closes it.
+                    if (prepared.activeRunAbort.registered) {
+                      prepared.activeRunAbort.bindAgentRunDelegatedAuthority(authority);
+                    }
+                  },
+                  internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
+                  internalDeliverySuppressText:
+                    params.client?.internal?.internalDeliverySuppressText,
+                  suppressPromptPersistence: prepared.userTurn.suppressPromptPersistence,
+                  userTurnTranscriptRecorder,
+                  cleanupBundleMcpOnRunEnd: params.request.cleanupBundleMcpOnRunEnd,
+                  abortSignal: prepared.activeRunAbort.controller.signal,
+                  lifecycleGeneration: params.lifecycleGeneration,
+                  onExecutionStarted: () => {
+                    if (!prepared.activeRunAbort.markExecutionStarted()) {
+                      return;
+                    }
+                    params.io.emitExecutionStarted?.();
+                    if (params.resolvedSessionKey) {
+                      emitSessionsChanged(
+                        params.context,
+                        {
+                          sessionKey: params.resolvedSessionKey,
+                          agentId: params.agentId,
+                          reason: "agent.run.started",
+                        },
+                        { accessChanged: false },
+                      );
+                    }
+                  },
+                  onActiveModelSelected: createAgentRunModelSelectionHandler({
+                    context: params.context,
+                    runId: params.runId,
+                    cfg: params.cfg,
+                    cfgForAgent: params.cfgForAgent,
+                    restoredCronContinuationLifecycleRevision:
+                      prepared.restoredCronContinuationLifecycleRevision,
+                    resolvedSessionKey: params.resolvedSessionKey,
+                    lifecycleStorePath: prepared.lifecycleStorePath,
+                    activeSessionAgentId: params.activeSessionAgentId,
+                    trustedInternalHandoff: prepared.trustedInternalHandoff,
+                  }),
+                  onSessionIdChanged: (sessionId) => {
+                    if (prepared.activeRunAbort.entry) {
+                      prepared.activeRunAbort.entry.sessionId = sessionId;
+                    }
+                  },
+                  workspaceDir: prepared.workspaceOverride,
+                  cwd: resolveSessionRuntimeCwd({
+                    requestedCwd: params.request.cwd,
+                    sessionEntry: params.sessionEntry,
+                  }),
+                  allowGatewaySubagentBinding: true,
+                  ...(params.mainRestartRecoveryOwnerLease
+                    ? { mainRestartRecoveryOwnerLease: params.mainRestartRecoveryOwnerLease }
+                    : {}),
+                  ...(params.isRestartRecoveryResumeRun
+                    ? { mainRestartRecoveryAdmitted: true }
+                    : {}),
+                  ...(params.request.internalExecutionIdentityRecoveryAttempt !== undefined
+                    ? {
+                        mainRestartRecoveryAttempt:
+                          params.request.internalExecutionIdentityRecoveryAttempt,
+                      }
+                    : {}),
+                  allowModelOverride: prepared.effectiveAllowModelOverride,
+                },
+                runId: params.runId,
+                dedupeKeys: params.agentDedupeKeys,
+                abortController: prepared.activeRunAbort.controller,
+                cleanupAbortController: cleanupAdmittedRun,
+                onSettled: params.restoredCronContinuation
+                  ? async ({ terminalOutcome, onRecovered }) =>
+                      await params.releaseCronContinuationClaimWithRecovery(
+                        { terminalOutcome },
+                        onRecovered,
+                      )
+                  : undefined,
+                io: params.io,
+                context: params.context,
+                taskTrackingMode: prepared.dispatchTaskTrackingMode,
+                restoreAdmittedRecovery: prepared.restoreAdmittedRestartRecoveryInterrupted,
+                canonicalSkillWorkspaceDir: params.sessionEntry?.worktree?.canonicalWorkspaceDir,
               },
-              runId: params.runId,
-              dedupeKeys: params.agentDedupeKeys,
-              abortController: prepared.activeRunAbort.controller,
-              cleanupAbortController: cleanupAdmittedRun,
-              onSettled: params.restoredCronContinuation
-                ? async ({ terminalOutcome, onRecovered }) =>
-                    await params.releaseCronContinuationClaimWithRecovery(
-                      { terminalOutcome },
-                      onRecovered,
-                    )
-                : undefined,
-              io: params.io,
-              context: params.context,
-              taskTrackingMode: prepared.dispatchTaskTrackingMode,
-              restoreAdmittedRecovery: prepared.restoreAdmittedRestartRecoveryInterrupted,
-              canonicalSkillWorkspaceDir: params.sessionEntry?.worktree?.canonicalWorkspaceDir,
-            },
-            executionIdentitySpawnFacts,
-          ),
+              executionIdentitySpawnFacts,
+            ),
+          );
+        const execution = runWithChildRunDelegatedExecutionLineage(
+          childRunDelegatedExecutionLineage,
+          dispatchChildRun,
         );
         dispatched = true;
         await execution;

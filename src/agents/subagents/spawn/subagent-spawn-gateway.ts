@@ -5,6 +5,7 @@ import {
   isRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readCurrentDelegatedExecutionLineage } from "../../../delegation/delegated-execution-scope.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { withInProcessAgentRuntimeIdentity } from "../../../gateway/in-process-agent-runtime-identity.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
@@ -46,6 +47,10 @@ async function callSubagentGatewayWithDispatchMode(
 ): Promise<{ response: SubagentGatewayResponse; dispatchMode: SubagentGatewayDispatchMode }> {
   const { sessionSpawnContext, parentExecutionIdentityToken } =
     readSubagentGatewayExecutionIdentity(params) ?? {};
+  // A delegated parent launches the child inside the Host-owned delegated scope.
+  // The proven lineage rides the trusted execution identity so the child rebinds
+  // it after Gateway identity validation; a plain launch request never carries it.
+  const delegatedExecutionLineage = readCurrentDelegatedExecutionLineage();
   // Subagent lifecycle requires methods spanning multiple scope tiers
   // (sessions.delete → admin, agent → write). When each call
   // independently negotiates least-privilege scopes the first connection pairs
@@ -119,6 +124,7 @@ async function callSubagentGatewayWithDispatchMode(
               ...(parentExecutionIdentityToken
                 ? { executionIdentity: parentExecutionIdentityToken }
                 : {}),
+              ...(delegatedExecutionLineage ? { delegatedExecutionLineage } : {}),
               sessionSpawnContext,
             }
           : undefined;

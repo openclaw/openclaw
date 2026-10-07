@@ -65,6 +65,13 @@ export type AgentRuntimeIdentity = {
   cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   cronManagementGrant?: CronCreatorAuthorityGrant;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
+  /**
+   * Host-bound delegated execution lineage carried alongside the spawn context.
+   * The field is opaque correlation to a Host-minted binding; it is only ever
+   * populated from the Host-owned delegated execution scope, never from caller
+   * input, and the token's HMAC is what makes it non-forgeable on receipt.
+   */
+  delegatedExecutionLineage?: string;
 };
 
 export type AgentRuntimeDelegatedAuthority = AgentRunDelegatedAuthority &
@@ -239,6 +246,7 @@ const agentRuntimeIdentityTokenPayloadSchema = z.object({
   cronManagementGrant: cronCreatorAuthorityGrantSchema.optional(),
   sessionSpawnContext: sessionSpawnContextSchema.optional(),
   executionLineageHandoffId: normalizedRequiredStringSchema.optional(),
+  delegatedExecutionLineage: normalizedRequiredStringSchema.optional(),
 });
 
 function decodeDelegatedAuthority(
@@ -387,6 +395,7 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
     }
     const sessionSpawnContext = raw.sessionSpawnContext;
     const executionLineageHandoffId = raw.executionLineageHandoffId;
+    const delegatedExecutionLineage = normalizeOptionalString(raw.delegatedExecutionLineage);
     const cronToolsAllowCapture = raw.cronToolsAllowCapture;
     const cronExecToolTarget = cronToolsAllowCapture ? raw.cronExecToolTarget : undefined;
     const cronCreatorAuthorityGrant = raw.cronCreatorAuthorityGrant;
@@ -423,6 +432,7 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
       ...(cronSelfManagementContext ? { cronSelfManagementContext } : {}),
       ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
       ...(executionLineageHandoffId ? { executionLineageHandoffId } : {}),
+      ...(delegatedExecutionLineage ? { delegatedExecutionLineage } : {}),
       ...(cronToolsAllowCapture ? { cronToolsAllowCapture } : {}),
       ...(cronExecToolTarget ? { cronExecToolTarget } : {}),
       ...(cronCreatorAuthorityGrant ? { cronCreatorAuthorityGrant } : {}),
@@ -454,6 +464,7 @@ export type AgentRuntimeIdentityTokenParams = {
   cronManagementGrant?: CronCreatorAuthorityGrant;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
   executionLineageHandoffId?: string;
+  delegatedExecutionLineage?: string;
   workerTurnClaim?: WorkerSessionTurnClaim;
   approvalAuthority?: AgentRunDelegatedAuthority;
 };
@@ -477,6 +488,7 @@ function prepareAgentRuntimeIdentityTokenPayload(
   if (executionLineageHandoffId && (sessionSpawnContext || params.executionIdentityToken)) {
     throw new Error("execution lineage handoff cannot duplicate private spawn facts");
   }
+  const delegatedExecutionLineage = normalizeOptionalString(params.delegatedExecutionLineage);
   const activeAuthority = getActiveAgentRunDelegatedAuthority({
     instanceId: operationalInstanceId,
     runId: operationalRunId,
@@ -578,6 +590,7 @@ function prepareAgentRuntimeIdentityTokenPayload(
     ...(params.cronManagementGrant ? { cronManagementGrant: params.cronManagementGrant } : {}),
     ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
     ...(executionLineageHandoffId ? { executionLineageHandoffId } : {}),
+    ...(delegatedExecutionLineage ? { delegatedExecutionLineage } : {}),
     ...(params.executionIdentityToken?.runId === operationalRunId
       ? { executionIdentity: params.executionIdentityToken }
       : {}),
@@ -683,6 +696,9 @@ function resolveAgentRuntimeIdentityPayload(
       ? { cronCreatorAuthorityGrant: payload.cronCreatorAuthorityGrant }
       : {}),
     ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
+    ...(payload.delegatedExecutionLineage
+      ? { delegatedExecutionLineage: payload.delegatedExecutionLineage }
+      : {}),
   };
   return handoff
     ? withAgentRuntimeExecutionLineageRedemption(identity, handoff.redemption)
