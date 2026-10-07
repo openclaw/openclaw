@@ -50,7 +50,9 @@ preparation; otherwise conflicting physical-store ownership is rejected earlier.
 This is an explicit callback mutation probe, not a reachable incident producer
 or a root-cause repair. Runtime output reports only the diagnostic and zero
 provider calls. The provider stream is mocked; no paid API or production Gateway
-is used. Pre-persisted replay coverage remains a separate lifecycle contract.
+is used. An additional composed case invokes the real pre-persisted current-user-turn
+preparer, adopts the actual existing anchor with `appended: false`, settles
+durable admission, and dispatches without duplicating the user write.
 
 The manual workflow explicitly fetches its immutable baseline before reading
 the source blob, so later branch/main dispatches do not depend on shallow depth.
