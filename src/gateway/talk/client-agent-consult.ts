@@ -325,6 +325,7 @@ export function createTalkClientAgentConsultRunner(params: {
           surface: params.surface ?? "a browser Talk session",
           userLabel: "User",
           questionSourceLabel: "user",
+          useSessionModelSelection: true,
           thinkLevel: talkConfig?.consultThinkingLevel,
           fastMode: talkConfig?.consultFastMode,
           ...authority,

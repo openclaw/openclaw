@@ -69,6 +69,10 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
       sessionFile?: string;
       spawnedBy?: string;
       agentHarnessId?: string;
+      providerOverride?: string;
+      modelOverride?: string;
+      modelOverrideSource?: SessionEntry["modelOverrideSource"];
+      agentRuntimeOverride?: string;
       modelSelectionLocked?: boolean;
       forkedFromParent?: boolean;
       totalTokens?: number;
@@ -288,6 +292,35 @@ describe("realtime voice agent consult runtime", () => {
     await waitForDiagnosticEventsDrained();
     expect(resolveClientVoiceRunBinding(runId)).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "preserves an explicit caller route with session selection enabled=%s",
+    async (useSessionModelSelection) => {
+      const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
+      sessionStore["voice:explicit-route"] = {
+        sessionId: "explicit-route",
+        updatedAt: 1,
+        providerOverride: "openai",
+        modelOverride: "gpt-4o-mini",
+        modelOverrideSource: "user",
+        agentRuntimeOverride: "codex",
+      };
+      await runConsult({
+        agentRuntime: runtime as never,
+        sessionKey: "voice:explicit-route",
+        runIdPrefix: "voice-consult",
+        args: { question: "Check this" },
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+        useSessionModelSelection,
+      });
+      const call = requireEmbeddedAgentCall(runEmbeddedAgent);
+      expect(call.provider).toBe("anthropic");
+      expect(call.model).toBe("claude-sonnet-4-5");
+      expect(call.agentHarnessRuntimeOverride).toBeUndefined();
+      expect(call.modelFallbacksOverride).toBeUndefined();
+    },
+  );
 
   it("runs an embedded agent using the shared session and prompt contract", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([

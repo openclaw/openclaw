@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readSessionMessageIdentity } from "../../packages/gateway-client/src/session-projection-message-identity.js";
+import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { resolveAgentRunSessionTarget } from "../agents/run-session-target.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createTalkClientAgentConsultRunner } from "../gateway/talk/client-agent-consult.js";
 import { createRuntimeAgent } from "../plugins/runtime/runtime-agent.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import {
@@ -16,9 +19,29 @@ import {
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { consultRealtimeVoiceAgent } from "./agent-consult-runtime.js";
 
+const { browserRunEmbeddedAgent } = vi.hoisted(() => ({
+  browserRunEmbeddedAgent: vi.fn<(params: RunEmbeddedAgentInternalParams) => Promise<unknown>>(),
+}));
+// mock-isolation: keep real consultation and storage, but never start model/provider execution.
+vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: browserRunEmbeddedAgent }));
+
 let state: OpenClawTestState;
+let config: OpenClawConfig;
+const browserSessionKey = "agent:main:dashboard:talk-selection";
 beforeEach(async () => {
   state = await createOpenClawTestState({ label: "voice-consult-store" });
+  config = {
+    agents: {
+      defaults: {
+        model: { primary: "openai/gpt-4.1", fallbacks: ["openai/gpt-4o"] },
+        subagents: { model: { fallbacks: ["openai/gpt-4.1-mini"] } },
+      },
+      entries: { main: { workspace: state.workspaceDir } },
+    },
+  };
+  browserRunEmbeddedAgent
+    .mockReset()
+    .mockResolvedValue({ payloads: [{ text: "Checked" }], meta: {} });
 });
 afterEach(async () => {
   await state.cleanup();
@@ -165,6 +188,111 @@ describe("voice consult concrete store ownership", () => {
           sessionTarget: expect.objectContaining({ agentId: "main", sessionKey, storePath }),
         }),
       );
+    },
+  );
+});
+
+function browserTarget() {
+  return {
+    agentId: "main",
+    sessionKey: browserSessionKey,
+    storePath: state.statePath("sessions.sqlite"),
+  };
+}
+
+async function select(overrides: Partial<SessionEntry>) {
+  await replaceSessionEntry(browserTarget(), {
+    sessionId: "talk-selection",
+    updatedAt: 1,
+    ...overrides,
+  });
+}
+
+function createRunner() {
+  return createTalkClientAgentConsultRunner({
+    config,
+    context: { chatAbortControllers: new Map(), logGateway: { warn: vi.fn() } } as never,
+    sessionTarget: { ...browserTarget(), canonicalKey: browserSessionKey },
+    getVoiceSessionId: () => "voice-selection",
+    initialItems: [],
+    registerRun: vi.fn(),
+  });
+}
+
+describe("Browser Talk session model selection", () => {
+  it("uses the current user model and runtime pin, including changes between voice turns", async () => {
+    const runner = createRunner();
+    await select({
+      providerOverride: "openai",
+      modelOverride: "gpt-4.1-mini",
+      modelOverrideSource: "user",
+      modelOverrideRouteResolution: "resolved",
+      agentRuntimeOverride: "openclaw",
+    });
+    await expect(runner.runPrompt({ prompt: "Check this" })).resolves.toEqual({ text: "Checked" });
+    expect(browserRunEmbeddedAgent.mock.lastCall?.[0]).toMatchObject({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      requestedRouteResolution: "resolved",
+      agentHarnessRuntimeOverride: "openclaw",
+      modelFallbacksOverride: [],
+    });
+
+    await select({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o-mini",
+      agentRuntimeOverride: "codex",
+    });
+    await runner.runPrompt({ prompt: "Check again" });
+    expect(browserRunEmbeddedAgent.mock.lastCall?.[0]).toMatchObject({
+      provider: "openai",
+      model: "gpt-4o-mini",
+      agentHarnessRuntimeOverride: "codex",
+      modelFallbacksOverride: [],
+    });
+  });
+
+  it.each([undefined, "default"] as const)(
+    "uses configured defaults instead of historical selection (source=%s)",
+    async (source) => {
+      await select({
+        model: "historical-model",
+        modelProvider: "historical-provider",
+        agentHarnessId: "codex",
+        ...(source
+          ? { modelOverrideSource: source, providerOverride: "openai", modelOverride: "stale-pin" }
+          : {}),
+        agentRuntimeOverride: "openclaw",
+      });
+      await createRunner().runPrompt({ prompt: "Check this" });
+      expect(browserRunEmbeddedAgent.mock.lastCall?.[0]).toMatchObject({
+        provider: "openai",
+        model: "gpt-4.1",
+        agentHarnessRuntimeOverride: "openclaw",
+      });
+      expect(browserRunEmbeddedAgent.mock.lastCall?.[0].modelFallbacksOverride).toBeUndefined();
+    },
+  );
+
+  it.each([0, 1])(
+    "retains automatic fallback policy at spawn depth %s without pinning historical runtime",
+    async (spawnDepth) => {
+      await select({
+        providerOverride: "openai",
+        modelOverride: "gpt-4o-mini",
+        modelOverrideSource: "auto",
+        spawnDepth,
+        agentHarnessId: "codex",
+      });
+      await createRunner().runPrompt({ prompt: "Check this" });
+      expect(browserRunEmbeddedAgent.mock.lastCall?.[0]).toMatchObject({
+        provider: "openai",
+        model: "gpt-4o-mini",
+        modelFallbacksOverride: spawnDepth > 0 ? ["openai/gpt-4.1-mini"] : ["openai/gpt-4o"],
+      });
+      expect(
+        browserRunEmbeddedAgent.mock.lastCall?.[0].agentHarnessRuntimeOverride,
+      ).toBeUndefined();
     },
   );
 });
