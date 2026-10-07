@@ -4,6 +4,7 @@ import type {
   SessionsCatalogReadResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
+  ControlUiSessionBranch,
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
 } from "../../../../src/gateway/control-ui-contract.js";
@@ -43,6 +44,7 @@ import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import {
+  chatBranchId,
   chatPullRequestId,
   dismissChatPullRequest,
   listDismissedChatPullRequests,
@@ -87,6 +89,11 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     return this.sessionPullRequests.filter(
       (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
     );
+  }
+
+  protected get sessionPullRequestsBranchDismissed(): boolean {
+    const branch = this.sessionPullRequestsBranch;
+    return branch !== undefined && this.dismissedSessionPullRequestIds.has(chatBranchId(branch));
   }
 
   private applyPullRequestPresentation(
@@ -214,13 +221,21 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   protected readonly dismissSessionPullRequest = (
     pullRequest: ControlUiSessionPullRequest,
   ): void => {
+    this.dismissSessionPullRequestId(chatPullRequestId(pullRequest));
+  };
+
+  protected readonly dismissSessionPullRequestsBranch = (branch: ControlUiSessionBranch): void => {
+    this.dismissSessionPullRequestId(chatBranchId(branch));
+  };
+
+  private dismissSessionPullRequestId(id: string): void {
     const sessionKey = this.state?.sessionKey;
     if (!sessionKey) {
       return;
     }
-    this.dismissedSessionPullRequestIds = dismissChatPullRequest(sessionKey, pullRequest);
+    this.dismissedSessionPullRequestIds = dismissChatPullRequest(sessionKey, id);
     this.requestUpdate();
-  };
+  }
 
   protected deferSessionHydrationUntilTranscript(
     sessionKey: string,
