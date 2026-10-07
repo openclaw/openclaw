@@ -3,7 +3,7 @@ import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 
 type RunIdentity = Pick<SubagentRunReadRecord, "childSessionKey" | "requesterSessionKey">;
 type LookupIdentity = RunIdentity &
-  Pick<SubagentRunReadRecord, "runId" | "swarmRunId" | "controllerSessionKey">;
+  Pick<SubagentRunReadRecord, "runId" | "swarmRunId" | "schedulerSlotId" | "controllerSessionKey">;
 
 function buildChildren(runGroups: readonly Iterable<RunIdentity>[]) {
   const children = new Map<string, Set<string>>();
@@ -51,6 +51,7 @@ type LookupMembership = {
   entry: LookupIdentity;
   runId: string;
   swarmRunId?: string;
+  schedulerSlotId?: string;
   requester: string;
   child: string;
   controller: string;
@@ -92,6 +93,7 @@ export class SubagentSessionReadLookup {
       previous &&
       previous.runId === entry.runId &&
       previous.swarmRunId === entry.swarmRunId &&
+      previous.schedulerSlotId === entry.schedulerSlotId &&
       previous.child === child &&
       previous.requester === requester &&
       previous.controller === controller
@@ -107,13 +109,14 @@ export class SubagentSessionReadLookup {
       entry,
       runId: entry.runId,
       swarmRunId: entry.swarmRunId,
+      schedulerSlotId: entry.schedulerSlotId,
       child,
       requester,
       controller,
       order: previous?.order ?? this.#nextOrder++,
     };
     this.#memberships.set(cacheKey, membership);
-    for (const id of [membership.runId, membership.swarmRunId]) {
+    for (const id of [membership.runId, membership.swarmRunId, membership.schedulerSlotId]) {
       if (id) {
         this.#addToBucket(this.#byRunId, id, membership);
       }
@@ -269,7 +272,7 @@ export class SubagentSessionReadLookup {
   }
 
   #remove(membership: LookupMembership) {
-    for (const id of [membership.runId, membership.swarmRunId]) {
+    for (const id of [membership.runId, membership.swarmRunId, membership.schedulerSlotId]) {
       if (id) {
         this.#removeFromBucket(this.#byRunId, id, membership);
       }

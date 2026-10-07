@@ -8,7 +8,7 @@ import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import { registerSerializedJsonArray } from "./serialized-json.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
-import type { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
+import type { VisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { prepareSessionFastModePresentation } from "./session-fast-mode-presentation.js";
 import {
@@ -112,10 +112,8 @@ export function prepareSessionRowPublication(
     }
     return publication;
   };
-  return (
-    client?: GatewayClient | null,
-    projectRun?: ReturnType<typeof createVisibleActiveSessionRunProjector>,
-  ) => prepareProjectedSessionPresentation(read, client, now, projectRun, view);
+  return (client?: GatewayClient | null, projectRun?: VisibleActiveSessionRunProjector) =>
+    prepareProjectedSessionPresentation(read, client, now, projectRun, view);
 }
 
 /** Recreate after yields: the caller identity and clock belong to one synchronous presentation. */
@@ -123,7 +121,7 @@ export function prepareProjectedSessionPresentation(
   projection: SessionRowReadView,
   client?: GatewayClient | null,
   now = Date.now(),
-  projectRun?: ReturnType<typeof createVisibleActiveSessionRunProjector>,
+  projectRun?: VisibleActiveSessionRunProjector,
   publication?: PublicationView,
 ) {
   const { cfg, policyConfig, rowContext } = projection.state;

@@ -42,6 +42,7 @@ import {
   getAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { notifyGatewayWorkMetricsChanged } from "../../infra/gateway-work-metrics-events.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   isDiagnosticEmbeddedRunOwnerClosed,
@@ -80,6 +81,7 @@ import {
   EMBEDDED_RUN_WAITERS,
   RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS,
   setActiveEmbeddedRunLifecycleGeneration,
+  setActiveEmbeddedRunSessionIndexes,
   resolveActiveEmbeddedRunRecoveryBlocker,
   type ActiveEmbeddedRunSnapshot,
   type AbandonedEmbeddedRun,
@@ -882,6 +884,8 @@ export async function preemptAndDrainEmbeddedHeartbeatRun(
     handle.preemptByVisibleTurn();
   } catch (err) {
     diag.warn(`heartbeat preemption failed: sessionId=${sessionId} err=${String(err)}`);
+  } finally {
+    notifyGatewayWorkMetricsChanged();
   }
   return (await drainPromise) ? "drained" : "timed-out";
 }
@@ -1499,6 +1503,7 @@ function notifyEmbeddedRunEnded(
   endedHandle: EmbeddedAgentQueueHandle,
   aborted = false,
 ) {
+  notifyGatewayWorkMetricsChanged();
   const waiters = EMBEDDED_RUN_WAITERS.get(sessionId);
   if (!waiters || waiters.size === 0) {
     return;
@@ -1624,16 +1629,8 @@ export function setActiveEmbeddedRun(
   if (handle.runId) {
     ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.set(handle.runId, handle);
   }
-  clearActiveRunSessionIndex(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY, sessionId);
-  const normalizedSessionKey = sessionKey?.trim();
-  if (normalizedSessionKey) {
-    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set(normalizedSessionKey, sessionId);
-  }
-  clearActiveRunSessionIndex(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE, sessionId);
-  const normalizedSessionFile = normalizeSessionFileRegistryKey(sessionFile);
-  if (normalizedSessionFile) {
-    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(normalizedSessionFile, sessionId);
-  }
+  setActiveEmbeddedRunSessionIndexes(sessionId, sessionKey, sessionFile);
+  notifyGatewayWorkMetricsChanged();
   logSessionStateChange({
     sessionId,
     sessionKey,
@@ -1687,6 +1684,7 @@ function removeActiveEmbeddedRun(
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
   clearActiveRunSessionIndex(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY, sessionId, sessionKey?.trim());
   clearActiveRunSessionIndex(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE, sessionId);
+  notifyGatewayWorkMetricsChanged();
 }
 
 export function clearActiveEmbeddedRun(

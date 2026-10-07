@@ -8,6 +8,7 @@ import {
   getLatestLiveSubagentRunByChildSessionKey,
   isSubagentRunLive,
   isSubagentRunQueued,
+  listActiveSubagentSessionKeys,
 } from "../../agents/subagents/registry/subagent-registry-read.js";
 import { getSubagentRunRuntimeKey } from "../../agents/subagents/registry/subagent-run-generation.js";
 import { isSwarmRunWaitingForCapacity } from "../../agents/subagents/swarm/swarm-scheduler.js";
@@ -293,6 +294,13 @@ export function resolveVisibleActiveSessionRunState(params: {
   };
 }
 
+export type VisibleActiveSessionRunProjector = (
+  params: Omit<
+    Parameters<typeof resolveVisibleActiveSessionRunState>[0],
+    "context" | "trackedActiveRuns" | "projectedAgentRunIndex" | "includeTerminalPersistence"
+  >,
+) => VisibleActiveSessionRunState;
+
 /** Request-scoped index; candidate selection must not rescan all controllers per row. */
 export function createVisibleActiveSessionRunProjector(
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
@@ -325,12 +333,7 @@ export function createVisibleActiveSessionRunProjector(
       }
     }
   }
-  return (
-    params: Omit<
-      Parameters<typeof resolveVisibleActiveSessionRunState>[0],
-      "context" | "trackedActiveRuns" | "projectedAgentRunIndex" | "includeTerminalPersistence"
-    >,
-  ): VisibleActiveSessionRunState => {
+  const project: VisibleActiveSessionRunProjector = (params) => {
     const sessionId = params.sessionId?.trim() ?? "";
     // Inventory only excludes absent owners; positive matches retain the canonical agent policy.
     if (
@@ -359,4 +362,16 @@ export function createVisibleActiveSessionRunProjector(
       ],
     });
   };
+  // Empty identities request an unkeyed roster read from the selection owner.
+  const candidateSessionIdsOrKeys = (): ReadonlySet<string> =>
+    new Set(
+      [
+        ...candidateKeys,
+        ...candidateIds,
+        ...byKey.keys(),
+        ...byId.keys(),
+        ...listActiveSubagentSessionKeys(),
+      ].filter((identity) => identity.length > 0),
+    );
+  return Object.assign(project, { candidateSessionIdsOrKeys });
 }
