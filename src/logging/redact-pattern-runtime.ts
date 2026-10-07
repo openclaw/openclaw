@@ -289,6 +289,31 @@ type RedactMatcher = {
 export type ResolvedRedactPattern = RegExp | RedactMatcher;
 export type RedactPattern = string | ResolvedRedactPattern;
 
+// The shared compiler exposes mutable regexes; probes remain valid only for their original rule.
+const patternPrefilters = new WeakMap<ResolvedRedactPattern, (text: string) => boolean>();
+
+export function setRedactPatternPrefilter(
+  pattern: ResolvedRedactPattern,
+  probe: (text: string) => boolean,
+): void {
+  if (patternPrefilters.has(pattern)) {
+    return;
+  }
+  // oxlint-disable-next-line typescript/unbound-method -- Compare method identity; never invoke it unbound.
+  const { source, exec } = pattern;
+  const flags = pattern instanceof RegExp ? pattern.flags : undefined;
+  const replace = pattern instanceof RegExp ? pattern[Symbol.replace] : undefined;
+  patternPrefilters.set(
+    pattern,
+    (text) =>
+      pattern.source !== source ||
+      pattern.exec !== exec ||
+      (pattern instanceof RegExp &&
+        (pattern.flags !== flags || pattern[Symbol.replace] !== replace)) ||
+      probe(text),
+  );
+}
+
 // Derived matchers live only as long as their owner pattern, never as long as a secret value.
 const indexedPatterns = new WeakMap<RegExp, RegExp>();
 
@@ -358,6 +383,9 @@ export function* iterateRedactMatches(
   text: string,
   pattern: ResolvedRedactPattern,
 ): Iterable<RedactMatch> {
+  if (patternPrefilters.get(pattern)?.(text) === false) {
+    return;
+  }
   if (!(pattern instanceof RegExp)) {
     yield* pattern.exec(text);
     return;
@@ -406,6 +434,11 @@ export function replaceRedactPattern(
   replaceRegex?: (...args: unknown[]) => string,
 ): string {
   if (pattern instanceof RegExp) {
+    if (patternPrefilters.get(pattern)?.(text) === false) {
+      // Attached regexes are compiled global; native replacement resets even on a miss.
+      pattern.lastIndex = 0;
+      return text;
+    }
     return text.replace(
       pattern,
       replaceRegex ?? ((...args: unknown[]) => replace(readRedactMatch(args))),
