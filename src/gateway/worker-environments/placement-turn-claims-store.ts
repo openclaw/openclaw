@@ -8,6 +8,7 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { isCurrentPlacementTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
+import type { WorkerSessionPlacementState } from "./placement-state.js";
 import {
   stagePlacementTurnClaimWorkerPublication,
   stagePlacementWorkspaceResultWorkerPublication,
@@ -47,6 +48,13 @@ function isReceipt(value: unknown): value is PlacementTurnClaimReceipt {
         typeof value.environmentActivation.environmentId === "string" &&
         typeof value.environmentActivation.lastActivatedAtMs === "number"))
   );
+}
+
+function requirePlacement(receipt: PlacementTurnClaimReceipt, operation: string) {
+  if (!receipt.placement) {
+    throw new Error(`${operation} receipt is missing its placement`);
+  }
+  return receipt.placement;
 }
 
 export function createPlacementTurnClaimWorkerOps(runtime: {
@@ -118,6 +126,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
     let reportedContention = false;
     for (;;) {
       let prepared: PlacementTurnClaimReceipt | undefined;
+      let previousState: WorkerSessionPlacementState | null | undefined;
       let published = false;
       const mutation = createPlacementWorkerMutation({
         context,
@@ -129,12 +138,13 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
             return request.facts;
           }
           const admitted = assertSessionEntryCurrentAdmission(request, capturedEntryCheck);
-          if (current) {
-            if (!isReceipt(admitted.facts)) {
-              throw new Error("Placement admission has no current placement facts");
-            }
-            current.assertPlacementCurrent(admitted.facts.placement, admitted.facts.placementMove);
+          if (!isReceipt(admitted.facts)) {
+            throw new Error("Placement admission has no current placement facts");
           }
+          if (request.stage === "transaction") {
+            previousState = admitted.facts.placement ? admitted.facts.placement.state : null;
+          }
+          current?.assertPlacementCurrent(admitted.facts.placement, admitted.facts.placementMove);
           return admitted.facts;
         },
         readReceipt: (facts) => (isReceipt(facts) ? facts : undefined),
@@ -184,6 +194,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
                   context.admission.identity,
                   facts.placement,
                   resultFacts,
+                  previousState,
                 )
               : stagePlacementWorkspaceResultWorkerPublication(
                   context.admission.identity,
@@ -342,10 +353,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         { type: "placementTurns.transition", input: { ...input, nowMs: runtime.now?.() } },
         assertCurrent,
       );
-      if (!receipt.placement) {
-        throw new Error("Placement transition receipt is missing its placement");
-      }
-      return receipt.placement;
+      return requirePlacement(receipt, "Placement transition");
     },
     async startDrain(
       input: Omit<
@@ -358,10 +366,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         { type: "placementTurns.startDrain", input: { ...input, nowMs: runtime.now?.() } },
         assertCurrent,
       );
-      if (!receipt.placement) {
-        throw new Error("Placement drain receipt is missing its placement");
-      }
-      return receipt.placement;
+      return requirePlacement(receipt, "Placement drain");
     },
     async startReconcile(
       input: Omit<
@@ -374,10 +379,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         { type: "placementTurns.startReconcile", input: { ...input, nowMs: runtime.now?.() } },
         assertCurrent,
       );
-      if (!receipt.placement) {
-        throw new Error("Placement reconciliation receipt is missing its placement");
-      }
-      return receipt.placement;
+      return requirePlacement(receipt, "Placement reconciliation");
     },
     async fail(
       input: Omit<PlacementTurnClaimWorkerOperations["placementTurns.fail"]["input"], "nowMs">,
@@ -387,10 +389,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         { type: "placementTurns.fail", input: { ...input, nowMs: runtime.now?.() } },
         assertCurrent,
       );
-      if (!receipt.placement) {
-        throw new Error("Placement failure receipt is missing its placement");
-      }
-      return receipt.placement;
+      return requirePlacement(receipt, "Placement failure");
     },
     async failWorkspaceResultAndReleaseTurn(
       pending: WorkerWorkspacePendingResult,
@@ -404,10 +403,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         },
         assertCurrent,
       );
-      if (!receipt.placement) {
-        throw new Error("Workspace result failure receipt is missing its placement");
-      }
-      return receipt.placement;
+      return requirePlacement(receipt, "Workspace result failure");
     },
     async claimReclaimWorkspaceResult(
       input: Parameters<Claims["claimReclaimWorkspaceResult"]>[0],
@@ -493,10 +489,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         { type: "placementTurns.drainResult", input: { claim, nowMs: runtime.now?.() } },
         assertCurrent,
       );
-      if (!receipt.placement) {
-        throw new Error("Workspace result drain receipt is missing its placement");
-      }
-      return receipt.placement;
+      return requirePlacement(receipt, "Workspace result drain");
     },
     async completeWorkspaceResultAndReleaseTurn(
       claim: WorkerSessionTurnClaim,
@@ -508,10 +501,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         assertCurrent,
         current,
       );
-      if (!receipt.placement) {
-        throw new Error("Workspace result completion receipt is missing its placement");
-      }
-      return receipt.placement;
+      return requirePlacement(receipt, "Workspace result completion");
     },
     async cancelWorkspaceResultAndReleaseTurn(
       claim: WorkerSessionTurnClaim,
@@ -530,10 +520,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         },
         assertCurrent,
       );
-      if (!receipt.placement) {
-        throw new Error("Workspace result cancellation receipt is missing its placement");
-      }
-      return receipt.placement;
+      return requirePlacement(receipt, "Workspace result cancellation");
     },
     async updateAckCursors(input: PlacementAckCursorInput, assertCurrent?: () => void) {
       const receipt = await execute(
@@ -550,10 +537,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
           },
         },
       );
-      if (!receipt.placement) {
-        throw new Error("Worker ACK receipt is missing its placement");
-      }
-      return receipt.placement;
+      return requirePlacement(receipt, "Worker ACK");
     },
     async updateWorkspaceBaseManifest(
       input: Parameters<Claims["updateWorkspaceBaseManifest"]>[0],
@@ -568,10 +552,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         assertCurrent,
         current,
       );
-      if (!receipt.placement) {
-        throw new Error("Workspace journal commit receipt is missing its placement");
-      }
-      return receipt.placement;
+      return requirePlacement(receipt, "Workspace journal commit");
     },
     async recordStagedWorkspaceResult(
       claim: WorkerSessionTurnClaim,
@@ -624,10 +605,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         },
         assertCurrent,
       );
-      if (!receipt.placement) {
-        throw new Error("Worker runtime refresh handoff receipt is missing its placement");
-      }
-      return receipt.placement;
+      return requirePlacement(receipt, "Worker runtime refresh handoff");
     },
     async claimTurn(input: Parameters<Claims["claimTurn"]>[0], assertCurrent?: () => void) {
       const receipt = await execute(
@@ -644,10 +622,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         { type: "placementTurns.release", input: { claim, nowMs: runtime.now?.() } },
         assertCurrent,
       );
-      if (!receipt.placement) {
-        throw new Error("Placement turn release receipt is missing its placement");
-      }
-      return receipt.placement;
+      return requirePlacement(receipt, "Placement turn release");
     },
     async releaseTurnIfOwned(claim: Parameters<Claims["releaseTurn"]>[0]) {
       await execute({

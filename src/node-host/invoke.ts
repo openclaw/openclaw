@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { validateSystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { DEFAULT_ASK, DEFAULT_SECURITY } from "../infra/exec-approvals-config.js";
 import {
   analyzeArgvCommand,
@@ -75,6 +76,7 @@ import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-comm
 import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
+import { preferMacAppExecHost } from "./runtime-manifest.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
 const MCP_ERROR_MESSAGE_MAX_CHARS = 1_024;
@@ -90,34 +92,22 @@ type NodeHostPrivateInvokeRuntime = NodeHostInvokeRuntime & {
   workerComputer?: NodeWorkerComputer;
 };
 
-const preferMacAppExecHost =
-  process.platform === "darwin" &&
-  normalizeLowercaseStringOrEmpty(process.env.OPENCLAW_NODE_EXEC_HOST ?? "") === "app";
-
 type SystemWhichParams = {
   bins: string[];
 };
 
-type McpToolsCallParams = {
-  server: string;
-  tool: string;
-  arguments?: Record<string, unknown>;
-};
+type McpToolsCallParams = ReturnType<typeof decodeMcpToolsCallParams>;
 
 type SystemExecApprovalsSetParams = {
   file: ExecApprovalsFile;
   baseHash?: string | null;
 };
 
-type SystemRunPrepareParams = {
+type SystemRunPrepareParams = Parameters<typeof buildSystemRunApprovalPlan>[0] & {
   security?: ExecSecurity;
   ask?: ExecAsk;
-  command?: unknown;
-  rawCommand?: unknown;
-  cwd?: unknown;
   env?: Record<string, string> | null;
-  agentId?: unknown;
-  sessionKey?: unknown;
+  executionContext?: unknown;
   strictInlineEval?: unknown;
 };
 
@@ -568,6 +558,12 @@ async function dispatchInvoke(
         decodeParams<SystemRunPrepareParams>(frame.paramsJSON),
         frame.nodeId,
       );
+      if (
+        params.executionContext !== undefined &&
+        (preferMacAppExecHost || !validateSystemRunExecutionContext(params.executionContext))
+      ) {
+        throw new Error("executionContext invalid or unsupported");
+      }
       const { getRuntimeConfig } = await import("../config/config.js");
       const execPolicy = await resolveEffectiveSystemRunExecPolicy({
         cfg: getRuntimeConfig(),
@@ -663,7 +659,7 @@ async function dispatchInvoke(
   });
 }
 
-function decodeMcpToolsCallParams(raw?: string | null): McpToolsCallParams {
+function decodeMcpToolsCallParams(raw?: string | null) {
   const value = decodeParams<unknown>(raw);
   if (!isRecord(value)) {
     throw new Error("INVALID_REQUEST: MCP tool params must be an object");

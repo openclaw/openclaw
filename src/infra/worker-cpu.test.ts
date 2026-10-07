@@ -126,6 +126,7 @@ describe("worker CPU lifecycle", () => {
         script: "other",
         heapUsed: native.used_heap_size,
         heapTotal: native.total_heap_size,
+        heapSizeLimitBytes: process.versions.bun ? undefined : native.heap_size_limit,
       }),
     ]);
     const now = performance.now();
@@ -153,7 +154,9 @@ describe("worker CPU lifecycle", () => {
     const published = createDeferredCore<{
       port: MessagePort;
       worker: Worker;
-      sample: Pick<NodeJS.MemoryUsage, "heapUsed" | "heapTotal" | "external" | "arrayBuffers">;
+      sample: Pick<NodeJS.MemoryUsage, "heapUsed" | "heapTotal" | "external" | "arrayBuffers"> & {
+        heapSizeLimitBytes?: number;
+      };
     }>();
     let attached = false;
     const onWorker = (worker: Worker) => {
@@ -216,6 +219,9 @@ describe("worker CPU lifecycle", () => {
       });
       expect(read).toHaveBeenCalledTimes(1);
       const native = await read.mock.results[0]!.value;
+      expect(sample.heapSizeLimitBytes).toBe(
+        process.versions.bun ? undefined : native.heap_size_limit,
+      );
       const late = createDeferredCore<Awaited<ReturnType<Worker["getHeapStatistics"]>>>();
       completeNative = () => late.resolve(native);
       read.mockReturnValueOnce(late.promise);
@@ -257,14 +263,28 @@ describe("worker CPU lifecycle", () => {
     }
   });
 
-  it("retains native ownership through stalled reads and removes it only at exit", async () => {
+  it.each(["stall", "recovery"])("owns native counter reads through %s", async (mode) => {
     const initial = getTrackedWorkerCpuSources();
     const worker = await createWorker();
-    const read = createDeferredCore<NodeJS.CpuUsage>();
-    const cpuUsage = vi.spyOn(worker, "cpuUsage").mockReturnValue(read.promise);
+    const cpuUsage = vi.spyOn(worker, "cpuUsage");
     const tracked = getTrackedWorkerCpuSources();
-    expect(tracked.workers).toHaveLength(initial.workers.length + 1);
     const source = tracked.workers.at(-1)!;
+    if (mode === "recovery") {
+      cpuUsage
+        .mockRejectedValueOnce(new Error("not running"))
+        .mockImplementationOnce(() => {
+          throw new Error("unsupported");
+        })
+        .mockResolvedValue({ user: 100, system: 10 });
+      await expect(source.cpuUsage()).resolves.toBeUndefined();
+      await expect(source.cpuUsage()).resolves.toBeUndefined();
+      await expect(source.cpuUsage()).resolves.toEqual({ user: 100, system: 10 });
+      expect(cpuUsage).toHaveBeenCalledTimes(3);
+      return;
+    }
+    const read = createDeferredCore<NodeJS.CpuUsage>();
+    cpuUsage.mockReturnValue(read.promise);
+    expect(tracked.workers).toHaveLength(initial.workers.length + 1);
     const pending = source.cpuUsage();
     await expect(source.cpuUsage()).resolves.toBeUndefined();
     await expect(getTrackedWorkerCpuSources().workers.at(-1)!.cpuUsage()).resolves.toBeUndefined();
@@ -275,21 +295,5 @@ describe("worker CPU lifecycle", () => {
     read.resolve({ user: 100, system: 10 });
     await pending;
     expect(getTrackedWorkerCpuSources().workers).toEqual(initial.workers);
-  });
-
-  it("recovers after rejected or synchronously unavailable native counters", async () => {
-    const worker = await createWorker();
-    const cpuUsage = vi
-      .spyOn(worker, "cpuUsage")
-      .mockRejectedValueOnce(new Error("not running"))
-      .mockImplementationOnce(() => {
-        throw new Error("unsupported");
-      })
-      .mockResolvedValue({ user: 100, system: 10 });
-    const source = getTrackedWorkerCpuSources().workers.at(-1)!;
-    await expect(source.cpuUsage()).resolves.toBeUndefined();
-    await expect(source.cpuUsage()).resolves.toBeUndefined();
-    await expect(source.cpuUsage()).resolves.toEqual({ user: 100, system: 10 });
-    expect(cpuUsage).toHaveBeenCalledTimes(3);
   });
 });

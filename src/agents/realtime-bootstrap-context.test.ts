@@ -18,7 +18,7 @@ let params: { config: OpenClawConfig; agentId: string };
 beforeEach(() => {
   workspaceDir = tempDirs.make("openclaw-realtime-bootstrap-");
   config = {
-    agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main", default: true }] },
+    agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } },
   };
   params = { config, agentId: "main" };
 });
@@ -151,14 +151,14 @@ describe("resolveRealtimeVoiceAgentContextInstructions", () => {
           new Error("profile unavailable"),
         );
       }
-      config.agents!.list![0]!.identity = { name: "Wilfred" };
+      config.agents!.entries!.main!.identity = { name: "Wilfred" };
       expect(await resolveRealtimeVoiceAgentContextInstructions({ ...params, files, warn })).toBe(
         framing,
       );
       if (profile === "unavailable") {
         expect(warn).toHaveBeenCalledWith(expect.stringContaining("profile unavailable"));
       } else {
-        config.agents!.list![0]!.identity = { name: " ", emoji: "" };
+        config.agents!.entries!.main!.identity = { name: " ", emoji: "" };
         await expect(
           resolveRealtimeBootstrapContextInstructions({ ...params, files }),
         ).resolves.toBeUndefined();

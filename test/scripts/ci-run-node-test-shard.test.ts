@@ -73,7 +73,9 @@ const scratchDirs: string[] = [];
 const bunConfig = "test/vitest/vitest.unit-fast.config.ts";
 const unitConfig = "test/vitest/vitest.unit.config.ts";
 const unitSrcConfig = "test/vitest/vitest.unit-src.config.ts";
+const graphemeTarget = "packages/normalization-core/src/grapheme.test.ts";
 const libraryTarget = "src/library.test.ts";
+const workerQuiescenceTarget = "src/node-host/node-worker-workspace-quiescence.acceptance.test.ts";
 const workerClosingWindowTarget = "src/worker/worker-connection-closing-window.test.ts";
 const bunTarget = nativeQualificationFixtures.first;
 const vitestBunTarget = "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts";
@@ -91,13 +93,6 @@ const gatewayWorkspaceHashTarget = "src/gateway/worker-environments/workspace-ha
 const memoryConfig = "test/vitest/vitest.extension-memory.config.ts";
 const memoryTarget = "extensions/memory-lancedb/config.test.ts";
 const memoryIncludes = ["extensions/memory-lancedb", "extensions/memory-wiki"];
-const uiNodeFiles = [
-  "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
-  "ui/src/pages/chat/chat-pane-retention.test.ts",
-  "ui/src/pages/chat/chat-thread-retention.test.ts",
-  "ui/src/pages/chat/session-snapshot-store.test.ts",
-  "ui/src/pages/usage/usage-page-retention.test.ts",
-];
 
 function makeScratchDir(): string {
   const dir = mkdtempSync(path.join(tmpdir(), "openclaw-shard-test-"));
@@ -279,8 +274,10 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     "preserves selected UI discovery before runtime partitioning under %s",
     async (policy) => {
       vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
-      const bunFile = "ui/src/pages/chat/chat-pane-history.test.ts";
-      const includePatterns = [bunFile, ...uiNodeFiles];
+      const includePatterns = [
+        "ui/src/pages/chat/chat-pane-history.test.ts",
+        "ui/src/pages/chat/chat-thread-retention.test.ts",
+      ];
       const seen: Array<{ runtime: string | undefined; membership?: string[] }> = [];
       await expect(
         runShardPlans(
@@ -312,11 +309,10 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
           },
         ),
       ).resolves.toBe(0);
-      const expected = [
-        { runtime: "node", membership: policy === "dual" ? undefined : uiNodeFiles },
-        { runtime: "bun", membership: [bunFile] },
-      ];
-      expect(seen).toEqual(policy === "dual" ? expected : expected.toReversed());
+      expect(seen).toEqual([
+        ...(policy === "dual" ? [{ runtime: "node", membership: undefined }] : []),
+        { runtime: "bun", membership: includePatterns },
+      ]);
     },
   );
 
@@ -677,13 +673,15 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     "preserves runtime inventories under $policy with $vitestArgs",
     async ({ policy, vitestArgs }) => {
       const skippedOnBun = "src/process/spawn-broker/cleanup.test.ts";
-      const v8HeapTest = "src/infra/worker-task-pool.memory.test.ts";
+      const workerMemoryTest = "src/infra/worker-task-pool.memory.test.ts";
       const pluginRetentionTest = "src/plugins/runtime.retention.test.ts";
       const nodeHistoryBenchmark = "test/scripts/bench-session-history.test.ts";
       const nativeCompilerTest = "test/scripts/native-typescript.test.ts";
       const compilerGraphTest = "test/scripts/ts-topology.test.ts";
       const mixedCompilerTest = "src/plugin-sdk/provider-tools.test.ts";
       const bunVitestFiles = [
+        "packages/markdown-core/src/render-aware-chunking.test.ts",
+        workerMemoryTest,
         "src/agents/code-mode-node.test.ts",
         vitestBunTarget,
         nativeCompilerTest,
@@ -695,12 +693,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "src/plugin-sdk/provider-catalog-shared.cancellation.test.ts",
         "src/plugin-sdk/provider-catalog-shared.retention.test.ts",
       ].toSorted();
-      const nodeFiles = [
-        skippedOnBun,
-        v8HeapTest,
-        nodeHistoryBenchmark,
-        "packages/markdown-core/src/render-aware-chunking.test.ts",
-      ];
+      const nodeFiles = [skippedOnBun, nodeHistoryBenchmark];
       const nativeFiles = vitestArgs.length ? [] : [bunTarget, nativeBunTarget];
       const bunFiles = nativeFiles.length
         ? bunVitestFiles
@@ -837,7 +830,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       ),
     ).toEqual([
       {
-        runtime: "node",
+        runtime: "bun",
         includePatterns: ["packages/markdown-core/src/render-aware-chunking.test.ts"],
       },
       { runtime: "bun", engine: "bun-test", files: [bunTarget] },
@@ -977,7 +970,12 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   ] as const)(
     "admits qualified unit coverage while preserving $config siblings under $policy",
     async ({ policy, config, nodeFile }) => {
-      const bunFiles = [libraryTarget, workerClosingWindowTarget];
+      const bunFiles = [
+        ...(config === unitConfig ? [graphemeTarget] : []),
+        libraryTarget,
+        workerQuiescenceTarget,
+        workerClosingWindowTarget,
+      ];
       const includePatterns = [...bunFiles, nodeFile];
       const seen: Array<{ runtime: string | undefined; includes: string[] }> = [];
       await expect(
@@ -1029,6 +1027,14 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
             ),
           ).toBe(false);
         }
+      }
+      if (config === unitSrcConfig) {
+        expect(
+          resolveCiTestRuntimeSelections(
+            { configs: [config], includePatterns: [graphemeTarget] },
+            policy,
+          ),
+        ).toEqual([{ runtime: "node" }]);
       }
       expect(ciTestShardRequiresBun({ configs: [config] }, policy)).toBe(true);
     },
@@ -1142,6 +1148,36 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
 
   it.each([
     {
+      config: "test/vitest/vitest.extension-database-workers.config.ts",
+      dir: "extensions",
+      targets: [
+        "extensions/codex/src/session-catalog-native-performance.test.ts",
+        "extensions/team-reports/src/render/theme.test.ts",
+      ],
+      sibling: "extensions/team-reports/src/render/site.test.ts",
+      glob: "**/*.test.ts",
+    },
+    {
+      config: "test/vitest/vitest.extension-whatsapp.config.ts",
+      dir: "extensions",
+      targets: ["extensions/whatsapp/src/session.media-upload.test.ts"],
+      sibling: "extensions/whatsapp/src/session.test.ts",
+      glob: "whatsapp/src/*.test.ts",
+    },
+    {
+      config: "test/vitest/vitest.extension-slack.config.ts",
+      dir: "extensions",
+      targets: [
+        "extensions/slack/src/monitor/ingress.auth-retry.test.ts",
+        "extensions/slack/src/monitor/ingress.deferred-stop.test.ts",
+        "extensions/slack/src/monitor/ingress.relay.test.ts",
+        "extensions/slack/src/monitor/message-handler.debounce-policy.test.ts",
+        "extensions/slack/src/monitor/provider.transport-credentials.test.ts",
+      ],
+      sibling: "extensions/slack/src/monitor/relay-source.test.ts",
+      glob: "slack/src/monitor/*.test.ts",
+    },
+    {
       config: "test/vitest/vitest.extension-provider-openai.config.ts",
       dir: "extensions",
       targets: ["extensions/openai/realtime-quicksilver-peer-worker.test.ts"],
@@ -1151,9 +1187,13 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     {
       config: "test/vitest/vitest.plugins.config.ts",
       dir: "src/plugins",
-      targets: ["src/plugins/plugin-module-generation.interop.test.ts"],
+      targets: [
+        "src/plugins/plugin-module-generation.interop.test.ts",
+        "src/plugins/provider-discovery.capture-lifetime.test.ts",
+        "src/plugins/sdk-alias.test.ts",
+      ],
       sibling: "src/plugins/plugin-module-generation.test.ts",
-      glob: "plugin-module-generation*.test.ts",
+      glob: "**/*.test.ts",
     },
     {
       config: "test/vitest/vitest.tooling.config.ts",
@@ -1162,11 +1202,15 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "test/helpers/managed-handoff-isolation.test.ts",
         "test/scripts-update-gateway-legacy.test.ts",
         "test/scripts/bench-gateway-installed.test.ts",
+        "test/scripts/clawhub-bootstrap-artifact.test.ts",
+        "test/scripts/clawhub-fixture-server.test.ts",
+        "test/scripts/crabbox-untrusted-bootstrap.test.ts",
         "test/scripts/oxlint-config.test.ts",
         "test/scripts/pr-worktree-interruption.test.ts",
         "test/scripts/pr-worktree-state.test.ts",
         "test/scripts/pr-wrappers.test.ts",
         "test/scripts/test-projects-empty-native.test.ts",
+        "test/scripts/test-projects.test.ts",
         "test/scripts/upgrade-survivor-timeout-diagnostics.test.ts",
         "test/scripts/watch-pr-ci-dependencies.test.ts",
         "test/scripts/watch-pr-ci.test.ts",
@@ -1189,9 +1233,40 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     {
       config: "test/vitest/vitest.infra.config.ts",
       dir: "",
-      targets: ["src/infra/update-managed-service-handoff-reclamation.test.ts"],
+      targets: [
+        "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
+        "src/infra/update-managed-service-handoff-reclamation.test.ts",
+        "src/infra/worker-cpu.test.ts",
+      ],
       sibling: "src/infra/update-managed-service-handoff-recovery.test.ts",
       glob: "**/*.test.ts",
+    },
+    {
+      config: "test/vitest/vitest.gateway-database-workers.config.ts",
+      dir: ".",
+      targets: ["src/gateway/server-methods/session-catalog.performance.test.ts"],
+      sibling: "src/gateway/server-methods/session-creator-preparation.test.ts",
+      glob: "**/*.test.ts",
+    },
+    {
+      config: "test/vitest/vitest.logging.config.ts",
+      dir: "src",
+      targets: ["src/logging/diagnostic-memory.test.ts"],
+      sibling: "src/logging/diagnostic-heap-profile.test.ts",
+      glob: "logging/*.test.ts",
+    },
+    {
+      config: "test/vitest/vitest.ui-e2e.config.ts",
+      dir: "",
+      targets: [
+        "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
+        "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
+        "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
+        "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
+        "ui/src/e2e/service-worker-update.e2e.test.ts",
+      ],
+      sibling: "ui/src/e2e/board-fixture.e2e.test.ts",
+      glob: "ui/src/e2e/*.test.ts",
     },
     {
       config: "test/vitest/vitest.cli-process.config.ts",
@@ -1301,6 +1376,64 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   });
 
   it.each([
+    {
+      glob: "team-reports/src/render/*.test.ts",
+      target: "extensions/team-reports/src/render/theme.test.ts",
+    },
+    {
+      glob: "codex/src/session-catalog-*.test.ts",
+      target: "extensions/codex/src/session-catalog-native-performance.test.ts",
+    },
+  ])("keeps extension database-worker dual coverage inside $glob", ({ glob, target }) => {
+    const selection = {
+      configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
+      includePatterns: [glob],
+    };
+    expect(resolveCiTestRuntimeSelections(selection, "bun-compatible")).toEqual([
+      { runtime: "node" },
+    ]);
+    expect(resolveCiTestRuntimeSelections(selection, "dual")).toEqual([
+      { runtime: "node" },
+      { runtime: "bun", includePatterns: [target] },
+    ]);
+  });
+
+  it("preserves mixed logging coverage, runtime caches and child failure in dual mode", async () => {
+    const config = "test/vitest/vitest.logging.config.ts";
+    const target = "src/logging/diagnostic-memory.test.ts";
+    const includePatterns = [target, "src/logging/diagnostic-heap-profile.test.ts"];
+    const seen: Array<{
+      runtime: string | undefined;
+      includes: string[];
+      cache: string | undefined;
+    }> = [];
+    await expect(
+      runShardPlans(
+        [{ kind: "group", name: "logging", plan: { configs: [config], includePatterns } }],
+        {
+          env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual" },
+          scratchDir: makeScratchDir(),
+          runChild: async (args, env) => {
+            expect(args).toEqual([config]);
+            seen.push({
+              runtime: env.OPENCLAW_VITEST_RUNTIME,
+              includes: JSON.parse(readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8")),
+              cache: env.OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT,
+            });
+            return env.OPENCLAW_VITEST_RUNTIME === "bun" ? 23 : 0;
+          },
+        },
+      ),
+    ).resolves.toBe(23);
+    expect(seen.map(({ runtime, includes }) => ({ runtime, includes }))).toEqual([
+      { runtime: "node", includes: includePatterns },
+      { runtime: "bun", includes: [target] },
+    ]);
+    expect(seen.every(({ cache }) => typeof cache === "string" && cache.length > 0)).toBe(true);
+    expect(new Set(seen.map(({ cache }) => cache)).size).toBe(2);
+  });
+
+  it.each([
     { env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--shard=1/2"]' } },
     { env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--root=another-root"]' } },
     { env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--project=another-project"]' } },
@@ -1384,11 +1517,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
           env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
           scratchDir: makeScratchDir(),
           runChild: async (_args, env) => {
-            if (policy === "dual") {
-              expect(env.OPENCLAW_VITEST_NATIVE_SHARD_RECEIPT).toBeUndefined();
-              if (env.OPENCLAW_VITEST_RUNTIME === "node") {
-                expect(env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE).toBeUndefined();
-              }
+            if (env.OPENCLAW_VITEST_RUNTIME === "node") {
+              expect(env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE).toBeUndefined();
             }
             seen.push({
               runtime: env.OPENCLAW_VITEST_RUNTIME,
@@ -1417,94 +1547,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
           allocatorInterval: "1000",
         },
       ];
-      expect(seen).toEqual(policy === "dual" ? expected : expected.toReversed());
-    },
-  );
-
-  it("retains Node-first UI execution without joined process ownership", async () => {
-    vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(false);
-    const seen: string[] = [];
-    await expect(
-      runShardPlans([{ kind: "group", name: "ui", plan: { configs: ["ui/vitest.config.ts"] } }], {
-        env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-compatible" },
-        scratchDir: makeScratchDir(),
-        runChild: async (_args, env) => {
-          seen.push(env.OPENCLAW_VITEST_RUNTIME!);
-          expect(env.OPENCLAW_VITEST_NATIVE_SHARD_RECEIPT).toBeUndefined();
-          return 0;
-        },
-      }),
-    ).resolves.toBe(0);
-    expect(seen).toEqual(["node", "bun"]);
-  });
-
-  it.each([
-    { receipt: "empty", bunCode: 0, expectedRuntimes: ["bun"] },
-    { receipt: "node-member", bunCode: 0, expectedRuntimes: ["bun", "node"] },
-    { receipt: "missing", bunCode: 0, expectedRuntimes: ["bun", "node"] },
-    { receipt: "malformed", bunCode: 0, expectedRuntimes: ["bun", "node"] },
-    { receipt: "stale", bunCode: 0, expectedRuntimes: ["bun", "node"] },
-    { receipt: "wrong-config", bunCode: 0, expectedRuntimes: ["bun", "node"] },
-    { receipt: "no-discovery", bunCode: 0, expectedRuntimes: ["bun", "node"] },
-    { receipt: "unknown-file", bunCode: 0, expectedRuntimes: ["bun", "node"] },
-    { receipt: "unsupported-version", bunCode: 0, expectedRuntimes: ["bun", "node"] },
-    { receipt: "empty", bunCode: 17, expectedRuntimes: ["bun", "node"] },
-  ])(
-    "uses completed native UI membership ($receipt, Bun exit $bunCode) to admit Node",
-    async ({ receipt, bunCode, expectedRuntimes }) => {
-      vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
-      const seen: string[] = [];
-      let receiptFile: string | undefined;
-      const nodeFile = "ui/src/pages/usage/usage-page-retention.test.ts";
-      const bunFile = "ui/src/pages/chat/chat-pane-history.test.ts";
-      await expect(
-        runShardPlans([{ kind: "group", name: "ui", plan: { configs: ["ui/vitest.config.ts"] } }], {
-          env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-compatible" },
-          scratchDir: makeScratchDir(),
-          runChild: async (_args, env) => {
-            seen.push(env.OPENCLAW_VITEST_RUNTIME!);
-            if (env.OPENCLAW_VITEST_RUNTIME === "node") {
-              const included = JSON.parse(
-                readFileSync(env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE!, "utf8"),
-              );
-              expect(included).toEqual(uiNodeFiles);
-              return 0;
-            }
-            receiptFile = env.OPENCLAW_VITEST_NATIVE_SHARD_RECEIPT;
-            expect(receiptFile).toBeTruthy();
-            if (receipt !== "missing") {
-              // Native producer equality is covered by the registered sequencer fixture;
-              // this boundary exercises child-result transport and failed admission.
-              const value = {
-                version: receipt === "unsupported-version" ? 2 : 1,
-                requestId:
-                  receipt === "stale"
-                    ? "previous-invocation"
-                    : env.OPENCLAW_VITEST_NATIVE_SHARD_REQUEST_ID,
-                config: path
-                  .join(
-                    process.cwd(),
-                    receipt === "wrong-config" ? "vitest.config.ts" : "ui/vitest.config.ts",
-                  )
-                  .replaceAll("\\", "/"),
-                root: path.join(process.cwd(), "ui").replaceAll("\\", "/"),
-                files:
-                  receipt === "no-discovery"
-                    ? []
-                    : receipt === "node-member"
-                      ? [nodeFile, bunFile]
-                      : receipt === "unknown-file"
-                        ? ["ui/src/not-discovered.test.ts"]
-                        : [bunFile],
-              };
-              writeFileSync(receiptFile!, receipt === "malformed" ? "{" : JSON.stringify(value));
-            }
-            return bunCode;
-          },
-        }),
-      ).resolves.toBe(bunCode);
-      expect(seen).toEqual(expectedRuntimes);
-      expect(existsSync(receiptFile!)).toBe(false);
+      expect(seen).toEqual(policy === "dual" ? expected : expected.slice(1));
     },
   );
 
@@ -1711,6 +1754,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         CI: "1",
         RUNNER_ENVIRONMENT: "self-hosted",
         FROZEN_TARGET: "false",
+        LANG: "C.UTF-8",
+        LC_ALL: "C.UTF-8",
         OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-compatible",
         RAYON_NUM_THREADS: "1",
         TOKIO_WORKER_THREADS: "1",

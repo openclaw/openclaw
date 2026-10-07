@@ -25,13 +25,11 @@ import { resolveRequiredHomeDir } from "./home-dir.js";
 import { resolveLegacyStateDirMigrationCandidates } from "./state-migrations.state-dir.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import { UPDATE_CAPTURE_PRIVACY_MARKER } from "./update-capture-privacy-marker.js";
-import { updateRecoveryCaptureStateSchema } from "./update-recovery-receipt-schema.js";
 import { recordedUpdateRunDrivers } from "./update-run-activity.js";
 import { inspectUpdateRunDriver, sameUpdateRunDriver } from "./update-run-driver.js";
 import { getUpdateRunAsync } from "./update-run-reader.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 
-type Authority = { assertOwned: () => void };
 const updateRecoveryBackupRefSchema = z.strictObject({
   directory: z.string().min(1),
   manifestPath: z.string().min(1),
@@ -46,8 +44,6 @@ const recordedOutcomeSchema = z.strictObject({
   manifestSha256: z.string().regex(/^[a-f0-9]{64}$/u),
 });
 
-const updateRecoveryForwardResolutionSchema =
-  updateRecoveryCaptureStateSchema.shape.forwardResolution.unwrap();
 type Outcome = {
   status: "pending" | "restored" | "committed" | "restore-failed";
   error?: string;
@@ -161,15 +157,15 @@ function assertManifestLocation(
 
 async function withRecoveryMetadata<T>(
   location: Omit<UpdateRecoveryBackupRef, "manifestSha256"> & { manifestSha256?: string },
-  authority: Authority,
   run: (state: {
     ref: UpdateRecoveryBackupRef;
     manifest: UpdateRecoveryBackupManifest;
     outcome?: RecordedOutcome;
     pin: Awaited<ReturnType<typeof pinDirectory>>;
   }) => Promise<T>,
+  assertOwned?: () => void,
 ): Promise<T> {
-  authority.assertOwned();
+  assertOwned?.();
   updateRecoveryBackupRefSchema.partial({ manifestSha256: true }).parse(location);
   if (
     path.resolve(location.directory) !== location.directory ||
@@ -179,16 +175,16 @@ async function withRecoveryMetadata<T>(
   }
   const pin = await pinDirectory(location.directory);
   try {
-    authority.assertOwned();
+    assertOwned?.();
     if (pin.receipt.realPath !== location.directory) {
       throw new Error("Update recovery capture changed location.");
     }
     const source = await safeRoot(location.directory, { symlinks: "reject", hardlinks: "reject" });
-    authority.assertOwned();
+    assertOwned?.();
     const bytes = await source.readBytes("manifest.json", {
       maxBytes: MAX_MANIFEST_BYTES,
     });
-    authority.assertOwned();
+    assertOwned?.();
     const ref = { ...location, manifestSha256: sha256Hex(bytes) };
     if (location.manifestSha256 !== undefined && ref.manifestSha256 !== location.manifestSha256) {
       throw new Error("Update recovery manifest changed before metadata access.");
@@ -197,20 +193,20 @@ async function withRecoveryMetadata<T>(
     assertManifestLocation(ref, manifest);
     let outcome: RecordedOutcome | undefined;
     const outcomeEntry = await statOrMissing(path.join(ref.directory, "outcome.json"));
-    authority.assertOwned();
+    assertOwned?.();
     if (outcomeEntry) {
       outcome = recordedOutcomeSchema.parse(
         await source.readJson("outcome.json", {
           maxBytes: MAX_UPDATE_RECOVERY_OUTCOME_BYTES,
         }),
       );
-      authority.assertOwned();
+      assertOwned?.();
       if (outcome.manifestSha256 !== ref.manifestSha256) {
         throw new Error("Update recovery outcome refers to another manifest.");
       }
     }
     await pin.assertCurrent();
-    authority.assertOwned();
+    assertOwned?.();
     return await run({ ref, manifest, outcome, pin });
   } finally {
     await pin.close();
@@ -218,10 +214,7 @@ async function withRecoveryMetadata<T>(
 }
 
 /** Bind retained crash/refusal evidence without claiming it is a sealed or restorable generation. */
-async function fingerprintIncompleteRecoveryGeneration(
-  directory: string,
-  assertOwned: () => void,
-): Promise<string> {
+async function fingerprintIncompleteRecoveryGeneration(directory: string): Promise<string> {
   const observed = new Map<string, BigIntStats>();
   const inventory: unknown[] = [];
   const walk = async (current: string): Promise<void> => {
@@ -237,7 +230,6 @@ async function fingerprintIncompleteRecoveryGeneration(
         a.name.localeCompare(b.name),
       );
       for (const entry of entries) {
-        assertOwned();
         const pathname = path.join(current, entry.name);
         if (entry.isDirectory) {
           await walk(pathname);
@@ -250,7 +242,6 @@ async function fingerprintIncompleteRecoveryGeneration(
         }
       }
       await pin.assertCurrent();
-      assertOwned();
     } finally {
       await pin.close();
     }
@@ -274,14 +265,12 @@ async function fingerprintIncompleteRecoveryGeneration(
       ].map(String),
     ]);
   }
-  assertOwned();
   return sha256Hex(JSON.stringify(inventory));
 }
 /** This records repair of current state, never reverse publication or permission to delete B/C/T. */
-async function readBinding(ref: UpdateRecoveryBackupRef, authority: Authority) {
-  return withRecoveryMetadata(ref, authority, async ({ manifest, outcome, pin }) => {
+async function readBinding(ref: UpdateRecoveryBackupRef) {
+  return withRecoveryMetadata(ref, async ({ manifest, outcome, pin }) => {
     const run = await getUpdateRunAsync(manifest.runId);
-    authority.assertOwned();
     const capture = run?.origin.updateRecoveryCapture;
     if (
       outcome ||
@@ -309,10 +298,7 @@ async function readBinding(ref: UpdateRecoveryBackupRef, authority: Authority) {
       if (!(await statOrMissing(path.join(directory, "manifest.json")))) {
         // Preparation can stop before the final seal. Retain and bind all of
         // those bytes, but never label them a verified rollback generation.
-        incompleteGenerations[kind] = await fingerprintIncompleteRecoveryGeneration(
-          directory,
-          authority.assertOwned,
-        );
+        incompleteGenerations[kind] = await fingerprintIncompleteRecoveryGeneration(directory);
         continue;
       }
       const source = await safeRoot(directory);
@@ -330,10 +316,7 @@ async function readBinding(ref: UpdateRecoveryBackupRef, authority: Authority) {
         }
         // The seal file itself is created before its write completes. A
         // truncated JSON prefix is evidence, not a published generation.
-        incompleteGenerations[kind] = await fingerprintIncompleteRecoveryGeneration(
-          directory,
-          authority.assertOwned,
-        );
+        incompleteGenerations[kind] = await fingerprintIncompleteRecoveryGeneration(directory);
         continue;
       }
       if (
@@ -351,7 +334,6 @@ async function readBinding(ref: UpdateRecoveryBackupRef, authority: Authority) {
       generations[`${kind}Sha256`] = sha256Hex(raw);
     }
     await pin.assertCurrent();
-    authority.assertOwned();
     return {
       runId: manifest.runId,
       failedAtMs: run.finishedAtMs,
@@ -368,20 +350,16 @@ async function readBinding(ref: UpdateRecoveryBackupRef, authority: Authority) {
 /** Missing receipt keeps admission closed. Malformed or contradictory receipts fail closed. */
 export async function hasUpdateRecoveryForwardResolution(
   ref: UpdateRecoveryBackupRef,
-  authority: Authority = { assertOwned() {} },
 ): Promise<boolean> {
-  return withRecoveryMetadata(ref, authority, async ({ manifest, outcome }) => {
+  return withRecoveryMetadata(ref, async ({ manifest, outcome }) => {
     const run = await getUpdateRunAsync(manifest.runId);
-    authority.assertOwned();
-    const value = run?.origin.updateRecoveryCapture?.forwardResolution;
-    if (!value) {
+    const receipt = run?.origin.updateRecoveryCapture?.forwardResolution;
+    if (!receipt) {
       return false;
     }
-    const receipt = updateRecoveryForwardResolutionSchema.parse(value);
-    if (outcome || !isDeepStrictEqual(receipt.binding, await readBinding(ref, authority))) {
+    if (outcome || !isDeepStrictEqual(receipt.binding, await readBinding(ref))) {
       throw new Error("Forward recovery receipt is stale or contradicts its failed capture.");
     }
-    authority.assertOwned();
     return true;
   });
 }
@@ -477,7 +455,6 @@ export async function readUpdateRecoveryBaselineIdentity(params: {
   };
   const result = await withRecoveryMetadata(
     expectedRef ?? { directory, manifestPath: path.join(directory, "manifest.json") },
-    { assertOwned: assertReuseCurrent },
     async ({ ref, manifest, outcome, pin }) => {
       identity = { ref, manifest };
       assertReuseCurrent();
@@ -495,6 +472,7 @@ export async function readUpdateRecoveryBaselineIdentity(params: {
       assertReuseCurrent();
       return identity;
     },
+    assertReuseCurrent,
   );
   assertReuseCurrent();
   return result;
@@ -509,9 +487,7 @@ type UpdateRecoveryBackupRead =
     }
   | { kind: "incomplete"; directory: string };
 
-export async function readUpdateRecoveryBackups(
-  installRoot?: string,
-): Promise<UpdateRecoveryBackupRead[]> {
+export async function readUpdateRecoveryBackups(): Promise<UpdateRecoveryBackupRead[]> {
   const result: UpdateRecoveryBackupRead[] = [];
   const scopes = captureScopes(process.env);
   for (const stateDir of scopes.keys()) {
@@ -554,9 +530,6 @@ export async function readUpdateRecoveryBackups(
         maxBytes: MAX_MANIFEST_BYTES,
       });
       const manifest = parseUpdateRecoveryBackupManifest(raw);
-      if (installRoot && manifest.installRoot !== path.resolve(installRoot)) {
-        continue;
-      }
       const ref = { directory, manifestPath, manifestSha256: sha256Hex(raw) };
       assertManifestLocation(ref, manifest);
       assertManifestSelectedScope(manifest, scopes);

@@ -16,8 +16,13 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { validateSessionTranscriptContextAnchor } from "../../config/sessions/session-accessor.sqlite-model-context.js";
+import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
+import { SessionTranscriptReadFenceError } from "../../config/sessions/session-transcript-read-fence.js";
+import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { createBackgroundWorkOwner } from "../../process/background-work.js";
 import {
   getGatewayRestartDrainSignal,
@@ -158,56 +163,115 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
   });
   try {
     abortSignal.throwIfAborted();
-    if (executionRoot) {
-      await fs.mkdir(executionRoot, { recursive: true });
-    }
-    const sessionManager = await SessionManager.openModelContextAsync(candidate.source, {
-      cwd: executionRoot ?? workspaceDir,
-      through: candidate.source,
-      signal: abortSignal,
-    });
-    abortSignal.throwIfAborted();
-    const { listWritableWorkshopSkillSummaries } = await import("./workspace-skill-read.js");
-    abortSignal.throwIfAborted();
-    // Deleting or replacing the source session must not revive its captured evidence.
-    // Check after asynchronous preparation; a replacement can retain the old transcript.
-    const sourceEntry = loadSessionEntryReadOnly({
-      ...candidate.source,
-      hydrateSkillPromptRefs: false,
-      readConsistency: "latest",
-    });
-    if (sourceEntry?.sessionId !== candidate.source.sessionId) {
-      throw new Error("Skill experience review source session was deleted or replaced.");
-    }
-    const existingSkills =
-      mode === "propose"
-        ? listWritableWorkshopSkillSummaries({ config, agentId: foregroundPromptContext.agentId })
-        : undefined;
-    validateSessionTranscriptContextAnchor(candidate.source, candidate.source);
-    // Source revocation fences retained tools and completion, even when the
-    // model handles a denied tool call and returns a normal final response.
-    const assertSourceCurrent = () => {
-      abortSignal.throwIfAborted();
+    const prepare = async (
+      source: typeof candidate.source,
+      assertPhysicalCurrent: () => void,
+      assertPreparationCurrent: () => void,
+    ) => {
+      if (executionRoot) {
+        await fs.mkdir(executionRoot, { recursive: true });
+      }
+      const sessionManager = await SessionManager.openModelContextAsync(source, {
+        cwd: executionRoot ?? workspaceDir,
+        through: candidate.source,
+        signal: abortSignal,
+      });
+      assertPreparationCurrent();
+      const { listWritableWorkshopSkillSummaries } = await import("./workspace-skill-read.js");
+      assertPreparationCurrent();
+      const existingSkills =
+        mode === "propose"
+          ? listWritableWorkshopSkillSummaries({ config, agentId: foregroundPromptContext.agentId })
+          : undefined;
+      let sourceEntry: Pick<InternalSessionEntry, "permissionMode"> | undefined;
+      await readSessionTranscriptAnchorsAsync(
+        source,
+        {
+          entryIds: [],
+          contextAuthority: true,
+          contextValidation: { through: candidate.source },
+        },
+        abortSignal,
+        (facts) => {
+          assertPreparationCurrent();
+          const current = facts.contextAuthority?.entry;
+          if (current?.sessionId !== candidate.source.sessionId) {
+            throw new Error("Skill experience review source session was deleted or replaced.");
+          }
+          if (facts.contextValidated) {
+            sourceEntry = current;
+          }
+        },
+      );
+      if (!sourceEntry) {
+        throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
+      }
+      return { source, sourceEntry, sessionManager, existingSkills, assertPhysicalCurrent };
+    };
+    const { source, sourceEntry, sessionManager, existingSkills, assertPhysicalCurrent } =
+      await withSessionTranscriptReadSource(
+        candidate.source,
+        (scope) =>
+          prepare(
+            { ...candidate.source, ...scope },
+            () => abortSignal.throwIfAborted(),
+            () => abortSignal.throwIfAborted(),
+          ),
+        ({ scope, expectedIdentity, assertCurrent }) => {
+          const assertSourceIdentity = () => {
+            abortSignal.throwIfAborted();
+            if (expectedIdentity) {
+              assertExistingDatabaseIdentity(
+                scope.storePath,
+                expectedIdentity.key,
+                expectedIdentity.birthtime,
+              );
+            }
+          };
+          return prepare({ ...candidate.source, ...scope }, assertSourceIdentity, assertCurrent);
+        },
+        abortSignal,
+      );
+    let sourceFailure: Error | undefined;
+    const assertHostCurrent = () => {
+      if (sourceFailure) {
+        throw sourceFailure;
+      }
+      assertPhysicalCurrent();
       if (
         mode === "auto" &&
         resolveSkillWorkshopConfig(getRuntimeConfig()).autonomous.mode !== "auto"
       ) {
         throw new Error("Automatic Skill Workshop maintenance was disabled during review.");
       }
-      const current = loadSessionEntryReadOnly({
-        ...candidate.source,
-        hydrateSkillPromptRefs: false,
-        readConsistency: "latest",
-      });
-      if (
-        current?.sessionId !== candidate.source.sessionId ||
-        current?.permissionMode !== sourceEntry.permissionMode
-      ) {
-        throw new Error(
-          "Skill experience review source session was deleted, replaced, or changed permissions.",
-        );
+    };
+    // Source revocation fences retained tools and completion, even when the
+    // model handles a denied tool call and returns a normal final response.
+    const assertSourceCurrent = () => {
+      try {
+        assertHostCurrent();
+        // fs-safe's beforeWrite is synchronous after awaited file preparation.
+        // Its final effect guard still needs native reads to observe foreign commits.
+        const current = loadSessionEntryReadOnly({
+          ...source,
+          hydrateSkillPromptRefs: false,
+          readConsistency: "latest",
+        });
+        if (
+          current?.sessionId !== candidate.source.sessionId ||
+          current?.permissionMode !== sourceEntry.permissionMode
+        ) {
+          throw new Error(
+            "Skill experience review source session was deleted, replaced, or changed permissions.",
+          );
+        }
+        validateSessionTranscriptContextAnchor(source, candidate.source);
+      } catch (error) {
+        sourceFailure ??= new Error("source execution authority is no longer active", {
+          cause: error,
+        });
+        throw error;
       }
-      validateSessionTranscriptContextAnchor(candidate.source, candidate.source);
     };
     const preparedRunAdmission = prepareAgentRunAdmission({
       cfg: config,
@@ -283,7 +347,33 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     const embeddedResult = capability
       ? await runWithCronCreatorAuthorityCapability(capability, run)
       : await run();
-    preparedRunAdmission.assertSourceCurrent();
+    assertHostCurrent();
+    let completed = false;
+    await readSessionTranscriptAnchorsAsync(
+      source,
+      {
+        entryIds: [],
+        contextAuthority: { permissionMode: sourceEntry.permissionMode },
+        contextValidation: { through: candidate.source },
+      },
+      abortSignal,
+      (facts) => {
+        assertHostCurrent();
+        const current = facts.contextAuthority?.entry;
+        if (
+          current?.sessionId !== candidate.source.sessionId ||
+          current?.permissionMode !== sourceEntry.permissionMode
+        ) {
+          throw new Error(
+            "Skill experience review source session was deleted, replaced, or changed permissions.",
+          );
+        }
+        completed = facts.contextValidated === true;
+      },
+    );
+    if (!completed) {
+      throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
+    }
 
     // Direct edits have normal file-tool semantics; drafts remain pending even
     // if the operator enables automatic maintenance while this review runs.

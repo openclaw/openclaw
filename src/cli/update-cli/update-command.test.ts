@@ -29,11 +29,7 @@ import {
   formatPostUpdateGatewayRecoveryInstructions,
   recoverLaunchAgentAndRecheckGatewayHealth,
 } from "./update-command-service-recovery.js";
-import {
-  resolvePostUpdateServiceStateReadEnv,
-  resolveUpdatedGatewayRestartPort,
-  shouldPrepareUpdatedInstallRestart,
-} from "./update-command-service.js";
+import { resolveUpdatedGatewayRestartPort } from "./update-command-service.js";
 import { hasLoadedLaunchdKeepAliveSupervisor } from "./update-command-supervisor.js";
 
 const tempDirs = createTempDirTracker();
@@ -109,65 +105,6 @@ describe("applyPostPluginConfigValidation", () => {
   });
 });
 
-describe("shouldPrepareUpdatedInstallRestart", () => {
-  it("prepares package update restarts when the service is installed but stopped", () => {
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "npm",
-        serviceInstalled: true,
-        serviceLoaded: false,
-      }),
-    ).toBe(true);
-  });
-
-  it("does not install a new service for package updates when no service exists", () => {
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "npm",
-        serviceInstalled: false,
-        serviceLoaded: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps non-package updates tied to the matching loaded service state", () => {
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "git",
-        serviceInstalled: true,
-        serviceLoaded: false,
-      }),
-    ).toBe(false);
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "git",
-        serviceInstalled: true,
-        serviceLoaded: true,
-        serviceMatchesUpdateRoot: false,
-      }),
-    ).toBe(false);
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "git",
-        serviceInstalled: true,
-        serviceLoaded: true,
-        serviceMatchesUpdateRoot: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("prepares git restart when this update stopped the managed service", () => {
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "git",
-        serviceInstalled: true,
-        serviceLoaded: false,
-        serviceStoppedForUpdate: true,
-      }),
-    ).toBe(true);
-  });
-});
-
 describe("resolveUpdatedGatewayRestartPort", () => {
   it("uses the managed service port ahead of the caller environment", async () => {
     expect(
@@ -187,26 +124,6 @@ describe("resolveUpdatedGatewayRestartPort", () => {
         serviceEnv: {},
       }),
     ).toBe(19000);
-  });
-});
-
-describe("resolvePostUpdateServiceStateReadEnv", () => {
-  it.each(["git", "npm"] as const)(
-    "keeps %s restart preparation anchored to the pre-update service env",
-    (updateMode) => {
-      const processEnv = { OPENCLAW_STATE_DIR: "/source/state" };
-      const preManagedServiceEnv = { OPENCLAW_STATE_DIR: "/managed/state" };
-      expect(
-        resolvePostUpdateServiceStateReadEnv({ updateMode, processEnv, preManagedServiceEnv }),
-      ).toEqual(preManagedServiceEnv);
-    },
-  );
-
-  it("uses the caller environment when no managed service context was captured", () => {
-    const processEnv = { OPENCLAW_STATE_DIR: "/source/state" };
-    expect(resolvePostUpdateServiceStateReadEnv({ updateMode: "git", processEnv })).toEqual(
-      processEnv,
-    );
   });
 });
 
@@ -305,25 +222,54 @@ describe("resolveUpdateTargetEnv", () => {
 });
 
 describe("resolveUpdatedInstallCommandEnv", () => {
-  it("keeps runtime SecretRef inputs while applying managed service overrides", () => {
+  it("keeps operator scratch and SecretRef inputs while applying managed service selectors", () => {
     const env = resolveUpdatedInstallCommandEnv({
       invocationCwd: "/srv/openclaw",
       processEnv: {
         OPENCLAW_GATEWAY_AUTH_TOKEN: "runtime-token",
         OPENCLAW_STATE_DIR: "/wrong/state",
+        OPENCLAW_HOME: "/wrong/home",
+        OPENCLAW_PROFILE: "caller",
         PATH: "/caller/bin",
+        TMPDIR: "/caller/cache",
+        TMP: "/caller/tmp",
+        TEMP: "/caller/temp",
       },
       serviceEnv: {
         OPENCLAW_STATE_DIR: "daemon-state",
+        OPENCLAW_HOME: "/daemon/home",
+        OPENCLAW_PROFILE: "work",
         PATH: "/daemon/bin",
+        TMPDIR: "/tmp",
+        TMP: "/service/tmp",
+        TEMP: "/service/temp",
       },
     });
 
     expect(env.OPENCLAW_GATEWAY_AUTH_TOKEN).toBe("runtime-token");
     expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw", "daemon-state"));
     expect(env.PATH).toBe("/daemon/bin");
+    expect(env.OPENCLAW_HOME).toBe("/daemon/home");
+    expect(env.OPENCLAW_PROFILE).toBe("work");
+    expect(env).toMatchObject({
+      TMPDIR: "/caller/cache",
+      TMP: "/caller/tmp",
+      TEMP: "/caller/temp",
+    });
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
     expect(resolveUpdatedInstallCommandEnv({ processEnv: env })).toEqual(env);
+  });
+
+  it.each([undefined, ""])("preserves scratch defaults with an operator value of %j", (value) => {
+    const env = resolveUpdatedInstallCommandEnv({
+      processEnv: { TMPDIR: value, TMP: value, TEMP: value },
+      serviceEnv: { TMPDIR: "/service/tmp", TMP: "/service/tmp", TEMP: "/service/tmp" },
+    });
+    expect(env).toMatchObject({
+      TMPDIR: value ?? "/service/tmp",
+      TMP: value ?? "/service/tmp",
+      TEMP: value ?? "/service/tmp",
+    });
   });
 
   it("preserves effective base-owned selectors while clearing unowned caller selectors", () => {
@@ -545,14 +491,13 @@ describe("collectMissingPluginInstallPayloads", () => {
     }
   });
 
-  it("skips disabled tracked records when requested", async () => {
+  it("skips disabled nonofficial tracked records", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
     const missingDir = path.join(tmpDir, "state", "npm", "node_modules", "@openclaw", "missing");
     try {
       await expect(
         updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
           env: { HOME: tmpDir } as NodeJS.ProcessEnv,
-          skipDisabledPlugins: true,
           config: {
             plugins: {
               entries: {
@@ -576,15 +521,13 @@ describe("collectMissingPluginInstallPayloads", () => {
     }
   });
 
-  it("keeps disabled trusted official npm records eligible for payload repair when requested", async () => {
+  it("keeps disabled trusted official npm records eligible for payload repair", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
     const missingDir = path.join(tmpDir, "state", "npm", "node_modules", "@openclaw", "codex");
     try {
       await expect(
         updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
           env: { HOME: tmpDir } as NodeJS.ProcessEnv,
-          skipDisabledPlugins: true,
-          syncOfficialPluginInstalls: true,
           config: {
             plugins: {
               entries: {
@@ -616,15 +559,13 @@ describe("collectMissingPluginInstallPayloads", () => {
     }
   });
 
-  it("keeps disabled trusted official ClawHub records eligible for payload repair when requested", async () => {
+  it("keeps disabled trusted official ClawHub records eligible for payload repair", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
     const missingDir = path.join(tmpDir, "state", "clawhub", "diagnostics-otel");
     try {
       await expect(
         updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
           env: { HOME: tmpDir } as NodeJS.ProcessEnv,
-          skipDisabledPlugins: true,
-          syncOfficialPluginInstalls: true,
           config: {
             plugins: {
               entries: {
@@ -861,6 +802,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
           expectedBuildId: "new-build",
           env,
           supervisorKeepsAlive: true,
+          requirePluginHealth: false,
           settle: { probes: 12 },
         });
       } else {

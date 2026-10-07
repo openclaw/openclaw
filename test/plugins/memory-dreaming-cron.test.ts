@@ -78,7 +78,7 @@ async function createScheduler(cronEnabled: boolean, owner?: string) {
 it("does not author ownerless dreaming work when the scheduler overrides enabled config", async () => {
   vi.useFakeTimers();
   const config: OpenClawConfig = {
-    agents: { ownership: "explicit", list: [{ id: "qa" }, { id: "qa-extra" }] },
+    agents: { ownership: "explicit", entries: { qa: {}, "qa-extra": {} } },
     cron: { enabled: true },
   };
   const cron = await createScheduler(false);
@@ -98,7 +98,7 @@ it("creates one owned declaration after scheduling resumes and across service re
     agents: {
       ownership: "explicit",
       defaults: { systemAgent: { agentId: "qa" } },
-      list: [{ id: "qa" }, { id: "qa-extra" }],
+      entries: { qa: {}, "qa-extra": {} },
     },
   };
   let cron = await createScheduler(false, "qa");
@@ -149,7 +149,7 @@ it.each([true, false])(
     const unrelated = await cron.add({ ...job, name: "Unrelated maintenance" });
     const before = await cron.list({ includeDisabled: true });
     const config: OpenClawConfig = {
-      agents: { ownership: "explicit", list: [{ id: "qa" }, { id: "qa-extra" }] },
+      agents: { ownership: "explicit", entries: { qa: {}, "qa-extra": {} } },
       plugins: {
         entries: { "memory-core": { config: { dreaming: { enabled: dreamingEnabled } } } },
       },

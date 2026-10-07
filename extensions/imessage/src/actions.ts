@@ -444,7 +444,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       }
     };
     const opts = {
-      cliPath: account.config.cliPath?.trim() || "imsg",
+      cliPath: cliPathForProbe,
       dbPath: account.config.dbPath?.trim() || undefined,
       remoteHost,
       timeoutMs: account.config.probeTimeoutMs,

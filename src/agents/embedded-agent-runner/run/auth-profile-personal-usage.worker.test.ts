@@ -40,7 +40,7 @@ function fixture(
     token: "synthetic-personal-token",
   },
 ) {
-  const config = { agents: { list: [{ id: "main", default: true }] } };
+  const config = { agents: { entries: { main: {} } } };
   setRuntimeConfigSnapshot(config, config);
   const owner = ensureProfileForEmail("personal-usage@example.test");
   const { authProfileId: profileId } = connectUserModelAccount({

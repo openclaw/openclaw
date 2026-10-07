@@ -241,7 +241,8 @@ single-tool schema response inside the program.
 The guest runtime never sees host objects directly. Inputs and outputs cross
 the bridge as JSON-compatible values with explicit size caps.
 
-Tool arguments and values passed to `results.save` must serialize to JSON.
+Tool arguments and values passed to `results.save` or `store` must serialize to JSON
+(except `store(key, undefined)`, which deletes the key).
 BigInts, cycles, and throwing serialization hooks fail the affected call instead
 of silently replacing its data. Catch the error and convert the value explicitly;
 existing saved results remain unchanged.
@@ -374,7 +375,10 @@ of emitting the value. The bounded reference preview is separate from the
 complete saved JSON; `results.load(id)` lets later code select a smaller
 projection without refetching. See
 [Reuse data across cells](/tools/code-mode/quickstart#reuse-data-across-cells)
-for limits and the agent-run lifetime.
+for limits. References expire when the current reply ends; never reuse ids from
+earlier turns. Use `await store(key, value)` and `await load(key)` for small JSON
+values needed across turns and restarts in the same session; see the
+[session store](/tools/code-mode/guest-api#session-store).
 
 Interactive `exec`/`wait` also preserve an oversized final object or array
 automatically when their final display projection would truncate it. A saved

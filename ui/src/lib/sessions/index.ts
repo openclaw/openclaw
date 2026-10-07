@@ -3,10 +3,10 @@ import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/
 import { registerListener } from "../../../../src/shared/listeners.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
+import { type SelectedAgentSource, watchSelectedAgent } from "../agents/watch-selected-agent.ts";
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import type { SessionCreateOutcome } from "./create.ts";
-import { subscribeAgentSelection, type SessionAgentSelection } from "./session-agent-selection.ts";
 import type { SessionCapability, SessionGateway, SessionState } from "./session-capability.ts";
 import { createSessionDeletions } from "./session-deletions.ts";
 import { createSessionEventSubscriptionOwner } from "./session-event-subscription.ts";
@@ -61,7 +61,7 @@ export type {
 
 export function createSessionCapability(
   gateway: SessionGateway,
-  agentSelection: SessionAgentSelection,
+  agentSelection: SelectedAgentSource,
   cacheOptions: SessionRosterCacheOptions & {
     connectionBootstrap?: ConnectionBootstrapCoordinator;
   } = {},
@@ -485,6 +485,7 @@ export function createSessionCapability(
         agentId: state.resultCached ? state.agentId : null,
         loading: false,
         error: null,
+        startupPending: false,
         deletedSessions: [],
       });
       return;
@@ -524,7 +525,7 @@ export function createSessionCapability(
     }
   });
 
-  const stopSelection = subscribeAgentSelection(agentSelection, (nextAgentId, foreground) => {
+  const stopSelection = watchSelectedAgent(agentSelection, (nextAgentId, foreground) => {
     retirePresentation();
     notifySubscribers();
     // Selection publishes before Gateway hydration. A new connection bootstraps

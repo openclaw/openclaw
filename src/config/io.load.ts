@@ -26,16 +26,16 @@ import {
   snapshotEnv,
 } from "./io.read-helpers.js";
 import { maybeLoadDotEnvForConfig } from "./io.runtime-env.js";
-import { materializeConfigSnapshotDefaults } from "./io.snapshot-preparation.js";
+import {
+  materializeConfigSnapshotDefaults,
+  prepareConfigSnapshotValidation,
+} from "./io.snapshot-preparation.js";
 import { createConfigFileSnapshot } from "./io.snapshot-shared.js";
 import { loggedConfigWarningFingerprints, loggedInvalidConfigs } from "./io.state.js";
 import { logConfigWarningsOnce, warnIfConfigFromFuture } from "./io.warnings.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig } from "./types.js";
-import {
-  validateConfigObjectWithPlugins,
-  validateConfigObjectWithPluginsAsync,
-} from "./validation.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 type ConfigLoadOptions = { skipSuspiciousRecovery?: boolean; assertCurrent?: () => void };
 
@@ -158,17 +158,14 @@ function* loadConfigWithEffects(
             }),
           };
         }),
-      async: async () => {
-        const pending = await context.resolveDeferredPluginMigrationsAsync();
-        return {
-          deferredPluginMigrations: pending,
-          validated: await validateConfigObjectWithPluginsAsync(effectiveConfigRaw, {
-            ...validationParams,
-            deferredPluginMigrations: pending,
-            loadPluginMetadataSnapshotAsync: pluginMetadata.loadAsync,
-          }),
-        };
-      },
+      async: () =>
+        prepareConfigSnapshotValidation({
+          kind: "validate",
+          context,
+          metadata: pluginMetadata,
+          raw: effectiveConfigRaw,
+          sourceRaw: parsed,
+        }),
     });
     if (!validated.ok) {
       const invalidSnapshot = createConfigFileSnapshot({

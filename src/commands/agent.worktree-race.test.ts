@@ -6,7 +6,13 @@ import { promisify } from "node:util";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./agent-command.test-mocks.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { prepareAgentCommandExecution } from "../agents/command/prepare.js";
+import { holdWorkspacePreparationSnapshot } from "../agents/workspace-preparation-queue.test-support.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { getRegistryWorktree } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
@@ -30,6 +36,8 @@ vi.mock("../config/io.js", () => ({
 const execFileAsync = promisify(execFile);
 const runtime = createThrowingTestRuntime();
 const sessionKey = "agent:main:worktree-race";
+const actualWorkspace =
+  await vi.importActual<typeof import("../agents/workspace.js")>("../agents/workspace.js");
 
 function recordProof(line: string): void {
   const out = process.env.OPENCLAW_PROOF_OUT;
@@ -100,13 +108,70 @@ async function createSessionWorktree(
 
 describe("agent command worktree admission", () => {
   beforeEach(() => {
-    vi.mocked(ensureAgentWorkspace).mockClear();
+    vi.mocked(ensureAgentWorkspace).mockReset();
     vi.mocked(ensureAgentWorkspace).mockResolvedValue({ dir: "" });
     clearSessionStoreCacheForTest();
   });
 
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
+  });
+
+  it("rejects an aborted command queued behind workspace preparation before scaffolding", async ({
+    signal,
+  }) => {
+    await withTempHome(async (home) => {
+      mockConfig(home, path.join(home, "sessions.json"));
+      const workspaceDir = path.join(home, "openclaw");
+      await fs.mkdir(workspaceDir);
+      const held = holdWorkspacePreparationSnapshot(workspaceDir);
+      const leader = actualWorkspace.ensureAgentWorkspace({ dir: workspaceDir });
+      void leader.catch(() => undefined);
+      let preparing: ReturnType<typeof prepareAgentCommandExecution> | undefined;
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(held.entered, leader, "Workspace leader did not enter"),
+          signal,
+        );
+        const queued = createDeferred();
+        vi.mocked(ensureAgentWorkspace).mockImplementationOnce((params) => {
+          const pending = actualWorkspace.ensureAgentWorkspace(params);
+          queued.resolve();
+          return pending;
+        });
+        const controller = new AbortController();
+        const reason = new Error("Command source retired while workspace preparation was queued");
+        const options = {
+          message: "prepare the workspace",
+          agentId: "main",
+          sessionId: "queued-workspace-command",
+          abortSignal: controller.signal,
+        };
+        preparing = prepareAgentCommandExecution(options, runtime);
+        void preparing.catch(() => undefined);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            queued.promise,
+            preparing,
+            "Command did not queue workspace preparation",
+          ),
+          signal,
+        );
+        options.abortSignal = new AbortController().signal;
+        controller.abort(reason);
+        held.release();
+        await leader;
+        const error = await preparing.catch((caught: unknown) => caught);
+        expect(await fs.readdir(workspaceDir)).toEqual([]);
+        expect(error).toMatchObject({
+          name: "AbortError",
+          message: "Operation aborted",
+          cause: reason,
+        });
+      } finally {
+        await held.dispose([leader, preparing]);
+      }
+    });
   });
 
   it("holds the lease through workspace preparation so a racing removal is rejected", async () => {

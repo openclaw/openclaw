@@ -64,7 +64,6 @@ const MAX_COLD_ARCHIVE_BYTES = 64 * 1024 * 1024;
 type SessionColdPlan = {
   databaseOptions: OpenClawAgentDatabaseOptions & { path: string };
   sessionId: string;
-  beforeMs: number;
   snapshot: SessionStateDeleteSnapshot;
 };
 type SessionColdPrepared = {
@@ -120,6 +119,7 @@ export type SessionColdMutationPlan = { databaseOptions: SessionColdPlan["databa
       externalizations: SessionColdExternalization[];
       beforeMs: number;
       protectionKeys: string[];
+      liveSessionKeys: string[];
     }
   | {
       kind: "cold-restore";
@@ -530,7 +530,11 @@ export function mutateSessionColdTranscriptInWorker(
         if ([...protectionKeys].some((key) => !plan.protectionKeys.includes(key))) {
           throw new Error("Transcript ownership changed; cold archival was canceled");
         }
-        const protectedIds = readSessionColdStorageProtection(database, plan.beforeMs);
+        const protectedIds = readSessionColdStorageProtection(
+          database,
+          plan.beforeMs,
+          new Set(plan.liveSessionKeys),
+        );
         const archivedIds: string[] = [];
         for (const prepared of plan.prepared) {
           const { sessionId, snapshot } = prepared.plan;

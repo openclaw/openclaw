@@ -44,9 +44,9 @@ import {
   commitMainSessionRecovery,
   type MainSessionRecoveryStoreTarget,
 } from "./main-session-recovery-store.js";
-import { dispatchRestartRecoveryWithinCapacity } from "./main-session-restart-dispatch-capacity.js";
 import { settleAcceptedRestartRecovery } from "./main-session-restart-dispatch-settlement.js";
 import {
+  dispatchRestartRecoveryUntilStarted,
   normalizeRestartRecoveryTerminalStatus,
   probeRestartRecoveryTerminalStatus,
 } from "./main-session-restart-dispatch-start.js";
@@ -174,7 +174,6 @@ type ResumeMainSessionParams = {
   lifecycleGeneration?: string;
   shouldContinue?: () => boolean;
   gatewayRuntime: GatewayRecoveryRuntime;
-  recoveryCapacity?: Parameters<typeof dispatchRestartRecoveryWithinCapacity>[0]["capacity"];
 };
 
 export async function resumeMainSession(
@@ -370,7 +369,6 @@ async function resumeMainSessionWithinAdmission(
           (harnessCompletion &&
             (entry.lifecycleRevision !== harnessCompletion.lifecycleRevision ||
               entry.restartRecoveryHarnessCompletion?.taskId !== harnessCompletion.taskId)) ||
-          entry.status !== "running" ||
           entry.abortedLastRun !== true ||
           normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== claimedRunId ||
           normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !==
@@ -400,7 +398,6 @@ async function resumeMainSessionWithinAdmission(
       }
       const current = rollback?.entry;
       return current?.sessionId === params.entry.sessionId &&
-        current.status === "running" &&
         current.abortedLastRun === true &&
         !current.mainRestartRecovery?.reservation &&
         !current.mainRestartRecovery?.tombstone
@@ -467,25 +464,21 @@ async function resumeMainSessionWithinAdmission(
     if (params.forceRestartSafeTools) {
       log.info(`dispatching restart-safe recovery for ${params.sessionKey}`);
     }
+    if (!params.recoveryAdmission.beginDispatch()) {
+      await rollbackReservation("cancel_reservation");
+      return "skipped";
+    }
     dispatchStarted = true;
     let dispatchSettled = false;
     let stopTyping: (() => void) | undefined;
-    const dispatchOutcome = await dispatchRestartRecoveryWithinCapacity({
+    const dispatchOutcome = await dispatchRestartRecoveryUntilStarted({
       agentParams,
-      capacity: params.recoveryCapacity,
-      beginDispatch: params.recoveryAdmission.beginDispatch,
       gatewayRuntime: params.gatewayRuntime,
       onSettled: () => {
         dispatchSettled = true;
         stopTyping?.();
       },
-      shouldContinue: () => params.shouldContinue?.() !== false,
     });
-    if (!dispatchOutcome) {
-      dispatchStarted = false;
-      await rollbackReservation("cancel_reservation");
-      return "skipped";
-    }
     ({ dispatchAccepted, executionStarted, preStartAbortAttempted, preStartAbortConfirmed } =
       dispatchOutcome.observation);
     if (dispatchOutcome.kind === "failed") {

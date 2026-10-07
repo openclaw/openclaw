@@ -3,10 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId, type Worker } from "node:worker_threads";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
@@ -24,7 +25,11 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
+} from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import * as archiveWorkers from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
@@ -59,6 +64,7 @@ import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 const tempDirs = createTempDirTracker();
 const databasePaths: string[] = [];
+const sharedDatabasePath = resolveOpenClawStateSqlitePath();
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -66,9 +72,14 @@ afterEach(async () => {
     await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: databasePath });
   }
   await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
+  await closeOpenClawStateDatabaseByPathAsync(sharedDatabasePath);
   closeOpenClawAgentDatabasesForTest();
   tempDirs.cleanup();
+});
+
+afterAll(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
 });
 
 async function createFixture() {
@@ -561,6 +572,9 @@ describe("cold transcript storage workers", () => {
       expect(prepared).toBe(true);
       expect(revoked).toBe(true);
       expect(closeElapsedMs).toBeLessThan(2_000);
+      if (revocation === "database owner") {
+        await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
+      }
       expect(fixture.snapshot()).toEqual(fixture.original);
       expect(
         fixture.database().prepare("SELECT * FROM session_transcript_cold_archives").all(),
@@ -649,7 +663,7 @@ describe("cold transcript storage workers", () => {
     await expect(
       runSessionColdStorageMaintenance({
         config: {
-          agents: { list: [{ id: "main" }] },
+          agents: { entries: { main: {} } },
           session: {
             store: fixture.scope.storePath,
             maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
@@ -726,15 +740,24 @@ describe("cold transcript storage workers", () => {
     await replaceSessionEntry(fixture.scope, {
       sessionId: currentId,
       updatedAt: 1,
-      status: "running",
     });
     setTranscriptActivity(fixture.options, currentId);
     const running = fixture.snapshot();
-    expect(await runSessionColdStorageMaintenance({ config })).toEqual({
-      archivedTranscripts: 0,
-      externalizedTranscripts: 0,
+    registerAgentRunContext("cold-current-run", {
+      agentId: "main",
+      sessionKey: fixture.scope.sessionKey,
+      sessionId: currentId,
+      projectSessionActive: true,
     });
-    expect(fixture.snapshot()).toEqual(running);
+    try {
+      expect(await runSessionColdStorageMaintenance({ config })).toEqual({
+        archivedTranscripts: 0,
+        externalizedTranscripts: 0,
+      });
+      expect(fixture.snapshot()).toEqual(running);
+    } finally {
+      clearAgentRunContext("cold-current-run");
+    }
   });
 
   it("applies the configured day cutoff to historical transcript activity", async () => {
@@ -756,12 +779,12 @@ describe("cold transcript storage workers", () => {
     expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeDefined();
   });
 
-  it("archives old unreferenced history despite a recently updated running session", async () => {
+  it("archives old unreferenced history despite a recently updated idle session", async () => {
     const fixture = await createFixture();
     await replaceSessionEntry(fixture.scope, {
       sessionId: currentId,
       updatedAt: Date.now(),
-      status: "running",
+      status: "done",
     });
     const currentBefore = transcriptRows(fixture, currentId);
     const nodesBefore = fixture.database().prepare("SELECT * FROM session_nodes").all();

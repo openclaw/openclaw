@@ -338,11 +338,9 @@ export function dedicatedSectionVersionForTag(tag: unknown) {
   return /-(?:alpha\.)?[1-9][0-9]*$/u.test(taggedVersion) ? taggedVersion : undefined;
 }
 
-function releaseNotesSectionForTag(changelog: unknown, version: unknown, tag: unknown) {
+function releaseNotesSectionForTag(changelog: string, version: string, tag: string) {
   // Alpha and correction tags prefer their own exact heading when the
   // changelog carries one; otherwise they fall back to the base version.
-  assertString(tag, "tag");
-  assertString(version, "version");
   const dedicatedVersion = dedicatedSectionVersionForTag(tag);
   if (dedicatedVersion && dedicatedVersion !== version) {
     try {
@@ -408,7 +406,6 @@ export function renderGithubReleaseNotes({
   assertString(tag, "tag");
   assertString(version, "version");
   validateRepository(repository);
-  validateTag(tag);
   const tagVersion = releaseNotesVersionForTag(tag);
   if (tagVersion !== version) {
     fail(`release tag ${tag} requires CHANGELOG.md version ${tagVersion}, got ${version}`);
@@ -561,6 +558,9 @@ function main() {
     : changelogPath
       ? readFileSync(changelogPath, "utf8")
       : fail("release notes source was not validated");
+  const validationManifest: unknown = options.validationManifest
+    ? JSON.parse(readFileSync(options.validationManifest, "utf8"))
+    : undefined;
   const target = {
     changelog,
     version,
@@ -568,9 +568,7 @@ function main() {
     repository,
     regularStableVersion: options.regularStableVersion,
     contributionRecordPath: source?.recordPath ?? undefined,
-    validationManifest: options.validationManifest
-      ? JSON.parse(readFileSync(options.validationManifest, "utf8"))
-      : undefined,
+    validationManifest,
   };
   if (options.verifyBody) {
     const result = verifyGithubReleaseNotes({

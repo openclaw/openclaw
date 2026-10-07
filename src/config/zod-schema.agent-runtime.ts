@@ -237,15 +237,12 @@ const ToolsWebFetchSchema = z
     enabled: z.boolean().optional(),
     /** Web fetch fallback provider id. */
     provider: z.string().optional(),
-    /** Max characters to return from fetched content. */
     maxChars: z.number().int().positive().optional(),
     /** Hard cap for maxChars (tool or config), defaults to 20000. */
     maxCharsCap: z.number().int().positive().optional(),
     /** Max download size before truncation, defaults to 750000 bytes. */
     maxResponseBytes: z.number().int().positive().optional(),
-    /** Timeout in seconds for fetch requests. */
     timeoutSeconds: z.number().int().positive().optional(),
-    /** Cache TTL in minutes for fetched content. */
     cacheTtlMinutes: z.number().nonnegative().optional(),
     /** Maximum number of redirects to follow (default: 3). */
     maxRedirects: z.number().int().nonnegative().optional(),
@@ -264,7 +261,6 @@ const ToolsWebFetchSchema = z
     readability: z.boolean().optional(),
     /** Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy enforces outbound policy. */
     useTrustedEnvProxy: z.boolean().optional(),
-    /** SSRF policy configuration for web_fetch. */
     ssrfPolicy: SsrFPolicyConfigSchema.optional(),
   })
   .optional();
@@ -280,13 +276,8 @@ const ToolProfileSchema = z
   .union([z.literal("minimal"), z.literal("coding"), z.literal("messaging"), z.literal("full")])
   .optional();
 
-type AllowlistPolicy = {
-  allow?: string[];
-  alsoAllow?: string[];
-};
-
 function addAllowAlsoAllowConflictIssue(
-  value: AllowlistPolicy,
+  value: { allow?: string[]; alsoAllow?: string[] },
   ctx: z.RefinementCtx,
   message: string,
 ): void {
@@ -368,14 +359,12 @@ const ToolExecBaseShape = {
   grantExpiryDays: z.number().int().min(1).max(3650).optional(),
   /** Extra explicit directories trusted for safeBins path checks (never derived from PATH). */
   safeBinTrustedDirs: z.array(z.string()).optional(),
-  /** Optional custom safe-bin profiles for entries in tools.exec.safeBins. */
   safeBinProfiles: z.record(z.string(), ToolExecSafeBinProfileSchema).optional(),
   /** Model-backed reviewer used by tools.exec.mode=auto before falling back to human approval. */
   reviewer: z
     .strictObject({
       /** Optional reviewer model override (provider/model or agent model config). */
       model: AgentModelSchema.optional(),
-      /** Optional reasoning effort for model-backed approval reviews. */
       thinking: z.enum(["minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
       /** Optional Fast processing for supported provider requests. */
       fastMode: z.boolean().optional(),
@@ -399,7 +388,6 @@ const ToolExecBaseShape = {
    * Default false to reduce context noise.
    */
   notifyOnExitEmptySuccess: z.boolean().optional(),
-  /** apply_patch subtool configuration. */
   applyPatch: ToolExecApplyPatchSchema,
 } as const;
 
@@ -509,7 +497,6 @@ const SwarmSchema = z
       maxChildrenPerGroup: z.number().int().positive().optional(),
       /** Maximum lifetime collector spawns per swarm group. */
       maxTotalPerGroup: z.number().int().positive().optional(),
-      /** Maximum agents_wait timeout in seconds. */
       waitTimeoutSecondsMax: z.number().int().positive().optional(),
       /** Default child agent id when sessions_spawn omits agentId. */
       defaultAgentId: z.string().optional(),
@@ -592,7 +579,6 @@ const MessageToolConfigSchema = z
         allowWithinProvider: z.boolean().optional(),
         /** Allow sends across different providers (default: true). */
         allowAcrossProviders: z.boolean().optional(),
-        /** Cross-context marker configuration. */
         marker: z
           .strictObject({
             /** Enable origin markers for cross-context sends (default: true). */
@@ -645,7 +631,6 @@ const AgentToolsSchema = z
     swarm: SwarmSchema,
     /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
     elevated: ElevatedToolsSchema,
-    /** Exec tool defaults for this agent. */
     exec: ToolExecSchema,
     /** Complete per-agent GitHub CLI identity and Git author override. */
     github: GitHubToolIdentitySchema.unwrap()
@@ -656,9 +641,14 @@ const AgentToolsSchema = z
       .optional(),
     /** Filesystem tool path guards. */
     fs: ToolFsSchema,
-    /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
     loopDetection: ToolLoopDetectionSchema,
-    /** Message tool configuration for this agent. */
+    /** Explicit outbound destinations; does not grant session reads or bypass global/sandbox policy. */
+    agentToAgent: z
+      .strictObject({
+        /** Agent ids or * globs for sessions_send. Omitted inherits visibility; [] denies cross-agent sends. */
+        send: z.array(z.string()).optional(),
+      })
+      .optional(),
     message: MessageToolConfigSchema,
     sandbox: NestedToolPolicySchema,
   })
@@ -721,7 +711,6 @@ export const ToolsSchema = z
     codeMode: CodeModeSchema,
     /** Collector-mode subagents and wait controls. */
     swarm: SwarmSchema,
-    /** Message tool configuration. */
     message: MessageToolConfigSchema,
     agentToAgent: z
       .strictObject({
@@ -736,19 +725,16 @@ export const ToolsSchema = z
       .optional(),
     /** Elevated exec permissions for the host machine. */
     elevated: ElevatedToolsSchema,
-    /** Exec tool defaults. */
     exec: ToolExecSchema,
     fs: ToolFsSchema,
     /** Sub-agent tool policy defaults (deny wins; progress_card is always denied). */
     subagents: NestedToolPolicySchema,
     /** Sandbox tool policy defaults (deny wins). */
     sandbox: NestedToolPolicySchema,
-    /** sessions_spawn tool configuration. */
     sessions_spawn: z
       .strictObject({
         attachments: z
           .strictObject({
-            /** Enable inline attachments for sessions_spawn. */
             enabled: z.boolean().optional(),
             maxTotalBytes: z.number().optional(),
             maxFiles: z.number().optional(),

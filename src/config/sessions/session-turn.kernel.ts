@@ -210,7 +210,6 @@ export function createSessionTranscriptTurnKernel(
         appendedMessages,
         currentEntry: appendedEntry,
         expectedSessionState: options.expectedSessionState,
-        sessionFile: options.sessionFile,
         sessionLifecyclePatch: options.sessionLifecyclePatch,
         touchSessionEntry: options.touchSessionEntry,
       });

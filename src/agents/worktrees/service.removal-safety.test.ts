@@ -4,11 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as checkoutGitOwner from "./checkout-git-config.js";
 import * as checkoutInspection from "./checkout-inspection.js";
 import * as gitOwner from "./git.js";
-import { getRegistryWorktree } from "./registry.js";
+import { getRegistryWorktree, updateRegistryWorktree } from "./registry.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
@@ -118,6 +119,62 @@ describe("managed removal custody", () => {
     expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("hidden change\n");
   });
 
+  it("finalizes source-only deletion after its producer and command scope are revoked", async () => {
+    const created = await materializeManagedWorktreeFixture({
+      env,
+      name: "revoked-deletion",
+      now: Date.now(),
+      repoRoot: repo,
+      stateDir: env.OPENCLAW_STATE_DIR!,
+      ownerKind: "session",
+    });
+    await fs.writeFile(path.join(created.path, "README.md"), "restorable archived edit\n");
+    const runGit = gitOwner.runGit;
+    let current = true;
+    let stopCommands = () => {};
+    vi.spyOn(gitOwner, "runGit").mockImplementation(async (cwd, args, options) => {
+      const result = await runGit(cwd, args, options);
+      if (args[0] === "worktree" && args[1] === "remove" && result.code === 0) {
+        current = false;
+        stopCommands();
+      }
+      return result;
+    });
+
+    const removed = await withCommandProcessScope(async (stop) => {
+      stopCommands = stop;
+      return await service.remove({
+        id: created.id,
+        reason: "owner-gc",
+        commitGuard: () => {
+          if (!current) {
+            throw new Error("maintenance configuration changed");
+          }
+        },
+      });
+    });
+
+    expect(current).toBe(false);
+    expect(checkoutGitOwner.withWorktreeGitConfig).toHaveBeenCalledWith(
+      created.path,
+      true,
+      expect.any(Object),
+      expect.any(Function),
+    );
+    expect(getRegistryWorktree(env, created.id)).toMatchObject({
+      removedAt: expect.any(Number),
+      snapshotRef: removed.snapshotRef,
+    });
+    expect(await git(repo, "branch", "--list", created.branch)).toBe("");
+    await expect(
+      git(repo, "show-ref", "--verify", `refs/openclaw/removals/${created.id}`),
+    ).rejects.toThrow();
+    const restored = await service.restore({ id: created.id });
+    expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+      "restorable archived edit\n",
+    );
+  });
+
   it("releases lossless removal custody without recording an outcome after caller revocation", async () => {
     const created = await materialize("revoked-lossless");
     await fs.writeFile(path.join(created.path, "README.md"), "retained change\n");
@@ -210,34 +267,52 @@ describe("managed removal custody", () => {
     expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.outcome).toBe("failed");
   });
 
-  it("does not overwrite a completed snapshot after a partial deletion failure", async () => {
-    const created = await materialize("partial");
-    await fs.writeFile(path.join(created.path, "README.md"), "complete recovery content\n");
-    const runGit = gitOwner.runGit;
-    const fault = vi.spyOn(gitOwner, "runGit").mockImplementation(async (cwd, args, options) => {
-      if (args[0] === "worktree" && args[1] === "remove") {
-        await fs.unlink(path.join(created.path, "README.md"));
-        return {
-          ...(await runGit(cwd, ["status", "--porcelain"], options)),
-          code: 1,
-          stderr: "injected partial removal",
-        };
+  it.each(["exit", "timeout"] as const)(
+    "does not overwrite a completed snapshot after a partial deletion %s",
+    async (termination) => {
+      const created = await materialize("partial");
+      await fs.writeFile(path.join(created.path, "README.md"), "complete recovery content\n");
+      const runGit = gitOwner.runGit;
+      const fault = vi.spyOn(gitOwner, "runGit").mockImplementation(async (cwd, args, options) => {
+        if (args[0] === "worktree" && args[1] === "remove") {
+          await fs.unlink(path.join(created.path, "README.md"));
+          return {
+            ...(await runGit(cwd, ["status", "--porcelain"], options)),
+            code: 1,
+            stderr: "injected partial removal",
+            termination,
+          };
+        }
+        return await runGit(cwd, args, options);
+      });
+      await expect(service.remove({ id: created.id, reason: "archive" })).rejects.toThrow(
+        "injected partial removal",
+      );
+      fault.mockRestore();
+      const snapshotRef = getRegistryWorktree(env, created.id)!.snapshotRef!;
+      if (termination === "timeout") {
+        expect(getRegistryWorktree(env, created.id)?.gcRetry).toMatchObject({
+          stage: "checkoutRemoval",
+          attempts: 1,
+        });
       }
-      return await runGit(cwd, args, options);
-    });
-    await expect(service.remove({ id: created.id, reason: "archive" })).rejects.toThrow(
-      "injected partial removal",
-    );
-    fault.mockRestore();
-    const snapshotRef = getRegistryWorktree(env, created.id)!.snapshotRef!;
-    const snapshot = await git(repo, "rev-parse", snapshotRef);
-    await expect(service.remove({ id: created.id, reason: "retry" })).rejects.toThrow(
-      "Previous worktree removal may be incomplete",
-    );
-    expect(await git(repo, "rev-parse", snapshotRef)).toBe(snapshot);
-    expect(await git(repo, "show", `${snapshot}:README.md`)).toBe("complete recovery content");
-    expect(await git(repo, "rev-parse", `refs/openclaw/removals/${created.id}`)).toBe(snapshot);
-  });
+      const activity = getRegistryWorktree(env, created.id)!.lastActiveAt;
+      await expect(service.acquire(created.id)).rejects.toThrow(/recover its preserved snapshot/);
+      expect(getRegistryWorktree(env, created.id)!.lastActiveAt).toBe(activity);
+      await updateRegistryWorktree(env, created.id, { lastActiveAt: activity + 1 });
+      expect(getRegistryWorktree(env, created.id)?.gcRetry).toBeUndefined();
+      await expect(acquireWorktreeRunLease(created.id, { env })).rejects.toThrow(
+        /recover its preserved snapshot/,
+      );
+      const snapshot = await git(repo, "rev-parse", snapshotRef);
+      await expect(service.remove({ id: created.id, reason: "retry" })).rejects.toThrow(
+        "Previous worktree removal may be incomplete",
+      );
+      expect(await git(repo, "rev-parse", snapshotRef)).toBe(snapshot);
+      expect(await git(repo, "show", `${snapshot}:README.md`)).toBe("complete recovery content");
+      expect(await git(repo, "rev-parse", `refs/openclaw/removals/${created.id}`)).toBe(snapshot);
+    },
+  );
 
   it("expires a pending HEAD pin after snapshot-loss removal without orphaning it", async () => {
     let now = Date.now();

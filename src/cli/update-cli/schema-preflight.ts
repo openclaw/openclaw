@@ -4,7 +4,7 @@ import { cloneEnvWithPlatformSemantics } from "../../config/env-vars.js";
 import { createConfigIO } from "../../config/io.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../../config/sessions/targets.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { preflightOpenClawDatabaseSchemaContexts } from "../../state/openclaw-database-preflight-contexts.js";
 import {
@@ -29,6 +29,19 @@ export type TargetDatabaseSchemaContextOptions = {
   /** Candidate admission owns schema validation; the installed process still pins source bytes. */
   configValidation?: "candidate";
 };
+
+// Doctor's input hash stays root-only; activation also fences include bytes and targets.
+export function updateConfigSource(snapshot: ConfigFileSnapshot) {
+  return {
+    path: snapshot.path,
+    exists: snapshot.exists,
+    raw: snapshot.raw,
+    hash: snapshot.hash,
+    includedPaths: snapshot.includedPaths ?? [],
+    includeProvenance: snapshot.includeProvenance ?? [],
+    sourceConfig: snapshot.sourceConfig,
+  };
+}
 
 /** Candidate admission sees only the invoking process's config and shared-state selectors. */
 export function isCandidateAdmissionContextCovered(
@@ -86,13 +99,7 @@ export async function captureTargetDatabaseSchemaContext(
   const before = planned?.snapshot;
   let legacyConfigPlan =
     before &&
-    before.path === snapshot.path &&
-    before.exists === snapshot.exists &&
-    before.raw === snapshot.raw &&
-    before.hash === snapshot.hash &&
-    isDeepStrictEqual(before.includedPaths ?? [], snapshot.includedPaths ?? []) &&
-    isDeepStrictEqual(before.includeProvenance ?? [], snapshot.includeProvenance ?? []) &&
-    isDeepStrictEqual(before.sourceConfig, snapshot.sourceConfig) &&
+    isDeepStrictEqual(updateConfigSource(before), updateConfigSource(snapshot)) &&
     isDeepStrictEqual(
       planned.includeIdentity.includeFileHashesForWrite ?? {},
       writeOptions.includeFileHashesForWrite ?? {},

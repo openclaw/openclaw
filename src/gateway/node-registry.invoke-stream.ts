@@ -1,3 +1,4 @@
+import type { NodeInvokeProgressParams as ProtocolNodeInvokeProgressParams } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
@@ -42,22 +43,14 @@ export type PendingInvoke = {
   isCompletionAuthorized?: () => boolean;
 };
 
-export type NodeInvokeProgressParams = {
-  invokeId: string;
-  nodeId: string;
+export type NodeInvokeProgressParams = ProtocolNodeInvokeProgressParams & {
   connId: string | undefined;
-  seq: number;
-  chunk: string;
 };
 
-export type NodeInvokeResultParams = {
+export type NodeInvokeResultParams = NodeInvokeResult & {
   id: string;
   nodeId: string;
   connId: string | undefined;
-  ok: boolean;
-  payload?: unknown;
-  payloadJSON?: string | null;
-  error?: { code?: string; message?: string } | null;
 };
 
 const MAX_PENDING_PROGRESS_CHUNKS = 128;

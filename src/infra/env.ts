@@ -1,12 +1,8 @@
 // Normalizes env flag values and logs env warnings lazily.
-import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { normalizeFsSafeNativeEnv } from "./fs-safe-env.js";
 export { isFastTestRuntimeEnv, isVitestRuntimeEnv } from "./test-runtime-env.js";
 
-const loadLog = createLazyPromise(() => import("./env-log.runtime.js"), {
-  cacheRejections: true,
-});
 const loggedEnv = new Set<string>();
 const ENV_NORMALIZATION_KEY_GROUPS = [["ZAI_API_KEY", "Z_AI_API_KEY"]] as const;
 
@@ -29,7 +25,7 @@ export function logAcceptedEnvOption(option: AcceptedEnvOption): void {
     return;
   }
   loggedEnv.add(option.key);
-  void loadLog()
+  void import("./env-log.runtime.js")
     .then(({ logAcceptedEnvValue }) => {
       logAcceptedEnvValue(option.key, rawValue, option.description, option.redact);
     })

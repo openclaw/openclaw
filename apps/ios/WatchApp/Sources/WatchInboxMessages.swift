@@ -607,26 +607,6 @@ extension WatchAppSnapshotMessage: Codable {
             : localize(.waitingForIPhone)
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case gatewayStatus
-        case gatewayConnected
-        case agentName
-        case agentAvatarURL
-        case agentAvatarText
-        case sessionKey
-        case gatewayStableID
-        case talkStatus
-        case talkEnabled
-        case talkListening
-        case talkSpeaking
-        case pendingApprovalCount
-        case chatItems
-        case chatStatus
-        case sentAtMs
-        case snapshotId
-        case chatDeliveryContext
-    }
-
     private enum LegacyCodingKeys: String, CodingKey {
         case gatewayStatusText, talkStatusText, chatStatusCode, chatStatusText
     }
@@ -781,18 +761,6 @@ struct WatchExecApprovalRecord: Equatable, Identifiable {
 }
 
 extension WatchExecApprovalRecord: Codable {
-    private enum CodingKeys: String, CodingKey {
-        case approval
-        case transport
-        case sourceSentAtMs
-        case updatedAt
-        case isResolving
-        case pendingDecision
-        case activeResolutionAttemptID
-        case status
-        case statusAt
-    }
-
     private enum LegacyCodingKeys: String, CodingKey {
         case statusText
     }

@@ -66,7 +66,6 @@ describe("browser runtime shutdown profile races", () => {
     try {
       await stopBrowserRuntime({
         current: state,
-        getState: () => state,
         clearState,
         onWarn: vi.fn(),
       });
@@ -120,7 +119,6 @@ describe("browser runtime shutdown profile races", () => {
 
     const stopping = stopBrowserBridgeRuntime({
       current: state,
-      getState: () => state,
       clearState,
       onWarn: vi.fn(),
     });

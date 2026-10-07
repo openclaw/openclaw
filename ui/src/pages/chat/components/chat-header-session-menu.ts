@@ -74,7 +74,6 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) onboarding = false;
   @property({ attribute: false }) preferencesBrowserOnly = false;
   @property({ attribute: false }) compact = false;
-  @property({ attribute: false }) navigationAllowed = false;
   @property({ attribute: false }) copyMarkdownAllowed = false;
   @property({ attribute: false }) splitAllowed = false;
   @property({
@@ -116,7 +115,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       session: this.session,
       selectionCount: 1,
       compact: this.compact,
-      navigationAllowed: this.navigationAllowed,
+      navigationAllowed: true,
       copyMarkdownAllowed: this.copyMarkdownAllowed,
       splitAllowed: this.splitAllowed,
       renderOpenInExtra: (inline) => this.renderTerminalAction(inline),
@@ -435,7 +434,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     const menuLabel = t("chat.sidebar.sessionMenu", { session: this.session.label });
     return html`
       <wa-dropdown
-        class=${`session-menu chat-header-session-menu${this.compact ? " chat-header-session-menu--compact" : ""}${this.compact && this.compactView === "sharing" ? " chat-header-session-menu--compact-sharing" : ""}`}
+        class=${`session-menu chat-header-session-menu${this.compact ? " session-menu--compact chat-header-session-menu--compact" : ""}${this.compact && this.compactView === "sharing" ? " chat-header-session-menu--compact-sharing" : ""}`}
         placement="bottom-end"
         aria-label=${menuLabel}
         @keydown=${(event: KeyboardEvent) => {

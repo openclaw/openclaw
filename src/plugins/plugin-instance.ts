@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
@@ -26,6 +27,7 @@ import type {
   PluginModuleLoaderRecovery,
 } from "./plugin-instance.types.js";
 import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-return-value.js";
+import { releasePluginInstanceRegistry } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
@@ -81,6 +83,7 @@ export class PluginInstance {
   );
   private disposal?: Promise<PluginInstanceDisposalResult>;
   readonly owner?: PluginInstanceOwner;
+  private readonly runtimeScope: Parameters<typeof withPluginRuntimePluginScope>[0];
 
   constructor(
     readonly pluginId: string,
@@ -96,6 +99,13 @@ export class PluginInstance {
     } else {
       this.setupCache = owner?.cache;
     }
+    const record = this.owner?.record;
+    this.runtimeScope = Object.freeze({
+      pluginId: record?.id ?? pluginId,
+      pluginSource: record?.source,
+      pluginOrigin: record?.origin,
+      pluginTrustedOfficialInstall: record?.trustedOfficialInstall,
+    });
     this.lifecycle = Object.freeze({
       signal: this.controller.signal,
       onDispose: (cleanup: () => void | Promise<void>) => this.addCleanup(cleanup, "plugin"),
@@ -248,6 +258,16 @@ export class PluginInstance {
       () =>
         (!includeCalls || this.ordinaryCallCount === 0) &&
         (includeConsumers ? this.retainedWorkCount : this.retainedWork.size) === 0,
+      signal,
+    );
+  }
+
+  /** Observe when a pre-stop replacement drain would pass: no retained work or calls, cleanup included. */
+  async waitForIdle(signal: AbortSignal): Promise<void> {
+    await waitForPluginInstanceSettlement(
+      this.pluginId,
+      this.waiters,
+      () => this.calls.size === 0 && this.retainedWorkCount === 0,
       signal,
     );
   }
@@ -414,23 +434,15 @@ export class PluginInstance {
     }
     const { record } = this.owner;
     const generation = getPluginRuntimeGenerationRegistry();
-    // Prepared callers retain their catalog; detached work follows the same
-    // instance when publication adopts it into a replacement registry.
+    // Prepared calls keep their registry; detached calls follow the adopted owner.
     const registry =
       this.consumers.get(token)?.registry ??
       this.calls.get(token)?.registry ??
       (generation?.plugins.includes(record) ? generation : this.owner.registry);
-    return withPluginRuntimePluginScope(
-      {
-        pluginId: record.id,
-        pluginSource: record.source,
-        pluginOrigin: record.origin,
-        pluginTrustedOfficialInstall: record.trustedOfficialInstall,
-      },
-      run,
-      registry,
-      call,
-    );
+    if (!registry) {
+      throw new PluginInstanceUnavailableError(record.id);
+    }
+    return withPluginRuntimePluginScope(this.runtimeScope, run, registry, call);
   }
 
   private lease(
@@ -708,21 +720,12 @@ export class PluginInstance {
         moduleCleanups.push(cleanup);
         continue;
       }
-      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        await Promise.race([
-          runCleanup(cleanup),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(
-              () => reject(new Error(`Plugin ${this.pluginId} cleanup did not settle`)),
-              Math.max(0, deadline - Date.now()),
-            );
-          }),
-        ]);
+        await raceWithTimeout(runCleanup(cleanup), Math.max(0, deadline - Date.now()), () => {
+          throw new Error(`Plugin ${this.pluginId} cleanup did not settle`);
+        });
       } catch (error) {
         failures.push(error);
-      } finally {
-        clearTimeout(timer);
       }
     }
     await cleanupWork.drain();
@@ -768,6 +771,11 @@ export class PluginInstance {
     }
     if (failures.length === 0) {
       releasePluginCacheInstance(this);
+      // Native ESM exports can outlive their instance. Keep its revocation identity, not
+      // the retired registry and every inspection/prepared resource keyed by that registry.
+      if (this.owner) {
+        releasePluginInstanceRegistry(this.owner);
+      }
     }
     return terminalFailures.result(failures);
   }

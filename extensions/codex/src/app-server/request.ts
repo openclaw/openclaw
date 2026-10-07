@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-profile.js";
 import type { CodexAppServerClient } from "./client.js";
@@ -137,7 +138,6 @@ type CodexAppServerJsonClientOptions = Pick<
   controlObservation?: CodexControlRequestObservation;
 };
 
-/** Sends a typed Codex app-server request and returns the method-specific response shape. */
 export async function requestCodexAppServerJson<M extends CodexAppServerRequestMethod>(
   params: CodexAppServerJsonClientOptions & {
     method: M;
@@ -262,18 +262,7 @@ async function readCodexAccountEmailBestEffort(
     ({ account }) => (account?.type === "chatgpt" ? account.email?.trim() || undefined : undefined),
     () => undefined,
   );
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<undefined>((resolve) => {
-    timer = setTimeout(() => resolve(undefined), boundMs);
-    timer.unref?.();
-  });
-  try {
-    return await Promise.race([read, timeout]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  return await raceWithTimeout(read, boundMs, () => undefined, { ref: false });
 }
 
 /**

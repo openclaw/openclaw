@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
@@ -203,29 +204,47 @@ describe("setup registry", () => {
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
-  it("resolves setup cli backends from descriptors without loading every setup-api", () => {
-    const openai = fixture({
-      id: "openai",
-      cliBackends: ["legacy-openai-cli"],
-      setup: { cliBackends: ["codex-cli"], requiresRuntime: true },
-    });
-    manifests(openai, fixture({ id: "anthropic", cliBackends: ["claude-cli"] }));
-    registration((api, source) =>
-      api.registerCliBackend(
-        source.includes(openai.rootDir)
-          ? { id: "codex-cli", config: { command: "codex" } }
-          : { id: "claude-cli", config: { command: "claude" } },
-      ),
-    );
-    const expected = {
-      pluginId: "openai",
-      backend: { id: "codex-cli", config: { command: "codex" } },
-    };
-    expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toEqual(expected);
-    expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toEqual(expected);
-    expect(resolvePluginSetupCliBackend({ backend: "legacy-openai-cli", env: {} })).toBeUndefined();
-    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-  });
+  it.each([false, true])(
+    "resolves setup CLI backends without rediscovery when prepared=%s",
+    (prepared) => {
+      const openai = fixture({
+        id: "openai",
+        cliBackends: ["legacy-openai-cli"],
+        setup: { cliBackends: ["codex-cli"], requiresRuntime: true },
+      });
+      const plugins = [openai, fixture({ id: "anthropic", cliBackends: ["claude-cli"] })];
+      manifests(...plugins);
+      const metadataSnapshot = prepared
+        ? createPluginMetadataSnapshotFixture({ plugins })
+        : undefined;
+      if (prepared) {
+        mocks.loadPluginManifestRegistry.mockImplementation(() => {
+          throw new Error("Prepared CLI lookup must not rediscover manifests");
+        });
+      }
+      registration((api, source) =>
+        api.registerCliBackend(
+          source.includes(openai.rootDir)
+            ? { id: "codex-cli", modelProvider: "openai", config: { command: "codex" } }
+            : { id: "claude-cli", config: { command: "claude" } },
+        ),
+      );
+      const expected = {
+        pluginId: "openai",
+        backend: { id: "codex-cli", modelProvider: "openai", config: { command: "codex" } },
+      };
+      expect(
+        resolvePluginSetupCliBackend({ backend: "codex-cli", env: {}, metadataSnapshot }),
+      ).toEqual(expected);
+      expect(
+        resolvePluginSetupCliBackend({ backend: "codex-cli", env: {}, metadataSnapshot }),
+      ).toEqual(expected);
+      expect(
+        resolvePluginSetupCliBackend({ backend: "legacy-openai-cli", env: {}, metadataSnapshot }),
+      ).toBeUndefined();
+      expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("reports unavailable setup runtime access with the plugin id and registration mode", () => {
     manifests(fixture({ id: "runtime-dependent-setup" }));

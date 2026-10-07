@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
 import {
   persistRegistryFixture,
   saveSubagentRegistryToSqlite,
@@ -102,14 +103,14 @@ it("maintains list order across metadata changes and archived-row rematerializat
       const archivedQuery = { agentId: "main", key: third };
       sessionChanges.emit({ all: true, scope: "catalog" });
       await projection.ensureMaterialized();
-      expect(projection.isMaterialized(archivedQuery)).toBe(false);
+      expect(projection.capture(archivedQuery)?.materialized).toBeUndefined();
       const rematerialized = await listProjectedSessions({
         projection,
         opts: { archived: true },
       });
       expect(rematerialized.sessions.map((row) => row.key)).toEqual([third]);
       expect(rematerialized.totalCount).toBe(1);
-      expect(projection.isMaterialized(archivedQuery)).toBe(true);
+      expect(projection.capture(archivedQuery)?.materialized).toBeDefined();
       expect((await list())[0]?.key).toBe(second);
       expect(scan.mock.calls.filter(([query]) => !query?.key)).toHaveLength(0);
       await deleteSessionEntryLifecycle({
@@ -293,6 +294,25 @@ it.each([false, true])(
       const cfg = { agents: { entries: { main: {}, ops: {} } } };
       const projection = createSessionRowProjectionFixture({ cfg, store: {} });
       const parent = "agent:main:parent";
+      const now = Date.now();
+      projection.state.rowContext.subagentRuns = buildSubagentRunReadIndexFromRuns({
+        now,
+        runs: new Map<string, SubagentRunRecord>([
+          [
+            "ordinary-run",
+            {
+              runId: "ordinary-run",
+              childSessionKey: "agent:main:ordinary",
+              requesterSessionKey: parent,
+              requesterDisplayKey: parent,
+              task: "Synthetic child selection",
+              cleanup: "keep",
+              createdAt: now,
+              execution: { status: "running", startedAt: now },
+            },
+          ],
+        ]),
+      });
       const samples = [
         ["shadow-global", "global", "main", "fallback"],
         ["ordinary", "agent:main:ordinary", "main", "primary"],
@@ -309,7 +329,7 @@ it.each([false, true])(
           sessionId,
           updatedAt: 1,
           ...(["ordinary", "shadow-global", "unknown-shadow"].includes(sessionId)
-            ? { spawnedBy: parent, status: "running" as const }
+            ? { spawnedBy: parent }
             : {}),
         };
         return {
@@ -384,7 +404,7 @@ it.each([false, true])(
 
 it("rejects duplicate ordinary keys introduced after store admission before filtering or pagination", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const primary = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const secondary = state.statePath("secondary.sqlite");
     const key = "agent:main:original";

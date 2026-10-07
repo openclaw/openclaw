@@ -41,7 +41,6 @@ type VoiceCommandContext = {
   discordConfig: DiscordAccountConfig;
   accountId: string;
   groupPolicy: "open" | "disabled" | "allowlist";
-  useAccessGroups: boolean;
   getManager: () => DiscordVoiceManager | null;
   ephemeralDefault: boolean;
 };
@@ -76,7 +75,7 @@ async function authorizeVoiceCommand(
   const channelName = channelOverride?.name ?? channelContext.channelName;
 
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-    ? interaction.rawData.member.roles.map((roleId: string) => roleId)
+    ? interaction.rawData.member.roles.slice()
     : [];
   const sender = resolveDiscordSenderIdentity({ author: user, member: interaction.rawData.member });
   const policy = await params.readPolicy?.();
@@ -90,7 +89,6 @@ async function authorizeVoiceCommand(
     discordConfig: currentParams.discordConfig,
     accountId: currentParams.accountId,
     groupPolicy: currentParams.groupPolicy,
-    useAccessGroups: currentParams.useAccessGroups,
     guild: interaction.guild,
     guildId: interaction.guild.id,
     channelId,

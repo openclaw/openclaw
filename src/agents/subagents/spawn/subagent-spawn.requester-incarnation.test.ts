@@ -30,11 +30,11 @@ import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import { runOpenClawAgentWriteTransaction } from "../../../state/openclaw-agent-db.js";
 import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "../registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import { spawnAcpDirect } from "./acp-spawn.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";

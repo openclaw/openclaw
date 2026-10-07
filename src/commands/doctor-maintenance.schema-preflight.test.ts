@@ -258,6 +258,8 @@ it.each(["present", "missing"] as const)(
             })
           : undefined;
       const heldBytes = heldPath ? fs.readFileSync(heldPath) : undefined;
+      const resultPath = state.path("doctor-result.json");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", resultPath);
       const initial = openOpenClawStateDatabase({ env: state.env });
       if (history === "missing") {
         initial.db.exec("DROP TABLE agent_deletion_journal");
@@ -334,14 +336,17 @@ it.each(["present", "missing"] as const)(
       expect(snapshotPath && fs.existsSync(snapshotPath)).toBe(false);
 
       const output = [...runtime.log.mock.calls, ...runtime.error.mock.calls].flat().join("\n");
-      if (heldPath) {
-        expect(runtime.exit, output).toHaveBeenCalledExactlyOnceWith(1);
-        expect(output).toContain("Failing check agent-deletion-journal");
-        expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
-      } else {
-        expect(runtime.exit, output).not.toHaveBeenCalled();
-        expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
-      }
+      expect(runtime.exit, output).not.toHaveBeenCalled();
+      expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
+      expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
+        resultPath,
+        result: expect.objectContaining({
+          status: "ok",
+          ...(heldPath
+            ? { warnings: expect.arrayContaining([expect.stringContaining(heldPath)]) }
+            : {}),
+        }),
+      });
       expect(output).toContain(`Warning: Rebuilt corrupt shared-state SQLite indexes: ${index}`);
       const backupLine = runtime.log.mock.calls
         .flat()
@@ -383,14 +388,7 @@ it.each(["present", "missing"] as const)(
       await runCommandWithRuntime(runtime, () =>
         runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
       );
-      if (heldPath) {
-        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-        expect(runtime.error.mock.calls.flat().join("\n")).toContain(
-          "Failing check agent-deletion-journal",
-        );
-      } else {
-        expect(runtime.exit, runtime.error.mock.calls.flat().join("\n")).not.toHaveBeenCalled();
-      }
+      expect(runtime.exit, runtime.error.mock.calls.flat().join("\n")).not.toHaveBeenCalled();
       expect(
         openOpenClawStateDatabase({ env: state.env })
           .db.prepare("SELECT * FROM audit_events NOT INDEXED")

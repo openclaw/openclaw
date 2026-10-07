@@ -1,7 +1,3 @@
-/**
- * Resolves Codex filesystem sandbox policy payloads into OpenClaw path/glob
- * checks for sandbox exec-server filesystem operations.
- */
 import { posix as pathPosix } from "node:path";
 import type { JsonObject } from "../protocol.js";
 import { requireObject, requireString } from "./json-rpc.js";
@@ -224,7 +220,6 @@ export function normalizeSandboxAbsolutePath(rawPath: string, label: string): st
   return normalized === "//" ? "/" : normalized;
 }
 
-/** Returns true when target is root itself or a descendant of root. */
 export function pathContains(root: string, target: string): boolean {
   return root === "/" || target === root || target.startsWith(`${root}/`);
 }

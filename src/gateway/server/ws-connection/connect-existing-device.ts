@@ -34,7 +34,6 @@ export async function authorizeExistingGatewayDevice(params: {
     lastSeenAtMs: number;
     lastSeenReason: string;
   };
-  handoffBootstrapProfile: DeviceBootstrapProfile | null;
   requirePairing: (reason: PairingReason, paired: PairedDevice) => Promise<boolean>;
 }): Promise<{ ok: boolean; handoffBootstrapProfile: DeviceBootstrapProfile | null }> {
   const { context, state, paired, devicePublicKey, clientAccessMetadata, requirePairing } = params;
@@ -53,7 +52,7 @@ export async function authorizeExistingGatewayDevice(params: {
     isWebchat,
     isNativeAppUi,
   } = state;
-  let { handoffBootstrapProfile } = params;
+  let { handoffBootstrapProfile } = state;
   const claimedPlatform = connectParams.client.platform;
   const pairedPlatform = paired.platform;
   const claimedDeviceFamily = connectParams.client.deviceFamily;

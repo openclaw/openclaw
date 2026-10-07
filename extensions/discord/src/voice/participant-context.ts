@@ -1,9 +1,6 @@
-import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { APIVoiceState, Client } from "../internal/discord.js";
-import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
 import { type DiscordVoiceIngressContext, resolveDiscordVoiceIngressContext } from "./ingress.js";
-import type { VoiceSessionEntry } from "./session.js";
 import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 
 const MAX_PARTICIPANTS = 20;
@@ -238,17 +235,9 @@ export async function resolveDiscordVoiceParticipantLines(params: {
   return lines;
 }
 
-export async function resolveDiscordVoiceIngressContextWithParticipants(params: {
-  readPolicy?: DiscordLivePolicyReader;
-  entry: VoiceSessionEntry;
-  userId: string;
-  client: Client;
-  cfg: OpenClawConfig;
-  discordConfig: DiscordAccountConfig;
-  admissionAllowFrom?: string[];
-  botUserId?: string;
-  speakerContext: DiscordVoiceSpeakerContextResolver;
-}): Promise<DiscordVoiceIngressContext | null> {
+export async function resolveDiscordVoiceIngressContextWithParticipants(
+  params: Parameters<typeof resolveDiscordVoiceIngressContext>[0] & { botUserId?: string },
+): Promise<DiscordVoiceIngressContext | null> {
   // Finish descriptive lookups before checking the speaker's current roles.
   const states = listDiscordVoiceParticipantStates({
     client: params.client,

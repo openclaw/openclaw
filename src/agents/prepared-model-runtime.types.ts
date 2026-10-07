@@ -9,7 +9,10 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import type { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
-import type { AgentHarnessPluginSelection } from "./harness/runtime-plugin-load-plan.js";
+import type {
+  AgentHarnessPluginSelection,
+  RuntimePluginLoadPurpose,
+} from "./harness/runtime-plugin-load-plan.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { PublishedModelCatalogOwnerCandidate } from "./prepared-model-catalog.types.js";
 import type { AuthStorage, AuthStorageData } from "./sessions/auth-storage.js";
@@ -146,6 +149,8 @@ export type PreparedModelRuntimeInput = {
   readOnly?: boolean;
   /** Load the exact runtime plugin generation for an isolated executable probe. */
   loadRuntimePlugins?: boolean;
+  /** Prompt-only inference selects providers/harnesses without agent capabilities. */
+  runtimePluginPurpose?: RuntimePluginLoadPurpose;
   skipCredentials?: boolean;
   env?: NodeJS.ProcessEnv;
   allowGatewaySubagentBinding?: boolean;

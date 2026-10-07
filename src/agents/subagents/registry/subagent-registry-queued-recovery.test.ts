@@ -1,9 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { callGateway } from "../../../gateway/call.js";
+import { sessionSharingTestContext } from "../../../gateway/server-methods/sessions-sharing.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
-import { executeExistingOpenClawStateRead } from "../../../state/openclaw-state-db-readonly.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import {
@@ -12,12 +14,17 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import {
+  mutateSubagentRuns,
+  SubagentRegistryMutationRejectedError,
+} from "./subagent-registry-persistence.js";
 import { createSubagentRegistryRestorer } from "./subagent-registry-restore.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
+import { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const fixture = vi.hoisted(() => ({
@@ -87,14 +94,7 @@ afterEach(async () => {
 });
 
 async function readStored() {
-  const reply = await executeExistingOpenClawStateRead(
-    { env: state.env },
-    { type: "subagents.runs", scope: { kind: "all" } },
-  );
-  if (!reply?.ok || reply.type !== "subagents.runs" || reply.projection) {
-    throw new Error("Queued recovery fixture could not read its durable registry");
-  }
-  return reply.runs;
+  return readAllSubagentRunsInWorker(captureOpenClawStateWorkerContext({ env: state.env }));
 }
 
 function createRegistrationFixture() {
@@ -150,6 +150,31 @@ function createRegistrationFixture() {
   return { refusal, manager };
 }
 
+type RestoreOptions = Parameters<typeof createSubagentRegistryRestorer>[0];
+
+function createRestorer(
+  options: Pick<RestoreOptions, "getGatewayContextResolver"> & Partial<RestoreOptions>,
+) {
+  return createSubagentRegistryRestorer({
+    runs: subagentRuns,
+    bindGatewayOwners: () => true,
+    settleRequesterTurn: async () => false,
+    retireSupersededRun: async () => {},
+    ensureListener: () => {},
+    startSweeper: () => {},
+    scheduleSweep: () => {},
+    resumeRun: () => {},
+    listSwarmRunsForGroup: () => [],
+    startQueuedSubagentRun: async () => true,
+    terminateAcceptedRestoredCollectorRun: async () => {},
+    cleanupCollectorLaunchResources: async () => true,
+    settleFailedQueuedSubagentLaunch: async () => true,
+    completeCollectorLaunchCleanup: async () => {},
+    warn: () => {},
+    ...options,
+  });
+}
+
 it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
   "reconciles a retained descriptorless registration through %s",
   async (recovery) => {
@@ -166,22 +191,16 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
     const cleaned = vi.fn(async () => {});
     const resume = vi.fn();
     const startQueued = vi.fn(async () => true);
-    const restorer = createSubagentRegistryRestorer({
-      runs: subagentRuns,
-      getGatewayContextResolver: () => undefined,
-      bindGatewayOwners: () => true,
-      settleRequesterTurn: async () => false,
-      ensureListener: () => {},
-      startSweeper: () => {},
-      scheduleSweep: () => {},
+    const gatewayContext = sessionSharingTestContext(vi.fn());
+    const resolveGatewayContext = () => gatewayContext;
+    const restorer = createRestorer({
+      getGatewayContextResolver: () => resolveGatewayContext,
       resumeRun: resume,
       listSwarmRunsForGroup: () => [...subagentRuns.values()],
       startQueuedSubagentRun: startQueued,
-      terminateAcceptedRestoredCollectorRun: async () => {},
       cleanupCollectorLaunchResources: cleanupResources,
       settleFailedQueuedSubagentLaunch: manager.settleFailedQueuedSubagentLaunch,
       completeCollectorLaunchCleanup: cleaned,
-      warn: () => {},
     });
     try {
       await expect(
@@ -347,4 +366,228 @@ it("settles an acknowledged queued launch failure through its captured native re
     collectorCompletion: { status: "failed" },
   });
   expect((await readStored()).get(runId)?.queuedLaunch).toBeUndefined();
+});
+
+it.each(["current", "during hydration", "reset", "replaced Gateway"] as const)(
+  "isolates failed requester activation and retries only its current startup owner (%s)",
+  async (owner) => {
+    vi.useFakeTimers();
+    const { manager } = createRegistrationFixture();
+    for (const runId of ["first-child", "later-child"]) {
+      await manager.registerSubagentRun({
+        runId,
+        childSessionKey: `agent:main:subagent:${runId}`,
+        requesterSessionKey: `agent:main:${runId}-requester`,
+        requesterAgentId: "main",
+        requesterTurnRunId: `${runId}-turn`,
+        requesterDisplayKey: "main",
+        task: "Restore independent requester custody",
+        cleanup: "keep",
+        expectsCompletionMessage: true,
+      });
+    }
+    subagentRuns.clear();
+    const context = sessionSharingTestContext(vi.fn());
+    let gateway = context;
+    const resolver = () => gateway;
+    context.resolveGatewayContext = resolver;
+    const recovered = createDeferred();
+    const failure = new Error("requester transfer temporarily unavailable");
+    let firstAttempts = 0;
+    const settleRequesterTurn = vi.fn<
+      Parameters<typeof createSubagentRegistryRestorer>[0]["settleRequesterTurn"]
+    >(async (params) => {
+      params.assertCurrent?.();
+      const first = params.requesterTurnRunId === "first-child-turn";
+      if (first && ++firstAttempts < 3) {
+        throw failure;
+      }
+      const runId = first ? "first-child" : "later-child";
+      await mutateSubagentRuns(
+        [runId],
+        (rows) => {
+          const entry = expectDefined(rows.get(runId), "restored requester child");
+          return {
+            value: undefined,
+            postimages: new Map([[runId, { ...entry, requesterTurnRunId: undefined }]]),
+          };
+        },
+        { context: params.stateContext, assertCurrent: params.assertCurrent },
+      );
+      if (first) {
+        recovered.resolve();
+      }
+      return true;
+    });
+    const ensureListener = vi.fn();
+    const startSweeper = vi.fn();
+    const resumeRun = vi.fn();
+    const warn = vi.fn();
+    const restorer = createRestorer({
+      getGatewayContextResolver: () => resolver,
+      settleRequesterTurn,
+      ensureListener,
+      startSweeper,
+      resumeRun,
+      warn,
+    });
+    try {
+      if (owner === "during hydration") {
+        await restorer.activate();
+        await expect(restorer.restoreOnce(undefined, true)).rejects.toBe(failure);
+      } else {
+        await restorer.restoreOnce();
+        await expect(restorer.activate()).rejects.toBe(failure);
+      }
+      expect(ensureListener).toHaveBeenCalledOnce();
+      expect(startSweeper).toHaveBeenCalledOnce();
+      expect(resumeRun.mock.calls).toEqual([["first-child"], ["later-child"]]);
+      expect(subagentRuns.get("first-child")?.requesterTurnRunId).toBe("first-child-turn");
+      expect(subagentRuns.get("later-child")?.requesterTurnRunId).toBeUndefined();
+      if (owner === "reset") {
+        restorer.reset();
+      } else if (owner === "replaced Gateway") {
+        gateway = sessionSharingTestContext(vi.fn());
+      }
+      await vi.advanceTimersByTimeAsync(999);
+      expect(firstAttempts).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      if (owner === "reset" || owner === "replaced Gateway") {
+        expect(firstAttempts).toBe(1);
+        expect(warn).not.toHaveBeenCalled();
+        return;
+      }
+      expect(firstAttempts).toBe(2);
+      expect(warn).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(firstAttempts).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(firstAttempts).toBe(3);
+      await recovered.promise;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(subagentRuns.get("first-child")?.requesterTurnRunId).toBeUndefined();
+      expect(settleRequesterTurn).toHaveBeenCalledTimes(4);
+      expect(ensureListener).toHaveBeenCalledOnce();
+      expect(startSweeper).toHaveBeenCalledOnce();
+      expect(resumeRun).toHaveBeenCalledTimes(2);
+    } finally {
+      restorer.reset();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("retries retirement when registration supersedes another restored child during a held write", async () => {
+  vi.useFakeTimers();
+  const { manager } = createRegistrationFixture();
+  const settleOwnedWork = observeRootWork();
+  const held = createDeferred();
+  const release = createDeferred();
+  const retiredLater = createDeferred();
+  const context = sessionSharingTestContext(vi.fn());
+  const resolver = () => context;
+  context.resolveGatewayContext = resolver;
+  const register = (runId: string, child: string, expectsCompletionMessage = false) =>
+    manager.registerSubagentRun({
+      runId,
+      childSessionKey: `agent:main:subagent:${child}`,
+      requesterSessionKey: "agent:main:retirement-requester",
+      requesterAgentId: "main",
+      requesterTurnRunId: expectsCompletionMessage ? "retirement-turn" : undefined,
+      requesterDisplayKey: "main",
+      task: "Exercise cancellation supersession during restore",
+      cleanup: "keep",
+      expectsCompletionMessage,
+    });
+  const restorer = createRestorer({
+    getGatewayContextResolver: () => resolver,
+    settleRequesterTurn: async () => {
+      throw new Error("Superseded children must retire before requester handoff");
+    },
+    retireSupersededRun: async (runId, entry, assertCurrent) => {
+      await retireSupersededSubagentRun({
+        runId,
+        entry,
+        runs: subagentRuns,
+        clearPendingLifecycleError: () => {},
+        assertCurrent,
+      });
+      if (runId === "later-child") {
+        retiredLater.resolve();
+      }
+    },
+  });
+  let activation: Promise<unknown> | undefined;
+  try {
+    for (const runId of ["first-child", "later-child"]) {
+      await register(runId, runId, true);
+      expect(await manager.markSubagentRunTerminated({ runId })).toBe(1);
+    }
+    await register("first-successor", "first-child");
+    subagentRuns.clear();
+    await restorer.restoreOnce();
+    expect(subagentRuns.get("first-child")?.killReconciliation?.supersededAt).toBeTypeOf("number");
+    expect(subagentRuns.get("later-child")?.killReconciliation?.supersededAt).toBeUndefined();
+
+    const execute = expectDefined(
+      vi.mocked(stateWorker.runOpenClawStateWorkerOperation).getMockImplementation(),
+      "registration fixture worker transport",
+    );
+    vi.mocked(stateWorker.runOpenClawStateWorkerOperation).mockImplementation(
+      (owner, run, options) =>
+        execute(
+          owner,
+          (scope) =>
+            run({
+              execute: async (command, executeOptions) => {
+                if (
+                  isSubagentRegistryWriteCommand(command) &&
+                  command.input.deleteRunIds.includes("first-child")
+                ) {
+                  held.resolve();
+                  await release.promise;
+                }
+                return scope.execute(command, executeOptions);
+              },
+            }),
+          options,
+        ),
+    );
+    activation = restorer.activate().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await awaitGateBeforeSettlement(
+      held.promise,
+      activation,
+      "Restored retirement did not reach its native deletion",
+    );
+    await register("later-successor", "later-child");
+    expect((await readStored()).get("later-child")?.killReconciliation?.supersededAt).toBeTypeOf(
+      "number",
+    );
+    release.resolve();
+    expect(await activation).toBeInstanceOf(SubagentRegistryMutationRejectedError);
+    expect((await readStored()).has("first-child")).toBe(false);
+    expect((await readStored()).get("later-child")?.requesterTurnRunId).toBe("retirement-turn");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await retiredLater.promise;
+    await vi.advanceTimersByTimeAsync(0);
+    const saved = await readStored();
+    expect(saved.has("later-child")).toBe(false);
+    for (const runId of ["first-successor", "later-successor"]) {
+      expect(saved.get(runId)).toMatchObject({
+        runId,
+        expectsCompletionMessage: false,
+        execution: { status: "running" },
+      });
+    }
+  } finally {
+    release.resolve();
+    await activation;
+    restorer.reset();
+    await settleOwnedWork();
+    vi.useRealTimers();
+  }
 });

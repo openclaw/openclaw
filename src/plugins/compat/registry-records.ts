@@ -1,11 +1,17 @@
+import { AGENT_HARNESS_COMPAT_RECORDS } from "./agent-harness-records.js";
+import { AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS } from "./agent-list-runtime-projection-records.js";
+import { CHANNEL_PAIRING_COMPAT_RECORD } from "./channel-pairing-record.js";
 import { DEPRECATION_MARKING_COMPAT_RECORDS } from "./deprecation-marking.js";
 import { MEDIA_LEGACY_PROJECTION_COMPAT_RECORD } from "./media-legacy-projection.js";
 import { MENTION_INBOX_COMPAT_RECORD } from "./mention-inbox-record.js";
+import { MODEL_ACCOUNT_CONNECT_COMPAT_RECORD } from "./model-account-connect-record.js";
 import {
   BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
   PLUGIN_SDK_SUBPATH_RECORDS,
 } from "./plugin-sdk-subpath-records.js";
+import { PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD } from "./progress-receipt-handoff-record.js";
 import { SESSION_PERSISTENCE_COMPAT_RECORDS } from "./session-persistence-records.js";
+import { TTS_PREFERENCES_COMPAT_RECORD } from "./tts-preferences-record.js";
 import type { PluginCompatRecord } from "./types.js";
 import { WATCHED_SESSIONS_COMPAT_RECORD } from "./watched-sessions.js";
 import { WORKSPACE_MUTATION_GUARD_COMPAT_RECORD } from "./workspace-mutation-guard.js";
@@ -20,10 +26,16 @@ const ACTIVATION_HINT_METADATA = {
 } as const;
 
 export const PLUGIN_COMPAT_RECORDS = [
+  ...AGENT_HARNESS_COMPAT_RECORDS,
+  CHANNEL_PAIRING_COMPAT_RECORD,
   MENTION_INBOX_COMPAT_RECORD,
+  MODEL_ACCOUNT_CONNECT_COMPAT_RECORD,
   WORKSPACE_MUTATION_GUARD_COMPAT_RECORD,
   ...SESSION_PERSISTENCE_COMPAT_RECORDS,
+  TTS_PREFERENCES_COMPAT_RECORD,
+  ...AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS,
   WATCHED_SESSIONS_COMPAT_RECORD,
+  PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD,
   {
     code: "gateway-placement-sync-results",
     status: "deprecated",
@@ -409,7 +421,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     introduced: "2026-04-29",
     docsPath: "/plugins/hooks",
     surfaces: ["before_tool_call block result", "before_tool_call approval result"],
-    diagnostics: ["hook runner contract probe"],
+    diagnostics: ["hook runner contract check"],
     tests: ["src/agents/agent-tools.before-tool-call.e2e.test.ts"],
   },
   {
@@ -419,7 +431,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     introduced: "2026-04-29",
     docsPath: "/plugins/hooks",
     surfaces: ["llm_input", "llm_output", "agent_end", "allowConversationAccess"],
-    diagnostics: ["conversation access hook contract probe"],
+    diagnostics: ["conversation access hook contract check"],
     tests: ["src/agents/cli-runner.reliability.test.ts", "src/config/schema.help.quality.test.ts"],
   },
   {
@@ -433,7 +445,7 @@ export const PLUGIN_COMPAT_RECORDS = [
       "capturePluginRegistration",
       "OpenClawPluginApi",
     ],
-    diagnostics: ["runtime registration capture contract probe"],
+    diagnostics: ["runtime registration capture contract check"],
     tests: ["src/plugins/captured-registration.test.ts"],
   },
   {
@@ -443,7 +455,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     introduced: "2026-04-29",
     docsPath: "/plugins/sdk-channel-plugins",
     surfaces: ["api.registerChannel", "channel setup metadata", "channel message envelope"],
-    diagnostics: ["channel runtime contract probe"],
+    diagnostics: ["channel runtime contract check"],
     tests: [
       "src/plugin-sdk/channel-entry-contract.test.ts",
       "src/plugins/captured-registration.test.ts",
@@ -611,19 +623,6 @@ export const PLUGIN_COMPAT_RECORDS = [
     ...ACTIVATION_HINT_METADATA,
     replacement: "manifest contribution ownership",
     surfaces: ["activation.onCapabilities", "activation planner"],
-  },
-  {
-    code: "agent-harness-sdk-alias",
-    status: "deprecated",
-    owner: "agent-runtime",
-    introduced: "2026-04-24",
-    deprecated: "2026-04-25",
-    warningStarts: "2026-04-25",
-    replacement: "none yet; retain until a harness subpath ships and external migration is proven",
-    docsPath: "/plugins/sdk-agent-harness",
-    surfaces: ["openclaw/plugin-sdk/agent-harness", "openclaw/plugin-sdk/agent-harness-runtime"],
-    diagnostics: ["plugin SDK compatibility warning"],
-    tests: ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"],
   },
   {
     code: "embedded-pi-agent-sdk-aliases",

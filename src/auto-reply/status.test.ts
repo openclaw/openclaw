@@ -483,10 +483,10 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       config: {
         agents: {
-          list: [
-            { id: "main", default: true },
-            { id: "discord", sandbox: { mode: "all" } },
-          ],
+          entries: {
+            main: {},
+            discord: { sandbox: { mode: "all" } },
+          },
         },
       } as unknown as OpenClawConfig,
       agent: {},

@@ -155,9 +155,7 @@ export type GatewayServiceEnvArgs = {
   requireEffective?: boolean;
 };
 
-export type GatewayServiceLoadStateReader = {
-  isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
-};
+export type GatewayServiceLoadStateReader = Pick<GatewayService, "isLoaded">;
 
 /** Live recovery custody, never reconstructed from a saved record alone. Loading
  * permits native definition inspection, not enablement, start, or readiness. */
@@ -185,15 +183,15 @@ export type SystemdServiceReadBinding = {
 };
 
 export type GatewayServiceCommandInspection =
-  | { kind: "absent" | "present" }
+  | { kind: "absent" }
+  | { kind: "present"; command?: GatewayServiceCommandConfig }
   | { kind: "unavailable"; error: unknown };
 
 /** Selected native unit for one inspection; never a service mutation grant. */
-export type SystemdServiceReadTarget = {
-  scope: "user" | "system";
-  unitName: string;
-  unitPath: string;
-};
+export type SystemdServiceReadTarget = Pick<
+  SystemdServiceIdentity,
+  "scope" | "unitName" | "unitPath"
+>;
 
 /** Both installed scopes must remain visible so callers can diagnose competing supervisors. */
 export type SystemdGatewayInstallation =

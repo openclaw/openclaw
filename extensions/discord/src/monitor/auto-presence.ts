@@ -22,12 +22,6 @@ const MIN_UPDATE_INTERVAL_MS = 1_000;
 
 type DiscordAutoPresenceState = "healthy" | "degraded" | "exhausted";
 
-type ResolvedDiscordAutoPresenceConfig = {
-  enabled: boolean;
-  intervalMs: number;
-  minUpdateIntervalMs: number;
-};
-
 type PresenceGateway = {
   isConnected: boolean;
   updatePresence: (payload: UpdatePresenceData) => void;
@@ -44,9 +38,7 @@ function clampPositiveInt(value: unknown, fallback: number, minValue: number): n
   return Math.max(minValue, rounded);
 }
 
-function resolveAutoPresenceConfig(
-  config?: DiscordAutoPresenceConfig,
-): ResolvedDiscordAutoPresenceConfig {
+function resolveAutoPresenceConfig(config?: DiscordAutoPresenceConfig) {
   const intervalMs = clampPositiveInt(config?.intervalMs, DEFAULT_INTERVAL_MS, MIN_INTERVAL_MS);
   const minUpdateIntervalMs = clampPositiveInt(
     config?.minUpdateIntervalMs,
@@ -62,9 +54,6 @@ function resolveAutoPresenceConfig(
 }
 
 function isExhaustedUnavailableReason(reason: AuthProfileFailureReason | null): boolean {
-  if (!reason) {
-    return false;
-  }
   return (
     reason === "rate_limit" ||
     reason === "overloaded" ||

@@ -103,15 +103,6 @@ it("refuses a second direct Gateway until the first finishes closing", async () 
   expect(await readActiveGatewayLockIdentity()).toBeUndefined();
 });
 
-it("releases direct ownership after a clean startup failure", async () => {
-  runtime.startupError = new Error("startup failed");
-  await expect(startGatewayServer(18701)).rejects.toBe(runtime.startupError);
-  runtime.startupError = undefined;
-  const successor = await startGatewayServer(18702);
-  await successor.close();
-  expect(await readActiveGatewayLockIdentity()).toBeUndefined();
-});
-
 it("joins a lost direct owner's close once before releasing its lock", async () => {
   const closing = createDeferredCore();
   const closed = createDeferredCore();
@@ -188,11 +179,14 @@ it("keeps the run loop's owner across server generations and rejects its retired
   );
 });
 
-it.each(["startup", "shutdown"] as const)(
-  "retains direct ownership when %s cleanup has not completed",
+it.each(["clean startup", "startup", "shutdown"] as const)(
+  "releases ownership only after successful cleanup: %s",
   async (phase) => {
-    const failure = new GatewayStartupCleanupError(new Error("startup"), new Error("cleanup"));
-    if (phase === "startup") {
+    const failure =
+      phase === "clean startup"
+        ? new Error("startup failed")
+        : new GatewayStartupCleanupError(new Error("startup"), new Error("cleanup"));
+    if (phase !== "shutdown") {
       runtime.startupError = failure;
       await expect(startGatewayServer(18701)).rejects.toBe(failure);
       runtime.startupError = undefined;
@@ -204,6 +198,12 @@ it.each(["startup", "shutdown"] as const)(
       await expect(first.close()).rejects.toBe(failure);
       runtime.close = async () => {};
     }
-    await expect(startGatewayServer(18702)).rejects.toThrow("gateway state ownership");
+    if (phase === "clean startup") {
+      const successor = await startGatewayServer(18702);
+      await successor.close();
+      expect(await readActiveGatewayLockIdentity()).toBeUndefined();
+    } else {
+      await expect(startGatewayServer(18702)).rejects.toThrow("gateway state ownership");
+    }
   },
 );

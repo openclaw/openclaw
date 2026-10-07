@@ -16,6 +16,7 @@ import {
   clearPublishedSwarmCollectorOutput,
   updateSwarmCollectorCompletion,
 } from "../swarm/swarm-collector.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   prepareSubagentKillSession,
   type SubagentKillSession,
@@ -29,10 +30,7 @@ import {
 import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lifecycle-context.js";
-import {
-  captureSubagentRunResult,
-  refreshPendingFinalDeliveryPayload,
-} from "./subagent-registry-lifecycle-delivery.js";
+import { captureSubagentRunResult } from "./subagent-registry-lifecycle-delivery.js";
 import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
@@ -47,18 +45,11 @@ import {
   resolveSubagentRunEffectiveEndedAt,
 } from "./subagent-run-timeout.js";
 
-type BrowserCleanupModule = typeof import("../../../browser-lifecycle-cleanup.js");
-type BrowserCleanup = BrowserCleanupModule["cleanupBrowserSessionsForLifecycleEnd"];
-
 const MISSING_REQUIRED_FINAL_REPLY_ERROR = "subagent run ended before producing a final reply";
 
-const browserCleanupLoader = createLazyImportLoader<BrowserCleanupModule>(
+const browserCleanupLoader = createLazyImportLoader(
   () => import("../../../browser-lifecycle-cleanup.js"),
 );
-
-async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<BrowserCleanup> {
-  return (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd;
-}
 
 function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): boolean {
   if (
@@ -162,11 +153,7 @@ export async function completeSubagentRunAttempt(
     ? getCurrentSubagentRunOwner(params.runs, completeParams.expectedEntry)
     : params.runs.get(completeParams.runId);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  if (
-    !selectedOwner ||
-    (completeParams.expectedEntry &&
-      !isSameSubagentRunOwner(selectedOwner, completeParams.expectedEntry))
-  ) {
+  if (!selectedOwner) {
     return;
   }
   let releaseCompletionLock: (() => void) | undefined = await context.acquireTerminalCompletionLock(
@@ -174,7 +161,7 @@ export async function completeSubagentRunAttempt(
   );
   let collectorSession: SubagentKillSession | undefined;
   const selected = getCurrentSubagentRunOwner(params.runs, selectedOwner);
-  if (!selected || !isSameSubagentRunOwner(selected, selectedOwner)) {
+  if (!selected) {
     releaseCompletionLock();
     throw new SubagentRegistryMutationRejectedError("Subagent terminal execution changed");
   }
@@ -228,6 +215,7 @@ export async function completeSubagentRunAttempt(
     });
     const prepared = {
       now,
+      childAgentId: resolveSubagentChildSessionOwner(selected, params.getRuntimeConfig()).agentId,
       watcherStorePaths: captureSessionWatcherStorePaths([selected.requesterSessionKey]),
       suppressSessionEffects,
       structuredOutput,
@@ -277,6 +265,7 @@ export async function completeSubagentRunAttempt(
                     prepareSubagentTerminalState(
                       {
                         childSessionKey: entry.childSessionKey,
+                        agentId: prepared.childAgentId,
                         runId: entry.runId,
                         requesterSessionKey: entry.requesterSessionKey,
                         outcomeStatus,
@@ -353,7 +342,7 @@ export async function completeSubagentRunAttempt(
       assertCurrent,
       loadCleanupBrowserSessionsForLifecycleEnd:
         params.loadCleanupBrowserSessionsForLifecycleEnd ??
-        loadCleanupBrowserSessionsForLifecycleEnd,
+        (async () => (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd),
     });
   } finally {
     releaseCompletionLock?.();
@@ -715,7 +704,20 @@ function planTerminalCompletion(
   } else {
     updateSubagentArchiveAtMs(entry, params.getRuntimeConfig());
   }
-  refreshPendingFinalDeliveryPayload(entry);
+  const delivery = entry.delivery;
+  if (
+    delivery?.payload &&
+    delivery.status !== "delivered" &&
+    typeof delivery.announcedAt !== "number"
+  ) {
+    delivery.payload = {
+      ...delivery.payload,
+      startedAt: entry.execution.startedAt,
+      endedAt: entry.execution.endedAt,
+      outcome: entry.execution.outcome,
+      terminalReply: entry.completion?.terminalReply,
+    };
+  }
   const mutated = !isDeepStrictEqual(currentEntry, entry);
   return {
     entry: mutated ? entry : currentEntry,

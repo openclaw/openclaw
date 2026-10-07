@@ -1,7 +1,10 @@
 import path from "node:path";
 import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { addSession, markExited } from "./bash-process-registry.js";
@@ -9,6 +12,7 @@ import { createProcessSessionFixture } from "./bash-process-registry.test-helper
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
+import * as persistence from "./subagents/registry/subagent-registry-persistence.js";
 import { mutateSubagentRuns } from "./subagents/registry/subagent-registry-persistence.js";
 import {
   addSubagentRunForTests,
@@ -105,7 +109,7 @@ function createTestOpenClawTools(
     ...options,
     config: {
       ...options.config,
-      agents: options.config?.agents ?? { entries: { main: { default: true } } },
+      agents: options.config?.agents ?? { entries: { main: {} } },
     } satisfies OpenClawConfig,
     wrapBeforeToolCallHook: false,
   });
@@ -147,6 +151,241 @@ describe("requester yield ownership", () => {
     },
   );
 
+  it.each([
+    { kind: "visible child", key: "dashboard:visible", child: true },
+    { kind: "hidden child", key: "subagent:hidden", child: true },
+    { kind: "dashboard root", key: "dashboard:root", child: false },
+    { kind: "Home-linked root", key: "dashboard:home", child: false },
+  ])("uses native task ownership for $kind message waits", async ({ key, child }) => {
+    const workspace = sessionDirs.make();
+    const storePath = path.join(workspace, "sessions.json");
+    const sessionKey = "agent:main:" + key;
+    const runId = "envelope-run";
+    const config: OpenClawConfig = {
+      agents: { entries: { main: { workspace } } },
+      session: { store: storePath },
+      tools: { profile: "coding" },
+    };
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionId: "envelope-session",
+        updatedAt: 1,
+        parentSessionKey: "agent:main:main",
+        ...(child
+          ? { spawnedBy: "agent:main:main", spawnDepth: 1, inheritedToolPolicyVersion: 1 }
+          : {}),
+      },
+    );
+    if (child) {
+      await seedRequiredChild("agent:main:main", {
+        runId,
+        childSessionKey: sessionKey,
+        childAgentId: "main",
+        requesterTurnRunId: undefined,
+      });
+    }
+    const onYield = vi.fn();
+    const tools = createTestOpenClawTools({
+      config,
+      sessionKey,
+      sessionId: "envelope-session",
+      runId,
+      onYield,
+    });
+    expect(
+      (await requireTool(tools, "sessions_yield").execute("message-wait", { waitFor: "message" }))
+        .details,
+    ).toMatchObject({ status: child ? "yielded" : "nothing_pending" });
+    expect(tools.some((tool) => tool.name === "sessions_send")).toBe(!child);
+    if (child) {
+      expect(onYield).toHaveBeenCalledWith("Turn yielded.", undefined, true);
+      expect(getSubagentRunByRunId(runId)?.requesterSettleWake?.pauseNotice).toBeDefined();
+    } else {
+      expect(onYield).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(["missing", "terminal", "stopped", "collector", "foreign-agent"] as const)(
+    "rejects an ineligible %s message wait",
+    async (kind) => {
+      const sessionKey = "agent:main:subagent:invalid";
+      if (kind !== "missing") {
+        await seedRequiredChild("agent:main:main", {
+          runId: "invalid",
+          childSessionKey: sessionKey,
+          childAgentId: kind === "foreign-agent" ? "peer" : "main",
+          requesterTurnRunId: undefined,
+          ...(kind === "terminal"
+            ? { execution: { status: "terminal", endedAt: 2000, outcome: { status: "ok" } } }
+            : {}),
+          ...(kind === "stopped" ? { suppressCompletionDelivery: true } : {}),
+          ...(kind === "collector" ? { collect: true } : {}),
+        });
+      }
+      const onYield = vi.fn();
+      const tool = createYieldToolForTurn({
+        requesterSessionKey: sessionKey,
+        requesterTurnRunId: "invalid",
+        onYield,
+      });
+      expect((await tool.execute("invalid-wait", { waitFor: "message" })).details).toMatchObject({
+        status: "nothing_pending",
+      });
+      expect(onYield).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { announcing: true, sameTask: true, successorAgent: "main" },
+    { announcing: false, sameTask: true, successorAgent: "main" },
+    { announcing: true, sameTask: false, successorAgent: "main" },
+    { announcing: false, sameTask: false, successorAgent: "main" },
+    { announcing: true, sameTask: true, successorAgent: "peer" },
+  ])(
+    "keeps message waits task- and agent-scoped ($announcing/$sameTask/$successorAgent)",
+    async ({ announcing, sameTask, successorAgent }) => {
+      const child = await seedRequiredChild("agent:main:main", {
+        generation: 1,
+        taskRunId: "logical-task",
+        childAgentId: "main",
+        expectsCompletionMessage: announcing,
+        completion: { required: announcing },
+        requesterTurnRunId: undefined,
+      });
+      await seedRequiredChild("agent:main:main", {
+        runId: "successor",
+        generation: 2,
+        childSessionKey: child.childSessionKey,
+        childAgentId: successorAgent,
+        taskRunId: sameTask ? child.taskRunId : undefined,
+        requesterTurnRunId: undefined,
+      });
+      const accepted = !sameTask || successorAgent !== "main";
+      const onYield = vi.fn();
+      const tool = createYieldToolForTurn({
+        requesterSessionKey: child.childSessionKey,
+        requesterTurnRunId: child.runId,
+        onYield,
+      });
+      expect((await tool.execute("generation-wait", { waitFor: "message" })).details).toMatchObject(
+        { status: accepted ? "yielded" : "nothing_pending" },
+      );
+      if (accepted) {
+        expect(onYield).toHaveBeenCalledWith("Turn yielded.", undefined, announcing);
+      } else {
+        expect(onYield).not.toHaveBeenCalled();
+      }
+      expect(Boolean(getSubagentRunByRunId(child.runId)?.requesterSettleWake?.pauseNotice)).toBe(
+        accepted && announcing,
+      );
+    },
+  );
+
+  it.each(
+    (["before commit", "after commit", "quiet before plan", "quiet after plan"] as const).flatMap(
+      (phase) => [true, false].map((sameTask) => ({ phase, sameTask })),
+    ),
+  )("rechecks native ownership $phase (same task: $sameTask)", async ({ phase, sameTask }) => {
+    const quiet = phase.startsWith("quiet");
+    const child = await seedRequiredChild("agent:main:main", {
+      childAgentId: "main",
+      taskRunId: "logical-task",
+      generation: 1,
+      expectsCompletionMessage: !quiet,
+      completion: { required: !quiet },
+      requesterTurnRunId: undefined,
+    });
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    let held = false;
+    const hold = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    const runWorker = stateWorker.runOpenClawStateWorkerOperation;
+    const mutate = persistence.mutateSubagentRuns;
+    const barrier = quiet
+      ? vi.spyOn(persistence, "mutateSubagentRuns").mockImplementation(async (...args) => {
+          if (held || !args[0].includes(child.runId)) {
+            return mutate(...args);
+          }
+          held = true;
+          if (phase === "quiet before plan") {
+            await hold();
+            return mutate(...args);
+          }
+          const result = await mutate(...args);
+          await hold();
+          return result;
+        })
+      : vi
+          .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+          .mockImplementation((context, run, options) =>
+            runWorker(
+              context,
+              (scope) =>
+                run({
+                  ...scope,
+                  execute: async (command, executeOptions) => {
+                    const selected = command.type === "subagents.persistChanges" && !held;
+                    if (selected) {
+                      held = true;
+                    }
+                    if (selected && phase === "before commit") {
+                      await hold();
+                    }
+                    const result = await scope.execute(command, executeOptions);
+                    if (selected && phase === "after commit") {
+                      await hold();
+                    }
+                    return result;
+                  },
+                }),
+              options,
+            ),
+          );
+    const onYield = vi.fn();
+    const yielding = createYieldToolForTurn({
+      requesterSessionKey: child.childSessionKey,
+      requesterTurnRunId: child.runId,
+      onYield,
+    }).execute("yield-await", { waitFor: "message" });
+    void yielding.catch(() => {});
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        yielding,
+        "yield did not reach its owner barrier",
+      );
+      await seedRequiredChild("agent:main:main", {
+        runId: "newer-run",
+        childSessionKey: child.childSessionKey,
+        childAgentId: "main",
+        taskRunId: sameTask ? child.taskRunId : undefined,
+        generation: 2,
+        requesterTurnRunId: undefined,
+      });
+      release.resolve();
+      if (sameTask) {
+        await expect(yielding).rejects.toThrow("current native task");
+        expect(onYield).not.toHaveBeenCalled();
+      } else {
+        expect((await yielding).details).toMatchObject({ status: "yielded" });
+        expect(onYield).toHaveBeenCalledWith("Turn yielded.", undefined, !quiet);
+      }
+      // A known commit stays published even when a newer task invalidates the caller.
+      // No-write quiet claims and refused pre-commit grants never create a notice.
+      expect(Boolean(getSubagentRunByRunId(child.runId)?.requesterSettleWake?.pauseNotice)).toBe(
+        !quiet && (!sameTask || phase === "after commit"),
+      );
+    } finally {
+      release.resolve();
+      await Promise.allSettled([yielding]);
+      barrier.mockRestore();
+    }
+  });
+
   it("omits yield for the execution identity and leaves its child owned", async () => {
     await seedRequiredChild();
     const before = structuredClone(getSubagentRunByRunId("run-child"));
@@ -179,6 +418,11 @@ describe("requester yield ownership", () => {
     "keeps a subagent active until its background exec result is collected ($label)",
     async ({ controllerKey, runKey, scopeKey }) => {
       const sessionKey = runKey ?? controllerKey;
+      await seedRequiredChild("agent:main:main", {
+        runId: "run-watcher",
+        childSessionKey: sessionKey,
+        requesterTurnRunId: undefined,
+      });
       const process = backgroundProcess(sessionKey, scopeKey);
       const onYield = vi.fn();
       const tools = createTestOpenClawTools({
@@ -227,6 +471,11 @@ describe("requester yield ownership", () => {
   it.each(["running", "finished"])(
     "ignores another session's %s background exec for subagent self-yield",
     async (state) => {
+      await seedRequiredChild("agent:main:main", {
+        runId: "run-watcher",
+        childSessionKey: "agent:main:subagent:watcher",
+        requesterTurnRunId: undefined,
+      });
       const process = backgroundProcess("agent:main:subagent:other");
       if (state === "finished") {
         markExited(process, 2, null, "failed");
@@ -272,6 +521,11 @@ describe("requester yield ownership", () => {
 
   it("checks background exec after an awaited runtime completion claim", async () => {
     const sessionKey = "agent:main:subagent:watcher";
+    await seedRequiredChild("agent:main:main", {
+      runId: "run-watcher",
+      childSessionKey: sessionKey,
+      requesterTurnRunId: undefined,
+    });
     const onYield = vi.fn();
     const tool = createTestOpenClawTools({
       sessionKey,
@@ -329,7 +583,7 @@ describe("requester yield ownership", () => {
       const workspace = sessionDirs.make();
       const storePath = path.join(workspace, "sessions.json");
       const config: OpenClawConfig = {
-        agents: { entries: { main: { default: true, workspace } } },
+        agents: { entries: { main: { workspace } } },
         session: { store: storePath },
         tools: policy,
       };

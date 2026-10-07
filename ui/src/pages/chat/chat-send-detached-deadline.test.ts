@@ -108,65 +108,21 @@ async function startApproval() {
   return { host, client, ws, observed, settled, sending, send, attachment, bytes, message };
 }
 
-it("settles a detached approval at its ACK deadline despite healthy ticks, without replay", async () => {
-  const { host, client, ws, observed, settled, sending, send, attachment, bytes, message } =
-    await startApproval();
-  await heartbeatUntilDeadline(ws);
-  expect(settled).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(1);
-  expect(ws.lastClose).toBeNull();
-  expect(client.connected).toBe(true);
-  expect(settled).toHaveBeenCalledOnce();
-  await sending;
-  const result = observed.mock.results[0]!;
-  if (result.type !== "return") {
-    throw new Error("chat.send did not return its protocol promise");
-  }
-  await expect(result.value).rejects.toBeInstanceOf(GatewayProtocolRequestTimeoutError);
-  await expect(result.value).rejects.toMatchObject({
-    requestSent: true,
-    timeoutMs: 30_000,
-    method: "chat.send",
-  });
-  expect(host.chatSubmitGuards?.size).toBe(0);
-  expect(host.chatRunId).toBe("active-run");
-  expect(host.chatStream).toBe("Waiting for approval");
-  expect(host.chatError).toBe(UNCONFIRMED_CHAT_SEND_ERROR);
-  expect(host.chatMessage).toBe(message);
-  expect(host.chatAttachments).toMatchObject([{ id: attachment.id }]);
-  expect(getChatAttachmentBlob(host.chatAttachments[0]!)).toBe(bytes);
-  expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(
-    "data:application/pdf;base64,JVBERi0xLjQK",
-  );
-  expect(host.chatQueue).toEqual([]);
-  ws.emitMessage({
-    type: "res",
-    id: send.id,
-    ok: true,
-    payload: { status: "started", runId: "late-command" },
-  });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(host.chatMessage).toBe(message);
-  expect(host.chatError).toBe(UNCONFIRMED_CHAT_SEND_ERROR);
-  expect(host.chatRunId).toBe("active-run");
-  client.stop();
-  await connect(client);
-  await resumeStoredChatOutboxes(host);
-  expect(wsInstances.flatMap((socket) => requests(socket, "chat.send"))).toHaveLength(1);
-  expect(host.chatMessage).toBe(message);
-  expect(host.chatRunId).toBe("active-run");
-});
-
-it.each(["newer input", "navigation", "account"] as const)(
-  "fences an expired approval and late ACK after %s",
+it.each(["unchanged", "newer input", "navigation", "account"] as const)(
+  "settles the ACK deadline without replay or stale recovery after %s",
   async (change) => {
-    const { host, ws, settled, sending, send, attachment, bytes, message } = await startApproval();
+    const { host, client, ws, observed, settled, sending, send, attachment, bytes, message } =
+      await startApproval();
     const originalSessionKey = host.sessionKey;
-    const newerAttachment = createStagedAttachment("newer-approval-document");
+    const newerAttachment =
+      change === "unchanged" ? attachment : createStagedAttachment("newer-approval-document");
     const newerBytes = getChatAttachmentBlob(newerAttachment);
-    host.chatMessage = "Keep my newer input";
-    host.chatAttachments = [newerAttachment];
-    host.chatError = "Current context notice";
+    const draft = change === "unchanged" ? message : "Keep my newer input";
+    if (change !== "unchanged") {
+      host.chatMessage = draft;
+      host.chatAttachments = [newerAttachment];
+      host.chatError = "Current context notice";
+    }
     if (change === "navigation") {
       host.sessionKey = "agent:main:other";
     } else if (change === "account") {
@@ -184,16 +140,40 @@ it.each(["newer input", "navigation", "account"] as const)(
     await heartbeatUntilDeadline(ws);
     expect(settled).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
+    expect(ws.lastClose).toBeNull();
+    expect(client.connected).toBe(true);
     expect(settled).toHaveBeenCalledOnce();
     await sending;
+    const result = observed.mock.results[0]!;
+    if (result.type !== "return") {
+      throw new Error("chat.send did not return its protocol promise");
+    }
+    await expect(result.value).rejects.toBeInstanceOf(GatewayProtocolRequestTimeoutError);
+    await expect(result.value).rejects.toMatchObject({
+      requestSent: true,
+      timeoutMs: 30_000,
+      method: "chat.send",
+    });
     expect(host.chatSubmitGuards?.size).toBe(0);
-    expect(host.chatMessage).toBe("Keep my newer input");
-    expect(host.chatAttachments).toEqual([newerAttachment]);
-    expect(getChatAttachmentBlob(newerAttachment)).toBe(newerBytes);
-    expect(host.chatError).toBe(
-      change === "newer input" ? UNCONFIRMED_CHAT_SEND_ERROR : "Current context notice",
-    );
     expect(host.chatRunId).toBe("active-run");
+    const expectedError =
+      change === "unchanged" || change === "newer input"
+        ? UNCONFIRMED_CHAT_SEND_ERROR
+        : "Current context notice";
+    expect(host.chatError).toBe(expectedError);
+    expect(host.chatMessage).toBe(draft);
+    if (change === "unchanged") {
+      expect(host.chatStream).toBe("Waiting for approval");
+      expect(host.chatAttachments).toMatchObject([{ id: attachment.id }]);
+      expect(getChatAttachmentBlob(host.chatAttachments[0]!)).toBe(bytes);
+      expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(
+        "data:application/pdf;base64,JVBERi0xLjQK",
+      );
+      expect(host.chatQueue).toEqual([]);
+    } else {
+      expect(host.chatAttachments).toEqual([newerAttachment]);
+      expect(getChatAttachmentBlob(newerAttachment)).toBe(newerBytes);
+    }
     if (change === "navigation") {
       const saved = Object.values(host.chatComposerFallbackByScope);
       expect(saved).toEqual([
@@ -215,9 +195,18 @@ it.each(["newer input", "navigation", "account"] as const)(
       payload: { status: "started", runId: "late-command" },
     });
     await vi.advanceTimersByTimeAsync(0);
+    expect(host.chatMessage).toBe(draft);
+    expect(host.chatError).toBe(expectedError);
+    expect(host.chatRunId).toBe("active-run");
+    if (change === "unchanged") {
+      client.stop();
+      await connect(client);
+    }
     await resumeStoredChatOutboxes(host);
-    expect(host.chatMessage).toBe("Keep my newer input");
-    expect(host.chatAttachments).toEqual([newerAttachment]);
+    expect(host.chatMessage).toBe(draft);
+    if (change !== "unchanged") {
+      expect(host.chatAttachments).toEqual([newerAttachment]);
+    }
     expect(host.chatComposerFallbackByScope).toEqual(fallback);
     expect(host.chatRunId).toBe("active-run");
     expect(wsInstances.flatMap((socket) => requests(socket, "chat.send"))).toHaveLength(1);

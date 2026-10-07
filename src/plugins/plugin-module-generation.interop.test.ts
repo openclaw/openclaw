@@ -4,6 +4,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
 import { describe, expect, it } from "vitest";
+import { isPathInside } from "../infra/path-guards.js";
+import { toSafeImportPath } from "../shared/import-specifier.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { createPluginModuleGenerationTestHarness } from "./plugin-module-generation.test-support.js";
 
@@ -153,7 +155,10 @@ describe("native plugin generation interop", () => {
       const namespace = pathToFileURL(directory).href;
       const captured = plugin.captured;
       return Object.entries(cache).filter(
-        ([id]) => id === captured || id.startsWith(directory) || id.startsWith(namespace),
+        ([id]) =>
+          id === captured ||
+          (path.isAbsolute(id) && isPathInside(directory, id)) ||
+          id.startsWith(namespace),
       );
     };
     const first = host(root);
@@ -162,7 +167,7 @@ describe("native plugin generation interop", () => {
     await expect(plugin.read()).resolves.toMatchObject({ value: 42 });
     const owned = records(plugin);
     expect(owned.length).toBeGreaterThan(0);
-    expect(owned.some(([id]) => id === plugin.captured)).toBe(true);
+    expect(owned.some(([id]) => path.relative(plugin.captured, id) === "")).toBe(true);
     if (!process.versions.bun) {
       expect(owned.some(([id]) => !id.startsWith("file:") && id.endsWith(".mjs"))).toBe(true);
       expect(owned.some(([id]) => !id.startsWith("file:") && id.endsWith(".js"))).toBe(true);
@@ -494,7 +499,8 @@ describe("native plugin generation interop", () => {
         read(name: string): Promise<{ value: number }>;
       };
       const first = path.join(root, "node_modules/source-dependency/first.mjs");
-      const specifier = reference === "absolute" ? first : pathToFileURL(first).href;
+      const specifier =
+        reference === "absolute" ? toSafeImportPath(first) : pathToFileURL(first).href;
       await expect(plugin.read(specifier)).resolves.toMatchObject({ value: 42 });
       fs.writeFileSync(first, "export const value = 43;");
       fs.writeFileSync(path.join(pluginRoot, "later.mjs"), "export const value = 2;");
@@ -593,7 +599,8 @@ describe("native plugin generation interop", () => {
         "node_modules/source-dependency/value.mjs": "export const value = 42;",
       });
       const dependency = path.join(root, "node_modules/source-dependency/value.mjs");
-      const specifier = reference === "absolute" ? dependency : pathToFileURL(dependency).href;
+      const specifier =
+        reference === "absolute" ? toSafeImportPath(dependency) : pathToFileURL(dependency).href;
       fs.writeFileSync(
         path.join(root, "entry.mjs"),
         `export const read = async () => (await import(${JSON.stringify(specifier)})).value;`,
@@ -647,7 +654,7 @@ describe("native plugin generation interop", () => {
         reference === "relative"
           ? `../shared/value.${extension}`
           : reference === "absolute"
-            ? shared
+            ? toSafeImportPath(shared)
             : pathToFileURL(shared).href;
       fs.writeFileSync(
         path.join(root, "plugin", `entry.${extension}`),
@@ -659,9 +666,9 @@ describe("native plugin generation interop", () => {
         readLocal(specifier: string): Promise<number>;
       };
       expect(first).toMatchObject({ value: 42 });
-      await expect(first.readLocal(path.join(root, "plugin", `local.${extension}`))).resolves.toBe(
-        17,
-      );
+      await expect(
+        first.readLocal(pathToFileURL(path.join(root, "plugin", `local.${extension}`)).href),
+      ).resolves.toBe(17);
       fs.writeFileSync(shared, "export const answer = 43;");
       expect(host(path.join(root, "plugin"), true).load(`entry.${extension}`)).toMatchObject({
         value: 43,

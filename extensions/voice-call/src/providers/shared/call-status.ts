@@ -1,15 +1,13 @@
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EndReason } from "../../types.js";
 
-// Shared provider status normalization and terminal-state mapping.
-
-const TERMINAL_PROVIDER_STATUS_TO_END_REASON: Record<string, EndReason> = {
-  completed: "completed",
-  failed: "failed",
-  busy: "busy",
-  "no-answer": "no-answer",
-  canceled: "hangup-bot",
-};
+const TERMINAL_PROVIDER_STATUS_TO_END_REASON = new Map<string, EndReason>([
+  ["completed", "completed"],
+  ["failed", "failed"],
+  ["busy", "busy"],
+  ["no-answer", "no-answer"],
+  ["canceled", "hangup-bot"],
+]);
 
 /** Normalize provider status text, falling back to "unknown". */
 export function normalizeProviderStatus(status: string | null | undefined): string {
@@ -18,12 +16,7 @@ export function normalizeProviderStatus(status: string | null | undefined): stri
 
 /** Map terminal provider status strings to OpenClaw end reasons. */
 export function mapProviderStatusToEndReason(status: string | null | undefined): EndReason | null {
-  const normalized = normalizeProviderStatus(status);
-  // Provider status is remote-controlled, so an inherited key such as
-  // "constructor" or "__proto__" must not read through to Object.prototype.
-  return Object.hasOwn(TERMINAL_PROVIDER_STATUS_TO_END_REASON, normalized)
-    ? (TERMINAL_PROVIDER_STATUS_TO_END_REASON[normalized] ?? null)
-    : null;
+  return TERMINAL_PROVIDER_STATUS_TO_END_REASON.get(normalizeProviderStatus(status)) ?? null;
 }
 
 /** Return true when a provider status is terminal. */

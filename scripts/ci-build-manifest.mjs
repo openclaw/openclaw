@@ -13,6 +13,8 @@ import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version
 const fromTarget = (specifier) => pathToFileURL(path.resolve(process.cwd(), specifier)).href;
 
 const workflowEventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
+// Dispatch fallbacks retain their existing scope even when they use PR planning.
+const ordinaryPullRequest = workflowEventName === "pull_request";
 const ciQualification =
   workflowEventName === "workflow_dispatch" &&
   process.env.OPENCLAW_CI_RELEASE_GATE === "true" &&
@@ -350,6 +352,7 @@ const pluginContractShards =
 const channelContractShards =
   !runtimePullRequest && runNodeFull && !releaseFastLane ? createChannelContractTestShards() : [];
 const runMacos =
+  !ordinaryPullRequest &&
   !nativeGeneratedOnly &&
   parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_MACOS) &&
   !docsOnly &&
@@ -358,7 +361,8 @@ const runMacos =
 // Older selected checkouts report only run_macos; retain their native Node coverage.
 const runMacosNode =
   runMacos ||
-  (!nativeGeneratedOnly &&
+  (!ordinaryPullRequest &&
+    !nativeGeneratedOnly &&
     parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_MACOS_NODE) &&
     !docsOnly &&
     isCanonicalRepository &&
@@ -369,7 +373,7 @@ const supportsCurrentMacosSwiftCi =
   existsSync("scripts/format-swift.sh");
 const supportsIosBuild = hasPackageScript("ios:build");
 const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
-const runIosBuild =
+const iosBuildScope =
   !nativeGeneratedOnly &&
   parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
   !releaseFastLane &&
@@ -377,6 +381,7 @@ const runIosBuild =
   !docsOnly &&
   isCanonicalRepository &&
   (!frozenTarget || supportsCurrentIosCi || (releaseCandidateTarget && supportsIosBuild));
+const runIosBuild = !ordinaryPullRequest && iosBuildScope;
 const runAndroid =
   !nativeGeneratedOnly &&
   parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_ANDROID) &&
@@ -394,6 +399,7 @@ const runAndroidAccessNative =
       "apps/android/app/src/androidTest/java/ai/openclaw/app/gateway/CloudflareAccessNativeTest.kt",
     ));
 let runWindows =
+  !ordinaryPullRequest &&
   parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
   !releaseFastLane &&
   !docsOnly &&
@@ -423,7 +429,7 @@ const selectUiE2eFamily = (family) =>
     : runUiTests);
 let runControlUiE2e = selectUiE2eFamily("control-ui");
 let runBrowserExtensionE2e = selectUiE2eFamily("browser-extension");
-let runUiRealGateway = selectUiE2eFamily("real-gateway");
+let runUiRealGateway = !ordinaryPullRequest && selectUiE2eFamily("real-gateway");
 let runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
 const nodeRunnerBackend = process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND || runnerProfile;
 const usesHostedRunnerProfile = runnerProfile === "github" || runnerProfile === "hybrid";
@@ -598,11 +604,14 @@ if (selectedTestTargets) {
   if (!uiTestGroups) {
     throw new Error("Current PR CI requires UI target groups");
   }
-  const selected = new Set(selectedTestTargets);
   const { controlUiE2eTestGlobs, isUiTestTarget, uiE2eRealGatewayTestFiles } = await import(
     fromTarget("./test/vitest/vitest.ui-paths.mjs")
   );
   const realGatewayTargets = new Set(uiE2eRealGatewayTestFiles);
+  if (ordinaryPullRequest) {
+    selectedTestTargets = selectedTestTargets.filter((file) => !realGatewayTargets.has(file));
+  }
+  const selected = new Set(selectedTestTargets);
   const selectedControlUiFiles = new Set(uiE2eSelection?.files);
   const narrowGroups = (groups, ownsFile, retainsFile) =>
     groups
@@ -626,7 +635,7 @@ if (selectedTestTargets) {
         controlUiE2eTestGlobs.some((pattern) => matchesGlob(file, pattern)),
       (file) =>
         realGatewayTargets.has(file)
-          ? uiOwnerScope.realGateway || selected.has(file)
+          ? !ordinaryPullRequest && (uiOwnerScope.realGateway || selected.has(file))
           : uiE2eSelection
             ? selectedControlUiFiles.has(file)
             : uiOwnerScope.mocked || selected.has(file),
@@ -727,7 +736,7 @@ const publishedDriverUpdate =
   supportsPublishedDriverUpdate &&
   !docsOnly &&
   (runtimePullRequest
-    ? publishedDriverUpdatePlan.shouldRunPublishedDriverUpdate(changedPaths)
+    ? publishedDriverUpdatePlan.shouldRunPublishedDriverUpdate(changedPaths, workflowEventName)
     : runProofTier && (ownerPathEvent || eventName === "workflow_dispatch" || mainValidation));
 // Canonical pushes also use compact bins: 80+ single-group jobs
 // drain the runner pool for minutes, and per-shard check names on
@@ -1022,14 +1031,16 @@ const plannedUiRealGatewayShards =
     : selectedTestTargets
       ? []
       : [{ shard: 1, shard_count: 1, run_desktop: true, groups: uiTestGroups?.e2e }];
-const uiRealGatewayShards = selectedTestTargets
-  ? plannedUiRealGatewayShards
-      .map((shard) => ({
-        ...shard,
-        groups: shard.groups?.filter((group) => group.includePatterns?.length > 0),
-      }))
-      .filter((shard) => shard.run_desktop || shard.groups?.length > 0)
-  : plannedUiRealGatewayShards;
+const uiRealGatewayShards = ordinaryPullRequest
+  ? []
+  : selectedTestTargets
+    ? plannedUiRealGatewayShards
+        .map((shard) => ({
+          ...shard,
+          groups: shard.groups?.filter((group) => group.includePatterns?.length > 0),
+        }))
+        .filter((shard) => shard.run_desktop || shard.groups?.length > 0)
+    : plannedUiRealGatewayShards;
 const projectNodeTestGroup = ({
   configs,
   env,
@@ -1205,7 +1216,7 @@ if (startupCorpusNodeRevision) {
 // an actual dist descriptor transfers that owner to build-artifacts.
 const runNodeCoreDist = nodeTestDistShards.length > 0;
 const runTuiPty = runNodeFull && ((runProofTier && runNodeCoreDist) || selectedTuiPty);
-const protocolCoverageRequested = runNode || runIosBuild || runAndroid;
+const protocolCoverageRequested = runNode || iosBuildScope || runAndroid;
 const runProtocolEventCoverage =
   protocolCoverageRequested &&
   (!frozenTarget || existsSync("scripts/check-protocol-event-coverage.mjs"));
@@ -1255,10 +1266,11 @@ const additionalChecks = [
   },
 ].filter(
   ({ group }) =>
-    !narrowCheckScope ||
-    (group === "prompt-snapshots"
-      ? changedScopeHasPromptSnapshotImpact
-      : narrowCheckScope.additionalGroups.includes(group)),
+    !(ordinaryPullRequest && group === "runtime-topology-architecture") &&
+    (!narrowCheckScope ||
+      (group === "prompt-snapshots"
+        ? changedScopeHasPromptSnapshotImpact
+        : narrowCheckScope.additionalGroups.includes(group))),
 );
 // Move an already-selected boundary row; sharing must never add another CI job.
 const sharedSdkDeclarations =
@@ -1279,6 +1291,10 @@ if (sharedSdkDeclarations) {
     1,
   );
 }
+const runPrMadgeImportCycles =
+  runCheck && ordinaryPullRequest && (proposedCheckScope?.madgeImportCycles ?? true);
+const runPrKyselyGuardrails =
+  runCheck && ordinaryPullRequest && (proposedCheckScope?.kyselyGuardrails ?? true);
 const checkTasks = [
   ...["guards", "npm-lock", "bundled-channel-config-metadata", "prod-types"].map((task) => ({
     check_name: `check-${task}`,
@@ -1291,6 +1307,9 @@ const checkTasks = [
     runner: "blacksmith-16vcpu-ubuntu-2404",
   })),
 ].filter((row) => {
+  if (ordinaryPullRequest && row.task === "dependencies") {
+    return false;
+  }
   if (!narrowCheckScope) {
     return true;
   }
@@ -1301,6 +1320,17 @@ const checkTasks = [
     ? narrowCheckScope.lint
     : narrowCheckScope.checkTasks.includes(row.task);
 });
+
+// Keep the selected source scans independent of the other PR guards.
+const guardRow = checkTasks.find(({ task }) => task === "guards");
+const splitPrGuards = guardRow !== undefined && (runPrMadgeImportCycles || runPrKyselyGuardrails);
+if (splitPrGuards) {
+  checkTasks.push({
+    check_name: "check-guards-architecture",
+    task: "guards-architecture",
+    runner: guardRow.runner,
+  });
+}
 
 // The selected guards row owns the same coercion scan; fast-only plans retain its row.
 if (
@@ -1317,7 +1347,7 @@ if (
 
 // These rows need no compiler plan; retain their existing full-check placement.
 if (runCheckPlan && runNodeFull && !releaseFastLane) {
-  for (const task of ["guards", "dependencies"]) {
+  for (const task of ["guards", "guards-architecture", "dependencies"]) {
     const index = checkTasks.findIndex((row) => row.task === task);
     if (index >= 0) {
       const { task: group, ...row } = checkTasks.splice(index, 1)[0];
@@ -1338,6 +1368,8 @@ const manifest = {
   run_published_driver_update: publishedDriverUpdate,
   run_macos: runMacos,
   run_android: runAndroid,
+  run_android_screenshots:
+    !ordinaryPullRequest && parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_ANDROID_SCREENSHOTS),
   run_skills_python: runSkillsPython,
   run_windows: runWindows,
   run_build_artifacts: runBuildArtifacts,
@@ -1378,6 +1410,10 @@ const manifest = {
   checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
   run_checks_node_core_dist: runNodeCoreDist,
   run_check: runCheck,
+  // Older scope owners retain these guards rather than silently dropping coverage.
+  run_pr_madge_import_cycles: runPrMadgeImportCycles,
+  run_pr_kysely_guardrails: runPrKyselyGuardrails,
+  split_pr_guards: splitPrGuards,
   narrow_check_paths_json: runCheckPlan ? JSON.stringify(changedPaths) : "",
   run_check_plan: runCheckPlan,
   check_plan_input_json: runCheckPlan
@@ -1618,6 +1654,7 @@ if (hybridHostedEligible) {
     "ios-build": count(manifest.run_ios_build),
     "ios-screenshot-shard": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 2),
     "ios-screenshot-evidence": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS)),
+    "android-screenshots": count(manifest.run_android_screenshots),
     "android-access-native": count(manifest.run_android_access_native, 2),
     "docker-seed-e2e": count(
       manifest.run_docker_seed_e2e &&
@@ -1776,7 +1813,8 @@ manifest.pr_job_count =
       countPrJobs(manifest.run_ios_build) +
       (manifest.run_ui_real_gateway ? uiRealGatewayShards.length : 0) +
       countPrJobs(manifest.run_android_access_native, 2) +
-      countPrJobs(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 3);
+      countPrJobs(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 3) +
+      countPrJobs(manifest.run_android_screenshots);
 
 for (const [key, value] of Object.entries(manifest)) {
   appendFileSync(

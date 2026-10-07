@@ -46,7 +46,7 @@ function createTool(params: {
     config: {
       ...config,
       agents: {
-        entries: { main: { default: true } },
+        entries: { main: {} },
         ...(config.agents as Record<string, unknown> | undefined),
       },
     },
@@ -300,9 +300,10 @@ describe("sessions_search tool", () => {
     const requests: CallGatewayRequest[] = [];
     const tool = createTool({
       requests,
+      agentId: "main",
       config: {
         tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { entries: { main: {}, work: {} } },
       },
       results: [hit({ sessionKey: "global", agentId: "work", messageId: "work-global" })],
     });
@@ -323,7 +324,7 @@ describe("sessions_search tool", () => {
       agentSessionKey: "global",
       config: {
         tools: { sessions: { visibility: "agent" } },
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { entries: { main: {}, work: {} } },
       },
       results: [
         hit({ sessionKey: "global", agentId: "work" }),
@@ -358,7 +359,7 @@ describe("sessions_search tool", () => {
       agentSessionKey: "agent:main:main",
       config: {
         tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { entries: { main: {}, work: {} } },
       },
       results: [hit({ sessionKey: "agent:work:other", agentId: "work" })],
     });
@@ -379,7 +380,7 @@ describe("sessions_search tool", () => {
   it("accepts the gateway's canonical key for the current-session alias", async () => {
     const tool = createSessionsSearchTool({
       config: {
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
         tools: { sessions: { visibility: "self" } },
       },
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {

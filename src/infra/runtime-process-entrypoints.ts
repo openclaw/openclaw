@@ -39,8 +39,23 @@ export const runtimeProcessEntrypoints = {
   identityFile: runtimeProcessEntrypoint("agents/identity-file.worker"),
   workspaceSkills: runtimeProcessEntrypoint("worker/skills-worker-entry"),
   boardStore: runtimeProcessEntrypoint("boards/sqlite-board-store.worker"),
+  progressCardStore: runtimeProcessEntrypoint("session-cards/progress-card-store.worker"),
   sessionSharingStore: runtimeProcessEntrypoint("config/sessions/session-sharing-store.worker"),
+  sessionForkDomain: runtimeProcessEntrypoint("config/sessions/session-fork-domain.worker"),
+  sessionGoalOperations: runtimeProcessEntrypoint("config/sessions/goals-operations.worker"),
+  sessionLifecyclePlanningDomain: runtimeProcessEntrypoint(
+    "config/sessions/session-lifecycle-projection.worker",
+  ),
+  sessionMessageRewriteDomain: runtimeProcessEntrypoint(
+    "config/sessions/session-message-rewrite.worker",
+  ),
+  sessionTranscriptStats: runtimeProcessEntrypoint(
+    "config/sessions/session-transcript-stats.worker",
+  ),
   heartbeatOutcomeStore: runtimeProcessEntrypoint("infra/heartbeat-outcome-store.worker"),
+  acpParentStreamStore: runtimeProcessEntrypoint(
+    "agents/subagents/spawn/acp-parent-stream-store.worker",
+  ),
   messageToolRunOutcomeStore: runtimeProcessEntrypoint(
     "infra/message-tool-run-outcome-store.worker",
   ),

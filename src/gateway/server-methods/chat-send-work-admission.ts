@@ -1,13 +1,18 @@
 import { isDeepStrictEqual } from "node:util";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
-import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
+import {
+  interruptReplyRunTarget,
+  REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+  replyRunRegistry,
+} from "../../auto-reply/reply/reply-run-registry.js";
 import type { SessionTranscriptTurnMutation } from "../../config/sessions/goals-operations.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { retireProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
 import {
   isCompetingSessionWorkAdmissionActive,
+  interruptSessionWorkAdmissions,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 import type { registerChatAbortController } from "../chat-abort.js";
@@ -21,16 +26,20 @@ import { formatForLog } from "../ws-log.js";
 import { readPreRegisteredRun } from "./chat-abort-authorization.js";
 import {
   prepareChatSendRetryComparison,
-  readChatSendDedupeResponse,
   resolveChatSendRequestConflict,
   respondChatSendAdmissionError,
   respondChatSendRetry,
-  type ChatSendPreAdmissionParams,
 } from "./chat-send-pre-admission.js";
+import type { ChatSendPreAdmissionParams } from "./chat-send-pre-admission.types.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
+import { readChatSendDedupeResponse } from "./chat-send-reservation.js";
 import type { ChatSendRetryComparison } from "./chat-send-retry-comparison.js";
-import { loadCurrentChatSendSession, type PreparedChatSendSession } from "./chat-send-session.js";
-import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+import { withCurrentChatSendSession, type PreparedChatSendSession } from "./chat-send-session.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  SessionMutationAuthorization,
+} from "./types.js";
 
 /** Preparation returns facts; the caller consumes current retry ownership before reserving. */
 export function prepareChatSendAdmissionRetry(params: ChatSendPreAdmissionParams) {
@@ -77,20 +86,58 @@ export function consumeChatSendAdmissionRetry(
   }
 }
 
-/** Reload after an actual worker wait in the consuming admission frame. */
-export function prepareCurrentChatSendRetry(
-  params: ChatSendPreAdmissionParams & { session: PreparedChatSendSession },
+/** An awaited retry comparison must return to current rows before admission can consume it. */
+export async function withCurrentChatSendRetry(
+  params: ChatSendPreAdmissionParams & {
+    session: PreparedChatSendSession;
+    withPreparedCurrent?: SessionMutationAuthorization["withPreparedCurrent"];
+  },
   ownPendingAttemptId: string,
+  consume: (
+    session: Parameters<Parameters<typeof withCurrentChatSendSession>[0]["consume"]>[0],
+    comparison: ChatSendRetryComparison | undefined,
+  ) => void,
 ) {
-  const session = loadCurrentChatSendSession(params.session);
-  const comparison = prepareChatSendRetryComparison(
-    { ...params, session: { ...params.session, entry: session.entry } },
-    ownPendingAttemptId,
-  );
-  return {
-    comparison,
-    readSession: () => (comparison ? loadCurrentChatSendSession(params.session) : session),
-  };
+  const withCurrent = <T>(read: (session: Parameters<typeof consume>[0]) => T) =>
+    withCurrentChatSendSession({
+      session: params.session,
+      getRuntimeConfig: params.context.getRuntimeConfig,
+      includeMembership: Boolean(params.withPreparedCurrent),
+      consume: (latest, membership, assertSourceCurrent) => {
+        const consumeCurrent = () => read(latest);
+        if (params.withPreparedCurrent) {
+          return params.withPreparedCurrent(
+            {
+              agentId: latest.agentId,
+              storePath: latest.storePath,
+              sessionKey: latest.canonicalKey,
+              entry: latest.entry,
+              readSource: latest.capturedReadSource,
+              members: membership.get(latest.legacyKey ?? latest.canonicalKey) ?? [],
+            },
+            consumeCurrent,
+            assertSourceCurrent,
+          );
+        }
+        assertSourceCurrent();
+        return consumeCurrent();
+      },
+    });
+  const pending = await withCurrent((session) => {
+    const comparison = prepareChatSendRetryComparison(
+      { ...params, session: { ...params.session, entry: session.entry } },
+      ownPendingAttemptId,
+    );
+    if (comparison) {
+      return observeChatSendWork(comparison);
+    }
+    consume(session, undefined);
+    return undefined;
+  });
+  if (pending) {
+    const comparison = await pending();
+    await withCurrent((session) => consume(session, comparison));
+  }
 }
 
 export function respondChatSendWorkAdmissionFailure(
@@ -129,14 +176,15 @@ export function admitChatSendUploads({
   context,
   respond,
 }: Pick<GatewayRequestHandlerOptions, "params" | "client" | "context" | "respond">) {
-  const assertClientUploadAllowed = captureGatewayClientUploadCommitGuard({
-    method: "chat.send",
-    requestParams: params,
-    client,
-    context,
-  });
   try {
+    const assertClientUploadAllowed = captureGatewayClientUploadCommitGuard({
+      method: "chat.send",
+      requestParams: params,
+      client,
+      context,
+    });
     assertClientUploadAllowed?.();
+    return { ok: true as const, assertClientUploadAllowed };
   } catch (error) {
     if (!(error instanceof SessionMutationAuthorizationChangedError)) {
       throw error;
@@ -144,7 +192,6 @@ export function admitChatSendUploads({
     respond(false, undefined, error.error);
     return { ok: false as const };
   }
-  return { ok: true as const, assertClientUploadAllowed };
 }
 
 /** Caller and physical target custody end together when admitted work settles. */
@@ -164,6 +211,41 @@ export function releaseChatSendCallerAuthority(params: {
       params.session.releaseSessionTarget();
     }
   }
+}
+
+/** Observe started work before the retained read releases; consuming still rethrows its error. */
+export function observeChatSendWork<T>(work: Promise<T>): () => Promise<T> {
+  void work.catch(() => {});
+  return () => work;
+}
+
+/** Interrupt the captured run, or competing admissions, without ever targeting this admission. */
+export function interruptChatSendWork(params: {
+  target: ReturnType<typeof replyRunRegistry.resolveCurrentInterruptTarget>;
+  signal: AbortSignal;
+  admission: Pick<SessionWorkAdmissionLease, "run">;
+  storePath: string;
+  identities: Array<string | undefined>;
+}) {
+  params.signal.throwIfAborted();
+  if (params.target) {
+    return interruptReplyRunTarget(params.target, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS).then(
+      ({ settled }) => ({ interrupted: true, settled }),
+    );
+  }
+  return params.admission.run(async () => {
+    if (!isCompetingSessionWorkAdmissionActive(params.storePath, params.identities)) {
+      return { interrupted: false, settled: true };
+    }
+    return {
+      interrupted: true,
+      settled: await interruptSessionWorkAdmissions({
+        scope: params.storePath,
+        identities: params.identities,
+        timeoutMs: REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+      }),
+    };
+  });
 }
 
 /** Queued and collected turns share the original session and caller admission until settlement. */

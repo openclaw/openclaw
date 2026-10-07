@@ -85,6 +85,16 @@ A complete recovery point must cover these together:
   including databases at configured paths outside the default layout.
 - The workspaces, credentials, and retained originals needed by that installation.
 
+Restore that set from one backup generation. Do not combine a pre-update config
+or shared database with a post-update per-agent database, or the reverse. Model
+auth profiles and their state are authoritative in each
+`openclaw-agent.sqlite`. Files named
+`auth-profiles.json.sqlite-import.<id>.bak` or
+`auth-state.json.sqlite-import.<id>.bak` are preserved migration inputs or
+recovery artifacts, not the live credential store. Restoring those JSON files
+without the matching per-agent database does not restore that generation's auth
+state.
+
 Use `openclaw backup create --verify` for a verified, WAL-aware archive. Never copy only the
 main `.sqlite` file from a live WAL database: committed data can still be in
 `-wal`. Restore the verified consolidated database offline; do not mix it with
@@ -141,7 +151,7 @@ updater owns this ordering; staging a newer candidate cannot change an
 already-running older updater.
 On Windows, an eligible capture first runs the same native SQLite exclusion check
 used by rollback. This settles any retained WAL before recording write fingerprints,
-so later probe cleanup is not mistaken for another writer. If another connection
+so later check cleanup is not mistaken for another writer. If another connection
 prevents exclusion, snapshots remain available for manual recovery.
 Snapshots taken while a Gateway may still be writing are available for
 manual recovery only until verified successful activation, even if it exits later.

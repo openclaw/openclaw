@@ -4,6 +4,7 @@ import {
   createSessionWorkStartChangedError,
   SessionWorkStartChangedError,
 } from "../config/sessions/lifecycle.js";
+import { hasRestartRecoveryTerminalRun } from "../config/sessions/restart-recovery-state.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -42,18 +43,6 @@ type AcquiredRecoveryOwner = {
   sessionKey: string;
 };
 
-function cloneRecoveryOwnerEntry(entry: InternalSessionEntry): InternalSessionEntry {
-  return {
-    ...entry,
-    ...(entry.restartRecoveryRuns
-      ? { restartRecoveryRuns: entry.restartRecoveryRuns.map((run) => ({ ...run })) }
-      : {}),
-    ...(entry.mainRestartRecovery
-      ? { mainRestartRecovery: structuredClone(entry.mainRestartRecovery) }
-      : {}),
-  };
-}
-
 function refreshPreparedRecoveryOwnerTarget(
   prepared: PreparedRecoveryOwnerTarget,
   acquired: AcquiredRecoveryOwner | undefined,
@@ -61,7 +50,16 @@ function refreshPreparedRecoveryOwnerTarget(
   if (!acquired || acquired.entry.sessionId !== prepared.sessionId) {
     return;
   }
-  const entry = cloneRecoveryOwnerEntry(acquired.entry);
+  const current = acquired.entry;
+  const entry = {
+    ...current,
+    ...(current.restartRecoveryRuns
+      ? { restartRecoveryRuns: current.restartRecoveryRuns.map((run) => ({ ...run })) }
+      : {}),
+    ...(current.mainRestartRecovery
+      ? { mainRestartRecovery: structuredClone(current.mainRestartRecovery) }
+      : {}),
+  };
   prepared.sessionEntry = entry;
   if (prepared.sessionStore && prepared.sessionKey) {
     prepared.sessionStore[prepared.sessionKey] = entry;
@@ -148,6 +146,15 @@ async function claimAgentCommandRecoveryOwner(params: {
     throw createSessionWorkStartChangedError(sessionKey);
   }
   if (claim.kind === "not_required") {
+    if (
+      params.opts.runId &&
+      ["subagent_settle", "subagent_announce"].includes(
+        params.opts.inputProvenance?.sourceTool ?? "",
+      ) &&
+      hasRestartRecoveryTerminalRun(claim.entry, params.opts.runId)
+    ) {
+      throw createSessionWorkStartChangedError(sessionKey);
+    }
     return undefined;
   }
   // Explicit replacements keep this token through successor persistence so
@@ -190,9 +197,10 @@ export async function runWithAgentCommandRecoveryOwner<
       throw error;
     }
     const target = prepared;
+    const sourceTool = params.opts.inputProvenance?.sourceTool;
     const mayWaitForRecovery =
       params.mode === "claim" &&
-      params.opts.inputProvenance?.sourceTool === "subagent_settle" &&
+      (sourceTool === "subagent_settle" || sourceTool === "subagent_announce") &&
       params.opts.sessionEffects !== "internal" &&
       !params.opts.mainRestartRecoveryAdmitted &&
       !params.opts.mainRestartRecoveryOwnerLease;
@@ -208,7 +216,7 @@ export async function runWithAgentCommandRecoveryOwner<
     let acquired: AcquiredRecoveryOwner | undefined;
     for (;;) {
       if (pendingOwner) {
-        // Keep the accepted settle turn (and its idempotency key) alive rather
+        // Keep the accepted settle/announce turn (and its idempotency key) alive rather
         // than returning a cached no-turn rejection to the durable delivery owner.
         await racePromiseWithAbortSignal(pendingOwner, params.opts.abortSignal);
         params.opts.abortSignal?.throwIfAborted();

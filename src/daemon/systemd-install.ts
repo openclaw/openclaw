@@ -481,7 +481,7 @@ function reportSystemdServicePublication(
   if (backedUp) {
     lines.push({ label: "Previous unit backed up to", value: `${unitPath}.bak` });
   }
-  writeFormattedLines(stdout, lines, { leadingBlankLine: true });
+  writeFormattedLines(stdout, lines);
 }
 
 export async function stageSystemdService({

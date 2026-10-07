@@ -90,20 +90,36 @@ function expectedPreparationCpu(trace?: DiagnosticTraceContext) {
 
 function controlProjectionClock(afterRow?: () => void) {
   vi.spyOn(performance, "now").mockImplementation(() => clock);
-  const prepare = sessionPresentation.prepareProjectedSessionPresentation;
-  vi.spyOn(sessionPresentation, "prepareProjectedSessionPresentation").mockImplementation(
-    (...args) => {
-      try {
-        return prepare(...args);
-      } finally {
-        cpu.user += 1_250;
-        cpu.system += 250;
-        // Readiness can repeat selection; each trace must account for all of its injected work.
-        const trace = getActiveDiagnosticTraceContext()?.traceId;
-        preparationCpuByTrace.set(trace, (preparationCpuByTrace.get(trace) ?? 0) + 1.5);
-      }
-    },
-  );
+  const presented = vi.fn();
+  const prepare = sessionPresentation.prepareSessionRowPublication;
+  vi.spyOn(sessionPresentation, "prepareSessionRowPublication").mockImplementation((...args) => {
+    try {
+      const recipient = prepare(...args);
+      return (...viewer) => {
+        const presentation = recipient(...viewer);
+        return {
+          ...presentation,
+          present(...rowArgs: Parameters<typeof presentation.present>) {
+            try {
+              return presentation.present(...rowArgs);
+            } finally {
+              presented();
+              clock += 20;
+              cpu.user += 750;
+              cpu.system += 250;
+              afterRow?.();
+            }
+          },
+        };
+      };
+    } finally {
+      cpu.user += 1_250;
+      cpu.system += 250;
+      // Readiness can repeat selection; each trace must account for all of its injected work.
+      const trace = getActiveDiagnosticTraceContext()?.traceId;
+      preparationCpuByTrace.set(trace, (preparationCpuByTrace.get(trace) ?? 0) + 1.5);
+    }
+  });
   const defaults = sessionModels.getSessionDefaults;
   vi.spyOn(sessionModels, "getSessionDefaults").mockImplementation((...args) => {
     try {
@@ -113,17 +129,7 @@ function controlProjectionClock(afterRow?: () => void) {
       cpu.system += 125;
     }
   });
-  const present = sessionRows.presentSessionRow;
-  return vi.spyOn(sessionRows, "presentSessionRow").mockImplementation((...args) => {
-    try {
-      return present(...args);
-    } finally {
-      clock += 20;
-      cpu.user += 750;
-      cpu.system += 250;
-      afterRow?.();
-    }
-  });
+  return presented;
 }
 
 test.each(["channel-only", "slow-warning"])("attributes %s operations", async (mode) => {
@@ -131,7 +137,13 @@ test.each(["channel-only", "slow-warning"])("attributes %s operations", async (m
     const context = requestContext(await seedSessions());
     context.subscribeSessionEvents = vi.fn();
     const client = { ...identifiedClient("owner@example.com"), connId: "private-connection" };
-    const request = { agentId: "main", limit: 1, includeDerivedTitles: true };
+    const request = {
+      agentId: "main",
+      limit: 1,
+      source: "sidebar" as const,
+      rowMode: "compact" as const,
+      includeDerivedTitles: true,
+    };
     await initializeSessionReadContext(context);
     await getSessionRowProjection(context)!.ensureMaterialized();
     const owner = getSessionRowProjection(context)!;
@@ -176,6 +188,11 @@ test.each(["channel-only", "slow-warning"])("attributes %s operations", async (m
       for (const [index, operation] of ["sessions.list", "sessions.subscribe"].entries()) {
         expect(events[index]).toMatchObject({
           operation,
+          source: "sidebar",
+          rowMode: "compact",
+          limit: 1,
+          offset: 0,
+          filterKind: "agentId",
           pid: process.pid,
           threadId,
           isMainThread,

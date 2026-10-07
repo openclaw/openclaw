@@ -357,32 +357,23 @@ describe("worker plugin state", () => {
       };
       const observation = observeHostDataSql();
       const sql = observation.calls;
-      const timings: Record<string, number> = {};
       try {
         expect(await readMemoryHostEventRecords({ workspaceDir, env: state.env })).toEqual([]);
         expect(existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
-        let started = performance.now();
         await appendMemoryHostEvent(workspaceDir, event, { env: state.env });
-        timings.coldAppendMs = performance.now() - started;
-        started = performance.now();
         await appendMemoryHostEvent(workspaceDir, event, { env: state.env });
-        timings.warmAppendMs = performance.now() - started;
-        started = performance.now();
         expect(await readMemoryHostEventRecords({ workspaceDir, env: state.env })).toEqual([
           event,
           event,
         ]);
-        timings.warmReadMs = performance.now() - started;
         for (const method of sql) {
           expect(method).not.toHaveBeenCalled();
         }
         await closeOpenClawStateDatabaseAsync();
-        started = performance.now();
         expect(await readMemoryHostEventRecords({ workspaceDir, env: state.env })).toEqual([
           event,
           event,
         ]);
-        timings.coldReadMs = performance.now() - started;
         for (const method of sql) {
           expect(method).not.toHaveBeenCalled();
         }
@@ -413,7 +404,6 @@ describe("worker plugin state", () => {
           )
           .get("memory-core", "memory-host.event-cursors"),
       ).toEqual({ value_json: '{"kind":"cursor","lastSequence":2}' });
-      console.log("memory-journal-worker timings", JSON.stringify(timings));
     });
   });
 

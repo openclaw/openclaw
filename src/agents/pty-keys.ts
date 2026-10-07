@@ -10,9 +10,7 @@ const CR = "\r";
 const TAB = "\t";
 const BACKSPACE = "\x7f";
 
-/** Bracketed-paste prefix emitted before pasted text. */
 const BRACKETED_PASTE_START = `${ESC}[200~`;
-/** Bracketed-paste suffix emitted after pasted text. */
 const BRACKETED_PASTE_END = `${ESC}[201~`;
 
 type Modifiers = {
@@ -106,6 +104,18 @@ const modifiableNamedKeys = new Set([
   "delete",
   "del",
   "dc",
+  "f1",
+  "f2",
+  "f3",
+  "f4",
+  "f5",
+  "f6",
+  "f7",
+  "f8",
+  "f9",
+  "f10",
+  "f11",
+  "f12",
 ]);
 
 type KeyEncodingRequest = {
@@ -119,7 +129,6 @@ type KeyEncodingResult = {
   warnings: string[];
 };
 
-/** True when request keys depend on normal vs application cursor-key mode. */
 export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean {
   return (
     request.keys?.some((raw) => {
@@ -136,7 +145,6 @@ export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean
   );
 }
 
-/** Encodes literal, hex, and named key tokens into one PTY byte payload. */
 export function encodeKeySequence(
   request: KeyEncodingRequest,
   cursorKeyMode?: "normal" | "application",
@@ -163,7 +171,6 @@ export function encodeKeySequence(
   return { data, warnings };
 }
 
-/** Wraps pasted text in bracketed-paste markers when enabled. */
 export function encodePaste(text: string, bracketed = true): string {
   if (!bracketed) {
     return text;
@@ -196,7 +203,6 @@ function encodeKeyToken(
     return `${ESC}[Z`;
   }
 
-  // Handle arrow keys specially based on cursor key mode.
   // DECCKM only changes unmodified cursor keys; modified keys use xterm modifier scheme.
   if (
     modifiableNamedKeys.has(baseLower) &&
@@ -212,12 +218,11 @@ function encodeKeyToken(
   const baseSeq = namedKeyMap.get(baseLower);
   if (baseSeq) {
     if (modifiableNamedKeys.has(baseLower) && hasAnyModifier(parsed.mods)) {
-      // Every modifiable named key is a CSI sequence from namedKeyMap.
       // Bare cursor sequences omit the first parameter; xterm modifiers require it.
       const parameter = baseSeq.slice(2, -1) || "1";
       return `${ESC}[${parameter};${xtermModifier(parsed.mods)}${baseSeq.at(-1)}`;
     }
-    return parsed.mods.alt ? `${ESC}${baseSeq}` : baseSeq;
+    return applyCharModifiers(baseSeq, parsed.mods);
   }
 
   if (base.length === 1) {
@@ -271,6 +276,9 @@ function applyCharModifiers(char: string, mods: Modifiers): string {
 function toCtrlChar(char: string): string | null {
   if (char === "?") {
     return "\x7f";
+  }
+  if (char === " ") {
+    return "\x00";
   }
   const code = char.toUpperCase().charCodeAt(0);
   if (code >= 64 && code <= 95) {

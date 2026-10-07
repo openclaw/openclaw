@@ -57,16 +57,14 @@ function hasRenderableTelegramNativeReplyPayload(result: TelegramNativeReplyPayl
 
 function isEditableTelegramProgressResult(result: TelegramNativeReplyPayload): boolean {
   const telegramData = resolveTelegramNativeReplyChannelData(result);
-  return Boolean(
-    typeof result.text === "string" &&
-    result.text.trim() &&
+  return (
     !result.mediaUrl &&
     (!result.mediaUrls || result.mediaUrls.length === 0) &&
     !result.presentation &&
     !result.interactive &&
     !result.btw &&
     !hasTelegramNativeReplyReaction(result) &&
-    telegramData?.pin !== true,
+    telegramData?.pin !== true
   );
 }
 

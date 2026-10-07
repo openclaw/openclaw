@@ -8,7 +8,8 @@ extension ChatSessionSidebar {
         isChild: Bool,
         now: Date,
         ownership: ChatSidebarOwnership,
-        previewRequest: ChatSessionSidebarPreviews.Request) -> some View
+        previewRequest: ChatSessionSidebarPreviews.Request,
+        menu: AnyView? = nil) -> some View
     {
         let session = node.session
         let pageAgent = self.showsAllAgents && self.query.isEmpty && !isChild && session.pinned == true
@@ -69,36 +70,44 @@ extension ChatSessionSidebar {
             archive: { Task { await self.archiveSidebarSession(session) } },
             archiving: self.batch.isArchiving(session),
             presentedAttention: self.$presentedAttention)
-        return self.interactionRow(content, session: session, isChild: isChild)
-            .overlay(alignment: .leading) {
-                OpenClawSessionColorStripe(color: session.color)
-                    .offset(x: -6)
+        return Group {
+            if menu == nil {
+                self.interactionRow(content, session: session, isChild: isChild)
+            } else {
+                content
             }
-            .tag(self.interactionIdentity(session))
-            .contextMenu {
-                if self.selectedBatchRows.count > 1,
-                   self.batch.selection.keys.contains(self.interactionIdentity(session))
-                {
-                    self.batchMenu.disabled(self.batch.busy)
-                } else {
-                    self.contextMenu(for: session, isChild: isChild, now: now)
-                }
+        }
+        .overlay(alignment: .leading) {
+            OpenClawSessionColorStripe(color: session.color)
+                .offset(x: -6)
+        }
+        .tag(self.interactionIdentity(session))
+        .contextMenu {
+            if let menu {
+                menu
+            } else if self.selectedBatchRows.count > 1,
+                      self.batch.selection.keys.contains(self.interactionIdentity(session))
+            {
+                self.batchMenu.disabled(self.batch.busy)
+            } else {
+                self.contextMenu(for: session, isChild: isChild, now: now)
             }
-            .modifier(ChatSidebarAttentionAccessibility(
-                title: ChatSessionSidebarModel.sidebarDisplayName(for: session),
-                targetID: targetID,
-                summary: attention,
-                metadata: [
-                    facts.channelLabel,
-                    facts.subtitle,
-                    !session.isArchived && (pageSummary.map { $0.unread > 0 } ?? node.badges.hasUnread)
-                        ? String(localized: "Unread") : nil,
-                    (pageSummary.map { $0.failed > 0 } ?? facts.failedDescendants)
-                        ? String(localized: "Thread failed") : nil,
-                ]
-                    .compactMap(\.self) + facts.badges.map(\.label),
-                presentation: self.$presentedAttention,
-                isOutlineHeading: !node.children.isEmpty))
+        }
+        .modifier(ChatSidebarAttentionAccessibility(
+            title: ChatSessionSidebarModel.sidebarDisplayName(for: session),
+            targetID: targetID,
+            summary: attention,
+            metadata: [
+                facts.channelLabel,
+                facts.subtitle,
+                !session.isArchived && (pageSummary.map { $0.unread > 0 } ?? node.badges.hasUnread)
+                    ? String(localized: "Unread") : nil,
+                (pageSummary.map { $0.failed > 0 } ?? facts.failedDescendants)
+                    ? String(localized: "Thread failed") : nil,
+            ]
+                .compactMap(\.self) + facts.badges.map(\.label),
+            presentation: self.$presentedAttention,
+            isOutlineHeading: !node.children.isEmpty))
     }
 
     func attentionSummary(

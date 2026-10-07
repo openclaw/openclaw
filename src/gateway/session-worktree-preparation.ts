@@ -12,6 +12,7 @@ import {
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { InvalidWorktreeBaseRefError, resolveWorktreeBase } from "../agents/worktrees/base-ref.js";
+import { SessionWorktreeSourceChangedError } from "../agents/worktrees/errors.js";
 import { insideGitCheckout } from "../agents/worktrees/git.js";
 import { slugifyWorktreeTitle } from "../agents/worktrees/name.js";
 import { getRegistryWorktree } from "../agents/worktrees/registry.js";
@@ -119,8 +120,6 @@ type SpawnParentWorktreeSource = {
   withRollback?: <T>(run: (assertCurrent: () => void) => Promise<T>) => Promise<T>;
 };
 
-class SessionWorktreeSourceChangedError extends Error {}
-
 async function resolveSpawnParentWorktreeSource(
   parentSessionKey: string,
   agentId: string,
@@ -186,9 +185,7 @@ async function resolveSpawnParentWorktreeSource(
     return {
       workspace: project.repoRoot,
       source: { kind: "project", id: projectId },
-      withCurrent: async (run) => {
-        return await run({ assertCurrent, signal: options.signal });
-      },
+      withCurrent: async (run) => await run({ assertCurrent, signal: options.signal }),
     };
   }
   const worktree = managedWorktrees.findLiveByOwner("session", parent.canonicalKey);
@@ -204,13 +201,22 @@ async function resolveSpawnParentWorktreeSource(
   const parentSessionId = parent.entry.sessionId;
   // Validate the inherited source through the child creation commit. After that,
   // persisted workspace intent belongs to the child and uses its admitted run.
-  const assertCurrent = () => {
+  const assertParentCurrent = () => {
     const current = loadGatewaySessionEntryReadOnly(parent.canonicalKey, { agentId });
-    const currentWorktree = managedWorktrees.findLiveByOwner("session", parent.canonicalKey);
     if (
       current.entry?.sessionId !== parentSessionId ||
       current.entry.archivedAt !== undefined ||
-      current.entry.worktree?.id !== worktree.id ||
+      current.entry.worktree?.id !== worktree.id
+    ) {
+      throw new SessionWorktreeSourceChangedError(
+        "Spawn parent managed worktree changed; retry from its current session",
+      );
+    }
+  };
+  const assertCurrent = () => {
+    assertParentCurrent();
+    const currentWorktree = managedWorktrees.findLiveByOwner("session", parent.canonicalKey);
+    if (
       currentWorktree?.id !== worktree.id ||
       currentWorktree.repoRoot !== worktree.repoRoot ||
       currentWorktree.path !== worktree.path
@@ -223,9 +229,23 @@ async function resolveSpawnParentWorktreeSource(
   return {
     workspace: worktree.repoRoot,
     source: { kind: "worktree", id: worktree.id },
-    withCurrent: async (run) => {
-      return await run({ assertCurrent, signal: options.signal });
-    },
+    withCurrent: async (run) =>
+      await run({
+        assertCurrent,
+        signal: options.signal,
+        workerAuthority: {
+          assertCurrent: assertParentCurrent,
+          predicates: [
+            {
+              kind: "source-owner",
+              ownerId: parent.canonicalKey,
+              id: worktree.id,
+              path: worktree.path,
+              repoRoot: worktree.repoRoot,
+            },
+          ],
+        },
+      }),
   };
 }
 
@@ -297,14 +317,21 @@ export async function prepareSessionWorktree(params: {
           "Accepted managed source is no longer available",
         );
       }
-      const assertCurrent = () => {
+      const assertHostCurrent = () => {
         commitGuard?.();
+        if (fs.realpathSync(workspace) !== root) {
+          throw new SessionWorktreeSourceChangedError(
+            "Accepted managed source changed during preparation",
+          );
+        }
+      };
+      const assertCurrent = () => {
+        assertHostCurrent();
         const current = getRegistryWorktree(process.env, source.id);
         if (
           current?.ownerId !== source.ownerId ||
           current?.repoRoot !== root ||
-          current?.repoFingerprint !== source.repoFingerprint ||
-          fs.realpathSync(workspace) !== root
+          current?.repoFingerprint !== source.repoFingerprint
         ) {
           throw new SessionWorktreeSourceChangedError(
             "Accepted managed source changed during preparation",
@@ -315,7 +342,22 @@ export async function prepareSessionWorktree(params: {
       // no longer the child's authority once the locked creation accepted intent.
       withSource = async (run) => {
         assertCurrent();
-        return await run({ assertCurrent, signal: params.signal });
+        return await run({
+          assertCurrent,
+          signal: params.signal,
+          workerAuthority: {
+            assertCurrent: assertHostCurrent,
+            predicates: [
+              {
+                kind: "source-record",
+                id: source.id,
+                ownerId: source.ownerId,
+                repoRoot: root,
+                repoFingerprint: source.repoFingerprint,
+              },
+            ],
+          },
+        });
       };
     }
     // Registry custody authorizes source-only preparation, not direct host access.

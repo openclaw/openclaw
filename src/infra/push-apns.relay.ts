@@ -21,7 +21,6 @@ import { requireCurrentApnsSend } from "./push-apns-send-current.js";
 type ApnsRelayPushType = "alert" | "background";
 type ApnsRelayEnvironment = "production" | "sandbox";
 
-/** Resolved APNs relay endpoint and client timeout for gateway-originated sends. */
 export type ApnsRelayConfig = {
   baseUrl: string;
   timeoutMs: number;
@@ -35,7 +34,6 @@ type ApnsRelayConfigResolutionOptions = {
   registrationRelayOrigin?: string;
 };
 
-/** Normalized relay response after the hosted relay has attempted an APNs send. */
 export type ApnsRelayPushResponse = {
   ok: boolean;
   status: number;
@@ -45,7 +43,6 @@ export type ApnsRelayPushResponse = {
   tokenSuffix?: string;
 };
 
-/** Test/integration seam for sending a signed APNs relay request. */
 export type ApnsRelayRequestSender = (params: {
   relayConfig: ApnsRelayConfig;
   sendGrant: string;
@@ -151,20 +148,6 @@ export function normalizePersistedApnsRelayBaseUrl(
   // Stored loopback HTTP URLs already passed the explicit development-only
   // policy before commit; decoding must survive later environment changes.
   return normalizeApnsRelayBaseUrlWithPolicy(baseUrl, true);
-}
-
-function buildRelayGatewaySignaturePayload(params: {
-  gatewayDeviceId: string;
-  signedAtMs: number;
-  bodyJson: string;
-}): string {
-  // Domain-separate relay send signatures from other gateway/device signatures.
-  return [
-    "openclaw-relay-send-v1",
-    params.gatewayDeviceId.trim(),
-    String(Math.trunc(params.signedAtMs)),
-    params.bodyJson,
-  ].join("\n");
 }
 
 /** Resolve the relay endpoint from env/config and require it to match relay-minted registrations. */
@@ -316,19 +299,15 @@ async function sendApnsRelayRequest(
   };
 }
 
-/** Sign and send an APNs relay push using the gateway device identity. */
-export async function sendApnsRelayPush(params: {
-  relayConfig: ApnsRelayConfig;
-  sendGrant: string;
-  relayHandle: string;
-  pushType: ApnsRelayPushType;
-  priority: "10" | "5";
-  payload: object;
-  gatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
-  requestSender?: ApnsRelayRequestSender;
-  signal?: AbortSignal;
-  isCurrent?: () => Promise<boolean>;
-}): Promise<ApnsRelayPushResponse> {
+export async function sendApnsRelayPush(
+  params: Omit<
+    Parameters<ApnsRelayRequestSender>[0],
+    "gatewayDeviceId" | "signature" | "signedAtMs" | "bodyJson"
+  > & {
+    gatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
+    requestSender?: ApnsRelayRequestSender;
+  },
+): Promise<ApnsRelayPushResponse> {
   await requireCurrentApnsSend(params);
   const sender = params.requestSender ?? sendApnsRelayRequest;
   const gatewayIdentity = params.gatewayIdentity ?? loadOrCreateProcessDeviceIdentity();
@@ -341,11 +320,13 @@ export async function sendApnsRelayPush(params: {
   });
   const signature = signDevicePayload(
     gatewayIdentity.privateKeyPem,
-    buildRelayGatewaySignaturePayload({
-      gatewayDeviceId: gatewayIdentity.deviceId,
-      signedAtMs,
+    // Domain-separate relay send signatures from other gateway/device signatures.
+    [
+      "openclaw-relay-send-v1",
+      gatewayIdentity.deviceId.trim(),
+      String(Math.trunc(signedAtMs)),
       bodyJson,
-    }),
+    ].join("\n"),
   );
   return await sender({
     relayConfig: params.relayConfig,

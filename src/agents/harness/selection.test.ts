@@ -455,10 +455,10 @@ function agentModelRuntimeConfig(
   if (agentId) {
     return {
       agents: {
-        list: [
-          { id: "main", default: true },
-          { id: agentId, models: { [modelRef]: { agentRuntime: { id: runtime } } } },
-        ],
+        entries: {
+          main: {},
+          [agentId]: { models: { [modelRef]: { agentRuntime: { id: runtime } } } },
+        },
       },
     } as OpenClawConfig;
   }
@@ -1005,7 +1005,7 @@ describe("runAgentHarnessAttempt", () => {
     const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
     const sessionKey = "agent:main:main";
     await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
-    const trajectoryRecorder = createTrajectoryRuntimeRecorder({
+    const trajectoryRecorder = await createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
       sessionKey,
       sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
@@ -1258,7 +1258,7 @@ describe("runAgentHarnessAttempt", () => {
       { config: { tools: { deny: ["*"] } } as OpenClawConfig },
       {
         config: {
-          agents: { list: [{ id: "worker", tools: { deny: ["*"] } }] },
+          agents: { entries: { worker: { tools: { deny: ["*"] } } } },
         } as OpenClawConfig,
         agentId: "worker",
       },
@@ -1751,7 +1751,7 @@ describe("runAgentHarnessAttempt", () => {
       { config: { tools: { deny: ["exec"] } } as OpenClawConfig },
       {
         config: {
-          agents: { list: [{ id: "worker", tools: { deny: ["exec"] } }] },
+          agents: { entries: { worker: { tools: { deny: ["exec"] } } } },
         } as OpenClawConfig,
         agentId: "worker",
         sessionKey: "agent:worker:session-1",
@@ -2320,7 +2320,7 @@ describe("selectAgentHarness", () => {
         agentHarnessId: "codex",
         config: {
           agents: {
-            list: [{ id: "main", default: true, agentDir: "/tmp/main-agent" }],
+            entries: { main: { agentDir: "/tmp/main-agent" } },
             defaults: {
               models: {
                 "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },

@@ -11,7 +11,7 @@ import { renderWorkboardToast, updateWorkboardToastOutcome } from "../../compone
 import { renderWorkboardBoardGlyph } from "../../components/workboard-board-glyph.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import type { WorkboardBoardSummary } from "../../lib/workboard/types.ts";
+import type { WorkboardBoardMetadata, WorkboardBoardSummary } from "../../lib/workboard/types.ts";
 
 export type BoardDraft = {
   id: string;
@@ -61,7 +61,7 @@ export function renderBoardModal(props: {
   toastOwner: object;
   client: GatewayBrowserClient | null;
   readonly canWrite: boolean;
-  onSaved: (boardId: string) => void;
+  onSaved: (board: WorkboardBoardMetadata) => void;
   onCancel: () => void;
   requestUpdate: () => void;
 }) {
@@ -107,7 +107,10 @@ export function renderBoardModal(props: {
     draft.error = null;
     props.requestUpdate();
     try {
-      await props.client.request("workboard.boards.upsert", input);
+      const { board } = await props.client.request<{ board: WorkboardBoardMetadata }>(
+        "workboard.boards.upsert",
+        input,
+      );
       if (sessions) {
         if (!props.canWrite) {
           throw new Error(t("workboard.sessionsBoard.writeUnavailable"));
@@ -117,7 +120,7 @@ export function renderBoardModal(props: {
           patch: { columns: sessions.columns },
         });
       }
-      props.onSaved(draft.id);
+      props.onSaved(board);
     } catch (error) {
       draft.error = formatUiError(error);
     } finally {

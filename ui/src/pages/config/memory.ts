@@ -1,4 +1,3 @@
-// Memory destination shell and its merged Settings surface.
 import { html, nothing, type TemplateResult } from "lit";
 import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
@@ -178,11 +177,8 @@ type MemoryViewProps = {
   pluginsHref: string;
   memoryImportHref: string;
   canImportMemory: boolean;
-  /** New status-led landing view. */
   overview: TemplateResult;
-  /** Search and read the selected agent's indexed memory. */
   memories: TemplateResult;
-  /** Agent-scoped dream diary and scene. */
   dreams: TemplateResult;
   /** One embedded editor for every `memory.*` schema field. */
   editor: TemplateResult;
@@ -198,7 +194,7 @@ const MEMORY_ENGINE_OFF = "";
 
 function engineHintKey(selection: MemoryEngineSelection): string {
   switch (selection.kind) {
-    case "auto":
+    case "default":
       return "memoryPage.engine.autoHint";
     case "off":
       return "memoryPage.engine.offHint";
@@ -217,7 +213,7 @@ function renderEngineSection(props: MemoryViewProps) {
     t("memoryPage.engine.openClawMemory");
   const defaultDescription = renderSettingsDefaultDescription(
     defaultEngine,
-    props.engineSelection.kind !== "auto",
+    props.engineSelection.kind !== "default",
   );
   if (props.engineOptions.length === 0) {
     return renderSettingsSection(

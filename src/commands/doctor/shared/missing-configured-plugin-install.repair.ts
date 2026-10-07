@@ -2,6 +2,7 @@ import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { assertDirectoryIdentitySync } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
@@ -71,10 +72,7 @@ import {
   resolveConfiguredPluginCandidateRepair,
   resolveConfiguredPluginRepairVersions,
 } from "./missing-configured-plugin-install.targets.js";
-import {
-  isLegacyPackageUpdateDoctorPass,
-  shouldDeferConfiguredPluginInstallRepair,
-} from "./update-phase.js";
+import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
 
 type PluginInstallRepairWarning = {
   message: string;
@@ -82,15 +80,12 @@ type PluginInstallRepairWarning = {
 };
 
 type RepairMissingPluginInstallsResult = {
-  /** User-facing repair notes for installed or recovered plugin records. */
   changes: string[];
-  /** User-facing warnings for failed or skipped plugin install repairs. */
   /** User-facing notices from successful repairs that still need operator review. */
   notices?: string[];
   warnings: string[];
   /** Unresolved consent errors, kept typed for update finalization. */
   outcomes?: PluginUpdateOutcome[];
-  /** Plugin ids successfully repaired from current configuration. */
   repairedPluginIds?: string[];
   /** Successful install-record or package repairs that invalidate retained metadata. */
   pluginInventoryChanged?: true;
@@ -128,7 +123,6 @@ type PluginInstallRepairOptions = {
   baselineRecords?: Record<string, PluginInstallRecord>;
 };
 
-/** Repair missing installs inferred from the current OpenClaw config. */
 export async function repairMissingConfiguredPluginInstalls(
   params: PluginInstallRepairOptions & { repairVersionDrift?: boolean },
 ): Promise<RepairMissingPluginInstallsResult> {
@@ -142,7 +136,6 @@ export async function repairMissingConfiguredPluginInstalls(
   );
 }
 
-/** Repair missing installs for an explicit plugin/channel id set. */
 export async function repairMissingPluginInstallsForIds(
   params: PluginInstallRepairOptions & {
     pluginIds: Iterable<string>;
@@ -153,19 +146,9 @@ export async function repairMissingPluginInstallsForIds(
   return repairMissingPluginInstalls(
     copyPluginInstallTransactionRequest(params, {
       ...params,
-      pluginIds: new Set(
-        [...params.pluginIds].map((pluginId) => pluginId.trim()).filter((pluginId) => pluginId),
-      ),
-      channelIds: new Set(
-        [...(params.channelIds ?? [])]
-          .map((channelId) => channelId.trim())
-          .filter((channelId) => channelId),
-      ),
-      blockedPluginIds: new Set(
-        [...(params.blockedPluginIds ?? [])]
-          .map((pluginId) => pluginId.trim())
-          .filter((pluginId) => pluginId),
-      ),
+      pluginIds: new Set(normalizeTrimmedStringList([...params.pluginIds])),
+      channelIds: new Set(normalizeTrimmedStringList([...(params.channelIds ?? [])])),
+      blockedPluginIds: new Set(normalizeTrimmedStringList([...(params.blockedPluginIds ?? [])])),
     }),
   );
 }
@@ -280,7 +263,6 @@ async function repairMissingPluginInstallsWithLease(
       onWarning: warn,
     });
   const deferredPluginIds = new Set<string>();
-  const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
   let nextRecords = records;
   const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
   const recordFailure = (pluginId: string, messages: string[], code?: string) => {
@@ -586,7 +568,6 @@ async function repairMissingPluginInstallsWithLease(
         env,
         updateChannel,
         mode: shouldReplaceBrokenOfficialInstall ? "update" : "install",
-        preferNpm: preferNpmInstalls,
         repairReason,
         ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
         beforePersistentEffect: params.beforePersistentEffect,

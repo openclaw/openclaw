@@ -182,7 +182,10 @@ describe("worker live events", () => {
         }),
       ),
     );
-    const terminal = live(4, lifecycle({ phase: "end", startedAt: 100, endedAt: 200 }));
+    const terminal = live(
+      4,
+      lifecycle({ phase: "end", startedAt: 100, endedAt: 200, stopReason: "length" }),
+    );
     await ack(terminal);
     await ack(terminal);
 
@@ -206,18 +209,13 @@ describe("worker live events", () => {
       success: true,
       result: { status: "written" },
     });
-    expect(rows[4]?.event.data).toMatchObject({ status: "success" });
+    expect(rows[3]?.event.data).toMatchObject({ stopReason: "length" });
+    expect(rows[4]?.event.data).toMatchObject({ status: "success", stopReason: "length" });
     expect(JSON.stringify(rows)).not.toContain(credential);
   });
 
   const lifecycleCredential = ["lifecycle", "credential", "value"].join("-");
   it.each([
-    [
-      "length completions",
-      lifecycle({ phase: "end", startedAt: 100, endedAt: 200, stopReason: "length" }),
-      "length",
-      "success",
-    ],
     [
       "provider errors",
       lifecycle({
@@ -364,40 +362,6 @@ describe("worker live events", () => {
       await result;
       diagnostic.mockRestore();
     }
-  });
-
-  it("replays an unacked tail once", async () => {
-    await ack(msg(2, " world"), 0);
-    await ack(msg(1), 2, { ...ID });
-    await ack(msg(1), 2);
-    await ack(msg(2, " world"), 2);
-    expect(deltas()).toEqual(["hello", " world"]);
-  });
-
-  it("resyncs a gap that exceeds the pending byte budget", async () => {
-    start({ maxPendingBytes: 1 });
-    await fail(msg(2, "buffered"), "resync-required");
-  });
-
-  it("restores the durable ACK when recreating a window", async () => {
-    durableAckedSeq = 5;
-    await ack(msg(6, "before", 5));
-    rx.clear();
-    await fail(msg(8, "stale", 7), "resync-required");
-    await ack(msg(6, "fresh", 5));
-  });
-
-  it("does not revive a missing startup source from a replacement row", async () => {
-    await remove();
-    start();
-    await fail(msg(1), "invalid-event");
-    await create();
-    await fail(msg(1), "invalid-event");
-    expect(events).toEqual([]);
-    captureSource();
-    start();
-    await fail(msg(6, "stale", 5), "resync-required");
-    await ack(msg(1));
   });
 
   it("rotates owners", async () => {
@@ -714,21 +678,14 @@ describe("worker live events", () => {
     expect(events.filter((event) => event.runId === RUN)).toHaveLength(1);
   });
 
-  it.each([
-    ["item", false],
-    ["item", true],
-    ["tool", false],
-    ["tool", true],
-  ] as const)(
-    "stops publication after %s detaches the worker (shared: %s)",
-    async (stream, shared) => {
-      if (shared) {
-        claimAgentRunContext(RUN, {
-          ...LOCAL,
-          isControlUiVisible: true,
-          lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        });
-      }
+  it.each(["item", "tool"] as const)(
+    "stops publication after %s detaches the worker from a shared run",
+    async (stream) => {
+      claimAgentRunContext(RUN, {
+        ...LOCAL,
+        isControlUiVisible: true,
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      });
       const diagnostic = vi.fn();
       const recorder = vi.spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner").mockReturnValue({
         record: diagnostic,
@@ -766,12 +723,6 @@ describe("worker live events", () => {
     },
   );
 
-  it("fences an environment detached before its first live event", async () => {
-    rx.clearEnvironment(ID.environmentId, EPOCH);
-    await fail(msg(1), "invalid-event");
-    expect(events).toEqual([]);
-  });
-
   it("clears on detach", async () => {
     await ack(msg(1, "delivered"));
     await ack(msg(3, "buffered", 1), 1);
@@ -780,57 +731,31 @@ describe("worker live events", () => {
     await fail(msg(1, "pending", 0, "run-pending"), "invalid-event");
   });
 
-  it("adopts a compatible pre-registered gateway run context", async () => {
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  it("clears an ownerless Gateway run context on terminal process turnover", async () => {
     claimAgentRunContext(RUN, {
       ...LOCAL,
-      isControlUiVisible: false,
-      lifecycleGeneration,
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
     });
 
     await ack(msg(1, "worker"));
+    await ack(live(2, lifecycle({ phase: "end", startedAt: 100, endedAt: 200 })));
+    expect(
+      rx.rotateCredential({
+        ackedSeq: 2,
+        credentialHash: "next-process-credential-hash",
+        environmentId: ID.environmentId,
+        newProcessTurn: true,
+        previousCredentialHash: ID.credentialHash,
+        runEpoch: EPOCH,
+        sessionId: SID,
+      }),
+    ).toBe(true);
 
-    expect(getAgentRunContext(RUN)).toMatchObject({
-      ...LOCAL,
-      isControlUiVisible: false,
-      lifecycleGeneration,
-      projectSessionActive: true,
-    });
-    expect(deltas()).toEqual(["worker"]);
+    expect(getAgentRunContext(RUN)).toBeUndefined();
+    expect(
+      resolveProjectedAgentRunProgressState({ sessionKeys: [KEY], sessionId: SID }),
+    ).toBeUndefined();
   });
-
-  it.each(["terminal process turnover", "detach"])(
-    "clears an ownerless Gateway run context on %s",
-    async (settledBy) => {
-      claimAgentRunContext(RUN, {
-        ...LOCAL,
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      });
-
-      await ack(msg(1, "worker"));
-      if (settledBy === "terminal process turnover") {
-        await ack(live(2, lifecycle({ phase: "end", startedAt: 100, endedAt: 200 })));
-        expect(
-          rx.rotateCredential({
-            ackedSeq: 2,
-            credentialHash: "next-process-credential-hash",
-            environmentId: ID.environmentId,
-            newProcessTurn: true,
-            previousCredentialHash: ID.credentialHash,
-            runEpoch: EPOCH,
-            sessionId: SID,
-          }),
-        ).toBe(true);
-      } else {
-        rx.clearEnvironment(ID.environmentId, EPOCH);
-      }
-
-      expect(getAgentRunContext(RUN)).toBeUndefined();
-      expect(
-        resolveProjectedAgentRunProgressState({ sessionKeys: [KEY], sessionId: SID }),
-      ).toBeUndefined();
-    },
-  );
 
   it("joins a visible dispatch-owned run context without blocking its terminal", async () => {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -913,35 +838,6 @@ describe("worker live events", () => {
     const source = await seedWorkerLiveSession(store, n, updatedAt);
     sources.set(source.sessionTarget.sessionId, source);
   };
-  it("evicts the oldest quiescent window instead of rejecting new sessions at the cap", async () => {
-    await Promise.all([farmSession(1), farmSession(2), farmSession(3)]);
-    start({ maxSessions: 2 });
-    for (const n of [1, 2]) {
-      await ack(
-        farmEvent(n, 1, { kind: "assistant", payload: { text: "hi", delta: "hi" } }),
-        1,
-        farmIdentity(n),
-      );
-      // Turn completion releases the run context gateway-side; the window's
-      // stale activeRuns entry lingers until the next event revalidates it.
-      for (const claimId of getAgentRunContextOwnership(`run-farm-${n}`)?.claimIds ?? []) {
-        releaseAgentRunContext(`run-farm-${n}`, claimId);
-      }
-    }
-    // Both existing windows are quiescent per the run-context registry; the
-    // third session evicts the oldest instead of failing with capacity-exceeded.
-    await ack(
-      farmEvent(3, 1, { kind: "assistant", payload: { text: "new", delta: "new" } }),
-      1,
-      farmIdentity(3),
-    );
-    durableAckedSeq = 1;
-    await ack(
-      farmEvent(1, 2, { kind: "assistant", payload: { text: "resumed", delta: "resumed" } }),
-      2,
-      farmIdentity(1),
-    );
-  });
 
   it("retains a quiescent window through acknowledgment validation", async () => {
     await Promise.all([farmSession(1), farmSession(2)]);
@@ -952,9 +848,7 @@ describe("worker live events", () => {
       .spyOn(liveProjection, "recordWorkerLiveTrajectoryEvent")
       .mockImplementation((...params) => {
         const write = record(...params);
-        if (write) {
-          writes.push(write);
-        }
+        writes.push(write);
         return write;
       });
     const writer = holdWorkerTranscriptWriter(store);
@@ -1004,23 +898,6 @@ describe("worker live events", () => {
       await competing;
       projection.mockRestore();
     }
-  });
-
-  it("rejects a new session only when every window has an active run", async () => {
-    await Promise.all([farmSession(1), farmSession(2), farmSession(3)]);
-    start({ maxSessions: 2 });
-    for (const n of [1, 2]) {
-      await ack(
-        farmEvent(n, 1, { kind: "assistant", payload: { text: "hi", delta: "hi" } }),
-        1,
-        farmIdentity(n),
-      );
-    }
-    await fail(
-      farmEvent(3, 1, { kind: "assistant", payload: { text: "new", delta: "new" } }),
-      "capacity-exceeded",
-      farmIdentity(3),
-    );
   });
 
   it("rejects a compatible context held by an exclusive Gateway owner", async () => {

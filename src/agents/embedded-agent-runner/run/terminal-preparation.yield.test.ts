@@ -130,7 +130,7 @@ describe("yielded terminal payloads after an earlier tool failure", () => {
           ? input.assistantTexts.map((text) => ({ text, replyToTag: false }))
           : [{ text: YIELD_DIAGNOSTIC_TEXT }],
       );
-      expect(terminal.activateInternalPrompt).not.toHaveBeenCalled();
+      expect(terminal.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
     },
   );
 

@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
@@ -12,6 +13,8 @@ import type {
   TranscriptTurnBoundary,
 } from "../../config/sessions/transcript-entry-anchor.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
@@ -620,7 +623,7 @@ describe("context-engine turn outbox", () => {
       { agentId: otherDatabase.agentId, path: otherDatabase.path },
       () => undefined,
     );
-    const databaseAccess = vi.spyOn(agentDatabase, "withOpenClawAgentDatabaseAsync");
+    const databaseAccess = vi.spyOn(agentDatabase, "withOpenClawAgentDatabaseRuntime");
     const accessesToTarget = () =>
       databaseAccess.mock.calls.filter(([options]) => options.path === database.path);
     try {
@@ -665,30 +668,50 @@ describe("context-engine turn outbox", () => {
     await expect(recorder.waitForRuntimePersistence()).rejects.toThrow("admission write failed");
   });
 
-  it("installs the outbox schema once per worker connection, not per command", async () => {
+  it("reuses admitted outbox schema across worker commands without DDL or catalog reads", async () => {
     const { target, database } = await createTranscript("schema-turn");
     const databasePath = database.path;
-    // A fresh connection has not ensured the lazy outbox DDL yet, as in a new worker.
-    const connection = new DatabaseSync(databasePath);
-    try {
-      const exec = vi.spyOn(connection, "exec");
-      const backend = bindSqliteWorkerBackend(undefined, {
-        databasePath,
-        database: connection,
-        admit: () => undefined,
-      });
-      const command = {
-        type: "hasPending" as const,
-        input: { engineId: "test", sessionId: target.sessionId },
-      };
-      expect(backend.execute(command)).toBe(false);
-      expect(backend.execute(command)).toBe(false);
-      const outboxDdl = exec.mock.calls.filter(([sql]) =>
-        sql.includes("CREATE TABLE IF NOT EXISTS context_engine_turn_outbox"),
-      );
-      expect(outboxDdl).toHaveLength(1);
-    } finally {
-      connection.close();
+    for (const firstUse of [false, true]) {
+      const connection = openNodeSqliteDatabase(databasePath);
+      try {
+        if (firstUse) {
+          connection.exec("DROP TABLE context_engine_turn_outbox");
+        }
+        admitSqliteSchema(connection);
+        const backend = bindSqliteWorkerBackend(undefined, {
+          databasePath,
+          database: connection,
+          admit: () => undefined,
+        });
+        const command = {
+          type: "hasPending" as const,
+          input: { engineId: "test", sessionId: target.sessionId },
+        };
+        if (firstUse) {
+          expect(backend.execute(command)).toBe(false);
+          // Consume the schema revision invalidated by the committed first-use DDL.
+          expect(backend.execute(command)).toBe(false);
+        }
+        const exec = vi.spyOn(connection, "exec");
+        const observation = observeSqliteReadSql(StatementSync.prototype);
+        try {
+          expect(backend.execute(command)).toBe(false);
+          expect(backend.execute(command)).toBe(false);
+          expect(
+            exec.mock.calls.filter(([sql]) =>
+              sql.includes("CREATE TABLE IF NOT EXISTS context_engine_turn_outbox"),
+            ),
+          ).toHaveLength(0);
+          expect(
+            observation.queries.filter((sql) => /sqlite_(?:schema|master)/iu.test(sql)),
+          ).toEqual([]);
+        } finally {
+          observation.restore();
+          exec.mockRestore();
+        }
+      } finally {
+        connection.close();
+      }
     }
   });
 });

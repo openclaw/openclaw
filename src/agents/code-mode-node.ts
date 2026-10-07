@@ -4,8 +4,7 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { runBestEffortCleanup } from "../infra/non-fatal-cleanup.js";
-import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import {
   WorkerTaskError,
   WorkerTaskPool,
@@ -16,7 +15,7 @@ import {
   type LegacyPluginSdkResourceHost,
 } from "../plugins/legacy-sdk-resource-host.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   codeModeFailureCode,
   CodeModeHeadlessAbortError,
@@ -128,7 +127,7 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
   for (;;) {
     signal.throwIfAborted();
     lifetime?.scheduler.signal.throwIfAborted();
-    workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.codeModeNode);
+    workerUrl = resolveRuntimeProcessEntrypointUrl("codeModeNode");
     const retiring = new Set([
       ...[...retiringPools].filter(
         (owner) => owner.lifetime === lifetime || owner.lifetime?.scheduler.signal.aborted,
@@ -188,7 +187,7 @@ async function releasePool(owner: NodePool): Promise<void> {
     !lifetime ||
     lifetime.scheduler.signal.aborted ||
     owner.tasks.isClosed ||
-    owner.url !== resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.codeModeNode).href
+    owner.url !== resolveRuntimeProcessEntrypointUrl("codeModeNode").href
   ) {
     await closePool(owner);
     return;

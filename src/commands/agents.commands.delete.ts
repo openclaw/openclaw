@@ -95,7 +95,6 @@ function failAgentsDelete(opts: AgentsDeleteOptions, runtime: RuntimeEnv, messag
 async function maybeDeleteAgentThroughGateway(params: {
   config: OpenClawConfig;
   agentId: string;
-  deleteFiles: boolean;
 }): Promise<AgentDeleteGatewayAttempt> {
   const { url } = buildGatewayConnectionDetails({ config: params.config });
   const localTarget = await isImplicitLocalGatewayTarget({ config: params.config });
@@ -106,7 +105,7 @@ async function maybeDeleteAgentThroughGateway(params: {
       method: "agents.delete",
       params: {
         agentId: params.agentId,
-        deleteFiles: params.deleteFiles,
+        deleteFiles: true,
       },
       mode: GATEWAY_CLIENT_MODES.CLI,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
@@ -293,7 +292,6 @@ export async function agentsDeleteCommand(
   const gatewayAttempt = await maybeDeleteAgentThroughGateway({
     config: cfg,
     agentId,
-    deleteFiles: true,
   });
   if (gatewayAttempt.kind === "deleted") {
     const workspaceSharedWith = opts.json
@@ -308,7 +306,7 @@ export async function agentsDeleteCommand(
   return await withAgentDeletion(agentId, async (begin) => {
     existingJournal = readAgentDeletionJournal(agentId);
     if (configured && existingJournal?.cleanupCompleted) {
-      if (!claimCompletedAgentDeletion(agentId, existingJournal.operationId)) {
+      if (!(await claimCompletedAgentDeletion(agentId, existingJournal.operationId))) {
         throw new Error(`Agent "${agentId}" deletion tombstone changed before fresh deletion.`);
       }
       existingJournal = undefined;
@@ -320,7 +318,7 @@ export async function agentsDeleteCommand(
     const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
 
     const deleteFiles = existingJournal?.deleteFiles ?? true;
-    const deletion = begin(
+    const deletion = await begin(
       existingJournal ?? { agentId, agentDir, workspaceDir, sessionsDir, deleteFiles },
     );
     let rosterCommitted = !configured;
@@ -364,7 +362,7 @@ export async function agentsDeleteCommand(
         !(error instanceof AgentDeletionAuthorityRollbackError) &&
         !(error instanceof AgentDeletionCommitUncertainError)
       ) {
-        deletion.rollback();
+        await deletion.rollback();
       }
       throw error;
     }

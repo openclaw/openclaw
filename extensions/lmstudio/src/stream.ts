@@ -14,6 +14,7 @@ import {
   isRecord,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { prepareLmstudioModelForInference, type LmstudioPreparedModel } from "./models.fetch.js";
 import { resolveLmstudioInferenceBase } from "./models.js";
@@ -114,24 +115,13 @@ function waitForLmstudioPreload(
   if (!signal) {
     return preload;
   }
-  if (signal.aborted) {
-    return Promise.reject(toLmstudioPreloadError(signal.reason, "LM Studio preload aborted"));
-  }
-  return new Promise((resolve, reject) => {
-    const onAbort = () =>
-      reject(toLmstudioPreloadError(signal.reason, "LM Studio preload aborted"));
-    signal.addEventListener("abort", onAbort, { once: true });
-    void preload.then(
-      (modelKey) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(modelKey);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(toLmstudioPreloadError(error, "LM Studio model preload failed"));
-      },
-    );
-  });
+  return racePromiseWithAbortSignal(
+    preload.catch((error: unknown) => {
+      throw toLmstudioPreloadError(error, "LM Studio model preload failed");
+    }),
+    signal,
+    () => toLmstudioPreloadError(signal.reason, "LM Studio preload aborted"),
+  );
 }
 
 async function ensureLmstudioModelLoadedBestEffort(params: {

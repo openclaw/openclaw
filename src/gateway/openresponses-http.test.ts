@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import OpenAI from "openai";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import { FailoverError } from "../agents/failover-error.js";
@@ -64,26 +64,24 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
   };
 });
 
-installGatewayTestHooks({ scope: "suite" });
-
 let enabledServer: Awaited<ReturnType<typeof startServer>>;
 let enabledPort: number;
-beforeAll(async () => {
-  const started = await startGatewayServerWithRetries({
-    port: await getGatewayTestPort(),
-    opts: {
-      host: "127.0.0.1",
-      auth: { mode: "none" },
-      controlUiEnabled: false,
-      openResponsesEnabled: true,
-    },
-  });
-  enabledPort = started.port;
-  enabledServer = started.server;
-});
-
-afterAll(async () => {
-  await enabledServer?.close({ reason: "openresponses enabled suite done" });
+installGatewayTestHooks({
+  scope: "suite",
+  setup: async () => {
+    const started = await startGatewayServerWithRetries({
+      port: await getGatewayTestPort(),
+      opts: {
+        host: "127.0.0.1",
+        auth: { mode: "none" },
+        controlUiEnabled: false,
+        openResponsesEnabled: true,
+      },
+    });
+    enabledPort = started.port;
+    enabledServer = started.server;
+  },
+  cleanup: async () => enabledServer?.close({ reason: "openresponses enabled suite done" }),
 });
 
 beforeEach(() => {
@@ -403,7 +401,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const request = { model: "openclaw", input: "hi" };
     const admin = { "x-openclaw-scopes": "operator.admin, operator.write" };
     try {
-      testState.agentsConfig = { list: [{ id: "main" }] };
+      testState.agentsConfig = { entries: { main: {} } };
       resetConfigRuntimeState();
       const nonPost = await fetch(`http://127.0.0.1:${enabledPort}/v1/responses`);
       expect(nonPost.status).toBe(405);
@@ -415,7 +413,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
           "x-openclaw-session-key": `agent:main:${key}`,
         });
       }
-      testState.agentsConfig = { ownership: "explicit", list: [{ id: "main" }, { id: "beta" }] };
+      testState.agentsConfig = { ownership: "explicit", entries: { main: {}, beta: {} } };
       resetConfigRuntimeState();
       await accept(
         {},
@@ -434,7 +432,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         { model: "openclaw/beta" },
         { sessionKey: expect.stringMatching(/^agent:beta:/) },
       );
-      testState.agentsConfig = { list: [{ id: "main" }] };
+      testState.agentsConfig = { entries: { main: {} } };
       resetConfigRuntimeState();
       await accept(
         { model: "openclaw/default" },

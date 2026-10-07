@@ -39,7 +39,6 @@ import {
   mergeTtsSupplementMessages,
   projectForwardedMessages,
   toProjectedMessages,
-  type SubagentCoordinationDisplayResolver,
 } from "./chat-display-projection.history.js";
 import {
   sanitizeChatHistoryContentBlock,
@@ -53,6 +52,7 @@ import type {
   CurrentUserProfileDisplay,
   CurrentUserProfileDisplayResolver,
 } from "./current-user-profile-display.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 import { projectTranscriptImageArtifacts } from "./transcript-image-artifacts.js";
 
 export type ChatDisplayProjectionOptions = {
@@ -539,5 +539,34 @@ export function projectChatDisplayMessage(
   message: unknown,
   options?: ChatDisplayProjectionOptions,
 ): Record<string, unknown> | undefined {
-  return projectChatDisplayMessages([message], options)[0];
+  const projected = projectChatDisplayMessages([message], options);
+  if (
+    !options?.includeCommentaryFallbacks ||
+    !projected.some((entry) => entry.openclawStreamFallback)
+  ) {
+    return projected[0];
+  }
+  // A fetched source row restores all its visible fragments as one message.
+  const result: Record<string, unknown> = {
+    ...projected.at(-1),
+    content: projected.flatMap(({ content }) =>
+      Array.isArray(content)
+        ? content
+        : typeof content === "string"
+          ? [{ type: "text", text: content }]
+          : [],
+    ),
+  };
+  const truncated = projected
+    .map((entry) => asOptionalRecord(entry["__openclaw"]))
+    .find((metadata) => metadata?.truncated === true);
+  if (truncated) {
+    result["__openclaw"] = {
+      ...asOptionalRecord(result["__openclaw"]),
+      truncated: true,
+      reason: truncated.reason,
+    };
+  }
+  delete result.openclawStreamFallback;
+  return result;
 }

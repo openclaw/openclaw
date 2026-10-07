@@ -20,7 +20,10 @@ import {
 import * as provenanceSchema from "./memory-schema-provenance.js";
 import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
 import { migrateMemoryIndexStorage } from "./memory-schema-storage-migration.js";
-import { migrateSqliteSchemaToStrict } from "./openclaw-runtime-sqlite.js";
+import {
+  migrateSqliteSchemaToStrict,
+  migrateSqliteSchemaToStrictInTransaction,
+} from "./openclaw-runtime-sqlite.js";
 export {
   markInvalidImportedMemoryEmbeddings,
   migrateMemoryIndexStorage,
@@ -329,45 +332,23 @@ export function ensureMemoryIndexSchema(params: {
   `);
   migrateMemoryIndexSourcesIdentity(params.db);
   params.db.exec(`
-
-    CREATE TRIGGER IF NOT EXISTS memory_index_sources_revision_after_insert
-    AFTER INSERT ON ${MEMORY_INDEX_SOURCES_TABLE}
-    BEGIN
-      UPDATE ${MEMORY_INDEX_STATE_TABLE} SET revision = revision + 1 WHERE id = 1;
-    END;
-    CREATE TRIGGER IF NOT EXISTS memory_index_sources_revision_after_update
-    AFTER UPDATE ON ${MEMORY_INDEX_SOURCES_TABLE}
-    BEGIN
-      UPDATE ${MEMORY_INDEX_STATE_TABLE} SET revision = revision + 1 WHERE id = 1;
-    END;
-    CREATE TRIGGER IF NOT EXISTS memory_index_sources_revision_after_delete
-    AFTER DELETE ON ${MEMORY_INDEX_SOURCES_TABLE}
-    BEGIN
-      UPDATE ${MEMORY_INDEX_STATE_TABLE} SET revision = revision + 1 WHERE id = 1;
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS memory_index_chunks_revision_after_insert
-    AFTER INSERT ON ${MEMORY_INDEX_CHUNKS_TABLE}
-    BEGIN
-      UPDATE ${MEMORY_INDEX_STATE_TABLE} SET revision = revision + 1 WHERE id = 1;
-    END;
-    CREATE TRIGGER IF NOT EXISTS memory_index_chunks_revision_after_update
-    AFTER UPDATE ON ${MEMORY_INDEX_CHUNKS_TABLE}
-    BEGIN
-      UPDATE ${MEMORY_INDEX_STATE_TABLE} SET revision = revision + 1 WHERE id = 1;
-    END;
-    CREATE TRIGGER IF NOT EXISTS memory_index_chunks_revision_after_delete
-    AFTER DELETE ON ${MEMORY_INDEX_CHUNKS_TABLE}
-    BEGIN
-      UPDATE ${MEMORY_INDEX_STATE_TABLE} SET revision = revision + 1 WHERE id = 1;
-    END;
+    ${[MEMORY_INDEX_SOURCES_TABLE, MEMORY_INDEX_CHUNKS_TABLE]
+      .flatMap((table) =>
+        ["insert", "update", "delete"].map(
+          (event) => `CREATE TRIGGER IF NOT EXISTS ${table}_revision_after_${event}
+            AFTER ${event.toUpperCase()} ON ${table}
+            BEGIN
+              UPDATE ${MEMORY_INDEX_STATE_TABLE} SET revision = revision + 1 WHERE id = 1;
+            END;`,
+        ),
+      )
+      .join("\n")}
 
     CREATE INDEX IF NOT EXISTS idx_memory_index_sources_source
       ON ${MEMORY_INDEX_SOURCES_TABLE}(source);
     CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path_source
       ON ${MEMORY_INDEX_CHUNKS_TABLE}(path, source);
-    CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path
-      ON ${MEMORY_INDEX_CHUNKS_TABLE}(path);
+    DROP INDEX IF EXISTS idx_memory_index_chunks_path;
     CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
       ON ${MEMORY_INDEX_CHUNKS_TABLE}(source);
   `);
@@ -383,7 +364,11 @@ export function ensureMemoryIndexSchema(params: {
         ON ${embeddingCacheTable}(updated_at);
     `);
   }
-  migrateSqliteSchemaToStrict(
+  // Worker admission owns BEGIN, foreign-key policy, and the guarded commit.
+  const migrateStrict = params.db.isTransaction
+    ? migrateSqliteSchemaToStrictInTransaction
+    : migrateSqliteSchemaToStrict;
+  migrateStrict(
     params.db,
     buildMemoryIndexStrictSchema({
       embeddingCacheTable,
@@ -410,9 +395,7 @@ export function ensureMemoryIndexSchema(params: {
         dropMemoryChunkFtsTriggers(params.db);
         dropMemoryPathFtsTriggers(params.db);
       }
-      const message = formatErrorMessage(err);
-      ftsAvailable = false;
-      ftsError = message;
+      ftsError = formatErrorMessage(err);
     }
   }
 

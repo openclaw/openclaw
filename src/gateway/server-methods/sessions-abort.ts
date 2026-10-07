@@ -26,6 +26,7 @@ import {
   isConfiguredSessionStoreAgentId,
   resolveExistingAgentSessionStoreTargetsSync,
 } from "../../config/sessions.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -358,12 +359,12 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     const abortSessionKey = canonicalKey === "global" ? "global" : resolvedAbortSessionKey;
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const lifecycleRevision = sessionEntry?.lifecycleRevision;
-    const assertAbortCurrent = () => {
-      authority.assertCurrent();
-      sessionMutationAuthorization?.assertCurrent();
-      requester.sessionAuthority?.assertCurrent();
-      assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-    };
+    const assertAbortCurrent = composeSessionSourceAssertion([
+      authority.assertCurrent,
+      sessionMutationAuthorization?.assertCurrent,
+      requester.sessionAuthority?.assertCurrent,
+      () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration),
+    ]);
     const queueKeys = [key, ...(requestedKeyAliases ?? []), canonicalKey, sessionEntry?.sessionId];
     const clearCapturedFollowups =
       narrow && clearQueued && !requestedRunId && requiredSessionId

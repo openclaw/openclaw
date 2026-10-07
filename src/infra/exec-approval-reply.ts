@@ -12,11 +12,11 @@ import type {
   MessagePresentationButton,
 } from "../interactive/payload.js";
 import { formatHumanList } from "../shared/human-list.js";
-// Builds reply payloads for exec approval prompts and outcomes.
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import { formatApprovalDisplayPath } from "./approval-display-paths.js";
 import { summarizeApprovalScope, type ApprovalScope } from "./approval-scope.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
+import type { ExecApprovalActionDescriptor } from "./exec-approval-action.types.js";
 import {
   describeNativeExecApprovalClientSetup,
   listNativeExecApprovalClientLabels,
@@ -27,6 +27,8 @@ import {
   type ExecApprovalDecision,
   type ExecHost,
 } from "./exec-approvals.js";
+
+export type { ExecApprovalActionDescriptor } from "./exec-approval-action.types.js";
 
 export type ExecApprovalReplyDecision = ExecApprovalDecision;
 export type ExecApprovalUnavailableReason =
@@ -43,17 +45,6 @@ export type ExecApprovalReplyMetadata = {
   sessionKey?: string;
 };
 
-export type ExecApprovalActionDescriptor = {
-  decision: ExecApprovalReplyDecision;
-  label: string;
-  style: NonNullable<MessagePresentationButton["style"]>;
-  /** Optional semantic action; omitted by the shipped command-backed builders. */
-  action?: MessagePresentationAction;
-  /** Copyable text fallback retained for non-interactive approval surfaces. */
-  command: string;
-};
-
-/** Approval descriptor guaranteed to carry a canonical typed approval action. */
 export type TypedApprovalActionDescriptor = ExecApprovalActionDescriptor & {
   action: Extract<MessagePresentationAction, { type: "approval" }>;
 };
@@ -111,13 +102,6 @@ function resolveAllowedDecisions(params: {
   return params.allowedDecisions ?? resolveExecApprovalAllowedDecisions({ ask: params.ask });
 }
 
-export function buildExecApprovalCommandText(params: {
-  approvalCommandId: string;
-  decision: ExecApprovalReplyDecision;
-}): string {
-  return `/approve ${params.approvalCommandId} ${params.decision}`;
-}
-
 type BuildExecApprovalActionDescriptorsParams = {
   approvalCommandId: string;
   ask?: string | null;
@@ -135,15 +119,11 @@ function buildApprovalActionDescriptors(
   ];
   return decisions
     .filter((descriptor) => allowedDecisions.includes(descriptor.decision))
-    .map((descriptor) => ({
-      decision: descriptor.decision,
-      label: descriptor.label,
-      style: descriptor.style,
-      command: buildExecApprovalCommandText({
-        approvalCommandId,
-        decision: descriptor.decision,
+    .map((descriptor) =>
+      Object.assign(descriptor, {
+        command: `/approve ${approvalCommandId} ${descriptor.decision}`,
       }),
-    }));
+    );
 }
 
 export function buildExecApprovalActionDescriptors(
@@ -155,7 +135,6 @@ export function buildExecApprovalActionDescriptors(
     : [];
 }
 
-/** Build approval descriptors with explicit owner-aware typed actions. */
 export function buildTypedApprovalActionDescriptors(
   params: BuildExecApprovalActionDescriptorsParams & {
     approvalKind: ChannelApprovalKind;
@@ -166,22 +145,18 @@ export function buildTypedApprovalActionDescriptors(
     return [];
   }
   return buildApprovalActionDescriptors(approvalId, resolveAllowedDecisions(params)).map(
-    (descriptor) => ({
-      decision: descriptor.decision,
-      label: descriptor.label,
-      style: descriptor.style,
-      command: descriptor.command,
-      action: {
-        type: "approval",
-        approvalId,
-        approvalKind: params.approvalKind,
-        decision: descriptor.decision,
-      },
-    }),
+    (descriptor) =>
+      Object.assign(descriptor, {
+        action: {
+          type: "approval",
+          approvalId,
+          approvalKind: params.approvalKind,
+          decision: descriptor.decision,
+        } satisfies TypedApprovalActionDescriptor["action"],
+      }),
   );
 }
 
-/** Build portable approval controls from decision descriptors. */
 export function buildApprovalPresentationFromActionDescriptors(
   actions: readonly ExecApprovalActionDescriptor[],
 ): MessagePresentation | undefined {
@@ -218,7 +193,6 @@ export function buildApprovalButtonPresentation(
   );
 }
 
-/** Build portable approval controls with explicit owner-aware typed actions. */
 export function buildTypedApprovalPresentation(
   params: BuildApprovalPresentationParams & { approvalKind: ChannelApprovalKind },
 ): MessagePresentation | undefined {
@@ -233,30 +207,10 @@ export function buildTypedApprovalPresentation(
 }
 
 /** Build the shipped command-backed exec-approval presentation. */
-export function buildExecApprovalPresentation(params: {
-  approvalCommandId: string;
-  ask?: string | null;
-  allowedDecisions?: readonly ExecApprovalReplyDecision[];
-}): MessagePresentation | undefined {
-  return buildApprovalButtonPresentation({
-    approvalId: params.approvalCommandId,
-    ask: params.ask,
-    allowedDecisions: params.allowedDecisions,
-  });
-}
-
-/** Build an exec-approval presentation with canonical typed decision actions. */
-export function buildTypedExecApprovalPresentation(params: {
-  approvalCommandId: string;
-  ask?: string | null;
-  allowedDecisions?: readonly ExecApprovalReplyDecision[];
-}): MessagePresentation | undefined {
-  return buildTypedApprovalPresentation({
-    approvalId: params.approvalCommandId,
-    approvalKind: "exec",
-    ask: params.ask,
-    allowedDecisions: params.allowedDecisions,
-  });
+export function buildExecApprovalPresentation(
+  params: BuildExecApprovalActionDescriptorsParams,
+): MessagePresentation | undefined {
+  return buildApprovalPresentationFromActionDescriptors(buildExecApprovalActionDescriptors(params));
 }
 
 export function getExecApprovalApproverDmNoticeText(): string {
@@ -410,15 +364,15 @@ export function buildExecApprovalPendingReplyPayload(
   };
 }
 
-/** Build an exec approval prompt with canonical typed decision actions. */
 export function buildTypedExecApprovalPendingReplyPayload(
   params: ExecApprovalPendingReplyParams,
 ): ReplyPayload {
   const payload = buildExecApprovalPendingReplyPayload(params);
   return {
     ...payload,
-    presentation: buildTypedExecApprovalPresentation({
-      approvalCommandId: params.approvalId,
+    presentation: buildTypedApprovalPresentation({
+      approvalId: params.approvalId,
+      approvalKind: "exec",
       allowedDecisions: resolveAllowedDecisions(params),
     }),
   };

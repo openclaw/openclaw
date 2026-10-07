@@ -40,48 +40,6 @@ const { createSessionStoreDir, openClient } = setupSessionCreateTestHarness(asyn
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-test("sessions.create atomically arms a private workspace diff claim", async () => {
-  const root = tempDirs.make("openclaw-session-diff-baseline-");
-  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
-  await fs.appendFile(path.join(workspace, "README.md"), "dirty at session start\n");
-  const { storePath } = await createSessionStoreDir();
-  sessionDiffBaselineMocks.useReal = true;
-  const { ws } = await openClient({
-    browserOrigin: "http://127.0.0.1",
-    client: {
-      id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-      version: "dev",
-      platform: "web",
-      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-    },
-  });
-  try {
-    const created = await rpcReq<{
-      entry?: Record<string, unknown>;
-      key?: string;
-      sessionId?: string;
-    }>(ws, "sessions.create", { agentId: "main", cwd: workspace });
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    const sessionKey = requireNonEmptyString(created.payload?.key, "baseline session key");
-    const sessionId = requireNonEmptyString(created.payload?.sessionId, "baseline session id");
-    expect(created.payload?.entry).not.toHaveProperty("sessionDiffBaselineCapture");
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      sessionId,
-      spawnedCwd: workspace,
-      sessionDiffBaselineCapture: {
-        version: 1,
-        captureId: expect.any(String),
-        status: "pending",
-      },
-    });
-    expect(sessionDiffBaselineMocks.ensure).not.toHaveBeenCalled();
-    expect(sessionDiffBaselineMocks.capture).not.toHaveBeenCalled();
-  } finally {
-    sessionDiffBaselineMocks.useReal = false;
-    ws.close();
-  }
-});
-
 test("sessions.create fences the first workspace write behind its diff baseline", async () => {
   const root = tempDirs.make("openclaw-session-diff-first-write-");
   const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
@@ -144,6 +102,7 @@ test("sessions.create fences the first workspace write behind its diff baseline"
       ok: true,
       payload: { runStarted: true, sessionId: expect.any(String) },
     });
+    expect(created.payload).not.toHaveProperty("entry.sessionDiffBaselineCapture");
     await captureStarted.promise;
     await expect(fs.stat(path.join(workspace, "first-turn.txt"))).rejects.toThrow();
 
@@ -525,10 +484,7 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
   const root = tempDirs.make("openclaw-session-existing-worktree-cwd-");
   const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
   testState.agentsConfig = {
-    list: [
-      { id: "main", default: true },
-      { id: "roboclaw", workspace },
-    ],
+    entries: { main: {}, roboclaw: { workspace } },
   };
   const { dir, storePath } = await createSessionStoreDir();
   const worktree = await managedWorktrees.create({

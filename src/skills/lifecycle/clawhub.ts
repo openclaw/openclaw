@@ -86,10 +86,7 @@ async function installRequestedSkillFromClawHub(
     }
     return await performClawHubSkillInstall({
       ...params,
-      slug: ref.slug,
-      ...(ref.ownerHandle ? { ownerHandle: ref.ownerHandle } : {}),
-      ...(ref.requestedReference ? { requestedReference: ref.requestedReference } : {}),
-      ...(ref.trustState ? { trustState: ref.trustState } : {}),
+      ...ref,
     });
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };

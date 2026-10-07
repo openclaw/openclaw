@@ -1,3 +1,4 @@
+import { startCronReceiptAuthorityHost } from "../cron/store/receipt-authority-owner.js";
 import { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../infra/gateway-suspend-coordinator.js";
 import {
   resetGatewayRestartStateForInProcessRestart,
@@ -7,15 +8,18 @@ import {
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { drainOpenClawAgentWriteQueuesForTest } from "../state/openclaw-agent-write-admission.test-support.js";
 
-export async function resetGatewayLifecycleTestState(options: {
-  preserveRuntimeBindings: boolean;
-}): Promise<void> {
+export async function resetGatewayLifecycleTestState(
+  phase: "prepare" | "cleanup" | "runtime",
+): Promise<void> {
   await drainOpenClawAgentWriteQueuesForTest();
   // Resume held scheduling and cancel pending restart work before clearing
   // admission. Live suite servers keep their policy and active-work binding.
   resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetGatewayRestartStateForInProcessRestart();
-  if (!options.preserveRuntimeBindings) {
+  if (phase === "prepare") {
+    startCronReceiptAuthorityHost();
+  }
+  if (phase !== "runtime") {
     setGatewayRestartPolicy({ allowExternal: false });
     setPreRestartDeferralCheck(() => 0);
   }

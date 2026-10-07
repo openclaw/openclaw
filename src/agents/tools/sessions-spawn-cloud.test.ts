@@ -307,7 +307,7 @@ describe("visible session placement and authority", () => {
           ...(success
             ? { defaults: { subagents: { model: "mock-provider/child@child-profile" } } }
             : {}),
-          list: [{ id: "main" }],
+          entries: { main: {} },
         },
         cloudWorkers: { profiles: { build: { provider: "fixture", settings: {} } } },
       },

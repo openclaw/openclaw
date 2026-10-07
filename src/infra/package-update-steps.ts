@@ -16,12 +16,11 @@ import type { PackageUpdateStepRunner } from "./package-update-lifecycle.js";
 import {
   prepareStagedPackageInstall,
   discardPackageUpdateStage,
-  resolveNpmUpdateLifecyclePolicy,
   runPackageUpdateLifecycle,
   verifyUnchangedPackageUpdateRecovery,
 } from "./package-update-lifecycle.js";
 import {
-  checkGlobalPackageUpdatePermissions,
+  checkGlobalPackageUpdateAdmission,
   classifyPackageUpdatePermissionFailure,
   resolveCanonicalPath,
   runPnpmPreflightProbe,
@@ -52,6 +51,7 @@ import {
   globalInstallArgs,
   listActivePnpmIsolatedGlobalPackages,
   resolveExpectedInstalledVersionFromSpec,
+  resolveNpmLifecyclePolicyGate,
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
@@ -125,7 +125,6 @@ export async function runGlobalPackageUpdateSteps(params: {
     }
     const cleanup = await discardPackageUpdateStage({
       stage: stagedInstall,
-      manager: params.installTarget.manager,
       committed,
     });
     if (cleanup.status === "failed") {
@@ -178,9 +177,13 @@ export async function runGlobalPackageUpdateSteps(params: {
   };
 
   try {
-    const permissions = await checkGlobalPackageUpdatePermissions(params.installTarget, params.env);
-    if (permissions) {
-      return await packageUpdateFailure(permissions);
+    const admission = await checkGlobalPackageUpdateAdmission(
+      params.installTarget,
+      params.packageName,
+      params.env,
+    );
+    if (admission) {
+      return await packageUpdateFailure(admission);
     }
     if (process.platform === "freebsd") {
       if (!params.installTarget.packageRoot) {
@@ -190,11 +193,17 @@ export async function runGlobalPackageUpdateSteps(params: {
       await inspection.assertUnowned(params.packageRoot);
       await inspection.assertUnowned(params.installTarget.packageRoot);
     }
-    const npmPreflight = await resolveNpmUpdateLifecyclePolicy({
-      installTarget: params.installTarget,
-    });
-    if (npmPreflight.failedStep) {
-      return await packageUpdateFailure(npmPreflight.failedStep);
+    const npmPreflight = resolveNpmLifecyclePolicyGate(params.installTarget);
+    if (npmPreflight.error) {
+      return await packageUpdateFailure({
+        name: "npm-lifecycle-policy-preflight",
+        command: `${params.installTarget.command} --version`,
+        cwd: process.cwd(),
+        durationMs: 0,
+        exitCode: 1,
+        stdoutTail: params.installTarget.npmOwner?.version || null,
+        stderrTail: npmPreflight.error,
+      });
     }
     const pnpmPreflight = await validatePnpmIsolatedUpdate({
       installTarget: params.installTarget,
@@ -271,9 +280,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       if (bin.failedStep) {
         return await packageUpdateFailure(bin.failedStep);
       }
-      globalBinDir = bin.result
-        ? readPackageManagerProbeValue(bin.result.stdout) || undefined
-        : undefined;
+      globalBinDir = readPackageManagerProbeValue(bin.result.stdout) || undefined;
     }
     const nativeOptions = stageNative
       ? { env: effectiveInstallEnv ?? process.env, globalBinDir, installSpec: params.installSpec }
@@ -471,6 +478,17 @@ export async function runGlobalPackageUpdateSteps(params: {
     }
 
     const verificationPackageRoot = stagedInstall.packageRoot;
+    // Additional launcher names are known only after npm stages the candidate.
+    // Inspect those destinations before validation, never unrelated prefix files.
+    const publicationAdmission = await checkGlobalPackageUpdateAdmission(
+      params.installTarget,
+      params.packageName,
+      params.env,
+      stagedInstall.layout.binDir,
+    );
+    if (publicationAdmission) {
+      return await packageUpdateFailure(publicationAdmission, [...steps, publicationAdmission]);
+    }
     await params.beforeVerifyCandidate?.(verificationPackageRoot);
     if (packageRoot && params.beforeVerifyCandidate) {
       // Admission staging owns only its private prefix. Retire old backups only

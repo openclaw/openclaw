@@ -3,7 +3,9 @@
  * Covers output caps, finished-session retention, cleanup, and PTY cursor mode
  * state for background exec sessions.
  */
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
   acknowledgeNotifyOnExit,
@@ -37,6 +39,26 @@ vi.mock("../infra/secure-random.js", () => ({
 }));
 
 describe("bash process registry", () => {
+  it("releases discarded backing strings from live, finished, and staged output", async ({
+    signal,
+  }) => {
+    const result = await runNodeScript(
+      [
+        "--expose-gc",
+        "--import",
+        "./scripts/tsx.mjs",
+        fileURLToPath(
+          new URL("./bash-process-registry.retention.test-support.ts", import.meta.url),
+        ),
+      ],
+      process.env,
+      undefined,
+      { cwd: fileURLToPath(new URL("../../", import.meta.url)), signal },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, [result.stdout, result.stderr].join("\n")).toBe(0);
+  });
+
   function createRegistrySession(params: {
     id?: string;
     maxOutputChars: number;

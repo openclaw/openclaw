@@ -66,7 +66,6 @@ import {
   type SnapshotResult,
   type SnapshotSummary,
   type SnapshotVerificationResult,
-  type SqliteSnapshotProvider,
 } from "./snapshot-provider.js";
 
 const SNAPSHOT_DIRECTORY_MODE = 0o700;
@@ -89,13 +88,11 @@ type LocalSqliteSnapshotProviderOptions = {
   readonly now?: () => Date;
 };
 
-export function createLocalSqliteSnapshotProvider(
-  options: LocalSqliteSnapshotProviderOptions,
-): SqliteSnapshotProvider {
+export function createLocalSqliteSnapshotProvider(options: LocalSqliteSnapshotProviderOptions) {
   return new LocalSqliteSnapshotProvider(options);
 }
 
-class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
+class LocalSqliteSnapshotProvider {
   readonly #allowedDatabaseRoles: readonly SnapshotDatabaseIdentity["role"][] | undefined;
   readonly #repositoryPath: string;
   readonly #validationRootPath: string;

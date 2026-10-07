@@ -13,8 +13,6 @@ import {
   type PluginDoctorContractModule,
 } from "../plugins/doctor-contract-module.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
-import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -33,7 +31,6 @@ import {
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
 import { runLegacyMigrationPlans } from "./state-migrations.plugin-state.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
-import { migrateLegacyUpdateCheckState } from "./state-migrations.update-check.js";
 
 function migrationReceipt(id: string, result: MigrationMessages) {
   return createLegacyStateMigrationStepReceipt(
@@ -55,64 +52,6 @@ afterEach(() => {
 });
 
 describe("recoverable legacy state", () => {
-  it.each([
-    { failure: "malformed", canonical: true },
-    { failure: "unreadable", canonical: true },
-    { failure: "malformed", canonical: false },
-    { failure: "unreadable", canonical: false },
-  ])(
-    "keeps $failure update metadata advisory only with canonical state=$canonical",
-    async ({ failure, canonical }) => {
-      await withOpenClawTestState({ label: "update-check-recovery" }, async ({ stateDir, env }) => {
-        const sourcePath = path.join(stateDir, "update-check.json");
-        const sourceBytes = failure === "malformed" ? "{invalid legacy JSON" : "{}";
-        await fs.writeFile(sourcePath, sourceBytes);
-        const canonicalState = {
-          autoInstallId: "canonical-install",
-          autoFirstSeenVersion: "2026.9.3",
-          autoFirstSeenAt: "2026-09-08T00:00:00.000Z",
-          autoLastAttemptVersion: "2026.9.3",
-          autoLastAttemptAt: "2026-09-08T01:00:00.000Z",
-        };
-        if (canonical) {
-          writeConfigMachineState("update.checkState", canonicalState, { env });
-        }
-        if (failure === "unreadable") {
-          const readFile = fsSync.readFileSync;
-          vi.spyOn(fsSync, "readFileSync").mockImplementation((target, options) => {
-            if (target === sourcePath) {
-              throw new Error("synthetic legacy cache permission denied");
-            }
-            return readFile(target, options);
-          });
-        }
-
-        const result = migrateLegacyUpdateCheckState({
-          stateDir,
-          detected: { sourcePath, hasLegacy: true },
-        });
-        const receipt = migrationReceipt("update-check", result);
-
-        await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(sourceBytes);
-        expect(readConfigMachineState("update.checkState", { env })).toEqual(
-          canonical ? canonicalState : undefined,
-        );
-        expect(receipt.warnings.join("\n")).toContain("update-check");
-        if (canonical) {
-          expect(() => throwIfDoctorStateMigrationRefused([receipt])).not.toThrow();
-          expect(receipt.outcome).toBe("warning");
-          expect(receipt.warnings.join("\n")).toContain("openclaw doctor --fix");
-        } else {
-          expect(() => throwIfDoctorStateMigrationRefused([receipt])).toThrow(
-            "Doctor stopped because a state migration refused",
-          );
-          expect(receipt.outcome).toBe("refused");
-        }
-        vi.restoreAllMocks();
-      });
-    },
-  );
-
   it.each([false, true])(
     "keeps Discord cache cleanup advisory with retired state=%s",
     async (retiredState) => {

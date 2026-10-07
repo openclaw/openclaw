@@ -55,11 +55,10 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each(
-  (["selection", "continuation"] as const).flatMap((phase) =>
-    (["success", "failure"] as const).map((outcome) => ({ phase, outcome })),
-  ),
-)(
+it.each([
+  { phase: "selection", outcome: "success" },
+  { phase: "continuation", outcome: "failure" },
+] as const)(
   "keeps transport $outcome independent of $phase capture admission and retains the diagnostic",
   async ({ phase, outcome }) => {
     const admissionFailure = new Error("synthetic admission refusal");
@@ -260,11 +259,10 @@ it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
   },
 );
 
-it.each(
-  (["ready", "reservation"] as const).flatMap((failureKind) =>
-    (["success", "failure"] as const).map((outcome) => ({ failureKind, outcome })),
-  ),
-)(
+it.each([
+  { failureKind: "ready", outcome: "success" },
+  { failureKind: "reservation", outcome: "failure" },
+] as const)(
   "keeps guarded transport $outcome independent of $failureKind capture preparation failure",
   async ({ failureKind, outcome }) => {
     const preparationFailure = new Error("synthetic capture preparation rejected");

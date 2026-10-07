@@ -19,6 +19,7 @@ import {
   assertNoRunningWorkerSessionToolOperations,
   clearWorkerTurnToolState,
 } from "./placement-session-tool-operations.kernel.js";
+import { parseWorkerSessionPlacementState } from "./placement-state.js";
 import {
   publishPlacementTurnClaimCleared,
   publishPlacementTurnClaimState,
@@ -79,7 +80,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     }
     sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
     const updated = fromRow(row);
-    publishPlacementTurnClaimState(db, updated);
+    publishPlacementTurnClaimState(db, updated, current.state);
     deferWorkerTurnClaimClosed(db, path, claim);
     return updated;
   };
@@ -153,7 +154,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     if (result.numAffectedRows !== 1n) {
       throw new Error(`Session ${identity.sessionId} placement changed during turn admission`);
     }
-    publishPlacementTurnClaimState(db, getRequired(db, identity.sessionId));
+    publishPlacementTurnClaimState(db, getRequired(db, identity.sessionId), current.state);
     sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
     return {
       sessionId: current.sessionId,
@@ -336,25 +337,25 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
 
     clearLocalTurnClaimsAfterRestart(this: void): number {
       return write((db) => {
-        const sessionIds = executeSqliteQuerySync(
+        const placements = executeSqliteQuerySync(
           db,
           query(db)
             .selectFrom("worker_session_placements")
-            .select("session_id")
+            .select(["session_id", "state"])
             .where("turn_claim_owner", "=", "local"),
-        ).rows.map((row) => row.session_id);
+        ).rows;
         const result = executeSqliteQuerySync(
           db,
           releaseTurnQuery(db, now()).where("turn_claim_owner", "=", "local"),
         );
-        if (result.numAffectedRows !== BigInt(sessionIds.length)) {
+        if (result.numAffectedRows !== BigInt(placements.length)) {
           throw new Error("Local turn claims changed during restart recovery");
         }
-        for (const sessionId of sessionIds) {
-          publishPlacementTurnClaimCleared(db, sessionId);
+        for (const { session_id: sessionId, state } of placements) {
+          publishPlacementTurnClaimCleared(db, sessionId, parseWorkerSessionPlacementState(state));
           deferTurnClaimRelease(db, path, sessionId);
         }
-        return sessionIds.length;
+        return placements.length;
       });
     },
 

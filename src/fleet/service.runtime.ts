@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { resolveStateDir } from "../config/paths.js";
 import { backupFleetCell, restoreFleetCell } from "./backup.runtime.js";
 import {
@@ -45,7 +46,6 @@ import {
   cleanupFailedCreateNetwork,
   detectHostSelinux,
   inspectionHasFleetOwner,
-  inspectionState,
   prepareCellConfig,
   prepareCellDirectories,
   probeCellHealth,
@@ -66,11 +66,6 @@ export type { FleetHealthResult } from "./service-support.runtime.js";
 
 const OFFICIAL_IMAGE_UID = 1_000;
 const OFFICIAL_IMAGE_GID = 1_000;
-// Mirrors the compose healthcheck contract: an upgrade commits only after /healthz
-// answers. The deadline bounds how long a broken image can hold the cell before
-// restore without rolling back slow-booting cells prematurely.
-const CELL_VERIFY_TIMEOUT_MS = 60_000;
-const CELL_VERIFY_POLL_MS = 1_000;
 
 export type FleetCreateOptions = {
   tenant: string;
@@ -100,30 +95,6 @@ type FleetCreateResult = {
   nextStep: string;
 };
 
-type FleetListEntry = {
-  tenant: string;
-  state: string;
-  port: number;
-  image: string;
-  created: string;
-};
-
-type FleetStatusResult = {
-  tenant: string;
-  containerName: string;
-  runtime: FleetContainerRuntimeName;
-  port: number;
-  image: string;
-  created: string;
-  dataDir: string;
-  container: { imageId?: string } & (
-    | { state: string; running: boolean; managed: boolean }
-    | { state: "missing"; running: false; managed: false }
-    | { state: "unknown"; running: false; managed: false; error: string }
-  );
-  health: FleetHealthResult;
-};
-
 export type FleetLifecycleAction = "start" | "stop" | "restart";
 
 export type FleetLogsOptions = {
@@ -132,13 +103,6 @@ export type FleetLogsOptions = {
   timestamps?: boolean;
   tail?: number;
   since?: string;
-};
-
-type FleetActionResult = {
-  tenant: string;
-  action: FleetLifecycleAction | "upgrade" | "rm";
-  image?: string;
-  dataPurged?: boolean;
 };
 
 type FleetServiceOptions = {
@@ -166,12 +130,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
     options.generateAttemptId ?? (() => crypto.randomBytes(16).toString("hex"));
   const getuid = options.getuid ?? (() => process.getuid?.());
   const getgid = options.getgid ?? (() => process.getgid?.());
-  const sleep =
-    options.sleep ??
-    ((ms: number) =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      }));
+  const sleep = options.sleep ?? delay;
   const selinuxEnabled = options.selinuxEnabled ?? detectHostSelinux;
   const updateImage = options.updateImage ?? updateFleetCellImage;
   const probePort = options.probePort ?? probeLoopbackPort;
@@ -388,8 +347,6 @@ export function createFleetService(options: FleetServiceOptions = {}) {
                 now,
                 sleep,
                 checkpoint,
-                timeoutMs: CELL_VERIFY_TIMEOUT_MS,
-                pollMs: CELL_VERIFY_POLL_MS,
                 context: "create",
               });
             } catch (error) {
@@ -406,7 +363,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
       });
     },
 
-    async list(): Promise<FleetListEntry[]> {
+    async list() {
       const records = await listFleetCells(env);
       const localityChecks = new Map<FleetContainerRuntimeName, Promise<void>>();
       const entries = await Promise.all(
@@ -419,10 +376,11 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               localityChecks.set(record.runtime, locality);
             }
             await locality;
-            state = inspectionState(
-              record,
-              await containers.inspect(record.runtime, record.containerName),
-            );
+            const inspection = await containers.inspect(record.runtime, record.containerName);
+            state =
+              inspection.kind === "ok" && !inspectionHasFleetOwner(record, inspection)
+                ? "unknown"
+                : inspection.state;
           } catch {
             // Listing retains cells whose container runtime is unavailable.
           }
@@ -438,7 +396,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
       }));
     },
 
-    async status(tenant: string): Promise<FleetStatusResult> {
+    async status(tenant: string) {
       const record = await requireCell(env, tenant);
       let inspection: FleetContainerInspectResult;
       try {
@@ -452,7 +410,11 @@ export function createFleetService(options: FleetServiceOptions = {}) {
         };
       }
       const url = `http://127.0.0.1:${record.hostPort}/healthz`;
-      let container: FleetStatusResult["container"];
+      let container: { imageId?: string } & (
+        | { state: string; running: boolean; managed: boolean }
+        | { state: "missing"; running: false; managed: false }
+        | { state: "unknown"; running: false; managed: false; error: string }
+      );
       let health: FleetHealthResult;
       if (inspection.kind === "ok") {
         const managed = inspectionHasFleetOwner(record, inspection);
@@ -490,7 +452,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
       };
     },
 
-    async lifecycle(tenant: string, action: FleetLifecycleAction): Promise<FleetActionResult> {
+    async lifecycle(tenant: string, action: FleetLifecycleAction) {
       const tenantId = validateTenantId(tenant);
       await containers.assertLocal((await requireCell(env, tenantId)).runtime);
       return await withFleetCellOperation({
@@ -531,7 +493,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
       });
     },
 
-    async upgrade(tenant: string, requestedImage?: string): Promise<FleetActionResult> {
+    async upgrade(tenant: string, requestedImage?: string) {
       const tenantId = validateTenantId(tenant);
       const explicitImage =
         requestedImage === undefined ? undefined : validateFleetImage(requestedImage);
@@ -608,8 +570,6 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               now,
               sleep,
               checkpoint,
-              timeoutMs: CELL_VERIFY_TIMEOUT_MS,
-              pollMs: CELL_VERIFY_POLL_MS,
               context: "upgrade",
             });
             await checkpoint();
@@ -636,7 +596,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               { cause: error },
             );
           }
-          return { tenant: record.tenantId, action: "upgrade", image };
+          return { tenant: record.tenantId, action: "upgrade" as const, image };
         },
       });
     },
@@ -695,11 +655,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
       return await runFleetDoctor({ env, containers, fetchImpl, tenant });
     },
 
-    async remove(params: {
-      tenant: string;
-      force?: boolean;
-      purgeData?: boolean;
-    }): Promise<FleetActionResult> {
+    async remove(params: { tenant: string; force?: boolean; purgeData?: boolean }) {
       if (params.purgeData && !params.force) {
         throw new Error("--purge-data requires --force.");
       }
@@ -775,7 +731,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
           await deleteFleetCell(env, record.tenantId);
           return {
             tenant: record.tenantId,
-            action: "rm",
+            action: "rm" as const,
             dataPurged: params.purgeData === true,
           };
         },

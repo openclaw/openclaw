@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   onInternalDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
@@ -34,7 +35,7 @@ describe("registered catalog list phase diagnostics", () => {
   let clock: number;
   let cpuMicros: number;
   let dirty: boolean;
-  let config: { agents: { list: { id: string }[] } };
+  let config: OpenClawConfig;
   let projection: ReturnType<typeof createSessionRowProjectionFixture>;
   let phases: Phase[];
   let trustedFlags: boolean[];
@@ -59,7 +60,7 @@ describe("registered catalog list phase diagnostics", () => {
     dirty = false;
     phases = [];
     trustedFlags = [];
-    config = { agents: { list: [{ id: "main" }] } };
+    config = { agents: { entries: { main: {} } } };
     projection = createSessionRowProjectionFixture({ cfg: config, store: {} });
     vi.spyOn(projection, "needsSelectionPreparation").mockImplementation(() => dirty);
     vi.spyOn(projectionAccess, "requireSessionRowProjection").mockReturnValue(projection);

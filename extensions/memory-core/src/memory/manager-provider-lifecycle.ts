@@ -663,9 +663,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   }
 
   async probeVectorStoreAvailability(): Promise<boolean> {
-    return await this.withManagerOperation(
-      async () => await this.probeVectorStoreAvailabilityAdmitted(),
-    );
+    return await this.withManagerOperation(() => this.probeVectorStoreAvailabilityAdmitted());
   }
 
   private async probeVectorStoreAvailabilityAdmitted(): Promise<boolean> {

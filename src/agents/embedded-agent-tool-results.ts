@@ -108,23 +108,6 @@ function normalizeToolErrorText(text: string): string | undefined {
     : firstLine;
 }
 
-function isErrorLikeStatus(status: string): boolean {
-  const normalized = normalizeOptionalLowercaseString(status);
-  if (!normalized) {
-    return false;
-  }
-  if (
-    normalized === "0" ||
-    normalized === "ok" ||
-    normalized === "success" ||
-    normalized === "completed" ||
-    normalized === "running"
-  ) {
-    return false;
-  }
-  return /error|fail|timeout|timed[_\s-]?out|denied|cancel|invalid|forbidden/.test(normalized);
-}
-
 function readErrorCandidate(value: unknown): string | undefined {
   if (typeof value === "string") {
     return normalizeToolErrorText(value);
@@ -148,11 +131,11 @@ function extractErrorField(value: unknown): string | undefined {
   if (direct) {
     return direct;
   }
-  const status = normalizeOptionalString(record.status) ?? "";
-  if (!status || !isErrorLikeStatus(status)) {
-    return undefined;
-  }
-  return normalizeToolErrorText(status);
+  const status = normalizeOptionalString(record.status);
+  return status &&
+    /error|fail|timeout|timed[_\s-]?out|denied|cancel|invalid|forbidden/.test(status.toLowerCase())
+    ? normalizeToolErrorText(status)
+    : undefined;
 }
 
 function extractDirectErrorField(value: unknown): string | undefined {
@@ -435,17 +418,8 @@ export function extractToolResultText(result: unknown): string | undefined {
   if (texts.length > 0) {
     return truncateToolText(texts.join("\n"));
   }
-  const structuredTexts: string[] = [];
-  for (const item of content) {
-    const structured = stringifyStructuredToolResultContent(item);
-    if (structured) {
-      structuredTexts.push(structured);
-    }
-  }
-  if (structuredTexts.length === 0) {
-    return undefined;
-  }
-  return truncateToolText(structuredTexts.join("\n"));
+  const structuredTexts = content.map(stringifyStructuredToolResultContent).filter(Boolean);
+  return structuredTexts.length > 0 ? truncateToolText(structuredTexts.join("\n")) : undefined;
 }
 
 export function extractToolErrorCode(result: unknown): string | undefined {

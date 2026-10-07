@@ -32,6 +32,7 @@ import {
   clampReasoning,
   createHttpProxyAgentsForTarget,
   createToolArgumentPreviewSchedule,
+  hasRuntimeContextMarker,
   parseStreamingJson,
   sanitizeSurrogates,
   transformMessages,
@@ -74,6 +75,7 @@ import {
   failTransportStream,
   finalizeTerminalToolCallArguments,
   notifyProviderHttpMetadata,
+  sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
@@ -927,11 +929,9 @@ function convertMessages(
         if (content.length === 0) {
           continue;
         }
-        if (
-          m.runtimeContextCarrier === true &&
-          !bindsClaudeThinkingPrefix(model) &&
-          firstVolatileMessageIndex === undefined
-        ) {
+        const volatileRuntimeContext =
+          hasRuntimeContextMarker(m) && !bindsClaudeThinkingPrefix(model);
+        if (volatileRuntimeContext && firstVolatileMessageIndex === undefined) {
           firstVolatileMessageIndex = result.length;
         }
         result.push({
@@ -1079,8 +1079,7 @@ function convertMessages(
     }
   }
 
-  // Cache points include their entire prefix, so anchors after transient runtime
-  // context would still cache volatile bytes even when those anchors are stable.
+  // Cache points include their entire prefix, so none may follow transient runtime context.
   if (cachePoint && result.at(-1)?.role === ConversationRole.USER) {
     const cacheAnchor = result.findLast(
       (message, index) =>
@@ -1103,7 +1102,7 @@ function convertToolConfig(
     return undefined;
   }
 
-  const bedrockTools: BedrockTool[] = tools.map((tool) => ({
+  const bedrockTools: BedrockTool[] = sortPromptCacheToolsByName(tools).map((tool) => ({
     toolSpec: {
       name: tool.name,
       description: tool.description,

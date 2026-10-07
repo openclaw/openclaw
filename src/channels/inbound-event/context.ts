@@ -239,12 +239,6 @@ export function filterChannelInboundQuoteContext(
   return filterSupplementalContext({ mode: contextVisibility, kind: "quote", context: quote });
 }
 
-function definedFields<T extends Record<string, unknown>>(fields: T): Partial<T> {
-  return Object.fromEntries(
-    Object.entries(fields).filter((entry) => entry[1] !== undefined),
-  ) as Partial<T>;
-}
-
 function resolveChannelInboundSupplementalForFinalizer(params: {
   supplemental?: SupplementalContextFacts | ChannelInboundSupplementalFacts;
   contextVisibility?: ContextVisibilityMode;
@@ -312,7 +306,11 @@ function finalizePreparedChannelInboundContext<T extends Record<string, unknown>
   finalizeOptions?: FinalizeInboundContextOptions;
 }): FinalizeChannelInboundContextResult<T> {
   const mediaPayload = params.media
-    ? definedFields(buildChannelInboundMediaPayload(params.media))
+    ? Object.fromEntries(
+        Object.entries(buildChannelInboundMediaPayload(params.media)).filter(
+          ([, value]) => value !== undefined,
+        ),
+      )
     : {};
   const baseContext = {
     ...params.originalContext,
@@ -482,12 +480,7 @@ function buildChannelInboundEventContextValue(
     Partial<ChannelInboundSupplementalResolutionOptions>,
 ): MaybePromise<BuiltChannelInboundEventContext> {
   const body = params.message.body ?? params.message.rawBody;
-  const commandTurn = resolveChannelCommandContext({
-    command: params.command,
-    commandTurn: params.commandTurn,
-    message: params.message,
-    access: params.access,
-  });
+  const commandTurn = resolveChannelCommandContext(params);
 
   const context = {
     Body: body,
@@ -543,7 +536,6 @@ function buildChannelInboundEventContextValue(
     MessageThreadId: params.reply.messageThreadId ?? params.conversation.threadId,
     NativeChannelId: params.reply.nativeChannelId ?? params.conversation.nativeChannelId,
     ConversationAvatar: params.conversation.avatar,
-    ConversationLink: params.conversation.link,
     ChannelContext: params.channelContext,
     OriginatingChannel: params.channel,
     OriginatingTo: params.reply.originatingTo ?? params.reply.to,

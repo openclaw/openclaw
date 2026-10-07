@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import {
@@ -22,9 +22,9 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import { recoverGatewaySession } from "./session-recovery-service.js";
 import {
@@ -45,10 +45,6 @@ import {
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
 
 function recoveryWorkerPlacement(params: {
   sessionId: string;
@@ -555,7 +551,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
   });
   const successorKey = recovered.payload?.key ?? "";
   const successorSessionId = recovered.payload?.sessionId ?? "";
-  expect(concurrentRetry).toMatchObject({
+  expect(concurrentRetry, JSON.stringify(concurrentRetry)).toMatchObject({
     ok: true,
     payload: {
       key: successorKey,
@@ -608,7 +604,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
     agentId: "main",
     key: sourceKey,
   });
-  expect(repeated).toMatchObject({
+  expect(repeated, JSON.stringify(repeated)).toMatchObject({
     ok: true,
     payload: {
       key: successorKey,
@@ -696,8 +692,11 @@ test.each([
       context: {
         getRuntimeConfig: () =>
           identity === "owner" ? { ...cfg, gateway: { ...cfg.gateway, roles: undefined } } : cfg,
+        getCommittedRuntimeConfig: () =>
+          identity === "owner" ? { ...cfg, gateway: { ...cfg.gateway, roles: undefined } } : cfg,
       },
     };
+    prepareGatewayRecipientProfile(request.client);
     type RecoveryPayload = { key: string; continuation: { status: string } };
     const recovered = await directSessionReq<RecoveryPayload>(
       "sessions.recover",

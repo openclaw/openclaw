@@ -141,7 +141,7 @@ describe("sessions_spawn tool", () => {
 
   function makeVisibleTool(options: SpawnOptions = {}) {
     return makeTool({
-      config: { agents: { list: [{ id: "main" }] } },
+      config: { agents: { entries: { main: {} } } },
       registerRun: vi.fn(),
       countActiveRuns: () => 0,
       ...options,
@@ -355,7 +355,7 @@ describe("sessions_spawn tool", () => {
         vi.mocked(callGateway).mockRejectedValue(error);
         const tool = makeVisibleTool({
           callGateway,
-          config: { agents: { list: [{ id: "main", workspace }] } },
+          config: { agents: { entries: { main: { workspace } } } },
         });
         const result = tool.execute("visible-cwd", {
           task: "inspect",
@@ -390,7 +390,7 @@ describe("sessions_spawn tool", () => {
       expectedParentSessionId: "original-parent",
       config: {
         session: { store: storePath },
-        agents: { list: [{ id: "main" }] },
+        agents: { entries: { main: {} } },
       },
       callGateway,
     });
@@ -458,10 +458,10 @@ describe("sessions_spawn tool", () => {
         config: {
           agents: {
             defaults: { subagents: { allowAgents: ["main", "reviewer"] } },
-            list: [
-              { id: "main", subagents: { model: configuredModel } },
-              { id: "reviewer", subagents: { model: "anthropic/claude-sonnet-4-6" } },
-            ],
+            entries: {
+              main: { subagents: { model: configuredModel } },
+              reviewer: { subagents: { model: "anthropic/claude-sonnet-4-6" } },
+            },
           },
         },
       });
@@ -502,7 +502,7 @@ describe("sessions_spawn tool", () => {
       config: {
         agents: {
           defaults: { subagents: { allowAgents: ["reviewer"] } },
-          list: [{ id: "main" }, { id: "reviewer" }],
+          entries: { main: {}, reviewer: {} },
         },
       },
       callGateway,
@@ -542,7 +542,7 @@ describe("sessions_spawn tool", () => {
       config: {
         agents: {
           defaults: { subagents: { requireAgentId: testCase.requireAgentId } },
-          list: [{ id: "main" }],
+          entries: { main: {} },
         },
       },
       callGateway,
@@ -571,7 +571,7 @@ describe("sessions_spawn tool", () => {
       const tool = makeVisibleTool({
         callGateway,
         config: {
-          agents: { defaults: { sandbox: { mode: "all" } }, list: [{ id: "main", workspace }] },
+          agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: { workspace } } },
         },
       });
       const result = await tool.execute("visible-sandbox-cwd", {

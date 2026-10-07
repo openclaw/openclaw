@@ -1,4 +1,3 @@
-// Control UI static-response policy: MIME types, caching, and encoding.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -187,12 +186,6 @@ export function respondHeadForControlUiFile(
   res.end();
 }
 
-function compressControlUiBody(body: Buffer, encoding: ControlUiContentEncoding): Promise<Buffer> {
-  return encoding === "br"
-    ? compressBrotli(body, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } })
-    : compressGzip(body, { level: 6 });
-}
-
 export function serveControlUiAsset(
   res: ServerResponse,
   filePath: string,
@@ -221,7 +214,10 @@ function cachedCompressedControlUiHtml(
   const compression = getOrCreatePromise(
     controlUiHtmlCompressionCache,
     key,
-    () => compressControlUiBody(Buffer.from(body), encoding),
+    () =>
+      encoding === "br"
+        ? compressBrotli(Buffer.from(body), { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } })
+        : compressGzip(Buffer.from(body), { level: 6 }),
     { cacheRejections: false },
   );
   pruneMapToMaxSize(controlUiHtmlCompressionCache, CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES);
@@ -238,6 +234,7 @@ export async function sendControlUiHtmlBody(
   req: IncomingMessage,
   res: ServerResponse,
   body: string,
+  isCurrent?: () => boolean,
 ) {
   const encoding = resolveControlUiHtmlEncoding(req);
   if (encoding === "not-acceptable") {
@@ -245,5 +242,12 @@ export async function sendControlUiHtmlBody(
     return;
   }
   setControlUiEncodingHeaders(res, ".html", encoding);
-  res.end(encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding));
+  const encoded =
+    encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding);
+  if (isCurrent && !isCurrent()) {
+    res.removeHeader("Content-Encoding");
+    respondPlainText(res, 403, "Session access changed. Reload the conversation.");
+    return;
+  }
+  res.end(encoded);
 }

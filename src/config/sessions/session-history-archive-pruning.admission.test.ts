@@ -13,6 +13,7 @@ import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.
 import { drainAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -459,6 +460,7 @@ it("bounds broker page reclamation and stops when its owner is revoked between u
       await expect(reclaim(1)).rejects.toThrow(/revoked|closed/);
     }),
   ).catch((error: unknown) => error);
+  await closeOpenClawAgentDatabaseByPathAsync(database.path);
   const reopened = openOpenClawAgentDatabase(options);
   expect(Number(reopened.db.prepare("PRAGMA freelist_count").get()?.freelist_count)).toBe(
     remaining,
@@ -568,6 +570,9 @@ it.each([
   });
   await later;
   expect(laterWriterRan).toBe(true);
+  if (outcome === "revoked") {
+    await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
+  }
   const row = fixture.readArchive();
   if (outcome === "complete") {
     expect(row).toBeUndefined();

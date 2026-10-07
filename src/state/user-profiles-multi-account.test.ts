@@ -16,7 +16,7 @@ import {
   prepareUserProfileGitHubAttribution,
   resolveUserProfileGitHubAttribution,
 } from "./user-profile-github-identity.js";
-import { listUserProfilesSync } from "./user-profile-identity.read.js";
+import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
 import {
   readUserProfileDirectory,
   resolveCanonicalCachedGitHubIdentity,
@@ -287,7 +287,9 @@ describe("multi-account people", () => {
       });
     }
     expect(
-      listUserProfilesSync(options).filter((profile) => profile.mergedInto === null),
+      readUserProfileSnapshotSync(options).profiles.filter(
+        (profile) => profile.mergedInto === null,
+      ),
     ).toHaveLength(1);
     expect(await readUserProfileDirectory(10, options)).toEqual({
       profiles: [{ id: person.id, logins: ["person", "person-work"] }],

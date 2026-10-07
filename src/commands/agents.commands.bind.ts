@@ -1,5 +1,5 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
@@ -8,7 +8,6 @@ import { logConfigUpdated } from "../config/logging.js";
 import type { AgentRouteBinding } from "../config/types.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { createLazyPromise } from "../shared/lazy-promise.js";
 import { describeBinding, describeBindingConflict } from "./agents.binding-format.js";
 import { requireValidConfig, requireValidConfigForWrite } from "./config-validation.js";
 
@@ -32,17 +31,6 @@ type AgentsUnbindOptions = {
   json?: boolean;
 };
 
-const loadAgentBindingsModule = createLazyPromise(() => import("./agents.bindings.js"));
-
-function hasAgent(cfg: AgentConfig, agentId: string): boolean {
-  const targetAgentId = normalizeAgentId(agentId);
-  const agents = listAgentEntries(cfg);
-  if (agents.length === 0) {
-    return targetAgentId === normalizeAgentId(resolveDefaultAgentId(cfg));
-  }
-  return agents.some((agent) => normalizeAgentId(agent.id) === targetAgentId);
-}
-
 function failAgentBinding(message: string): never {
   throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
 }
@@ -58,8 +46,8 @@ function resolveTargetAgentId(params: {
       `Agent "${params.agentInput}" not found. Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
     );
   }
-  const agentId = normalized?.value ?? resolveDefaultAgentId(params.cfg);
-  if (!hasAgent(params.cfg, agentId)) {
+  const agentId = normalized?.value ?? resolveAgentOperationAgentId(params.cfg);
+  if (!listAgentIds(params.cfg).includes(agentId)) {
     failAgentBinding(
       `Agent "${agentId}" not found. Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
     );
@@ -78,7 +66,7 @@ async function resolveParsedBindings(params: {
     failAgentBinding(params.emptyMessage);
   }
 
-  const { parseBindingSpecs } = await loadAgentBindingsModule();
+  const { parseBindingSpecs } = await import("./agents.bindings.js");
   const parsed = parseBindingSpecs({ agentId: params.agentId, specs, config: params.cfg });
   if (parsed.errors.length > 0) {
     failAgentBinding(parsed.errors.join("\n"));
@@ -178,7 +166,7 @@ export async function agentsBindCommand(
     emptyMessage: "Provide at least one --bind <channel[:accountId]>.",
   });
 
-  const { applyAgentBindings } = await loadAgentBindingsModule();
+  const { applyAgentBindings } = await import("./agents.bindings.js");
   const result = applyAgentBindings(cfg, bindings);
   if (result.added.length > 0 || result.updated.length > 0) {
     await replaceConfigFile({
@@ -284,7 +272,7 @@ export async function agentsUnbindCommand(
     emptyMessage: "Provide at least one --bind <channel[:accountId]> or use --all.",
   });
 
-  const { removeAgentBindings } = await loadAgentBindingsModule();
+  const { removeAgentBindings } = await import("./agents.bindings.js");
   const result = removeAgentBindings(cfg, bindings);
   if (result.removed.length > 0) {
     await replaceConfigFile({

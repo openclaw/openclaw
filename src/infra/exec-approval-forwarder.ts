@@ -15,7 +15,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { runWithRetainedGatewayRootWork } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createPendingApprovalRegistry } from "../shared/pending-approval-registry.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { canChannelEnforcePluginReviewerPolicy } from "./approval-channel-policy-support.js";
@@ -117,10 +116,6 @@ type ExecApprovalForwarderDeps = {
 };
 
 const SYNTHETIC_APPROVAL_REQUEST_ID = "__approval-routing__";
-
-const loadExecApprovalForwarderRuntime = createLazyRuntimeModule(
-  () => import("./exec-approval-forwarder.runtime.js"),
-);
 
 function buildTargetKey(target: ExecApprovalForwardTarget): string {
   const channel = normalizeMessageChannel(target.channel) ?? target.channel;
@@ -260,29 +255,31 @@ function defaultResolveSessionTarget(params: {
   cfg: OpenClawConfig;
   request: ExecApprovalRequest;
 }): Promise<ExecApprovalForwardTarget | null> {
-  return loadExecApprovalForwarderRuntime().then(({ resolveExecApprovalSessionTarget }) => {
-    const resolvedTarget = resolveExecApprovalSessionTarget({
-      cfg: params.cfg,
-      request: params.request,
-      turnSourceChannel: normalizeTurnSourceChannel(params.request.request.turnSourceChannel),
-      turnSourceTo: normalizeOptionalString(params.request.request.turnSourceTo),
-      turnSourceAccountId: normalizeOptionalString(params.request.request.turnSourceAccountId),
-      turnSourceThreadId: params.request.request.turnSourceThreadId ?? undefined,
-    });
-    if (!resolvedTarget?.channel || !resolvedTarget.to) {
-      return null;
-    }
-    const channel = resolvedTarget.channel;
-    if (!isDeliverableMessageChannel(channel)) {
-      return null;
-    }
-    return {
-      channel,
-      to: resolvedTarget.to,
-      accountId: resolvedTarget.accountId,
-      threadId: resolvedTarget.threadId,
-    };
-  });
+  return import("./exec-approval-forwarder.runtime.js").then(
+    ({ resolveExecApprovalSessionTarget }) => {
+      const resolvedTarget = resolveExecApprovalSessionTarget({
+        cfg: params.cfg,
+        request: params.request,
+        turnSourceChannel: normalizeTurnSourceChannel(params.request.request.turnSourceChannel),
+        turnSourceTo: normalizeOptionalString(params.request.request.turnSourceTo),
+        turnSourceAccountId: normalizeOptionalString(params.request.request.turnSourceAccountId),
+        turnSourceThreadId: params.request.request.turnSourceThreadId ?? undefined,
+      });
+      if (!resolvedTarget?.channel || !resolvedTarget.to) {
+        return null;
+      }
+      const channel = resolvedTarget.channel;
+      if (!isDeliverableMessageChannel(channel)) {
+        return null;
+      }
+      return {
+        channel,
+        to: resolvedTarget.to,
+        accountId: resolvedTarget.accountId,
+        threadId: resolvedTarget.threadId,
+      };
+    },
+  );
 }
 
 async function deliverToTargets(params: {
@@ -372,14 +369,11 @@ async function resolveForwardTargets(params: {
 function createApprovalHandlers<
   TRequest extends ApprovalRequestInput,
   TResolved extends { id: string; request?: ApprovalRouteRequest | null },
->(params: {
-  strategy: ApprovalStrategy<TRequest, TResolved>;
-  getConfig: () => OpenClawConfig;
-  deliver: DeliverApprovalPayloads;
-  nowMs: () => number;
-  resolveSessionTarget: ResolveSessionTargetFn;
-  getNativeApprovalRouteCoordinator: () => ApprovalNativeRouteCoordinator | undefined;
-}) {
+>(
+  params: {
+    strategy: ApprovalStrategy<TRequest, TResolved>;
+  } & Required<ExecApprovalForwarderDeps>,
+) {
   const pending = createPendingApprovalRegistry<PendingApproval>();
   const work = new AsyncWorkScope();
   let stopped = false;
@@ -618,7 +612,7 @@ export function createExecApprovalForwarder(
   const deliver =
     deps.deliver ??
     (async (params) => {
-      const { sendDurableMessageBatchCore } = await loadExecApprovalForwarderRuntime();
+      const { sendDurableMessageBatchCore } = await import("./exec-approval-forwarder.runtime.js");
       return sendDurableMessageBatchCore(params);
     });
   const nowMs = deps.nowMs ?? Date.now;

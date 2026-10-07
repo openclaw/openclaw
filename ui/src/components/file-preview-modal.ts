@@ -32,7 +32,6 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   @property() listLabel = "";
   @property() searchPlaceholder = "";
   @property() contextLabel = "";
-  @property() readOnlyLabel = "";
   @property() emptyTitle = "";
   @property() emptySubtitle = "";
   @property() copyLabel = "";
@@ -252,7 +251,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
                 <div class="chips">
                   <span class="chip accent">${fileKind(file.path)}</span>
                   <span class="chip">${file.size}</span>
-                  <span class="chip">${this.readOnlyLabel || t("filePreview.readOnly")}</span>
+                  <span class="chip">${t("filePreview.readOnly")}</span>
                   ${this.contextLabel ? html`<span class="chip ok">${this.contextLabel}</span>` : ""}
                 </div>
               </div>`
@@ -318,7 +317,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   }
 
   private handleQueryInput = (event: Event) => {
-    const nextQuery = (event.target as HTMLInputElement).value ?? "";
+    const nextQuery = (event.target as HTMLInputElement).value;
     this.dispatchEvent(
       new CustomEvent<string>("file-preview-query-change", {
         bubbles: true,

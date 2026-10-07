@@ -4,18 +4,20 @@ import type {
   ChatHistoryPageParams,
   ChatHistoryResponsePage,
 } from "../../config/sessions/session-history-types.js";
-import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
-import { capArrayByJsonBytes } from "../session-transcript-readers.js";
+import { readChatHistoryMessageId } from "../session-history-tail.js";
 import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
+  buildOversizedHistoryPlaceholder,
   createChatHistoryActivityProjection,
   createChatHistoryByteCounter,
   replaceOversizedChatHistoryMessages,
-  trimChatHistoryActivity,
 } from "./chat-history-budget.js";
+import { resolveChatHistoryPageCursors } from "./chat-history-page-cursor.js";
 import {
   capChatHistoryAroundMessage,
+  capChatHistoryTail,
   enrichChatHistoryCompactionMarkers,
+  resolveChatHistoryMessageGroup,
   resolveChatHistoryNextOffset,
 } from "./chat-history-page-kernel.js";
 
@@ -25,58 +27,70 @@ export function prepareChatHistoryResponsePage(
     entry: historyEntry,
     compactionMetrics,
     maxHistoryBytes,
+    responseHistoryBytes = maxHistoryBytes,
     messageId,
-  }: Pick<ChatHistoryPageParams, "entry" | "compactionMetrics" | "maxHistoryBytes" | "messageId">,
+  }: Pick<
+    ChatHistoryPageParams,
+    "entry" | "compactionMetrics" | "maxHistoryBytes" | "responseHistoryBytes" | "messageId"
+  >,
 ): ChatHistoryResponsePage {
   const normalized = enrichChatHistoryCompactionMarkers(
     historyPage.messages,
     historyEntry,
     compactionMetrics,
   );
-  // Imported snapshots have no back-scroll cursor. Preserve their complete
-  // snapshot budget until the external history owner supports pagination.
-  const responseHistoryBytes = historyPage.completeCliImport
-    ? getMaxChatHistoryMessagesBytes()
-    : maxHistoryBytes;
-  // A smaller page budget must not replace otherwise readable messages. The
-  // tail cap keeps one whole message; the server's single-message cap still applies.
   const activity = createChatHistoryActivityProjection(normalized, historyPage.activity);
   const byteCounter = createChatHistoryByteCounter(activity);
+  const framingCost = 1 + byteCounter.framingBytes(normalized);
+  const maxCost = responseHistoryBytes - framingCost;
+  const messageCost = (message: unknown) => byteCounter.messageBytes(message) + 1;
+  const messageSequences =
+    historyPage.pagination?.messageSequences ?? historyPage.anchor?.messageSequences;
+  const groups: unknown[] = [];
+  for (let index = 0; index < normalized.length;) {
+    const group = resolveChatHistoryMessageGroup(normalized, index, messageCost, messageSequences);
+    // A source row is the fetchable unit; replacing its display siblings keeps
+    // numeric offsets lossless without letting one row escape the page budget.
+    groups.push(
+      ...(group.cost > maxCost
+        ? [
+            buildOversizedHistoryPlaceholder(
+              normalized
+                .slice(group.start, group.end)
+                .find((message) => readChatHistoryMessageId(message) === messageId) ??
+                normalized[group.end - 1],
+            ),
+          ]
+        : normalized.slice(group.start, group.end)),
+    );
+    index = group.end;
+  }
   const replaced = replaceOversizedChatHistoryMessages({
     byteCounter,
-    messages: normalized,
-    maxSingleMessageBytes: Math.min(
-      CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
-      getMaxChatHistoryMessagesBytes(),
-    ),
+    messages: groups,
+    maxSingleMessageBytes: Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxCost - 1),
   });
-  // Terminal imports have no older-page cursor. Anchored reads retain their
-  // existing neighborhood selector instead of changing which groups surround the anchor.
-  const prioritized =
-    historyPage.completeCliImport && !messageId
-      ? trimChatHistoryActivity({
-          messages: replaced.messages,
-          maxBytes: responseHistoryBytes,
-          byteCounter,
-        })
-      : replaced.messages;
   const capped = messageId
     ? capChatHistoryAroundMessage({
-        messages: prioritized,
-        messageId,
+        messages: replaced.messages,
+        messageId: historyPage.anchor?.direction
+          ? (readChatHistoryMessageId(
+              historyPage.anchor.direction === "newer"
+                ? replaced.messages[0]
+                : replaced.messages.at(-1),
+            ) ?? messageId)
+          : messageId,
         // A nonempty JSON array costs one framing byte plus each message and its separator.
-        maxCost: responseHistoryBytes - 1 - byteCounter.framingBytes(prioritized),
-        messageCost: (message) => byteCounter.messageBytes(message) + 1,
+        maxCost,
+        messageCost,
+        messageSequences,
       })
-    : capArrayByJsonBytes(
-        prioritized,
-        responseHistoryBytes - byteCounter.framingBytes(prioritized),
-        byteCounter.messageBytes,
-      ).items;
-  const historyBudgetPreserved =
-    replaced.replacedCount === 0 &&
-    capped.length === normalized.length &&
-    capped.every((message, index) => message === normalized[index]);
+    : capChatHistoryTail({
+        messages: replaced.messages,
+        maxCost,
+        messageCost,
+        messageSequences,
+      });
   const pagination = historyPage.pagination;
   const candidateNextOffset =
     pagination === undefined
@@ -86,11 +100,11 @@ export function prepareChatHistoryResponsePage(
           totalMessages: pagination.totalMessages,
           offset: pagination.offset,
           rawPageMessages: pagination.rawPageMessages,
-          projected: normalized,
+          messageSequences: pagination.messageSequences,
         });
   const hasMore =
     pagination !== undefined && candidateNextOffset !== undefined
-      ? pagination.exhausted !== true && candidateNextOffset < pagination.totalMessages
+      ? candidateNextOffset < pagination.totalMessages
       : undefined;
   const survivors = new Set(capped);
   const omittedCount = normalized.reduce<number>(
@@ -107,12 +121,10 @@ export function prepareChatHistoryResponsePage(
       ? { omission: { omittedCount, normalizedBytes: byteCounter.messagesBytes(normalized) } }
       : {}),
     responseHistoryBytes,
+    ...resolveChatHistoryPageCursors(historyPage.anchor, capped, normalized),
     ...(hasMore ? { nextOffset: candidateNextOffset } : {}),
     ...(hasMore !== undefined ? { hasMore } : {}),
     ...(pagination !== undefined ? { totalMessages: pagination.totalMessages } : {}),
-    ...(historyPage.completeCliImport && !hasMore && historyBudgetPreserved
-      ? { completeSnapshot: true }
-      : {}),
   };
 }
 

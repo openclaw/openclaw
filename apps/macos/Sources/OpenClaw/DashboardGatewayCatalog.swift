@@ -86,7 +86,8 @@ enum DashboardGatewayCatalog {
         profiles: [MacGatewayCatalogProfile],
         primaryHealth: DashboardGatewayHealth,
         hostsLocalGateway: Bool = false,
-        localHealth: DashboardGatewayHealth = .unknown) -> [DashboardGatewayEntry]
+        localHealth: DashboardGatewayHealth = .unknown,
+        retainedProfileIDs: Set<String> = []) -> [DashboardGatewayEntry]
     {
         let canonicalPrimaryURL = mode == .remote
             ? (resolvedRemoteURL ?? primaryRemoteURL).flatMap {
@@ -113,9 +114,9 @@ enum DashboardGatewayCatalog {
             canPromote: false,
             health: primaryHealth)
         let saved = profiles.compactMap { item -> DashboardGatewayEntry? in
-            // A browser sign-in is a separate human authority even when its
-            // address matches the primary machine connection.
-            if item.profile.id == duplicate?.profile.id { return nil }
+            // Browser identities and open saved-profile windows keep their own target,
+            // even when the primary uses the same address.
+            if item.profile.id == duplicate?.profile.id, !retainedProfileIDs.contains(item.profile.id) { return nil }
             return DashboardGatewayEntry(
                 id: DashboardGatewayTarget.profile(item.profile.id).bridgeID,
                 name: item.profile.name,
@@ -163,7 +164,8 @@ enum DashboardGatewayCatalog {
             profiles: profiles,
             primaryHealth: self.primaryHealth(for: ControlChannel.shared.state),
             hostsLocalGateway: state.hostsLocalGatewayWithRemotePrimary,
-            localHealth: GatewaysMainMenu.shared.localHealth)
+            localHealth: GatewaysMainMenu.shared.localHealth,
+            retainedProfileIDs: WebChatManager.shared.openProfileIDs)
     }
 }
 

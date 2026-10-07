@@ -1,6 +1,9 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { capCompactionSummary } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import {
+  capCompactionSummary,
+  compactWithoutSummary,
+} from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { AssistantMessage } from "../../llm/types.js";
@@ -41,7 +44,10 @@ import type { SettingsManager } from "./settings-manager.js";
 
 type CompactionReason = "manual" | "threshold" | "overflow";
 type CompactionRequestState = "unresolved";
-type SummaryOutputPolicy = "none" | "retry-invalid-once";
+// "deterministic" makes no model call: the host commits compactWithoutSummary after a failed summary.
+type SummaryOutputPolicy = "none" | "retry-invalid-once" | "deterministic";
+// onSummaryReady marks the end of summary generation; later waits are persistence, not summary.
+type AutomaticCompactionOptions = CompactionRequestConstraints & { onSummaryReady?: () => void };
 type CompactionWorkOutcome =
   | { status: "completed"; result: CompactionResult; tokensAfter: number }
   | { status: "aborted" }
@@ -78,7 +84,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
   /**
    * Manually compact the session context.
    * Aborts current agent operation first.
-   * @param customInstructions Optional instructions for the compaction summary
    */
   async compact(customInstructions?: string): Promise<CompactionResult> {
     return await this.runWithSessionWriteSettlement(async () => {
@@ -94,7 +99,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     customInstructions?: string,
     requestState?: CompactionRequestState,
     summaryOutputPolicy: SummaryOutputPolicy = "retry-invalid-once",
-    constraints?: CompactionRequestConstraints,
+    constraints?: AutomaticCompactionOptions,
   ): Promise<SettledCompactionWorkOutcome> {
     return await this.runWithSessionWriteSettlement(() =>
       this.compactWithSessionWriteSettlement(
@@ -110,7 +115,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     customInstructions?: string,
     summaryOutputPolicy: SummaryOutputPolicy = "none",
     requestState?: CompactionRequestState,
-    constraints?: CompactionRequestConstraints,
+    constraints?: AutomaticCompactionOptions,
   ): Promise<SettledCompactionWorkOutcome> {
     this.disconnectFromAgent();
     await this.abort();
@@ -182,7 +187,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     this.autoCompactionAbortController?.abort();
   }
 
-  /** Cancel in-progress branch summarization. */
   abortBranchSummary(): void {
     this.branchSummaryAbortController?.abort();
   }
@@ -197,6 +201,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     summaryOutputPolicy: SummaryOutputPolicy;
     requestBudget?: CompactionRequestBudget;
     pendingUserEntryId?: string;
+    onSummaryReady?: () => void;
   }): Promise<CompactionWorkOutcome> {
     const isManual = options.mode === "manual";
     const assertContextReplacementActive = this.assertContextReplacementActive;
@@ -211,17 +216,19 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     const compactionThinkingLevel =
       this.resolveCompactionThinkingLevel?.(model, this.thinkingLevel) ?? this.thinkingLevel;
 
-    let auth: Awaited<ReturnType<typeof this.getCompactionRequestAuth>>;
-    try {
-      auth = await this.getCompactionRequestAuth(model);
-    } catch (error) {
-      if (isManual) {
-        throw error;
+    let auth: { apiKey?: string; headers?: Record<string, string> } = {};
+    if (options.summaryOutputPolicy !== "deterministic") {
+      try {
+        auth = await this.getCompactionRequestAuth(model);
+      } catch (error) {
+        if (isManual) {
+          throw error;
+        }
+        return {
+          status: "skipped",
+          reason: compactionErrorMessage(error, "Compaction authentication failed"),
+        };
       }
-      return {
-        status: "skipped",
-        reason: compactionErrorMessage(error, "Compaction authentication failed"),
-      };
     }
 
     const pathEntries = this.sessionManager.getBranch();
@@ -311,7 +318,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
 
     let compactionResult: CompactionResult | undefined;
     let fromExtension = false;
-    if (this.currentExtensionRunner.hasHandlers("session_before_compact")) {
+    if (options.summaryOutputPolicy === "deterministic") {
+      // Summary producers, including session_before_compact hooks, already failed.
+      compactionResult = unwrapCoreResult(compactWithoutSummary(preparation));
+    } else if (this.currentExtensionRunner.hasHandlers("session_before_compact")) {
       const extensionResult = await this.currentExtensionRunner.emit({
         type: "session_before_compact",
         preparation,
@@ -384,6 +394,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       }
       compactionResult = unwrapCoreResult(result);
     }
+    options.onSummaryReady?.();
 
     if (options.signal.aborted) {
       return { status: "aborted" };
@@ -567,7 +578,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       return await this.runAutoCompaction("overflow", true, requestBudget);
     }
 
-    // Case 2: Threshold - context is getting large
     // For error messages (no usage data), estimate from last successful response.
     // This ensures sessions that hit persistent API errors (e.g. 529) can still compact.
     let contextTokens: number;
@@ -576,7 +586,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       const estimate = estimateContextTokens(messages);
       if (estimate.lastUsageIndex === null) {
         return false;
-      } // No usage data at all
+      }
       contextTokens = estimate.tokens;
     } else if (assistantMessage.usage.contextUsage?.state === "unavailable") {
       const estimatedContextTokens = this.getContextUsage()?.tokens;
@@ -682,7 +692,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     }
   }
 
-  /** Whether auto-compaction is enabled */
   get autoCompactionEnabled(): boolean {
     return this.settingsManager.getCompactionEnabled();
   }

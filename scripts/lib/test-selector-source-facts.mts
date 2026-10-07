@@ -274,11 +274,300 @@ function sourceTokens(source: string): {
   return { tokens, uncertain, possibleJsx };
 }
 
+function hasUnparsedIdentifierTokens(tokens: SourceToken[]) {
+  return tokens.some(
+    (token) => !token.literal && (token.value === "\\" || /\P{ASCII}/u.test(token.value)),
+  );
+}
+
+function runtimeSourceTokens(source: string) {
+  try {
+    // Reuse the native syntax-erasure owner used by importFacts below. This
+    // parses only the changed blob; no compiler program or dependencies load.
+    return sourceTokens(nodeModule.stripTypeScriptTypes(source, { mode: "strip" }));
+  } catch {
+    return null;
+  }
+}
+
+/** Syntactic runtime export identities; null keeps unfamiliar syntax conservative. */
+export function readTestSelectorExportNames(source: string): string[] | null {
+  const parsed = runtimeSourceTokens(source);
+  if (
+    !parsed ||
+    parsed.uncertain ||
+    parsed.possibleJsx ||
+    hasUnparsedIdentifierTokens(parsed.tokens)
+  ) {
+    return null;
+  }
+  const { tokens } = parsed;
+  const names = new Set<string>();
+  let moduleDepth = 0;
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index]!;
+    if (token.literal) {
+      continue;
+    }
+    if (
+      (token.value === "module" &&
+        tokens[index + 1]?.value === "." &&
+        tokens[index + 2]?.value === "exports") ||
+      (token.value === "exports" && [".", "["].includes(tokens[index + 1]?.value ?? ""))
+    ) {
+      return null;
+    }
+    if (token.value === "{") {
+      moduleDepth++;
+    } else if (token.value === "}") {
+      moduleDepth--;
+    }
+    if (
+      token.value !== "export" ||
+      moduleDepth !== 0 ||
+      (tokens[index - 1]?.value === "." && !tokens[index - 1]?.literal)
+    ) {
+      continue;
+    }
+    let cursor = index + 1;
+    const at = () => tokens[cursor]?.value;
+    if (at() === "default") {
+      names.add("default");
+      continue;
+    }
+    if (at() === "async") {
+      cursor++;
+    }
+    if (["function", "class"].includes(at() ?? "")) {
+      cursor++;
+      if (at() === "*") {
+        cursor++;
+      }
+      const name = at();
+      if (!name || !/^[A-Za-z_$][\w$]*$/u.test(name)) {
+        return null;
+      }
+      names.add(name);
+    } else if (at() === "{") {
+      cursor++;
+      while (cursor < tokens.length && (tokens[cursor]?.literal || at() !== "}")) {
+        let name = at();
+        cursor++;
+        if (at() === "as") {
+          name = tokens[++cursor]?.value;
+          cursor++;
+        }
+        if (name !== undefined) {
+          names.add(name);
+        }
+        if (at() !== "," && at() !== "}") {
+          return null;
+        }
+        if (at() === ",") {
+          cursor++;
+        }
+      }
+    } else if (at() === "*") {
+      if (tokens[cursor + 1]?.value === "as") {
+        names.add(tokens[cursor + 2]?.value ?? "<unknown>");
+      } else {
+        // A wildcard's names belong to another source; retain mock coverage.
+        return null;
+      }
+    } else if (["const", "let", "var"].includes(at() ?? "")) {
+      const name = tokens[++cursor];
+      if (!name || name.literal || !/^[A-Za-z_$][\w$]*$/u.test(name.value)) {
+        return null;
+      }
+      names.add(name.value);
+      let depth = 0;
+      for (cursor++; cursor < tokens.length; cursor++) {
+        const part = tokens[cursor]!;
+        if (part.literal) {
+          continue;
+        }
+        // Do not infer extra exports from generics, comma expressions, or a
+        // following declaration separated by automatic semicolon insertion.
+        if (depth === 0 && ["<", ">", "\\", ","].includes(part.value)) {
+          return null;
+        }
+        if (depth === 0 && [";", "export"].includes(part.value)) {
+          break;
+        }
+        if (["(", "[", "{"].includes(part.value)) {
+          depth++;
+        } else if ([")", "]", "}"].includes(part.value)) {
+          depth--;
+        }
+      }
+    } else {
+      return null;
+    }
+  }
+  // Without ESM value exports this may publish arbitrary CommonJS keys.
+  return moduleDepth === 0 && names.size > 0 ? [...names].toSorted() : null;
+}
+
+/** Tagged runtime binding identities; literal names cannot collide with namespace consumption. */
+export function readTestSelectorImportNames(source: string): Map<string, string[]> {
+  const parsed = runtimeSourceTokens(source);
+  const imports = new Map<string, string[]>();
+  if (
+    !parsed ||
+    parsed.uncertain ||
+    parsed.possibleJsx ||
+    hasUnparsedIdentifierTokens(parsed.tokens)
+  ) {
+    // Unknown syntax must not prove that a newly consumed export is absent.
+    const specifiers = new Set(importFacts(source, false).imports);
+    for (const match of source.matchAll(CONSERVATIVE_IMPORT_PATTERN)) {
+      const specifier = match[1] ?? match[2] ?? match[3]?.replace(/[?#].*$/u, "");
+      if (specifier) {
+        specifiers.add(specifier);
+      }
+    }
+    for (const specifier of specifiers) {
+      imports.set(specifier, [`unknown:${source}`]);
+    }
+    return imports;
+  }
+  const { tokens } = parsed;
+  for (let index = 0; index < tokens.length; index++) {
+    if (
+      tokens[index]!.literal ||
+      !["import", "export"].includes(tokens[index]!.value) ||
+      (tokens[index - 1]?.value === "." && !tokens[index - 1]?.literal)
+    ) {
+      continue;
+    }
+    const next = tokens[index + 1];
+    if (
+      !next ||
+      next.literal ||
+      next.value === "." ||
+      (tokens[index]!.value === "export" && !["{", "*"].includes(next.value))
+    ) {
+      continue;
+    }
+    const names = new Set<string>();
+    let cursor = index + 1;
+    let specifier: string | undefined;
+    if (next.value === "(") {
+      if (tokens[index + 2]?.literal) {
+        specifier = tokens[index + 2]!.value;
+        names.add("namespace:dynamic-import");
+      }
+    } else {
+      if (!["{", "*"].includes(next.value)) {
+        names.add("name:default");
+        cursor++;
+        if (tokens[cursor]?.value === ",") {
+          cursor++;
+        }
+      }
+      if (tokens[cursor]?.value === "*") {
+        names.add(
+          tokens[index]!.value === "export"
+            ? tokens[cursor + 1]?.value === "as"
+              ? "namespace:re-export-as"
+              : "namespace:re-export-all"
+            : "namespace:import",
+        );
+        cursor++;
+        if (tokens[cursor]?.value === "as") {
+          cursor += 2;
+        }
+      } else if (tokens[cursor]?.value === "{") {
+        cursor++;
+        while (
+          cursor < tokens.length &&
+          (tokens[cursor]?.literal || tokens[cursor]?.value !== "}")
+        ) {
+          const name = tokens[cursor]!.value;
+          names.add(`name:${name}`);
+          cursor++;
+          if (tokens[cursor]?.value === "as") {
+            cursor += 2;
+          }
+          if (tokens[cursor]?.value === ",") {
+            cursor++;
+          } else if (tokens[cursor]?.value !== "}") {
+            break;
+          }
+        }
+        cursor++;
+      }
+      if (tokens[cursor]?.value === "from" && tokens[cursor + 1]?.literal) {
+        specifier = tokens[cursor + 1]!.value;
+      }
+    }
+    if (specifier && names.size > 0) {
+      imports.set(
+        specifier,
+        [...new Set([...(imports.get(specifier) ?? []), ...names])].toSorted(),
+      );
+    }
+  }
+  return imports;
+}
+
+function mockSpecifiers(tokens: SourceToken[]): string[] {
+  // Keep module-like mock registrations regardless of the local Vitest binding.
+  const specifiers = new Set<string>();
+  for (let index = 0; index < tokens.length; index++) {
+    if (
+      tokens[index]!.literal ||
+      tokens[index]!.value !== "." ||
+      !["mock", "doMock"].includes(tokens[index + 1]?.value ?? "")
+    ) {
+      continue;
+    }
+    let open = index + 2;
+    if (tokens[open]?.value === "<") {
+      let depth = 0;
+      do {
+        const token = tokens[open++]!;
+        if (!token.literal && token.value === "<") {
+          depth++;
+        }
+        if (!token.literal && token.value === ">") {
+          depth--;
+        }
+      } while (open < tokens.length && depth > 0);
+    }
+    if (tokens[open]?.value !== "(") {
+      continue;
+    }
+    const argument = tokens[open + 1];
+    if (argument?.literal) {
+      specifiers.add(argument.value);
+    } else if (
+      argument?.value === "import" &&
+      tokens[open + 2]?.value === "(" &&
+      tokens[open + 3]?.literal
+    ) {
+      specifiers.add(tokens[open + 3]!.value);
+    }
+  }
+  return [...specifiers];
+}
+
 function importFacts(
   source: string,
   classifyTypes = true,
-): { imports: string[]; typeOnlyImports: string[] } {
+): { imports: string[]; typeOnlyImports: string[]; mocks: string[] } {
   const { tokens, uncertain, possibleJsx } = sourceTokens(source);
+  const mocks = mockSpecifiers(tokens);
+  if (uncertain || possibleJsx || hasUnparsedIdentifierTokens(tokens)) {
+    // An unfamiliar lexical context cannot prove that a literal mock is absent.
+    for (const match of source.matchAll(
+      /\.\s*(?:mock|doMock)\s*(?:<[\s\S]*?>\s*)?\(\s*(?:import\s*\(\s*)?["'`]([^"'`]+)["'`]/gu,
+    )) {
+      if (!mocks.includes(match[1]!)) {
+        mocks.push(match[1]!);
+      }
+    }
+  }
   let runtimeSource: string | undefined;
   let unresolvedJsx = false;
   if (possibleJsx && !uncertain && classifyTypes) {
@@ -334,7 +623,11 @@ function importFacts(
     if (token.value !== "import" && token.value !== "export") {
       continue;
     }
-    if (next(1) === "." || next(1) === "(" || tokens[index - 1]?.value === ".") {
+    if (
+      next(1) === "." ||
+      next(1) === "(" ||
+      (tokens[index - 1]?.value === "." && !tokens[index - 1]?.literal)
+    ) {
       continue;
     }
     if (token.value === "import" && tokens[index + 1]?.literal) {
@@ -366,10 +659,10 @@ function importFacts(
         imports.add(specifier);
       }
     }
-    return { imports: [...imports], typeOnlyImports: [] };
+    return { imports: [...imports], typeOnlyImports: [], mocks };
   }
   if (!classifyTypes || (!needsTypeStrip && runtimeSource === undefined)) {
-    return { imports: [...imports], typeOnlyImports: [] };
+    return { imports: [...imports], typeOnlyImports: [], mocks };
   }
   try {
     // Node's parser distinguishes import types from calls and preserves named
@@ -377,12 +670,13 @@ function importFacts(
     runtimeSource ??= nodeModule.stripTypeScriptTypes(source, { mode: "strip" });
   } catch {
     // JSX and transform-required syntax remain conservatively connected.
-    return { imports: [...imports], typeOnlyImports: [] };
+    return { imports: [...imports], typeOnlyImports: [], mocks };
   }
   const runtime = new Set(importFacts(runtimeSource, false).imports);
   return {
     imports: [...imports],
     typeOnlyImports: [...imports].filter((specifier) => !runtime.has(specifier)),
+    mocks,
   };
 }
 
@@ -506,6 +800,7 @@ function parseFacts(value: unknown) {
     !value ||
     typeof value !== "object" ||
     !("imports" in value) ||
+    !("mocks" in value) ||
     !("typeOnlyImports" in value) ||
     !("matches" in value) ||
     !("references" in value)
@@ -514,6 +809,7 @@ function parseFacts(value: unknown) {
   }
   return {
     imports: parseStrings(value.imports),
+    mocks: parseStrings(value.mocks),
     typeOnlyImports: parseStrings(value.typeOnlyImports),
     matches: parseStrings(value.matches),
     references: parseStrings(value.references),
@@ -663,7 +959,9 @@ async function scanSourceFacts({ files, terms, matchingOnly }: SourceScan) {
     if (matchingOnly && matches.length === 0) {
       return null;
     }
-    const facts = parseImports ? importFacts(source) : { imports: [], typeOnlyImports: [] };
+    const facts = parseImports
+      ? importFacts(source)
+      : { imports: [], typeOnlyImports: [], mocks: [] };
     if (parseImports) {
       // Vitest loads these modules from config values instead of JavaScript imports.
       const configured = new Set(configuredRuntimeImports(source, file));

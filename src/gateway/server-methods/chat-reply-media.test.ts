@@ -100,13 +100,12 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     return {
       tools: params.allowRead ? { allow: ["read"] } : { fs: { workspaceOnly: true } },
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             agentDir: params.agentDir,
             workspace: params.workspaceDir,
           },
-        ],
+        },
       },
     };
   }

@@ -16,11 +16,7 @@ import {
   LEGACY_AGENT_DIR_RECEIPT,
   recordCompletedLegacyAgentDirMigration,
 } from "./state-migrations.agent-dir-receipt.js";
-import {
-  migrationFileExists,
-  readSessionStoreJson5,
-  type SessionEntryLike,
-} from "./state-migrations.fs.js";
+import { migrationFileExists, readSessionStoreJson5 } from "./state-migrations.fs.js";
 import {
   aliasedSessionStoreMigrationWarning,
   canonicalizeSessionStore,
@@ -119,23 +115,6 @@ export function inspectLegacyAgentDir(
   }
 }
 
-function normalizeTargetSessionStore(target: Record<string, SessionEntryLike>): {
-  store: Record<string, SessionEntry>;
-  rejectedProtectedKeyCount: number;
-} {
-  const store = Object.create(null) as Record<string, SessionEntry>;
-  let rejectedProtectedKeyCount = 0;
-  for (const [key, entry] of Object.entries(target)) {
-    const normalizedEntry = normalizeSessionEntry(entry, key);
-    if (!normalizedEntry) {
-      rejectedProtectedKeyCount++;
-      continue;
-    }
-    store[key] = normalizedEntry;
-  }
-  return { store, rejectedProtectedKeyCount };
-}
-
 export async function migrateLegacySessions(
   detected: LegacyStateDetection,
   options: {
@@ -224,21 +203,28 @@ export async function migrateLegacySessions(
     agentId: detected.targetAgentId,
     mainKey: detected.targetMainKey,
     scope: detected.targetScope,
-    skipCrossAgentRemap: detected.sessions.preserveAmbiguousKeys,
-    preserveCanonicalAgentOwner: true,
     preserveAmbiguousKeys: detected.sessions.preserveAmbiguousKeys,
     preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
     legacySessionSurfaces: options.legacySessionSurfaces.surfaces,
   });
-  const normalized = normalizeTargetSessionStore(canonicalized.store);
-  if (normalized.rejectedProtectedKeyCount > 0) {
+  const normalized = Object.create(null) as Record<string, SessionEntry>;
+  let rejectedProtectedKeyCount = 0;
+  for (const [key, entry] of Object.entries(canonicalized.store)) {
+    const normalizedEntry = normalizeSessionEntry(entry, key);
+    if (normalizedEntry) {
+      normalized[key] = normalizedEntry;
+    } else {
+      rejectedProtectedKeyCount++;
+    }
+  }
+  if (rejectedProtectedKeyCount > 0) {
     warnings.push(
-      `Refused legacy session migration because normalization rejected ${normalized.rejectedProtectedKeyCount} existing target session ${normalized.rejectedProtectedKeyCount === 1 ? "key" : "keys"}; left ${detected.sessions.targetStorePath} in place. Repair the conflicting rows, then rerun openclaw doctor --fix.`,
+      `Refused legacy session migration because normalization rejected ${rejectedProtectedKeyCount} existing target session ${rejectedProtectedKeyCount === 1 ? "key" : "keys"}; left ${detected.sessions.targetStorePath} in place. Repair the conflicting rows, then rerun openclaw doctor --fix.`,
     );
     return { changes, warnings };
   }
   if (Object.keys(targetStore).length > 0) {
-    await saveSessionStoreStrict(detected.sessions.targetStorePath, normalized.store);
+    await saveSessionStoreStrict(detected.sessions.targetStorePath, normalized);
     if (canonicalized.legacyKeys.length > 0) {
       changes.push(`Canonicalized ${canonicalized.legacyKeys.length} legacy session key(s)`);
     }
@@ -347,7 +333,6 @@ export async function migrateLegacyAgentDir(
     const duplicates: string[] = [];
     const directories: string[] = [];
     const movedFiles: { sourcePath: string; destinationPath: string }[] = [];
-    let plan: ReturnType<typeof planLegacyAgentDir> | undefined;
     let sourceRoot = legacyDir;
     let targetRoot = targetDir;
     let retainedRoot = legacyDir;
@@ -441,7 +426,7 @@ export async function migrateLegacyAgentDir(
         );
       }
       // Ownership inspection can materialize a SQLite shared-memory sidecar; inventory afterward.
-      plan = planLegacyAgentDir(sourceRoot, targetDir);
+      const plan = planLegacyAgentDir(sourceRoot, targetDir);
       preserveSource = plan.families.length > 0;
       for (const family of plan.families) {
         const database = path.join(sourceRoot, family.relative);

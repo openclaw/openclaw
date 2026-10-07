@@ -261,7 +261,14 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "matrix-inbound-dedupe-to-claimable-dedupe",
     label: "Matrix inbound dedupe markers",
     async detectLegacyState(params) {
-      await collectMatrixInboundDedupeSources(params.stateDir);
+      const sources = await collectMatrixInboundDedupeSources(params.stateDir);
+      if (
+        params.config.channels?.matrix === undefined &&
+        sources.status === "complete" &&
+        sources.sqliteRoots.length === 0
+      ) {
+        return null;
+      }
       return (await hasCompletedMatrixInboundDedupeMigration(params.context, params.env))
         ? null
         : { preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"] };

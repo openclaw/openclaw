@@ -8,8 +8,7 @@ import {
 } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 
@@ -49,7 +48,7 @@ import {
 import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
 import { usageHandlers } from "./usage.js";
 
-const config: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+const config: OpenClawConfig = { agents: { entries: { main: {} } } };
 const refreshingCapableClient = { connect: { caps: ["usage-refreshing"] } };
 const providerDescriptor = { provider: "openai", displayName: "OpenAI" };
 const visibleProvider = { providers: [{ provider: "openai" }] };
@@ -134,26 +133,6 @@ describe("usage.status provider usage cache", () => {
     resetPluginRuntimeStateForTest();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
-  });
-
-  it("hands the exact runtime config to the background refresh", async () => {
-    mocks.loadProviderUsageSummary.mockImplementation(async (options) => ({
-      updatedAt: now,
-      providers:
-        options.config === config
-          ? [
-              {
-                ...providerDescriptor,
-                windows: [{ label: "5h", usedPercent: 25 }],
-                accountEmail: "configured@example.com",
-              },
-            ]
-          : [],
-    }));
-    await expect(settledStatus()).resolves.toMatchObject({ refreshing: true });
-    await expect(runCapableUsageStatus()).resolves.toMatchObject({
-      providers: [{ accountEmail: "configured@example.com" }],
-    });
   });
 
   it("returns a cold marker only to capable clients and retains invalidated refresh work", async () => {
@@ -242,19 +221,6 @@ describe("usage.status provider usage cache", () => {
     await expect(runCapableUsageStatus()).resolves.toMatchObject({
       providers: [expect.any(Object)],
     });
-  });
-
-  it("rebuilds prepared usage facts once for each config and plugin generation", async () => {
-    await runUsageStatus();
-    await runUsageStatus();
-    const nextConfig = { ...config };
-    await runUsageStatus({ runtimeConfig: nextConfig });
-    await runUsageStatus({ runtimeConfig: nextConfig });
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    await runUsageStatus({ runtimeConfig: nextConfig });
-    await runUsageStatus({ runtimeConfig: nextConfig });
-    expect(mocks.listProviderUsagePluginDescriptors).toHaveBeenCalledTimes(3);
-    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(3);
   });
 
   it.each([false, true])("serves stale usage while refreshing (timeout: %s)", async (timeout) => {

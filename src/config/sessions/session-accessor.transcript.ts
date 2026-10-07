@@ -1,11 +1,11 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
-import { readTranscriptStatsSync } from "./session-accessor.sqlite-read.js";
 import { trimTranscriptForManualCompact } from "./session-accessor.sqlite-transcript-write.js";
 import type {
   SessionTranscriptRuntimeScope,
   SessionTranscriptManualTrimResult,
   SessionTranscriptManualTrimPreflightResult,
 } from "./session-accessor.types.js";
+import { readTranscriptStatsAsync } from "./session-transcript-stats.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -21,7 +21,6 @@ export {
   readTranscriptMutationStateSync,
 } from "./session-accessor.sqlite-metadata-read.js";
 export {
-  hasSessionTranscriptMessage,
   inspectTranscriptEventsSync,
   loadLatestAssistantText as readLatestTranscriptAssistantText,
   loadTranscriptEventRowsAfterSeqSync,
@@ -34,6 +33,7 @@ export {
   readTranscriptEventAtSeqSync,
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
+export { hasSessionTranscriptMessage } from "./session-transcript-message-presence.js";
 export { loadTranscriptEvents } from "./session-transcript-events.js";
 export {
   loadTranscriptSuffixEventsBoundedSync,
@@ -69,7 +69,7 @@ export async function preflightSessionTranscriptForManualCompact(
   scope: SessionTranscriptRuntimeScope,
   params: { maxLines: number; sessionFile?: string },
 ): Promise<SessionTranscriptManualTrimPreflightResult> {
-  const eventCount = readTranscriptStatsSync(scope).eventCount;
+  const { eventCount } = await readTranscriptStatsAsync(scope);
   if (eventCount === 0) {
     return { compacted: false, reason: "no transcript" };
   }
@@ -116,10 +116,6 @@ export async function trimSessionTranscriptForManualCompact(
   return { compacted: true, kept: trimmed.kept };
 }
 
-function parseManualCompactTranscriptRecord(line: string): Record<string, unknown> | null {
-  return safeParseJsonRecord(line) ?? null;
-}
-
 function normalizeManualCompactTranscriptLines(
   headerLine: string | undefined,
   tailLines: readonly string[],
@@ -127,14 +123,14 @@ function normalizeManualCompactTranscriptLines(
   if (!headerLine) {
     return null;
   }
-  const header = parseManualCompactTranscriptRecord(headerLine);
+  const header = safeParseJsonRecord(headerLine);
   if (header?.type !== "session" || typeof header.id !== "string") {
     return null;
   }
 
   const records = tailLines
-    .map(parseManualCompactTranscriptRecord)
-    .filter((record): record is Record<string, unknown> => record !== null);
+    .map(safeParseJsonRecord)
+    .filter((record): record is Record<string, unknown> => record !== undefined);
   const retainedIds = new Set<string>();
   const transparentParents = new Map<string, string | null>();
   const normalizedRecords: Record<string, unknown>[] = [];

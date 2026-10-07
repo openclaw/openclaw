@@ -32,7 +32,11 @@ import {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
 } from "./subagent-registry-read.js";
-import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import {
+  bindSubagentRunRecord,
+  rowToSubagentRunRecord,
+  subagentRunRecordVersion,
+} from "./subagent-registry.store.codec.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
@@ -55,9 +59,19 @@ function policyReceipt(
 ): SubagentCompletionMutationResult {
   return {
     applied: true,
-    records: [...postimages.values()].flatMap((entry) =>
-      entry ? [{ row: bindSubagentRunRecord(entry), cleanupHandled: entry.cleanupHandled }] : [],
-    ),
+    records: [...postimages.values()].flatMap((entry) => {
+      if (!entry) {
+        return [];
+      }
+      const subagent = rowToSubagentRunRecord(bindSubagentRunRecord(entry))!;
+      return [
+        {
+          subagent,
+          version: subagentRunRecordVersion(subagent)!,
+          cleanupHandled: entry.cleanupHandled,
+        },
+      ];
+    }),
     retiredRunIds: [...postimages].flatMap(([id, entry]) => (entry ? [] : [id])),
     queueIds: [],
   };
@@ -298,12 +312,12 @@ export function registerPrivateCompletionSettlementTests({
         runs,
         runSubagentAnnounceFlow,
         resumeSubagentRun: (runId) => {
-          controller.startSubagentAnnounceCleanupFlow(runId, runs.get(runId)!);
+          controller.startSubagentAnnounceCleanupFlow(runs.get(runId)!);
         },
         maybeWakeRequesterAfterAllChildrenSettled: async () => false,
       });
       try {
-        expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(false);
+        expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(false);
         expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
         expect(readLifecycleRun(entry).cleanupHandled).not.toBe(true);
         expect(readLifecycleRun(entry).completion?.resultText).toBe("private child result");
@@ -555,12 +569,12 @@ export function registerRequesterSettleRetirementTests({
         resumeSubagentRun: (runId) => {
           const current = subagentRuns.get(runId);
           if (current) {
-            controller.startSubagentAnnounceCleanupFlow(runId, current);
+            controller.startSubagentAnnounceCleanupFlow(current);
           }
         },
       });
       try {
-        controller.startSubagentAnnounceCleanupFlow(ancestor.runId, ancestor);
+        controller.startSubagentAnnounceCleanupFlow(ancestor);
         expect(readLifecycleRun(ancestor).cleanupCompletedAt).toBeUndefined();
         await controller.completeCleanupBookkeeping({
           runId: intermediate.runId,

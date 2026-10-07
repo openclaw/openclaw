@@ -70,7 +70,6 @@ export abstract class CodexTurnProjection {
   protected contextTokensSource: "runtime" | "runtime-configured" | "resolved" | undefined;
   protected readonly usageProjection = new CodexUsageProjection();
   protected completedCompactionCount = 0;
-  protected pendingSteeringAssistantBoundaryItemId: string | undefined;
 
   constructor(
     protected readonly params: EmbeddedRunAttemptParams,

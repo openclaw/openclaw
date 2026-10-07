@@ -31,80 +31,6 @@ import type { ThinkLevel } from "./directives.js";
 
 type ModelPickerCatalogEntry = { provider: string; id: string; name?: string };
 
-function buildModelPickerCatalog(params: {
-  cfg: OpenClawConfig;
-  defaultProvider: string;
-  defaultModel: string;
-  agentId: string;
-  aliasIndex: ModelAliasIndex;
-  allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
-}): ModelPickerCatalogEntry[] {
-  const configured = resolveConfiguredModelEntries({
-    ...params,
-    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-  });
-  const catalog = dedupeModelCatalogEntries([
-    ...params.allowedModelCatalog.flatMap((entry) => {
-      const id = normalizeOptionalString(entry.id);
-      const provider = normalizeProviderId(entry.provider);
-      return id && provider ? [{ provider, id, name: entry.name ?? id }] : [];
-    }),
-    ...configured.entries.map(({ ref }) => ({
-      provider: ref.provider,
-      id: ref.model,
-      name: ref.model,
-    })),
-  ]);
-  return createModelVisibilityPolicy({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    defaultProvider: params.defaultProvider,
-    defaultModel: configured.defaultRef,
-    catalog,
-    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-  }).allowedCatalog;
-}
-
-function filterMissingAuthNestedProviderDuplicates(params: {
-  cfg: OpenClawConfig;
-  entries: ModelPickerCatalogEntry[];
-  authByProvider: Map<string, string>;
-}): ModelPickerCatalogEntry[] {
-  const configuredKeys = new Set(
-    buildConfiguredModelCatalog({ cfg: params.cfg }).map((entry) =>
-      modelKey(entry.provider, entry.id),
-    ),
-  );
-  const wrapperKeys = new Set<string>();
-  for (const entry of params.entries) {
-    const id = normalizeOptionalString(entry.id) ?? "";
-    const slash = id.indexOf("/");
-    if (slash <= 0) {
-      continue;
-    }
-    const nestedProvider = normalizeProviderId(id.slice(0, slash));
-    const nestedModel = normalizeOptionalString(id.slice(slash + 1)) ?? "";
-    const wrapperProvider = normalizeProviderId(entry.provider);
-    if (!nestedProvider || !nestedModel || nestedProvider === wrapperProvider) {
-      continue;
-    }
-    wrapperKeys.add(modelKey(nestedProvider, nestedModel));
-  }
-  if (wrapperKeys.size === 0) {
-    return params.entries;
-  }
-
-  return params.entries.filter((entry) => {
-    const provider = normalizeProviderId(entry.provider);
-    const id = normalizeOptionalString(entry.id) ?? "";
-    const key = modelKey(provider, id);
-    if (configuredKeys.has(key)) {
-      return true;
-    }
-    return params.authByProvider.get(provider) !== "missing" || !wrapperKeys.has(key);
-  });
-}
-
 export async function maybeHandleModelDirectiveInfo(params: {
   directives: InlineDirectives;
   cfg: OpenClawConfig;
@@ -245,14 +171,34 @@ export async function maybeHandleModelDirectiveInfo(params: {
     };
   }
 
-  const pickerCatalog = buildModelPickerCatalog({
+  const configured = resolveConfiguredModelEntries({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
     agentId: params.activeAgentId,
     aliasIndex: params.aliasIndex,
-    allowedModelCatalog: params.allowedModelCatalog,
+    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   });
+  const catalog = dedupeModelCatalogEntries([
+    ...params.allowedModelCatalog.flatMap((entry) => {
+      const id = normalizeOptionalString(entry.id);
+      const provider = normalizeProviderId(entry.provider);
+      return id && provider ? [{ provider, id, name: entry.name ?? id }] : [];
+    }),
+    ...configured.entries.map(({ ref }) => ({
+      provider: ref.provider,
+      id: ref.model,
+      name: ref.model,
+    })),
+  ]);
+  const pickerCatalog = createModelVisibilityPolicy({
+    cfg: params.cfg,
+    agentId: params.activeAgentId,
+    defaultProvider: params.defaultProvider,
+    defaultModel: configured.defaultRef,
+    catalog,
+    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+  }).allowedCatalog;
   if (pickerCatalog.length === 0) {
     return { text: "No models available." };
   }
@@ -282,14 +228,39 @@ export async function maybeHandleModelDirectiveInfo(params: {
     lines.push(`(previous selection reset to default)`);
   }
 
-  const statusCatalog = filterMissingAuthNestedProviderDuplicates({
-    cfg: params.cfg,
-    entries: pickerCatalog,
-    authByProvider,
-  });
+  const configuredKeys = new Set(
+    buildConfiguredModelCatalog({ cfg: params.cfg }).map((entry) =>
+      modelKey(entry.provider, entry.id),
+    ),
+  );
+  const wrapperKeys = new Set<string>();
+  for (const entry of pickerCatalog) {
+    const id = normalizeOptionalString(entry.id) ?? "";
+    const slash = id.indexOf("/");
+    if (slash <= 0) {
+      continue;
+    }
+    const nestedProvider = normalizeProviderId(id.slice(0, slash));
+    const nestedModel = normalizeOptionalString(id.slice(slash + 1)) ?? "";
+    const wrapperProvider = normalizeProviderId(entry.provider);
+    if (!nestedProvider || !nestedModel || nestedProvider === wrapperProvider) {
+      continue;
+    }
+    wrapperKeys.add(modelKey(nestedProvider, nestedModel));
+  }
   const byProvider = new Map<string, ModelPickerCatalogEntry[]>();
-  for (const entry of statusCatalog) {
+  for (const entry of pickerCatalog) {
     const provider = normalizeProviderId(entry.provider);
+    if (wrapperKeys.size > 0) {
+      const key = modelKey(provider, normalizeOptionalString(entry.id) ?? "");
+      if (
+        !configuredKeys.has(key) &&
+        authByProvider.get(provider) === "missing" &&
+        wrapperKeys.has(key)
+      ) {
+        continue;
+      }
+    }
     const models = byProvider.get(provider) ?? [];
     models.push(entry);
     byProvider.set(provider, models);

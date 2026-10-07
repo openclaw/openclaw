@@ -1,8 +1,15 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { inspectManagedWorktreeCheckout } from "./checkout-inspection.js";
 import { deferWorktreeGcRecord, type WorktreeCleanupOwnerPolicy } from "./gc-removal.js";
 import type { createWorktreeGcPrefilter } from "./git-lock.js";
+import { worktreeGcRevision } from "./registry-read.kernel.js";
 import type { ManagedWorktreeRecord } from "./types.js";
+
+export type WorktreeCleanupDeferrals = Map<
+  string,
+  { revision: string; fingerprint: string | null }
+>;
 
 export async function autoRemovalProtectionReason(
   record: ManagedWorktreeRecord,
@@ -13,15 +20,11 @@ export async function autoRemovalProtectionReason(
     getConfig: () => OpenClawConfig;
     signal?: AbortSignal;
     beforeRun?: () => void;
+    now: number;
+    deferrals: WorktreeCleanupDeferrals;
   },
   policy: WorktreeCleanupOwnerPolicy = {},
 ): Promise<string | undefined> {
-  if (record.gcProtection) {
-    if (!policy.retryDeferred) {
-      return record.gcProtection;
-    }
-    await deferWorktreeGcRecord(context.env, record, null, context.beforeRun);
-  }
   if (
     record.ownerId !== undefined &&
     policy.shouldProtectOwner?.(record.ownerKind, record.ownerId) === true
@@ -30,6 +33,33 @@ export async function autoRemovalProtectionReason(
   }
   if (hasLiveLease(record.id)) {
     return "run lease is active";
+  }
+  if (record.gcRetry) {
+    // Do not walk or fingerprint a checkout whose last attempt exhausted its budget.
+    // The registry revision invalidates this receipt when its owner changes.
+    if (!policy.retryDeferred && context.now < record.gcRetry.retryAt) {
+      return record.gcProtection;
+    }
+  } else {
+    const revision = worktreeGcRevision(record);
+    const previous = context.deferrals.get(record.id);
+    const fingerprint =
+      record.gcProtection || !previous
+        ? await runGitWorkerOperation(
+            { type: "worktree.cleanup-fingerprint", input: { checkoutPath: record.path } },
+            { signal: context.signal, assertCurrent: context.beforeRun },
+          )
+        : previous.fingerprint;
+    context.deferrals.set(record.id, { revision, fingerprint });
+    if (record.gcProtection) {
+      if (
+        !policy.retryDeferred &&
+        (!previous || (previous.revision === revision && previous.fingerprint === fingerprint))
+      ) {
+        return record.gcProtection;
+      }
+      await deferWorktreeGcRecord(context.env, record, null, context.beforeRun);
+    }
   }
   const protection = await prefilter(record);
   if (protection !== undefined) {

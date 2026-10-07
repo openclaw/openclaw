@@ -24,12 +24,10 @@ type CurrentConversationBindingDatabase = Pick<
 >;
 
 export type CurrentConversationBindingScope = { channel: string; accountId: string };
-type CurrentConversationBindingRow = {
-  binding_key: string;
-  binding_id: string;
-  target_session_key: string;
-  record_json: string;
-};
+type CurrentConversationBindingRow = Pick<
+  CurrentConversationBindingDatabase["current_conversation_bindings"],
+  "binding_key" | "binding_id" | "target_session_key" | "record_json"
+>;
 
 function createCurrentConversationBindingQueries(db: DatabaseSync) {
   const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);

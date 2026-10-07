@@ -292,7 +292,6 @@ export function renderChat(props: ChatProps) {
         pendingInputs: displayedPendingInputs,
         runActive: props.runActive === true,
         runWorking,
-        subagentSessions: props.swarm?.sessions,
         startupLabel: chatStartupStatusLabel(props.startupStatus, placementStartup),
         questionPrompts: props.gatewayQuestionPrompts,
         agents: props.agentsList?.agents,
@@ -499,6 +498,7 @@ export function renderChat(props: ChatProps) {
           ? nothing
           : renderChatSelectionAnnotations({ ...props, disabled: !canCompose })
       }
+      ${props.composerRecovery ?? nothing}
     </div>`,
   );
   const taskSuggestionTray = renderChatTaskSuggestionTray(props);

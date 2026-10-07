@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { withPluginServiceScheduler } from "./service-scheduler-binding.js";
 import type { PluginServiceSchedulerV1 } from "./service-scheduler.types.js";
 

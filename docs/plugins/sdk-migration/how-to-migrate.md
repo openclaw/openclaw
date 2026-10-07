@@ -50,7 +50,9 @@ that depends on the operation. Dismissal IDs retain exact-match semantics.
 Replace `recordCommittedInput(input)` with `await recordCommittedInputAsync(input)`
 and `invalidate(sessionKey)` with `await invalidateAsync(sessionKey)`. Await
 recording before reading the resulting Inbox, and await invalidation before
-depending on refreshed connected views.
+depending on refreshed connected views. Recording also awaits the collaboration
+writer's session involvement update before saving Inbox items. Both writes retain
+their existing owners and settle before Gateway worker shutdown.
 
 The shipped `list`, `dismiss`, `recordCommittedInput`, and `invalidate` methods
 remain synchronous third-party adapters until the next Plugin SDK major and
@@ -61,6 +63,153 @@ timing stay intact, including recording before an immediate synchronous list.
 Notifications publish after the enclosing transaction commits and are discarded
 on rollback. This migration changes no schema, retained data, retention, or
 update behavior.
+
+## Await personal model-account operations
+
+The Gateway context's `modelAccountConnectService` now provides awaited
+replacements for its seven synchronous storage methods. Keep the existing
+arguments and await the result before publishing a response, starting dependent
+work, or releasing the caller's authority:
+
+| Synchronous method | Awaited replacement |
+| ------------------ | ------------------- |
+| `listLinks`        | `listLinksAsync`    |
+| `link`             | `linkAsync`         |
+| `unlink`           | `unlinkAsync`       |
+| `list`             | `listAsync`         |
+| `select`           | `selectAsync`       |
+| `status`           | `statusAsync`       |
+| `cancel`           | `cancelAsync`       |
+
+Each replacement resolves to the existing result envelope. Pass the current
+owner and live `assertCurrent` callback; the service rechecks authority across
+awaited work and before disclosing account summaries or links. Results never
+include credentials. If a write's commit outcome is unknown, do not retry it or
+fall back to its synchronous counterpart.
+
+The synchronous methods shipped in 2026.9.8 retain their arguments, immediate
+return values, and completion timing until the next Plugin SDK major and
+explicit breaking-release approval. Each emits one `DEP_SESSION_PERSISTENCE`
+warning per plugin and method per process, including across plugin reloads;
+unscoped calls warn once per method. Core and bundled callers use the awaited
+methods. This migration changes no RPC schema, stored data, retention, or update
+behavior.
+
+## Await reply tool authority
+
+Harness attempt parameters from `openclaw/plugin-sdk/agent-harness-runtime`
+expose an optional `replyOperation`. Await its `bindToolAuthoritySnapshotAsync`,
+`projectToolAuthorityFingerprintAsync`, and `bindToolAuthorityRouteAsync` methods.
+They preserve the existing inputs and resolve to `void`, `string | undefined`,
+and `string`, respectively. Preparation checks current session policy and then
+revalidates the original operation and concrete backend route.
+
+Tool-authority snapshot providers can implement optional `fingerprintAsync` and
+`projectAsync` companions while keeping their released synchronous methods.
+Legacy two-method snapshot objects remain accepted. Do not use an earlier hash
+as permission after an await: each action needs fresh preparation and current
+owner authority.
+
+V2 injection backends can add `queueMessageAsync`. It keeps the existing arguments,
+replacing the synchronous assertion argument with
+`{ prepareCurrent(): Promise<void>; assertCurrent(): void; compatAssertCurrent(): void }`.
+Preparation alone does not authorize input after its reader has closed. When
+delegating to built-in steering, forward the supplied preparation functions
+unchanged so the host can bind final reads and enqueue to one admission. Native
+transports can use `withPreparedCurrent` below. A sink without that consuming
+boundary retains the synchronous `compatAssertCurrent()` check immediately
+before its effect, outside worker grants. The host selects the awaited companion
+when supplied; released external V2 implementations remain supported.
+
+Legacy V1 backends still accept run-owned input without a separate caller-lifetime
+binding. Worker policy preparation alone does not create that binding. Input
+bound to a caller, operator, or source still requires V2; the host checks current
+owner and policy authority before invoking an unbound legacy backend.
+
+Native harness backends that await session-lineage admission can use the optional
+`NativeSessionBindingAuthority.withPreparedCurrent(consume, preparations)` companion.
+For worker-prepared policies, it reads tool policy and lineage together through
+the existing session reader, then invokes the synchronous `consume` callback
+while that admission is current.
+Use `withCurrent` for effects without tool-policy preparation; its signature is
+unchanged. Unknown or partly supported preparation providers retain full
+synchronous policy, target, and lineage checks outside worker grants, with no
+await before consumption. An optional per-item
+`onRefused(error)` callback may return `"discarded"` only after rejecting that item;
+otherwise the entire admission fails. A late compatibility refusal rejects the
+entire undispatched batch, without repeating native checks or settlement callbacks.
+
+Pending-question sinks can implement `claimPendingUserInputAnswerAsync` and
+`cancelPendingUserInputAsync`, taking the same preparation object as the queue
+companion. Pass it as `authority.toolAuthorityPreparation` to the shared question
+functions, alongside your current backend assertion. The question owner composes
+fresh policy reads with its final resolve or cancel boundary. Legacy sinks retain
+their full synchronous `compatAssertCurrent` assertion; an earlier snapshot never
+substitutes for current policy.
+
+Custom question dispatchers retain `version: 2`. When source-bound authority
+provides `assertCurrentAsync`, await it after transport preparation, then invoke
+`assertCurrent` immediately before I/O. Older implementations that only invoke
+`assertCurrent` retain the released fresh native check. A failed awaited check
+must not trigger a synchronous fallback or replay a possibly accepted input.
+Run-owned legacy callbacks keep a fresh native policy assertion immediately before
+dispatch because their unscoped contract exposes no awaited effect boundary.
+
+Queue-only target eligibility stays with ordinary enqueue admission; it does not add database
+reads to question callbacks. Built-in ordinary steering installs input inside
+its final admission and notifies subscribers after releasing that admission.
+
+The synchronous fingerprint, projection, binding, and injection methods are deprecated under
+`reply-tool-authority-sync-preparation`, with removal gated on the next Plugin
+SDK major and explicit breaking-release approval. No runtime warning, schema
+change, retention change, or update migration is introduced.
+
+## Await session upstream links
+
+Use `upsertSessionUpstreamLinkAsync` and `deleteSessionUpstreamLinkAsync` from
+`openclaw/plugin-sdk/session-catalog`. Keep the existing arguments and await
+completion before binding a native session, publishing adoption, or depending on
+link cleanup. The upsert resolves to a boolean; deletion resolves to `"deleted"`,
+`"absent"`, `"changed"`, or `undefined`, preserving the existing result semantics.
+
+Pass the existing `assertCommitAllowed` callback when the write depends on live
+authority. It runs at worker transaction and commit admission, so it must remain
+synchronous and must not query the shared-state database. An uncertain write
+outcome does not authorize retrying the write or invoking its synchronous
+counterpart.
+
+Official harnesses using the production-private
+`agent-harness-session-runtime` initializer should replace
+`initialization.link(input)` with `await initialization.linkAsync(input)` before
+calling `initialization.bind(...)`. Await rollback cleanup before releasing the
+initializer's ownership.
+
+The synchronous upsert, delete, and initializer `link` contracts shipped in
+`v2026.9.8` retain their arguments, immediate results, and completion timing until
+the next Plugin SDK major and explicit breaking-release approval. Their
+deprecation is recorded in TypeScript and the compatibility registry without
+runtime warnings. This migration changes no schema, stored data, retention, or
+update behavior.
+
+## Await locked transcript preparation
+
+Inside `withSessionTranscriptWriteLock`, use
+`prepareMessageAfterIdempotencyCheckAsync` when message preparation needs to await
+work. Returning `undefined` suppresses a fresh append. Duplicate messages and
+accepted pending inputs retain their original preparation decision. The existing
+`prepareMessageAfterIdempotencyCheck` callback remains synchronous inside the
+transaction until the next Plugin SDK major.
+
+Await each append to consume its result. The lock also joins accepted operations
+in call order before releasing the writer, including when its callback fails or
+returns without awaiting an append. Retained context methods reject new calls
+after the callback finishes. Keep current authority checks in
+`beforeFreshMessageCommit`.
+
+Bundled adapters use `composeSessionTranscriptWriteAssertion` to preserve prepared
+owner checks through wrappers. Pass existing assertions as sources; a custom
+check may inspect only owned in-memory state. Unprepared callbacks retain their
+native transaction ordering.
 
 ## Await session transcript persistence
 
@@ -114,6 +263,34 @@ for read limits, cancellation, and target-binding rules. Synchronous getters rea
 the prepared view. `inMemory()` and `fromEntries()` remain synchronous;
 `appendModelChange`, `appendThinkingLevelChange`, and `createBranchedSession`
 already return promises and keep their names.
+
+Replace `SessionManager.readSessionContext(target, read)` with
+`await SessionManager.readSessionContextAsync(target, read, { admission?, signal? })`.
+This reader preserves full-fidelity messages, including storage-only fields omitted
+from model context. Its consumer may return a promise; the iterator closes when
+the consumer settles, and source validation must succeed before the result is
+returned. A rewritten source or revoked admission rejects the read. The durable
+reader retains its database owner through consumption and cleanup;
+database closure revokes the read. Final acceptance uses the existing writer
+FIFO and native mutation witness, including rewrites made after worker validation.
+The `session-manager-sync-context-read` record deprecates the synchronous reader on
+October 4, 2026, with one warning per process and removal at the next Plugin SDK
+major. Its existing synchronous result remains compatible during that window.
+
+Actor-bound incognito sessions reject the deprecated synchronous persistence and
+context methods before native storage or loaded-view mutation. The error names
+the awaited replacement. Production incognito remains host-owned until the atomic
+worker activation; durable synchronous compatibility is unchanged. An ordinary
+`resolveCurrentTurnEntryId()` only walks the loaded view; to include omitted
+custom messages, await `openAsync(target)` and walk that complete view instead.
+
+Bundled Codex history captures `captureCodexSessionContextReader(target, signal?)`
+from `openclaw/plugin-sdk/codex-session-transcript-runtime` before yielding. When
+an actor binding exists, await the returned reader with the same target and a
+context consumer. It retains the actor through scanning, consumption, validation,
+and cleanup. Without an actor binding it returns `undefined`, preserving the
+existing host route. The synchronous Codex context reader and validators refuse
+actor-bound access; they never reopen a native incognito database.
 
 `branchAsync` can hydrate missing history through the read worker before selecting
 the branch. `resetLeafAsync(): Promise<void>` orders an in-memory navigation reset
@@ -211,6 +388,31 @@ legacy hook for supported older consumers. The awaited Gemini helper propagates
 metadata write failures; the legacy adapter retains its historical best-effort
 metadata behavior.
 
+## Await session observer and progress visibility
+
+Use `await context.sessionObserver.handleEventAsync(event)` to join event
+admission, `await getCompanionSnapshotAsync(sessionKey, agentId?)` for a current
+companion snapshot, and `await disposeAsync()` to join accepted observer work
+during shutdown. Connection visibility and removal remain synchronous.
+
+Reply-dispatch hooks should await `event.shouldSendToolSummariesAsync()` and
+`event.shouldSendFullToolDetailsAsync()` at each visibility decision. Current
+hosts supply both methods; they remain optional in the original event type so
+external callers can still construct released boolean-only events. Plugins that
+require worker-backed visibility should report a missing capability on older
+hosts rather than substitute a cached dispatch-start boolean.
+
+Channels should register `onVerboseProgressVisibilityAsync` instead of
+`onVerboseProgressVisibility`. The callback receives `() => Promise<boolean>`;
+dispatch awaits registration before selecting commentary ownership. Await the
+getter before rendering progress and recheck cancellation after that await.
+Commentary ownership remains frozen for a turn where the existing commentary
+delivery policy requires it; ordinary live visibility reads remain fresh.
+When both callbacks are supplied, the async callback takes precedence.
+
+The deprecated methods, booleans, and synchronous callback remain available
+until the next Plugin SDK major and explicit breaking-release approval.
+
 ## Managed node workspace acquisition
 
 Node-host commands should await `context.acquireManagedWorkspaceAsync(request)`
@@ -274,6 +476,40 @@ source/backup identities still verify. Conflicts, lost authority, and uncertain
 imports remain refusals.
 Do not implement import as runtime `enqueue` followed by `fail`: an interruption
 would expose a historical failure as new pending work.
+
+## Agent roster config
+
+Author agent rosters as `agents.entries`, keyed by agent ID. Entries contain no
+`id` field or `default` marker; their insertion order is the roster order. Read
+`cfg.agents.entries` directly, or use `listAgentIds` and `resolveAgentConfig` from
+`openclaw/plugin-sdk/agent-runtime`. Select the owner explicitly for the surface
+you use, such as `agents.defaults.systemAgent.agentId` for system work.
+
+Authored `agents.list` and boolean entry `default` markers are rejected. Run
+`openclaw doctor --fix` to migrate stored legacy configs; Doctor also records
+explicit ownership for migrated multi-agent rosters.
+
+Entries also carry no `agentRuntime` or `compaction`. Validation rejects both, so
+the authored config type omits them and `resolveAgentConfig` no longer returns
+`agentRuntime`. Read runtime policy from per-model `models[ref].agentRuntime` and
+compaction settings from `agents.defaults.compaction`.
+
+`agents.defaults` also no longer types `imageGenerationModel`, `videoGenerationModel`,
+`musicGenerationModel`, `envelopeTimezone`, `envelopeTimestamp`, `envelopeElapsed`,
+`timeFormat`, `promptOverlays`, or `agentRuntime`; validation rejects all nine. Use
+`mediaModels.image`, `mediaModels.video`, and `mediaModels.music`, `userTimezone` with
+built-in envelope and time formatting, `plugins.entries.openai.config.personality`,
+and per-model `models[ref].agentRuntime`. This is a type-only SDK change; run
+`openclaw doctor --fix` to migrate stored configs. A stored `agents.defaults.agentRuntime`
+is a retired format that current Doctor refuses;
+[upgrade through OpenClaw 2026.9.5](/install/updating#upgrading-very-old-versions) first.
+
+Plugins built against stable SDK releases through 2026.9.x may still read the
+deprecated, non-enumerable runtime `agents.list` projection introduced in
+[#113146](https://github.com/openclaw/openclaw/pull/113146). It is no longer typed
+or read internally, is not serialized or copied by `structuredClone`, and is
+scheduled for removal after January 2, 2027. Config mutation drafts must read and
+write `agents.entries`. This compatibility window adds no runtime warnings.
 
 ## How to migrate
 
@@ -590,3 +826,21 @@ would expose a historical failure as new pending work.
     ```
   </Step>
 </Steps>
+
+## Await strict transcript message preparation
+
+For `appendSessionTranscriptMessageByIdentityStrict`, use
+`prepareMessageAfterIdempotencyCheckAsync` when a message needs preparation after
+duplicate detection. The callback runs outside the writer transaction; returning
+`undefined` suppresses a fresh message. Replayed messages retain their stored bytes
+and skip preparation. A transcript change during awaited message preparation
+refuses that prepared write.
+
+Keep live, synchronous authority assertions in `beforeFreshMessageCommit`. They
+run only for fresh inserts and are checked again at commit. They must not perform
+blocking reads or query the target database from a worker admission callback;
+use the host owner's prepared source authority when storage facts are needed.
+
+The released `prepareMessageAfterIdempotencyCheck` callback keeps its synchronous
+result and transaction ordering until the next Plugin SDK major and an explicitly
+approved breaking release. This change requires no data migration or update step.

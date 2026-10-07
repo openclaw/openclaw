@@ -791,10 +791,10 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
   it.each([
     ["digest", "integrity verification"],
     ["length", "length does not match"],
-    ["redirect", /download HTTP response failed:.*HTTP 302/],
+    ["redirect", /download HTTP response failed from [^\s]+:.*HTTP 302/],
     ["http-reset", "download HTTP response failed (ECONNRESET)"],
     ["tls-reset", "download TLS failed (ECONNRESET)"],
-    ["truncated", "download body failed (ECONNRESET): aborted"],
+    ["truncated", /download body failed \(ECONNRESET\) from [^\s]+: aborted/],
   ] as const)(
     "identifies bootstrap %s failure before installing or starting a node",
     async (failure, diagnosis) => {
@@ -809,6 +809,7 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
       });
       const result = await enroll(home, {
         ...nodeBootstrap,
+        url: nodeBootstrap.url + "/synthetic-url-token",
         ...(failure === "digest" ? { sha256: "f".repeat(64) } : {}),
         ...(failure === "length" ? { bytes: archive.length + 1 } : {}),
       });
@@ -816,6 +817,19 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
       expect(result.output).toMatch(diagnosis);
       expect(result.output).not.toContain(nodeBootstrap.token);
       expect(result.output).not.toContain(setupCode);
+      expect(result.output).not.toContain("synthetic-url-token");
+      if (failure === "tls-reset") {
+        const origin = new URL(nodeBootstrap.url).origin;
+        expect(result.output).toContain(
+          `download TLS failed (ECONNRESET) from ${origin}; retrying download attempt 3`,
+        );
+        expect(result.output).toContain(
+          `Cloud worker node bootstrap download TLS failed (ECONNRESET) from ${origin}:`,
+        );
+        expect(result.output).toContain(
+          `The worker could not reach the Gateway public origin <${origin}>; verify the provider's network can reach it (for example with curl from a sandbox) or configure gateway.publicOrigin on a reachable hostname.`,
+        );
+      }
       const authorization = `Bearer ${nodeBootstrap.token}`;
       expect(new Set(authorizations)).toEqual(
         failure === "tls-reset" ? new Set() : new Set([authorization]),
@@ -827,7 +841,7 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
           failure === "http-reset" ? 3 : failure === "tls-reset" ? 0 : 1,
         );
       }
-      if (failure === "http-reset" || failure === "truncated") {
+      if (failure === "http-reset" || failure === "tls-reset" || failure === "truncated") {
         const terminalNoProgressFailure =
           /\(download attempt \d+; 3 consecutive no-progress failures\)/;
         const retryOnlyOutput = result.output
@@ -855,7 +869,7 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
     expect(rejected).toMatchObject({
       code: 1,
       output: expect.stringContaining(
-        "download TLS failed: Cloud worker bootstrap TLS fingerprint mismatch",
+        `download TLS failed from ${new URL(nodeBootstrap.url).origin}: Cloud worker bootstrap TLS fingerprint mismatch`,
       ),
     });
     expect(authorizations).toHaveLength(0);

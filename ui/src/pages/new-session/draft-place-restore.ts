@@ -75,33 +75,6 @@ export function draftPlacePreferenceReady(
   );
 }
 
-export function draftPlacePreferenceSelection(params: {
-  state: DraftPlaceRestoreState;
-  browser: DraftPlaceBrowser;
-  workspace: string;
-  folder: string;
-  where: NewSessionWhere;
-  freshWorkspace: boolean;
-  preferenceWorktree: boolean;
-  remoteRepository: boolean;
-  baseRef: string;
-  worktreeName: string;
-}): NewSessionPreference {
-  const { state, browser, where } = params;
-  return {
-    workspace: params.workspace,
-    folder: params.folder,
-    projectId: state.preferredProjectRestore || browser.projectId,
-    remoteProject: state.preferredRemoteProjectRestore ?? browser.remoteProject,
-    defaultRepositoryOptOut: state.configuredDefaultRepositoryOptOut,
-    where,
-    worktree: (where.kind !== "local" || params.preferenceWorktree) && !params.remoteRepository,
-    freshWorkspace: params.freshWorkspace,
-    baseRef: params.baseRef,
-    worktreeName: params.worktreeName,
-  };
-}
-
 export function restoreDraftPlacePreferences(params: {
   state: DraftPlaceRestoreState;
   browser: DraftPlaceBrowser;

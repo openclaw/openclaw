@@ -92,7 +92,6 @@ export function resolveEffectiveBlockStreamingConfig(params: {
   chunking?: BlockStreamingChunking;
   /** Optional upper bound for chunking/coalescing max chars. */
   maxChunkChars?: number;
-  /** Optional coalescer idle flush override in milliseconds. */
   coalesceIdleMs?: number;
 }): {
   chunking: BlockStreamingChunking;

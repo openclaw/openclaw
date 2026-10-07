@@ -2,7 +2,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
-import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
+import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
+import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { createReadWorkerFixture } from "./openclaw-state-db-readonly.test-support.js";
@@ -99,48 +101,170 @@ beforeEach(() => {
   });
 });
 
-it("retains discovery context when capturing read admission fails", async () => {
-  await withTempDir("openclaw-discovery-admission-", async (root) => {
+it("waits for temporary schema custody before admitting one discovery snapshot", async () => {
+  await withTempDir("openclaw-discovery-cold-admission-", async (root) => {
     const source = path.join(root, "source");
     fs.writeFileSync(source, "mock snapshot source; never opened as SQLite");
-    const failure = new Error("synthetic admission refusal");
-    mocks.capture.mockImplementation(() => {
-      throw failure;
-    });
-    const operation = vi.fn(async () => 1);
-    await expect(
-      withOpenClawStateDatabaseReadSnapshot(operation, { path: source }),
-    ).rejects.toMatchObject({
-      message: expect.stringContaining(`Cannot read shared state for discovery: ${source}`),
-      cause: failure,
-    });
-    expect(operation).not.toHaveBeenCalled();
-    expect(mocks.prepare).not.toHaveBeenCalled();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      mocks.assertFresh.mockImplementation(() => {
+        if (performance.now() < 9_000) {
+          throw new StateDatabaseAdmissionPendingError(source, "temporary schema custody");
+        }
+      });
+      const operation = vi.fn(async () => "admitted");
+      const read = withOpenClawStateDatabaseReadSnapshot(operation, {
+        path: source,
+        admissionTimeoutMs: 300_000,
+      });
+      const outcome = read.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      expect(mocks.capture).not.toHaveBeenCalled();
+      expect(mocks.prepare).not.toHaveBeenCalled();
+      expect(operation).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(await outcome).toEqual({ value: "admitted" });
+      expect(operation).toHaveBeenCalledOnce();
+      expect(mocks.cleanup).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
-it("preserves a precise source failure and cleans its prepared snapshot before callback admission", async () => {
-  await withTempDir("openclaw-discovery-precedence-", async (root) => {
+it.each([
+  "maintenance",
+  "other database",
+  "default",
+  "exhausted",
+  "cancelled",
+  "shutdown",
+] as const)("refuses %s before preparing discovery bytes", async (kind) => {
+  await withTempDir("openclaw-discovery-cold-refusal-", async (root) => {
     const source = path.join(root, "source");
     fs.writeFileSync(source, "mock snapshot source; never opened as SQLite");
-    const failure = new Error("synthetic readonly verification failure");
-    mocks.prepare.mockImplementation(async () => {
+    const refusal =
+      kind === "maintenance"
+        ? new Error("genuine offline maintenance")
+        : new StateDatabaseAdmissionPendingError(
+            kind === "other database" ? path.join(root, "other") : source,
+            "temporary schema custody",
+          );
+    const caller = new AsyncWorkScope();
+    const cancelled = new Error("caller closed while waiting for schema custody");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
       mocks.assertFresh.mockImplementation(() => {
-        throw failure;
+        throw refusal;
       });
-      mocks.assertCurrent.mockImplementation(() => {
-        throw new Error("read admission changed");
+      const operation = vi.fn(async () => "must not enter");
+      const read = caller.track(() =>
+        withOpenClawStateDatabaseReadSnapshot(operation, {
+          path: source,
+          admissionTimeoutMs: kind === "default" ? undefined : 300_000,
+        }),
+      );
+      let settled = false;
+      const outcome = read
+        .then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        )
+        .then((result) => {
+          settled = true;
+          return result;
+        });
+      if (kind === "exhausted") {
+        await vi.advanceTimersByTimeAsync(299_999);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+      } else if (kind === "cancelled") {
+        caller.beginClose(cancelled);
+      } else if (kind === "shutdown") {
+        await cleanupSnapshotOperations();
+      }
+      expect(await outcome).toMatchObject({
+        error: {
+          cause:
+            kind === "cancelled"
+              ? { name: "AbortError", cause: cancelled }
+              : kind === "shutdown"
+                ? { name: "AbortError" }
+                : refusal,
+        },
       });
-      return { location: "/fixture/private.sqlite", cleanupAsync: mocks.cleanup };
-    });
-    const operation = vi.fn(async () => 1);
-    await expect(withOpenClawStateDatabaseReadSnapshot(operation, { path: source })).rejects.toBe(
-      failure,
-    );
-    expect(operation).not.toHaveBeenCalled();
-    expect(mocks.cleanup).toHaveBeenCalledOnce();
+      expect(mocks.capture).not.toHaveBeenCalled();
+      expect(mocks.prepare).not.toHaveBeenCalled();
+      expect(operation).not.toHaveBeenCalled();
+      expect(mocks.cleanup).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      caller.beginClose(cancelled);
+      await caller.drain();
+      vi.useRealTimers();
+    }
   });
 });
+
+it.each(["capture", "verification", "cleanup"] as const)(
+  "preserves discovery %s failure and retires snapshot admission",
+  async (phase) => {
+    await withTempDir("openclaw-discovery-admission-", async (root) => {
+      const source = path.join(root, "source");
+      fs.writeFileSync(source, "mock snapshot source; never opened as SQLite");
+      const failure = new Error("synthetic admission refusal");
+      const fail = () => {
+        throw failure;
+      };
+      if (phase === "capture") {
+        mocks.capture.mockImplementation(fail);
+      } else if (phase === "verification") {
+        mocks.prepare.mockImplementation(async () => {
+          mocks.assertFresh.mockImplementation(fail);
+          mocks.assertCurrent.mockImplementation(() => {
+            throw new Error("read admission changed");
+          });
+          return { location: "/fixture/private.sqlite", cleanupAsync: mocks.cleanup };
+        });
+      }
+      let escape!: ReturnType<typeof AsyncLocalStorage.snapshot>;
+      if (phase === "cleanup") {
+        mocks.cleanup.mockResolvedValueOnce(false);
+      }
+      const operation = vi.fn(async () => {
+        escape = AsyncLocalStorage.snapshot();
+        expect(getActiveOpenClawStateDatabaseReadSnapshot({ path: source })).toBeDefined();
+        return 1;
+      });
+      const result = withOpenClawStateDatabaseReadSnapshot(operation, { path: source });
+      if (phase === "capture") {
+        await expect(result).rejects.toMatchObject({
+          message: expect.stringContaining(`Cannot read shared state for discovery: ${source}`),
+          cause: failure,
+        });
+        expect(mocks.prepare).not.toHaveBeenCalled();
+      } else if (phase === "verification") {
+        await expect(result).rejects.toBe(failure);
+        expect(mocks.cleanup).toHaveBeenCalledOnce();
+      } else {
+        await expect(result).rejects.toThrow("snapshot cleanup failed");
+        expect(await escape(() => probeRetiredAdmission(source))).toEqual(rejectedAdmissions);
+        expect(
+          escape(() =>
+            getActiveOpenClawStateDatabaseReadSnapshot({ path: path.join(root, "other") }),
+          ),
+        ).toBeUndefined();
+        expect(mocks.forbiddenNative).not.toHaveBeenCalled();
+        expect(mocks.read).not.toHaveBeenCalled();
+      }
+      if (phase !== "cleanup") {
+        expect(operation).not.toHaveBeenCalled();
+      }
+    });
+  },
+);
 
 // Escaped continuations retain ALS, but admission ends before private bytes are removed.
 async function probeRetiredAdmission(source: string) {
@@ -178,30 +302,6 @@ const rejectedAdmissions = {
   nestedDisposable: true,
   worker: true,
 };
-
-it("rejects escaped snapshot reads after failed cleanup instead of reopening a live source", async () => {
-  await withTempDir("openclaw-retired-snapshot-", async (root) => {
-    const source = path.join(root, "source");
-    fs.writeFileSync(source, "mock source; never opened as SQLite");
-    let escape!: ReturnType<typeof AsyncLocalStorage.snapshot>;
-    mocks.cleanup.mockResolvedValueOnce(false);
-    await expect(
-      withOpenClawStateDatabaseReadSnapshot(
-        async () => {
-          escape = AsyncLocalStorage.snapshot();
-          expect(getActiveOpenClawStateDatabaseReadSnapshot({ path: source })).toBeDefined();
-        },
-        { path: source },
-      ),
-    ).rejects.toThrow("snapshot cleanup failed");
-    expect(await escape(() => probeRetiredAdmission(source))).toEqual(rejectedAdmissions);
-    expect(
-      escape(() => getActiveOpenClawStateDatabaseReadSnapshot({ path: path.join(root, "other") })),
-    ).toBeUndefined();
-    expect(mocks.forbiddenNative).not.toHaveBeenCalled();
-    expect(mocks.read).not.toHaveBeenCalled();
-  });
-});
 
 it.each(["snapshot", "disposable"] as const)(
   "drains an admitted %s reader while rejecting escaped new reads, then rejects the closed scope",

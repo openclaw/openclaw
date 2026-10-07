@@ -292,6 +292,50 @@ describe("node worker tunnel manager", () => {
     }
   });
 
+  it("releases live tunnels and transfer state when shutdown cannot read the inventory", async () => {
+    const inventoryClosed = new Error("Worker environment inventory has closed");
+    let inventoryOpen = true;
+    const readInventory = <T>(value: T) => {
+      if (!inventoryOpen) {
+        throw inventoryClosed;
+      }
+      return value;
+    };
+    const record = environment();
+    const close = vi.fn(async () => {});
+    const closeAll = vi.fn(async () => {});
+    const manager = createManager(record, {
+      getEnvironment: () => readInventory(record),
+      listEnvironments: () => readInventory([record]),
+      workspaceTransfer: { ...workspaceTransfer(), close, closeAll },
+    });
+    await manager.start(startRequest());
+    // A terminal state-database failure revokes the inventory before Gateway shutdown.
+    inventoryOpen = false;
+
+    await expect(manager.stopAll()).rejects.toBe(inventoryClosed);
+    expect(manager.status(record.environmentId)).toBe("stopped");
+    expect(close).toHaveBeenCalledWith(record.environmentId);
+    expect(closeAll).toHaveBeenCalledOnce();
+  });
+
+  it.each(["current", "retiring"] as const)(
+    "rejects an owner epoch older than the %s owner",
+    async (owner) => {
+      const cleanup = createDeferred();
+      const manager = createManager(environment(), {
+        workspaceTransfer: { ...workspaceTransfer(), close: vi.fn(() => cleanup.promise) },
+      });
+      await manager.start(startRequest());
+      const stopping = owner === "retiring" ? manager.stop("environment-1", 2) : undefined;
+
+      const stale = manager.start({ ...startRequest(), ownerEpoch: 1 });
+      cleanup.resolve();
+      await expect(stale).rejects.toThrow("node worker tunnel owner epoch is stale");
+      await stopping;
+    },
+  );
+
   it("reports a cleanup failure after workspace binding initialization fails", async () => {
     tunnelWarn.mockClear();
     const record = environment();
@@ -531,6 +575,78 @@ describe("node worker tunnel manager", () => {
       }),
     ).rejects.toThrow("turn claim closed");
     expect(invoke).toHaveBeenCalledTimes(sentCommands);
+  });
+
+  it.each(["UNAVAILABLE", "TIMEOUT", "INVALID_REQUEST", NODE_WORKSPACE_TRANSFER_ERROR_CODE])(
+    "bounds and redacts node workspace diagnostics for %s",
+    async (code) => {
+      const secret = "sk-abcdefghijklmnopqrstuv";
+      const nodeTransport = transport();
+      nodeTransport.invoke = withWorkspaceDrain(async () => ({
+        ok: false,
+        error: {
+          code,
+          message: `workspace quiescence failed: Authorization: Bearer ${secret}\n${"detail ".repeat(300)}terminal diagnosis`,
+        },
+      }));
+      const snapshot = workspaceSnapshot("/gateway/workspace");
+      const manager = createManager(environment(), {
+        getTransport: () => nodeTransport,
+        workspaceTransfer: workspaceTransfer({
+          prepareSync: vi.fn(async () => ({ snapshot, token: "restore-token" })),
+        }),
+      });
+      manager.bindWorkspaceBindingResolver(async () => ({
+        source: { kind: "local", path: snapshot.root },
+        manifestRef: snapshot.manifestRef,
+        remoteWorkspaceDir: "/node/workspace",
+      }));
+      const handle = await manager.start(startRequest());
+
+      const error = await handle
+        .runWorkspaceCommand({ argv: ["node", "-e", "void 0"], transportRetry: "never" })
+        .then(
+          () => {
+            throw new Error("expected command failure");
+          },
+          (failure: unknown) => failure,
+        );
+      expect(error).toBeInstanceOf(Error);
+      if (!(error instanceof Error)) {
+        throw new Error("expected an Error result");
+      }
+      const message = error.message;
+      expect(message).toContain("workspace quiescence failed");
+      expect(message).toContain("terminal diagnosis");
+      expect(message).not.toContain(secret);
+      expect(message).not.toContain("\n");
+      if (code === NODE_WORKSPACE_TRANSFER_ERROR_CODE) {
+        expect(error).toBeInstanceOf(NodeWorkerWorkspaceTransferError);
+        expect(message.length).toBeLessThanOrEqual(500);
+      } else {
+        const prefix = `node workspace command failed (${code}): `;
+        expect(message).toContain(prefix);
+        expect(message.length).toBeLessThanOrEqual(prefix.length + 500);
+      }
+    },
+  );
+
+  it("keeps the workspace error code when the node provides no message", async () => {
+    const snapshot = workspaceSnapshot("/gateway/workspace");
+    const manager = createManager(environment(), {
+      workspaceTransfer: workspaceTransfer({
+        prepareSync: vi.fn(async () => ({ snapshot, token: "restore-token" })),
+      }),
+    });
+    manager.bindWorkspaceBindingResolver(async () => ({
+      source: { kind: "local", path: snapshot.root },
+      manifestRef: snapshot.manifestRef,
+      remoteWorkspaceDir: "/node/workspace",
+    }));
+    const handle = await manager.start(startRequest());
+    await expect(
+      handle.runWorkspaceCommand({ argv: ["node", "-e", "void 0"], transportRetry: "never" }),
+    ).rejects.toThrow("node workspace command failed (UNAVAILABLE)");
   });
 
   it("preserves a typed workspace transfer cause from the node", async () => {

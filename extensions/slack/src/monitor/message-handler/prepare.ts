@@ -86,10 +86,7 @@ import { resolveSlackMessageContent } from "./prepare-content.js";
 import { resolveSlackDmHistoryContext, resolveSlackDmHistoryLimit } from "./prepare-dm-history.js";
 import { resolveSlackRoomHistory } from "./prepare-room-history.js";
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
-import {
-  resolveSlackConversationLink,
-  resolveSlackGroupSessionSubject,
-} from "./prepare-session-presentation.js";
+import { resolveSlackGroupSessionSubject } from "./prepare-session-presentation.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
 import { resolveSlackThreadMentionPolicy } from "./prepare-thread-mentions.js";
 import { isSlackSubteamMentionForBot, normalizeSlackId } from "./subteam-mentions.js";
@@ -253,37 +250,6 @@ function collectSlackMentionMetadata(text: string): SlackMentionMetadata {
     mentionedSubteamIds: collectUniqueSlackMentionIds(text, SLACK_SUBTEAM_MENTION_RE),
     hasAnyMention: SLACK_ANY_MENTION_RE.test(text),
     hasSubteamMention: text.includes(SLACK_SUBTEAM_MENTION_MARKER),
-  };
-}
-
-async function resolveSlackExplicitMentionState(params: {
-  ctx: SlackMonitorContext;
-  messageText: string;
-  mentionedUserIds: readonly string[];
-  hasSubteamMention: boolean;
-  source: "message" | "app_mention";
-  eventScope?: SlackEventScope;
-}) {
-  const normalizedBotUserId = normalizeSlackId(params.ctx.botUserId);
-  const explicitlyMentionedBotUser = Boolean(
-    normalizedBotUserId && params.mentionedUserIds.includes(normalizedBotUserId),
-  );
-  const explicitlyMentionedBotSubteam =
-    Boolean(params.ctx.botUserId && params.hasSubteamMention) &&
-    (await isSlackSubteamMentionForBot({
-      client: params.eventScope?.client ?? params.ctx.app.client,
-      text: params.messageText,
-      botUserId: params.ctx.botUserId,
-      teamId: params.eventScope?.teamId ?? params.ctx.teamId,
-      log: logVerbose,
-    }));
-  return {
-    explicitlyMentionedBotUser,
-    explicitlyMentionedBotSubteam,
-    explicitlyMentioned:
-      explicitlyMentionedBotUser ||
-      explicitlyMentionedBotSubteam ||
-      params.source === "app_mention",
   };
 }
 
@@ -610,15 +576,21 @@ export async function prepareSlackMessage(params: {
           eventScope: opts.eventScope,
         })
       : Promise.resolve(undefined);
-  const { explicitlyMentionedBotUser, explicitlyMentionedBotSubteam, explicitlyMentioned } =
-    await resolveSlackExplicitMentionState({
-      ctx,
-      messageText,
-      mentionedUserIds,
-      hasSubteamMention: mentionMetadata.hasSubteamMention,
-      source: opts.source,
-      eventScope: opts.eventScope,
-    });
+  const currentBotUserId = normalizeSlackId(ctx.botUserId);
+  const explicitlyMentionedBotUser = Boolean(
+    currentBotUserId && mentionedUserIds.includes(currentBotUserId),
+  );
+  const explicitlyMentionedBotSubteam =
+    Boolean(ctx.botUserId && mentionMetadata.hasSubteamMention) &&
+    (await isSlackSubteamMentionForBot({
+      client: opts.eventScope?.client ?? ctx.app.client,
+      text: messageText,
+      botUserId: ctx.botUserId,
+      teamId: opts.eventScope?.teamId ?? ctx.teamId,
+      log: logVerbose,
+    }));
+  const explicitlyMentioned =
+    explicitlyMentionedBotUser || explicitlyMentionedBotSubteam || opts.source === "app_mention";
   // Channels with `requireMention: false` and a non-`off` reply mode produce
   // a Slack-side thread on every top-level bot reply (because `replyToMode`
   // creates one). Seed thread routing for the root turn too, so the inbound
@@ -1250,12 +1222,6 @@ export async function prepareSlackMessage(params: {
     storePath,
     sessionKey,
   });
-  const conversationLink = resolveSlackConversationLink({
-    channelId: message.channel,
-    teamId: opts.eventScope?.teamId ?? ctx.teamId,
-    slackApiUrl: slackClient.slackApiUrl,
-    existingLink: sessionEntry?.conversationLink,
-  });
   const previousTimestamp = sessionEntry?.updatedAt;
   const excludedMessageIds = new Set(opts.sourceMessageIds);
   if (message.ts) {
@@ -1453,7 +1419,6 @@ export async function prepareSlackMessage(params: {
       threadId: boundMessageThreadId,
       nativeChannelId: message.channel,
       avatar: conversationAvatar,
-      link: conversationLink,
     },
     route: {
       ...route,

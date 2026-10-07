@@ -40,8 +40,36 @@ written before the cutoff may be retired together with its Doctor checks.
 When Doctor refuses a retired input, it names an intermediate release to upgrade
 through before retrying. Retirement must leave persisted source data untouched.
 
-Legacy normalization belongs to Doctor and migration owners, with the existing
-backup and verification flow. Runtime readers consume canonical state.
+Except for the deferred readers recorded below, legacy normalization belongs to
+Doctor and migration owners, with the existing backup and verification flow.
+Runtime readers consume canonical state.
+
+### Deferred compaction checkpoints
+
+Keep the runtime readers for session-entry `compactionCheckpoints`, including
+their transcript retention references and historical token metrics. Replacing
+these supported readers with a durable migration would add more than 300 net
+production lines; retain the readers until the format leaves the support window.
+
+The last verified creating release is `v2026.9.3`. Preservation also counts as
+writing: `v2026.9.7` retains existing checkpoints during transcript rewind and
+branch operations. The scheduled retirement date is **January 1, 2027**, subject
+to verifying that no later shipped release writes or preserves the format.
+At that point, delete the readers directly instead of adding a temporary Doctor
+migration. Keep this record current if another preservation writer ships.
+
+Retained transcript nodes with empty entry metadata remain supported runtime
+state; this deferral does not require a Doctor rewrite of those nodes.
+
+### Workspace setup
+
+The nested `<workspace>/.openclaw/workspace-state.json` layout is retired. Its
+last stable writer was `2026.6.8`, published to npm on June 16, 2026. Later
+preservation rewrites wrote `<workspace>/openclaw-workspace-state.json` instead.
+Upgrade through `2026.9.7` and run `openclaw doctor --fix` before updating to
+import the nested file. Current Doctor leaves it untouched.
+The root-level setup file and workspace attestations remain supported migration
+inputs because July releases still wrote them.
 
 ### Session settings
 
@@ -156,6 +184,27 @@ original files before stopping the running Gateway. The same early check reports
 the existing recovery guidance for a retired `plugins/installs.json` index. See
 [state migration recovery](/gateway/doctor/state-and-sessions).
 
+Voice Wake trigger/routing JSON, plugin-binding approvals,
+current-conversation bindings, ACP replay `acp/event-ledger.json`, and
+`restart-sentinel.json` are retired. Their last writers shipped before July 1.
+A leftover `update-check.json` is only a notification cache, so Doctor and
+updates ignore it.
+Doctor and update admission preserve the files and refuse with the intermediate
+upgrade path: install `2026.9.7`, run `openclaw doctor --fix` on the original
+host, then retry. Interrupted ACP and restart-sentinel import claims are also
+preserved. Current SQLite state and the supported config-health importer remain
+unchanged. Plugin-binding approvals retain their original default-home scope;
+a custom state directory does not inspect another profile's approval file.
+
+Startup leaves these retired files for Doctor. When `openclaw gateway run` or
+a local `openclaw message send` prepares that state, it continues without
+importing the files, logs a warning, and retains that deferred outcome in the
+startup diagnostics. Their presence alone does not prevent bootstrap or a
+recovery restart. Gateway-routed message clients leave state preparation to the
+running Gateway.
+If this advisory inspection fails, startup records the error with guidance to
+run `openclaw doctor` and continues without changing the files.
+
 Doctor also refuses these retired config inputs:
 
 - `agents.defaults.llm`, agent `embeddedPi`, `embeddedHarness`, whole-agent
@@ -166,6 +215,10 @@ Doctor also refuses these retired config inputs:
 - `memorySearch.store.path`, including its agent and `memory.search` forms.
 - `plugins.installs`, `gateway.webchat`, `session.parentForkMaxTokens`,
   `browser.relayBindHost`, and `browser.ssrfPolicy.allowPrivateNetwork`.
+- Extension browser profiles with a legacy `cdpUrl`. Current extension profiles
+  discover their relay endpoint automatically; the extension driver remains supported.
+- The `openai-codex-responses` provider or model API identifier. The intermediate
+  release migrates it to `openai-chatgpt-responses` before the current provider repair.
 - Queue modes `queue`, `steer-backlog`, and `steer+backlog` in `messages.queue.mode`
   or `messages.queue.byChannel`.
 - Top-level `heartbeat`, `routing.allowFrom`, and `routing.groupChat`.
@@ -174,6 +227,7 @@ Doctor also refuses these retired config inputs:
 - `channels.telegram.requireMention`, `channels.feishu.accounts.<id>.botName`,
   and the retired `channels.webchat` section.
 - `channels.telegram.groupMentionsOnly`; use `channels.telegram.groups["*"].requireMention`.
+- `channels.whatsapp.exposeErrorText`, including account overrides.
 - `session.threadBindings.ttlHours` and Discord/LINE/Matrix/Telegram `threadBindings.ttlHours`,
   including per-account settings.
 - Telegram `dm`, `direct.*.threadReplies`, native draft preview settings, and scalar
@@ -191,13 +245,21 @@ of stripping these settings or replacing them with a backup. For an older instal
 [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
 and run its Doctor migrations before installing the latest version.
 
+WhatsApp's `exposeErrorText` has been ignored since April 2026. Remove it from
+the reported channel or account path before retrying; removing this no-op does
+not change error delivery. Doctor leaves the authored config unchanged, or you
+can use the intermediate release above to remove it.
+
 OAuth credential sidecars under `credentials/auth-profiles/` are retired. Their
 last writer shipped in `2026.5.16-beta.3` on May 16, 2026; `2026.5.16-beta.4`
 removed that writer. Doctor detects these files without reading credentials or
-accessing encryption keys. Upgrade through `2026.9.7` and run
-`openclaw doctor --fix` on the original host before retrying. The supported
-`auth.json`, `auth-profiles.json`, SQLite credential, and migration-recovery
-contracts remain unchanged.
+accessing encryption keys. When a legacy `auth-profiles.json` still references
+one, upgrade through `2026.9.7` and run `openclaw doctor --fix` on the original
+host before retrying. Sidecars that no legacy profile references stay in place
+and do not block the upgrade; `2026.9.7` also keeps them, because agent
+directories outside its scan might still use them. The supported `auth.json`,
+`auth-profiles.json`, SQLite credential, and migration-recovery contracts
+remain unchanged.
 
 ## Cron ownership before roster migration
 
@@ -490,6 +552,28 @@ by a published updater that invokes Doctor without `--fix`.
 Voice Call-only settings remain valid configuration. Doctor detects this pending
 inheritance repair independently of schema errors; ordinary config reads never
 copy the settings into Talk.
+
+## ACP session metadata
+
+Doctor moves historical raw, agent-prefixed, and ownerless ACP metadata keys to
+canonical keys bound to the owning session. It also imports ACP metadata embedded
+in SQLite session entries. Before rewriting a source database, Doctor saves a
+verified private SQLite backup and reports its path. Rekeying preserves every
+metadata column except the key. Embedded imports keep the canonical ACP fields,
+including identity and runtime-options JSON, lifecycle binding, and last activity;
+the entry's update timestamp becomes the metadata update timestamp. Unknown
+embedded fields remain in the source backup. Embedded JSON follows the session
+decoder's last-value semantics for duplicate properties. Ambiguous ownership and conflicting
+payloads remain intact with a warning naming the affected session.
+
+Runtime reads and writes use canonical metadata only. Startup refuses unmigrated
+ACP state with offline repair instructions before handing session stores to
+runtime. Run `openclaw doctor --fix` after restoring older state; the update-time
+Doctor pass runs the same repair.
+Embedded metadata imports record durable receipts before removing the source
+field, so retrying interrupted cleanup cannot reopen a session after its canonical
+metadata was cleared. Legacy `sessions.json` imports retain their existing backups
+and source receipts.
 
 ## ACP agents' model precedence
 
@@ -799,7 +883,6 @@ against the current SQLite owners before the import can rename profiles.
     | `plugins.entries.voice-call.config.streaming.sttProvider`                                        | `plugins.entries.voice-call.config.streaming.provider`                      |
     | `plugins.entries.voice-call.config.streaming.openaiApiKey`/`sttModel`/`silenceDurationMs`/`vadThreshold` | `plugins.entries.voice-call.config.streaming.providers.openai.*`             |
     | `models.providers.*.api: "openai"`                                                               | `"openai-completions"` (gateway startup also skips providers whose `api` is a future/unknown enum value rather than failing closed) |
-    | `browser.profiles.*.driver: "extension"` with a stale `cdpUrl`                                  | driver preserved; stale relay URL removed                                     |
     | `mcp.servers.*.type`, `nodeHost.mcp.servers.*.type` (CLI-native aliases)                           | corresponding `transport` field                                            |
     | `mcp.servers.*.disabled`                                                                         | inverse `mcp.servers.*.enabled`                                              |
     | MCP timeout aliases `connectTimeout`/`connect_timeout`/`timeout`                                 | `connectionTimeoutMs`/`requestTimeoutMs`                                    |

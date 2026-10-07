@@ -1,4 +1,5 @@
 import { createDeferredCore } from "../../shared/deferred.js";
+import { reportPlacementTransition } from "./placement-record.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -132,7 +133,7 @@ export async function failHandedOffTurn(params: {
         assertCurrent,
       );
       const recoveryError = failures.join("; ");
-      await params.placements.fail(
+      const failed = await params.placements.fail(
         {
           sessionId: reconciling.sessionId,
           expectedGeneration: reconciling.generation,
@@ -140,6 +141,7 @@ export async function failHandedOffTurn(params: {
         },
         assertCurrent,
       );
+      reportPlacementTransition(undefined, failed);
       return recoveryError;
     } catch (error) {
       if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
@@ -165,30 +167,23 @@ export async function failHandedOffTurn(params: {
   }
   const waitForCleanup = (operation: Promise<unknown>) =>
     terminalRecovery ? Promise.race([operation, terminalRecovery.promise]) : operation;
-  if (!isCurrentDrain()) {
-    await recordingFailure;
-    return;
-  }
-  try {
-    await waitForCleanup(
-      params.environments.stopTunnel(
-        params.placement.environmentId,
-        params.placement.activeOwnerEpoch,
-      ),
-    );
-  } catch (error) {
-    failures.push(`tunnel stop: ${boundedWorkerError(error)}`);
-  }
-  // Recovery may have recorded failure, or a replacement may own the session.
-  // A late cleanup completion must never destroy that newer placement.
-  if (!isCurrentDrain()) {
-    await recordingFailure;
-    return;
-  }
-  try {
-    await waitForCleanup(params.environments.destroy(params.placement.environmentId));
-  } catch (error) {
-    failures.push(`environment destroy: ${boundedWorkerError(error)}`);
+  for (const [label, cleanup] of [
+    [
+      "tunnel stop",
+      () => params.environments.stopTunnel(draining.environmentId, draining.activeOwnerEpoch),
+    ],
+    ["environment destroy", () => params.environments.destroy(draining.environmentId)],
+  ] as const) {
+    // Recovery or replacement may have closed this drain while cleanup awaited.
+    if (!isCurrentDrain()) {
+      await recordingFailure;
+      return;
+    }
+    try {
+      await waitForCleanup(cleanup());
+    } catch (error) {
+      failures.push(`${label}: ${boundedWorkerError(error)}`);
+    }
   }
   await recordFailure();
 }

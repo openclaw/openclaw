@@ -301,14 +301,12 @@ function matchesExecutableBasenamePattern(
   if (hasPathSelector(resolution.rawExecutable)) {
     return false;
   }
-  const candidates = new Set<string>();
-  if (resolution.executableName) {
-    candidates.add(resolution.executableName);
-  }
-  if (resolution.resolvedPath) {
-    candidates.add(path.basename(resolution.resolvedPath));
-  }
-  return [...candidates].some((candidate) => matchesExecAllowlistPattern(pattern, candidate));
+  return Boolean(
+    (resolution.executableName &&
+      matchesExecAllowlistPattern(pattern, resolution.executableName)) ||
+    (resolution.resolvedPath &&
+      matchesExecAllowlistPattern(pattern, path.basename(resolution.resolvedPath))),
+  );
 }
 
 export function matchAllowlist(
@@ -334,9 +332,6 @@ export function matchAllowlist(
     return null;
   }
   const trustPath = resolution.resolvedRealPath?.trim() || resolution.resolvedPath;
-  if (!trustPath) {
-    return null;
-  }
   let pathOnlyMatch: ExecAllowlistEntry | null = null;
   let cwdBoundHash: string | undefined;
   for (const entry of entries) {
@@ -382,73 +377,41 @@ export function matchAllowlist(
   return pathOnlyMatch;
 }
 
-type ExecArgvToken =
-  | {
-      kind: "empty";
-      raw: string;
-    }
-  | {
-      kind: "terminator";
-      raw: string;
-    }
-  | {
-      kind: "stdin";
-      raw: string;
-    }
-  | {
-      kind: "positional";
-      raw: string;
-    }
-  | {
-      kind: "option";
-      raw: string;
-      style: "long";
-      flag: string;
-      inlineValue?: string;
-    }
-  | {
-      kind: "option";
-      raw: string;
-      style: "short-cluster";
-      cluster: string;
-      flags: string[];
-    };
-
 /**
  * Tokenizes a single argv entry into a normalized option/positional model.
  * Consumers can share this model to keep argv parsing behavior consistent.
  */
-export function parseExecArgvToken(raw: string): ExecArgvToken {
+export function parseExecArgvToken(raw: string) {
   if (!raw) {
-    return { kind: "empty", raw };
+    return { kind: "empty" as const, raw };
   }
   if (raw === "--") {
-    return { kind: "terminator", raw };
+    return { kind: "terminator" as const, raw };
   }
   if (raw === "-") {
-    return { kind: "stdin", raw };
+    return { kind: "stdin" as const, raw };
   }
   if (!raw.startsWith("-")) {
-    return { kind: "positional", raw };
+    return { kind: "positional" as const, raw };
   }
   if (raw.startsWith("--")) {
     const eqIndex = raw.indexOf("=");
     if (eqIndex > 0) {
       return {
-        kind: "option",
+        kind: "option" as const,
         raw,
-        style: "long",
+        style: "long" as const,
         flag: raw.slice(0, eqIndex),
         inlineValue: raw.slice(eqIndex + 1),
       };
     }
-    return { kind: "option", raw, style: "long", flag: raw };
+    return { kind: "option" as const, raw, style: "long" as const, flag: raw };
   }
   const cluster = raw.slice(1);
   return {
-    kind: "option",
+    kind: "option" as const,
     raw,
-    style: "short-cluster",
+    style: "short-cluster" as const,
     cluster,
     flags: cluster.split("").map((entry) => `-${entry}`),
   };

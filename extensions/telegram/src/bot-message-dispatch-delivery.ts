@@ -293,8 +293,7 @@ export async function sendPayload(
     const result = await (turn.telegramDeps.deliverStructuredReplies ?? deliverStructuredReplies)({
       ...createDeliveryBaseOptions(turn),
       replyToMode: effectiveReplyToMode,
-      transcriptMirror:
-        options?.durable && options?.mirrorTranscript !== false ? transcriptMirror : undefined,
+      transcriptMirror: options?.durable ? transcriptMirror : undefined,
       replies: [effectivePayload],
       onMediaAccepted: options?.onMediaAccepted,
       onVoiceRecording: turn.context.sendRecordVoice,

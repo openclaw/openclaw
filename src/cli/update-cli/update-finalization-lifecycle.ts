@@ -46,6 +46,7 @@ import { watchCliExitAfterOutput } from "../one-shot-exit.js";
 import { hasCliProcessScope } from "../runtime-cleanup-scope.js";
 import { getPendingCliDisposers } from "../runtime-cleanup.js";
 import {
+  createUpdateCommandFailureResult,
   UpdateCommandFailure,
   UpdateCommandFinalizedRecoveryFailure,
 } from "./update-command-result.js";
@@ -92,6 +93,7 @@ export class UpdateFinalizationLifecycle {
   private stateBudgetMs: number | undefined;
   private reportTimeout?: () => void;
   private failureObservation?: UpdateRunResult;
+  private failureReason?: string;
 
   constructor(
     private readonly json: boolean,
@@ -160,23 +162,21 @@ export class UpdateFinalizationLifecycle {
     failureFacts?: UpdateFailureFact[],
     exitCode?: number | null,
   ): void {
+    const failureReason = failureFacts?.find(
+      (fact) => fact.code.trim() && fact.code !== "finalization-failed",
+    )?.code;
     const step = {
       step: name,
       status,
       ...(detail ? { detail } : {}),
       ...(failureFacts?.length ? { failureFacts } : {}),
       ...(exitCode !== undefined ? { exitCode } : {}),
-      ...(status === "failed"
-        ? {
-            reason:
-              failureFacts?.find((fact) => fact.code.trim() && fact.code !== "finalization-failed")
-                ?.code ?? name,
-          }
-        : {}),
+      ...(status === "failed" ? { reason: failureReason ?? name } : {}),
       ...(status === "in_progress" ? { startedAtMs: at } : { endedAtMs: at }),
     };
     const message = `[update finalize] ${JSON.stringify(step)}`;
     if (status === "failed") {
+      this.failureReason = failureReason;
       defaultRuntime.error(message);
     } else if (name.startsWith("warning:")) {
       console.warn(message);
@@ -440,13 +440,15 @@ export class UpdateFinalizationLifecycle {
     const result: UpdateRunResult =
       error instanceof UpdateCommandFailure
         ? error.result
-        : {
-            status: "error",
+        : createUpdateCommandFailureResult({
             mode: "unknown",
             root: this.root,
-            steps: [],
+            failure: { cause: error },
             durationMs: Math.round(performance.now() - this.startedAt),
-          };
+          });
+    if (result.reason === "update-failed" && this.failureReason) {
+      result.reason = this.failureReason;
+    }
     try {
       this.failureObservation = await verifyUpdateFailureRecovery({
         result,
@@ -474,7 +476,10 @@ export class UpdateFinalizationLifecycle {
       try {
         finishUpdateRun(
           this.runId,
-          { status: exitCode ? "failed" : "succeeded", diagnostics: this.failureObservation },
+          {
+            status: exitCode ? "failed" : "succeeded",
+            diagnostics: this.failureObservation,
+          },
           this.ledgerOptions,
         );
       } catch {

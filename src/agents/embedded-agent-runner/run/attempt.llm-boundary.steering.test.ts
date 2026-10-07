@@ -16,7 +16,10 @@ import {
   normalizeMessagesForLlmBoundary,
 } from "./attempt-llm-boundary.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
-import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
+import {
+  attachSteeringRuntimeContext,
+  buildRuntimeContextCustomMessage,
+} from "./runtime-context-prompt.js";
 
 function createSession() {
   return {
@@ -43,6 +46,34 @@ const runtimeContext = () =>
   expectDefined(buildRuntimeContextCustomMessage("original context"), "runtime context fixture");
 
 describe("active prompt steering context", () => {
+  it("keeps steering context through tool use and retires it after a settled answer", () => {
+    const first = steeringUser();
+    attachSteeringRuntimeContext(first, { text: "first quoted context" });
+    const second = { ...steeringUser(), timestamp: 2 };
+    attachSteeringRuntimeContext(second, { text: "second quoted context" });
+    const toolUse = createAssistant(testModel, []);
+    toolUse.stopReason = "toolUse";
+
+    expect(JSON.stringify(normalizeMessagesForLlmBoundary([first, toolUse]))).toContain(
+      "first quoted context",
+    );
+    for (const stopReason of ["error", "aborted"] as const) {
+      const failed = createAssistant(testModel, []);
+      failed.stopReason = stopReason;
+      const retry = JSON.stringify(normalizeMessagesForLlmBoundary([first, second, failed]));
+      expect(retry).toContain("first quoted context");
+      expect(retry).toContain("second quoted context");
+    }
+
+    const settled = createAssistant(testModel, [{ type: "text", text: "done" }]);
+    const third = { ...steeringUser(), timestamp: 3 };
+    attachSteeringRuntimeContext(third, { text: "third quoted context" });
+    const next = JSON.stringify(normalizeMessagesForLlmBoundary([first, second, settled, third]));
+    expect(next).not.toContain("first quoted context");
+    expect(next).not.toContain("second quoted context");
+    expect(next).toContain("third quoted context");
+  });
+
   it("keeps keyless context on the original prompt through pre-prompt rebuilding and initial steering", async () => {
     const manager = SessionManager.inMemory();
     const kept = manager.appendMessage({ role: "user", content: "older request", timestamp: 1 });

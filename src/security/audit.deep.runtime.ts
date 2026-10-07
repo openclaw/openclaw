@@ -24,14 +24,6 @@ type SkillScanSummary = Awaited<
 
 export type CodeSafetySummaryCache = Map<string, Promise<SkillScanSummary>>;
 
-const loadAgentScopeModule = createLazyRuntimeModule(() => import("../agents/agent-scope.js"));
-
-const loadAgentWorkspaceDirsModule = createLazyRuntimeModule(
-  () => import("../agents/workspace-dirs.js"),
-);
-
-const loadSkillSourceModule = createLazyRuntimeModule(() => import("../skills/loading/source.js"));
-
 const loadSkillScannerModule = createLazyRuntimeModule(
   () => import("../skills/security/scanner.js"),
 );
@@ -277,7 +269,10 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   const pluginExtensionsDir = path.join(params.stateDir, "extensions");
   const scannedSkillDirs = new Set<string>();
   const [{ listAgentWorkspaceDirs, listExplicitAgentWorkspaceDirs }, { resolveSkillSource }] =
-    await Promise.all([loadAgentWorkspaceDirsModule(), loadSkillSourceModule()]);
+    await Promise.all([
+      import("../agents/workspace-dirs.js"),
+      import("../skills/loading/source.js"),
+    ]);
   const workspaceDirs = new Set(params.workspaceDir ? [params.workspaceDir] : []);
   try {
     for (const workspaceDir of listAgentWorkspaceDirs(params.cfg)) {
@@ -293,7 +288,7 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   const entries = [...workspaceDirs].flatMap((workspaceDir) =>
     loadWorkspaceSkills(workspaceDir, { config: params.cfg }),
   );
-  const { listAgentIds } = await loadAgentScopeModule();
+  const { listAgentIds } = await import("../agents/agent-scope.js");
   const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
   const reportWorkshopScanFailure = (filePath: string, error: unknown) => {
     findings.push({

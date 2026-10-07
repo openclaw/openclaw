@@ -83,27 +83,17 @@ function bootstrapProfileSatisfiesProfile(params: {
   actualProfile: DeviceBootstrapProfile;
   requiredProfile: DeviceBootstrapProfile;
 }): boolean {
-  for (const requiredRole of params.requiredProfile.roles) {
-    if (!params.actualProfile.roles.includes(requiredRole)) {
-      return false;
-    }
-    const requiredScopes = resolveBootstrapProfileScopesForRole(
-      requiredRole,
-      params.requiredProfile.scopes,
-      params.requiredProfile.purpose,
-    );
-    if (
-      requiredScopes.length > 0 &&
-      !bootstrapProfileAllowsRequest({
-        allowedProfile: params.actualProfile,
-        requestedRole: requiredRole,
-        requestedScopes: requiredScopes,
-      })
-    ) {
-      return false;
-    }
-  }
-  return true;
+  return params.requiredProfile.roles.every((role) =>
+    bootstrapProfileAllowsRequest({
+      allowedProfile: params.actualProfile,
+      requestedRole: role,
+      requestedScopes: resolveBootstrapProfileScopesForRole(
+        role,
+        params.requiredProfile.scopes,
+        params.requiredProfile.purpose,
+      ),
+    }),
+  );
 }
 
 function normalizeBootstrapPublicKey(publicKey: string): string {
@@ -221,7 +211,6 @@ function consumeDeviceBootstrapTokenWithSetupCompletion(
   });
 }
 
-/** Remove every outstanding bootstrap token from the pairing state file. */
 function clearDeviceBootstrapTokens(params: { nowMs: number }): { removed: number } {
   const state = loadState(params.nowMs);
   const removed = Object.keys(state).length;

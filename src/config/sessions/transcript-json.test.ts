@@ -90,6 +90,11 @@ it("retains ordinary shared JSON and unchanged frozen containers", () => {
   expect(value.first).toBe(shared);
   expect(value.second).toBe(shared);
   expect(shared.values).toBe(values);
+  const block = { text: "shared transcript text" };
+  const nested = { content: [block, block] };
+  expect(normalizeTranscriptJsonValue(nested, "data")).toBe(nested);
+  expect(nested.content[0]).toBe(block);
+  expect(nested.content[1]).toBe(block);
   const frozen = Object.freeze({ nested: Object.freeze({ value: 7 }) });
   expect(normalizeTranscriptJsonValue(frozen, "data")).toBe(frozen);
 });

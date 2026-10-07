@@ -30,15 +30,10 @@ type PostCompactionSession = {
   assertActive?: () => void | Promise<void>;
 };
 
-async function runPostCompactionSessionMemorySync(params: PostCompactionSession): Promise<void> {
-  if (!params.config) {
-    return;
-  }
+async function runPostCompactionSessionMemorySync(
+  params: PostCompactionSession & { config: OpenClawConfig },
+): Promise<void> {
   try {
-    const sessionFile = params.sessionFile.trim();
-    if (!sessionFile) {
-      return;
-    }
     const agentId = resolveSessionAgentId({
       sessionKey: params.sessionKey,
       config: params.config,
@@ -124,7 +119,7 @@ async function runPostCompactionSessionMemorySync(params: PostCompactionSession)
               },
             ],
           }
-        : { archiveFiles: [sessionFile] }),
+        : { archiveFiles: [params.sessionFile] }),
     });
   } catch (err) {
     await params.assertActive?.();
@@ -148,7 +143,7 @@ export async function runPostCompactionSideEffects(params: PostCompactionSession
   const mode = params.config?.agents?.defaults?.compaction?.postIndexSync ?? "async";
   const syncTask =
     mode !== "off" && params.config
-      ? runPostCompactionSessionMemorySync({ ...params, sessionFile })
+      ? runPostCompactionSessionMemorySync({ ...params, config: params.config, sessionFile })
       : undefined;
   if (mode !== "await") {
     // Async indexing cannot leak an abort rejection after foreground settlement.

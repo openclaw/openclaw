@@ -14,7 +14,7 @@ import { resolveSessionTranscriptDatabasePath } from "../config/sessions/session
 import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
-import { stripEnvelopeFromMessage } from "../gateway/chat-sanitize.js";
+import { stripEnvelopeFromMessages } from "../gateway/chat-sanitize.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -79,7 +79,7 @@ describe("persistUserTurnTranscript", () => {
       expect(
         await runSessionColdStorageMaintenance({
           config: {
-            agents: { list: [{ id: target.agentId }] },
+            agents: { entries: { [target.agentId]: {} } },
             session: {
               store: target.storePath,
               maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
@@ -130,7 +130,7 @@ describe("persistUserTurnTranscript", () => {
       });
       const [stored] = await readTranscriptMessages(target);
       expect(stored?.content).toBe(redact ? "[redacted]" : modelText);
-      expect(stripEnvelopeFromMessage(stored)).toMatchObject({
+      expect(stripEnvelopeFromMessages([stored])[0]).toMatchObject({
         content: redact ? "[redacted]" : text,
       });
       if (redact) {
@@ -138,7 +138,9 @@ describe("persistUserTurnTranscript", () => {
       } else {
         expect(stored).toHaveProperty("__openclaw.workContext", { snapshot, text });
       }
-      expect(stripEnvelopeFromMessage(stored)).not.toHaveProperty("__openclaw.workContext.text");
+      expect(stripEnvelopeFromMessages([stored])[0]).not.toHaveProperty(
+        "__openclaw.workContext.text",
+      );
     },
   );
 
@@ -154,12 +156,14 @@ describe("persistUserTurnTranscript", () => {
       preparedMessage: prepared,
       runtimeMessage: { ...prepared, content: "[redacted]" },
     });
-    expect(stripEnvelopeFromMessage(runtime)).toMatchObject({ content: "[redacted]" });
+    expect(stripEnvelopeFromMessages([runtime])[0]).toMatchObject({ content: "[redacted]" });
     expect(runtime).not.toHaveProperty("__openclaw.workContext");
     recorder.replaceTextBeforePersistence?.("approved continuation");
     await recorder.persistApproved();
     const [persisted] = await readTranscriptMessages(target);
-    expect(stripEnvelopeFromMessage(persisted)).toMatchObject({ content: "approved continuation" });
+    expect(stripEnvelopeFromMessages([persisted])[0]).toMatchObject({
+      content: "approved continuation",
+    });
     expect(persisted).not.toHaveProperty("__openclaw.workContext");
   });
 

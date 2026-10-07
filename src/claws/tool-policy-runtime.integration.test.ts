@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { toAgentEntriesRecord } from "../agents/agent-scope-config.js";
 import { createExecTool } from "../agents/bash-tools.exec-run.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import {
@@ -201,10 +202,10 @@ describe("Claw tool policy consent provenance", () => {
     const mixedConfig = {
       agents: {
         ...config.agents,
+        ownership: "explicit" as const,
         entries: {
           ...config.agents.entries,
-          created: created.agent.config,
-          legacy: legacy.agent.config,
+          ...toAgentEntriesRecord([created.agent.config, legacy.agent.config]),
         },
       },
     };
@@ -238,7 +239,7 @@ describe("Claw tool policy consent provenance", () => {
     closeOpenClawStateDatabase();
     const external = new DatabaseSync(databasePath);
     const snapshot = vi.spyOn(sqliteSnapshot, "prepareSqliteReadOnlyLocationSync");
-    const config = { agents: { list: [plan.agent.config] } };
+    const config = { agents: { entries: toAgentEntriesRecord([plan.agent.config]) } };
     try {
       setRuntimeConfigSnapshot(config);
       expect(() =>
@@ -270,7 +271,7 @@ describe("Claw tool policy consent provenance", () => {
       const root = tempDirs.make("openclaw-uninitialized-tool-consent-");
       const stateDir = join(root, "state");
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const config = { agents: { list: [{ id: "worker", tools }] } };
+      const config = { agents: { entries: { worker: { tools } } } };
       setRuntimeConfigSnapshot(config);
       expect(() =>
         resolveConversationCapabilityProfile({ agentId: "worker", config }),
@@ -287,13 +288,13 @@ describe("Claw tool policy consent provenance", () => {
       vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
       const databasePath = resolveOpenClawStateSqlitePath(env);
       let config: OpenClawConfig = {
-        agents: { list: [{ id: "worker", tools: { profile: "coding" } }] },
+        agents: { entries: { worker: { tools: { profile: "coding" } } } },
       };
       if (known) {
         const { plan } = await makeToolConsentPlan(root);
         persistClawInstallRecord(plan, { env });
         closeOpenClawStateDatabase();
-        config = { agents: { list: [plan.agent.config] } };
+        config = { agents: { entries: toAgentEntriesRecord([plan.agent.config]) } };
       }
       mkdirSync(dirname(databasePath), { recursive: true });
       writeFileSync(databasePath, "not a sqlite database");
@@ -319,14 +320,14 @@ describe("Claw tool policy consent provenance", () => {
       persistClawInstallRecord(plan, { env });
       const config = {
         agents: {
-          list: [
+          entries: toAgentEntriesRecord([
             {
               ...plan.agent.config,
               ...(kind === "modified"
                 ? { tools: { profile: "full" as const, allow: ["read", "exec"] } }
                 : {}),
             },
-          ],
+          ]),
         },
       };
       setRuntimeConfigSnapshot(config);
@@ -352,7 +353,7 @@ describe("Claw tool policy consent provenance", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
     const { plan } = await makeToolConsentPlan(root, { profile, allow: ["read"] });
     persistClawInstallRecord(plan, { env });
-    const config = { agents: { list: [plan.agent.config] } };
+    const config = { agents: { entries: toAgentEntriesRecord([plan.agent.config]) } };
     setRuntimeConfigSnapshot(config);
     const capabilityProfile = resolveConversationCapabilityProfile({ agentId: "worker", config });
     const policies = resolveConversationToolPolicies({ capabilityProfile });
@@ -374,7 +375,9 @@ describe("Claw tool policy consent provenance", () => {
       .run("openclaw.clawInstallRecord.v1", "worker");
     closeOpenClawStateDatabase();
     openOpenClawStateDatabase({ env });
-    const legacyConfig = { agents: { list: [{ ...plan.agent.config, tools: { profile } }] } };
+    const legacyConfig = {
+      agents: { entries: toAgentEntriesRecord([{ ...plan.agent.config, tools: { profile } }]) },
+    };
     setRuntimeConfigSnapshot(legacyConfig);
     expect(() =>
       resolveConversationCapabilityProfile({ agentId: "worker", config: legacyConfig }),
@@ -408,7 +411,12 @@ describe("Claw tool policy consent provenance", () => {
     closeOpenClawStateDatabase();
     openOpenClawStateDatabase({ env });
 
-    const config = { agents: { list: [validPlan.agent.config, invalidPlan.agent.config] } };
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        entries: toAgentEntriesRecord([validPlan.agent.config, invalidPlan.agent.config]),
+      },
+    };
     setRuntimeConfigSnapshot(config);
 
     expect(() =>
@@ -434,7 +442,7 @@ describe("Claw tool policy consent provenance", () => {
 
     const config = {
       tools: { profile: "minimal" as const },
-      agents: { list: [plan.agent.config] },
+      agents: { entries: toAgentEntriesRecord([plan.agent.config]) },
     };
     setRuntimeConfigSnapshot(config);
     const capabilityProfile = resolveConversationCapabilityProfile({

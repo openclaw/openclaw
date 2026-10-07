@@ -28,7 +28,7 @@ export async function runCodexAppServerAttempt(
   if (
     params.requireWorkspaceOnly === true &&
     (params.disableTools === true ||
-      typeof params.hostCapabilities?.createToolSurface !== "function")
+      typeof params.hostCapabilities?.createToolSurfaceAsync !== "function")
   ) {
     throw new Error("Codex required-root execution requires an enabled host-mediated tool surface");
   }

@@ -25,10 +25,9 @@ type OtelDiagnosticEventPrivateData = DiagnosticEventPrivateData &
 export function createDiagnosticsEventHandler(params: {
   logger: OtelLogger;
   recorders: DiagnosticsEventRecorders;
-  recordLogRecord: ReturnType<typeof createDiagnosticsLogExporter>["recordLogRecord"];
-  recordSecurityEvent: ReturnType<typeof createDiagnosticsLogExporter>["recordSecurityEvent"];
+  recordLogEvent: ReturnType<typeof createDiagnosticsLogExporter>["recordLogEvent"];
 }) {
-  const { logger, recorders, recordLogRecord, recordSecurityEvent } = params;
+  const { logger, recorders, recordLogEvent } = params;
   return (
     evt: DiagnosticEventPayload,
     metadata: DiagnosticEventMetadata,
@@ -37,7 +36,8 @@ export function createDiagnosticsEventHandler(params: {
     try {
       switch (evt.type) {
         case "diagnostic.child_process.spawn":
-          // Child-launch counts currently export through Prometheus.
+        case "worker.request":
+          // Child launch and worker request metrics currently export through Prometheus.
           return;
         case "diagnostic.gc":
           return recorders.recordGcDuration(evt, metadata);
@@ -133,9 +133,8 @@ export function createDiagnosticsEventHandler(params: {
         case "exec.approval.followup_suppressed":
           break;
         case "log.record":
-          return recordLogRecord?.(evt, metadata);
         case "security.event":
-          return recordSecurityEvent?.(evt, metadata);
+          return recordLogEvent?.(evt, metadata);
         case "tool.loop":
           return recorders.recordToolLoop(evt);
         case "diagnostic.memory.sample":

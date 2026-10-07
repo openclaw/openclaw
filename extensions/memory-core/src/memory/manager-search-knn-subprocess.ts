@@ -32,11 +32,11 @@ class VectorKnnSubprocessError extends Error {
   }
 }
 
-function buildChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+function buildChildEnv(): NodeJS.ProcessEnv {
   const childEnv: NodeJS.ProcessEnv = {};
   for (const name of ["PATH", "SystemRoot", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR"]) {
-    if (env[name]) {
-      childEnv[name] = env[name];
+    if (process.env[name]) {
+      childEnv[name] = process.env[name];
     }
   }
   return childEnv;

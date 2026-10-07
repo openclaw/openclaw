@@ -128,7 +128,6 @@ export const forcedUnitFastTestFiles = [
   "src/realtime-transcription/websocket-session.test.ts",
   "src/routing/resolve-route.test.ts",
   "src/status/status-message.test.ts",
-  "src/trajectory/cleanup.test.ts",
   "src/trajectory/export.test.ts",
   "src/trajectory/metadata.test.ts",
   "src/tts/openai-compatible-speech-provider.test.ts",
@@ -197,7 +196,6 @@ const ownerRoutedUnitTestPatterns = [
   "src/agents/openai-transport-stream.*.test.ts",
   // Split transport suites install module mocks through their shared harness.
   "src/agents/provider-transport-fetch.*.test.ts",
-  "src/agents/embedded-agent-runner/run.inherited-auth-owner.test.ts",
   "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
   "src/agents/embedded-agent-runner/run.shared-integration.test.ts",
   "src/auto-reply/reply/dispatch-from-config.test.ts",

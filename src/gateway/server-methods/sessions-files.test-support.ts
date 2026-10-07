@@ -52,7 +52,7 @@ export function createSessionFilesHandlerInvoker(handlers: GatewayRequestHandler
       isWebchatConnect: () => false,
       respond: responder.respond,
       context: {
-        getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+        getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
         ...context,
       } as never,
       ...options,

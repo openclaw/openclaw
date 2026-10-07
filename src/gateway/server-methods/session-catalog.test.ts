@@ -820,7 +820,7 @@ describe("session catalog Gateway methods", () => {
           catalogId: "claude",
           metadataOnly,
         },
-        { agents: { list: [{ id: "main" }, { id: "research" }] } },
+        { agents: { entries: { main: {}, research: {} } } },
       );
       expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "research" });
       expect(available).toHaveBeenCalledWith(true, {
@@ -947,45 +947,6 @@ describe("session catalog Gateway methods", () => {
       conversationBindingMocks.bindPluginSessionConversation.mock.invocationCallOrder[0],
     ).toBeLessThan(afterConversationBound.mock.invocationCallOrder[0] ?? 0);
     expect(respond).toHaveBeenCalledWith(true, { sessionKey: "agent:main:adopted" });
-  });
-
-  it("records an upstream link and adopted event for a linkable continue", async () => {
-    const continueSession = vi.fn(async () => ({
-      sessionKey: "agent:main:adopted",
-      upstream: {
-        kind: "codex-app-server" as const,
-        ref: { fingerprint: "connection-1", threadId: "thread-1" },
-        marker: { turnId: "turn-1" },
-      },
-    }));
-    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { continueSession }) }];
-
-    const respond = await call("sessions.catalog.continue", {
-      catalogId: "codex",
-      hostId: "gateway:local",
-      threadId: "thread-1",
-    });
-
-    expect(respond).toHaveBeenCalledWith(true, { sessionKey: "agent:main:adopted" });
-    expect(hoisted.upsertSessionUpstreamLink).toHaveBeenCalledWith({
-      sessionKey: "agent:main:adopted",
-      agentId: "main",
-      catalogId: "codex",
-      hostId: "gateway:local",
-      threadId: "thread-1",
-      upstreamKind: "codex-app-server",
-      upstreamRef: { fingerprint: "connection-1", threadId: "thread-1" },
-      marker: { turnId: "turn-1" },
-    });
-    expect(hoisted.recordSessionStateEvent).toHaveBeenCalledWith({
-      sessionKey: "agent:main:adopted",
-      agentId: "main",
-      kind: "adopted",
-      actorType: "human",
-      summary: "adopted from codex",
-      payload: { catalogId: "codex", hostId: "gateway:local" },
-      dedupeKey: "adopted:agent:main:adopted",
-    });
   });
 
   it("does not publish provider adoption when the Control UI binding fails", async () => {

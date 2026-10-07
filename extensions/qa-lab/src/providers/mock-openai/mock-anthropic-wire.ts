@@ -1,4 +1,3 @@
-// QA Lab Anthropic Messages wire conversion and response events.
 import { createHash } from "node:crypto";
 import {
   type ResponsesInputItem,

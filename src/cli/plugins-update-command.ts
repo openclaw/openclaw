@@ -52,10 +52,12 @@ import {
 } from "../plugins/plugin-package-update.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import {
+  isClawHubTrustSkippedOutcome,
   isPluginInstallRecordUpdateSource,
   pluginInstallRecordMayMigrateConfigId,
   updateNpmInstalledPlugins,
   type PluginUpdateIntegrityDriftParams,
+  type PluginUpdateOutcome,
 } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
@@ -64,7 +66,6 @@ import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import { createPluginInstallLogger } from "./plugins-command-helpers.js";
 import { resolvePluginLifecycleGateway } from "./plugins-lifecycle-client.js";
-import { logPluginUpdateOutcomes } from "./plugins-update-outcomes.js";
 import {
   resolveHookPackUpdateSelection,
   resolvePluginUpdateSelection,
@@ -73,6 +74,29 @@ import { promptYesNo } from "./prompt.js";
 
 const DEPRECATED_DANGEROUS_FORCE_UNSAFE_UPDATE_WARNING =
   "--dangerously-force-unsafe-install is deprecated and no longer affects plugin updates because built-in install-time dangerous-code scanning has been removed. Configure security.installPolicy for operator-owned install decisions.";
+
+function logPluginUpdateOutcomes(
+  outcomes: readonly Pick<PluginUpdateOutcome, "status" | "message" | "channelFallback" | "code">[],
+): 0 | 1 {
+  let exitCode: 0 | 1 = 0;
+  for (const outcome of outcomes) {
+    if (outcome.status === "error") {
+      exitCode = 1;
+      defaultRuntime.error(theme.error(outcome.message));
+    } else if (outcome.status === "skipped") {
+      if (isClawHubTrustSkippedOutcome(outcome)) {
+        exitCode = 1;
+      }
+      defaultRuntime.log(theme.warn(outcome.message));
+    } else {
+      defaultRuntime.log(outcome.message);
+    }
+    if (outcome.channelFallback) {
+      defaultRuntime.log(theme.warn(outcome.channelFallback.message));
+    }
+  }
+  return exitCode;
+}
 
 async function confirmUpdateIntegrityDrift(
   item: string,
@@ -587,13 +611,7 @@ async function runPluginUpdateCommandUnlocked(
           : undefined;
       if (!pluginResult.changed && !hookResult.changed && !migration?.changed) {
         await migration?.publish(nextConfig, async () => {});
-        return logPluginUpdateOutcomes({
-          outcomes: [...pluginResult.outcomes, ...hookResult.outcomes],
-          log: defaultRuntime.log,
-          error: defaultRuntime.error,
-        }).hasErrors
-          ? 1
-          : 0;
+        return logPluginUpdateOutcomes([...pluginResult.outcomes, ...hookResult.outcomes]);
       }
       nextConfig = migration?.config ?? nextConfig;
       const commit = async () => {
@@ -647,12 +665,7 @@ async function runPluginUpdateCommandUnlocked(
       }
     }
 
-    const outcomeSummary = logPluginUpdateOutcomes({
-      outcomes: [...pluginResult.outcomes, ...hookResult.outcomes],
-      log: defaultRuntime.log,
-      error: defaultRuntime.error,
-    });
-    return outcomeSummary.hasErrors ? 1 : 0;
+    return logPluginUpdateOutcomes([...pluginResult.outcomes, ...hookResult.outcomes]);
   } catch (error) {
     updateFailure = { error };
     if (getRetainedPluginInstallPublication(error)) {

@@ -1,5 +1,6 @@
 // Command startup policy tests cover which CLI commands require startup side effects.
 import { describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { cliCommandCatalog } from "./command-catalog.js";
 import { resolveCliStartupPolicy } from "./command-startup-policy.js";
 
@@ -16,6 +17,18 @@ function resolvePolicy(params: {
 }
 
 describe("command-startup-policy", () => {
+  it.each(["gateway", "daemon"])("defers only %s installs with a runtime expectation", (parent) => {
+    const commandPath = [parent, "install"];
+    expect(resolvePolicy({ commandPath }).skipConfigGuard).toBe(false);
+    expect(
+      resolveCliStartupPolicy({
+        commandPath,
+        options: { expectedRuntimePin: "{}" },
+        jsonOutputMode: true,
+      }).skipConfigGuard,
+    ).toBe(true);
+  });
+
   it("resolves config guard policy for Commander and invocation-aware commands", () => {
     for (const commandPath of [
       ["backup", "create"],
@@ -223,7 +236,7 @@ describe("command-startup-policy", () => {
   });
 
   it("uses process env banner suppression when startup env is omitted", () => {
-    const originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
+    const originalEnv = captureEnv(["OPENCLAW_HIDE_BANNER"]);
     try {
       process.env.OPENCLAW_HIDE_BANNER = "1";
 
@@ -241,11 +254,7 @@ describe("command-startup-policy", () => {
         }).hideBanner,
       ).toBe(false);
     } finally {
-      if (originalHideBanner === undefined) {
-        delete process.env.OPENCLAW_HIDE_BANNER;
-      } else {
-        process.env.OPENCLAW_HIDE_BANNER = originalHideBanner;
-      }
+      originalEnv.restore();
     }
   });
 

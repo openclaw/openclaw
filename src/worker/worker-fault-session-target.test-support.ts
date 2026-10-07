@@ -2,6 +2,7 @@ import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.
 import { bindAgentToolExecutionLocation } from "../agents/agent-tool-metadata.js";
 import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
 import type { BoundAgentRunSessionTarget } from "../agents/run-session-target.types.js";
+import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { WorkerSessionTurnClaim } from "../gateway/worker-environments/placement-record.js";
 import type { WorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
@@ -98,7 +99,7 @@ export async function bindWorkerFixtureTurnSource(
         for (const tool of tools) {
           bindAgentToolExecutionLocation(tool, { kind: "placement" });
         }
-        return { tools, policy };
+        return { tools, policy, presentation: createToolSurfacePresentationForTest() };
       },
     }),
   });

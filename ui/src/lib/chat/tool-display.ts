@@ -85,21 +85,16 @@ function sanitizeCanvasEntryUrl(
   rawEntryUrl: string,
   allowExternalEmbedUrls = false,
 ): string | undefined {
-  try {
-    const entry = new URL(rawEntryUrl, "http://localhost");
-    if (entry.origin !== "http://localhost") {
-      if (!allowExternalEmbedUrls || !isHttpUrl(entry)) {
-        return undefined;
-      }
-      return entry.toString();
-    }
-    if (!isCanvasHttpPath(entry.pathname)) {
-      return undefined;
-    }
-    return `${entry.pathname}${entry.search}${entry.hash}`;
-  } catch {
+  const entry = URL.parse(rawEntryUrl, "http://localhost");
+  if (!entry) {
     return undefined;
   }
+  if (entry.origin !== "http://localhost") {
+    return allowExternalEmbedUrls && isHttpUrl(entry) ? entry.toString() : undefined;
+  }
+  return isCanvasHttpPath(entry.pathname)
+    ? `${entry.pathname}${entry.search}${entry.hash}`
+    : undefined;
 }
 
 /**

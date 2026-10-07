@@ -100,16 +100,9 @@ function keyPairMatches(publicKeyPem: string, privateKeyPem: string): boolean {
   try {
     deriveCanonicalEd25519PublicKeyRaw(publicKeyPem);
     deriveCanonicalEd25519PrivateKeyRaw(privateKeyPem);
-    const publicKey = crypto.createPublicKey(publicKeyPem);
-    const privateKey = crypto.createPrivateKey(privateKeyPem);
-    if (publicKey.asymmetricKeyType !== "ed25519" || privateKey.asymmetricKeyType !== "ed25519") {
-      return false;
-    }
-    const derivedPublicKey = crypto
-      .createPublicKey(privateKeyPem)
-      .export({ type: "spki", format: "der" });
-    const storedPublicKey = publicKey.export({ type: "spki", format: "der" });
-    return Buffer.from(derivedPublicKey).equals(Buffer.from(storedPublicKey));
+    return (
+      crypto.createPublicKey(privateKeyPem).export({ type: "spki", format: "pem" }) === publicKeyPem
+    );
   } catch {
     return false;
   }

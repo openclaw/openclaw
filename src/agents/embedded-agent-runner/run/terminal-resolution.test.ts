@@ -55,7 +55,7 @@ describe("terminal resolution", () => {
       const resolved = await resolveEmbeddedRunTerminal(input);
 
       expect(resolved.action).toBe("complete");
-      expect(input.activateInternalPrompt).not.toHaveBeenCalled();
+      expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
       if (resolved.action !== "complete") {
         throw new Error("expected terminal resolution to complete");
       }
@@ -121,8 +121,8 @@ describe("terminal resolution", () => {
         action: "complete",
         result: { meta: { error: { message: error.message, fallbackSafe: false } } },
       });
-      expect(input.activateInternalPrompt).not.toHaveBeenCalled();
-      expect(input.setSuppressNextUserMessagePersistence).not.toHaveBeenCalled();
+      expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
+      expect(input.sessionPromptState.suppressNextUserMessagePersistence).toBe(false);
       expect(input.armPostCompactionGuard).not.toHaveBeenCalled();
       expect(markEmbeddedRunAuthProfileSuccess).not.toHaveBeenCalled();
       expect(reportEmbeddedRunSuccessfulAuthBinding).not.toHaveBeenCalled();
@@ -163,7 +163,7 @@ describe("terminal resolution", () => {
       expect(resolved.result.meta.error).toBeUndefined();
       expect(resolved.result.meta.livenessState).toBe("blocked");
     }
-    expect(input.activateInternalPrompt).not.toHaveBeenCalled();
+    expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
   });
 
   it("keeps an ordinary tool failure nonfatal when the attempt completed", async () => {
@@ -206,7 +206,7 @@ describe("terminal resolution", () => {
           terminalReplyExpectation: "required",
           inputProvenance: { kind: "inter_session" },
         },
-        activateInternalPrompt,
+        sessionPromptState: { activateInternalPrompt },
       });
 
       await expect(resolveEmbeddedRunTerminal(input)).resolves.toEqual({ action: "retry" });
@@ -239,7 +239,7 @@ describe("terminal resolution", () => {
                 trigger: "user",
                 inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" },
               },
-        activateInternalPrompt,
+        sessionPromptState: { activateInternalPrompt },
       });
 
       const resolved = await resolveEmbeddedRunTerminal(input);
@@ -529,7 +529,7 @@ describe("terminal resolution", () => {
         expect(resolved.result.meta.error).toBeUndefined();
         expect(resolved.result.payloads).toBeUndefined();
         expect(resolved.result.meta.livenessState).toBe("working");
-        expect(input.activateInternalPrompt).not.toHaveBeenCalled();
+        expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
         expect(attempt.messagesSnapshot.at(-1)).toBe(toolResult);
       } else if (testCase.expectIncompleteTurn !== false) {
         expect(resolved.result.meta.error?.kind).toBe("incomplete_turn");
@@ -559,7 +559,7 @@ describe("terminal resolution", () => {
       attempt,
       attemptAssistant: assistant,
       runParams: { trigger: "cron", terminalReplyExpectation: "required" },
-      activateInternalPrompt,
+      sessionPromptState: { activateInternalPrompt },
     });
 
     const resolved = await resolveEmbeddedRunTerminal(input);
@@ -695,7 +695,7 @@ describe("terminal resolution", () => {
       attempt,
       attemptAssistant: assistant,
       runParams: { allowEmptyAssistantReplyAsSilent: true, terminalReplyExpectation: "required" },
-      activateInternalPrompt,
+      sessionPromptState: { activateInternalPrompt },
     });
 
     await expect(resolveEmbeddedRunTerminal(retryInput)).resolves.toEqual({ action: "retry" });
@@ -821,18 +821,18 @@ describe("terminal resolution", () => {
         currentAttemptAssistant: undefined,
         currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
       });
-      const setSuppressNextUserMessagePersistence = vi.fn();
       const activateInternalPrompt = vi.fn();
       const input = makeTerminalInput({
         attempt,
         attemptAssistant: undefined,
-        activePromptPersisted,
-        setSuppressNextUserMessagePersistence,
-        activateInternalPrompt,
+        sessionPromptState: {
+          activePrompt: { persisted: activePromptPersisted, internal: false },
+          activateInternalPrompt,
+        },
       });
 
       await expect(resolveEmbeddedRunTerminal(input)).resolves.toEqual({ action: "retry" });
-      expect(setSuppressNextUserMessagePersistence).toHaveBeenCalledWith(expectedSuppression);
+      expect(input.sessionPromptState.suppressNextUserMessagePersistence).toBe(expectedSuppression);
       expect(activateInternalPrompt).not.toHaveBeenCalled();
     },
   );
@@ -861,7 +861,7 @@ describe("terminal resolution", () => {
     const input = makeTerminalInput({
       attempt,
       attemptAssistant: assistant,
-      activateCompactionContinuation,
+      sessionPromptState: { activateCompactionContinuation },
     });
 
     await expect(resolveEmbeddedRunTerminal(input)).resolves.toEqual({ action: "retry" });
@@ -938,7 +938,7 @@ describe("terminal resolution", () => {
       makeTerminalInput({
         attempt,
         attemptAssistant: assistant,
-        activateInternalPrompt,
+        sessionPromptState: { activateInternalPrompt },
         settledTurnFinalizationOutcome: "failed",
       }),
     );

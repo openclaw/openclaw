@@ -690,6 +690,37 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
         #expect(cached.historyMarker == message.historyMarker)
     }
 
+    @Test func `cache projection preserves dispatcher IDs and only inner patch input`() throws {
+        let message = OpenClawChatMessage(
+            role: "assistant",
+            content: [
+                OpenClawChatMessageContent(
+                    type: "toolCall", id: "search", name: "tool_call",
+                    arguments: AnyCodable(["id": " web_search ", "args": ["query": "drop"]])),
+                OpenClawChatMessageContent(
+                    type: "toolUse", id: "patch", name: "tool_call",
+                    arguments: AnyCodable([
+                        "id": "mcp:editor:apply_patch", "ignored": "drop",
+                        "args": ["input": "*** Begin Patch\n*** End Patch", "ignored": "drop"],
+                    ])),
+                OpenClawChatMessageContent(
+                    type: "toolCall", name: "web_search", arguments: AnyCodable(["query": "drop"])),
+                OpenClawChatMessageContent(
+                    type: "toolCall", name: "tool_call", arguments: AnyCodable(["id": " "])),
+            ],
+            timestamp: 1)
+
+        let cached = try #require(OpenClawChatSQLiteTranscriptCache.cacheableMessages([message]).first)
+        #expect(cached.content[0].id == "search")
+        #expect(cached.content[0].name == "tool_call")
+        #expect(cached.content[0].arguments == AnyCodable(["id": "web_search"]))
+        #expect(cached.content[1].arguments == AnyCodable([
+            "id": "mcp:editor:apply_patch", "args": ["input": "*** Begin Patch\n*** End Patch"],
+        ]))
+        #expect(cached.content[2].arguments == nil)
+        #expect(cached.content[3].arguments == nil)
+    }
+
     @Test func `gateway removal deletes only that gateways cache and state`() async throws {
         let storeA = databases.store(gatewayID: "gw-a")
         let storeB = databases.store(gatewayID: "gw-b")

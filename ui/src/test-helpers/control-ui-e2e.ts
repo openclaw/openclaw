@@ -425,6 +425,8 @@ export type ControlUiMockGatewayScenario = {
   deferredMethods?: string[];
   /** Hold every request until resolveDeferred/rejectDeferred releases the method. */
   heldMethods?: string[];
+  /** Fail each admission-dependent read this many times before serving its normal response. */
+  startupPendingResponses?: number;
   /** Non-release gateway checkout branch surfaced in the sidebar footer. */
   devGitBranch?: string;
   /** Exact immutable Control UI artifact served by the mocked Gateway. */
@@ -959,6 +961,7 @@ function normalizeScenario(
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
     heldMethods: scenario.heldMethods ?? [],
+    startupPendingResponses: scenario.startupPendingResponses ?? 0,
     devGitBranch: scenario.devGitBranch?.trim() || "",
     serverBuildId: scenario.serverBuildId?.trim() || sharedBuildInfo?.buildId || "e2e",
     gatewayBootId: scenario.gatewayBootId?.trim() || "e2e-gateway-boot",
@@ -1207,6 +1210,8 @@ function installControlUiMockGateway(
     {
       methodResponses: scenario.methodResponses,
       defaultAgentId: scenario.defaultAgentId,
+      agentModel: scenario.agentModel,
+      startupPendingResponses: scenario.startupPendingResponses,
       sessions,
       groupRenames: () => groupsState.renames,
     },
@@ -1336,29 +1341,6 @@ function installControlUiMockGateway(
 
   function hasOwn(record: Record<string, unknown>, key: string): boolean {
     return Object.hasOwn(record, key);
-  }
-
-  function applyScenarioAgentModel(method: string, value: unknown): unknown {
-    if (!scenario.agentModel || !isRecord(value)) {
-      return value;
-    }
-    const applyAgentsList = (agentsList: unknown): unknown => {
-      if (!isRecord(agentsList) || !Array.isArray(agentsList.agents)) {
-        return agentsList;
-      }
-      return {
-        ...agentsList,
-        agents: agentsList.agents.map((agent) =>
-          isRecord(agent) && !hasOwn(agent, "model")
-            ? { ...agent, model: { primary: scenario.agentModel } }
-            : agent,
-        ),
-      };
-    };
-    if (method === "agents.list") {
-      return applyAgentsList(value);
-    }
-    return value;
   }
 
   type CommittedChatInput = {
@@ -1797,6 +1779,10 @@ function installControlUiMockGateway(
   }
 
   function buildResponse(method: string, params: unknown): unknown {
+    const pending = responseFixtures.startupPending(method);
+    if (pending) {
+      return pending;
+    }
     if (configState && baseConfigResponse) {
       if (method === "config.get") {
         const configured = responseFixtures.select(method, params);
@@ -1866,7 +1852,7 @@ function installControlUiMockGateway(
     }
     const configured = responseFixtures.select(method, params);
     if (configured.found) {
-      const configuredValue = applyScenarioAgentModel(method, configured.value);
+      const configuredValue = responseFixtures.applyAgentModel(method, configured.value);
       return method === "sessions.list"
         ? sessions.listResponse(configuredValue, params, {
             renames: groupsState.renames,
@@ -2639,17 +2625,17 @@ function installControlUiMockGateway(
     },
     deferNext(method, match) {
       deferredMethods.push({ method, match });
+      return exposed.findRequests(method, match).length;
     },
     emit(event, payload) {
       emitGatewayEvent(MockWebSocket.latest, event, payload);
     },
-    findRequests(method, match) {
-      // Capture and deferral must select the same RPC scope; child lists share the roster method.
-      return requests.filter(
+    // Capture and deferral must select the same RPC scope; child lists share the roster method.
+    findRequests: (method, match) =>
+      requests.filter(
         (request) =>
           (!method || request.method === method) && responseFixtures.matches(request.params, match),
-      );
-    },
+      ),
     rejectDeferred(method, error) {
       for (const response of takeDeferredResponses(method)) {
         response.socket.deliver({
@@ -2671,7 +2657,7 @@ function installControlUiMockGateway(
         const resolvedPayload = commitFixtureResponse(
           response.method,
           response.params,
-          applyScenarioAgentModel(
+          responseFixtures.applyAgentModel(
             response.method,
             payload ?? buildResponse(response.method, response.params),
           ),
@@ -2907,6 +2893,7 @@ export async function installMockGateway(
   if (
     scenario.awaitInitialRoster ??
     (!connectFails &&
+      normalizedScenario.startupPendingResponses === 0 &&
       ![...normalizedScenario.heldMethods, ...normalizedScenario.deferredMethods].some((method) =>
         rosterGates.has(method),
       ))

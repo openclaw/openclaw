@@ -1,4 +1,3 @@
-// Codex CLI lists native sessions and adopts or archives idle local threads.
 import type { Command } from "commander";
 import {
   addGatewayClientOptions,

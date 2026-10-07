@@ -1276,19 +1276,33 @@ class ChatController internal constructor(
       resolveAgentIdFromMainSessionKey(sessionKey)
         ?: ownerAgentId?.trim()?.takeIf { it.isNotEmpty() }
         ?: if (sessionKey == _sessionKey.value) resolveAgentIdForSessionKey(sessionKey) else null
-    val hasPatch =
-      clearLabel ||
-        label != null ||
-        clearCategory ||
-        category != null ||
-        clearSnooze ||
-        snoozedUntil != null ||
-        clearColor ||
-        color != null ||
-        pinned != null ||
-        archived != null ||
-        unread != null
-    if (!hasPatch) return false
+    val patch =
+      buildJsonObject {
+        if (clearLabel) {
+          put("label", JsonNull)
+        } else if (label != null) {
+          put("label", JsonPrimitive(label))
+        }
+        if (clearCategory) {
+          put("category", JsonNull)
+        } else if (category != null) {
+          put("category", JsonPrimitive(category))
+        }
+        if (clearSnooze) {
+          put("snoozedUntil", JsonNull)
+        } else if (snoozedUntil != null) {
+          put("snoozedUntil", JsonPrimitive(snoozedUntil))
+        }
+        if (clearColor) {
+          put("color", JsonNull)
+        } else if (color != null) {
+          put("color", JsonPrimitive(color))
+        }
+        if (pinned != null) put("pinned", JsonPrimitive(pinned))
+        if (archived != null) put("archived", JsonPrimitive(archived))
+        if (unread != null) put("unread", JsonPrimitive(unread))
+      }
+    if (patch.isEmpty()) return false
     val lifecycleSessionId = expectedSessionId?.trim()?.takeIf { it.isNotEmpty() }
     if ((archived != null || snoozedUntil != null || clearSnooze) && lifecycleSessionId == null) {
       updateErrorText("Session lifecycle action requires a durable session identity.")
@@ -1300,29 +1314,7 @@ class ChatController internal constructor(
           put("key", JsonPrimitive(sessionKey))
           capturedOwnerAgentId?.let { put("agentId", JsonPrimitive(it)) }
           lifecycleSessionId?.let { put("expectedSessionId", JsonPrimitive(it)) }
-          if (clearLabel) {
-            put("label", JsonNull)
-          } else if (label != null) {
-            put("label", JsonPrimitive(label))
-          }
-          if (clearCategory) {
-            put("category", JsonNull)
-          } else if (category != null) {
-            put("category", JsonPrimitive(category))
-          }
-          if (clearSnooze) {
-            put("snoozedUntil", JsonNull)
-          } else if (snoozedUntil != null) {
-            put("snoozedUntil", JsonPrimitive(snoozedUntil))
-          }
-          if (clearColor) {
-            put("color", JsonNull)
-          } else if (color != null) {
-            put("color", JsonPrimitive(color))
-          }
-          if (pinned != null) put("pinned", JsonPrimitive(pinned))
-          if (archived != null) put("archived", JsonPrimitive(archived))
-          if (unread != null) put("unread", JsonPrimitive(unread))
+          patch.forEach { (key, value) -> put(key, value) }
           if (unreadExpectation != null) {
             val marker = unreadExpectation.markedUnreadAt
             put("expectedMarkedUnreadAt", marker?.let(::JsonPrimitive) ?: JsonNull)
@@ -3064,7 +3056,6 @@ class ChatController internal constructor(
     rememberSelection: Boolean = true,
   ) {
     val key = normalizeRequestedSessionKey(sessionKey)
-    if (key.isEmpty()) return
     val owner = normalizeSessionSelectionOwner(key, ownerAgentId)
     prepareSessionSelection(key)
     val generation =
@@ -3386,12 +3377,7 @@ class ChatController internal constructor(
 
   private fun currentSelectedSession(): ChatSessionEntry? = _sessions.value.firstOrNull { it.key == _sessionKey.value }
 
-  private fun advertisedRunIds(session: ChatSessionEntry? = currentSelectedSession()): List<String> =
-    session
-      ?.activeRunIds
-      .orEmpty()
-      .mapNotNull { it.trim().takeIf(String::isNotEmpty) }
-      .distinct()
+  private fun advertisedRunIds(session: ChatSessionEntry? = currentSelectedSession()): List<String> = session?.activeRunIds.orEmpty().distinct()
 
   private fun publishRunPresentation() {
     synchronized(gatewayScopeApplyLock) {
@@ -3474,10 +3460,6 @@ class ChatController internal constructor(
         liveRunTelemetryByRunId.remove(runId)
       }
     }
-  }
-
-  private fun clearAllRunTelemetry() {
-    synchronized(liveRunTelemetryLock) { liveRunTelemetryByRunId.clear() }
   }
 
   private fun recordLiveRunUsage(
@@ -3821,7 +3803,7 @@ class ChatController internal constructor(
           refreshHistoryForRecovery(forceHealth = true)
         } else {
           markHealthOk()
-          refreshCommandsAfterReconnect()
+          if (!hasCurrentChatMetadata()) refreshCommands()
         }
       }
 
@@ -4977,8 +4959,7 @@ class ChatController internal constructor(
         }
         currentSessionActionSnapshot(_sessionKey.value)
       }
-    var shouldRefreshSwarm = false
-    var shouldDisableSwarm = false
+    var requestedSwarmState: Boolean? = null
     try {
       val res =
         requestGatewayBound(
@@ -4992,8 +4973,7 @@ class ChatController internal constructor(
         if (!isCurrent()) return
         _commands.value = parseChatCommands(root)
         synchronized(swarmLock) { swarmEnabled = metadataSwarmEnabled }
-        shouldRefreshSwarm = metadataSwarmEnabled
-        shouldDisableSwarm = !metadataSwarmEnabled
+        requestedSwarmState = metadataSwarmEnabled
       }
       val catalogParams =
         buildJsonObject {
@@ -5045,9 +5025,10 @@ class ChatController internal constructor(
       }
     }
     if (!isCurrent()) return
-    when {
-      shouldRefreshSwarm -> refreshSwarmSessions()
-      shouldDisableSwarm -> resetSwarmProgress()
+    when (requestedSwarmState) {
+      true -> refreshSwarmSessions()
+      false -> resetSwarmProgress()
+      null -> Unit
     }
   }
 
@@ -5308,11 +5289,6 @@ class ChatController internal constructor(
   private fun hasCurrentChatMetadata(): Boolean {
     val currentScope = currentChatMetadataScope() ?: return false
     return chatMetadataLoaded && chatMetadataScope == currentScope
-  }
-
-  private fun refreshCommandsAfterReconnect() {
-    if (hasCurrentChatMetadata()) return
-    refreshCommands()
   }
 
   /**
@@ -5796,11 +5772,7 @@ class ChatController internal constructor(
   ): Boolean {
     val rows = runCatching { commandOutbox.load(gatewayId) }.getOrDefault(emptyList())
     if (rows.isEmpty()) return false
-    val inFlightRunId =
-      history.inFlightRun
-        ?.runId
-        ?.trim()
-        ?.takeIf { it.isNotEmpty() }
+    val inFlightRunId = history.inFlightRun?.runId
     val sessionRows =
       rows.filter { row ->
         sameOutboxSession(row.sessionKey, history.sessionKey) &&
@@ -6620,13 +6592,8 @@ class ChatController internal constructor(
   // The gateway sends explicit JSON null for cleared display metadata on session
   // events; the merge must apply those clears instead of preserving stale values.
   private fun parseExplicitSessionClears(obj: JsonObject): Set<String> =
-    buildSet {
-      if (obj["label"] is JsonNull) add("label")
-      if (obj["autoLabel"] is JsonNull) add("autoLabel")
-      if (obj["displayName"] is JsonNull) add("displayName")
-      if (obj["subject"] is JsonNull) add("subject")
-      if (obj["category"] is JsonNull) add("category")
-    }
+    listOf("label", "autoLabel", "displayName", "subject", "category")
+      .filterTo(mutableSetOf()) { obj[it] is JsonNull }
 
   private fun isLocallyOwnedRun(runId: String): Boolean = synchronized(pendingRuns) { runId in pendingRuns } || unresolvedRepliesByRunId.containsKey(runId)
 
@@ -6823,7 +6790,7 @@ class ChatController internal constructor(
     val eventSessionKey =
       when (normalizedSessionKey) {
         null -> return null
-        "main" -> appliedMainSessionKey.trim().takeIf(String::isNotEmpty) ?: return null
+        "main" -> appliedMainSessionKey
         else -> normalizedSessionKey
       }
     return resolveChatComposerRoutingOwner(
@@ -7303,7 +7270,7 @@ class ChatController internal constructor(
         }
         pendingRuns.clear()
       }
-      if (clearRunTelemetry) clearAllRunTelemetry()
+      if (clearRunTelemetry) synchronized(liveRunTelemetryLock) { liveRunTelemetryByRunId.clear() }
       pendingRunProjectionsByRunId.keys
         .filterNot { runId -> synchronized(pendingRuns) { runId in pendingRuns } }
         .forEach(::armPendingRunProjectionDeadline)
@@ -8546,17 +8513,18 @@ private fun parseToolActivityContent(
     listOf("toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "callId", "id").firstNotNullOfOrNull(obj::nonBlankString)
   if (name.isEmpty() && id == null) return null
   val args = (obj["arguments"] ?: obj["input"] ?: obj["args"]).asObjectOrNull()
+  val displayCall = unwrapToolCallForDisplay(name, args)
   val result = if (resultBlock) boundedToolText(toolResultText(obj["content"] ?: obj["result"] ?: obj["text"]), CHAT_TOOL_RESULT_MAX_CHARS) else null
   return ChatMessageContent(
     type = if (resultBlock) "toolResult" else "toolCall",
     toolActivity =
       ChatToolActivity(
         toolCallId = id,
-        name = name.ifEmpty { "tool" },
-        detail = toolDetail(args),
+        name = displayCall.name.ifEmpty { "tool" },
+        detail = toolDetail(displayCall.args),
         result = result,
         isError = isChatToolError(obj),
-        arguments = toolPresentationArguments(args),
+        arguments = toolPresentationArguments(displayCall.args),
         browserTab = if (resultBlock && name == "browser" && !isChatToolError(obj)) parseChatBrowserTab(obj["details"]) else null,
       ),
   )
@@ -8751,7 +8719,7 @@ internal fun reconcileMessageIds(
   return incoming.map { message ->
     val key = messageIdentityKey(message) ?: return@map message
     val matches = messagesByKey[key] ?: return@map message
-    val previousMessage = matches.removeFirstOrNull() ?: return@map message
+    val previousMessage = matches.removeFirst()
     if (matches.isEmpty()) {
       messagesByKey.remove(key)
     }

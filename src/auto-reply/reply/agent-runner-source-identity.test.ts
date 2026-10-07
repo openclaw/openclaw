@@ -21,7 +21,6 @@ describe("admitted Gateway source identity", () => {
       const sourceTurnId = admission === "recovered" ? "gateway-original-source" : admissionRunId;
       let entry: SessionEntry = {
         sessionId,
-        status: "running",
         updatedAt: 1,
         restartRecoveryTerminalRunIds: ["gateway-previous-run"],
         ...(admission === "recovered"

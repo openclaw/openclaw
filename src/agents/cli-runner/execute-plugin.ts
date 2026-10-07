@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { racePromiseWithAbortSignal, raceWithTimeout } from "@openclaw/retry";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { mergePathPrepend } from "../../infra/path-prepend.js";
@@ -371,24 +372,14 @@ function waitForIteratorValue<T>(
   iterator: AsyncIterator<T>,
   signal: AbortSignal,
 ): Promise<IteratorResult<T>> {
-  if (signal.aborted) {
-    return Promise.reject(toErrorObject(signal.reason, "CLI plugin execution was aborted."));
-  }
-  return new Promise((resolve, reject) => {
-    const rejectAborted = () =>
-      reject(toErrorObject(signal.reason, "CLI plugin execution was aborted."));
-    signal.addEventListener("abort", rejectAborted, { once: true });
-    void iterator.next().then(
-      (value) => {
-        signal.removeEventListener("abort", rejectAborted);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", rejectAborted);
-        reject(toErrorObject(error, "CLI plugin execution stream failed."));
-      },
-    );
-  });
+  return racePromiseWithAbortSignal(
+    () =>
+      iterator.next().catch((error: unknown) => {
+        throw toErrorObject(error, "CLI plugin execution stream failed.");
+      }),
+    signal,
+    () => toErrorObject(signal.reason, "CLI plugin execution was aborted."),
+  );
 }
 
 async function closePluginIterator(
@@ -397,23 +388,18 @@ async function closePluginIterator(
   if (!iterator?.return) {
     return;
   }
-  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
+    await raceWithTimeout(
       iterator.return(),
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error("CLI plugin runtime did not close after its run ended.")),
-          PLUGIN_ITERATOR_CLOSE_TIMEOUT_MS,
-        );
-        timeout.unref();
-      }),
-    ]);
+      PLUGIN_ITERATOR_CLOSE_TIMEOUT_MS,
+      () => {
+        throw new Error("CLI plugin runtime did not close after its run ended.");
+      },
+      { ref: false },
+    );
   } catch (error) {
     recordAgentCleanupFailure();
     throw error;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 

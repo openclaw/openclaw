@@ -131,7 +131,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         {
           agents: {
             defaults: { workspace: path.join(home, "default-workspace") },
-            list: [{ id: "main" }, { id: agentId, workspace: workspaceDir }],
+            entries: { main: {}, [agentId]: { workspace: workspaceDir } },
           },
         },
       );

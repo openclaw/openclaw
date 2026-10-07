@@ -28,7 +28,6 @@ import { getMediaDir } from "../../../media/store.js";
 import { loadWebMedia, type WebMediaResult } from "../../../media/web-media.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { resolveUserPath } from "../../../utils.js";
-import type { ImageSanitizationLimits } from "../../image-sanitization.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
   createSandboxBridgeReadFile,
@@ -39,7 +38,7 @@ import { sanitizeImageBlocks } from "../../tool-images.js";
 import { getAgentWorkspaceAccess } from "../../workspace-access.js";
 import { log } from "../logger.js";
 import {
-  collectMediaImageRefs,
+  mediaFactToImageRef,
   isOpenClawCliImageCachePath,
   resolveMediaFactLocalRef,
   type MediaFileRef,
@@ -78,31 +77,6 @@ type PromptImageEntry = {
   image: ImageContent;
   factIndex: ImageFactIndex;
 };
-
-async function sanitizeImageEntriesWithLog(
-  entries: PromptImageEntry[],
-  label: string,
-  imageSanitization?: ImageSanitizationLimits,
-): Promise<{ entries: PromptImageEntry[]; failedMediaCount: number }> {
-  const sanitized: PromptImageEntry[] = [];
-  let dropped = 0;
-  let failedMediaCount = 0;
-  for (const entry of entries) {
-    const result = await sanitizeImageBlocks([entry.image], label, imageSanitization);
-    const image = result.images[0];
-    if (image) {
-      sanitized.push({ image, factIndex: entry.factIndex });
-    }
-    dropped += result.dropped;
-    if (result.dropped > 0 && entry.factIndex !== null) {
-      failedMediaCount++;
-    }
-  }
-  if (dropped > 0) {
-    log.warn(`Native image: dropped ${dropped} image(s) after sanitization (${label}).`);
-  }
-  return { entries: sanitized, failedMediaCount };
-}
 
 /** Detects explicit local image paths and file URLs in user prompt text. */
 export function detectImageReferences(prompt: string): MediaFileRef[] {
@@ -186,32 +160,39 @@ function rawAliasDedupeKey(alias: string): string | undefined {
 }
 
 async function loadMediaFromRef(
-  ref: MediaFileRef,
-  workspaceDir: string,
-  options?: {
-    label?: string;
-    maxBytes?: number;
-    signal?: AbortSignal;
-    workspaceOnly?: boolean;
-    localRoots?: readonly string[];
-    sandbox?: { root: string; bridge: SandboxFsBridge };
-  },
+  ref: MediaFileRef & { workspaceDir?: string },
+  options: PromptMediaOptions,
+  label: string,
+  attachment = false,
 ): Promise<WebMediaResult | null> {
-  options?.signal?.throwIfAborted();
+  options.signal?.throwIfAborted();
+  // Remote workspaces keep admitted attachment originals on Gateway for hydration.
+  // Prompt-discovered workspace references still use the sandbox boundary.
+  const gatewayAttachment =
+    attachment &&
+    Boolean(
+      getAgentWorkspaceAccess(
+        options.agentWorkspaceDir ?? options.workspaceDir,
+        "prepareTurnAttachments",
+      )?.prepareTurnAttachments,
+    );
+  const sandbox = gatewayAttachment ? undefined : options.sandbox;
+  const localRoots = gatewayAttachment
+    ? [getMediaDir()]
+    : (options.localRoots ?? (options.workspaceOnly ? [options.workspaceDir] : undefined));
   const redactedRef = redactSensitiveText(ref.raw || ref.resolved);
   try {
     let targetPath = ref.resolved;
 
-    if (!options?.sandbox) {
+    if (!sandbox) {
       targetPath = await resolveMediaReferenceLocalPath(targetPath);
     }
 
-    if (options?.sandbox) {
+    if (sandbox) {
       try {
         const resolved = await resolveSandboxedBridgeMediaPath({
           sandbox: {
-            root: options.sandbox.root,
-            bridge: options.sandbox.bridge,
+            ...sandbox,
             workspaceOnly: options.workspaceOnly,
           },
           mediaPath: targetPath,
@@ -220,33 +201,31 @@ async function loadMediaFromRef(
         targetPath = resolved.resolved;
       } catch (err) {
         log.warn(
-          `${options?.label ?? "Native media"}: sandbox validation failed for ${redactedRef}: ${redactSensitiveText(formatErrorMessage(err))}`,
+          `${label}: sandbox validation failed for ${redactedRef}: ${redactSensitiveText(formatErrorMessage(err))}`,
         );
         return null;
       }
     } else if (!path.isAbsolute(targetPath)) {
-      targetPath = path.resolve(workspaceDir, targetPath);
+      targetPath = path.resolve(ref.workspaceDir ?? options.workspaceDir, targetPath);
     }
 
-    const media = options?.sandbox
+    const media = sandbox
       ? await loadWebMedia(targetPath, {
           maxBytes: options.maxBytes,
           sandboxValidated: true,
-          readFile: createSandboxBridgeReadFile({ sandbox: options.sandbox }),
+          readFile: createSandboxBridgeReadFile({ sandbox }),
         })
       : await loadWebMedia(
           targetPath,
-          options?.workspaceOnly || options?.localRoots
-            ? { maxBytes: options.maxBytes, localRoots: options.localRoots ?? [workspaceDir] }
-            : options?.maxBytes,
+          localRoots ? { maxBytes: options.maxBytes, localRoots } : options.maxBytes,
         );
 
-    options?.signal?.throwIfAborted();
+    options.signal?.throwIfAborted();
     return media;
   } catch (err) {
-    options?.signal?.throwIfAborted();
+    options.signal?.throwIfAborted();
     log.warn(
-      `${options?.label ?? "Native media"}: failed to load ${redactedRef}: ${redactSensitiveText(formatErrorMessage(err))}`,
+      `${label}: failed to load ${redactedRef}: ${redactSensitiveText(formatErrorMessage(err))}`,
     );
     return null;
   }
@@ -295,8 +274,8 @@ export async function detectAndLoadPromptImages(
   const imageFactIndexes = media.flatMap((fact, factIndex) =>
     isImageMediaFact(fact) && !suppressed.has(factIndex) ? [factIndex] : [],
   );
-  const refs = collectMediaImageRefs(media);
-  const refsByFact = new Map(refs.flatMap((ref) => (ref ? [[ref.factIndex, ref] as const] : [])));
+  const refs = media.map(mediaFactToImageRef).filter((ref): ref is MediaImageRef => Boolean(ref));
+  const refsByFact = new Map(refs.map((ref) => [ref.factIndex, ref]));
   const inferredSlots = (() => {
     if (params.imageOrder?.length === imageFactIndexes.length) {
       return params.imageOrder.map((kind, index) => ({
@@ -360,7 +339,6 @@ export async function detectAndLoadPromptImages(
           : -1;
     return index >= 0 ? unusedExisting.splice(index, 1)[0] : undefined;
   };
-  const availableRefs = refs.filter((ref): ref is MediaImageRef => Boolean(ref));
   const attachmentRefs = slots.flatMap((slot) =>
     slot.kind === "offloaded" && slot.factIndex !== undefined
       ? (refsByFact.get(slot.factIndex) ?? [])
@@ -378,7 +356,7 @@ export async function detectAndLoadPromptImages(
       !attachmentKeys.has(refDedupeKey(ref, params.workspaceDir)),
   );
   const detectedRefs = [
-    ...availableRefs.flatMap(({ detect, hydrate, raw, type, resolved }) =>
+    ...refs.flatMap(({ detect, hydrate, raw, type, resolved }) =>
       detect !== false &&
       (hydrate || (!resolved.startsWith("http://") && !resolved.startsWith("https://")))
         ? [{ raw, type, resolved }]
@@ -390,25 +368,12 @@ export async function detectAndLoadPromptImages(
   let failedMediaCount = 0;
   let skippedCount = 0;
   const loadRef = async (ref: MediaFileRef & { workspaceDir?: string }, attachment = false) => {
-    // Remote workspaces keep admitted attachment originals on Gateway for hydration.
-    // Prompt-discovered workspace references still use the sandbox boundary.
-    const gatewayAttachment =
-      attachment &&
-      Boolean(
-        getAgentWorkspaceAccess(
-          params.agentWorkspaceDir ?? params.workspaceDir,
-          "prepareTurnAttachments",
-        )?.prepareTurnAttachments,
-      );
-    const loadedMedia = await loadMediaFromRef(ref, ref.workspaceDir ?? params.workspaceDir, {
-      label: "Native image",
-      maxBytes: params.maxBytes,
-      workspaceOnly: params.workspaceOnly,
-      localRoots: gatewayAttachment
-        ? [getMediaDir()]
-        : (params.localRoots ?? (params.workspaceOnly ? [params.workspaceDir] : undefined)),
-      sandbox: gatewayAttachment ? undefined : params.sandbox,
-    });
+    const loadedMedia = await loadMediaFromRef(
+      ref,
+      { ...params, signal: undefined },
+      "Native image",
+      attachment,
+    );
     if (!loadedMedia || loadedMedia.kind !== "image") {
       skippedCount++;
       return null;
@@ -447,16 +412,31 @@ export async function detectAndLoadPromptImages(
       promptImages.push({ image, factIndex: null });
     }
   }
-  const sanitizedPromptImages = await sanitizeImageEntriesWithLog(promptImages, "prompt:images", {
+  const imageSanitization = {
     maxBytes: params.maxBytes,
     maxDimensionPx: params.maxDimensionPx,
-  });
-  const finalized = finalizeRuntimePromptImages(sanitizedPromptImages.entries);
+  };
+  const sanitized: PromptImageEntry[] = [];
+  let dropped = 0;
+  for (const entry of promptImages) {
+    const result = await sanitizeImageBlocks([entry.image], "prompt:images", imageSanitization);
+    const image = result.images[0];
+    if (image) {
+      sanitized.push({ image, factIndex: entry.factIndex });
+    }
+    dropped += result.dropped;
+    if (result.dropped > 0 && entry.factIndex !== null) {
+      failedMediaCount++;
+    }
+  }
+  if (dropped > 0) {
+    log.warn(`Native image: dropped ${dropped} image(s) after sanitization (prompt:images).`);
+  }
 
   return {
-    ...finalized,
+    ...finalizeRuntimePromptImages(sanitized),
     detectedRefs,
-    failedMediaCount: failedMediaCount + sanitizedPromptImages.failedMediaCount,
+    failedMediaCount,
     loadedCount,
     skippedCount,
   };
@@ -497,23 +477,13 @@ async function materializeVideoFact(
     return { type: "text", text: VIDEO_OMISSION.limit };
   }
   const ref = resolveMediaFactLocalRef(fact);
-  const gatewayAttachment = Boolean(
-    getAgentWorkspaceAccess(
-      options.agentWorkspaceDir ?? options.workspaceDir,
-      "prepareTurnAttachments",
-    )?.prepareTurnAttachments,
-  );
   const loaded = ref
-    ? await loadMediaFromRef(ref, fact.workspaceDir ?? options.workspaceDir, {
-        label: "Native video",
-        maxBytes: budget.remaining,
-        signal: options.signal,
-        workspaceOnly: options.workspaceOnly,
-        localRoots: gatewayAttachment
-          ? [getMediaDir()]
-          : (options.localRoots ?? (options.workspaceOnly ? [options.workspaceDir] : undefined)),
-        sandbox: gatewayAttachment ? undefined : options.sandbox,
-      })
+    ? await loadMediaFromRef(
+        { ...ref, workspaceDir: fact.workspaceDir },
+        { ...options, maxBytes: budget.remaining },
+        "Native video",
+        true,
+      )
     : null;
   if (!loaded) {
     return { type: "text", text: VIDEO_OMISSION.unavailable };

@@ -180,10 +180,6 @@ class SecurePrefs(
   private val _preventSleep = MutableStateFlow(plainPrefs.getBoolean("screen.preventSleep", true))
   val preventSleep: StateFlow<Boolean> = _preventSleep
 
-  private val _manualEnabled =
-    MutableStateFlow(plainPrefs.getBoolean("gateway.manual.enabled", false))
-  val manualEnabled: StateFlow<Boolean> = _manualEnabled
-
   private val _manualHost =
     MutableStateFlow(plainPrefs.getString("gateway.manual.host", "") ?: "")
   val manualHost: StateFlow<String> = _manualHost
@@ -325,7 +321,7 @@ class SecurePrefs(
 
   fun setPreventSleep(value: Boolean) = _preventSleep.persistBoolean("screen.preventSleep", value)
 
-  fun setManualEnabled(value: Boolean) = _manualEnabled.persistBoolean("gateway.manual.enabled", value)
+  fun setManualEnabled(value: Boolean) = plainPrefs.edit { putBoolean("gateway.manual.enabled", value) }
 
   fun setManualHost(value: String) = _manualHost.persistString("gateway.manual.host", value.trim())
 
@@ -818,8 +814,7 @@ class SecurePrefs(
     expectedRevision: Long,
   ): Boolean {
     if (!gatewayAppearancePreferenceMayApply("ui.themeMode", expectedRevision)) return false
-    plainPrefs.edit { putString(appearanceThemeModeKey, mode.rawValue) }
-    _appearanceThemeMode.value = mode
+    setAppearanceThemeMode(mode)
     return true
   }
 
@@ -829,8 +824,7 @@ class SecurePrefs(
     expectedRevision: Long,
   ): Boolean {
     if (!gatewayAppearancePreferenceMayApply("ui.theme", expectedRevision)) return false
-    plainPrefs.edit { putString(appearanceThemeFamilyKey, family.rawValue) }
-    _appearanceThemeFamily.value = family
+    setAppearanceThemeFamily(family)
     return true
   }
 
@@ -840,14 +834,7 @@ class SecurePrefs(
     expectedRevision: Long,
   ): Boolean {
     if (!gatewayAppearancePreferenceMayApply("ui.accent", expectedRevision)) return false
-    plainPrefs.edit {
-      if (argb == null) {
-        remove(appearanceAccentArgbKey)
-      } else {
-        putLong(appearanceAccentArgbKey, argb)
-      }
-    }
-    _appearanceAccentArgb.value = argb
+    setAppearanceAccentArgb(argb)
     return true
   }
 

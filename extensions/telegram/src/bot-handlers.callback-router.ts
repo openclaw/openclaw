@@ -254,7 +254,6 @@ export function createTelegramCallbackRouter({
         chatTitle: callbackMessage.chat.title,
         isGroup,
         senderId,
-        senderUsername,
         mode: authorizationMode,
         context: eventAuthContext,
       });

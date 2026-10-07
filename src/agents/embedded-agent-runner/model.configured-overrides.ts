@@ -1,5 +1,6 @@
 import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readModelParams } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -45,7 +46,6 @@ import {
   sanitizeModelHeaders,
 } from "./model.inline-provider.js";
 import type { ProviderRuntimeHooks } from "./model.provider-hooks.js";
-import { resolveProviderRequestTimeoutMs } from "./model.provider-hooks.js";
 import { resolveProviderTransport } from "./model.provider-transport.js";
 import type { ManifestModelCatalogProviderAliasMetadata } from "./model.static-catalog.js";
 
@@ -377,11 +377,11 @@ export function applyConfiguredProviderOverrides(params: {
     params.providerMetadataOwners,
   );
   const manifestAliasTransport = params.manifestAlias.transport;
-  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
-  const defaultModelParams = findConfiguredAgentModelParams(params);
-  const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
-    stripSecretRefMarkers: true,
+  const requestTimeoutMs = finiteSecondsToTimerSafeMilliseconds(providerConfig?.timeoutSeconds, {
+    floorSeconds: true,
   });
+  const defaultModelParams = findConfiguredAgentModelParams(params);
+  const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers);
   const requestParams = {
     provider: params.provider,
     ...(params.providerMetadataOwners
@@ -453,13 +453,9 @@ export function applyConfiguredProviderOverrides(params: {
     params.preferDiscoveredModelMetadata && configuredModel?.metadataSource === "models-add"
       ? undefined
       : configuredModel;
-  const providerHeaders = sanitizeModelHeaders(providerConfig.headers, {
-    stripSecretRefMarkers: true,
-  });
+  const providerHeaders = sanitizeModelHeaders(providerConfig.headers);
   const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig.request);
-  const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers, {
-    stripSecretRefMarkers: true,
-  });
+  const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers);
   const providerParams = readModelParams(providerConfig.params);
   const configuredRequestParams = {
     ...requestParams,

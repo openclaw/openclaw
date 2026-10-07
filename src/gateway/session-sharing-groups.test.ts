@@ -8,6 +8,7 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -50,12 +51,11 @@ describe("session sharing group mutations", () => {
     async ({ retiredOwner, logicalAgent, discoveryAgent, archived }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const storePath = state.statePath("shared.sqlite");
-        const cfg = {
+        const cfg: OpenClawConfig = {
           session: { store: storePath },
           agents: {
-            list: retiredOwner
-              ? [{ id: "ops", default: true }, { id: "other" }]
-              : [{ id: "main", default: true }, { id: "research" }],
+            defaults: { sessionStore: { agentId: discoveryAgent } },
+            entries: retiredOwner ? { ops: {}, other: {} } : { main: {}, research: {} },
           },
         };
         openOpenClawAgentDatabase({ agentId: "main", path: storePath });

@@ -64,7 +64,7 @@ describe("source-aware schema validation", () => {
     },
   );
 
-  it("reuses compiled validation while keeping conditional defaults tied to the source input", () => {
+  it("shares compiled schemas across callers while keeping defaults tied to the source input", () => {
     const conditional = {
       ...schema,
       properties: { ...schema.properties, enabled: { type: "boolean", default: true } },
@@ -80,12 +80,22 @@ describe("source-aware schema validation", () => {
       applyDefaults: true,
       cache,
     };
-    expect(validateJsonSchemaValue(params)).toEqual({
+    expect(validateJsonSchemaValue({ ...params, applyDefaults: false })).toEqual({
       ok: true,
-      value: { credential: "resolved-fixture-key", retries: 2, enabled: true },
+      value: params.value,
     });
     const compile = vi.spyOn(globalThis, "Function");
     try {
+      expect(
+        validateJsonSchemaValue({
+          ...params,
+          schema: structuredClone(conditional),
+          cacheKey: "source-conditional-clone",
+        }),
+      ).toEqual({
+        ok: true,
+        value: { credential: "resolved-fixture-key", retries: 2, enabled: true },
+      });
       expect(
         validateJsonSchemaValue({
           ...params,

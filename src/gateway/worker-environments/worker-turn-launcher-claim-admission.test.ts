@@ -6,13 +6,14 @@ import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { completeWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { placementTurnOwner } from "./placement-record.js";
-import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
+import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
 import {
   createPlacementTurnClaimFixtureOps,
   seedAttachedPlacementEnvironment,
 } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
+import { createWorkerGatewayTools } from "./worker-session-tool-executor.js";
 import { waitForPendingWorkerResult } from "./worker-turn-admission.js";
 import {
   createWorkerTurnTunnel,
@@ -371,7 +372,7 @@ describe("worker turn launcher claim admission", () => {
         manifestRef: MANIFEST_REF,
       });
       await placements.acceptWorkspaceResult(priorClaim);
-      await completeReclaimedWorkspaceTeardown({
+      await completeWorkerWorkspaceTeardown({
         placements,
         turnClaim: priorClaim,
         environmentId: active.environmentId,
@@ -536,6 +537,9 @@ describe("worker turn launcher claim admission", () => {
     { label: "with negotiated node portal support", portalAvailable: true },
   ])("launches one worker loop $label", async ({ portalAvailable }) => {
     await seedActivePlacement();
+    const unexpectedToolCall = () => {
+      throw new Error("Unexpected Gateway tool invocation while preparing the turn");
+    };
     const commandStarted = createDeferred();
     const commandFinished = createDeferred<{
       stdout: string;
@@ -557,6 +561,19 @@ describe("worker turn launcher claim admission", () => {
         sshEndpoint: null,
       })),
       supportsNodePortal: vi.fn(async () => portalAvailable),
+      createGatewayTools: async (params) =>
+        createWorkerGatewayTools({
+          ...params,
+          placements,
+          environments,
+          resolveGatewayContext: unexpectedToolCall,
+          dispatchChild: unexpectedToolCall,
+          portals: {
+            getService: unexpectedToolCall,
+            carrier: { open: unexpectedToolCall },
+            onChanged: unexpectedToolCall,
+          },
+        }),
       acquireTurnCredential: vi.fn(async () => credential()),
       acknowledgeCredentialDelivery: vi.fn(async () => true),
       startTunnel: vi.fn(async () =>
@@ -619,9 +636,9 @@ describe("worker turn launcher claim admission", () => {
             permissionMode: "workspace",
             workerContainmentRoot: "/worker/workspace",
           });
-          expect(
-            launchRequest.plan.assignment.toolAuthority.allowedToolNames.includes("portal"),
-          ).toBe(portalAvailable);
+          expect(placements.isWorkerTurnToolAuthorized(launchRequest.turnClaim, "portal")).toBe(
+            portalAvailable,
+          );
           expect(environments.supportsNodePortal).toHaveBeenCalledWith(ENVIRONMENT_ID, OWNER_EPOCH);
           await createWorkerSessionPlacementGate(placements).updateAckCursors({
             claim: launchRequest.turnClaim,

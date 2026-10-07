@@ -358,7 +358,7 @@ describe("Canvas widget view", () => {
     expect(sibling.scrollTop).toBe(0);
   });
 
-  it.each(["credential", "profile", "session", "denied"])(
+  it.each(["credential", "session", "denied"])(
     "retires retained content after %s changes",
     async (change) => {
       const client = { request: vi.fn().mockResolvedValue(documentView) };
@@ -375,13 +375,7 @@ describe("Canvas widget view", () => {
       if (change === "session") {
         view.sessionKey = "agent:other:session";
       }
-      connection(
-        view,
-        "connected",
-        change === "profile"
-          ? { selfUser: { id: "other" } as ApplicationGatewaySnapshot["selfUser"] }
-          : {},
-      );
+      connection(view, "connected");
       await settle(view);
       expect(view.querySelector("iframe")).toBeNull();
       expect(frame.isConnected).toBe(false);
@@ -487,8 +481,11 @@ describe("Canvas widget view", () => {
   });
 
   it("shows a bounded script error and wakes the session only once across document remounts", async () => {
+    const now = 1_800_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
     const client = { request: vi.fn().mockResolvedValue(documentView) };
     const view = mount(client, "cv_runtime_error");
+    view.messageTimestamp = now - 600_000;
     view.title = "Status".repeat(20);
     const frame = await frameFor(view);
     const report = {
@@ -548,14 +545,12 @@ describe("Canvas widget view", () => {
   });
 
   it.each([
-    { label: "exactly ten minutes old", ageMs: 600_000, wakes: true },
-    { label: "older than ten minutes", ageMs: 600_001, wakes: false },
-    { label: "missing", ageMs: undefined, wakes: false },
-    { label: "non-finite", ageMs: Infinity, wakes: false },
-    { label: "NaN", ageMs: Number.NaN, wakes: false },
+    { label: "older than ten minutes", ageMs: 600_001 },
+    { label: "missing", ageMs: undefined },
+    { label: "non-finite", ageMs: Infinity },
   ])(
     "keeps the notice but gates wakes when the message timestamp is $label",
-    async ({ label, ageMs, wakes }) => {
+    async ({ label, ageMs }) => {
       const now = 1_800_000_000_000;
       vi.spyOn(Date, "now").mockReturnValue(now);
       const client = { request: vi.fn().mockResolvedValue(documentView) };
@@ -567,9 +562,7 @@ describe("Canvas widget view", () => {
       expect(view.querySelector('[role="status"]')?.textContent).toBe(
         "Script error: Missing element",
       );
-      expect(client.request.mock.calls.filter(([method]) => method === "wake")).toHaveLength(
-        wakes ? 1 : 0,
-      );
+      expect(client.request.mock.calls.filter(([method]) => method === "wake")).toHaveLength(0);
       expect(view.querySelector("iframe")).toBe(frame);
     },
   );

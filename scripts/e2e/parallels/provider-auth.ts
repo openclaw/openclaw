@@ -135,9 +135,13 @@ export function resolveLatestVersion(
   const userConfigPath = path.join(userConfigDir, "npmrc");
   try {
     writeFile(userConfigPath, "", "utf8");
-    return runCommand("npm", ["view", "openclaw", "version", "--userconfig", userConfigPath], {
-      quiet: true,
-    }).stdout.trim();
+    return runCommand("npm", [
+      "view",
+      "openclaw",
+      "version",
+      "--userconfig",
+      userConfigPath,
+    ]).stdout.trim();
   } finally {
     removeDir(userConfigDir, { force: true, recursive: true });
   }

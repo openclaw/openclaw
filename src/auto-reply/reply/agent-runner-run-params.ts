@@ -1,4 +1,3 @@
-/** Builds embedded-agent run parameters from queued follow-up run state. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   modelFallbackOverrideFromAvailability,
@@ -23,7 +22,6 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profile.js";
 import type { FollowupRun } from "./queue.js";
 
-/** Builds model fallback options for an embedded follow-up run. */
 export function resolveModelFallbackOptions(
   run: FollowupRun["run"],
   configOverride: FollowupRun["run"]["config"] = run.config,
@@ -91,7 +89,6 @@ export async function resolveRunModelHasVision(params: {
   return modelSupportsInput(findModelInCatalog(catalog, provider, model), "image");
 }
 
-/** Builds the shared embedded-agent run params from a queued follow-up run. */
 export async function buildEmbeddedRunBaseParams(params: {
   run: FollowupRun["run"];
   provider: string;

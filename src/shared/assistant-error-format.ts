@@ -1,5 +1,8 @@
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractHttpResponseBody } from "./http-error-response.js";
 const ERROR_PAYLOAD_PREFIX_RE =
@@ -37,14 +40,6 @@ const MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE =
   "LLM streaming response contained a malformed fragment. Please try again.";
 
 type ErrorPayload = Record<string, unknown>;
-
-type ApiErrorInfo = {
-  httpCode?: string;
-  type?: string;
-  code?: string;
-  message?: string;
-  requestId?: string;
-};
 
 export function formatProviderRefusalText(message: {
   diagnostics?: unknown;
@@ -89,10 +84,7 @@ function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
 }
 
 export function parseApiErrorPayload(raw?: string): ErrorPayload | null {
-  if (!raw) {
-    return null;
-  }
-  const trimmed = raw.trim();
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }
@@ -143,10 +135,6 @@ export function extractErrorHttpStatus(raw: string): { code: number; rest: strin
 
 export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-
   if (
     HTML_ERROR_PREFIX_RE.test(trimmed) &&
     HTML_CLOSE_RE.test(trimmed) &&
@@ -171,20 +159,14 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
 
 export function isGenericProviderInternalError(raw: string): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
   return (
     GENERIC_PROVIDER_INTERNAL_ERROR_RE.test(trimmed) &&
     (/help\.openai\.com/i.test(trimmed) || SUPPORT_REQUEST_ID_RE.test(trimmed))
   );
 }
 
-export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
-  if (!raw) {
-    return null;
-  }
-  const trimmed = raw.trim();
+export function parseApiErrorInfo(raw?: string) {
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }
@@ -298,7 +280,7 @@ const TRANSPORT_ERRORS = [
 ];
 
 export function isKnownTransportErrorCode(value: string): boolean {
-  return TRANSPORT_ERRORS.some(({ code }) => code?.exec(value)?.[0] === value);
+  return TRANSPORT_ERRORS.some(({ code }) => code.exec(value)?.[0] === value);
 }
 
 export function formatTransportErrorCopy(raw: string): string | undefined {
@@ -307,7 +289,7 @@ export function formatTransportErrorCopy(raw: string): string | undefined {
   }
   const lower = normalizeLowercaseStringOrEmpty(raw);
   for (const { code, phrases, message } of TRANSPORT_ERRORS) {
-    if (code?.test(raw) || phrases.some((phrase) => lower.includes(phrase))) {
+    if (code.test(raw) || phrases.some((phrase) => lower.includes(phrase))) {
       return message;
     }
   }

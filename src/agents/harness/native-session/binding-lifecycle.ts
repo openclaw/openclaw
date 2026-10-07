@@ -1,5 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
+import { resolveRuntimeFacadeModuleLocation } from "../../../plugin-sdk/facade-resolution-shared.js";
+import type { PluginStateNativeBindingCodec } from "../../../plugin-state/plugin-state-native-binding.types.js";
+import { capturePluginStateNativeBindingStore } from "../../../plugin-state/plugin-state-store.native-binding.js";
+import { validateKey } from "../../../plugin-state/plugin-state-store.validation.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { AgentHarnessSessionDeletionMutation } from "../types.js";
 import {
   createNativeSessionBindingLeases,
@@ -8,6 +13,10 @@ import {
   type NativeSessionBindingRecord,
   type NativeSessionBindingStateStore,
 } from "./binding-leases.js";
+import {
+  bindNativeSessionDeletionParticipant,
+  type NativeSessionDeletionParticipant,
+} from "./deletion-participant.js";
 
 /** Shared binding coordination; backend callbacks retain native ownership and retention policy. */
 export function createNativeSessionBindingLifecycle<TRecord extends NativeSessionBindingRecord>(
@@ -81,6 +90,95 @@ export function createNativeSessionBindingLifecycle<TRecord extends NativeSessio
       mutation: AgentHarnessSessionDeletionMutation,
     ) => Promise<TResult>,
   ): Promise<TResult> => {
+    leases.assertSettled(key);
+    const store = options.workerCodec
+      ? capturePluginStateNativeBindingStore(
+          state.withCurrent({ assertCurrent: deletion.assertCurrent }),
+        )
+      : undefined;
+    const workerCodec =
+      (options.workerCodec === "codex" || options.workerCodec === "agentsapi") &&
+      store?.options.pluginId === options.workerCodec
+        ? options.workerCodec
+        : undefined;
+    const source =
+      workerCodec && store
+        ? captureOpenClawStateWorkerContext({ env: store.options.env })
+        : undefined;
+    const codecOwner = workerCodec
+      ? resolveRuntimeFacadeModuleLocation({
+          dirName: workerCodec,
+          artifactBasename: "native-session-binding-api.js",
+        })
+      : undefined;
+    if (codecOwner === null) {
+      throw new Error(`Native session binding codec is unavailable: ${workerCodec}`);
+    }
+    const bindParticipant = (
+      mutation: AgentHarnessSessionDeletionMutation,
+      value?: Omit<TRecord, "lease">,
+      owner?: ReturnType<typeof leases.owner>,
+    ) => {
+      if (!store || !source || !workerCodec || !source.admission.identity.key.startsWith("file:")) {
+        return mutation;
+      }
+      const custody = new Set<object>();
+      const participant: NativeSessionDeletionParticipant = {
+        binding: {
+          codec: workerCodec,
+          codecSource: codecOwner
+            ? {
+                rootDir: codecOwner.boundaryRoot,
+                source: codecOwner.modulePath,
+                origin: codecOwner.origin ?? "global",
+              }
+            : undefined,
+          pluginId: store.options.pluginId,
+          namespace: store.options.namespace,
+          key: validateKey(key, "delete"),
+          maxEntries: store.options.maxEntries,
+          overflowPolicy: store.options.overflowPolicy,
+          ttlMs: store.options.defaultTtlMs,
+          staleMs: options.lease.staleMs,
+          deletionChanged: options.errors.deletionChanged,
+          rollbackChanged: options.errors.rollbackChanged,
+          predicate: owner ? { kind: "leased", token: owner.token, value } : { kind: "absent" },
+        },
+        source: source.admission.identity,
+        assertCurrent() {
+          source.admission.assertCurrent();
+          source.maintenanceScope?.assertAdmission();
+          store.assertCurrent?.();
+          deletion.assertCurrent();
+          if (owner?.failure || owner?.phase === "closed") {
+            throw owner.failure ?? options.errors.lostLease(key);
+          }
+        },
+        renewalPending: () => owner?.renewalPending() ?? false,
+        joinRenewal: async () => {
+          await owner?.joinRenewal();
+        },
+        quiesce: () => owner?.quiesce(),
+        retain: (custodian) => {
+          custody.add(custodian);
+        },
+        unknown: false,
+        settle(outcome, error) {
+          if (outcome === "unknown") {
+            participant.unknown = true;
+            const failure = error ?? new Error("Native binding settlement is unknown");
+            if (owner) {
+              owner.block(failure, participant);
+            } else {
+              leases.block(key, failure, participant);
+            }
+          } else if (owner) {
+            owner.phase = outcome === "committed" ? "deleted" : "held";
+          }
+        },
+      };
+      return bindNativeSessionDeletionParticipant(mutation, participant);
+    };
     const deleteIf = state.deleteIf?.bind(state);
     if (!deleteIf) {
       throw new Error(options.errors.conditionalDeletionRequired);
@@ -90,7 +188,7 @@ export function createNativeSessionBindingLifecycle<TRecord extends NativeSessio
       if (state.lookup(key) === undefined) {
         let active = true;
         try {
-          return await run(undefined, {
+          const mutation: AgentHarnessSessionDeletionMutation = {
             commit() {
               deletion.assertCurrent();
               if (!active || state.lookup(key) !== undefined) {
@@ -98,7 +196,8 @@ export function createNativeSessionBindingLifecycle<TRecord extends NativeSessio
               }
             },
             rollback() {},
-          });
+          };
+          return await run(undefined, bindParticipant(mutation));
         } finally {
           active = false;
         }
@@ -122,7 +221,7 @@ export function createNativeSessionBindingLifecycle<TRecord extends NativeSessio
             }
           };
           try {
-            return await run(stored, {
+            const mutation: AgentHarnessSessionDeletionMutation = {
               commit() {
                 assertActive();
                 if (deleted) {
@@ -171,7 +270,8 @@ export function createNativeSessionBindingLifecycle<TRecord extends NativeSessio
                 deleted = undefined;
                 owner.phase = "held";
               },
-            });
+            };
+            return await run(stored, bindParticipant(mutation, expectedValue, owner));
           } finally {
             active = false;
           }
@@ -196,6 +296,8 @@ type NativeSessionBindingLifecycleOptions<TRecord extends NativeSessionBindingRe
   NativeSessionBindingLeaseConfig<TRecord>,
   "errors"
 > & {
+  /** Only bundled, audited codecs qualify for the worker storage participant. */
+  workerCodec?: PluginStateNativeBindingCodec;
   errors: NativeSessionBindingLeaseConfig<TRecord>["errors"] & {
     mutationBlocked: string;
     conditionalDeletionRequired: string;

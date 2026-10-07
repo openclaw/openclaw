@@ -102,7 +102,7 @@ function assertConversationDeliveryInput(
   }
 }
 
-function createOperationQuery(database: OpenClawAgentReadOnlyDatabase["db"]) {
+const operationQuery = createSqliteQueryCache((database) => {
   const db = getSessionKysely(database);
   return prepareSqliteQuerySync<string, ConversationDeliveryRow>(database, (parameter) =>
     // Session pruning removes only session_conversations. The canonical
@@ -123,9 +123,7 @@ function createOperationQuery(database: OpenClawAgentReadOnlyDatabase["db"]) {
         parameter((operationId) => operationId),
       ),
   );
-}
-
-const operationQuery = createSqliteQueryCache(createOperationQuery);
+});
 
 function selectOperation(
   database: OpenClawAgentReadOnlyDatabase,

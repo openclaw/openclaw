@@ -17,7 +17,10 @@ import {
 } from "../../infra/outbound/payloads.js";
 import { preserveReplyPayloadMediaSelectionCore } from "../../infra/outbound/reply-media-entries.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { captureDeliveredTranscriptMirror } from "./dispatch-from-config.transcript.js";
@@ -54,7 +57,6 @@ async function makePendingFinalFixture() {
     { sessionKey, storePath },
     {
       sessionId: "session-1",
-      status: "running",
       updatedAt: Date.now(),
       pendingFinalDelivery: {
         kind: "replayable",
@@ -346,7 +348,8 @@ describe("beforeDeliver in reply dispatcher", () => {
         dispatcher.sendFinalReply(fixture.payload);
         dispatcher.markComplete();
         const receipt = await dispatcher.waitForIdle();
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync(fixture.tmpDir);
+        closeOpenClawAgentDatabasesForTest(fixture.tmpDir);
         expect(
           (loadSessionEntry(fixture) as InternalSessionEntry)?.pendingFinalDelivery?.deliveries,
         ).toEqual([{ id: "delivery-1", state }]);
@@ -359,7 +362,8 @@ describe("beforeDeliver in reply dispatcher", () => {
         await replay.waitForIdle();
         expect(deliver).toHaveBeenCalledOnce();
       } finally {
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync(fixture.tmpDir);
+        closeOpenClawAgentDatabasesForTest(fixture.tmpDir);
         await fs.rm(fixture.tmpDir, { recursive: true, force: true });
       }
     },

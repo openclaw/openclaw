@@ -1,5 +1,9 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
-import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeStringEntriesLower,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyToolEvidence } from "../policy-state-types.js";
 import type { PolicyEvidence, PolicyToolPostureEvidence } from "../policy-state.js";
 import { expandPolicyToolRequirement, toolListCoversTool } from "../tool-policy-conformance.js";
@@ -18,14 +22,13 @@ export function toolPostureFindings(
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
   const findings: HealthFinding[] = [];
+  const entries = evidence.toolPosture ?? [];
   if (
     isRecord(policy) &&
     isRecord(policy.tools) &&
     posturePolicyShapeFinding("tools", policy.tools, { policyDocName, policyPath }) === undefined
   ) {
-    findings.push(
-      ...toolPostureFindingsForRule(policy.tools, policyDocName, "tools", evidence, () => true),
-    );
+    findings.push(...toolPostureFindingsForRule(policy.tools, policyDocName, "tools", entries));
   }
   if (!hasValidScopedPolicy(policy, policyPath, policyDocName)) {
     return findings;
@@ -40,8 +43,7 @@ export function toolPostureFindings(
         target.overlay.tools,
         policyDocName,
         requirementBase,
-        evidence,
-        (entry) => scopedToolAgentMatches(entry, target.agentId, evidence.toolPosture ?? []),
+        entries.filter((entry) => scopedToolAgentMatches(entry, target.agentId, entries)),
       ),
     );
   }
@@ -52,10 +54,8 @@ function toolPostureFindingsForRule(
   toolsPolicy: Record<string, unknown>,
   policyDocName: string,
   requirementBase: string,
-  evidence: PolicyEvidence,
-  evidenceFilter: (entry: PolicyToolPostureEvidence) => boolean,
+  entries: readonly PolicyToolPostureEvidence[],
 ): readonly HealthFinding[] {
-  const entries = (evidence.toolPosture ?? []).filter(evidenceFilter);
   return [
     ...toolValuePostureFindings(toolsPolicy, policyDocName, requirementBase, entries),
     ...toolAlsoAllowExpectedFindings(toolsPolicy, policyDocName, requirementBase, entries),
@@ -160,10 +160,10 @@ function toolAlsoAllowExpectedFindings(
   if (alsoAllowPolicy.expected === undefined) {
     return [];
   }
-  const expected = normalizedStringSet(readStringList(toolsPolicy, ["alsoAllow", "expected"]));
+  const expected = new Set(readStringList(toolsPolicy, ["alsoAllow", "expected"]).toSorted());
   const findings: HealthFinding[] = [];
   for (const entry of entries.filter((candidate) => candidate.kind === "alsoAllow")) {
-    const actual = normalizedStringSet(entry.entries ?? []);
+    const actual = new Set(normalizeStringEntriesLower(entry.entries).toSorted());
     for (const expectedTool of expected) {
       if (actual.has(expectedTool)) {
         continue;
@@ -192,15 +192,6 @@ function toolAlsoAllowExpectedFindings(
     }
   }
   return findings;
-}
-
-function normalizedStringSet(entries: readonly string[]): ReadonlySet<string> {
-  return new Set(
-    entries
-      .map((entry) => entry.trim().toLowerCase())
-      .filter(Boolean)
-      .toSorted(),
-  );
 }
 
 function toolRequiredDenyFindings(

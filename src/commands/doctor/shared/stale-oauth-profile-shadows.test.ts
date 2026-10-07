@@ -13,7 +13,9 @@ import { saveAuthProfileStore } from "../../../agents/auth-profiles/store-runtim
 import type { AuthProfileStore, OAuthCredential } from "../../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { captureEnv } from "../../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { resolveLegacyAuthProfilesPath as resolveAuthStorePath } from "../../doctor-auth-legacy-paths.js";
+import { beginDoctorMaintenance } from "../../doctor-maintenance.js";
 import {
   collectStaleOAuthProfileShadowWarnings,
   repairStaleOAuthProfileShadows,
@@ -76,7 +78,11 @@ describe("stale OAuth profile shadow doctor repair", () => {
 
   afterEach(async () => {
     clearRuntimeAuthProfileStoreSnapshots();
-    envSnapshot.restore();
+    try {
+      await cleanupSessionStateForTest({ stateDir, rootPath: tempRoot });
+    } finally {
+      envSnapshot.restore();
+    }
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
@@ -287,7 +293,7 @@ describe("stale OAuth profile shadow doctor repair", () => {
     );
 
     const result = await repairStaleOAuthProfileShadows({
-      cfg: { agents: { entries: { telegram: { default: true } } } } satisfies OpenClawConfig,
+      cfg: { agents: { entries: { telegram: {} } } } satisfies OpenClawConfig,
       env,
       now,
     });
@@ -344,7 +350,7 @@ describe("stale OAuth profile shadow doctor repair", () => {
     expect(raw.profiles[profileId]?.oauthRef).toBeDefined();
   });
 
-  it("retires a local OAuth copy without changing the authored account order", async () => {
+  it("retires a local OAuth copy under Doctor maintenance without changing the authored order", async () => {
     const profileId = "anthropic:default";
     const now = Date.now();
     const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
@@ -387,10 +393,26 @@ describe("stale OAuth profile shadow doctor repair", () => {
       childAgentDir,
     );
 
-    const result = await repairStaleOAuthProfileShadows({
-      cfg: {} satisfies OpenClawConfig,
-      now,
+    await cleanupSessionStateForTest({ stateDir });
+    const maintenance = await beginDoctorMaintenance({
+      root: null,
+      options: { repair: true },
+      runtime: { log() {}, error() {}, exit() {} },
     });
+    if (!maintenance) {
+      throw new Error("Doctor did not acquire maintenance");
+    }
+    let result;
+    try {
+      result = await maintenance.run(() =>
+        repairStaleOAuthProfileShadows({
+          cfg: {} satisfies OpenClawConfig,
+          now,
+        }),
+      );
+    } finally {
+      await maintenance.release();
+    }
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toHaveLength(1);

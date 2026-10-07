@@ -71,7 +71,7 @@ export function getAgentTestMocks() {
 export function resolveAgentTestConfig(
   cfg: OpenClawConfig = mocks.loadConfigReturn,
 ): OpenClawConfig {
-  if (cfg.agents?.list) {
+  if (cfg.agents?.entries) {
     return cfg;
   }
   const agentIds = mocks.listAgentIds();
@@ -82,7 +82,7 @@ export function resolveAgentTestConfig(
     ...cfg,
     agents: {
       ...cfg.agents,
-      list: agentIds.map((id) => ({ id })),
+      entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
     },
   };
   if (cfg === mocks.loadConfigReturn) {
@@ -130,6 +130,13 @@ vi.mock("../../config/sessions.js", async () => {
     }) => `agent:${agentId}:${cfg?.session?.mainKey ?? "main"}`,
   };
 });
+
+// mock-isolation: Handler fixtures supply lifecycle timestamps without opening transcript readers.
+vi.mock("../../config/sessions/lifecycle-read.js", () => ({
+  resolveSessionLifecycleTimestampsAsync: async (
+    params: Parameters<typeof mocks.resolveSessionLifecycleTimestamps>[0],
+  ) => mocks.resolveSessionLifecycleTimestamps(params),
+}));
 
 vi.mock("../../config/sessions/session-accessor.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
@@ -252,10 +259,6 @@ vi.mock("../../agents/agent-scope.js", async () => {
   return {
     ...actual,
     listAgentIds: mocks.listAgentIds,
-    resolveDefaultAgentId: (cfg?: {
-      agents?: { list?: Array<{ id?: string; default?: boolean }> };
-    }) =>
-      cfg?.agents?.list?.find((agent) => agent.default)?.id ?? cfg?.agents?.list?.[0]?.id ?? "main",
     resolveSessionAgentId: ({
       sessionKey,
       agentId,
@@ -282,18 +285,9 @@ vi.mock("../../agents/agent-scope.js", async () => {
         sessionAgentId: agentId ?? parsedAgentId ?? fallbackAgentId ?? "main",
       };
     },
-    resolveAgentConfig: (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
-      cfg.agents?.list?.find((agent) => agent.id === agentId),
-    resolveAgentWorkspaceDir: (
-      cfg: {
-        agents?: {
-          defaults?: { workspace?: string };
-          list?: Array<{ id?: string; workspace?: string }>;
-        };
-      },
-      agentId?: string,
-    ) =>
-      cfg?.agents?.list?.find((agent) => agent.id === agentId)?.workspace ??
+    resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) => cfg.agents?.entries?.[agentId],
+    resolveAgentWorkspaceDir: (cfg: OpenClawConfig, agentId?: string) =>
+      (agentId ? cfg.agents?.entries?.[agentId]?.workspace : undefined) ??
       cfg?.agents?.defaults?.workspace ??
       "/tmp/workspace",
     resolveNativeModelPrimary: () => undefined,

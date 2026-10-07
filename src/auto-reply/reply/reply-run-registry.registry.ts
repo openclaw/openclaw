@@ -184,10 +184,16 @@ export const replyRunRegistry: ReplyRunRegistry = {
     const sourceTurnId = replyRunState.sourceTurnByKey.get(normalizedSessionKey);
     return {
       [replyMessageInjectionTargetOwner]: {
+        backendIdentity: backend,
         acceptParticipant: (overlay) => operation.personalToolParticipants?.accept(overlay),
         projectToolAuthorityFingerprint: (overlay) =>
           operation.projectToolAuthorityFingerprint(overlay),
-        resolve: (params) => resolveReplyMessageInjectionRejection({ ...params, operation }),
+        projectToolAuthorityFingerprintAsync: (overlay) =>
+          operation.projectToolAuthorityFingerprintAsync(overlay),
+        resolve: (params) =>
+          getAttachedBackend(operation) === backend
+            ? resolveReplyMessageInjectionRejection({ ...params, operation })
+            : { reason: "no_active_run" },
         recordAccepted: (options) => {
           operation.recordActivity();
           operation.markSteeredInputAccepted({ inboundAudio: options?.inboundAudio === true });

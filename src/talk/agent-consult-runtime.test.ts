@@ -297,7 +297,7 @@ describe("realtime voice agent consult runtime", () => {
     ]);
 
     const result = await runConsult({
-      cfg: { agents: { list: [{ id: "operator", default: true }] } } as never,
+      cfg: { agents: { entries: { operator: {} } } },
       agentRuntime: runtime as never,
       sessionKey: "voice:15550001234",
       runIdPrefix: "voice-realtime-consult:call-1",
@@ -307,6 +307,7 @@ describe("realtime voice agent consult runtime", () => {
       senderId: "+15550001234",
       senderIsOwner: true,
       toolsAllow: ["read"],
+      toolBindings: { voice_call: { kind: "active-call", callId: "call-1" } },
       provider: "openai",
       model: "gpt-5.4",
       thinkLevel: "high",
@@ -339,6 +340,9 @@ describe("realtime voice agent consult runtime", () => {
     expect(call.messageProvider).toBe("voice");
     expect(call.lane).toBe("voice");
     expect(call.toolsAllow).toStrictEqual(["read"]);
+    expect(call.toolBindings).toStrictEqual({
+      voice_call: { kind: "active-call", callId: "call-1" },
+    });
     expect(call.provider).toBe("openai");
     expect(call.model).toBe("gpt-5.4");
     expect(call.thinkLevel).toBe("high");
@@ -581,7 +585,7 @@ describe("realtime voice agent consult runtime", () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime();
 
     await runConsult({
-      cfg: { agents: { list: [{ id: "operator", default: true }] } } as never,
+      cfg: { agents: { entries: { operator: {} } } },
       agentRuntime: runtime as never,
       agentId: "voice",
       sessionKey: "voice:15550001234",
@@ -713,7 +717,7 @@ describe("realtime voice agent consult runtime", () => {
         const entry = params.fallbackEntry ?? { sessionId: "", updatedAt: Date.now() };
         const sessionEntry: SessionEntry = {
           ...entry,
-          ...params.patch?.({ entry, parentEntry: typedParentEntry, fork, decision }),
+          ...params.entryPatch?.forked,
           sessionId: fork.sessionId,
           forkedFromParent: true,
         };

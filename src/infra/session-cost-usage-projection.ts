@@ -143,7 +143,6 @@ export async function projectCostUsageSummary(
     startMs: number;
     endMs: number;
     dayBucket?: UsageDailyBucket;
-    refreshing: boolean;
   },
 ): Promise<CostUsageSummary> {
   const daily = new Map<string, CostUsageTotals>();
@@ -200,13 +199,6 @@ export async function projectCostUsageSummary(
     latestScan,
   );
   fillMissingDays(daily, params.startMs, params.endMs, formatDay);
-  const status = params.refreshing
-    ? "refreshing"
-    : staleFiles > 0
-      ? cachedFiles > 0
-        ? "partial"
-        : "stale"
-      : "fresh";
   return {
     updatedAt: Date.now(),
     days: countCalendarDays(params.startMs, params.endMs, formatDay),
@@ -215,7 +207,7 @@ export async function projectCostUsageSummary(
     ),
     totals,
     cacheStatus: {
-      status,
+      status: staleFiles === 0 ? "fresh" : cachedFiles > 0 ? "partial" : "stale",
       cachedFiles,
       pendingFiles: staleFiles,
       staleFiles,
@@ -233,7 +225,6 @@ export async function projectSessionCostSummaries(
     endMs?: number;
     includeUntimestamped?: boolean;
     dayBucket?: UsageDailyBucket;
-    refreshing: boolean;
   },
 ): Promise<{
   summaries: Array<SessionCostSummary | null>;
@@ -304,7 +295,7 @@ export async function projectSessionCostSummaries(
           formatDay,
         }),
         computedAt: entry.scannedAt,
-        ...(!fresh ? { refreshing: params.refreshing, staleSince: file.mtimeMs } : {}),
+        ...(!fresh ? { refreshing: false, staleSince: file.mtimeMs } : {}),
       };
     }
   }
@@ -317,14 +308,7 @@ export async function projectSessionCostSummaries(
   return {
     summaries,
     cacheStatus: {
-      status:
-        staleSessionFiles.size === 0
-          ? "fresh"
-          : params.refreshing
-            ? "refreshing"
-            : cachedFiles > 0
-              ? "partial"
-              : "stale",
+      status: staleSessionFiles.size === 0 ? "fresh" : cachedFiles > 0 ? "partial" : "stale",
       cachedFiles,
       pendingFiles: staleSessionFiles.size,
       staleFiles: staleSessionFiles.size,

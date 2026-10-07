@@ -1,12 +1,15 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ErrorCodes,
   errorShape,
   type SessionsForkResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
@@ -14,12 +17,14 @@ import {
   appendTranscriptMessage,
   createSessionEntryWithTranscript,
   listSessionEntriesCore,
+  listSessionBranches,
   loadSessionEntry,
   loadTranscriptEvents,
+  readSessionTranscriptMessageEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
-import * as sqliteSessionScope from "../../config/sessions/session-accessor.sqlite-scope.js";
+import * as messageCut from "../../config/sessions/session-accessor.sqlite-message-cut.js";
 import {
   getSessionKysely,
   resolveSqliteScope,
@@ -34,6 +39,7 @@ import {
 } from "../../config/sessions/session-sharing-store.native.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createRuntimeAgent } from "../../plugins/runtime/runtime-agent.js";
@@ -54,6 +60,7 @@ import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
+import * as repositoryCheckpoints from "../worker-environments/session-repository-checkpoints.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
 import { sessionSharingHandlers } from "./sessions-sharing.js";
@@ -70,7 +77,10 @@ type MutationMethod = (typeof mutationMethods)[number];
 type SourceScope = Awaited<ReturnType<typeof seedMessageCutSource>>;
 
 beforeEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
-afterEach(() => resetPluginRuntimeStateForTest());
+afterEach(() => {
+  vi.restoreAllMocks();
+  resetPluginRuntimeStateForTest();
+});
 
 it.each(mutationMethods)(
   "rejects %s while its source initializer is still running",
@@ -191,13 +201,19 @@ function context(): GatewayRequestContext {
 it.each([
   { kind: "visible", hidden: false },
   { kind: "hidden internal-effects", hidden: true },
-])("lists $kind session branches without decoding unrelated metadata", async ({ hidden }) => {
+])("lists $kind session branches without decoding saved snapshots", async ({ hidden }) => {
   await withOpenClawTestState({ label: "branch-list-bounded-read" }, async (state) => {
     await state.writeConfig(cfg);
     const identity = hidden
       ? resolveInternalSessionEffectsIdentity({ agentId: "main", runId: "branch-list-hidden" })
       : undefined;
     const scope = await seedMessageCutSource(false, identity);
+    const selectedPrompt = "selected-session-unused-skill-prompt".repeat(128);
+    await upsertSessionEntryCore(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      skillsSnapshot: { prompt: selectedPrompt, skills: [] },
+    });
     const unrelatedPrompt = "unrelated-session-skill-prompt".repeat(128);
     for (let index = 0; index < 3; index += 1) {
       await upsertSessionEntryCore(
@@ -238,6 +254,7 @@ it.each([
         undefined,
       );
       expect(parse.mock.calls.filter(([text]) => text.includes(unrelatedPrompt))).toHaveLength(0);
+      expect(parse.mock.calls.filter(([text]) => text.includes(selectedPrompt))).toHaveLength(0);
     } finally {
       parse.mockRestore();
     }
@@ -286,6 +303,82 @@ function invokeMessageCut(
   );
   return { respond, error };
 }
+
+it.each([
+  {
+    method: "sessions.rewind",
+    activeIds: ["user-1", "assistant-1"],
+    leafEntryId: "assistant-1",
+  },
+  {
+    method: "sessions.branches.switch",
+    activeIds: ["alternate-user"],
+    leafEntryId: "alternate-user",
+  },
+] as const)("executes the $method transaction with zero caller-thread SQL", async (testCase) => {
+  await withOpenClawTestState({ label: "message-cut-worker-boundary" }, async (state) => {
+    await state.writeConfig(cfg);
+    const scope = await seedMessageCutSource();
+    await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId });
+    const original = await loadTranscriptEvents(scope);
+    await expect(listSessionBranches(scope)).resolves.toMatchObject({
+      status: "ok",
+      branches: expect.arrayContaining([
+        expect.objectContaining({ leafEntryId: "user-2", active: true }),
+      ]),
+    });
+
+    const measured: string[][] = [];
+    const measure = async <T>(run: () => Promise<T>): Promise<T> => {
+      // The handler's other-owner authority reads precede this migrated operation.
+      const sql = observeHostDataSql();
+      try {
+        return await run();
+      } finally {
+        measured.push([...sql.queries]);
+        sql.restore();
+      }
+    };
+    const rewind = messageCut.rewindSessionToMessage;
+    const switchBranch = messageCut.switchSessionBranch;
+    const rewindSpy = vi
+      .spyOn(messageCut, "rewindSessionToMessage")
+      .mockImplementation((...args) => measure(() => rewind(...args)));
+    const switchSpy = vi
+      .spyOn(messageCut, "switchSessionBranch")
+      .mockImplementation((...args) => measure(() => switchBranch(...args)));
+    try {
+      const mutation = invokeMessageCut(testCase.method, scope);
+      expect(await mutation.error).toBeUndefined();
+      expect(mutation.respond).toHaveBeenCalledWith(
+        true,
+        testCase.method === "sessions.rewind" ? { editorText: "What did I say?" } : {},
+        undefined,
+      );
+      expect(measured).toEqual([[]]);
+    } finally {
+      rewindSpy.mockRestore();
+      switchSpy.mockRestore();
+    }
+
+    const entry = expectDefined(loadSessionEntry(scope), "rotated session");
+    expect(entry.sessionId).not.toBe(scope.sessionId);
+    expect(entry.previousSessionId).toBe(scope.sessionId);
+    expect(readSessionTranscriptMessageEvents({ ...scope, sessionId: entry.sessionId })).toEqual(
+      testCase.activeIds.map((id) =>
+        expect.objectContaining({ event: expect.objectContaining({ id }) }),
+      ),
+    );
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual(original);
+    const branches = await listSessionBranches(scope);
+    expect(branches.status).toBe("ok");
+    if (branches.status === "ok") {
+      expect(branches.branches.filter((branch) => branch.active)).toEqual([
+        expect.objectContaining({ leafEntryId: testCase.leafEntryId }),
+      ]);
+    }
+  });
+});
 
 it.each(mutationMethods)(
   "observes initialization written by another process for %s",
@@ -344,8 +437,10 @@ async function revokeDuringWriterWait(
   revoke: () => void | Promise<void>,
 ) {
   const resolved = resolveSqliteScope(scope);
+  await waitForSessionTranscriptIndexReconcile(toDatabaseOptions(resolved));
   const entered = createDeferredCore();
   const release = createDeferredCore();
+  const queued = createDeferredCore();
   const heldWriter = runExclusiveSqliteSessionWrite(
     resolved,
     async () => {
@@ -355,25 +450,24 @@ async function revokeDuringWriterWait(
     "session.transcript.batch",
   );
   await entered.promise;
-  const enqueueWrite = sqliteSessionScope.runExclusiveSqliteSessionWrite;
-  let sourceWriteQueued = false;
-  const writer = vi
-    .spyOn(sqliteSessionScope, "runExclusiveSqliteSessionWrite")
-    .mockImplementation((...args) => {
-      const [writeScope] = args;
-      const pending = enqueueWrite(...args);
-      if ("sessionKey" in writeScope && writeScope.sessionKey === scope.sessionKey) {
-        sourceWriteQueued = true;
-      }
-      return pending;
-    });
+  const enqueueWrite = storeWriterQueue.runQueuedStoreWrite;
+  const writer = vi.spyOn(storeWriterQueue, "runQueuedStoreWrite").mockImplementation((params) => {
+    const pending = enqueueWrite(params);
+    if (
+      params.label === "agent database write admission" &&
+      params.storePath === resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved))
+    ) {
+      queued.resolve();
+    }
+    return pending;
+  });
   const mutation = invoke();
   try {
-    // Branch seeding also queues database-wide projection work. Observe the source-scoped
-    // mutation's actual enqueue instead of counting unrelated writers in the same queue.
-    await vi.waitFor(() => {
-      expect(sourceWriteQueued).toBe(true);
-    });
+    await awaitGateBeforeSettlement(
+      queued.promise,
+      mutation.error,
+      "Message cut settled before joining its physical writer queue",
+    );
     await revoke();
   } finally {
     writer.mockRestore();
@@ -505,24 +599,24 @@ describe("sessions.fork storage ownership", () => {
     { kind: "incognito", incognito: true },
     { kind: "ordinary", incognito: false },
     { kind: "repository", incognito: false },
+    { kind: "repository-changed", incognito: false },
     { kind: "local-project", incognito: false },
   ])(
-    "keeps the $kind child accessible in its source storage class",
+    "preserves source and child storage ownership during $kind fork preparation",
     async ({ kind, incognito }) => {
       await withOpenClawTestState({ label: "message-fork-storage" }, async (testState) => {
         await testState.writeConfig(cfg);
         const sourceScope = await seedMessageCutSource(incognito);
         const { sessionKey } = sourceScope;
-        const repository =
-          kind === "repository"
-            ? await getSessionRepositoryWorkspaceStore().create({
-                agentId: "main",
-                sessionKey,
-                url: "https://github.com/openclaw/fixture.git",
-                runSetupScript: false,
-                assertCurrent: () => {},
-              })
-            : undefined;
+        const repository = kind.startsWith("repository")
+          ? await getSessionRepositoryWorkspaceStore().create({
+              agentId: "main",
+              sessionKey,
+              url: "https://github.com/openclaw/fixture.git",
+              runSetupScript: false,
+              assertCurrent: () => {},
+            })
+          : undefined;
         if (repository) {
           await upsertSessionEntryCore(sourceScope, {
             repositoryWorkspaceId: repository.workspaceId,
@@ -537,13 +631,104 @@ describe("sessions.fork storage ownership", () => {
             sessionRoot: projectRoot,
           });
         }
-        const sourceEntry = loadSessionEntry(sourceScope);
+        const sourceEntry = expectDefined(loadSessionEntry(sourceScope), "fork source");
         const sourceEvents = await loadTranscriptEvents(sourceScope);
-        const { respond, error } = invokeMessageCut("sessions.fork", sourceScope, {
-          sessionMutationCommitGuard: () => {},
-          sessionMutationAuthorization: { assertCurrent: () => {}, assertTargetCurrent: () => {} },
-        });
-        expect(await error).toBeUndefined();
+        const grants: string[] = [];
+        const sourceReads: string[] = [];
+        const agentPath = resolveOpenClawAgentSqlitePath({ agentId: sourceScope.agentId });
+        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+        const admission = repository
+          ? vi
+              .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+              .mockImplementation((callback, attachment) =>
+                createAdmission((request, grant) => {
+                  const facts = request.facts;
+                  if (
+                    (request.stage !== "transaction" && request.stage !== "commit") ||
+                    !isRecord(facts) ||
+                    !isRecord(facts.identity) ||
+                    facts.identity.nativeLocation !== agentPath
+                  ) {
+                    callback(request, grant);
+                    return;
+                  }
+                  // Repository S grants retain separate authority; observe only this agent writer.
+                  const sql = observeHostDataSql();
+                  try {
+                    grants.push(request.stage);
+                    callback(request, grant);
+                  } finally {
+                    sourceReads.push(
+                      ...sql.queries.filter((query) =>
+                        /^\s*(?:select|with)\b[\s\S]*\bsession_nodes\b/i.test(query),
+                      ),
+                    );
+                    sql.restore();
+                  }
+                }, attachment),
+              )
+          : undefined;
+        let racedStorage: Awaited<ReturnType<typeof readMutationStorage>> | undefined;
+        let repositoryForkId: string | undefined;
+        const prepareRepository = repositoryCheckpoints.forkSessionRepositoryWorkspace;
+        const preparation =
+          kind === "repository-changed"
+            ? vi
+                .spyOn(repositoryCheckpoints, "forkSessionRepositoryWorkspace")
+                .mockImplementation(async (...args) => {
+                  const target = await prepareRepository(...args);
+                  repositoryForkId = target.workspaceId;
+                  runOpenClawAgentWriteTransaction(
+                    (database) =>
+                      writeSessionEntry(database, sessionKey, {
+                        ...sourceEntry,
+                        repositoryWorkspaceId: undefined,
+                      }),
+                    { agentId: sourceScope.agentId },
+                  );
+                  racedStorage = await readMutationStorage(sourceScope);
+                  expect(racedStorage.source?.repositoryWorkspaceId).toBeUndefined();
+                  expect(racedStorage.source?.sessionId).toBe(sourceScope.sessionId);
+                  expect(racedStorage.source?.lifecycleRevision).toBe(
+                    sourceEntry.lifecycleRevision,
+                  );
+                  return target;
+                })
+            : undefined;
+        let mutation: ReturnType<typeof invokeMessageCut>;
+        try {
+          mutation = invokeMessageCut("sessions.fork", sourceScope, {
+            sessionMutationCommitGuard: () => {},
+            sessionMutationAuthorization: {
+              assertCurrent: () => {},
+              assertTargetCurrent: () => {},
+            },
+          });
+          expect(await mutation.error).toBeUndefined();
+        } finally {
+          admission?.mockRestore();
+          preparation?.mockRestore();
+        }
+        const { respond } = mutation;
+        if (kind === "repository-changed") {
+          expect(respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
+          );
+          expect(await readMutationStorage(sourceScope)).toEqual(racedStorage);
+          await expect(
+            getSessionRepositoryWorkspaceStore().get(
+              expectDefined(repositoryForkId, "prepared repository fork"),
+            ),
+          ).resolves.toBeUndefined();
+          return;
+        }
+        if (repository) {
+          expect(grants).toContain("transaction");
+          expect(grants).toContain("commit");
+          expect(sourceReads).toEqual([]);
+        }
 
         expect(respond).toHaveBeenCalledWith(
           true,
@@ -617,21 +802,22 @@ describe.each(["sessionMutationCommitGuard", "sessionMutationAuthorization"] as 
   "message-cut %s",
   (guardKind) => {
     it.each(mutationMethods)(
-      "revalidates %s authority inside the queued commit",
+      "revalidates %s authority at the transaction boundary",
       async (method) => {
         await withOpenClawTestState({ label: "message-cut-authority" }, async (testState) => {
           await testState.writeConfig(cfg);
           const scope = await seedMessageCutSource();
+          await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId });
           const before = await readMutationStorage(scope);
-          const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
           const denied = new SessionMutationAuthorizationChangedError(
             errorShape(ErrorCodes.FORBIDDEN, "admitted mutation authority was revoked"),
           );
           let current = true;
-          let rejectedInsideTransaction = false;
+          let workerCommitGrant = false;
+          let rejectedAtWriteEdge = false;
           const assertCurrent = () => {
             if (!current) {
-              rejectedInsideTransaction = database.db.isTransaction;
+              rejectedAtWriteEdge ||= workerCommitGrant;
               throw denied;
             }
           };
@@ -644,16 +830,26 @@ describe.each(["sessionMutationCommitGuard", "sessionMutationAuthorization"] as 
                     assertTargetCurrent: vi.fn(),
                   },
                 };
-          const mutation = await revokeDuringWriterWait(
-            scope,
-            () => invokeMessageCut(method, scope, guards),
-            () => {
-              current = false;
-            },
+          const create = workerAdmission.createSqliteWorkerOperationAdmission;
+          vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+            (callback, attachment) =>
+              create((request, grant) => {
+                workerCommitGrant = request.stage === "commit";
+                if (workerCommitGrant) {
+                  current = false;
+                }
+                try {
+                  callback(request, grant);
+                } finally {
+                  workerCommitGrant = false;
+                }
+              }, attachment),
           );
+          const mutation = invokeMessageCut(method, scope, guards);
+          await mutation.error;
 
           expect.soft(await readMutationStorage(scope)).toEqual(before);
-          expect.soft(rejectedInsideTransaction).toBe(true);
+          expect.soft(rejectedAtWriteEdge).toBe(true);
           expect(await mutation.error).toBe(denied);
           expect(mutation.respond).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
         });

@@ -70,23 +70,12 @@ async function createPreparationHandler(params: DeliverOutboundPayloadsParams) {
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
     silent: params.silent,
-    mediaAccess: resolveOutboundMediaAccessForSend(params, params.channel, []),
+    mediaAccess: resolveOutboundMediaAccessForSend(params, []),
     gatewayClientScopes: params.gatewayClientScopes,
     conversationReadOrigin: params.conversationReadOrigin,
     preparedMessageId: params.preparedMessageId,
     requiredUnknownSendReconciliation: params.requiredUnknownSendReconciliation,
   });
-}
-
-function suppressionReasonForEmpty(params: {
-  replyHookChanged: boolean;
-  messageHookChanged: boolean;
-}) {
-  return params.messageHookChanged
-    ? ("empty_after_message_sending_hook" as const)
-    : params.replyHookChanged
-      ? ("empty_after_reply_payload_sending_hook" as const)
-      : ("no_visible_payload" as const);
 }
 
 function compactPreparedPayload(payload: ReplyPayload): ReplyPayload {
@@ -336,10 +325,11 @@ async function prepareOutboundPlan(
       entries.push({
         sourceIndex,
         status: "suppressed",
-        reason: suppressionReasonForEmpty({
-          replyHookChanged: replyHookResult.changed,
-          messageHookChanged: messageHookResult.contentRewritten,
-        }),
+        reason: messageHookResult.contentRewritten
+          ? "empty_after_message_sending_hook"
+          : replyHookResult.changed
+            ? "empty_after_reply_payload_sending_hook"
+            : "no_visible_payload",
       });
       continue;
     }

@@ -37,7 +37,6 @@ export { shouldHandleTextCommands } from "./commands-text-routing.js";
 
 export type {
   ChatCommandDefinition,
-  CommandArgChoiceContext,
   CommandArgDefinition,
   CommandArgValues,
   CommandArgs,
@@ -233,11 +232,7 @@ export function isActiveRunSafeCommandTurn(params: {
 
 function parsePositionalArgs(definitions: CommandArgDefinition[], raw: string): CommandArgValues {
   const values: CommandArgValues = {};
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return values;
-  }
-  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  const tokens = raw.split(/\s+/);
   let index = 0;
   for (const definition of definitions) {
     if (index >= tokens.length) {
@@ -325,7 +320,7 @@ export function buildCommandTextFromArgs(
   return raw ? `/${commandName} ${raw}` : `/${commandName}`;
 }
 
-export type ResolvedCommandArgChoice = { value: string; label: string };
+type ResolvedCommandArgChoice = { value: string; label: string };
 
 /** Resolves static or context-aware choices for one command argument. */
 export function resolveCommandArgChoices(

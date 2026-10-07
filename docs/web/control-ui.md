@@ -22,6 +22,8 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.
+
 If the Gateway's request queue is full, automatic sidebar session discovery keeps the current rows and retries up to three times, respecting the server's retry delay. A persistent failure shows "The server is busy. Please try again in a moment." Other actions can show this message immediately; wait briefly, then retry the action.
 
 While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Home and System busyness open directly in their destination panels, with working headers and Close controls while the content loads. Brief loads do not flash placeholders; slower loads show placeholders inside the panel, and load errors offer Retry in the same place. The rest of the page stays usable. Drag the System busyness title bar to move the panel; its position is remembered in this browser. You can also focus the title bar and use the arrow keys (Shift moves farther). Compact/expanded transitions animate briefly, respect reduced motion, and keep the panel inside the window. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
@@ -31,6 +33,8 @@ The selected chat loads before automatic sidebar session lists refresh. Live eve
 Session details share concurrent reads across the sidebar, chat, and resource panels. Returning to an unchanged session reuses its details on the same connection. Session changes, explicit refreshes, and reconnects fetch current details; failed reads remain retryable.
 
 Sidebar pull-request indicators reuse the last known snapshot. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
+
+Background pull-request comparisons use local Git objects and never fetch missing history or blobs. If a partial clone lacks objects needed for the comparison, statistics can remain unavailable until those objects are fetched. A timed-out comparison skips its dependent checks, keeps the branch visible without statistics or a Create PR link, and logs a warning to fetch repository history and retry.
 
 The sidebar’s **Online** list shows compact person rows with avatar presence indicators: solid green means active, amber means idle, and a hollow green ring means connected with activity unavailable. Names stay on one line and fade at the edge when space is tight. The indicators, hovercard, and accessible description preserve the activity distinctions. A compact group at the end of each row shows a theme-accent spinner and running count, then a small message-circle icon and muted open count. Each icon-number pair uses tabular digits and keeps its natural width, with a wider gap between running and open groups. The group rests at the right edge; names and counts share a text baseline, without fixed digit columns. Counts have no pill background at rest, with explanatory tooltips; hovering or keyboard-focusing the row reveals a subtle grouping pill without shifting the content. Reduced motion keeps the spinner still. Known zero counts are omitted. Open counts each person’s owned, unarchived conversations that you can access across configured agents, excluding hidden subagents, automation, system, and global/unknown sessions. Running counts those conversations actively executing an agent turn, not queued work or activity in descendant sessions. Counts cover the matching sessions before pagination and do not change with your session-list filters. By default, all connected people remain visible, ordered Active, Idle, then Online with activity unavailable. Hover the **Online** block or focus it with the keyboard to reveal **Filter & sort**; the action stays available on touch devices. Its compact menu uses the existing dropdown controls: choose **All** or **Running**, and sort by **Active people first**, **Running sessions**, **Total sessions**, or **Name**. Mouse hover opens the choice submenus; selecting an option dismisses the menu. Count sorts put larger values first and unavailable counts last; **Total sessions** uses the open count above, not lifetime history. **Reset to defaults** appears only after a setting changes, below a single separator, and restores the default view. These controls only filter or order people; they do not change session-list queries or hide either counter. Unavailable counts show no placeholder; the row tooltip and accessible description identify them as unavailable rather than zero. A failed refresh keeps the last counts with a retry notice.
 
@@ -74,11 +78,12 @@ a separate status for execution, startup, or approval. **Keep commentary** in
 the chat view menu controls whether commentary stays visible after the run,
 not whether the active run’s narration survives a history refresh. Completed
 dashboard turns collapse their narration and tool activity under **Worked for …**
-above the answer. Expanding it restores the sequence with the existing tool-call
-groups. When no run duration is available, the heading reads **Worked**.
-The heading includes the total tool-call count followed by any failures, such as
-**Worked · 200 tool calls · 20 failed**. Calls without failures still show the
-total; turns without tool calls omit it.
+above the answer, with durations such as **Worked for 2 minutes, 3 seconds**.
+Expanding it restores the sequence with the existing tool-call groups and shows
+the total tool-call count. When no run duration is available, the heading reads
+**Worked** rather than estimating from message timestamps. Failures and other
+non-success outcomes remain visible even when collapsed, such as
+**Worked for 2 minutes, 3 seconds · 2 failed**.
 
 Consecutive tool activity shares one expandable log, including when background
 work resumes in a new run. Visible messages, media, and conversation markers
@@ -96,14 +101,23 @@ When an incoming message causes an unstarted tool call to be skipped, its card
 and work summary show **Skipped**, including after reloading the conversation.
 Approval blocks and tool failures keep their separate outcomes.
 
-Subagent runs appear in their session transcripts, outside sidebar navigation.
-Inspect them from the parent conversation with `/subagents list`,
-`/subagents info <id|#>`, and `/subagents log <id|#>`. Opening a child transcript
-is view-only; continue the conversation in its parent session.
+Open the parent conversation's side panel and select **Subagents** from its **+**
+menu to inspect ordinary child runs. The panel groups running and finished work,
+keeping children waiting on their own descendants under **Running**. It shows
+elapsed time and available tool activity, and opens each child's existing
+view-only transcript beside the parent. It does not add rows to the left sidebar;
+Swarm members remain in their parallel-tasks view. A directly opened child page
+offers **Open parent session**. The `/subagents list`, `/subagents info <id|#>`,
+and `/subagents log <id|#>` commands remain available.
 
-The **running tasks** indicator previews only active background tasks (running or
-queued). Its tooltip shows up to five tasks, with an overflow count for additional
-active tasks. Select the indicator to open the full task list, including finished tasks.
+Open **Processes** from the chat header's **Panels** menu or the side-panel **+**
+menu to inspect the conversation's background exec commands. It is separate from
+**Subagents**. Running and retained finished processes show status and elapsed
+time. **Finished** starts collapsed; click its heading to expand or collapse the
+list. Selecting a process opens its recent output. **Stop** targets that exact
+process, not the parent conversation or another command with the same name.
+Hidden panels stop refreshing. Output follows the process owner's temporary
+retention limits; viewing it does not drain output waiting for the agent.
 
 Select a session's title in the chat header to rename it. Enter saves the name;
 Escape cancels the edit. While an input method is composing text, Enter and
@@ -134,6 +148,13 @@ Existing workspace instructions are never overwritten. If `AGENTS.md` already
 contains different instructions, choose a new workspace for the custom agent.
 Created agents appear in Agents home and
 the agent switcher.
+
+The sidebar agent menu uses horizontal rows with a bounded, scrollable list.
+With more than six agents, **Find an agent…** filters by display name or agent ID;
+matching names retain their existing pinned order. Duplicate names show their
+IDs underneath. New-agent, directory, capability, and settings actions stay outside
+the scrolling list. Reopening the menu clears the filter and brings the selected
+agent into view.
 Opening **New agent** keeps your existing Ask OpenClaw conversation. Finish any
 pending wizard or approval before opening the creation choices.
 If team creation stops partway through, the custodian reports the retained
@@ -208,7 +229,7 @@ Local onboarding generates a Gateway secret in token mode by default, without a 
 
 ## Agents home
 
-Open **Agents** in the sidebar, choose **All agents** in the agent switcher, or
+Open **Agents** in the sidebar, choose **See all agents** in the agent menu, or
 visit `/agents` to see your configured agents as a roster. Each card shows the
 agent's identity, model, current work status, last activity, and a preview from its
 main chat. **Open chat** opens that agent's
@@ -218,28 +239,34 @@ main session. Working agents appear first, followed by the most recently active.
 agent creation flow when available, or agent settings otherwise. `/agents` now
 opens the roster; agent configuration remains at `/settings/agents`.
 
-To browse sessions across agents, choose **Show all agents** in the
-agent switcher. This enables **team mode**, a browser preference that is off by
-default. The top row becomes a workspace header with the configured Gateway display
-name, or **OpenClaw**, and the OpenClaw mark. Its menu contains **Show one agent**,
-**Agent settings**, and the existing documentation, help, community, and changelog
-links. Pinned sessions stay in **Pages**, using their agent's avatar as the icon.
+To browse sessions across agents, choose the **Show all** tile in the agent
+switcher. It appears with two or more agents and groups their own avatars: two
+overlap diagonally, three or four form a two-column grid, and five or more show
+three avatars plus a remaining-agent count. This enables **team mode**, a browser
+preference that is off by default. The top row becomes a workspace header with
+the configured Gateway display name, or **OpenClaw**, and a small static OpenClaw mark.
+Both modes use the same menu: agent tiles, **New agent**, **See all agents**, then
+a divider before **What can Harbor do?** and **Harbor settings**, named for the
+active agent. **See all agents** opens `/agents`; the named settings action opens
+that agent’s configuration. The selected tile has an avatar ring. Help and its
+links remain in the account menu. Pinned sessions stay in **Pages**, using their
+agent's avatar as the icon.
 Other sessions appear under collapsible agent headers in configured roster order,
 which stays stable as activity changes. **Home** disappears from Pages: click an agent header's avatar or name to
 open that agent's main chat. The separate collapse control only folds its sessions.
 The top **+**, labeled **New conversation**, opens an agent menu with avatars and names in
 the same order as the groups; choosing an agent opens New session for that agent.
 Each group's **+** does this directly, appearing on hover or keyboard focus and remaining visible on touch devices. Selecting a session switches the active
-agent for chat. Choose **Show one agent** in the workspace menu to restore the
-agent chip, Home row, and direct New session button.
+agent for chat. Choose a named agent tile in the workspace menu to leave team
+mode with that agent selected, restoring the agent chip, Home row, and direct
+New session button.
 
-Enabling team mode also defaults the shared page scope to **All agents**, while
-remembering the previous scope to restore when you turn it off. That scope,
+Choosing **Show all** defaults the shared page scope to **All agents**. That scope,
 including an explicit **All agents** selection, is saved in this browser for each
 gateway. It survives reloads and switching to another gateway and back, even if
-you open a different agent's chat in team mode. Turning team mode off clears the
-remembered value after restoring it. You can still
-choose a narrower scope; navigating between pages does not reset that choice.
+you open a different agent's chat in team mode. Choosing a named agent tile leaves
+team mode and scopes pages to that agent. You can still choose a narrower page
+scope while in team mode; navigating between pages does not reset that choice.
 Automations, Dashboards, Sessions, and Usage support all-agent views, with
 agent identity shown on mixed-agent rows. In Settings, choose an agent below the
 sidebar title to keep the same target across Agents, Models, Memory, and Skills.

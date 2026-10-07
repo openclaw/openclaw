@@ -1,6 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
-import type { DatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
+import type {
+  DatabaseFileIdentity,
+  DatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 
 // v24 separates keyed cold session snapshots from hot entry facts without rewriting transcripts.
@@ -29,6 +32,10 @@ export const AGENT_STORAGE_SCHEMA_VERSION = 23;
 export const TRANSCRIPT_FTS_ROW_SCHEMA_VERSION = 22;
 export const AGENT_MEDIA_SCHEMA_VERSION = 17;
 export const CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION = 21;
+// Bound the disk work shared by startup inspection, admission, and canonical preparation.
+export const AGENT_DATABASE_PREFLIGHT_CONCURRENCY = 2;
+// Bounds startup session reconciliation for large fleets without letting one slow store hold every slot.
+export const AGENT_DATABASE_PREPARATION_CONCURRENCY = 4;
 
 /** Open per-agent SQLite database handle plus lifecycle maintenance. */
 export type OpenClawAgentDatabase = {
@@ -70,6 +77,13 @@ export type OpenClawAgentDatabaseRegistrationCommit = Readonly<{
   stateDatabasePath: string;
   stateDatabaseIdentity: string;
 }>;
+
+export type AgentDatabaseRegistryWorkerOperations = {
+  "agentDatabaseRegistry.remove": {
+    input: { agentId: string; agentPath: string; identity: DatabasePathIdentity };
+    output: OpenClawAgentDatabaseRegistrationCommit;
+  };
+};
 
 export type OpenClawAgentDatabaseRegistrationObserver = {
   starting?: () => void;

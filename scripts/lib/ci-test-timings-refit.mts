@@ -1,5 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import { decodeNodeTestGroups } from "./ci-node-test-groups-codec.mts";
+import type { NodeTestShardGroup } from "./ci-node-test-plan.mts";
 import {
   NATIVE_SOLO_TIMING_PROFILE,
   createNativeSoloTimingKey,
@@ -36,14 +37,11 @@ export type CiTimingRun = {
 type Samples = Map<string, number[]>;
 type WorkerCeilings = Map<string, Set<number | "unspecified" | "ambiguous">>;
 
-type RuntimeTimingGroup = {
-  shard_name: string;
-  timing_key?: string;
-  configs: string[];
+type RuntimeTimingGroup = Omit<
+  NodeTestShardGroup,
+  "runner" | "requiresDist" | "pretestBuildMode" | "includePatterns"
+> & {
   includePatterns?: string[] | null;
-  env?: Record<string, string>;
-  fallbackMaxWorkers?: number;
-  minTotalMemoryBytes?: number;
 };
 
 function readRuntimeTimingGroups(text: string): RuntimeTimingGroup[] {

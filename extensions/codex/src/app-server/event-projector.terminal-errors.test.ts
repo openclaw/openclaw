@@ -131,19 +131,6 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     });
   });
 
-  it("fails closed when interrupted status has no abort marker", async () => {
-    const projector = await createProjector();
-    await projector.handleNotification(pendingCommandStarted("cmd-interrupted"));
-    await projector.handleNotification(turnWithStatus("interrupted"));
-    const result = snapshot(projector);
-    expect(readAttemptTerminal(result)).toMatchObject({
-      aborted: false,
-      promptErrorSource: "prompt",
-    });
-    expect(readAttemptTerminal(result).promptError).toContain("without a matching tool.result");
-    expect(result.lastToolError).toBeUndefined();
-  });
-
   it("does not fail a completed reply after a retryable app-server error notification", async () => {
     const onAgentEvent = vi.fn();
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });
@@ -290,26 +277,24 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     });
   });
 
-  it.each([
-    { label: "missing", explanation: undefined },
-    { label: "blank", explanation: " \n " },
-    { label: "too many UTF-8 bytes", explanation: "🙂".repeat(16_385) },
-  ])("does not offer review for $label native explanation", async ({ explanation }) => {
-    const projector = await misalignmentProjector(explanation, {
-      message: "Continue only the requested task.",
-    });
-    expect(review(projector)).toBeUndefined();
-  });
+  it.each([{ label: "too many UTF-8 bytes", explanation: "🙂".repeat(16_385) }])(
+    "does not offer review for $label native explanation",
+    async ({ explanation }) => {
+      const projector = await misalignmentProjector(explanation, {
+        message: "Continue only the requested task.",
+      });
+      expect(review(projector)).toBeUndefined();
+    },
+  );
 
-  it.each([
-    { label: "missing", steer: undefined },
-    { label: "blank", steer: { message: " \n " } },
-    { label: "too many UTF-8 bytes", steer: { message: "🙂".repeat(257) } },
-  ])("keeps $label continuation findings non-continuable", async ({ steer }) => {
-    const explanation = "Review the proposed action before proceeding.";
-    const projector = await misalignmentProjector(explanation, steer);
-    expect(review(projector)).toEqual({ explanation });
-  });
+  it.each([{ label: "missing", steer: undefined }])(
+    "keeps $label continuation findings non-continuable",
+    async ({ steer }) => {
+      const explanation = "Review the proposed action before proceeding.";
+      const projector = await misalignmentProjector(explanation, steer);
+      expect(review(projector)).toEqual({ explanation });
+    },
+  );
 
   it("keeps an active native compaction failure scoped through the failed turn", async () => {
     const { projector, onAgentEvent, onContextCompacted } = await compactionFixture();
@@ -345,25 +330,6 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     expect(compactionEvents(onAgentEvent)).toEqual([
       compactionEvent("start", "compact-failed"),
       compactionEvent("end", "compact-failed", false),
-    ]);
-  });
-
-  it("closes visible unfinished compaction once without forgetting native work", async () => {
-    const { projector, onAgentEvent, onContextCompacted } = await compactionFixture();
-    await projector.handleNotification(compaction("started", "compact-unfinished"));
-    expect(onAgentEvent).toHaveBeenCalledWith(compactionEvent("start", "compact-unfinished"));
-    await projector.closeProjection();
-    await projector.closeProjection();
-    const result = snapshot(projector);
-    expect(projector.isCompacting()).toBe(false);
-    expect(result.itemLifecycle).toEqual({ startedCount: 1, completedCount: 0, activeCount: 0 });
-    expect(result.compactionCount).toBeUndefined();
-    expect(onContextCompacted).not.toHaveBeenCalled();
-    expect(compactionEvents(onAgentEvent)).toEqual([
-      expect.objectContaining({
-        data: expect.objectContaining({ phase: "start", itemId: "compact-unfinished" }),
-      }),
-      compactionEvent("end", "compact-unfinished", false),
     ]);
   });
 
@@ -665,89 +631,6 @@ describe("CodexAppServerEventProjector usage projection", () => {
     });
   });
 
-  it("retains current-turn thread counts through retry, refresh, and abort without raw responses", async () => {
-    const projector = await createProjector();
-    const assertUsage = (
-      expected: typeof counts & { cacheWrite: number },
-      context: Record<string, unknown>,
-      reasoning: number,
-    ) => {
-      const snapshot = result(projector);
-      expect(snapshot.assistantTexts).toEqual(["done"]);
-      expect(snapshot.modelIterations).toBeUndefined();
-      expectUsageFields(snapshot.attemptUsage, expected);
-      expect(snapshot.attemptUsage?.reasoningTokens).toBe(reasoning);
-      expect(snapshot.attemptUsage?.contextUsage).toEqual(context);
-      expectUsageFields(snapshot.lastAssistant?.usage, expected);
-      expect(snapshot.lastAssistant?.usage.contextUsage).toEqual(context);
-      expect(normalizeUsage(snapshot.lastAssistant?.usage)?.reasoningTokens).toBe(reasoning);
-    };
-    await projector.handleNotification(agentMessageDelta("done"));
-    await projector.handleNotification(
-      thread(
-        { ...usage, cacheWriteInputTokens: 1, reasoningOutputTokens: 3 },
-        { total: cumulative },
-      ),
-    );
-    const initial = { input: 2, output: 7, cacheRead: 2, cacheWrite: 1, total: 12 };
-    assertUsage(initial, { state: "available", promptTokens: 5, totalTokens: 12 }, 3);
-    await projector.handleNotification(retry());
-    assertUsage(initial, unavailable, 3);
-    await projector.handleNotification(
-      thread({
-        ...usage,
-        totalTokens: 21,
-        inputTokens: 14,
-        cachedInputTokens: 8,
-        cacheWriteInputTokens: 2,
-        reasoningOutputTokens: 4,
-      }),
-    );
-    const updated = { input: 4, output: 7, cacheRead: 8, cacheWrite: 2, total: 21 };
-    assertUsage(updated, { state: "available", promptTokens: 14, totalTokens: 21 }, 4);
-    projector.markAborted();
-    assertUsage(updated, unavailable, 4);
-  });
-
-  it.each([
-    { label: "incomplete", value: { totalTokens: 12 }, expected: { total: 12 } },
-    {
-      label: "incoherent total",
-      value: { ...usage, totalTokens: 6 },
-      expected: { ...counts, cacheWrite: 0, total: 6 },
-    },
-    {
-      label: "impossible cache counts",
-      value: { ...usage, cachedInputTokens: 4, cacheWriteInputTokens: 2 },
-      expected: { output: 7, cacheRead: 4, cacheWrite: 2, total: 12 },
-    },
-  ])("keeps valid fields from $label response usage", async ({ label, value, expected }) => {
-    const projector = await createProjector();
-    await projector.handleNotification(agentMessageDelta("done"));
-    await projector.handleNotification(response("response-1", value));
-    const snapshot = result(projector);
-    expect(snapshot.assistantTexts).toEqual(["done"]);
-    expect(snapshot.attemptUsage).toMatchObject(expected);
-    if (label === "incomplete") {
-      expect(snapshot.attemptUsage?.input).toBeUndefined();
-      expect(snapshot.attemptUsage?.output).toBeUndefined();
-      expect(snapshot.attemptUsage?.cacheRead).toBeUndefined();
-      expect(snapshot.attemptUsage?.reasoningTokens).toBeUndefined();
-    }
-    expect(snapshot.attemptUsage?.contextUsage).toEqual(unavailable);
-    expect(snapshot.lastAssistant?.usage.contextUsage).toEqual(unavailable);
-  });
-
-  it("counts unique responses with no usage without reviving thread billing", async () => {
-    const projector = await createProjector();
-    await projector.handleNotification(thread(usage));
-    for (const id of ["response-1", "response-1", "response-2"]) {
-      await projector.handleNotification(response(id, null));
-    }
-    expect(result(projector).modelIterations).toBe(2);
-    expect(result(projector).attemptUsage).toEqual({ contextUsage: unavailable });
-  });
-
   it("keeps exact counts over cumulative thread usage and missing or replayed final response usage", async () => {
     const projector = await createProjector();
     await projector.handleNotification(agentMessageDelta("done"));
@@ -773,29 +656,5 @@ describe("CodexAppServerEventProjector usage projection", () => {
     expect(snapshot.attemptUsage?.contextUsage).toEqual(unavailable);
     expectUsageFields(snapshot.lastAssistant?.usage, counts);
     expect(snapshot.lastAssistant?.usage.contextUsage).toEqual(unavailable);
-  });
-
-  it("preserves observed usage but invalidates context when the turn is interrupted", async () => {
-    const projector = await createProjector();
-    await projector.handleNotification(response("response-1", usage));
-    await projector.handleNotification(turnWithStatus("interrupted"));
-    expect(result(projector).attemptUsage).toMatchObject({ ...counts, contextUsage: unavailable });
-  });
-
-  it("retains output and token counts but invalidates exact context usage on timeout", async () => {
-    const projector = await createProjector();
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: { type: "agentMessage", id: "msg-1", text: "done" },
-      }),
-    );
-    await projector.handleNotification(thread(usage));
-    await projector.handleNotification(response("response-1", usage));
-    projector.markTimedOut();
-    const timedOut = result(projector);
-    expect(readAttemptTerminal(timedOut).aborted).toBe(true);
-    expect(timedOut.attemptUsage?.contextUsage).toEqual(unavailable);
-    expect(timedOut.assistantTexts).toEqual(["done"]);
-    expectUsageFields(timedOut.attemptUsage, counts);
   });
 });

@@ -7,6 +7,7 @@ import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-work
 import type { DomainScope } from "../state/openclaw-state-worker-store.types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentInternalEvent } from "./internal-events.js";
+import { projectSubagentRunForSessionList } from "./subagents/registry/subagent-delivery-state.js";
 import type { RegisterSubagentRunParams } from "./subagents/registry/subagent-registry-run-launch-record.js";
 import type * as RegistryState from "./subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
@@ -136,6 +137,8 @@ export function createSubagentStateMock(
 ) {
   return {
     // Policy fixtures supply retained rows in memory; worker custody uses the real state owner.
+    getSubagentSessionListRunsSnapshotForRead: (runs: Map<string, SubagentRunRecord>) =>
+      new Map([...runs].map(([id, entry]) => [id, projectSubagentRunForSessionList(entry)])),
     withSubagentRunReadSnapshot: (async (runs, select, consume) => {
       await Promise.resolve();
       const selected = select(new Map(runs));

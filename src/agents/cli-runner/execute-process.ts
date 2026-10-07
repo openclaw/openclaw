@@ -28,7 +28,6 @@ import {
   createCliFailoverError,
   resolveCliResumeAtError,
 } from "./exit-error.js";
-import { buildCliSupervisorScopeKey } from "./helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
 import type { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
 import {
@@ -36,6 +35,7 @@ import {
   resolveCliNoOutputTimeoutDecision,
 } from "./no-output-timeout-policy.js";
 import { createCliOutputFailoverError } from "./output-error.js";
+import { buildCliSupervisorScopeKey } from "./reliability.js";
 import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
 
 const CLI_RUNNER_OUTPUT_PARSE_BYTES = 1024 * 1024;
@@ -352,8 +352,7 @@ export async function executeCliProcess(params: {
   }
   params.options?.onPhase?.("resolve");
   streamingParser?.finish();
-  const streamingParserErrorText =
-    params.outputMode === "jsonl" ? (streamingParser?.getErrorText() ?? null) : null;
+  const streamingParserErrorText = streamingParser?.getErrorText();
   if (streamingParserErrorText) {
     throw createCliFailoverError(streamingParserErrorText, "format", failoverContext);
   }
@@ -407,8 +406,7 @@ export async function executeCliProcess(params: {
     }
   }
 
-  const streamedJsonlOutput =
-    params.outputMode === "jsonl" ? (streamingParser?.getOutput() ?? null) : null;
+  const streamedJsonlOutput = streamingParser?.getOutput();
   const parsedStructuredOutput =
     streamedJsonlOutput ??
     (params.outputMode === "json" && stdoutCapture.truncatedBytes === 0

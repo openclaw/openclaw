@@ -8,16 +8,15 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import {
+  isAgentDatabaseInspectionPendingError,
+  resolveGatewayReadRetryDelayMs,
+} from "../../lib/gateway-availability.ts";
+import {
   isUiSelectedGlobalSessionKey,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { subscribeToSharedRequest } from "../../lib/shared-request-subscription.ts";
-import {
-  CHAT_HISTORY_RETRY_WINDOW_MS,
-  isAgentDatabaseInspectionPendingError,
-  isRetryableChatReadError,
-  resolveChatReadRetryDelayMs,
-} from "./chat-history-retry.ts";
+import { CHAT_HISTORY_RETRY_WINDOW_MS, isRetryableChatReadError } from "./chat-history-retry.ts";
 import {
   type ChatHistoryResult,
   type ChatHistoryObservation,
@@ -141,7 +140,7 @@ async function requestChatHistory<T extends ChatHistoryResponse>(
         throw err;
       }
       onRetry(err);
-      await sleepWithAbort(resolveChatReadRetryDelayMs(err, attemptNumber++), signal);
+      await sleepWithAbort(resolveGatewayReadRetryDelayMs(err, attemptNumber++), signal);
       if (!shouldContinue() || !shouldRetry()) {
         throw err;
       }
@@ -400,29 +399,15 @@ export async function loadOlderChatHistoryPage(
   return result;
 }
 
-export type StagedOlderHistoryPage = {
-  claim: {
-    client: GatewayBrowserClient;
-    connectionEpoch: number;
-    sessionKey: string;
-    agentId?: string;
-    /** Projection fence: any later history request or reset (tail reload,
-     * rewind, branch switch) advances the version and voids this page even
-     * when the replacement projection lands on the same cursor. */
-    historyVersion: number;
-  };
-  requestedOffset: number;
-  result: ChatHistoryResult;
-};
+export type StagedOlderHistoryPage = NonNullable<
+  Awaited<ReturnType<typeof fetchStagedOlderHistoryPage>>
+>;
 
 // The staged prefetch deliberately skips beginHistoryRequest: request
 // ownership is last-writer-wins, so a background fetch bumping the version
 // could invalidate a concurrent tail load's apply. The claim below carries the
 // same facts and the pane validates it at consume time instead.
-export async function fetchStagedOlderHistoryPage(
-  state: ChatState,
-  offset: number,
-): Promise<StagedOlderHistoryPage | undefined> {
+export async function fetchStagedOlderHistoryPage(state: ChatState, offset: number) {
   if (!state.client || !state.connected) {
     return undefined;
   }
@@ -439,6 +424,7 @@ export async function fetchStagedOlderHistoryPage(
       client,
       connectionEpoch,
       sessionKey,
+      // Any later history request or reset voids this page even on the same cursor.
       historyVersion,
       ...(requestAgentId ? { agentId: requestAgentId } : {}),
     },

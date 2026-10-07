@@ -4,6 +4,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureActiveCronJobAgentDeletion } from "../cron/active-jobs.js";
+import {
+  withCronReceiptAuthorityMutation,
+  type CronReceiptAuthorityMutation,
+} from "../cron/store/receipt-authority-owner.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -33,7 +37,11 @@ import type {
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
-import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
+import {
+  captureOpenClawStateReadWorkerContext,
+  captureOpenClawStateWorkerContext,
+} from "../state/openclaw-state-worker-context.js";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 
 export class AgentDeletionAuthorityRollbackError extends AggregateError {}
@@ -73,22 +81,56 @@ export type AgentDeletionOperation = {
   finish: () => void;
   completeInTransaction: (database: OpenClawStateDatabase) => void;
   handoffToRetry: (database: OpenClawStateDatabase) => void;
-  rollback: () => void;
+  rollback: () => Promise<void>;
 };
+
+type AgentDeletionTransaction = <T>(
+  run: (
+    database: OpenClawStateDatabase,
+    begin: (entry: AgentDeletionInput) => AgentDeletionOperation,
+  ) => T,
+) => Promise<T>;
+
+function publishDeletionAuthorityAfterCommit(
+  database: OpenClawStateDatabase,
+  mutation: CronReceiptAuthorityMutation,
+): void {
+  mutation.assertCurrent();
+  if (
+    !stageSqliteTransactionState(database.db, {
+      stage() {},
+      rollback() {},
+      commit: () => mutation.publish({ nonce: mutation.attachment.nonce, sequence: 1 }),
+    })
+  ) {
+    throw new Error("Agent deletion publication requires its transaction owner");
+  }
+}
 
 const log = createSubsystemLogger("agents/lifecycle");
 
 /** Acquire before the config lock and retain ownership through cleanup and recovery. */
 export function withAgentDeletion<T>(
   agentId: string,
-  run: (begin: (entry: AgentDeletionInput) => AgentDeletionOperation) => Promise<T>,
+  run: (
+    begin: (entry: AgentDeletionInput) => Promise<AgentDeletionOperation>,
+    transact: AgentDeletionTransaction,
+  ) => Promise<T>,
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<T> {
   const id = normalizeAgentId(agentId);
+  if (isReservedSystemAgentId(id)) {
+    throw new Error(
+      `System agent ${id} cannot be deleted; run openclaw doctor --fix to quarantine invalid deletion history.`,
+    );
+  }
   const statePath = path.resolve(
-    options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
+    options.database?.path ??
+      options.path ??
+      resolveOpenClawStateSqlitePath(options.env ?? process.env),
   );
   const stateOptions = { ...options, path: statePath, env: { ...(options.env ?? process.env) } };
+  const receiptContext = captureOpenClawStateWorkerContext(stateOptions);
   return withOpenClawStateLease(
     {
       scope: "core:agent-deletion",
@@ -105,34 +147,33 @@ export function withAgentDeletion<T>(
       let begun = false;
       let closed = false;
       try {
-        return await run((entry) => {
+        const begin = (
+          journalDatabase: OpenClawStateDatabase,
+          entry: AgentDeletionInput,
+        ): AgentDeletionOperation => {
           if (closed || begun || normalizeAgentId(entry.agentId) !== id) {
             throw new Error(`Agent ${id} deletion already began or has a different target.`);
           }
           begun = true;
           const operationId = crypto.randomUUID();
-          const journal = runOpenClawStateWriteTransaction((database) => {
-            lease.assertOwnedInTransaction(database.db);
-            const cancelCronRuns = captureActiveCronJobAgentDeletion(
-              id,
-              requireOpenClawStateDatabaseIdentity(database).key,
-            );
-            const entryJournal = beginAgentDeletionJournal(
-              { ...entry, agentId: id, operationId, deleteFiles: entry.deleteFiles !== false },
-              stateOptions,
-            );
-            // Revoke before cleanup preparation can yield, but never for a rolled-back journal.
-            if (
-              !stageSqliteTransactionState(database.db, {
-                stage() {},
-                rollback() {},
-                commit: cancelCronRuns,
-              })
-            ) {
-              throw new Error("Agent deletion requires a managed transaction");
-            }
-            return entryJournal;
-          }, stateOptions);
+          const cancelCronRuns = captureActiveCronJobAgentDeletion(
+            id,
+            requireOpenClawStateDatabaseIdentity(journalDatabase).key,
+          );
+          const journal = beginAgentDeletionJournal(
+            { ...entry, agentId: id, operationId, deleteFiles: entry.deleteFiles !== false },
+            stateOptions,
+          );
+          // Revoke before cleanup preparation can yield, but never for a rolled-back journal.
+          if (
+            !stageSqliteTransactionState(journalDatabase.db, {
+              stage() {},
+              rollback() {},
+              commit: cancelCronRuns,
+            })
+          ) {
+            throw new Error("Agent deletion requires a managed transaction");
+          }
           const readContext = captureOpenClawStateReadWorkerContext(stateOptions);
           const assertJournalIdentity = (
             currentStatePath: string,
@@ -202,10 +243,19 @@ export function withAgentDeletion<T>(
             await verifyLease();
             assertAsyncScopeCurrent();
           };
-          const mutateJournal = <Result>(mutate: () => Result): Result =>
+          const mutateJournal = <Result>(
+            mutate: () => Result,
+            mutation?: CronReceiptAuthorityMutation,
+          ): Result =>
             runOpenClawStateWriteTransaction((database) => {
+              mutation?.assertCurrent();
               assertCurrent(database);
-              return mutate();
+              if (mutation) {
+                publishDeletionAuthorityAfterCommit(database, mutation);
+              }
+              const result = mutate();
+              mutation?.assertCurrent();
+              return result;
             }, stateOptions);
           const completeInTransaction = (database: OpenClawStateDatabase) => {
             assertCurrent(database);
@@ -283,14 +333,48 @@ export function withAgentDeletion<T>(
             completeInTransaction,
             finish: () => runOpenClawStateWriteTransaction(completeInTransaction, stateOptions),
             rollback: () =>
-              mutateJournal(() => {
-                if (!removeAgentDeletionJournal(id, operationId, stateOptions)) {
-                  throw new Error(`Failed to roll back deletion journal for agent ${id}.`);
-                }
-                closed = true;
-              }),
+              withCronReceiptAuthorityMutation(
+                receiptContext,
+                async (mutation) =>
+                  mutateJournal(() => {
+                    if (!removeAgentDeletionJournal(id, operationId, stateOptions)) {
+                      throw new Error(`Failed to roll back deletion journal for agent ${id}.`);
+                    }
+                    closed = true;
+                  }, mutation),
+                { settlement: true },
+              ),
           };
-        });
+        };
+        const transact: AgentDeletionTransaction = (apply) => {
+          if (closed) {
+            return Promise.reject(
+              new Error(`Agent ${id} deletion already began or has a different target.`),
+            );
+          }
+          return withCronReceiptAuthorityMutation(receiptContext, async (mutation) =>
+            runOpenClawStateWriteTransaction((database) => {
+              mutation.assertCurrent();
+              lease.assertOwnedInTransaction(database.db);
+              publishDeletionAuthorityAfterCommit(database, mutation);
+              let active = true;
+              try {
+                const result = apply(database, (entry) => {
+                  if (!active) {
+                    throw new Error("Agent deletion transaction has settled");
+                  }
+                  mutation.assertCurrent();
+                  return begin(database, entry);
+                });
+                mutation.assertCurrent();
+                return result;
+              } finally {
+                active = false;
+              }
+            }, stateOptions),
+          );
+        };
+        return await run((entry) => transact((_database, claim) => claim(entry)), transact);
       } finally {
         closed = true;
       }
@@ -303,8 +387,22 @@ export function claimCompletedAgentDeletion(
   agentId: string,
   operationId: string,
   options: OpenClawStateDatabaseOptions = {},
-): boolean {
-  return claimCompletedAgentDeletionJournal(normalizeAgentId(agentId), operationId, options);
+): Promise<boolean> {
+  const context = captureOpenClawStateWorkerContext({
+    ...options,
+    path: options.database?.path ?? options.path,
+  });
+  const capturedOptions = {
+    ...options,
+    path: context.admission.databasePath,
+    env: { ...(options.env ?? process.env) },
+  };
+  return withCronReceiptAuthorityMutation(context, async (mutation) =>
+    claimCompletedAgentDeletionJournal(normalizeAgentId(agentId), operationId, capturedOptions, {
+      assertCurrent: mutation.assertCurrent,
+      onCommitted: () => mutation.publish({ nonce: mutation.attachment.nonce, sequence: 1 }),
+    }),
+  );
 }
 
 /** Return whether this process must refuse new authority for an agent id. */

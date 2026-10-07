@@ -7,10 +7,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 
 const pairingMocks = vi.hoisted(() => ({
   getPairingAdapter: vi.fn<
@@ -51,8 +49,8 @@ beforeAll(() => {
   fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pairing-"));
 });
 
-afterAll(() => {
-  closeOpenClawStateDatabaseForTest();
+afterAll(async () => {
+  await closeStateDatabaseForTest();
   fs.rmSync(fixtureRoot, { recursive: true, force: true });
 });
 
@@ -62,10 +60,10 @@ beforeEach(() => {
   pairingMocks.getPairingAdapter.mockReset();
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
 });
 
 function createTestEnv(): { stateDir: string; env: NodeJS.ProcessEnv } {

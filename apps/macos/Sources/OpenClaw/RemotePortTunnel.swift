@@ -17,20 +17,6 @@ final class RemotePortTunnel: @unchecked Sendable {
         let remotePort: Int
         let hostKeyPolicy: CommandResolver.SSHHostKeyPolicy
         let preferredLocalPort: UInt16?
-
-        init(
-            target: CommandResolver.SSHParsedTarget,
-            identity: String,
-            remotePort: Int,
-            hostKeyPolicy: CommandResolver.SSHHostKeyPolicy,
-            preferredLocalPort: UInt16? = nil)
-        {
-            self.target = target
-            self.identity = identity
-            self.remotePort = remotePort
-            self.hostKeyPolicy = hostKeyPolicy
-            self.preferredLocalPort = preferredLocalPort
-        }
     }
 
     let localPort: UInt16
@@ -118,8 +104,7 @@ final class RemotePortTunnel: @unchecked Sendable {
                 code: 3,
                 userInfo: [NSLocalizedDescriptionKey: "Remote mode is not configured"])
         }
-        let sshHost = target.host.trimmingCharacters(in: .whitespacesAndNewlines)
-        let ports = Self.ports(root: root, sshHost: sshHost)
+        let ports = Self.ports(root: root, sshHost: target.host)
         return Configuration(
             target: target,
             identity: settings.identity.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -128,18 +113,12 @@ final class RemotePortTunnel: @unchecked Sendable {
             preferredLocalPort: UInt16(ports.local))
     }
 
-    static func create(
-        configuration: Configuration,
-        preferredLocalPort: UInt16? = nil,
-        allowRandomLocalPort: Bool = true) async throws -> RemotePortTunnel
-    {
+    static func create(configuration: Configuration) async throws -> RemotePortTunnel {
         // Reap orphans from crashed instances before picking a port, otherwise a dead
         // session's tunnel squats the preferred port and forces an ephemeral one.
         await PortGuardian.shared.reapOrphanedTunnels()
 
-        let localPort = try await Self.findPort(
-            preferred: preferredLocalPort,
-            allowRandom: allowRandomLocalPort)
+        let localPort = try await Self.findPort(preferred: configuration.preferredLocalPort ?? 18789)
         let sshHost = configuration.target.host
         Self.logger.debug(
             "ssh tunnel route host=\(sshHost, privacy: .public) " +
@@ -330,13 +309,7 @@ final class RemotePortTunnel: @unchecked Sendable {
         remotePort: Int,
         hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]
     {
-        [
-            "-o", "BatchMode=yes",
-            // The app tracks this exact child PID, so aliases must not hand the tunnel to a shared master.
-            "-o", "ControlMaster=no",
-            "-o", "ControlPath=none",
-            "-o", "ControlPersist=no",
-            "-o", "ForkAfterAuthentication=no",
+        ["-o", "BatchMode=yes"] + hostKeyPolicy.commandOptions + [
             "-o", "ExitOnForwardFailure=yes",
             "-o", "ServerAliveInterval=15",
             "-o", "ServerAliveCountMax=3",
@@ -344,19 +317,11 @@ final class RemotePortTunnel: @unchecked Sendable {
             "-n",
             "-N",
             "-L", "\(localPort):127.0.0.1:\(remotePort)",
-        ] + hostKeyPolicy.hostKeyOptions
+        ]
     }
 
-    private static func findPort(preferred: UInt16?, allowRandom: Bool) async throws -> UInt16 {
-        if let preferred, self.portIsFree(preferred) { return preferred }
-        if let preferred, !allowRandom {
-            throw NSError(
-                domain: "RemotePortTunnel",
-                code: 5,
-                userInfo: [
-                    NSLocalizedDescriptionKey: "Local port \(preferred) is unavailable",
-                ])
-        }
+    private static func findPort(preferred: UInt16) async throws -> UInt16 {
+        if self.portIsFree(preferred) { return preferred }
 
         return try await withCheckedThrowingContinuation { cont in
             let queue = DispatchQueue(label: "ai.openclaw.remote.tunnel.port", qos: .utility)

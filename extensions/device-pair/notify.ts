@@ -1,9 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { listDevicePairing } from "openclaw/plugin-sdk/device-bootstrap";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { OpenClawPluginApi, PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenClawPluginApi,
+  PluginCommandContext,
+  PluginServiceSchedulerV1,
+} from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  normalizeTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS,
   DEVICE_PAIR_NOTIFY_SEEN_REQUEST_MAX_ENTRIES,
@@ -18,32 +25,17 @@ import {
 
 const NOTIFY_POLL_INTERVAL_MS = 10_000;
 
-type PendingPairingRequest = {
-  requestId: string;
-  deviceId: string;
-  displayName?: string;
-  platform?: string;
-  role?: string;
-  roles?: string[];
-  scopes?: string[];
-  remoteIp?: string;
-  ts?: number;
-};
+type PendingPairingRequest = Pick<
+  Awaited<ReturnType<typeof listDevicePairing>>["pending"][number],
+  "requestId" | "deviceId" | "displayName" | "platform" | "role" | "roles" | "scopes" | "remoteIp"
+> & { ts?: number };
 
 function formatStringList(values?: readonly string[]): string {
-  if (!Array.isArray(values) || values.length === 0) {
-    return "none";
-  }
-  const normalized = values.map((value) => value.trim()).filter((value) => value.length > 0);
-  return normalized.length > 0 ? normalized.join(", ") : "none";
+  return normalizeTrimmedStringList(values).join(", ") || "none";
 }
 
 function formatRoleList(request: PendingPairingRequest): string {
-  const role = normalizeOptionalString(request.role);
-  if (role) {
-    return role;
-  }
-  return formatStringList(request.roles);
+  return normalizeOptionalString(request.role) ?? formatStringList(request.roles);
 }
 
 export function formatPendingRequests(pending: PendingPairingRequest[]): string {
@@ -96,19 +88,9 @@ function openNotifySeenRequestStore(
   });
 }
 
-type NotifyTarget = {
-  to: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-};
+type NotifyTarget = Pick<NotifySubscription, "to" | "accountId" | "messageThreadId">;
 
-function resolveNotifyTarget(ctx: {
-  senderId?: string;
-  from?: string;
-  to?: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-}): NotifyTarget | null {
+function resolveNotifyTarget(ctx: NotifyCommandContext): NotifyTarget | null {
   const to =
     normalizeOptionalString(ctx.senderId) ||
     normalizeOptionalString(ctx.from) ||
@@ -291,15 +273,10 @@ async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }):
   }
 }
 
-type NotifyCommandContext = {
-  assertOwnerCurrent?: () => void;
-  channel: string;
-  senderId?: string;
-  from?: string;
-  to?: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-};
+type NotifyCommandContext = Pick<
+  PluginCommandContext,
+  "assertOwnerCurrent" | "channel" | "senderId" | "from" | "to" | "accountId" | "messageThreadId"
+>;
 
 export async function armPairNotifyOnce(params: {
   api: OpenClawPluginApi;

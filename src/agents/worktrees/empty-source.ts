@@ -5,7 +5,8 @@ import { resolveStateDir } from "../../config/state-dir.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
 import { listGitWorktrees, requireGit, worktreePathExists } from "./git.js";
-import { listRegistryWorktrees } from "./registry.js";
+import { readPendingWorktrees } from "./pending-slots.js";
+import { readRegistryWorktrees } from "./registry-read.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -73,7 +74,12 @@ export async function ensureEmptyWorktreeSource(params: {
   const sourceRoot = path.join(ownerRoot, "workspace");
   if (!(await worktreePathExists(sourceRoot))) {
     if (
-      listRegistryWorktrees(env).some((record) => path.relative(sourceRoot, record.repoRoot) === "")
+      (await readPendingWorktrees(env)).some(
+        ({ record }) => path.relative(sourceRoot, record.repoRoot) === "",
+      ) ||
+      (await readRegistryWorktrees(env)).some(
+        (record) => path.relative(sourceRoot, record.repoRoot) === "",
+      )
     ) {
       throw new Error(
         `Empty workspace source is missing: ${sourceRoot}. Restore its original Git metadata before starting this workspace; existing session history and snapshots depend on it.`,
@@ -155,7 +161,14 @@ export async function removeUnusedEmptyWorktreeSource(params: {
     return;
   }
   const ownerRoot = path.dirname(expected);
-  const otherRecords = listRegistryWorktrees(env).filter(
+  if (
+    (await readPendingWorktrees(env)).some(
+      ({ record: pending }) => path.relative(expected, pending.repoRoot) === "",
+    )
+  ) {
+    return;
+  }
+  const otherRecords = (await readRegistryWorktrees(env)).filter(
     (other) => other.id !== record.id && path.relative(expected, other.repoRoot) === "",
   );
   if (otherRecords.length > 0) {

@@ -76,32 +76,41 @@ export function createUpdateRun(
     supersedeStaleIdentityless?: boolean;
     /** Preview history must not repair canonical task data. */
     preview?: boolean;
+    /** Record an already completed repair without publishing a transient running row. */
+    settlement?: { reason: string; detail: string };
   },
   options: LedgerOptions = {},
 ): UpdateRunRecord {
   const now = Date.now();
-  const row = encodeRun(
-    {
-      runId: input.runId ?? randomUUID(),
-      createdAtMs: now,
-      updatedAtMs: now,
-      trigger: input.trigger,
-      phase: "requested",
-      status: "running",
-      reason: null,
-      origin: input.origin ?? {},
-      target: input.target ?? {},
-      before: input.before ?? {},
-      after: {},
-      steps: [{ step: "requested", status: "in_progress", startedAtMs: now }],
-      verification: {},
-      repair: [],
-      confirmedAtMs: null,
-      finishedAtMs: null,
-      downtimeMs: null,
-    },
-    options,
-  );
+  const initial: UpdateRunRecord = {
+    runId: input.runId ?? randomUUID(),
+    createdAtMs: now,
+    updatedAtMs: now,
+    trigger: input.trigger,
+    phase: "requested",
+    status: "running",
+    reason: null,
+    origin: input.origin ?? {},
+    target: input.target ?? {},
+    before: input.before ?? {},
+    after: {},
+    steps: [{ step: "requested", status: "in_progress", startedAtMs: now }],
+    verification: {},
+    repair: [],
+    confirmedAtMs: null,
+    finishedAtMs: null,
+    downtimeMs: null,
+  };
+  if (input.settlement) {
+    upsertStep(initial, {
+      step: "reconcile:settle",
+      status: "completed",
+      endedAtMs: now,
+      detail: input.settlement.detail,
+    });
+    finishUpdateRunRecord(initial, { status: "succeeded", reason: input.settlement.reason });
+  }
+  const row = encodeRun(initial, options);
   return runUpdateRunAdmission(
     (db, recoveryChanges) => {
       const recordRecovery = (record: UpdateRunRecord) => {
@@ -157,11 +166,7 @@ export function createUpdateRun(
       return decodeRun(admittedRow);
     },
     options,
-    {
-      schemaSql: schema,
-      busyTimeoutMs: options.busyTimeoutMs,
-      recoverTaskDeliveryOrphans: !input.preview,
-    },
+    !input.preview,
   );
 }
 

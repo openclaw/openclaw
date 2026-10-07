@@ -25,7 +25,6 @@ import {
   getSessionWorkspace,
   isCurrentSessionWorkspace,
   loadSessionWorkspace,
-  openSessionCheckoutSidebar,
   refreshSessionWorkspaceState,
   trackSessionCheckoutSidebar,
 } from "./chat-session-workspace-state.ts";
@@ -249,7 +248,6 @@ function openFile(
                   },
                 );
                 const hash = saved?.file.hash;
-                const updatedAtMs = saved?.file.updatedAtMs;
                 if (
                   typeof hash === "string" &&
                   viewingSession &&
@@ -261,7 +259,6 @@ function openFile(
                   ? {
                       ok: true as const,
                       hash,
-                      ...(typeof updatedAtMs === "number" ? { updatedAtMs } : {}),
                     }
                   : { ok: false as const, code: "error" as const, message: "Save failed." };
               } catch (error) {
@@ -269,15 +266,12 @@ function openFile(
                   error instanceof GatewayRequestError &&
                   error.details &&
                   typeof error.details === "object"
-                    ? (error.details as { type?: unknown; currentHash?: unknown })
+                    ? (error.details as { type?: unknown })
                     : null;
                 if (details?.type === "session_file_conflict") {
                   return {
                     ok: false as const,
                     code: "conflict" as const,
-                    ...(typeof details.currentHash === "string"
-                      ? { currentHash: details.currentHash }
-                      : {}),
                   };
                 }
                 return {
@@ -503,7 +497,6 @@ export function createSessionWorkspaceProps(
       workspace.filter = filter;
       state.requestUpdate?.();
     },
-    onRefresh: () => loadSessionWorkspace(state, workspace, true),
     onBrowsePath: (path) => {
       clearWorkspaceTimer(workspace);
       workspace.browserPath = path;
@@ -529,7 +522,7 @@ export function createSessionWorkspaceProps(
       }, 160);
     },
     onOpenArtifact: (artifactId) => openArtifact(state, workspace, artifactId),
-    onOpenDiff: diffContent ? () => openSessionCheckoutSidebar(state, diffContent) : undefined,
+    onOpenDiff: diffContent ? () => state.handleOpenSidebar(diffContent) : undefined,
   };
 }
 

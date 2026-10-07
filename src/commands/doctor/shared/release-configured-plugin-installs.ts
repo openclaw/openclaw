@@ -25,16 +25,12 @@ import {
 import { VERSION } from "../../../version.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
+import { acpxRuntimeIsConfigured } from "./configured-runtime-plugin-installs.js";
 import { collectBlockedPluginIds as collectBlockedPluginIdSet } from "./missing-configured-plugin-install.ids.js";
 import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-install.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
 
 const CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION = "2026.5.2-beta.1";
-
-const AGENT_HARNESS_RUNTIME_PLUGIN_IDS: Readonly<Record<string, string>> = {
-  // Codex can be selected as a harness for OpenAI models without a plugin entry.
-  codex: "codex",
-};
 
 type ReleaseConfiguredPluginIds = {
   pluginIds: string[];
@@ -116,13 +112,6 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv
   });
 }
 
-function collectAgentHarnessRuntimePluginIds(cfg: OpenClawConfig): string[] {
-  return collectConfiguredAgentHarnessRuntimes(cfg)
-    .map((runtime) => AGENT_HARNESS_RUNTIME_PLUGIN_IDS[runtime])
-    .filter((pluginId): pluginId is string => Boolean(pluginId))
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
 function collectWebSearchPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
   if (cfg.tools?.web?.search?.enabled === false) {
     return [];
@@ -165,20 +154,6 @@ function collectSpeechPluginIds(cfg: OpenClawConfig): string[] {
   });
 }
 
-function collectAcpRuntimePluginIds(cfg: OpenClawConfig): string[] {
-  const acp = asNullableRecord(cfg.acp);
-  if (!acp) {
-    return [];
-  }
-  const backend = normalizeId(acp.backend)?.toLowerCase() ?? "";
-  const configured =
-    acp.enabled === true || asNullableRecord(acp.dispatch)?.enabled === true || backend === "acpx";
-  if (!configured || (backend && backend !== "acpx")) {
-    return [];
-  }
-  return ["acpx"];
-}
-
 function collectAllowOnlyOfficialPluginIds(cfg: OpenClawConfig): string[] {
   const allow = cfg.plugins?.allow;
   if (!Array.isArray(allow) || allow.length === 0) {
@@ -212,17 +187,18 @@ function addEligiblePluginId(cfg: OpenClawConfig, pluginIds: Set<string>, plugin
 function shouldRunConfiguredPluginInstallReleaseStep(params: {
   currentVersion?: string | null;
   touchedVersion?: string | null;
-  releaseVersion?: string;
 }): boolean {
-  const releaseVersion = params.releaseVersion ?? CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION;
   const currentComparedToRelease = compareOpenClawVersions(
     params.currentVersion ?? VERSION,
-    releaseVersion,
+    CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION,
   );
   if (currentComparedToRelease === null || currentComparedToRelease < 0) {
     return false;
   }
-  const touchedComparedToRelease = compareOpenClawVersions(params.touchedVersion, releaseVersion);
+  const touchedComparedToRelease = compareOpenClawVersions(
+    params.touchedVersion,
+    CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION,
+  );
   return touchedComparedToRelease === null || touchedComparedToRelease < 0;
 }
 
@@ -248,11 +224,11 @@ function collectReleaseConfiguredPluginIds(params: {
     ...collectMaterialPluginEntryIds(params.cfg),
     ...collectSlotPluginIds(params.cfg),
     ...collectConfiguredProviderPluginIds({ cfg: params.cfg, env }),
-    ...collectAgentHarnessRuntimePluginIds(params.cfg),
+    ...collectConfiguredAgentHarnessRuntimes(params.cfg).filter((id) => id === "codex"),
     ...collectWebSearchPluginIds(params.cfg, env),
     ...collectWebFetchPluginIds(params.cfg, env),
     ...collectSpeechPluginIds(params.cfg),
-    ...collectAcpRuntimePluginIds(params.cfg),
+    ...(acpxRuntimeIsConfigured(params.cfg) ? ["acpx"] : []),
     ...collectAllowOnlyOfficialPluginIds(params.cfg),
   ]) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);

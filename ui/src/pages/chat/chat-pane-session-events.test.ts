@@ -529,7 +529,8 @@ describe("mounted pane session event ownership", () => {
         };
         const initialModel = draw();
         expect(initialModel?.textContent).toContain("Primary");
-        expect(initialModel?.getAttribute("aria-busy")).toBe("true");
+        expect(initialModel?.getAttribute("aria-busy")).toBe("false");
+        expect(initialModel?.querySelector(".btn__spinner")).toBeNull();
 
         reenter = reentrant;
         emitGatewayEvent("sessions.changed", {

@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { ifDefined } from "lit/directives/if-defined.js";
 import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
@@ -85,6 +86,7 @@ type ChatPaneHeaderProps = {
   renameDisabledReason?: string;
   actionsDisabled?: boolean;
   panelActions: TemplateResult | typeof nothing;
+  runAction?: TemplateResult | typeof nothing;
   panelLayoutActions: TemplateResult | typeof nothing;
   presence?: TemplateResult | typeof nothing;
   sharingControl?: TemplateResult | typeof nothing;
@@ -464,7 +466,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             : nothing
         }
         <div class="chat-pane__actions">
-          ${props.panelLayoutActions}
+          ${props.runAction ?? nothing} ${props.panelLayoutActions}
           <fieldset class="chat-pane__actions" ?disabled=${props.actionsDisabled}>
             ${compactSessionActions ? nothing : props.panelActions}
             ${(
@@ -525,6 +527,26 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
       </div>
     </div>
   `;
+}
+
+export function renderChatPanePanelToggle(props: {
+  label: string;
+  icon: TemplateResult;
+  className?: string;
+  expanded?: boolean;
+  onToggle: () => void;
+}) {
+  return html`<openclaw-tooltip .content=${props.label}>
+    <button
+      class="btn btn--ghost btn--icon chat-icon-btn ${props.className ?? ""}"
+      type="button"
+      aria-label=${props.label}
+      aria-expanded=${ifDefined(props.expanded === undefined ? undefined : String(props.expanded))}
+      @click=${props.onToggle}
+    >
+      ${props.icon}
+    </button>
+  </openclaw-tooltip>`;
 }
 
 export function renderChatPanePanelLayoutActions(

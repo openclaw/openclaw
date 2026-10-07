@@ -58,7 +58,7 @@ export function createEmbeddedAttemptSessionSettleTracker(
 }
 
 type AttemptTranscriptLifecycle = ReturnType<typeof createEmbeddedAttemptTranscriptLifecycle>;
-type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
+type TrajectoryRecorder = Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
 type DisposableRuntime = { dispose(): Promise<void> | void };
 
 export type EmbeddedAttemptSessionResources = {
@@ -109,8 +109,6 @@ type CleanupEmbeddedAttemptSessionInput = EmbeddedAttemptSessionResources & {
   bundleMcpRuntime?: DisposableRuntime;
   bundleLspRuntime?: DisposableRuntime;
   toolSearchCatalogRef?: ToolSearchCatalogRef;
-  sandboxSessionKey?: string;
-  sessionAgentId: string;
   trajectoryEndRecorded: boolean;
   deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
   emitDiagnosticRunCompleted?: EmitDiagnosticRunCompleted;
@@ -159,13 +157,7 @@ export async function cleanupEmbeddedAttemptSessionPhase(
   // lock release ahead of runtime disposal so the next attempt can recover.
   let cleanupError: unknown;
   try {
-    clearToolSearchCatalog({
-      sessionId: attempt.sessionId,
-      sessionKey: input.sandboxSessionKey,
-      agentId: input.sessionAgentId,
-      runId: attempt.runId,
-      catalogRef: input.toolSearchCatalogRef,
-    });
+    clearToolSearchCatalog({ catalogRef: input.toolSearchCatalogRef });
     await input.transcriptLifecycle.beginCleanup();
     // Cancellation can arrive during trajectory flushing or the transcript drain.
     // Read it only after both waits before deciding whether to wait for idle.

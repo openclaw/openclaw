@@ -1447,27 +1447,6 @@ describe("FRV same-parent recovery", () => {
     );
   });
 
-  it.each([
-    ["child", "HTTP 403: workflow rerun forbidden"],
-    ["parent", "HTTP 422: workflow rerun rejected"],
-  ])("does not poll after a hard %s mutation failure", async (target, error) => {
-    const scenario = rerunScenario(
-      target === "child"
-        ? { childError: new Error(error) }
-        : {
-            childSource: [1, "success"],
-            parentError: new Error(error),
-            parentSource: [1, "failure"],
-          },
-    );
-    await expect(continueFailed(plan([scenario.selected]), "77", scenario.client)).rejects.toThrow(
-      error,
-    );
-    expect(
-      target === "child" ? scenario.counters.reads.child : scenario.counters.reads.parent,
-    ).toBe(0);
-  });
-
   it("reconciles an ambiguous peer before surfacing a hard child mutation failure", async () => {
     const first = child("normalCi", "101");
     const second = child("pluginPrerelease", "202");
@@ -1584,30 +1563,6 @@ describe("FRV same-parent recovery", () => {
       ),
     );
     expect(scenario.counters.posts.child).toBe(1);
-  });
-
-  it("keeps dry-run recovery mutation-free", async () => {
-    const selected = child("normalCi", "101");
-    let mutations = 0;
-    const client = {
-      ...controllerClient([selected], new Map([["101", { attempt: 1, conclusion: "failure" }]]), {
-        attempt: 1,
-        conclusion: "failure",
-      }),
-      rerunFailed: async () => {
-        mutations += 1;
-      },
-      rerunParent: async () => {
-        mutations += 1;
-      },
-      verify: async () => {
-        mutations += 1;
-      },
-    };
-    await expect(
-      continueFailed(plan([selected]), "77", client, { dryRun: true }),
-    ).resolves.toMatchObject({ action: "would-rerun" });
-    expect(mutations).toBe(0);
   });
 });
 

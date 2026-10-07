@@ -25,10 +25,10 @@ import {
   retireSupersededCleanupIfNeeded,
   beginSubagentCleanup,
   runDetachedCleanupAttempt,
+  runWithSubagentCleanupWorkAdmission,
 } from "./subagent-registry-lifecycle-attempt.js";
 import {
   isSubagentCompletionDeliveryAllowed,
-  retireSupersededCleanupInBackground,
   suspendPendingFinalDelivery,
 } from "./subagent-registry-lifecycle-cleanup.js";
 import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle-context.js";
@@ -111,7 +111,6 @@ export const resumeAncestorCleanup = (
         stateContext,
         run: () =>
           finalizeResumedAnnounceGiveUp(context, {
-            runId,
             entry,
             reason: "expiry",
             cleanupGeneration,
@@ -127,7 +126,6 @@ export const resumeAncestorCleanup = (
 
 export const startSubagentAnnounceCleanupFlow = (
   context: SubagentLifecycleAnnounceCleanupContext,
-  _runId: string,
   observedEntry: SubagentRunRecord,
 ): boolean => {
   const params = context.options;
@@ -171,7 +169,7 @@ export const startSubagentAnnounceCleanupFlow = (
   };
   const assertCurrent = () => {
     assertPersistenceCurrent();
-    if (!context.isCleanupGenerationCurrent(runId, entry, cleanupGeneration)) {
+    if (!context.isCleanupGenerationCurrent(entry, cleanupGeneration)) {
       throw new Error("Subagent cleanup generation changed before persistence.");
     }
     const current = getCurrentSubagentRunOwner(params.runs, entry);
@@ -224,15 +222,13 @@ export const startSubagentAnnounceCleanupFlow = (
     if (!suppressSessionEffects && !context.sessionEffectsHostCurrent(entry)) {
       suppressSessionEffects = true;
     }
-    return (
-      !suppressSessionEffects && context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)
-    );
+    return !suppressSessionEffects && context.isCleanupAttemptCurrent(entry, cleanupGeneration);
   };
   const prepareChildSessionEffects = async () => {
     assertCurrent();
     const suppress = !suppressSessionEffects && (await context.shouldSuppressSessionEffects(entry));
     assertPersistenceCurrent();
-    if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+    if (!context.isCleanupAttemptCurrent(entry, cleanupGeneration)) {
       return false;
     }
     if (suppress || suppressSessionEffects) {
@@ -251,7 +247,7 @@ export const startSubagentAnnounceCleanupFlow = (
         // registration can invalidate it before sessions.delete is submitted.
         await Promise.resolve();
         assertPersistenceCurrent();
-        if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+        if (!context.isCleanupAttemptCurrent(entry, cleanupGeneration)) {
           await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
           return;
         }
@@ -323,7 +319,7 @@ export const startSubagentAnnounceCleanupFlow = (
           }
         }
         assertPersistenceCurrent();
-        if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+        if (!context.isCleanupAttemptCurrent(entry, cleanupGeneration)) {
           await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
           return;
         }
@@ -349,7 +345,7 @@ export const startSubagentAnnounceCleanupFlow = (
   let committedDeliveryOwner: SubagentRunRecord | undefined;
   const finalizeAnnounceCleanup = async (announceOutcome: SubagentAnnounceFlowOutcome) => {
     assertPersistenceCurrent();
-    if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+    if (!context.isCleanupAttemptCurrent(entry, cleanupGeneration)) {
       await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
       return;
     }
@@ -361,7 +357,7 @@ export const startSubagentAnnounceCleanupFlow = (
         ? await hasPriorRequesterDeliveryMirror(params, entry)
         : undefined;
     assertPersistenceCurrent();
-    if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+    if (!context.isCleanupAttemptCurrent(entry, cleanupGeneration)) {
       await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
       return;
     }
@@ -470,8 +466,17 @@ export const startSubagentAnnounceCleanupFlow = (
         : undefined,
     onDeliveryResult: async (delivery) => {
       assertPersistenceCurrent();
-      if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
-        retireSupersededCleanupInBackground(context, runId, entry, cleanupGeneration, stateContext);
+      if (!context.isCleanupAttemptCurrent(entry, cleanupGeneration)) {
+        const retiredEntry = entry;
+        const retiredRunId = runId;
+        void runWithSubagentCleanupWorkAdmission(async () => {
+          assertSubagentRegistryWriteSourceCurrent(stateContext);
+          await retireSupersededCleanupIfNeeded(context, retiredEntry, cleanupGeneration);
+        }).catch((error: unknown) => {
+          defaultRuntime.log(
+            `[warn] subagent superseded cleanup retirement failed (${retiredRunId}): ${String(error)}`,
+          );
+        });
         return;
       }
       assertCurrent();
@@ -582,6 +587,8 @@ export const startSubagentAnnounceCleanupFlow = (
             ...announceParams,
             childAgentId: entry.childAgentId,
             signal: deadline.signal,
+            // Delivery expiry bounds admission; the requester owns its execution budget.
+            onExecutionStarted: () => clearTimeout(deadlineTimer),
           }),
         );
       } catch (error) {
@@ -596,7 +603,7 @@ export const startSubagentAnnounceCleanupFlow = (
       }
       assertPersistenceCurrent();
       if (
-        context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration) &&
+        context.isCleanupAttemptCurrent(entry, cleanupGeneration) &&
         getCurrentSubagentRunOwner(params.runs, entry)?.delivery?.status !== "delivered" &&
         (subagentRuns.isCompletionAuthorityRetired(entry) ||
           (shouldSuspendPendingFinalDelivery(entry) &&

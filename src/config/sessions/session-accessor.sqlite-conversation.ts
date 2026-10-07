@@ -22,35 +22,6 @@ type PreparedSessionConversation = {
   routeContext?: ConversationRouteContext | null;
 };
 
-/** Shared-main DMs multiplex peers through one context; every other routed session has one primary. */
-function prepareSessionConversation(params: {
-  entry: SessionEntry;
-  routeContext?: ConversationRouteContext | null;
-  sessionScope: string;
-}): PreparedSessionConversation | null {
-  const routeContext =
-    params.routeContext === null
-      ? null
-      : params.routeContext === undefined
-        ? undefined
-        : parseConversationRouteContext(params.routeContext);
-  if (params.routeContext !== undefined && params.routeContext !== null && !routeContext) {
-    throw new Error("Invalid conversation route context");
-  }
-  const identity = conversationIdentityFromSessionEntry(params.entry, routeContext);
-  if (!identity) {
-    return null;
-  }
-  return {
-    identity,
-    role:
-      params.sessionScope === "shared-main" && identity.kind === "direct"
-        ? "participant"
-        : "primary",
-    ...(routeContext !== undefined ? { routeContext } : {}),
-  };
-}
-
 /** Keeps a previously observed route peer when a generic session writer has no route facts. */
 function preserveSessionConversationIdentity(params: {
   database: OpenClawAgentDatabase;
@@ -113,6 +84,7 @@ function preserveSessionConversationIdentity(params: {
     : params.identity;
 }
 
+/** Shared-main DMs multiplex peers through one context; every other routed session has one primary. */
 export function prepareSessionConversationForWrite(params: {
   database: OpenClawAgentDatabase;
   entry: SessionEntry;
@@ -120,18 +92,36 @@ export function prepareSessionConversationForWrite(params: {
   routeContext?: ConversationRouteContext | null;
   sessionScope: string;
 }): PreparedSessionConversation | null {
-  const conversation = prepareSessionConversation(params);
-  if (!conversation || params.routeContext !== undefined) {
-    return conversation;
+  const routeContext =
+    params.routeContext === null
+      ? null
+      : params.routeContext === undefined
+        ? undefined
+        : parseConversationRouteContext(params.routeContext);
+  if (params.routeContext !== undefined && params.routeContext !== null && !routeContext) {
+    throw new Error("Invalid conversation route context");
   }
-  conversation.identity = preserveSessionConversationIdentity({
-    database: params.database,
-    identity: conversation.identity,
-    sessionIds: [params.entry.sessionId, params.previousEntry?.sessionId].filter(
-      (sessionId): sessionId is string => Boolean(sessionId),
-    ),
-  });
-  return conversation;
+  const identity = conversationIdentityFromSessionEntry(params.entry, routeContext);
+  if (!identity) {
+    return null;
+  }
+  return {
+    identity:
+      routeContext === undefined
+        ? preserveSessionConversationIdentity({
+            database: params.database,
+            identity,
+            sessionIds: [params.entry.sessionId, params.previousEntry?.sessionId].filter(
+              (sessionId): sessionId is string => Boolean(sessionId),
+            ),
+          })
+        : identity,
+    role:
+      params.sessionScope === "shared-main" && identity.kind === "direct"
+        ? "participant"
+        : "primary",
+    ...(routeContext !== undefined ? { routeContext } : {}),
+  };
 }
 
 /** Upserts the address before the session row so its primary-conversation FK is always valid. */

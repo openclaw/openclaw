@@ -61,10 +61,8 @@ function isShellWrapperAllowedOverrideEnvVarName(rawKey: string): boolean {
   return HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEYS.has(upper) || upper.startsWith("LC_");
 }
 
-type HostExecEnvSanitizationResult = {
+type HostExecEnvSanitizationResult = HostExecEnvOverrideDiagnostics & {
   env: Record<string, string>;
-  rejectedOverrideBlockedKeys: string[];
-  rejectedOverrideInvalidKeys: string[];
 };
 
 type HostExecEnvOverrideDiagnostics = {
@@ -155,49 +153,39 @@ function sanitizeInheritedGitAllowProtocolValue(value: string): string {
     .join(":");
 }
 
-function sanitizeHostInheritedEnvEntry(key: string, value: string): [string, string] | null {
+function sanitizeHostInheritedEnvValue(key: string, value: string): string | undefined {
   // Preserve inherited Git allowlists without widening malformed or unsafe entries by deletion.
   // Protocols outside Git's safe default set are removed instead of being passed through.
   if (key.toUpperCase() === GIT_ALLOW_PROTOCOL_ENV_KEY) {
-    return [key, sanitizeInheritedGitAllowProtocolValue(value)];
+    return sanitizeInheritedGitAllowProtocolValue(value);
   }
   // Preserve non-permissive Git boolean values. Permissive values must become explicit `0`
   // because Git's unset default still permits protocols with policy `user`.
   if (key.toUpperCase() === GIT_PROTOCOL_FROM_USER_ENV_KEY) {
-    return [
-      key,
-      isPermissiveGitProtocolFromUserValue(value) ? GIT_PROTOCOL_FROM_USER_DISABLED_VALUE : value,
-    ];
+    return isPermissiveGitProtocolFromUserValue(value)
+      ? GIT_PROTOCOL_FROM_USER_DISABLED_VALUE
+      : value;
   }
   if (isDangerousHostInheritedEnvVarName(key)) {
-    return null;
+    return undefined;
   }
-  return [key, value];
+  return value;
 }
 
 function sanitizeHostEnvOverridesWithDiagnostics(params?: {
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
 }): {
-  acceptedOverrides?: Record<string, string>;
+  acceptedOverrides: Record<string, string>;
   rejectedOverrideBlockedKeys: string[];
   rejectedOverrideInvalidKeys: string[];
 } {
-  const overrides = params?.overrides ?? undefined;
-  if (!overrides) {
-    return {
-      acceptedOverrides: undefined,
-      rejectedOverrideBlockedKeys: [],
-      rejectedOverrideInvalidKeys: [],
-    };
-  }
-
   const blockPathOverrides = params?.blockPathOverrides ?? true;
   const acceptedOverrides: Record<string, string> = {};
   const rejectedBlocked: string[] = [];
   const rejectedInvalid: string[] = [];
 
-  for (const [rawKey, value] of Object.entries(overrides)) {
+  for (const [rawKey, value] of Object.entries(params?.overrides ?? {})) {
     if (typeof value !== "string") {
       continue;
     }
@@ -250,22 +238,18 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
     if (isScopedBlockedHostExecEnvVarName(key)) {
       continue;
     }
-    const sanitizedEntry = sanitizeHostInheritedEnvEntry(key, value);
-    if (!sanitizedEntry) {
-      continue;
+    const sanitized = sanitizeHostInheritedEnvValue(key, value);
+    if (sanitized !== undefined) {
+      merged[key] = sanitized;
     }
-    const [sanitizedKey, sanitizedValue] = sanitizedEntry;
-    merged[sanitizedKey] = sanitizedValue;
   }
 
   const overrideResult = sanitizeHostEnvOverridesWithDiagnostics({
     overrides: params?.overrides ?? undefined,
     blockPathOverrides: params?.blockPathOverrides ?? true,
   });
-  if (overrideResult.acceptedOverrides) {
-    for (const [key, value] of Object.entries(overrideResult.acceptedOverrides)) {
-      merged[key] = value;
-    }
+  for (const [key, value] of Object.entries(overrideResult.acceptedOverrides)) {
+    merged[key] = value;
   }
 
   return {

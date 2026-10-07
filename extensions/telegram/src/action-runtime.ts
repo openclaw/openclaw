@@ -247,10 +247,8 @@ export async function handleTelegramAction(
   },
 ): Promise<AgentToolResult<unknown>> {
   rejectTelegramNativeButtonParams(params);
-  const { action, accountId } = {
-    action: normalizeTelegramActionName(readStringParam(params, "action", { required: true })),
-    accountId: readStringParam(params, "accountId"),
-  };
+  const action = normalizeTelegramActionName(readStringParam(params, "action", { required: true }));
+  const accountId = readStringParam(params, "accountId");
   const isActionEnabled = createTelegramActionGate({
     cfg,
     accountId,
@@ -301,7 +299,7 @@ export async function handleTelegramAction(
     const allowed = await getTelegramAllowedReactions(chatId, {
       cfg,
       token,
-      accountId: accountId ?? undefined,
+      accountId,
     });
     const reactions =
       allowed ??
@@ -325,7 +323,7 @@ export async function handleTelegramAction(
     // loops and duplicate content.
     const reactionLevelInfo = resolveTelegramReactionLevel({
       cfg,
-      accountId: accountId ?? undefined,
+      accountId,
     });
     if (!reactionLevelInfo.agentReactionsEnabled) {
       return jsonResult({
@@ -399,7 +397,7 @@ export async function handleTelegramAction(
               chatId: authorizedChatId,
               cfg,
               token,
-              accountId: accountId ?? undefined,
+              accountId,
             })}`
           : "Reaction failed. Do not retry.",
       });
@@ -409,7 +407,7 @@ export async function handleTelegramAction(
         chatId: authorizedChatId,
         cfg,
         token,
-        accountId: accountId ?? undefined,
+        accountId,
       });
       return jsonResult({
         ok: false,
@@ -467,7 +465,7 @@ export async function handleTelegramAction(
     if (buttons) {
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
-        accountId: accountId ?? undefined,
+        accountId,
       });
       if (inlineButtonsScope === "off") {
         throw new Error(
@@ -530,7 +528,7 @@ export async function handleTelegramAction(
       cfg,
       channel: "telegram",
       to,
-      accountId: accountId ?? undefined,
+      accountId,
       payloads: [payload],
       ...(options?.reply
         ? { reply: options.reply }
@@ -624,16 +622,16 @@ export async function handleTelegramAction(
         question,
         options: answers,
         maxSelections: resolvePollMaxSelections(answers.length, allowMultiselect ?? false),
-        durationSeconds: durationSeconds ?? undefined,
-        durationHours: durationHours ?? undefined,
+        durationSeconds,
+        durationHours,
       },
       {
         ...apiOptions,
         token,
-        replyToMessageId: replyToMessageId ?? undefined,
-        messageThreadId: messageThreadId ?? undefined,
-        isAnonymous: isAnonymous ?? undefined,
-        silent: silent ?? undefined,
+        replyToMessageId,
+        messageThreadId,
+        isAnonymous,
+        silent,
       },
     );
     notifyVisibleOutboundSuccess(to, messageThreadId);
@@ -710,7 +708,7 @@ export async function handleTelegramAction(
     if (buttons !== undefined) {
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
-        accountId: accountId ?? undefined,
+        accountId,
       });
       if (inlineButtonsScope === "off") {
         throw new Error(
@@ -780,8 +778,8 @@ export async function handleTelegramAction(
     const result = await sendStickerTelegram(to, fileId, {
       ...apiOptions,
       token,
-      replyToMessageId: replyToMessageId ?? undefined,
-      messageThreadId: messageThreadId ?? undefined,
+      replyToMessageId,
+      messageThreadId,
     });
     notifyVisibleOutboundSuccess(to, messageThreadId);
     return jsonResult({
@@ -835,7 +833,7 @@ export async function handleTelegramAction(
       ...apiOptions,
       token,
       iconColor,
-      iconCustomEmojiId: iconCustomEmojiId ?? undefined,
+      iconCustomEmojiId,
     });
     return jsonResult({
       ok: true,
@@ -860,8 +858,8 @@ export async function handleTelegramAction(
     const result = await editForumTopicTelegram(chatId ?? "", messageThreadId, {
       ...apiOptions,
       token,
-      name: name ?? undefined,
-      iconCustomEmojiId: iconCustomEmojiId ?? undefined,
+      name,
+      iconCustomEmojiId,
     });
     if (result.chatId) {
       const patch: { name?: string; iconCustomEmojiId?: string } = {};

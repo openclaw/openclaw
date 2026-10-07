@@ -24,11 +24,6 @@ import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
 } from "../infra/sqlite-lifecycle-errors.js";
-import {
-  admitSqliteSchema,
-  getAdmittedSqliteSchemaFacts,
-  runSqliteReadOperationSync,
-} from "../infra/sqlite-schema-facts.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { cancelSqliteWalWriteAdmission } from "../infra/sqlite-wal-write-admission.js";
 import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
@@ -50,6 +45,7 @@ import {
   createStateDatabaseRetainer,
   type StateDatabaseBorrowers,
 } from "./openclaw-state-db-borrow.js";
+import { createStateDatabaseCacheAdmission } from "./openclaw-state-db-cache.admission.js";
 import { createStateDatabaseIdleRetirement } from "./openclaw-state-db-cache.idle.js";
 import type {
   CachedOpenClawStateDatabase,
@@ -62,10 +58,12 @@ import type {
   OpenClawStateDatabaseLifecycleEvent,
   StateDatabaseHandle,
 } from "./openclaw-state-db-contract.js";
-import { closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
-import { createOpenClawStateDatabaseRuntimeFailureOwner } from "./openclaw-state-db-runtime-failure.js";
+import {
+  closeTrackedStateDatabase,
+  readTrackedStateDatabaseIdentity,
+} from "./openclaw-state-db-handle.js";
+import { invalidateOpenClawStateRuntimeIntegrity } from "./openclaw-state-db-integrity-admission.js";
 import { assertExistingOpenClawStateSchemaCacheAdmission } from "./openclaw-state-db-schema-policy.js";
-import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import { openClawStateSnapshotOwners } from "./openclaw-state-db-snapshot-owner.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
@@ -81,7 +79,7 @@ const stateDatabaseLifecycle = resolveGlobalSingleton<StateDatabaseLifecycle>(
     borrowers: new WeakMap<DatabaseSync, StateDatabaseBorrowers>(),
     databaseLifecycleListeners: new Set<(event: OpenClawStateDatabaseLifecycleEvent) => void>(),
     terminalOpenLatch: createSqliteTerminalOpenLatch({
-      closeByPath: (pathname, error) => runtimeFailures.closeTerminalFailure(pathname, error),
+      closeByPath: (pathname, error) => cacheAdmission.closeTerminalFailure(pathname, error),
     }),
     asyncResources: createOpenClawStateDatabaseAsyncLifecycle(),
   }),
@@ -141,9 +139,8 @@ export function requireOpenClawStateDatabaseIdentity(
   return identity;
 }
 
-const runtimeFailures = createOpenClawStateDatabaseRuntimeFailureOwner({
+const cacheAdmission = createStateDatabaseCacheAdmission({
   cachedDatabases,
-  latch: terminalOpenLatch,
   evict: evictCachedOpenClawStateDatabase,
   invalidate: (pathname) => asyncResources.invalidate(pathname),
   notifyTerminalFailure: (pathname, error) =>
@@ -304,6 +301,7 @@ function closeOpenClawStateDatabaseHandle(
 }
 
 function evictCachedOpenClawStateDatabase(database: OpenClawStateDatabase): boolean {
+  invalidateOpenClawStateRuntimeIntegrity(database.db);
   if (cachedDatabases.get(database.path) !== database) {
     return false;
   }
@@ -332,13 +330,10 @@ function publishOpenClawStateDatabase(
   env: NodeJS.ProcessEnv,
 ): OpenClawStateDatabase {
   const { db, path: pathname } = database;
-  admitSqliteSchema(db);
-  const schemaFacts = runSqliteReadOperationSync(db, () => {
-    assertSupportedStateSchemaVersion(db, pathname);
-    return getAdmittedSqliteSchemaFacts(db);
-  });
+  const schemaFacts = cacheAdmission.initialize(database);
   const { identity, admission } = asyncResources.publish(pathname);
-  databaseIdentities.set(db, identity);
+  // Lifecycle settlement retains this projection after native disposal clears its identity.
+  databaseIdentities.set(db, readTrackedStateDatabaseIdentity(db) ?? identity);
   cachedDatabases.set(pathname, Object.assign(database, { schemaFacts }));
   registerStateDatabaseWalAdmission(database, identity, admission, env);
   touchStateDatabase(database);
@@ -366,11 +361,14 @@ function getCachedOpenClawStateDatabase(
     maintenance?.assertAdmission();
   }
   assertExistingOpenClawStateSchemaCacheAdmission(pathname, stateDatabaseLifecycle);
-  const runtimeFailure = runtimeFailures.get(pathname);
+  const runtimeFailure = terminalOpenLatch.get(path.resolve(pathname));
   if (runtimeFailure) {
     throw runtimeFailure;
   }
   const database = cachedDatabases.get(path.resolve(pathname));
+  if (database?.db.isOpen && !cacheAdmission.refresh(database)) {
+    return undefined;
+  }
   if (database && borrowers.get(database.db)?.retiring) {
     throw new Error(`OpenClaw state database native borrower cleanup is pending: ${pathname}`);
   }
@@ -494,7 +492,7 @@ function assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
   if (quarantineFailure) {
     // Another process can record quarantine. Revoke admitted owners without a
     // process-local latch that could outlive the durable decision's generation.
-    runtimeFailures.closeTerminalFailure(pathname, quarantineFailure);
+    cacheAdmission.closeTerminalFailure(pathname, quarantineFailure);
     throw quarantineFailure;
   }
 }
@@ -595,6 +593,8 @@ export function registerOpenClawStateDatabaseAsyncResource(
 /** Capture the canonical read generation before any asynchronous worker admission. */
 export const captureOpenClawStateDatabaseReadAdmission = asyncResources.capture;
 
+export const captureOpenClawStateIntegrityAdmission = asyncResources.integrity;
+
 /** Bind worker-created storage to its captured admission without publishing a native handle. */
 export function publishOpenClawStateDatabaseWorkerAdmission(
   admission: OpenClawStateDatabaseReadAdmission,
@@ -657,7 +657,6 @@ export const openClawStateDatabaseCache = {
   evictCachedOpenClawStateDatabase,
   evictOpenClawStateDatabaseAfterCorruption,
   getCachedOpenClawStateDatabase,
-  getOpenClawStateDatabaseRuntimeFailure: runtimeFailures.get,
   getOpenClawStateDatabaseRecordedFailure: terminalOpenLatch.peek,
   getOpenClawStateDatabaseIfOpenAtPath,
   getKnownOpenClawStateDatabaseIdentity: asyncResources.knownIdentity,

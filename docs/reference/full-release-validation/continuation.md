@@ -113,7 +113,7 @@ controller never reconstructs old state or dispatches a replacement parent.
 
 For new dispatches, including dry runs, the helper first proves GitHub serves the
 exact Validation SHA by bare-SHA fetch in a fresh temporary repository. It pushes
-one immutable `release-ci/*` workflow ref pinned to the Tooling SHA,
+one immutable `release-ci/*` workflow ref pinned to Q=C after independent P admission,
 passes the exact Validation SHA as both `ref` and `expected_sha`, and
 deletes the temporary ref after successful validation and strict evidence
 verification. The helper reads Release Decision artifacts while the parent is
@@ -135,13 +135,13 @@ Validation SHA is the exact commit being qualified: the Code SHA, which can
 also be the Release SHA, or a later changelog-only Release SHA. It is not a
 third release identity. The workflow
 rejects malformed or mismatched expected SHAs before child dispatch. Every
-child must report the same Tooling SHA. Pass
-`-f reuse_evidence=false` to force a fresh run. Regular release-branch runs
-require `--workflow-sha` with the recorded full SHA, which must remain reachable
-from current `origin/main`. The helper rejects a pinned Tooling SHA that does
-not declare the current release-isolation contract or the `expected_sha`
-dispatch input; it never silently substitutes newer tooling. The workflow never
-creates or updates repository refs itself.
+child must report the same Q. Pass `-f reuse_evidence=false` to force a fresh run.
+New publication requests retain Q=C and select P with the admission-workflow
+arguments. Only P requires independent trusted-main or protected-tag authority;
+Q requires its reviewed candidate context and frozen qualification contracts.
+Missing contracts require deliberate candidate backports, never newer-tooling
+substitution. Existing historical requests retain their original identities.
+The workflow never creates or updates repository refs itself.
 
 ### Automatic retries for declared flakes
 
@@ -157,8 +157,10 @@ or retry records. Current qualification requires successful selected results. A
 campaign already dispatched with an
 older pinned Tooling SHA remains owned by that immutable tooling and must not be
 retargeted mid-run. Current strict tooling rejects retained `windows-node-ci`
-advisory evidence; start a fresh campaign on current tooling to qualify under the
-restored blocking gate. Retired waivers and pre-declared advisory failure
+advisory evidence; start a fresh campaign that satisfies the restored blocking
+gate. Candidate-owned qualification still uses Q=C: if the frozen harness needs
+the policy repair, deliberately backport it and freeze a new candidate instead
+of substituting newer main tooling. Retired waivers and pre-declared advisory failure
 allowances remain rejected and must be replaced with a fresh qualifying run; they
 cannot authorize publication.
 

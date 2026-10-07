@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { patchSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
@@ -15,7 +16,9 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { resolveSessionLifecycleTimestampsAsync } from "./lifecycle-read.js";
 import { retainPreparedSessionGenerationFacts } from "./session-accessor.sqlite-entry-cache.js";
 import {
   readExactSessionEntryRow,
@@ -32,6 +35,11 @@ import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-t
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import { commitSessionEntryPatch } from "./session-entry-patch.worker.js";
 import { readSessionEntryInWorker } from "./session-entry-read-runtime.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "./session-source-authority.js";
 import { markSessionTranscriptIndexDirtyInTransaction } from "./session-transcript-index.js";
 import * as reconcile from "./session-transcript-reconcile.js";
 import type { SessionEntry } from "./types.js";
@@ -383,46 +391,146 @@ it.each(["after updater", "final grant"] as const)(
 it("settles false before CAS and later throwing authority, while null updates still validate CAS", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
+    const sourceScope = { ...f.scope, sessionKey: "agent:main:patch-source" };
+    const changeSource = (label: string) =>
+      replaceSessionEntrySync(sourceScope, { sessionId: "source", updatedAt: 1, label });
+    changeSource("original source");
+    const identity = readOpenClawAgentDatabaseIdentity(f.database);
+    const refusal = new Error("session source changed");
+    const refuse = vi.fn((): never => {
+      throw refusal;
+    });
+    const source: SessionSourceAssertion = Object.assign(() => {}, {
+      async prepareSessionSource() {
+        const expected = await readSessionEntryInWorker(sourceScope, () => {});
+        const assertCurrent = () => {
+          if (expected?.sessionId !== "source" || expected.label !== "original source") {
+            refuse();
+          }
+        };
+        assertCurrent();
+        return {
+          assertCurrent,
+          checks: [
+            {
+              predicate: {
+                source: {
+                  agentId: f.database.agentId,
+                  path: f.database.path,
+                  databaseIdentity: identity.identity,
+                  databaseBirthtime: identity.birthtime,
+                },
+                sessionKey: sourceScope.sessionKey,
+                fields: ["label" as const],
+                expected,
+              },
+              refuse,
+            },
+          ],
+        };
+      },
+    });
     let current = true;
+    let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
     const createAdmission = admission.createSqliteWorkerOperationAdmission;
     vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (callback, attachment) =>
-        createAdmission((request, grant) => {
+      (callback, attachment) => {
+        const owned = createAdmission((request, grant) => {
+          if (request.stage === "transaction" || request.stage === "commit") {
+            nativeAdmission = owned;
+          }
           if (request.stage === "commit") {
             current = false;
           }
           callback(request, grant);
-        }, attachment),
+        }, attachment);
+        return owned;
+      },
     );
     const changeDuringUpdate = () => {
+      changeSource("changed before false predicate");
       replaceSessionEntrySync(f.scope, { sessionId: "replacement", updatedAt: 2, label: "newer" });
       return null;
     };
-    await expect(
-      patchSessionEntryCore(f.scope, changeDuringUpdate, {
-        workerGuard: {
-          assertCurrent() {
-            if (!current) {
-              throw new Error("too late");
-            }
+    await expect
+      .soft(
+        patchSessionEntryCore(f.scope, changeDuringUpdate, {
+          workerGuard: {
+            source,
+            assertCurrent() {
+              if (!current) {
+                throw new Error("too late");
+              }
+            },
+            shouldCommitIf: {
+              kind: "transcript",
+              sessionId: "original",
+              generation: "not-current",
+              leafEntryId: null,
+            },
           },
-          shouldCommitIf: {
-            kind: "transcript",
-            sessionId: "original",
-            generation: "not-current",
-            leafEntryId: null,
-          },
-        },
-      }),
-    ).resolves.toBeNull();
+        }),
+      )
+      .resolves.toBeNull();
     expect(f.read()?.label).toBe("newer");
-    vi.restoreAllMocks();
-    await expect(
-      patchSessionEntryCore(f.scope, () => {
+    expect.soft(refuse).not.toHaveBeenCalled();
+    changeSource("original source");
+    const conflict = patchSessionEntryCore(
+      f.scope,
+      () => {
+        changeSource("changed before target conflict");
         replaceSessionEntrySync(f.scope, { sessionId: "another", updatedAt: 3 });
         return null;
-      }),
-    ).rejects.toThrow("state changed while preparing");
+      },
+      { workerGuard: { source } },
+    );
+    await expect.soft(conflict).rejects.toBeInstanceOf(SqliteSessionMutationConflictError);
+    await expect.soft(conflict).rejects.toThrow("state changed while preparing");
+    expect.soft(refuse).not.toHaveBeenCalled();
+
+    changeSource("original source");
+    const before = f.read();
+    const previousAdmission = nativeAdmission;
+    await expect(
+      patchSessionEntryCore(
+        f.scope,
+        () => {
+          changeSource("changed before source guard");
+          return { label: "must not persist" };
+        },
+        { workerGuard: { source } },
+      ),
+    ).rejects.toBe(refusal);
+    expect.soft(refuse).toHaveBeenCalledOnce();
+    expect(f.read()).toEqual(before);
+    expect(nativeAdmission).toBeDefined();
+    expect(nativeAdmission).not.toBe(previousAdmission);
+    expect(nativeAdmission?.settlement).toMatchObject({ kind: "completed" });
+    expect(nativeAdmission?.committed).toBeUndefined();
+  });
+});
+
+it("recovers missing lifecycle timestamps during worker patch planning", async ({ signal }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const startedAt = 1_700_000_000_000;
+    runOpenClawAgentWriteTransaction(
+      (database) =>
+        appendTranscriptEventsInTransaction(database, { ...f.scope, sessionId: "original" }, [
+          { type: "session", id: "original", version: 3, timestamp: startedAt },
+        ]),
+      { agentId: f.database.agentId, path: f.database.path },
+    );
+    const entry = await patchSessionEntryCore(f.scope, async (current) => {
+      const timestamps = await resolveSessionLifecycleTimestampsAsync({
+        ...f.scope,
+        entry: current,
+        signal,
+      });
+      return { sessionStartedAt: timestamps.sessionStartedAt };
+    });
+    expect(entry?.sessionStartedAt).toBe(startedAt);
+    expect(f.read()?.sessionStartedAt).toBe(startedAt);
   });
 });
 
@@ -591,3 +699,161 @@ it.each(["lost reply", "callback failure", "unknown settlement with callback fai
     });
   },
 );
+
+it("preserves an unknown native outcome when releasing its prepared source also fails", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const replyFailure = new Error("commit reply lost");
+    const cleanupFailure = new Error("prepared source release failed");
+    let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
+    const createAdmission = admission.createSqliteWorkerOperationAdmission;
+    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (callback, attachment) => {
+        const owned = createAdmission((request, grant) => {
+          if (request.stage === "commit") {
+            nativeAdmission = owned;
+          }
+          callback(request, grant);
+        }, attachment);
+        return owned;
+      },
+    );
+    const loseCommitResult = vi.fn(() => {
+      expect(nativeAdmission?.committed?.facts).toMatchObject({
+        kind: "session-entry-patch-committed",
+      });
+      if (!nativeAdmission) {
+        throw new Error("Patch did not reach native commit admission");
+      }
+      // The real write has committed; neither reply nor native receipt reaches settlement.
+      vi.spyOn(nativeAdmission, "committed", "get").mockReturnValue(undefined);
+      vi.spyOn(nativeAdmission, "settlement", "get").mockReturnValue({ kind: "unknown" });
+      throw replyFailure;
+    });
+    delivery.afterCommit = loseCommitResult;
+    const releaseFirst = vi.fn();
+    const releaseLast = vi.fn(() => {
+      throw cleanupFailure;
+    });
+    const update = vi.fn(() => ({ label: "committed once" }));
+    const failure: unknown = await patchSessionEntryCore(f.scope, update, {
+      workerGuard: {
+        source: composeSessionSourceAssertion(
+          [releaseFirst, releaseLast].map((release) =>
+            Object.assign(() => {}, {
+              prepareSessionSource: async () => ({ assertCurrent() {}, checks: [], release }),
+            }),
+          ),
+        ),
+      },
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure).toMatchObject({
+      code: "outcome-unknown",
+      cause: { code: "outcome-unknown", cause: replyFailure },
+      errors: expect.arrayContaining([cleanupFailure]),
+    });
+    expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
+    expect(update).toHaveBeenCalledOnce();
+    expect(loseCommitResult).toHaveBeenCalledOnce();
+    expect(releaseFirst).toHaveBeenCalledOnce();
+    expect(releaseLast).toHaveBeenCalledOnce();
+    expect(f.read()?.label).toBe("committed once");
+  });
+});
+
+it.each([false, true])(
+  "releases prepared source custody when writer acquisition fails (cleanup failure: %s)",
+  async (cleanupFails) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      const acquisitionFailure = new Error("writer owner retired before acquisition");
+      const cleanupFailure = new Error("prepared source release failed");
+      const release = vi.fn(async () => {
+        if (cleanupFails) {
+          throw cleanupFailure;
+        }
+      });
+      const capture = vi
+        .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
+        .mockImplementation(() => {
+          throw acquisitionFailure;
+        });
+      const update = vi.fn(() => ({ label: "must not commit" }));
+      try {
+        const failure: unknown = await patchSessionEntryCore(f.scope, update, {
+          workerGuard: {
+            source: Object.assign(() => {}, {
+              prepareSessionSource: async () => ({ assertCurrent() {}, checks: [], release }),
+            }),
+          },
+        }).catch((error: unknown) => error);
+        expect(release).toHaveBeenCalledOnce();
+        if (cleanupFails) {
+          expect(failure).toBeInstanceOf(AggregateError);
+          expect(failure).toMatchObject({
+            cause: acquisitionFailure,
+            errors: [acquisitionFailure, cleanupFailure],
+          });
+        } else {
+          expect(failure).toBe(acquisitionFailure);
+        }
+        expect(update).not.toHaveBeenCalled();
+        expect(f.read()?.label).toBe("initial");
+      } finally {
+        capture.mockRestore();
+      }
+    });
+  },
+);
+
+it("preserves the translated source refusal while joining failed preparation cleanup", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const refusal = new Error("source was revoked during preparation");
+    const translated = new TypeError("caller source is no longer active", { cause: refusal });
+    const cleanupFailure = new Error("retained source cleanup failed");
+    const releaseFirst = vi.fn();
+    const releaseLast = vi.fn(async () => {
+      throw cleanupFailure;
+    });
+    const update = vi.fn(() => ({ label: "must not commit" }));
+    const source = composeSessionSourceAssertion(
+      [
+        ...[releaseFirst, releaseLast].map((release) =>
+          Object.assign(() => {}, {
+            prepareSessionSource: async () => ({ assertCurrent() {}, checks: [], release }),
+          }),
+        ),
+        Object.assign(() => {}, {
+          prepareSessionSource: async () => {
+            throw refusal;
+          },
+        }),
+      ],
+      (assertSources) => {
+        try {
+          assertSources();
+        } catch (error) {
+          throw error === refusal ? translated : error;
+        }
+      },
+    );
+    const failure: unknown = await patchSessionEntryCore(f.scope, update, {
+      workerGuard: { source },
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    if (!(failure instanceof AggregateError)) {
+      throw failure;
+    }
+    expect(failure.cause).toBe(translated);
+    expect(failure.errors[0]).toBe(translated);
+    expect(failure.errors).toContain(cleanupFailure);
+    expect(releaseFirst).toHaveBeenCalledOnce();
+    expect(releaseLast).toHaveBeenCalledOnce();
+    expect(update).not.toHaveBeenCalled();
+    expect(f.read()?.label).toBe("initial");
+  });
+});

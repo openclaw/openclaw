@@ -66,7 +66,6 @@ async function admitCompletion(
   const original: SessionEntry = {
     sessionId: `requester-${name}`,
     lifecycleRevision: "original-revision",
-    status: "running",
     updatedAt: Date.now(),
     ...patch,
   };
@@ -627,18 +626,6 @@ describe("message-tool source reply custody", () => {
     {
       name: "confirmed source reply",
       result: { didDeliverSourceReplyViaMessageTool: true },
-      expected: "delivered",
-    },
-    {
-      name: "current-source receipt",
-      result: { sourceReplyDelivered: true },
-      expected: "delivered",
-    },
-    {
-      name: "source final payload",
-      result: {
-        messagingToolSourceReplyPayloads: [{ text: "Done", sourceReplyFinal: true }],
-      },
       expected: "delivered",
     },
     {

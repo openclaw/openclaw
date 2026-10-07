@@ -1,4 +1,3 @@
-// Session store maintenance prunes stale entries, caps count, and handles quota TTL state.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -16,8 +15,9 @@ import {
 } from "../../sessions/session-key-utils.js";
 import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
+import { hasMainSessionRecoveryClaim } from "./restart-recovery-state.js";
 import { isPinnableSessionEntry } from "./session-pin-policy.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 const log = createSubsystemLogger("sessions/store");
 
@@ -33,18 +33,6 @@ const DEFAULT_SESSION_MAX_DISK_BYTES = 10 * 1024 * 1024 * 1024;
 const STRICT_ENTRY_MAINTENANCE_MAX_ENTRIES = 49;
 const MIN_BATCHED_ENTRY_MAINTENANCE_SLACK = 25;
 const BATCHED_ENTRY_MAINTENANCE_SLACK_RATIO = 0.1;
-
-export type SessionMaintenanceWarning = {
-  activeSessionKey: string;
-  activeUpdatedAt?: number;
-  totalEntries: number;
-  pruneAfterMs: number;
-  maxEntries: number;
-  wouldPrune: boolean;
-  wouldCap: boolean;
-  capOutcome?: "archive" | "remove" | null;
-  pruneOutcome?: "archive" | "remove" | null;
-};
 
 export type ResolvedSessionMaintenanceConfig = {
   mode: SessionMaintenanceMode;
@@ -139,10 +127,6 @@ function resolveHighWaterBytes(
   }
 }
 
-/**
- * Resolve maintenance settings from openclaw.json (`session.maintenance`).
- * Falls back to built-in defaults when config is missing or unset.
- */
 export function resolveMaintenanceConfigFromInput(
   maintenance?: SessionMaintenanceConfig,
 ): ResolvedSessionMaintenanceConfig {
@@ -320,13 +304,12 @@ export function pruneStaleModelRunEntries(
   return pruned;
 }
 
-const DEFAULT_QUOTA_SUSPENSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const DEFAULT_QUOTA_SUSPENSION_TTL_MS = 30 * 60 * 1000;
 const QUOTA_SUSPENSION_CLEANUP_FACTOR = 2; // entries beyond N*ttl are deleted outright
 
 type QuotaSuspensionEntryMaintenanceResult = {
   /** Patch to apply to the entry, or null when no TTL transition is due. */
   patch: Partial<SessionEntry> | null;
-  /** True when the quota-suspension marker should be removed. */
   cleared: boolean;
 };
 
@@ -509,8 +492,8 @@ function shouldPreserveNonArchivedMaintenanceEntry(params: SessionMaintenanceEnt
   // the same conversation under an incompatible model, so pressure may exceed
   // configured retention limits while the lock remains.
   return (
+    (hasMainSessionRecoveryClaim(params.entry) && !params.entry?.mainRestartRecovery?.tombstone) ||
     params.entry?.modelSelectionLocked === true ||
-    params.entry?.status === "running" ||
     params.preserveKeys?.has(params.key) === true ||
     isRecentSessionMaintenanceEntry(params) ||
     isProtectedSessionMaintenanceEntry(params.key, params.entry)

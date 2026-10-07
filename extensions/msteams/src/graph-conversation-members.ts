@@ -13,10 +13,7 @@ export async function findMSTeamsConversationMember(params: {
   token: string;
   to: string;
   userId: string;
-}): Promise<{
-  conversationId: string;
-  member: MSTeamsConversationMember | undefined;
-}> {
+}) {
   const conversationId = await resolveGraphConversationId(params.to);
   const conversation = resolveConversationPath(conversationId);
   const userId = params.userId.trim().toLowerCase();

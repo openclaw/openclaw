@@ -6,7 +6,7 @@ import {
   loadExactSessionEntryCandidates,
   loadExactSessionEntryCandidatesReadOnlyBatch,
 } from "../config/sessions/session-accessor.js";
-import type { SessionEntryListScope } from "../config/sessions/session-accessor.types.js";
+import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
 import type {
   CapturedSessionEntryReadSource,
   SessionEntryReadSource,
@@ -26,7 +26,15 @@ export type GatewaySessionStoreRead = {
   storePath: string;
   clone?: boolean;
   agentId?: string;
-  options: NonNullable<Parameters<typeof loadGatewaySessionLookupStore>[3]>;
+  options: {
+    env?: NodeJS.ProcessEnv;
+    readOnly?: boolean;
+    cache?: GatewaySessionStoreCache;
+    exactKeys?: readonly string[];
+    projection?: SessionEntryReadScope["projection"];
+    readConsistency?: SessionEntryReadScope["readConsistency"];
+    readSource?: SessionEntryReadSource;
+  };
   result?: Result<Record<string, SessionEntry>, unknown>;
   readSource?: SessionEntryReadSource;
   capturedReadSource?: CapturedSessionEntryReadSource;
@@ -37,12 +45,16 @@ export function readGatewaySessionStore(
   read: GatewaySessionStoreRead,
 ): Record<string, SessionEntry> {
   if (read.result === undefined) {
-    const loaded = loadGatewaySessionLookupStore(
-      read.storePath,
-      read.clone,
-      read.agentId,
-      read.options,
-    );
+    const { storePath, clone, agentId, options } = read;
+    const cache = options.cache;
+    const cacheKey = cache
+      ? `${storePath}\u0000${agentId ?? ""}\u0000${clone === false ? "0" : "1"}\u0000${options.readOnly}\u0000${JSON.stringify(options.projection ?? "full")}\u0000${options.readConsistency ?? ""}\u0000${options.exactKeys?.join("\u0001") ?? ""}`
+      : "";
+    let loaded = cache?.get(cacheKey);
+    if (!loaded) {
+      loaded = loadGatewaySessionLookupStore(read);
+      cache?.set(cacheKey, loaded);
+    }
     read.result = ok(loaded.store);
     read.readSource = loaded.readSource;
     read.capturedReadSource = loaded.capturedReadSource;
@@ -81,41 +93,12 @@ export function loadGatewaySessionStoreReads(reads: readonly GatewaySessionStore
   }
 }
 
-function loadGatewaySessionLookupStore(
-  storePath: string,
-  clone: boolean | undefined,
-  agentId?: string,
-  options: {
-    env?: NodeJS.ProcessEnv;
-    readOnly?: boolean;
-    cache?: GatewaySessionStoreCache;
-    exactKeys?: readonly string[];
-    projection?: SessionEntryListScope["projection"];
-    readConsistency?: SessionEntryListScope["readConsistency"];
-    readSource?: SessionEntryReadSource;
-  } = {},
-): GatewaySessionStoreView {
-  const cache = options.cache;
-  const cacheKey = cache
-    ? `${storePath}\u0000${agentId ?? ""}\u0000${clone === false ? "0" : "1"}\u0000${options.readOnly}\u0000${options.projection ?? "full"}\u0000${options.readConsistency ?? ""}\u0000${options.exactKeys?.join("\u0001") ?? ""}`
-    : "";
-  if (cache) {
-    const cached = cache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-  }
-  const loaded = loadGatewaySessionLookupStoreUncached(storePath, clone, agentId, options);
-  cache?.set(cacheKey, loaded);
-  return loaded;
-}
-
-function loadGatewaySessionLookupStoreUncached(
-  storePath: string,
-  clone: boolean | undefined,
-  agentId?: string,
-  options: NonNullable<Parameters<typeof loadGatewaySessionLookupStore>[3]> = {},
-): GatewaySessionStoreView {
+function loadGatewaySessionLookupStore({
+  storePath,
+  clone,
+  agentId,
+  options,
+}: GatewaySessionStoreRead): GatewaySessionStoreView {
   if (options.exactKeys) {
     // Borrowed listing views and probes never create stores; ordinary owned reads may.
     let readSource: SessionEntryReadSource | undefined;
@@ -152,7 +135,9 @@ function loadGatewaySessionLookupStoreUncached(
         env: options.env,
         ...(agentId ? { agentId } : {}),
         ...(clone === false ? { clone: false } : {}),
-        ...(options.projection ? { projection: options.projection } : {}),
+        ...(options.projection
+          ? { projection: typeof options.projection === "object" ? "full" : options.projection }
+          : {}),
         ...(options.readConsistency ? { readConsistency: options.readConsistency } : {}),
         storePath,
       }).map(({ sessionKey, entry }) => [sessionKey, entry]),

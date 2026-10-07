@@ -36,7 +36,7 @@ import {
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
   countPendingDescendantRuns,
-  getLatestSubagentRunByChildSessionKey,
+  buildLatestSubagentSessionListReadIndex,
   isSubagentSessionRunActive,
   listSubagentRunsForRequester,
   resolveRequesterForChildSession,
@@ -164,6 +164,7 @@ type SubagentAnnounceFlowParams = {
   isCompletionDeliveryAllowed?: () => boolean;
   isCompletionOwnedByRequesterYield?: () => boolean;
   signal?: AbortSignal;
+  onExecutionStarted?: () => void;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   onBeforeDeleteChildSession?: () => boolean | Promise<boolean>;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
@@ -260,10 +261,10 @@ async function runSubagentAnnounceFlowBound(
       if (
         params.completionTarget !== "parent" &&
         requesterDepth >= 1 &&
-        shouldIgnorePostCompletionAnnounceForSession(
+        (await shouldIgnorePostCompletionAnnounceForSession(
           targetRequesterSessionKey,
           targetRequesterAgentId,
-        )
+        ))
       ) {
         return "delivered";
       }
@@ -297,7 +298,9 @@ async function runSubagentAnnounceFlowBound(
           childCompletionRows = dedupeLatestChildCompletionRows(
             filterCurrentDirectChildCompletionRows(directChildren, {
               requesterSessionKey: params.childSessionKey,
-              getLatestSubagentRunByChildSessionKey,
+              getLatestSubagentRunByChildSessionKey: buildLatestSubagentSessionListReadIndex(
+                directChildren.map((entry) => entry.childSessionKey),
+              ).getLatestSubagentRun,
             }),
           );
         }
@@ -469,10 +472,10 @@ async function runSubagentAnnounceFlowBound(
       if (!isSubagentSessionRunActive(targetRequesterSessionKey, targetRequesterAgentId)) {
         if (
           params.completionTarget !== "parent" &&
-          shouldIgnorePostCompletionAnnounceForSession(
+          (await shouldIgnorePostCompletionAnnounceForSession(
             targetRequesterSessionKey,
             targetRequesterAgentId,
-          )
+          ))
         ) {
           return "delivered";
         }
@@ -484,7 +487,7 @@ async function runSubagentAnnounceFlowBound(
             shouldDeleteChildSession = false;
             return "retryable";
           }
-          const fallback = resolveRequesterForChildSession(
+          const fallback = await resolveRequesterForChildSession(
             targetRequesterSessionKey,
             targetRequesterAgentId,
           );
@@ -613,6 +616,7 @@ async function runSubagentAnnounceFlowBound(
       directIdempotencyKey,
       onDeliveryResult: reportDeliveryResult,
       signal: params.signal,
+      onExecutionStarted: params.onExecutionStarted,
       resolveGatewayContext: params.resolveGatewayContext,
     });
     await reportDeliveryResult(delivery);
@@ -637,6 +641,7 @@ async function runSubagentAnnounceFlowBound(
     ) {
       await deleteSubagentSessionForCleanup({
         callGateway: callSubagentLifecycleGateway,
+        gatewayBinding: { resolveGatewayContext: params.resolveGatewayContext },
         prepareCurrent: prepareChildSessionEffects,
         isCurrent: childSessionEffectsAllowed,
         childSessionKey: params.childSessionKey,

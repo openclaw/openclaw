@@ -16,13 +16,9 @@ import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.j
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
-import { resolveSessionPlacementSandbox } from "../../session-placement-admission.js";
 import { resolveSessionSkillResourceSnapshot } from "../../session-placement-skill-resources.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
-import {
-  resolveAttemptWorkspaceSandbox,
-  resolveHarnessWorkspace,
-} from "../../workspace-sandbox.js";
+import { preparePluginHarnessWorkspace, resolveHarnessWorkspace } from "../../workspace-sandbox.js";
 import { remapExplicitSkillSelectionPath, remapSkillReferencePaths } from "../sandbox-skills.js";
 import { prepareEmbeddedSkills } from "../skill-runtime.js";
 import { mapThinkingLevelForProvider } from "../utils.js";
@@ -165,11 +161,22 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     provider,
     runtimePlan,
   });
+  if (!params.admittedRunContext) {
+    throw new Error("embedded attempt reached dispatch without an admitted run context");
+  }
+  const admittedRunContext = params.admittedRunContext;
+  const assertTrajectoryCurrent = resolveAdmittedRunActiveAssertion(
+    admittedRunContext,
+    params.abortSignal,
+  );
+  if (!assertTrajectoryCurrent) {
+    throw new Error("embedded attempt reached dispatch without an active admitted run");
+  }
   const trajectoryRecorder =
     runtime.agentHarness.id === CODEX_HARNESS_ID &&
     !params.disableTrajectory &&
     params.sessionPersistence !== "detached"
-      ? createTrajectoryRuntimeRecorder({
+      ? await createTrajectoryRuntimeRecorder({
           cfg: params.config,
           env: process.env,
           runId: params.runId,
@@ -195,6 +202,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
           workspaceDir,
         })
       : undefined;
+  assertTrajectoryCurrent();
   let startupStagesEmitted = input.startupStagesEmitted;
   if (!startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.runtimePlan);
@@ -248,10 +256,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     modelMaxTokens: effectiveModel.maxTokens,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
   });
-  if (!params.admittedRunContext) {
-    throw new Error("embedded attempt reached dispatch without an admitted run context");
-  }
-  const admittedRunContext = params.admittedRunContext;
   const assertActiveRun = resolveAdmittedRunActiveAssertion(
     admittedRunContext,
     attemptAbortController.signal,
@@ -260,27 +264,18 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     throw new Error("embedded attempt reached dispatch without an active admitted run");
   }
   assertActiveRun();
-  const placementSandbox = runtime.pluginHarnessOwnsTransport
-    ? await resolveSessionPlacementSandbox({
-        agentId: workspaceResolution.agentId,
-        config: params.config,
-        sessionId,
-        sessionKey: resolvedSessionKey,
-        workspaceDir,
-      })
-    : null;
-  assertActiveRun();
-  const pluginWorkspace = runtime.pluginHarnessOwnsTransport
-    ? await resolveAttemptWorkspaceSandbox({
+  using placement = runtime.pluginHarnessOwnsTransport
+    ? await preparePluginHarnessWorkspace({
         ...params,
         agentId: workspaceResolution.agentId,
         cwd: undefined,
         sessionId,
         sessionKey: resolvedSessionKey,
         workspaceDir,
-        placementSandbox,
       })
-    : undefined;
+    : null;
+  assertActiveRun();
+  const pluginWorkspace = placement?.workspace;
   const promptMedia = pluginWorkspace
     ? await prepareEmbeddedAttemptPromptExecution({
         attempt: { ...params, model: effectiveModel },
@@ -303,7 +298,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
           finalize: params.finalizePromptForResolvedTools,
         })
       : undefined;
-  const pluginSandbox = placementSandbox ?? pluginWorkspace?.sandbox;
+  const pluginSandbox = placement?.sandbox ?? pluginWorkspace?.sandbox;
   if (params.permissionMode) {
     // Attempts narrow this shared run-owned policy before recovery can reuse it.
     params.execOverrides ??= {};
@@ -605,6 +600,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     onExecutionPhase: params.onExecutionPhase,
     extraSystemPrompt,
     gitCoauthorPrompt,
+    preparedTtsPreferences: params.preparedTtsPreferences,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     silentReplyPromptMode: params.silentReplyPromptMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
@@ -658,6 +654,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     forceMessageTool: params.forceMessageTool,
     enableHeartbeatTool: params.enableHeartbeatTool,
     forceHeartbeatTool: params.forceHeartbeatTool,
+    continuesConversation: params.continuesConversation,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     internalEvents: params.internalEvents,
     runtimeContextFragments: params.runtimeContextFragments,
@@ -681,7 +678,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   const rawAttempt = await withPreparedEmbeddedGatewayTools(
     attemptParams,
     attemptControls.isCurrent,
-    () => runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime, params.media),
+    () => {
+      assertActiveRun();
+      placement?.assertCurrent();
+      return runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime, params.media);
+    },
   )
     .catch((err: unknown): never => {
       throw input.getPostCompactionAbortError() ?? err;

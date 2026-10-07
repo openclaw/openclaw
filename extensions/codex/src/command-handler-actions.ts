@@ -65,13 +65,11 @@ export function resolveCodexNativeCommandSandboxBlock(
   subcommand: string,
   args: readonly string[],
 ): string | undefined {
-  if (isReadOnlyCodexGoalCommand(subcommand, args)) {
-    return undefined;
-  }
-  if (!CODEX_NATIVE_EXECUTION_SUBCOMMANDS.has(subcommand)) {
-    return undefined;
-  }
-  if (returnsBeforeNativeCodexExecution(subcommand, args)) {
+  if (
+    isReadOnlyCodexGoalCommand(subcommand, args) ||
+    !CODEX_NATIVE_EXECUTION_SUBCOMMANDS.has(subcommand) ||
+    returnsBeforeNativeCodexExecution(subcommand, args)
+  ) {
     return undefined;
   }
   if (isCodexCliNodeResumeBind(subcommand, args)) {
@@ -139,14 +137,10 @@ function isCodexCliNodeResumeBind(subcommand: string, args: readonly string[]): 
 
 function returnsBeforeNativeCodexResume(args: readonly string[]): boolean {
   const parsed = parseResumeArgs([...args]);
-  const normalizedThreadId = parsed.threadId?.trim();
-  if (parsed.help) {
+  if (parsed.help || !parsed.threadId) {
     return true;
   }
-  if (parsed.host) {
-    return !normalizedThreadId || parsed.bindHere !== true;
-  }
-  return !normalizedThreadId || args.length !== 1;
+  return parsed.host ? parsed.bindHere !== true : args.length !== 1;
 }
 
 export async function handleComputerUseCommand(
@@ -173,7 +167,7 @@ export async function handleComputerUseCommand(
     pluginConfig,
     config: ctx.config,
     agentDir,
-    forceEnable: parsed.action === "install" || parsed.hasOverrides,
+    forceEnable: parsed.action === "install" || Object.keys(parsed.overrides).length > 0,
     ...(Object.keys(parsed.overrides).length > 0 ? { overrides: parsed.overrides } : {}),
   };
   if (parsed.action === "install") {

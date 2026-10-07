@@ -127,7 +127,6 @@ type SkillWorkshopToolOptions = {
   proposalOnly?: boolean;
   /** Allows proposal-only sessions to draft update proposals for existing live skills. */
   updateProposals?: boolean;
-  /** Marks proposals created by an autonomous capture pipeline. */
   autonomousCapture?: boolean;
   /** Run-scoped budget shared by every tool instance created across retries. */
   proposalMutationBudget?: SkillWorkshopProposalMutationBudget;

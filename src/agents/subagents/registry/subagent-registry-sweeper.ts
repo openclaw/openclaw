@@ -7,6 +7,7 @@ import {
   runWithGatewayDetachedWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
+import { runInDetachedAsyncContext } from "../../../shared/detached-async-context.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import {
   blockSubagentCompletionDelivery,
@@ -138,10 +139,12 @@ export function createSubagentRegistrySweeper(params: {
       return;
     }
     clearTimeout(scheduled?.timer);
-    const timer = setTimeout(() => {
-      scheduled = undefined;
-      void trackWork(runTick);
-    }, delayMs);
+    const timer = runInDetachedAsyncContext(() =>
+      setTimeout(() => {
+        scheduled = undefined;
+        void trackWork(runTick);
+      }, delayMs),
+    );
     timer.unref?.();
     scheduled = { timer, at: nextAt };
   }
@@ -306,7 +309,7 @@ export function createSubagentRegistrySweeper(params: {
               clearPendingLifecycleTimeout: params.clearPendingLifecycleTimeout,
               discardTerminalDelivery: params.discardTerminalDelivery,
               completeCleanupBookkeeping: params.completeCleanupBookkeeping,
-              isCurrent: () => params.isCleanupOwnerCurrent(runId, entry),
+              isCurrent: () => params.isCleanupOwnerCurrent(entry),
               sessionEffectsHostCurrent: params.sessionEffectsHostCurrent,
               shouldSuppressSessionEffects: params.shouldSuppressSessionEffects,
               shouldEmitEndedHookForRun: params.shouldEmitEndedHookForRun,

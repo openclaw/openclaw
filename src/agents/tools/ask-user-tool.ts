@@ -1,5 +1,5 @@
-/** Built-in blocking user-question tool and its active-session answer bridge. */
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { raceWithTimeout } from "@openclaw/retry";
 import type {
   QuestionAnswers,
   QuestionRequestQuestion,
@@ -9,6 +9,7 @@ import { isReplyDispatchDeliveryError } from "../../auto-reply/reply/reply-dispa
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
+import { sleep } from "../../utils/sleep.js";
 import {
   resolveAgentQuestionGatewayCall,
   type AgentHarnessQuestionGatewayCall,
@@ -198,9 +199,7 @@ export async function waitForAskUserPromptReady(
       // Registration and local Gateway credentials may still be coming online.
       // Local state can win on the next pass; isolated runtimes retry the record.
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
+    await sleep(50);
   }
   return undefined;
 }
@@ -232,22 +231,15 @@ async function readAskUserQuestionStatusBeforeExpiry(
   if (remainingMs <= 0) {
     return { kind: "expired" };
   }
-  return await new Promise<AskUserPromptStatusRead>((resolve) => {
-    let settled = false;
-    const finish = (result: AskUserPromptStatusRead) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(expiryTimer);
-      resolve(result);
-    };
-    const expiryTimer = setTimeout(() => finish({ kind: "expired" }), remainingMs);
-    void readAskUserQuestionStatus(questionId, gatewayCall).then(
-      (status) => finish({ kind: "status", status }),
-      () => finish({ kind: "error" }),
-    );
-  });
+  return await raceWithTimeout(
+    () =>
+      readAskUserQuestionStatus(questionId, gatewayCall).then(
+        (status) => ({ kind: "status" as const, status }),
+        () => ({ kind: "error" as const }),
+      ),
+    remainingMs,
+    () => ({ kind: "expired" as const }),
+  );
 }
 
 /** Opens prompt delivery after question.request succeeds. */
@@ -328,9 +320,7 @@ export async function isAskUserPromptPending(
     if (remainingMs <= 0) {
       return false;
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, Math.min(ASK_USER_PROMPT_RECHECK_MS, remainingMs));
-    });
+    await sleep(Math.min(ASK_USER_PROMPT_RECHECK_MS, remainingMs));
   }
   return false;
 }

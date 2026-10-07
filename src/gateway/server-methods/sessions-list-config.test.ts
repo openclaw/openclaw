@@ -22,7 +22,7 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { OperatorScope } from "../operator-scopes.js";
-import { retainSessionListForegroundWork } from "../session-projection-work.js";
+import * as projectionWork from "../session-projection-work.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
@@ -62,7 +62,7 @@ it("reuses committed row facts when a changed model catalog updates session list
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
         defaults: { utilityModel: "unit-test/small" },
       },
       plugins: { enabled: false },
@@ -95,15 +95,48 @@ it("reuses committed row facts when a changed model catalog updates session list
       });
     }
     let catalog = [{ id: "fixture", name: "Fixture", provider: "unit-test", contextTokens: 8192 }];
-    const release = retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({
+    const release = projectionWork.retainSessionListForegroundWork();
+    const firstRead = createDeferredCore();
+    const resumeFirstRead = createDeferredCore();
+    const backgroundRefresh = createDeferredCore();
+    const startupReads: string[] = [];
+    let pauseFirstRead = true;
+    observeRowFacts(startupReads, async () => {
+      if (pauseFirstRead) {
+        pauseFirstRead = false;
+        firstRead.resolve();
+        await resumeFirstRead.promise;
+      }
+    });
+    const createDrain = projectionWork.createSessionProjectionDrain;
+    vi.spyOn(projectionWork, "createSessionProjectionDrain").mockImplementation((options) =>
+      createDrain({
+        ...options,
+        refresh() {
+          const work = options.refresh();
+          backgroundRefresh.resolve();
+          return work;
+        },
+      }),
+    );
+    const creating = createSessionRowProjection({
       cfg,
       getModelCatalog: async () => catalog,
     });
+    try {
+      await firstRead.promise;
+      await backgroundRefresh.promise;
+      await projectionWork.yieldSessionListWork();
+    } finally {
+      resumeFirstRead.resolve();
+    }
+    const projection = await creating;
+    await projection.ensureMaterialized();
     const context = bindSessionRowProjection(requestContext(cfg), () => projection);
     const client = identifiedClient("viewer");
     const list = () => listSessions({ context, client, request: { includeActivitySummary: true } });
     try {
+      expect(startupReads.toSorted()).toEqual(scopes.map((scope) => scope.sessionKey).toSorted());
       expect((await list()).sessions.map((row) => row.contextTokens)).toEqual([8192, 8192]);
       const reads: string[] = [];
       observeRowFacts(reads);
@@ -173,7 +206,7 @@ it("retains session facts on identity-scope changes and refreshes changes that a
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     let cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
         defaults: { model: "unit-test/original" },
       },
       plugins: { enabled: false },
@@ -193,7 +226,7 @@ it("retains session facts on identity-scope changes and refreshes changes that a
     }
     const context = requestContext(cfg);
     context.getRuntimeConfig = () => getRuntimeConfigSnapshot()!;
-    const release = retainSessionListForegroundWork();
+    const release = projectionWork.retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({
       cfg,
       getConfig: () => context.getRuntimeConfig(),

@@ -161,7 +161,7 @@ export async function withClawAgentConfigRemoval<T>(
   };
   return await withAgentDeletion(
     params.agentId,
-    async (begin) => {
+    async (_begin, transact) => {
       const config = params.config ?? getRuntimeConfig();
       assertAgentSessionStoreDeletionSafe(config, params.agentId, stateOptions);
       const effects = deletionEffects(
@@ -177,7 +177,7 @@ export async function withClawAgentConfigRemoval<T>(
           expectedInstall,
         );
       // Validate and claim together: a stale install snapshot must never fence a replacement.
-      const { existingJournal, deletion } = runOpenClawStateWriteTransaction((database) => {
+      const { existingJournal, deletion } = await transact((database, begin) => {
         if (!matchesInstall(database)) {
           throw params.onModified();
         }
@@ -191,7 +191,7 @@ export async function withClawAgentConfigRemoval<T>(
           deleteFiles: previousJournal?.deleteFiles ?? false,
         });
         return { existingJournal: previousJournal, deletion: claimedDeletion };
-      }, stateOptions);
+      });
       let committed = false;
       let monitorEffectsStarted = false;
       const assertCurrent = (database?: OpenClawStateDatabase) => {
@@ -206,7 +206,9 @@ export async function withClawAgentConfigRemoval<T>(
         } else {
           const current = openOpenClawStateDatabase(stateOptions);
           // Worker admission can hold the writer lock while waiting for this read-only authority check.
-          runSqliteDeferredTransactionSync(current.db, () => check(current));
+          runSqliteDeferredTransactionSync(current.db, () => check(current), {
+            operationLabel: "claws.removal.authority",
+          });
         }
       };
       try {
@@ -249,7 +251,7 @@ export async function withClawAgentConfigRemoval<T>(
       } finally {
         // Pre-config partial results release only this attempt's fence; committed cleanup retains it.
         if (!committed && !monitorEffectsStarted && !existingJournal) {
-          deletion.rollback();
+          await deletion.rollback();
         }
         if (expectedInstall) {
           // Result construction is pure; only the live operation may publish retry status.

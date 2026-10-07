@@ -76,7 +76,6 @@ function fixture(mode: "merge" | "replace" = "merge") {
     entries: [
       {
         provider,
-        result: { provider: staticConfig },
         providerConfigs: { [providerId]: staticConfig },
       },
     ],

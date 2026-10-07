@@ -16,6 +16,7 @@ import { runScopedSqliteArchiveOperation } from "./session-accessor.sqlite-archi
 import type {
   MaterializedSessionStateDeletePlan,
   SessionStateDeletePlan,
+  SqliteArchiveOneShotWorkerData,
   TranscriptArchivePagePlan,
   TranscriptArchivePageResult,
   TranscriptArchivePublishPlan,
@@ -233,7 +234,11 @@ function runSqliteTranscriptArchiveWorker(
   }
   return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchiveWorkerResult>({
     expectedMessageType: "done",
-    workerData: { operation: "materialize", type: "sqlite-transcript-archive-v2", plans },
+    workerData: {
+      operation: "materialize",
+      type: "sqlite-transcript-archive-v2",
+      plans,
+    } satisfies SqliteArchiveOneShotWorkerData,
   });
 }
 
@@ -257,7 +262,11 @@ export function runSqliteTranscriptArchivePublishWorker(
   return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchivePublishResult>({
     signal,
     expectedMessageType: "published",
-    workerData: { operation: "publish", type: "sqlite-transcript-archive-v2", plans },
+    workerData: {
+      operation: "publish",
+      type: "sqlite-transcript-archive-v2",
+      plans,
+    } satisfies SqliteArchiveOneShotWorkerData,
   });
 }
 

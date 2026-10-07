@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { GATEWAY_OWNER_HEARTBEAT_MS } from "./gateway-lock-payload.js";
 import type { GatewayStateOwnerHeartbeatData } from "./gateway-state-owner-heartbeat.runtime.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";

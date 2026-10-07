@@ -1,4 +1,3 @@
-// QA Lab scenario module references normalize into the canonical flow shape.
 import { z } from "zod";
 
 const qaFlowModuleExportArgSchema = z
@@ -91,33 +90,25 @@ const qaSharedFlows = {
           },
           sendSharedFlowMarker("marker"),
           {
-            // Object literals with a `then` property become JavaScript thenables.
-            // Build the QA DSL branch as data so an accidental await cannot execute it.
-            if: Object.fromEntries([
-              ["expr", "config.expectReply"],
-              [
-                qaSharedFlowPositiveBranch,
-                [
-                  {
-                    waitForOutbound: {
-                      textIncludes: { ref: "marker" },
-                      timeoutMs: { ref: "config.timeoutMs" },
-                    },
+            if: {
+              expr: "config.expectReply",
+              [qaSharedFlowPositiveBranch]: [
+                {
+                  waitForOutbound: {
+                    textIncludes: { ref: "marker" },
+                    timeoutMs: { ref: "config.timeoutMs" },
                   },
-                ],
+                },
               ],
-              [
-                "else",
-                [
-                  {
-                    waitForNoOutbound: {
-                      quietMs: { ref: "config.timeoutMs" },
-                      sinceIndex: { ref: "outboundCount" },
-                    },
+              else: [
+                {
+                  waitForNoOutbound: {
+                    quietMs: { ref: "config.timeoutMs" },
+                    sinceIndex: { ref: "outboundCount" },
                   },
-                ],
+                },
               ],
-            ]),
+            },
           },
         ],
         detailsExpr: "`${config.markerPrefix}: expectReply=${config.expectReply}`",

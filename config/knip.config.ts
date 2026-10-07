@@ -18,6 +18,11 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "apps/linux/scripts/test-runtime-boundary.mjs!",
+  "apps/linux/scripts/stage-runtime.mjs!",
+  "apps/linux/scripts/test-stage-runtime.mjs!",
+  // The Python onboarding driver installs this synthetic CLI by path.
+  "apps/linux/tests/fixtures/onboarding-cli.mjs!",
   // apps/linux/README.md invokes this live Windows native-browser proof driver by path.
   "apps/linux/scripts/test-inline-browser.mjs!",
   // Linux App CI executes the injected native-auth bridge tests through Node.
@@ -212,10 +217,6 @@ const repositoryScriptEntries = [
   "scripts/openclaw-release-clawhub-runtime-state.ts!",
   // Protected preparation/button workflows invoke this coordinator by path.
   "scripts/openclaw-release-ready.mjs!",
-  // Plugin Prerelease builds immutable package artifacts, then scans them in a bounded child.
-  "scripts/plugin-npm-security-prepare.mts!",
-  "scripts/plugin-npm-security-scan-runner.mjs!",
-  "scripts/plugin-npm-security-scan.mts!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
@@ -393,6 +394,8 @@ const rootEntries = [
   "node-runtime-recovery.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
+  // Startup metadata renders source help through a generated child module's file-URL import.
+  "src/cli/program/root-help.ts!",
   // Packaged postinstall imports this private compiled entry before stage activation.
   "src/commands/doctor-update-schema-guard.ts!",
   // Built as the official image's Docker HEALTHCHECK entrypoint.
@@ -402,6 +405,7 @@ const rootEntries = [
   "src/worker/worker-deploy-file-tool-planning.ts!",
   "src/worker/worker-deploy-image-processor.ts!",
   "src/worker/worker-deploy-sqlite-store.ts!",
+  "src/worker/worker-deploy-state-read.ts!",
   "src/worker/workspace-rsync-receiver.ts!",
   // v2026.9.1 Gateways lazy-import this stable dist entry after an in-place update.
   "src/gateway/plugin-channel-reload-targets.ts!",
@@ -421,19 +425,21 @@ const rootEntries = [
   "scripts/openclaw-cross-os-release-checks.ts!",
   "scripts/release-plan-producer-core.mts!",
   "scripts/release-plan-producer.mts!",
+  // The producer verifies committed bytes, then launches this module through node -e.
+  "scripts/lib/release-plan-child-runner.mjs!",
   "scripts/full-release-publication-observations.mts!",
   "scripts/release-verify-publish.ts!",
   // Spawned by the agent concurrency benchmark; no static import edge exists.
   "scripts/bench-agent-concurrency-worker.ts!",
   "scripts/bench-sqlite-reliability.ts!",
   "scripts/bench-cron-session-reaper.ts!",
-  "scripts/bench-codex-catalog-pages.ts!",
-  "scripts/bench-redaction-hot-paths.ts!",
-  // The manual heap-retention CLI launches its private IPC preload by path.
-  "scripts/bench-gateway-heap-retention.ts!",
-  "scripts/lib/gateway-heap-retention-preload.mjs!",
   // docs/reference/test/performance.md invokes this standalone comparison harness.
   "scripts/bench-workspace-computation.ts!",
+  // packages/worker-runtime/README.md invokes the benchmark; its worker is loaded by URL.
+  "scripts/bench-worker-runtime.ts!",
+  "scripts/bench-worker-runtime.worker.ts!",
+  // docs/help/testing/control-ui-load.md invokes this opt-in Linux process/protocol proof.
+  "scripts/bench-gateway-control-ui-proof.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
@@ -449,8 +455,7 @@ const rootEntries = [
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
   "src/cli/plugins-list-format.ts!",
   "src/infra/warning-filter.ts!",
-  // Jiti exposes this SDK barrel and its type-only declaration owner.
-  "src/agents/sessions/extension-sdk.ts!",
+  // The session extension SDK exposes this type-only declaration owner.
   "src/agents/sessions/extensions/types.ts!",
   // Plugin-SDK ACP facades expose the registry's runtime signatures.
   "src/acp/runtime/registry.ts!",
@@ -876,6 +881,7 @@ const config = {
     "packages/acp-core": workspacePackage("acp-core"),
     "packages/terminal-core": workspacePackage("terminal-core"),
     "packages/retry": workspacePackage("retry"),
+    "packages/worker-runtime": workspacePackage("worker-runtime"),
     "packages/media-generation-core": workspacePackage("media-generation-core"),
     "packages/media-understanding-common": workspacePackage("media-understanding-common"),
     "packages/memory-host-sdk": {

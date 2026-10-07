@@ -77,6 +77,10 @@ saved continuation across restart. Registry recovery waits for that owner instea
 of reporting interruption while the same continuation is being replayed. This
 does not authorize automatic relaunch of unrelated interrupted child work.
 
+Recovery retires superseded requester-transfer generations before restoring the
+remaining claim. The current generation keeps its completion custody; obsolete
+transfers do not retry indefinitely. Transient persistence failures still retry.
+
 Recovery handles both sessions marked `abortedLastRun: true` and hard kills that
 prevented the shutdown marker from being written. For a hard kill, the child
 session must still identify the exact run from the retired Gateway, with no newer
@@ -152,9 +156,11 @@ session key. Legacy runs without a recorded owner use current configuration to
 resolve one agent and clear only that agent's queues. The optional binding stays
 in `payload_json` when an older build rewrites the run.
 
-Owner-aware child lookups keep watched follow-ups, steering, and run generations
-separate when agents share a raw key. Rows without a recorded owner and callers
-without an explicit owner retain their existing key-only lookup behavior.
+Owner-aware child lookups keep watched follow-ups, steering, run generations,
+completion transcripts, and timeout reconciliation separate when agents share a
+raw key. Terminal events and session timing updates use that same child owner.
+Rows without a recorded owner and callers without an explicit owner retain their
+existing key-only lookup behavior.
 
 Stop also retires pending completion continuations for the selected work, even
 when a child has already finished. Cancelling a completion turn retires its

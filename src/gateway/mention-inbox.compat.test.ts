@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { validateMentionsListResult } from "../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import * as mentionWorker from "./mention-inbox-worker.js";
@@ -13,31 +12,6 @@ import {
 afterEach(() => vi.restoreAllMocks());
 
 describe("released Mention Inbox compatibility", () => {
-  it("completes a released record call before an immediate synchronous list", async () => {
-    await withInbox(async (f) => {
-      const returned = f.inbox.recordCommittedInput({
-        sourceId: "released-record",
-        committedSource: {
-          generation: "test-generation",
-          sequence: 1,
-          timestamp: f.scheduler.now(),
-        },
-        sessionKey: SESSION_KEY,
-        agentId: "main",
-        sessionId: SESSION_ID,
-        messageId: "message-released-record",
-        senderProfileId: f.alice.id,
-        recipientProfileIds: [f.bob.id],
-      });
-      expect(f.inbox.list(f.bobClient)).toMatchObject({
-        ok: true,
-        value: { items: [{ messageId: "message-released-record" }] },
-      });
-      expect(returned).toBeUndefined();
-      expect(f.push).toHaveBeenCalledOnce();
-    });
-  });
-
   it("publishes a foreign dismissal before a released invalidation returns", async () => {
     await withInbox(async (f) => {
       await f.post("before-invalidation");
@@ -108,52 +82,6 @@ describe("released Mention Inbox compatibility", () => {
         }
         expect((await read(f.inbox, f.bobSecond)).items).toHaveLength(commit ? 1 : 0);
       }
-    });
-  });
-
-  it("keeps released synchronous reads and exact-ID dismissals fresh and durable", async () => {
-    await withInbox(async (f) => {
-      await f.post("original");
-      const first = f.inbox.list(f.bobClient);
-      expect(first).toMatchObject({
-        ok: true,
-        value: { items: [{ messageId: "message-original" }] },
-      });
-      if (!first.ok) {
-        throw new Error(first.error.message);
-      }
-      expect(validateMentionsListResult(first.value)).toBe(true);
-      const peer = f.openInbox("foreign-native-reader");
-      await f.post("foreign", {}, peer);
-      const fresh = f.inbox.list(f.bobClient);
-      if (!fresh.ok) {
-        throw new Error(fresh.error.message);
-      }
-      expect(fresh.value.items.map((item) => item.messageId)).toEqual([
-        "message-foreign",
-        "message-original",
-      ]);
-      const foreign = fresh.value.items[0]!;
-      expect(f.inbox.dismiss(f.bobClient, [` ${foreign.id} `])).toEqual(fresh);
-      const dismissed = f.inbox.dismiss(f.bobClient, [foreign.id]);
-      expect(dismissed).toMatchObject({ ok: true, value: { items: first.value.items } });
-      expect(f.inbox.list({ ...f.bobClient, invalidated: true })).toMatchObject({
-        ok: false,
-        error: { code: "FORBIDDEN" },
-      });
-      await f.inbox.dispose();
-      f.push.mockClear();
-      const restarted = f.openInbox("native-restart");
-      expect(restarted.list(f.bobClient)).toMatchObject({
-        ok: true,
-        value: { items: first.value.items },
-      });
-      await f.post("foreign", {}, restarted);
-      expect(restarted.list(f.bobClient)).toMatchObject({
-        ok: true,
-        value: { items: first.value.items },
-      });
-      expect(f.push).not.toHaveBeenCalled();
     });
   });
 

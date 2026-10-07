@@ -39,7 +39,7 @@ import { backupRestoreCommand } from "./backup-restore.js";
 import { buildBackupArchivePath } from "./backup-shared.js";
 import * as backupVerify from "./backup-verify.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
-import type { DoctorMaintenance, DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
+import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { guardUpdateDoctorSchemaUpgrade } from "./doctor-update-schema-guard.js";
 
@@ -119,7 +119,9 @@ const runtime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
 
 async function withDoctorMaintenance(
   options: Partial<Pick<DoctorMaintenanceParams, "runtime" | "assertCurrent">>,
-  run: (maintenance: DoctorMaintenance) => Promise<void>,
+  run: (
+    maintenance: NonNullable<Awaited<ReturnType<typeof beginDoctorMaintenance>>>,
+  ) => Promise<void>,
 ) {
   const maintenance = await beginDoctorMaintenance({
     root: null,
@@ -648,7 +650,11 @@ it("retains disposable coverage through the real migration of a mixed backed-up 
     }
     await state.writeConfig({
       plugins: { enabled: false },
-      agents: { entries: { main: { default: true }, external: { agentDir: externalDir } } },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "main" } },
+        entries: { main: {}, external: { agentDir: externalDir } },
+      },
     });
     await closeStateDatabaseForTest();
     const schemas = await prepareDoctorDatabasePreflight();

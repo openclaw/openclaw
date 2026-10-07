@@ -8,7 +8,7 @@ import {
   upsertSessionEntryCore,
   replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
-import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
+import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
 import { SessionTranscriptStorageUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
@@ -16,10 +16,11 @@ import { historyLane } from "../../config/sessions/session-transcript-worker-res
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { SessionManager, type SessionEntry } from "../../plugin-sdk/agent-sessions.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabases,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   listOpenIncognitoAgentDatabases,
   recordOpenClawAgentDatabaseOpenFailure,
@@ -33,6 +34,8 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { sessionManagerPrepareCurrentTurnReplay } from "./session-manager-current-turn.js";
+
+const { prepareSessionTranscriptHydration } = transcriptHydration;
 
 function canonicalTarget(
   state: OpenClawTestState,
@@ -483,6 +486,28 @@ it.each([
         await receiver.reloadPersistedTranscriptAsync();
       }
       const originalView = receiver.buildSessionContext();
+      const received = createDeferredCore();
+      const publish = createDeferredCore();
+      const holdPublication = async <T>(read: Promise<T>) => {
+        const result = await read;
+        received.resolve();
+        await publish.promise;
+        return result;
+      };
+      const hydration =
+        transition === "replace"
+          ? vi
+              .spyOn(transcriptHydration, "prepareSessionTranscriptHydration")
+              .mockImplementationOnce((...args) => {
+                const reader = prepareSessionTranscriptHydration(...args);
+                return {
+                  ...reader,
+                  read: () => holdPublication(reader.read()),
+                  readCurrentTurnEntry: (request) =>
+                    holdPublication(reader.readCurrentTurnEntry(request)),
+                };
+              })
+          : undefined;
       const pending =
         entry === "full"
           ? SessionManager.openAsync(target)
@@ -501,20 +526,35 @@ it.each([
       const rejected = expect(pending).rejects.toThrow(
         "incognito database owner is no longer current",
       );
-      if (entry !== "bounded-callback") {
-        closeOpenClawAgentDatabases(state.root);
+      try {
+        if (transition === "replace") {
+          await Promise.race([
+            received.promise,
+            rejected.then(() => {
+              throw new Error("Hydration settled before its replacement publication barrier");
+            }),
+          ]);
+          await closeOpenClawAgentDatabasesAsync(state.root);
+          const replacement = SessionManager.open(target);
+          replacement.appendMessage(makeUserMessage("replacement private history", 2));
+          expect(replacement.buildSessionContext().messages).toEqual([
+            makeUserMessage("replacement private history", 2),
+          ]);
+          publish.resolve();
+        } else if (entry !== "bounded-callback") {
+          closeOpenClawAgentDatabases(state.root);
+        }
+        await rejected;
+        if (entry === "bounded-callback") {
+          expect(onTruncated).toHaveBeenCalledOnce();
+        }
+        expect(receiver.buildSessionContext()).toEqual(originalView);
+        expect(fs.existsSync(target.storePath)).toBe(false);
+      } finally {
+        publish.resolve();
+        hydration?.mockRestore();
+        await Promise.allSettled([pending, rejected]);
       }
-      if (transition === "replace") {
-        SessionManager.open(target).appendMessage(
-          makeUserMessage("replacement private history", 2),
-        );
-      }
-      await rejected;
-      if (entry === "bounded-callback") {
-        expect(onTruncated).toHaveBeenCalledOnce();
-      }
-      expect(receiver.buildSessionContext()).toEqual(originalView);
-      expect(fs.existsSync(target.storePath)).toBe(false);
     });
   },
 );

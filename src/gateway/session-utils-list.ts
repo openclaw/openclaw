@@ -22,11 +22,11 @@ import { gatewayClientSessionCreator } from "./server-methods/gateway-client-ide
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import { resolveGatewayModelSelectionPolicy } from "./server-methods/session-model-selection-policy.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
-import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
+import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import type { SessionListDiagnostics } from "./session-list-diagnostics.types.js";
 import {
   filterSessionEntries,
-  type SessionListFilteredEntries,
+  type SessionEntrySelection,
   type SessionListFilterParams,
 } from "./session-list-filters.js";
 import {
@@ -36,7 +36,7 @@ import {
 } from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
-import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
+import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import {
   identity as rowIdentity,
   selectionRow,
@@ -49,15 +49,6 @@ import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
-type SessionEntrySelection = Omit<SessionListFilteredEntries, "ownerEntries"> & {
-  ownerCount: number;
-  totalCount: number;
-  limitApplied?: number;
-  offset: number;
-  nextOffset: number | null;
-  hasMore: boolean;
-};
-
 function resolveSessionsListWindowLimit(limit: number | undefined, offset: number) {
   if (limit === undefined) {
     return undefined;
@@ -66,7 +57,7 @@ function resolveSessionsListWindowLimit(limit: number | undefined, offset: numbe
   return Number.isFinite(windowLimit) ? Math.min(windowLimit, Number.MAX_SAFE_INTEGER) : undefined;
 }
 
-function* selectSessionEntries(
+export function* selectSessionEntries(
   params: SessionListFilterParams & { defaultLimit?: number },
 ): SynchronousWork<SessionEntrySelection> {
   const { ownerEntries, entries: filtered, ...facets } = yield* filterSessionEntries(params);
@@ -132,20 +123,22 @@ function buildSessionsListResult(
     modelCatalog instanceof Map ? modelCatalog.get(defaultsAgentId) : undefined;
   const defaultsCatalog =
     modelCatalog instanceof Map ? preparedDefaultsCatalog?.entries : modelCatalog;
-  const metadataSnapshot = readPreparedGatewayModelCatalogMetadata(preparedDefaultsCatalog);
+  const metadataSnapshot = readPreparedGatewayModelMetadata(cfg, preparedDefaultsCatalog);
   const defaults = getSessionDefaults(cfg, defaultsCatalog, {
     ...(opts.agentId ? { agentId: opts.agentId } : {}),
     allowPluginNormalization: false,
-    providerPolicySource: preparedDefaultsCatalog?.pluginRegistry,
+    providerPolicySource: preparedDefaultsCatalog?.pluginRegistry ?? "active",
     metadataSnapshot,
   });
   const policy =
     client === undefined
       ? undefined
-      : prepareOperatorModelPresentation({ cfg, policyConfig, client, metadataSnapshot })?.forAgent(
-          defaultsAgentId,
-          defaultsCatalog,
-        );
+      : prepareOperatorModelPresentation({
+          cfg,
+          policyConfig,
+          client,
+          metadataSnapshot,
+        })?.forAgent(defaultsAgentId, defaultsCatalog);
   return {
     ts: list.now,
     path: list.storePath,
@@ -158,6 +151,7 @@ function buildSessionsListResult(
     owners: list.ownerFacet,
     ...(list.ownerSessionCounts ? { ownerSessionCounts: list.ownerSessionCounts } : {}),
     involvingProfileId: list.involvingProfileId,
+    ...(list.activityExpiresAt !== undefined ? { activityExpiresAt: list.activityExpiresAt } : {}),
     ...(list.activityPulse ? { activityPulse: list.activityPulse } : {}),
     ...(list.people
       ? {
@@ -364,31 +358,16 @@ export function prepareSessionRowSelection(
     storePath: selectedScope.path,
     userProfileIdentityById: rowContext.userProfileIdentityById,
     getRowContext: () => rowContext,
-    getTarget: (
-      key: string,
-    ):
-      | (SelectionTarget & {
-          storeKey?: string;
-          getModelFacts?: () => ReturnType<SessionRowProjection["modelFacts"]>;
-        })
-      | undefined => {
+    getTarget: (key: string): (SelectionTarget & { storeKey?: string }) | undefined => {
       const winner = selected.get(key);
-      if (!winner || (!opts.search && key === winner.key)) {
-        return winner;
-      }
-      const query = {
-        agentId: winner.agentId,
-        key: winner.key,
-        storePath: winner.storeTarget.storePath,
-      };
-      return {
-        ...winner,
-        ...(opts.search && projection.isMaterialized(query)
-          ? { materialized: projection.capture(query)?.materialized }
-          : {}),
-        ...(key !== winner.key ? { storeKey: winner.key } : {}),
-        getModelFacts: () => projection.modelFacts(query, prepared?.metadataPrepared === true),
-      };
+      return !winner || key === winner.key ? winner : { ...winner, storeKey: winner.key };
+    },
+    getModelFacts: (key: string) => {
+      const winner = selected.get(key)!;
+      return projection.modelFacts(
+        { agentId: winner.agentId, key: winner.key, storePath: winner.storeTarget.storePath },
+        prepared?.metadataPrepared === true,
+      );
     },
   };
 }
@@ -443,15 +422,15 @@ export function prepareProjectedSessionList(params: {
   now: number;
   metadataPrepared?: boolean;
   searchIdentities?: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>>;
+  /** Reused only within one admitted caller/configuration/profile authority epoch. */
+  visibility?: WeakMap<object, boolean>;
 }) {
   const { projection, opts, key: exactKey, context, client, now } = params;
   if (params.searchIdentities && params.searchIdentities.cfg !== projection.state.cfg) {
     throw new Error("Session identity configuration changed while reading; retry the request");
   }
-  const presentation = prepareProjectedSessionPresentation(
-    projection,
+  const presentation = prepareSessionRowPublication(projection, now)(
     client,
-    now,
     context
       ? createVisibleActiveSessionRunProjector(
           context,
@@ -481,10 +460,14 @@ export function prepareProjectedSessionList(params: {
       : undefined,
     entryFilter: (key, entry) => {
       const row = getTarget(key);
-      const visible = Boolean(
-        row &&
-        (client === undefined || (presentation.sharing.entryFilter?.(row.key, entry) ?? true)),
-      );
+      let visible = params.visibility?.get(entry);
+      if (visible === undefined) {
+        visible = Boolean(
+          row &&
+          (client === undefined || (presentation.sharing.entryFilter?.(row.key, entry) ?? true)),
+        );
+        params.visibility?.set(entry, visible);
+      }
       return (
         visible &&
         (opts.hasBoard === undefined || row?.hasBoard === opts.hasBoard) &&
@@ -502,6 +485,7 @@ export async function listProjectedSessions(params: {
   key?: string;
   context?: GatewayRequestContext;
   client?: GatewayClient | null;
+  acceptsSerializedJson?: boolean;
   diagnostics?: SessionListDiagnostics;
   onResult?: (result: SessionsListResult) => void;
 }): Promise<SessionsListResult> {
@@ -541,9 +525,14 @@ export async function listProjectedSessions(params: {
           metadataPrepared: true,
         });
         diagnostics?.mark("filterSetup");
-        const selection = withAgentRosterFactsBatch(prepared.cfg, () =>
-          runSynchronousWork(selectSessionEntries({ ...filters, defaultLimit: 100 })),
-        );
+        const select = () =>
+          withAgentRosterFactsBatch(prepared.cfg, () =>
+            runSynchronousWork(selectSessionEntries({ ...filters, defaultLimit: 100 })),
+          );
+        const selection =
+          params.acceptsSerializedJson && exactKey === undefined
+            ? presentation.select(opts, select)
+            : select();
         return { now, presentation, prepared, selection };
       } finally {
         diagnostics?.finishSyncCpu("prepareThreadCpuMs", syncCpu);
@@ -597,29 +586,32 @@ export async function listProjectedSessions(params: {
             }
             const includeTranscriptFields =
               index < SESSIONS_LIST_TRANSCRIPT_LIMIT + selection.ownerCount;
-            const row = presentation.present(record, {
+            const sharedRow = presentation.present(record, {
               includeDerivedTitles: opts.includeDerivedTitles && includeTranscriptFields,
               includeLastMessage: opts.includeLastMessage && includeTranscriptFields,
               includeActivitySummary: opts.includeActivitySummary === true,
+              rowMode: opts.rowMode,
+              omitSentinelChildren: opts.activeOnly && sentinel(record.key),
+              childArchiveFilter: opts.archived ?? false,
             });
-            if (!row) {
+            if (!sharedRow) {
               return [];
             }
-            bindSessionListRowRead(row, { projection, record, client });
             if ((record.materializedSequence ?? 0) > materializedBefore) {
               materializedRowCount++;
             }
-            if (opts.activeOnly && sentinel(record.key)) {
-              row.childSessions = undefined;
-              row.hasActiveSubagentRun = undefined;
+            if (params.acceptsSerializedJson) {
+              return [sharedRow];
             }
+            const row = { ...sharedRow };
+            bindSessionListRowRead(row, { projection, record, client });
             return [row];
           });
           diagnostics?.mark("decoration");
           const result = buildSessionsListResult(
             prepared,
             { ...selection, now, storePath: prepared.storePath },
-            sessions,
+            params.acceptsSerializedJson ? presentation.list(sessions, opts) : sessions,
             context?.getCommittedRuntimeConfig?.() ?? cfg,
             client,
           );

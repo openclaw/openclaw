@@ -17,6 +17,13 @@ import {
   type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type { IncognitoSessionActor } from "./session-incognito-actor.js";
+import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
+import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
+import type {
+  IncognitoHistoryOperations,
+  IncognitoHistoryTarget,
+} from "./session-incognito-history-contract.js";
 import type { SessionTranscriptMaintenanceRead } from "./session-transcript-hydration.types.js";
 import { readSessionTranscriptMaintenance } from "./session-transcript-maintenance-read.js";
 import {
@@ -32,12 +39,92 @@ import type {
 } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 
+type SessionTranscriptHydrationReader = {
+  target: ReturnType<typeof captureSessionTranscriptTargetBinding>;
+  assertCurrent: () => void;
+  read: () => Promise<PreparedSessionTranscriptHydration>;
+  readCurrentTurnEntry: (
+    request: SessionTranscriptCurrentTurnEntryRequest,
+  ) => Promise<SessionTranscriptCurrentTurnEntryRead>;
+  readMaintenance: (
+    request: SessionTranscriptMaintenanceRead,
+  ) => Promise<IncognitoHistoryOperations["session.history.maintenance"]["output"]>;
+  readRecentActiveEvents: (
+    maxEvents: number,
+  ) => Promise<IncognitoHistoryOperations["session.history.recent-active-events"]["output"]>;
+  readLatestActiveMessage: () => Promise<
+    IncognitoHistoryOperations["session.history.latest-active-message"]["output"]
+  >;
+};
+
+/** Inactive until P7d: the caller supplies the sole actor for this captured session. */
+export function prepareIncognitoSessionTranscriptHydration(params: {
+  actor: IncognitoSessionActor;
+  authority: IncognitoSessionAuthority;
+  target: IncognitoHistoryTarget;
+  limits?: { maxBytes: number; maxEvents: number };
+  signal?: AbortSignal;
+}): SessionTranscriptHydrationReader {
+  const { actor, authority, signal } = params;
+  actor.assertCurrent();
+  authority.assertCurrent();
+  const captured = structuredClone(params.target);
+  const limits = params.limits ? { ...params.limits } : undefined;
+  const target = captureSessionTranscriptTargetBinding({
+    agentId: actor.agentId,
+    storePath: actor.path,
+    sessionKey: captured.sessionKey,
+    sessionId: captured.sessionId,
+  });
+  captured.admission ??= resolveSessionTranscriptReadFence(target);
+  const claim = actor.sessions.captureCurrent(captured.sessionKey);
+  const assertCurrent = () => {
+    signal?.throwIfAborted();
+    actor.assertCurrent();
+    authority.assertCurrent();
+    claim.assertCurrent();
+  };
+  const boundAuthority: IncognitoSessionAuthority = {
+    assertCurrent,
+    authorize: (stage, facts) => authority.authorize?.(stage, facts),
+  };
+  const read = async <Key extends keyof IncognitoHistoryOperations>(
+    type: Key,
+    input: IncognitoHistoryOperations[Key]["input"],
+  ): Promise<IncognitoHistoryOperations[Key]["output"]> => {
+    assertCurrent();
+    const value = await actor.sessions.history(boundAuthority, { type, input }, signal);
+    assertCurrent();
+    return value;
+  };
+  return {
+    target,
+    assertCurrent,
+    read: () => read("session.history.hydrate", { ...captured, limits }),
+    readCurrentTurnEntry: (request) =>
+      read("session.history.current-turn-entry", {
+        ...captured,
+        entryId: request.entryId,
+        version: { ...request.version },
+        includeEntry: request.includeEntry,
+      }),
+    readMaintenance: (request) => read("session.history.maintenance", { ...captured, request }),
+    readRecentActiveEvents: (maxEvents) =>
+      read("session.history.recent-active-events", { ...captured, maxEvents }),
+    readLatestActiveMessage: () => read("session.history.latest-active-message", captured),
+  };
+}
+
 /** Capture identity before queueing; a missing file remains the creation owner's responsibility. */
 export function prepareSessionTranscriptHydration(
   source: SessionTranscriptRuntimeTarget & { env?: NodeJS.ProcessEnv },
   limits?: { maxBytes: number; maxEvents: number },
   signal?: AbortSignal,
-) {
+): SessionTranscriptHydrationReader {
+  const incognito = captureIncognitoSessionHistoryBinding(source);
+  if (incognito) {
+    return prepareIncognitoSessionTranscriptHydration({ ...incognito, limits, signal });
+  }
   const target = captureSessionTranscriptTargetBinding(source);
   const contextLimits = limits
     ? { maxBytes: limits.maxBytes, maxEvents: limits.maxEvents }

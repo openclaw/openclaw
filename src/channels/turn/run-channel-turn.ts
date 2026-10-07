@@ -92,16 +92,6 @@ function resolveDroppedHistorySender(input: NormalizedTurnInput, preflight: Pref
   );
 }
 
-function resolveDroppedHistoryBody(input: NormalizedTurnInput, preflight: PreflightFacts) {
-  return (
-    preflight.message?.bodyForAgent ??
-    preflight.message?.body ??
-    preflight.message?.rawBody ??
-    input.textForAgent ??
-    input.rawText
-  );
-}
-
 export async function recordDroppedChannelTurnHistory(params: {
   input: NormalizedTurnInput;
   preflight: PreflightFacts;
@@ -115,7 +105,12 @@ export async function recordDroppedChannelTurnHistory(params: {
   if (!history || history.limit <= 0 || !(history.recordOnDrop || admission.recordHistory)) {
     return;
   }
-  const body = resolveDroppedHistoryBody(params.input, params.preflight);
+  const body =
+    params.preflight.message?.bodyForAgent ??
+    params.preflight.message?.body ??
+    params.preflight.message?.rawBody ??
+    params.input.textForAgent ??
+    params.input.rawText;
   const entry =
     body.trim().length > 0
       ? {

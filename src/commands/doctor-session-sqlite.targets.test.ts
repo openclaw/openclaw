@@ -223,7 +223,11 @@ describe("runDoctorSessionSqlite", () => {
       { mode: 0o600 },
     );
 
-    const agents = { ownership: "explicit" as const, entries: { main: {}, ops: {} } };
+    const agents = {
+      ownership: "explicit" as const,
+      defaults: { sessionStore: { agentId: "main" } },
+      entries: { main: {}, ops: {} },
+    };
     const ignored = await runDoctorSessionSqlite({
       allAgents: true,
       cfg: { agents },
@@ -321,7 +325,11 @@ describe("runDoctorSessionSqlite", () => {
       const report = await runDoctorSessionSqlite({
         ...(allAgents ? { allAgents: true } : { agent: "main" }),
         cfg: {
-          agents: { list: [{ default: true, id: "main" }, { id: "work" }] },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "main" } },
+            entries: { main: {}, work: {} },
+          },
           session: { store: storePath },
         },
         env,
@@ -377,7 +385,14 @@ describe("runDoctorSessionSqlite", () => {
       expect(fs.existsSync(workTranscriptPath)).toBe(false);
       expect(fs.existsSync(orphanTranscriptPath)).toBe(false);
       closeOpenClawAgentDatabasesForTest();
-      const cfg = { agents: { entries: { main: {}, work: {} } }, session: { store: storePath } };
+      const cfg: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "main" } },
+          entries: { main: {}, work: {} },
+        },
+        session: { store: storePath },
+      };
       const preview = inspectSessionSqliteRecovery({ cfg, env });
       const cleanup = await retireSessionSqliteRecovery({
         env,

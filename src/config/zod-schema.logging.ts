@@ -32,7 +32,6 @@ export const DiagnosticsConfigSchema = z
         logsExporter: z
           .union([z.literal("otlp"), z.literal("stdout"), z.literal("both")])
           .optional(),
-        /** Trace sample rate (0.0 - 1.0). */
         sampleRate: z.number().min(0).max(1).optional(),
         /** Metric export interval (ms). */
         flushIntervalMs: z.number().int().nonnegative().optional(),

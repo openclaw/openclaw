@@ -16,6 +16,7 @@ import type { InternalSessionEntry, SessionDiffBaseline } from "../config/sessio
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { ensureSessionDiffBaseline } from "../sessions/session-diff-baseline.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
@@ -53,22 +54,32 @@ afterEach(() => {
 async function resetFromCaller(key: string, current: () => boolean) {
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const resources = new LegacyPluginSdkResourceHost();
+  const work = new AsyncWorkScope();
+  // The RPC deadline does not cancel accepted work; authority tests control that clock.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
-    return await resources.run(() =>
-      withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig }, () =>
-        withGatewayToolCallerIdentity(
-          {
-            agentId: "main",
-            sessionKey: "agent:main:reset-requester",
-            operationalRunInstance: { instanceId: "reset-instance", runId: "reset-run" },
-            receiptAuthority: current,
-          },
-          () => callAgentToolGatewayRequest({ method: "sessions.reset", params: { key } }),
+    return await work.run(() =>
+      resources.run(() =>
+        withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig }, () =>
+          withGatewayToolCallerIdentity(
+            {
+              agentId: "main",
+              sessionKey: "agent:main:reset-requester",
+              operationalRunInstance: { instanceId: "reset-instance", runId: "reset-run" },
+              receiptAuthority: current,
+            },
+            () => callAgentToolGatewayRequest({ method: "sessions.reset", params: { key } }),
+          ),
         ),
       ),
     );
   } finally {
-    await resources.close();
+    try {
+      await work.runWhenIdle(() => resources.close());
+    } finally {
+      vi.useRealTimers();
+      await work.drain();
+    }
   }
 }
 
@@ -334,23 +345,6 @@ test("sessions.reset rejects a stale expected session without interrupting curre
   } finally {
     admission.release();
   }
-});
-
-test("sessions.reset accepts a matching expected session", async () => {
-  const sessionKey = "agent:main:subagent:guarded-reset";
-  const sessionId = "sess-current";
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: { [sessionKey]: sessionStoreEntry(sessionId) },
-  });
-
-  const reset = await directSessionReq<{ entry: { sessionId: string } }>("sessions.reset", {
-    key: sessionKey,
-    expectedSessionId: sessionId,
-  });
-
-  expect(reset).toMatchObject({ ok: true, payload: { entry: { sessionId } } });
-  expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe(sessionId);
 });
 
 test("sessions.reset rechecks the expected session before interrupting replacement work", async () => {

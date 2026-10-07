@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import type { OpenClawConfigWithLegacyRoster } from "./legacy.roster.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import {
   hasUtilityModelSeparationMigrationMarker,
@@ -134,7 +135,7 @@ describe("utility model separation migration", () => {
     "preserves a per-agent implicit default in a %s roster without promoting disabled utilities",
     (kind) => {
       const agent = { utilityModel: "remote/utility", model: { fallbacks: ["backup/model"] } };
-      const config: OpenClawConfig = {
+      const config: OpenClawConfigWithLegacyRoster = {
         agents:
           kind === "entries"
             ? { entries: { worker: agent, disabled: { utilityModel: "" } } }
@@ -216,7 +217,7 @@ describe("utility model separation migration", () => {
     { agents: { entries: [] } },
     { agents: { list: [{ model: "fixture/model" }] } },
   ])("leaves malformed migration parents for validation: %j", (raw) => {
-    const config = raw as unknown as OpenClawConfig;
+    const config: Record<string, unknown> = raw;
     expect(materializeUtilityModelSeparation(config)).toEqual({ config, changes: [] });
   });
 });

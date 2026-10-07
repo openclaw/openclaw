@@ -48,7 +48,7 @@ export function makeCfg(
 ): OpenClawConfig {
   const base: OpenClawConfig = {
     agents: {
-      entries: { main: { default: true } },
+      entries: { main: {} },
       defaults: {
         model: "anthropic/claude-opus-4-6",
         workspace: path.join(home, "openclaw"),

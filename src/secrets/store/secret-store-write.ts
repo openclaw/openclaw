@@ -17,7 +17,6 @@ import { SecretStoreValidationError } from "./secret-store-validation-error.js";
 import {
   assertSecretStoreMutationName,
   assertSecretStoreWriteShape,
-  normalizeScope,
   normalizeSecretAllowedHosts,
   type SecretStoreKind,
   type SecretStoreScope,
@@ -75,7 +74,6 @@ export function writeSecretStoreEntriesInDatabase(
       assertSecretStoreWriteShape(entry.value, entry.kind, entry.name, entry.allowedHosts);
     }
   }
-  const { scopeKind, scopeId } = normalizeScope(params.scope);
   const { now } = params;
   return runOpenClawStateWriteTransaction(
     ({ db: sqlite }) => {
@@ -90,8 +88,8 @@ export function writeSecretStoreEntriesInDatabase(
                 db
                   .selectFrom("secret_store_entries")
                   .select(["value", "kind", "allowed_hosts", "updated_by"])
-                  .where("scope_kind", "=", scopeKind)
-                  .where("scope_id", "=", scopeId)
+                  .where("scope_kind", "=", "team")
+                  .where("scope_id", "=", "")
                   .where("name", "=", entry.name)
                   .where("deleted_at_ms", "is", null),
               )
@@ -107,11 +105,7 @@ export function writeSecretStoreEntriesInDatabase(
         // value outside the schema domain falls back to the requested kind rather than trusting it.
         const storedKind =
           previous?.kind === "secret" || previous?.kind === "env" ? previous.kind : undefined;
-        const kind = repair
-          ? (storedKind ?? entry.kind)
-          : inheritExistingKind && storedKind !== undefined
-            ? storedKind
-            : entry.kind;
+        const kind = repair || inheritExistingKind ? (storedKind ?? entry.kind) : entry.kind;
         if (entry.valueSource === "argv" && kind === "secret") {
           throw new SecretStoreValidationError(
             "SECRET_STORE_VALUE_IN_ARGV",
@@ -134,8 +128,8 @@ export function writeSecretStoreEntriesInDatabase(
           db
             .insertInto("secret_store_entries")
             .values({
-              scope_kind: scopeKind,
-              scope_id: scopeId,
+              scope_kind: "team",
+              scope_id: "",
               name: entry.name,
               value: entry.value,
               kind,
@@ -195,7 +189,6 @@ export function rollbackSecretStoreEntryWriteInDatabase(
   admit: (stage: "transaction" | "commit") => void,
 ): boolean {
   assertSecretStoreMutationName(params.name);
-  const { scopeKind, scopeId } = normalizeScope(params.scope);
   const { now } = params;
   try {
     return runOpenClawStateWriteTransaction(
@@ -216,8 +209,8 @@ export function rollbackSecretStoreEntryWriteInDatabase(
                   deleted_at_ms: null,
                 },
           )
-          .where("scope_kind", "=", scopeKind)
-          .where("scope_id", "=", scopeId)
+          .where("scope_kind", "=", "team")
+          .where("scope_id", "=", "")
           .where("name", "=", params.name)
           .where("updated_by", "=", params.expectedUpdatedBy)
           .where("deleted_at_ms", "is", null);
@@ -246,7 +239,6 @@ export function deleteSecretStoreEntryInDatabase(
   admit: (stage: "transaction" | "commit") => void,
 ): void {
   assertSecretStoreMutationName(params.name);
-  const { scopeKind, scopeId } = normalizeScope(params.scope);
   const state = openOpenClawStateDatabase(params.database);
   const { now } = params;
   try {
@@ -258,14 +250,14 @@ export function deleteSecretStoreEntryInDatabase(
           classifyHiddenGitHubStoreName(params.name) === "setup"
             ? db
                 .deleteFrom("secret_store_entries")
-                .where("scope_kind", "=", scopeKind)
-                .where("scope_id", "=", scopeId)
+                .where("scope_kind", "=", "team")
+                .where("scope_id", "=", "")
                 .where("name", "=", params.name)
             : db
                 .updateTable("secret_store_entries")
                 .set({ deleted_at_ms: now, updated_at_ms: now })
-                .where("scope_kind", "=", scopeKind)
-                .where("scope_id", "=", scopeId)
+                .where("scope_kind", "=", "team")
+                .where("scope_id", "=", "")
                 .where("name", "=", params.name)
                 .where("deleted_at_ms", "is", null);
         executeSqliteQuerySync(sqlite, query);

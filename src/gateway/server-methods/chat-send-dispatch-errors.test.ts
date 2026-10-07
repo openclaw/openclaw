@@ -150,7 +150,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           updatedAt: 1_000,
           startedAt: 1_000,
           lifecycleRunId: runId,
-          status: "running",
           ...(restartSafe
             ? {
                 restartRecoveryDeliveryRunId: runId,
@@ -411,7 +410,12 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       const cleanupAdmittedRun = vi.fn();
       const removeChatRun = vi.fn();
       const warn = vi.fn();
-      const dedupe = new Map();
+      const cached = {
+        ts: 1,
+        ok: true,
+        payload: { runId: "run-1", status: completed ? "completed" : "accepted" },
+      };
+      const dedupe = new Map([["chat:run-1", cached]]);
       const lifecycle = createChatSendDispatchErrorLifecycle({
         admission: {
           sessionBinding: {
@@ -441,7 +445,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           removeChatRun,
         } as never,
         isQueuedFollowupEnqueued: () => true,
-        isQueuedFollowupCompleted: () => completed,
         isAgentRunStarted: () => false,
         persistUserTurnTranscript: vi.fn(),
         session: {
@@ -463,15 +466,8 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining("dispatch failed after followup queue admission"),
       );
-      expect(dedupe.get("chat:run-1")).toMatchObject({
-        ok: true,
-        payload: { runId: "run-1", status: completed ? "completed" : "ok" },
-      });
-      expect(broadcast).toHaveBeenCalledWith(
-        "chat",
-        expect.objectContaining({ runId: "run-1", state: "final" }),
-        { sessionKeys: ["agent:main:main"] },
-      );
+      expect(dedupe.get("chat:run-1")).toBe(cached);
+      expect(broadcast).not.toHaveBeenCalled();
       expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
       expect(removeChatRun).toHaveBeenCalledWith("run-1", "run-1", "agent:main:main");
     },
@@ -735,7 +731,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     const cfg = retainLegacyDefaultAgentId(
       {
         agents: {
-          list: [{ id: "main" }, { id: "ops" }],
+          entries: { main: {}, ops: {} },
         },
       },
       "main",

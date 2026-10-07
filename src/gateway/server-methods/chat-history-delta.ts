@@ -11,10 +11,7 @@ import {
 import { jsonUtf8BytesOrInfinity } from "../../infra/json-utf8-bytes.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
-import {
-  prepareForwardedMessageCronJobNameResolver,
-  type SubagentCoordinationDisplayResolver,
-} from "../chat-display-projection.history.js";
+import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.history.js";
 import {
   createCurrentUserProfileMessageProjector,
   isAssistantTtsSupplementMessage,
@@ -24,12 +21,15 @@ import {
   createPreparedSessionHistorySubagentProjection,
   isAppendOnlySessionHistoryDelta,
 } from "../session-history-delta-visibility.js";
+import type { IncognitoSessionHistoryReader } from "../session-history-snapshot.js";
 import { createSessionHistorySubagentProjection } from "../session-history-subagent-projection.js";
 import { projectTranscriptEntryMessage } from "../session-transcript-entry-message.js";
 import {
   projectSessionMessagePayload,
   type SessionMessageProjectionState,
 } from "../session-transcript-message.js";
+import type { SubagentCoordinationDisplayResolver } from "../session-transcript-read.types.js";
+import { captureIncognitoSessionHistoryReader } from "../session-transcript-readers.js";
 import {
   chatHistoryActivityBytes,
   createChatHistoryActivityProjection,
@@ -63,8 +63,27 @@ type ChatHistoryDeltaParams = {
 export async function readChatHistoryDelta(
   params: ChatHistoryDeltaParams & { incognito?: boolean },
   signal?: AbortSignal,
+  suppliedIncognito?: IncognitoSessionHistoryReader,
 ): Promise<ChatHistoryDeltaRead> {
   signal?.throwIfAborted();
+  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryReader(params.scope, signal);
+  if (incognito) {
+    const actorDelta = await incognito.delta(
+      params.scope,
+      {
+        cursor: params.cursor,
+        maxBytes: Math.min(params.maxBytes ?? Infinity, CHAT_HISTORY_DELTA_MAX_BYTES),
+        maxEvents: CHAT_HISTORY_DELTA_MAX_EVENTS,
+      },
+      (delta, subagents) =>
+        // A cursor cannot qualify hidden earlier inputs without prepared visibility facts.
+        subagents
+          ? projectChatHistoryDelta(params, delta, subagents)
+          : Promise.resolve<ChatHistoryDeltaRead>({ kind: "reset" }),
+    );
+    signal?.throwIfAborted();
+    return actorDelta;
+  }
   if (params.incognito || isIncognitoSessionKey(params.sessionKey)) {
     return readRestoredSessionTranscript(params.scope, () => readLocalChatHistoryDelta(params));
   }

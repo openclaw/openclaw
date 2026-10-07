@@ -11,6 +11,11 @@ import {
 } from "../../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem, ChatQueueDisplayItem } from "../../../lib/chat/chat-types.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../../lib/ime.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
@@ -491,7 +496,7 @@ function renderChatQueueItem(
                 }
               }}
               @keydown=${(event: KeyboardEvent) => {
-                if (event.isComposing || event.keyCode === 229) {
+                if (isComposingKeyboardEvent(event)) {
                   return;
                 }
                 if (event.key === "Escape") {
@@ -503,6 +508,9 @@ function renderChatQueueItem(
                   edit?.onEditSubmit?.();
                 }
               }}
+              @compositionend=${recordCompositionEnd}
+              @keyup=${clearCompositionEnd}
+              @blur=${clearCompositionEnd}
             ></textarea>`
           : html`<span class="chat-queue__copy">
               <span class="chat-queue__text" title=${text}>${text}</span>
@@ -592,7 +600,7 @@ function renderChatQueueItem(
                   <button
                     class="chat-queue__remove"
                     type="button"
-                    ?disabled=${editing || (item.serverQueued && !props.canRemoveServerQueued)}
+                    ?disabled=${item.serverQueued && !props.canRemoveServerQueued}
                     aria-label=${t("chat.queue.removeQueuedMessage")}
                     @click=${(event: MouseEvent) => {
                       // Chromium retargets click 2 after row removal; detail still owns the gesture.

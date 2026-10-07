@@ -1,5 +1,3 @@
-// Interpreter inline-eval detection recognizes flags and positional program
-// forms that execute command text without reading a script file.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
 
@@ -25,7 +23,6 @@ type InterpreterFlagSpec = {
   names: readonly string[];
   exactFlags: ReadonlySet<string>;
   rawExactFlags?: ReadonlyMap<string, string>;
-  rawPrefixFlags?: readonly PrefixFlagSpec[];
   abbreviatedFlags?: readonly AbbreviatedFlagSpec[];
   joinedExactFlags?: ReadonlySet<string>;
   joinedFlagDenyExact?: ReadonlySet<string>;
@@ -48,8 +45,6 @@ type PositionalInterpreterSpec = {
   fileFlags?: ReadonlySet<string>;
   fileFlagPrefixes?: readonly string[];
   exactValueFlags?: ReadonlySet<string>;
-  exactOptionalValueFlags?: ReadonlySet<string>;
-  prefixValueFlags?: readonly string[];
   flag: "<command>" | "<program>";
 };
 
@@ -93,7 +88,6 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
     // gawk before 4.0 accepted "--s" for "--source"; modern releases reject it
     // as ambiguous with "--sandbox", so the older executable case sets the floor.
     abbreviatedFlags: [{ label: "--source", full: "--source", min: "--s" }],
-    prefixFlags: [{ label: "--source", prefix: "--source=" }],
   },
   {
     names: ["ruby"],
@@ -259,22 +253,15 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
     names: ["make", "gmake"],
     exactFlags: new Set(["-f", "--file", "--makefile", "--eval"]),
     rawExactFlags: new Map([["-E", "-E"]]),
-    rawPrefixFlags: [{ label: "-E", prefix: "-E" }],
     // GNU make keeps "--e" ambiguous with "--environment-overrides";
     // "--ev" is the shortest unique spelling of "--eval".
     abbreviatedFlags: [{ label: "--eval", full: "--eval", min: "--ev" }],
-    prefixFlags: [
-      { label: "-f", prefix: "-f" },
-      { label: "--file", prefix: "--file=" },
-      { label: "--makefile", prefix: "--makefile=" },
-      { label: "--eval", prefix: "--eval=" },
-    ],
+    prefixFlags: [{ label: "-f", prefix: "-f" }],
   },
   {
     names: ["sed", "gsed"],
     exactFlags: new Set(),
     rawExactFlags: new Map([["-e", "-e"]]),
-    rawPrefixFlags: [{ label: "-e", prefix: "-e" }],
   },
 ];
 
@@ -296,7 +283,6 @@ const POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS: readonly PositionalInterpreterSp
       "--load",
       "-W",
     ]),
-    prefixValueFlags: ["-F", "--field-separator=", "-v", "--assign=", "--include=", "--load="],
     flag: "<program>",
   },
   {
@@ -317,27 +303,6 @@ const POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS: readonly PositionalInterpreterSp
       "-s",
       "--max-chars",
     ]),
-    exactOptionalValueFlags: new Set(["--eof", "--replace"]),
-    prefixValueFlags: [
-      "-a",
-      "--arg-file=",
-      "-d",
-      "--delimiter=",
-      "-E",
-      "--eof=",
-      "-I",
-      "--replace=",
-      "-i",
-      "-L",
-      "--max-lines=",
-      "-l",
-      "-n",
-      "--max-args=",
-      "-P",
-      "--max-procs=",
-      "-s",
-      "--max-chars=",
-    ],
     flag: "<command>",
   },
   {
@@ -345,8 +310,6 @@ const POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS: readonly PositionalInterpreterSp
     fileFlags: new Set(["-f", "--file"]),
     fileFlagPrefixes: ["-f", "--file="],
     exactValueFlags: new Set(["-f", "--file", "-l", "--line-length"]),
-    exactOptionalValueFlags: new Set(["-i", "--in-place"]),
-    prefixValueFlags: ["-f", "--file=", "--in-place=", "--line-length="],
     flag: "<program>",
   },
 ];
@@ -492,12 +455,7 @@ export function detectInterpreterInlineEvalArgv(
         }
         break;
       }
-      const rawFlag =
-        spec.rawExactFlags?.get(token) ||
-        matchJoinedRawExactFlag(spec, token) ||
-        spec.rawPrefixFlags?.find(
-          ({ prefix }) => token.startsWith(prefix) && token.length > prefix.length,
-        )?.label;
+      const rawFlag = spec.rawExactFlags?.get(token) || matchJoinedRawExactFlag(spec, token);
       if (rawFlag) {
         return createInlineEvalHit(executable, argv, rawFlag);
       }
@@ -548,16 +506,6 @@ export function detectInterpreterInlineEvalArgv(
     }
     if (positionalSpec.exactValueFlags?.has(token)) {
       idx += 1;
-      continue;
-    }
-    if (positionalSpec.exactOptionalValueFlags?.has(token)) {
-      continue;
-    }
-    if (
-      positionalSpec.prefixValueFlags?.some(
-        (prefix) => token.startsWith(prefix) && token.length > prefix.length,
-      )
-    ) {
       continue;
     }
     if (token.startsWith("-")) {

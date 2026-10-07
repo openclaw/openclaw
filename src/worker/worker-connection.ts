@@ -1,4 +1,5 @@
 import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
+import pLimit from "p-limit";
 import { WebSocket } from "ws";
 import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import type {
@@ -16,6 +17,7 @@ import type {
   WorkerGatewayToolResponseFrame,
   WorkerGatewayToolCancelResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -70,6 +72,7 @@ export class WorkerConnection {
   private readonly readyListeners = new Set<(hello: WorkerHelloOk) => void>();
   private readonly stateListeners = new Set<(state: WorkerConnectionState) => void>();
   private readonly frames: WorkerConnectionFrameDispatcher;
+  private readonly gatewayToolSlots = pLimit(WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS);
   private readonly reconnectAbort = new AbortController();
   private readonly exit = createDeferredCore<WorkerConnectionExit>();
   private generation = 0;
@@ -184,15 +187,16 @@ export class WorkerConnection {
         options.onUpdate?.(payload.result);
       }
     });
-    const request = () => {
-      options.signal?.throwIfAborted();
-      return this.frames.request(
-        "gateway-tool",
-        params,
-        undefined,
-        Math.max(this.requestTimeoutMs, options.timeoutMs ?? 0),
-      );
-    };
+    const request = () =>
+      this.gatewayToolSlots(() => {
+        options.signal?.throwIfAborted();
+        return this.frames.request(
+          "gateway-tool",
+          params,
+          undefined,
+          Math.max(this.requestTimeoutMs, options.timeoutMs ?? 0),
+        );
+      });
     try {
       return await (options.replay
         ? this.requestReplayableOperation(request, options.signal)
@@ -386,7 +390,7 @@ export class WorkerConnection {
     try {
       const response = await this.frames.request("heartbeat", {
         sentAtMs: Date.now(),
-        status: this.options.heartbeatStatus?.() ?? "ready",
+        status: "ready",
       });
       if (response.ok) {
         if (response.payload.ownerEpoch !== this.options.connectParams.admission.ownerEpoch) {

@@ -22,6 +22,7 @@ const MANAGED_UPDATE_SELECTOR_ENV_KEYS = [
   "OPENCLAW_HOME",
   ...GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 ] as const;
+const OPERATOR_SCRATCH_ENV_KEYS = ["TMPDIR", "TMP", "TEMP"] as const;
 
 /** Recovery can be printed inside an owned-env scope that the operator's shell never had. */
 export function resolveServiceRecoveryContext(
@@ -58,16 +59,14 @@ export function resolveServiceRecoveryContext(
   };
 }
 
-function applyManagedServiceSelectorEnv(params: {
-  baseEnv: NodeJS.ProcessEnv;
-  serviceEnv: NodeJS.ProcessEnv;
-  selectorEnv?: NodeJS.ProcessEnv;
-}): NodeJS.ProcessEnv {
-  const resolved = { ...fsSafeEnvInput(params.baseEnv) };
-  const selectorEnv = params.selectorEnv ?? params.serviceEnv;
+function applyManagedServiceSelectorEnv(
+  resolved: NodeJS.ProcessEnv,
+  serviceEnv: NodeJS.ProcessEnv,
+  selectorEnv = serviceEnv,
+): NodeJS.ProcessEnv {
   for (const key of MANAGED_UPDATE_SELECTOR_ENV_KEYS) {
     if (resolveEnvironmentValue(selectorEnv, key)?.trim()) {
-      resolved[key] = params.serviceEnv[key];
+      resolved[key] = serviceEnv[key];
     } else {
       delete resolved[key];
     }
@@ -119,26 +118,24 @@ export async function withOwnedManagedUpdateEnv<T>(
   const previousEnv = { ...fsSafeEnvInput(process.env) };
   // Snapshot an aliased input before clearing the process environment.
   const phaseEnv = env === process.env ? previousEnv : { ...fsSafeEnvInput(env) };
-  clearFsSafeEnvFallback(process.env);
-  for (const key of Object.keys(process.env)) {
-    delete process.env[key];
-  }
-  for (const [key, value] of Object.entries(phaseEnv)) {
-    // Node stringifies undefined on assignment; unset selectors must remain absent.
-    if (value !== undefined) {
-      process.env[key] = value;
-    }
-  }
-  normalizeFsSafeNativeEnv();
-  try {
-    return await run();
-  } finally {
+  const replace = (snapshot: NodeJS.ProcessEnv) => {
     clearFsSafeEnvFallback(process.env);
     for (const key of Object.keys(process.env)) {
       delete process.env[key];
     }
-    Object.assign(process.env, previousEnv);
+    for (const [key, value] of Object.entries(snapshot)) {
+      // Node stringifies undefined on assignment; unset selectors must remain absent.
+      if (value !== undefined) {
+        process.env[key] = value;
+      }
+    }
     normalizeFsSafeNativeEnv();
+  };
+  replace(phaseEnv);
+  try {
+    return await run();
+  } finally {
+    replace(previousEnv);
   }
 }
 
@@ -219,25 +216,28 @@ export function resolveUpdatedInstallCommandEnv(params?: {
     : undefined;
   // SecretRefs may resolve from the updater's runtime env even when the
   // managed service intentionally omits resolved secrets from its definition.
-  return disableUpdatedPackageCompileCacheEnv({
-    ...processEnv,
-    ...serviceEnv,
-  });
+  const resolved = { ...processEnv, ...serviceEnv };
+  // The service owns installation selectors; the invoking operator owns scratch placement.
+  for (const key of OPERATOR_SCRATCH_ENV_KEYS) {
+    if (processEnv[key] !== undefined) {
+      resolved[key] = processEnv[key];
+    }
+  }
+  return disableUpdatedPackageCompileCacheEnv(resolved);
 }
 
-export function resolveOwnedManagedUpdateEnv(params: {
-  processEnv?: NodeJS.ProcessEnv;
-  serviceEnv: NodeJS.ProcessEnv;
-  serviceDefinitionEnv?: NodeJS.ProcessEnv;
-  invocationCwd?: string;
-}): NodeJS.ProcessEnv {
+export function resolveOwnedManagedUpdateEnv(
+  params: NonNullable<Parameters<typeof resolveUpdatedInstallCommandEnv>[0]> & {
+    serviceEnv: NodeJS.ProcessEnv;
+    serviceDefinitionEnv?: NodeJS.ProcessEnv;
+  },
+): NodeJS.ProcessEnv {
   const resolved = resolveUpdatedInstallCommandEnv(params);
-  const definitionEnv = params.serviceDefinitionEnv ?? params.serviceEnv;
-  return applyManagedServiceSelectorEnv({
-    baseEnv: resolved,
-    serviceEnv: resolved,
-    selectorEnv: definitionEnv,
-  });
+  return applyManagedServiceSelectorEnv(
+    resolved,
+    resolved,
+    params.serviceDefinitionEnv ?? params.serviceEnv,
+  );
 }
 
 export function resolveUpdateTargetEnv(params?: {
@@ -256,5 +256,5 @@ export function resolveUpdateTargetEnv(params?: {
     return resolvedEnv;
   }
   const serviceEnv = resolveServiceRefreshEnv(params.serviceEnv, params.invocationCwd);
-  return applyManagedServiceSelectorEnv({ baseEnv: resolvedEnv, serviceEnv });
+  return applyManagedServiceSelectorEnv(resolvedEnv, serviceEnv);
 }

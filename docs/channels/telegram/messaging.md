@@ -19,7 +19,7 @@ How inbound and outbound Telegram messages are routed, previewed, acknowledged, 
 - When the bot joins an allowed group or supergroup, it posts one introduction grounded in available room metadata: the group title, description, and pinned message. The Telegram Bot API cannot read group messages from before the bot joined, so introductions never claim to use prior chat history. Introductions are enabled by default, never run in private chats, and can be disabled with `channels.telegram.joinIntro: false` or overridden per account with `channels.telegram.accounts.<accountId>.joinIntro`. See [group join introductions](/channels#group-join-introductions) for once-per-room behavior and untrusted-content handling.
 - DM messages can carry `message_thread_id`; OpenClaw preserves it for replies. DM topic sessions split only when Telegram `getMe` reports `has_topics_enabled: true` for the bot; otherwise DMs stay on the flat session.
 - Long polling runs in an isolated worker. Updates are saved to a durable queue and processed in order for each chat and topic.
-- Multi-account startup bounds concurrent `getMe` probes so large bot fleets do not fan out every account probe at once.
+- Multi-account startup bounds concurrent `getMe` checks so large bot fleets do not fan out every account check at once.
 - Each gateway process guards long polling so only one active poller can use a bot token at a time. Persistent `getUpdates` 409 conflicts point to another OpenClaw gateway, script, or external poller using the same token.
 - The polling watchdog restarts after 120 seconds without completed `getUpdates` liveness.
 - Telegram Bot API has no read-receipt support (`sendReadReceipts` does not apply).
@@ -55,7 +55,9 @@ Telegram batches rapid text messages from the same sender into one agent turn by
 - Batches stay isolated by bot account, sender, chat, and topic. Reply metadata and source message IDs are preserved.
 - `messages.inbound.byChannel.telegram` overrides `messages.inbound.debounceMs`, which overrides the 300ms ordinary-text default. An explicit `0` disables ordinary burst batching but keeps automatic long-paste assembly.
 - Control commands bypass batching and dispatch immediately. Stop/abort commands cancel pending text for their target conversation.
-- Forwarded messages use a separate 1-second collection window, but share the sender's dispatch queue so they cannot overtake earlier text. Telegram delivers each message of a multi-message forward as its own update, often in a later poll, so the window waits long enough for the rest of the burst to arrive. A single forward therefore starts its turn about one second after it arrives.
+- Forwarded messages use a separate 1-second collection window, but share the sender's dispatch queue so they cannot overtake earlier text. Telegram delivers each message of a multi-message forward as its own update, often in a later poll, so the window waits long enough for the rest of the burst to arrive. A single forward therefore starts its turn about one second after it arrives. If another forward from the same sender is already queued on the conversation's ingress lane, collection waits for it, bounded by the existing 5-second batch deadline.
+
+Inbound photo albums use a 500ms quiet window. When another member of the same album is already queued on the conversation's ingress lane, OpenClaw waits for it before flushing, with holds bounded to 20 seconds from the first buffered member. These windows cover Telegram delivery gaps; local processing delays do not split an album or forward burst while matching members remain queued within those bounds.
 
 Ordinary text batches are bounded to 12 messages and 50,000 characters. Their collection deadline is 7.5 seconds from the first message, or the configured quiet window if longer. Messages arriving after a batch flushes cannot join it. This heuristic does not guarantee that Telegram delivers every paste fragment together. See [Inbound debouncing](/concepts/messages#inbound-debouncing) for hot-reload behavior.
 
@@ -166,7 +168,7 @@ Ordinary text batches are bounded to 12 messages and 50,000 characters. Their co
     Common setup failures:
 
     - `setMyCommands failed` with `BOT_COMMANDS_TOO_MUCH` after a trim retry means the menu still overflows; reduce plugin/skill/custom commands or disable `channels.telegram.commands.native`.
-    - `deleteWebhook`, `deleteMyCommands`, or `setMyCommands` failing with `404: Not Found` while direct Bot API curl commands work usually means `channels.telegram.apiRoot` was set to the full `/bot<TOKEN>` endpoint. `apiRoot` must be the Bot API root only; `openclaw doctor --fix` removes an accidental trailing `/bot<TOKEN>`.
+    - `apiRoot must be the Bot API root` means `channels.telegram.apiRoot` includes a full `/bot<TOKEN>` endpoint. Run `openclaw doctor --fix` to remove that suffix before starting Telegram. Runtime requests use the repaired root; custom proxy paths remain supported.
     - `getMe returned 401` means Telegram rejected the configured bot token. Update `botToken`, `tokenFile`, or `TELEGRAM_BOT_TOKEN` (default account) with the current BotFather token; OpenClaw stops before polling so this is not reported as a webhook cleanup failure.
     - `setMyCommands failed` with network/fetch errors usually means outbound DNS/HTTPS to `api.telegram.org` is blocked.
 

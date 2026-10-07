@@ -1,6 +1,6 @@
 // Load the shared migration mocks before their production consumers.
 // oxfmt-ignore
-import { legacyConfig, useDoctorLegacyConfigFixture } from "./doctor/shared/legacy-config-fixture.test-support.js";
+import { useDoctorLegacyConfigFixture } from "./doctor/shared/legacy-config-fixture.test-support.js";
 import { describe, expect, it } from "vitest";
 import { parseSecretRef } from "../config/types.secrets.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
@@ -9,25 +9,23 @@ describe("normalizeCompatibilityConfigValues", () => {
   useDoctorLegacyConfigFixture();
 
   it("migrates legacy secretref-env markers on SecretRef credential paths", () => {
-    const res = normalizeCompatibilityConfigValues(
-      legacyConfig({
-        secrets: {
-          defaults: {
-            env: "gateway-env",
-          },
+    const res = normalizeCompatibilityConfigValues({
+      secrets: {
+        defaults: {
+          env: "gateway-env",
         },
-        channels: {
-          discord: {
-            token: "secretref-env:DISCORD_BOT_TOKEN",
-            accounts: {
-              work: {
-                token: "__env__:DISCORD_WORK_TOKEN",
-              },
+      },
+      channels: {
+        discord: {
+          token: "secretref-env:DISCORD_BOT_TOKEN",
+          accounts: {
+            work: {
+              token: "__env__:DISCORD_WORK_TOKEN",
             },
           },
         },
-      }),
-    );
+      },
+    });
 
     expect(res.config.channels?.discord?.accounts?.default).toBeUndefined();
     expect(res.config.channels?.discord?.token).toEqual({
@@ -49,20 +47,18 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("leaves invalid legacy secretref-env markers unchanged", () => {
-    const res = normalizeCompatibilityConfigValues(
-      legacyConfig({
-        messages: {
-          groupChat: {
-            visibleReplies: "message_tool",
-          },
+    const res = normalizeCompatibilityConfigValues({
+      messages: {
+        groupChat: {
+          visibleReplies: "message_tool",
         },
-        channels: {
-          discord: {
-            token: "secretref-env:not-valid",
-          },
+      },
+      channels: {
+        discord: {
+          token: "secretref-env:not-valid",
         },
-      }),
-    );
+      },
+    });
 
     expect(res.config.channels?.discord?.token).toBe("secretref-env:not-valid");
     expect(res.changes).toStrictEqual([]);
@@ -72,7 +68,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     "adds the configured %s provider only to registered SecretRef fields",
     (source) => {
       const id = source === "file" ? "/SYNTHETIC_KEY" : "SYNTHETIC_KEY";
-      const original = legacyConfig({
+      const original = {
         secrets: { defaults: { [source]: "configured" } },
         models: {
           providers: {
@@ -89,7 +85,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           },
         },
         plugins: { entries: { opaque: { config: { metadata: { source, id: "SYNTHETIC_KEY" } } } } },
-      });
+      };
       const before = structuredClone(original);
       const result = normalizeCompatibilityConfigValues(original);
       expect(result.config.models?.providers?.example?.apiKey).toEqual({

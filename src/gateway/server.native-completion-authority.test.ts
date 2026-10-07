@@ -9,6 +9,7 @@ import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
 import { prepareCatalogExecutor } from "../agents/embedded-agent-runner/run/attempt-stream-prepare.test-support.js";
 import * as embeddedRuns from "../agents/embedded-agent-runner/runs.js";
+import { buildAgentInternalEventContext } from "../agents/internal-events.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import {
   appendHistory,
@@ -25,8 +26,8 @@ import { SessionManager } from "../agents/sessions/session-manager.js";
 import { deliverSubagentAnnouncement } from "../agents/subagents/announce/subagent-announce-delivery.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
+import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { resumeSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
-import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import {
   prepareRequesterCronAuthority,
@@ -343,6 +344,7 @@ describe("native completion final-effect authority", () => {
       const gates = [createGate(), createGate()] as const;
       const sources: unknown[] = [];
       const attempts: string[] = [];
+      const requesterRuntimeContext: unknown[] = [];
       let requesterCommands = 0;
       const release = () => gates.forEach((gate) => gate.resume.resolve());
       signal.addEventListener("abort", release, { once: true });
@@ -378,6 +380,12 @@ describe("native completion final-effect authority", () => {
           return child;
         }
         requesterCommands += 1;
+        requesterRuntimeContext.push(
+          ...buildAgentInternalEventContext(
+            command.internalEvents,
+            command.runtimeContextFragments,
+          ),
+        );
         const recorder = expectDefined(
           command.userTurnTranscriptRecorder,
           "Expected real registered completion input recorder",
@@ -422,18 +430,20 @@ describe("native completion final-effect authority", () => {
         );
         expect((await listSessionPendingInputs(pair.requesterScope)).total).toBe(0);
         const stored = loadSubagentRegistryFromSqlite();
+        const runtimeContext = JSON.stringify(requesterRuntimeContext);
         for (const [index, run] of pair.runs.entries()) {
           // Exact source identity also catches borrowing when both sources remain live.
           expect(sources[index]).toBe(run.source.authority.source);
           if (index === revokedIndex) {
             expect(stored.get(run.runId)?.delivery?.status).not.toBe("delivered");
             expect(context.dedupe.has(`agent:${run.idempotencyKey}`)).toBe(false);
-            expect(JSON.stringify(events)).not.toContain(run.result);
+            expect(runtimeContext).not.toContain(run.result);
           } else {
             expect(stored.get(run.runId)?.delivery?.status).toBe("delivered");
             expect(context.dedupe.get(`agent:${run.idempotencyKey}`)).toMatchObject({ ok: true });
-            expect(JSON.stringify(events)).toContain(run.result);
+            expect(runtimeContext).toContain(run.result);
           }
+          expect(JSON.stringify(events)).not.toContain(run.result);
           resumeSubagentRun(run.runId);
         }
         await pair.settle();
@@ -646,7 +656,7 @@ describe("native completion final-effect authority", () => {
         },
       });
       expect(prepared.queueHandle.messageInjectionV2?.version).toBe(2);
-      const inject = vi.spyOn(session.agent, "steer");
+      const inject = vi.spyOn(session.agent, "admitSteeringMessage");
       const steer = session.steer.bind(session);
       let steering: ReturnType<typeof session.steer> | undefined;
       vi.spyOn(session, "steer").mockImplementation((...args) => (steering = steer(...args)));

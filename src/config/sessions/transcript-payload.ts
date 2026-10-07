@@ -369,12 +369,13 @@ export function transcriptEventResetNavigationSql(
 
 export function transcriptEventModelNavigationSql(
   alias: TranscriptPayloadAlias = "transcript_events",
+  entryType?: Expression<unknown>,
 ): RawBuilder<string> {
   const identity =
     /* kysely-allow-raw: closed transcript aliases select the native identity fallback. */ sql.ref<string>(
       `${alias}.event_json`,
     );
-  return storedProjectionSql("model", projectModelContextNavigationSql(identity), alias);
+  return storedProjectionSql("model", projectModelContextNavigationSql(identity, entryType), alias);
 }
 
 /** Model admission retains projected byte costs, which can be much smaller than canonical JSON. */

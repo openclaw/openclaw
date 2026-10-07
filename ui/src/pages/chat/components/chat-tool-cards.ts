@@ -25,8 +25,10 @@ import {
   resolveToolCardOutcome,
 } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { renderPluginSurface } from "../../../plugins/control-ui-view.ts";
+import { resolveSpawnedSubagent, type SpawnedSubagent } from "../chat-spawned-subagent.ts";
 import type { WorkGroupRenderItem } from "../chat-thread-grouping.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import { renderHighlightedCommand } from "./chat-command-highlight.ts";
@@ -51,9 +53,6 @@ export function renderBrowserTabPreviews(
         .map((card) => ({ card, groupKey: group.key })),
     ),
   );
-  if (cards.length === 0) {
-    return [];
-  }
   // Select each tab's final state before collapsing reopened pages. A newer
   // blank/non-web result must still retire that tab's older web preview.
   const seenTabs = new Set<string>();
@@ -135,8 +134,6 @@ export function renderToolIcon(
   return icons[name as IconName] ?? icons.puzzle;
 }
 
-// ── Kind-aware tool rows (command / read / edit / write / search / fetch) ──
-
 const TOOL_ROW_VERB_KEYS: Partial<Record<ToolCallView["kind"], string>> = {
   read: "chat.toolCards.verbs.read",
   search: "chat.toolCards.verbs.searched",
@@ -190,13 +187,6 @@ function commandPreview(command: string): string {
   );
 }
 
-function compactToolTarget(target: string, kind: ToolCallView["kind"]): string {
-  if (kind !== "edit" && kind !== "write") {
-    return target;
-  }
-  return pathDisplayName(target);
-}
-
 export function syncToolDisclosureOverflow(event: Event): void {
   const disclosure = event.currentTarget;
   if (!(disclosure instanceof HTMLElement)) {
@@ -232,6 +222,8 @@ function renderToolRowContent(
 
   const verb = resolveToolRowVerb(view, outcome);
   if (verb && view.target) {
+    const target =
+      view.kind === "edit" || view.kind === "write" ? pathDisplayName(view.target) : view.target;
     const stat =
       outcome === "succeeded"
         ? view.stat
@@ -251,11 +243,9 @@ function renderToolRowContent(
                 onOpenWorkspaceFile({ path: workspaceFilePath });
               }}
             >
-              ${compactToolTarget(view.target, view.kind)}
+              ${target}
             </button>`
-          : html`<span class="chat-tool-row__target"
-              >${compactToolTarget(view.target, view.kind)}</span
-            >`
+          : html`<span class="chat-tool-row__target">${target}</span>`
       }
       ${stat ? renderDiffStatChips(stat) : nothing}
       ${
@@ -270,9 +260,52 @@ function renderToolRowContent(
   const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
   const displayName = distinctSummaryText(summary.name, displayLabel);
   return html`
-    ${summary.label !== toolLabel ? html`<span class="chat-tool-msg-summary__label">${displayLabel}</span>` : nothing}
+    ${!displayName || summary.label !== toolLabel ? html`<span class="chat-tool-msg-summary__label">${displayLabel}</span>` : nothing}
     ${
       displayName ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>` : nothing
+    }
+  `;
+}
+
+/**
+ * A launched subagent reads as its name, not its assignment, with how long it
+ * took once it is done. The name opens its session when the pane holds it.
+ */
+function renderSubagentRowContent(subagent: SpawnedSubagent, onOpen: (() => void) | undefined) {
+  const session = subagent.session;
+  // How it ended matters more than how long it took.
+  const state = session?.running
+    ? t("chat.toolCards.subagentRunning")
+    : session?.ended === "failed"
+      ? t("chat.toolCards.failed")
+      : session?.ended === "stopped"
+        ? t("chat.toolCards.subagentStopped")
+        : formatDurationCompact(session?.runtimeMs);
+  return html`
+    ${
+      onOpen
+        ? html`<button
+            class="chat-tool-row__subagent-link"
+            type="button"
+            title=${t("chat.toolCards.openSubagent")}
+            @click=${(event: MouseEvent) => {
+              event.stopPropagation();
+              onOpen();
+            }}
+          >
+            ${subagent.label}
+          </button>`
+        : html`<span class="chat-tool-row__title">${subagent.label}</span>`
+    }
+    ${
+      state
+        ? html`<span
+            class="chat-tool-row__subagent-state ${
+              session?.ended === "failed" ? "chat-tool-row__subagent-state--failed" : ""
+            }"
+            >${state}</span
+          >`
+        : nothing
     }
   `;
 }
@@ -447,6 +480,15 @@ export function renderToolCard(
   const icon = TOOL_ROW_ICONS[view.kind] ?? display.icon;
   const workspaceFilePath = toolWorkspacePath(card, view);
   const isFileRow = Boolean(workspaceFilePath);
+  const subagent = resolveSpawnedSubagent(card, opts.subagents?.subagentSessions);
+  const subagentSession = subagent?.session;
+  // Only a subagent the panel lists can be shown there; any other opens its session.
+  const onOpenSubagent =
+    (subagentSession?.listed && opts.subagents?.onOpenSubagent) || opts.subagents?.onOpenSession;
+  const openSubagent =
+    subagentSession && onOpenSubagent ? () => onOpenSubagent(subagentSession.key) : undefined;
+  // A link inside the row needs the row's own toggle beside it, not around it.
+  const linkedRow = isFileRow ? "file" : openSubagent ? "subagent" : null;
   const rowContent = html`
     <span
       class="chat-tool-msg-summary__icon"
@@ -456,14 +498,18 @@ export function renderToolCard(
       >${renderToolIcon(icon, { toolName: display.name, pluginToolIcons: opts.pluginToolIcons })}</span
     >
     <span class="chat-tool-disclosure__content"
-      >${renderToolRowContent(
-        card,
-        view,
-        outcome,
-        display.label,
-        workspaceFilePath,
-        opts.onOpenWorkspaceFile,
-      )}</span
+      >${
+        subagent
+          ? renderSubagentRowContent(subagent, openSubagent)
+          : renderToolRowContent(
+              card,
+              view,
+              outcome,
+              display.label,
+              workspaceFilePath,
+              opts.onOpenWorkspaceFile,
+            )
+      }</span
     >
     ${expanded ? nothing : renderToolOutcomeSummary(activityCards, Boolean(opts.children))}
     <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
@@ -478,9 +524,9 @@ export function renderToolCard(
         class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${expanded ? "is-open" : ""}"
       >
         ${
-          isFileRow
+          linkedRow
             ? html`<div
-                class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row chat-tool-row--file ${
+                class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row chat-tool-row--${linkedRow} ${
                   isRunning ? "chat-tool-row--running" : ""
                 }"
                 @pointerenter=${syncToolDisclosureOverflow}
@@ -490,7 +536,11 @@ export function renderToolCard(
                   class="chat-tool-row__toggle"
                   type="button"
                   aria-expanded=${String(expanded)}
-                  aria-label=${resolveToolRowText(card, view, outcome)}
+                  aria-label=${
+                    subagent
+                      ? `${display.label} ${subagent.label}`
+                      : resolveToolRowText(card, view, outcome)
+                  }
                   @click=${() => opts.onToggleExpanded(card.id)}
                 ></button>
                 ${rowContent}

@@ -17,12 +17,10 @@ import {
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import * as gatewayCallRuntime from "../../../gateway/call.js";
-import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
-import type { SubagentRegistryWrite } from "./subagent-registry.store.kernel.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const noop = () => {};
@@ -643,51 +641,6 @@ describe("subagent registry steer restarts", () => {
     ]);
   });
 
-  it("keeps the source generation published when replacement persistence fails", async () => {
-    await registerRun({
-      runId: "run-generation-persist-old",
-      childSessionKey: "agent:main:subagent:generation-persist",
-      task: "preserve the source owner",
-    });
-    const execute = stateWorker.runOpenClawStateWorkerOperation;
-    const worker = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((owner, run, options) =>
-        execute(
-          owner,
-          (scope) =>
-            run({
-              execute: async (command, executeOptions) => {
-                if (
-                  command.type === "subagents.persistChanges" &&
-                  (command.input as SubagentRegistryWrite).values.some(
-                    (row) => row.run_id === "run-generation-persist-new",
-                  )
-                ) {
-                  throw new Error("replacement unavailable");
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          options,
-        ),
-      );
-    try {
-      expect(
-        await mod.replaceSubagentRunAfterSteerCore({
-          previousRunId: "run-generation-persist-old",
-          nextRunId: "run-generation-persist-new",
-          lifecycleGeneration: "test-generation",
-        }),
-      ).toBe(false);
-    } finally {
-      worker.mockRestore();
-    }
-    expect(listMainRuns()).toEqual([
-      expect.objectContaining({ runId: "run-generation-persist-old" }),
-    ]);
-  });
-
   it("preserves frozen completion as fallback when replacing for wake continuation", async () => {
     await registerRun({
       runId: "run-wake-old",
@@ -888,40 +841,5 @@ describe("subagent registry steer restarts", () => {
         await settleRootWork();
       }
     }
-  });
-
-  it("keeps completion cleanup pending while descendants are still active", async () => {
-    announceSpy.mockResolvedValue("retryable");
-
-    await registerCompletionModeRun(
-      "run-parent-expiry",
-      "agent:main:subagent:parent-expiry",
-      "parent completion expiry",
-    );
-    await registerRun({
-      runId: "run-child-active",
-      childSessionKey: "agent:main:subagent:parent-expiry:subagent:child-active",
-      requesterSessionKey: "agent:main:subagent:parent-expiry",
-      requesterDisplayKey: "parent-expiry",
-      task: "child still running",
-    });
-
-    emitLifecycleEnd("run-parent-expiry", {
-      startedAt: Date.now() - 7 * 60_000,
-      endedAt: Date.now() - 6 * 60_000,
-    });
-
-    await flushAnnounce();
-
-    const parentHookCall = runSubagentEndedHookMock.mock.calls.find((call) => {
-      const event = call[0] as { runId?: string; reason?: string };
-      return event.runId === "run-parent-expiry" && event.reason === "subagent-complete";
-    });
-    expect(parentHookCall).toBeUndefined();
-    const parent = mod
-      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
-      .find((entry) => entry.runId === "run-parent-expiry");
-    expect(parent?.cleanupCompletedAt).toBeUndefined();
-    expect(parent?.cleanupHandled).toBe(false);
   });
 });

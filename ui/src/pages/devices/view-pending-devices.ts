@@ -8,11 +8,14 @@ import {
 import { icons } from "../../components/icons.ts";
 import { renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { formatList, formatRelativeTimestamp } from "../../lib/format.ts";
 import type { PairedDevice, PendingDevice } from "../../lib/nodes/index.ts";
 import { renderDeviceEntryMenu } from "./entry-menu.ts";
 import { renderDeviceTile } from "./view-shared.ts";
 import type { DevicesProps } from "./view.types.ts";
+
+registerDevicesEnglish();
 
 export function renderPendingDeviceRows(
   pending: PendingDevice[],

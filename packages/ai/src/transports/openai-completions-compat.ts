@@ -9,15 +9,13 @@ import type { AiProviderRequestCapabilities, AiProviderRequestPolicyInput } from
 import { isKnownOpenAIJsonSchemaModelId } from "../providers/openai-response-format.js";
 import { resolveProviderRequestCapabilities as resolveModelProviderRequestCapabilities } from "./host-policy.js";
 
-type ProviderEndpointClass = string;
-type ProviderRequestCapabilities = AiProviderRequestCapabilities;
 type OpenAICompletionsSessionAffinity = "none" | "openai" | "openrouter";
 
 type OpenAICompletionsCompatDefaultsInput = {
   provider?: string;
   modelId?: string;
   baseUrl?: string;
-  endpointClass: ProviderEndpointClass;
+  endpointClass: string;
   knownProviderFamily: string;
   supportsNativeStreamingUsageCompat?: boolean;
   supportsOpenAICompletionsStreamingUsageCompat?: boolean;
@@ -39,11 +37,6 @@ type OpenAICompletionsCompatDefaults = {
   cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
   sessionAffinityFormat: Exclude<OpenAICompletionsSessionAffinity, "none">;
   supportsLongCacheRetention: boolean;
-};
-
-type DetectedOpenAICompletionsCompat = {
-  capabilities: ProviderRequestCapabilities;
-  defaults: OpenAICompletionsCompatDefaults;
 };
 
 export type ResolvedOpenAICompletionsCompat = Omit<
@@ -258,8 +251,8 @@ export function detectOpenAICompletionsCompat(
   model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id"> & {
     compat?: { supportsStore?: boolean } | null;
   },
-  resolveCapabilities?: (input: AiProviderRequestPolicyInput) => ProviderRequestCapabilities,
-): DetectedOpenAICompletionsCompat {
+  resolveCapabilities?: (input: AiProviderRequestPolicyInput) => AiProviderRequestCapabilities,
+) {
   const capabilities = (
     resolveCapabilities ?? ((input) => resolveModelProviderRequestCapabilities(input, model))
   )({
@@ -305,7 +298,7 @@ function resolveSessionAffinity(
 /** Applies explicit model overrides once on top of the canonical transport defaults. */
 export function resolveOpenAICompletionsCompat(
   model: Pick<Model<"openai-completions">, "id" | "provider" | "baseUrl" | "compat">,
-  resolveCapabilities?: (input: AiProviderRequestPolicyInput) => ProviderRequestCapabilities,
+  resolveCapabilities?: (input: AiProviderRequestPolicyInput) => AiProviderRequestCapabilities,
 ): ResolvedOpenAICompletionsCompat {
   const { defaults } = detectOpenAICompletionsCompat(model, resolveCapabilities);
   const configured = model.compat;

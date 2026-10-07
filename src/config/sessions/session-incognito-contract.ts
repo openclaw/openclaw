@@ -1,23 +1,26 @@
-import type { SqliteWorkerEphemeralTarget } from "../../infra/sqlite-worker-contract.js";
-import type { CommittedSessionSharingFacts } from "./session-accessor.sqlite-sharing-acquisition.js";
+import type { SessionEntryListScope, SessionEntrySummary } from "./session-accessor.types.js";
+import type {
+  SessionIdentityEvidenceIdentity,
+  SessionIdentityEvidenceResult,
+} from "./session-entry-read-source.types.js";
 import type { IncognitoComputeOperations } from "./session-incognito-compute-contract.js";
+import type { IncognitoEntryCreationOperations } from "./session-incognito-entry-creation-contract.js";
+import type { IncognitoEntryPatchOperations } from "./session-incognito-entry-patch-contract.js";
+import type { IncognitoSessionFacts } from "./session-incognito-facts.types.js";
 import type { IncognitoHistoryOperations } from "./session-incognito-history-contract.js";
 import type { IncognitoLifecycleOperations } from "./session-incognito-lifecycle-contract.js";
 import type { IncognitoOutboxOperations } from "./session-incognito-outbox-contract.js";
+import type { IncognitoPendingInputOperations } from "./session-incognito-pending-input-contract.js";
 import type { IncognitoSideDataOperations } from "./session-incognito-side-data-contract.js";
 import type { IncognitoTranscriptOperations } from "./session-incognito-transcript-contract.js";
 import type { SessionEntry } from "./types.js";
 
-type IncognitoSessionVersion = Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
+export type {
+  IncognitoSessionAuthority,
+  IncognitoSessionFacts,
+} from "./session-incognito-facts.types.js";
 
-/** Content-free postimage; full entries remain owned by the requesting read. */
-export type IncognitoSessionFacts = {
-  identity: Readonly<SqliteWorkerEphemeralTarget>;
-  sessionKey: string;
-  revision: number;
-  sharing: CommittedSessionSharingFacts | undefined;
-  expiresAt?: number;
-};
+type IncognitoSessionVersion = Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
 
 export type IncognitoSessionSnapshot = {
   entry: SessionEntry | undefined;
@@ -35,10 +38,13 @@ export type IncognitoSessionCreate = {
   cwd?: string;
 };
 
-type DomainOperations = IncognitoSideDataOperations &
+type DomainOperations = IncognitoEntryCreationOperations &
+  IncognitoEntryPatchOperations &
+  IncognitoSideDataOperations &
   IncognitoComputeOperations &
   IncognitoHistoryOperations &
   IncognitoLifecycleOperations &
+  IncognitoPendingInputOperations &
   IncognitoTranscriptOperations &
   IncognitoOutboxOperations;
 
@@ -48,12 +54,14 @@ export type IncognitoSessionOperations = {
     output: { value: DomainOperations[Key]["output"]; facts: IncognitoSessionFacts[] };
   };
 } & {
+  "session.identities.read": {
+    input: { identities: readonly SessionIdentityEvidenceIdentity[] };
+    output: { evidence: SessionIdentityEvidenceResult[]; facts: IncognitoSessionFacts[] };
+  };
+  "session.entries.read": {
+    input: Pick<SessionEntryListScope, "projection">;
+    output: { entries: SessionEntrySummary[]; facts: IncognitoSessionFacts[] };
+  };
   "session.entry.read": { input: IncognitoSessionRead; output: IncognitoSessionSnapshot };
   "session.entry.create": { input: IncognitoSessionCreate; output: IncognitoSessionSnapshot };
-};
-
-export type IncognitoSessionAuthority = {
-  assertCurrent(): void;
-  /** Synchronous host policy only. Never query the actor from a native grant. */
-  authorize?(stage: "transaction" | "commit", facts: IncognitoSessionFacts): void;
 };

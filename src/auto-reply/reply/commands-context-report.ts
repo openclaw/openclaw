@@ -5,15 +5,12 @@ import {
   analyzeBootstrapBudget,
   buildBootstrapInjectionStats,
 } from "../../agents/bootstrap-budget.js";
-import { isRealConversationMessage } from "../../agents/compaction-real-conversation.js";
+import { createRealConversationClassifier } from "../../agents/compaction-real-conversation.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../../agents/embedded-agent-helpers/bootstrap.js";
-import {
-  createMessageCharEstimateCache,
-  estimateMessageCharsCached,
-} from "../../agents/embedded-agent-runner/tool-result-char-estimator.js";
+import { estimateMessageChars } from "../../agents/embedded-agent-runner/tool-result-char-estimator.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
@@ -22,7 +19,8 @@ import {
   type SessionEntry,
   type SessionSystemPromptReport,
 } from "../../config/sessions/types.js";
-import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
+import { readSessionMessagesWithSourceAsync } from "../../gateway/session-transcript-readers.js";
+import { iterateSessionTranscriptSourcePages } from "../../gateway/session-transcript-source-pages.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { renderContextTreemapPng } from "./context-treemap.js";
@@ -66,28 +64,27 @@ function resolveContextReportAgentId(params: HandleCommandsParams): string {
   }).sessionAgentId;
 }
 
-async function readContextTranscriptMessages(
+async function* readContextTranscriptPages(
   params: HandleCommandsParams,
   targetSessionEntry: SessionEntry | undefined,
-): Promise<AgentMessage[]> {
+): AsyncGenerator<AgentMessage[]> {
   const sessionId = targetSessionEntry?.sessionId?.trim();
   if (!sessionId) {
-    return [];
+    return;
   }
   const agentId = resolveContextReportAgentId(params);
-  return (await readSessionMessagesAsync(
-    {
+  for await (const page of iterateSessionTranscriptSourcePages(readSessionMessagesWithSourceAsync, {
+    agentId,
+    sessionId,
+    sessionKey: params.sessionKey,
+    storePath: resolveSessionStorePathForScope({
       agentId,
-      sessionId,
       sessionKey: params.sessionKey,
-      storePath: resolveSessionStorePathForScope({
-        agentId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      }),
-    },
-    { mode: "full", reason: "context-report" },
-  )) as AgentMessage[];
+      storePath: params.storePath,
+    }),
+  })) {
+    yield page.messages as AgentMessage[];
+  }
 }
 
 async function buildTranscriptCompactabilityLines(
@@ -98,18 +95,21 @@ async function buildTranscriptCompactabilityLines(
     return ["Compactable transcript: unavailable (no active transcript session)"];
   }
 
-  const messages = await readContextTranscriptMessages(params, targetSessionEntry);
-  if (!messages.length) {
+  const isRealConversation = createRealConversationClassifier();
+  let totalMessages = 0;
+  let realConversationMessages = 0;
+  for await (const messages of readContextTranscriptPages(params, targetSessionEntry)) {
+    totalMessages += messages.length;
+    for (const message of messages) {
+      realConversationMessages += isRealConversation(message) ? 1 : 0;
+    }
+  }
+  if (!totalMessages) {
     return ["Compactable transcript: unavailable (no transcript messages found)"];
   }
 
-  const realConversationMessages = messages.reduce(
-    (count, message, index) =>
-      count + (isRealConversationMessage(message, messages, index) ? 1 : 0),
-    0,
-  );
   return [
-    `Compactable transcript: ${formatInt(realConversationMessages)} real conversation message(s) / ${formatInt(messages.length)} transcript message(s)`,
+    `Compactable transcript: ${formatInt(realConversationMessages)} real conversation message(s) / ${formatInt(totalMessages)} transcript message(s)`,
     ...(realConversationMessages === 0
       ? [
           "Compaction note: prompt/cache usage may be high even when there are no compactable conversation messages.",
@@ -196,13 +196,12 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         ].join("\n"),
       };
     }
-    const messages = await readContextTranscriptMessages(params, targetSessionEntry);
-    const estimateCache = createMessageCharEstimateCache();
-    const conversationTotals = messages.reduce(
-      (totals, message) => {
-        const chars = estimateMessageCharsCached(message, estimateCache);
+    const totals = { user: 0, assistant: 0, toolResults: 0, summaries: 0, other: 0 };
+    for await (const messages of readContextTranscriptPages(params, targetSessionEntry)) {
+      for (const message of messages) {
+        const chars = estimateMessageChars(message);
         if (chars === 0) {
-          return totals;
+          continue;
         }
         if (message.role === "user") {
           totals.user += chars;
@@ -215,16 +214,14 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         } else {
           totals.other += chars;
         }
-        return totals;
-      },
-      { user: 0, assistant: 0, toolResults: 0, summaries: 0, other: 0 },
-    );
+      }
+    }
     const conversation = [
-      { name: "User", value: conversationTotals.user },
-      { name: "Assistant", value: conversationTotals.assistant },
-      { name: "Tool results", value: conversationTotals.toolResults },
-      { name: "Summaries", value: conversationTotals.summaries },
-      { name: "Other", value: conversationTotals.other },
+      { name: "User", value: totals.user },
+      { name: "Assistant", value: totals.assistant },
+      { name: "Tool results", value: totals.toolResults },
+      { name: "Summaries", value: totals.summaries },
+      { name: "Other", value: totals.other },
       // Runtime context and hook prompt additions reach only the model, never
       // the transcript; without these leaves the map undercounts model-visible
       // context. The persisted turn prompt is already counted above.

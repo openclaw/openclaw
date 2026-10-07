@@ -505,7 +505,7 @@ describe("agentCommand runtime config", () => {
       const store = path.join(home, "sessions.json");
       const cfg = mockConfig(home, store);
 
-      const resolved = resolveSession({ cfg, to: "+1555" });
+      const resolved = await resolveSession({ cfg, to: "+1555" });
 
       expect(resolved.storePath).toBe(store);
       expect(resolved.sessionKey).toBeTypeOf("string");

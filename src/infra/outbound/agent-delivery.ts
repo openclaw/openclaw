@@ -1,5 +1,3 @@
-// Agent delivery planning resolves final reply destinations from explicit
-// options, session history, turn source, bindings, and channel route hooks.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
@@ -355,7 +353,6 @@ export function resolveAgentOutboundTarget(params: {
 }): {
   resolvedTarget: OutboundTargetResolution | null;
   resolvedTo?: string;
-  targetMode: ChannelOutboundTargetMode;
 } {
   const targetMode =
     params.targetMode ??
@@ -365,7 +362,6 @@ export function resolveAgentOutboundTarget(params: {
     return {
       resolvedTarget: { ok: false, error: params.plan.targetResolutionError },
       resolvedTo: undefined,
-      targetMode,
     };
   }
   if (
@@ -375,7 +371,6 @@ export function resolveAgentOutboundTarget(params: {
     return {
       resolvedTarget: null,
       resolvedTo: params.plan.resolvedTo,
-      targetMode,
     };
   }
   const resolvedTarget = resolveOutboundTarget({
@@ -389,6 +384,5 @@ export function resolveAgentOutboundTarget(params: {
   return {
     resolvedTarget,
     resolvedTo: resolvedTarget.ok ? resolvedTarget.to : params.plan.resolvedTo,
-    targetMode,
   };
 }

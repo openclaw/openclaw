@@ -16,10 +16,10 @@ describe("resolveAssistantIdentity", () => {
   it("uses the selected agent identity", async () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [
-          { id: "main", identity: { name: "Main agent", avatar: "M" } },
-          { id: "worker", identity: { name: "Worker agent", avatar: "W" } },
-        ],
+        entries: {
+          main: { identity: { name: "Main agent", avatar: "M" } },
+          worker: { identity: { name: "Worker agent", avatar: "W" } },
+        },
       },
     };
 
@@ -98,12 +98,11 @@ describe("resolveAssistantIdentity", () => {
   it("drops sentence-like avatar placeholders", async () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             identity: { avatar: "workspace-relative path, http(s) URL, or data URI" },
           },
-        ],
+        },
       },
     };
 
@@ -114,7 +113,7 @@ describe("resolveAssistantIdentity", () => {
 
   it("keeps path avatars", async () => {
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", identity: { avatar: "avatars/openclaw.png" } }] },
+      agents: { entries: { main: { identity: { avatar: "avatars/openclaw.png" } } } },
     };
 
     expect((await resolveAssistantIdentity({ cfg, workspaceDir: "" })).avatar).toBe(
@@ -125,7 +124,7 @@ describe("resolveAssistantIdentity", () => {
   it("preserves long image data URLs without truncating past 200 chars", async () => {
     const dataUrl = `data:image/png;base64,${"A".repeat(50_000)}`;
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", identity: { avatar: dataUrl } }] },
+      agents: { entries: { main: { identity: { avatar: dataUrl } } } },
     };
 
     expect((await resolveAssistantIdentity({ cfg, workspaceDir: "" })).avatar).toBe(dataUrl);
@@ -177,7 +176,7 @@ describe("resolveAssistantIdentity", () => {
     "uses the configured emoji when the agent avatar is unsupported: %s",
     async (avatar) => {
       const cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main", identity: { avatar, emoji: "🦞" } }] },
+        agents: { entries: { main: { identity: { avatar, emoji: "🦞" } } } },
       };
 
       expect((await resolveAssistantIdentity({ cfg, workspaceDir: "" })).avatar).toBe("🦞");
@@ -189,7 +188,7 @@ describe("resolveAssistantIdentity", () => {
       await fs.writeFile(path.join(workspace, "IDENTITY.md"), "- Avatar: identity.png\n");
       const cfg: OpenClawConfig = {
         agents: {
-          list: [{ id: "main", workspace, identity: { avatar: "slack://avatar.png" } }],
+          entries: { main: { workspace, identity: { avatar: "slack://avatar.png" } } },
         },
       };
 
@@ -203,7 +202,7 @@ describe("resolveAssistantIdentity", () => {
     const resolveName = async (name: string) =>
       (
         await resolveAssistantIdentity({
-          cfg: { agents: { list: [{ id: "main", identity: { name } }] } },
+          cfg: { agents: { entries: { main: { identity: { name } } } } },
           agentId: "main",
           workspaceDir: "",
         })

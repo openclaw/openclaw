@@ -68,27 +68,27 @@ export function hasRetainedManagedNpmInstallMarker(packageDir: string): boolean 
 
 export async function clearRetainedManagedNpmInstallMarker(
   packageDir: string,
-  assertCurrent?: () => void,
+  assertCurrent?: () => void | Promise<void>,
 ): Promise<boolean> {
   const info = resolveRetainedManagedNpmInstallPackageInfo(packageDir);
   if (!info) {
     return false;
   }
-  assertCurrent?.();
+  await assertCurrent?.();
   try {
     await fs.promises.rm(info.markerPath, { force: true });
   } catch (error) {
-    assertCurrent?.();
+    await assertCurrent?.();
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return false;
     }
     throw error;
   }
-  assertCurrent?.();
+  await assertCurrent?.();
   try {
     await fs.promises.rmdir(path.dirname(info.markerPath));
   } catch {
-    assertCurrent?.();
+    await assertCurrent?.();
     // Best effort: keep the OpenClaw-owned marker directory if it is not empty.
   }
   return true;
@@ -202,6 +202,7 @@ function isOwnedManagedNpmProject(params: {
 async function cleanupRetainedLegacyNpmPackages(params: {
   npmRoot: string;
   activeInstallPaths: string[];
+  assertCurrent?: () => void | Promise<void>;
   onError?: (error: unknown, projectRoot: string) => void;
 }): Promise<number> {
   let removed = 0;
@@ -214,8 +215,9 @@ async function cleanupRetainedLegacyNpmPackages(params: {
       continue;
     }
     try {
+      await params.assertCurrent?.();
       await fs.promises.rm(packageDir, { recursive: true, force: true });
-      await clearRetainedManagedNpmInstallMarker(packageDir);
+      await clearRetainedManagedNpmInstallMarker(packageDir, params.assertCurrent);
       removed += 1;
     } catch (error) {
       params.onError?.(error, packageDir);
@@ -230,6 +232,7 @@ export async function cleanupRetainedManagedNpmInstallGenerations(
     env?: NodeJS.ProcessEnv;
     npmDir?: string;
     onError?: (error: unknown, projectRoot: string) => void;
+    assertCurrent?: () => void | Promise<void>;
   } = {},
 ): Promise<number> {
   // Callers run this only after the previous gateway server has closed and preserve
@@ -247,6 +250,7 @@ export async function cleanupRetainedManagedNpmInstallGenerations(
       removed += await cleanupRetainedLegacyNpmPackages({
         npmRoot: projectRoot,
         activeInstallPaths,
+        assertCurrent: params.assertCurrent,
         onError: params.onError,
       });
       continue;
@@ -280,6 +284,7 @@ export async function cleanupRetainedManagedNpmInstallGenerations(
       continue;
     }
     try {
+      await params.assertCurrent?.();
       await fs.promises.rm(projectRoot, { recursive: true, force: true });
       removed += 1;
     } catch (error) {

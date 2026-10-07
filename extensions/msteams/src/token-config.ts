@@ -13,7 +13,7 @@ type MSTeamsSecretCredentials = {
   tenantId: string;
 };
 
-export type MSTeamsFederatedCredentials = {
+type MSTeamsFederatedCredentials = {
   type: "federated";
   appId: string;
   tenantId: string;
@@ -104,7 +104,6 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
     const managedIdentityClientId =
       cfg?.managedIdentityClientId || process.env.MSTEAMS_MANAGED_IDENTITY_CLIENT_ID || undefined;
 
-    // At least one federated mechanism must be configured.
     if (!certificatePath && !useManagedIdentity) {
       return undefined;
     }

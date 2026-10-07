@@ -13,10 +13,13 @@ Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 
 ## Choose a model route
 
-The model picker can show **Anthropic** and **Claude CLI** separately. These are
+The model picker shows each Claude model once per route. API and Claude CLI are
 not interchangeable billing choices: `anthropic/*` is the canonical model
 identity and can run through either runtime; `claude-cli/*` selects the native
-Claude runtime explicitly.
+Claude runtime explicitly. When a configured `anthropic/*` model already runs
+through Claude CLI, the picker omits its matching `claude-cli/*` entry, unless the
+agent's model policy or a Gateway role allows that `claude-cli/*` entry but not
+the `anthropic/*` one.
 
 - **API / API · OpenClaw** uses the configured Anthropic API connection.
 - **Claude CLI / Claude CLI · native** runs through Claude Code, using its native
@@ -141,7 +144,9 @@ OpenClaw release:
         native login tokens. Claude owns the login and token refresh lifecycle.
         Gateway startup shares the native login availability check across agent
         workspaces using the same config and environment. Explicit catalog/auth
-        captures recheck availability for their own generation.
+        captures recheck availability for their own generation. Model lists also
+        recheck it in the background at most once a minute, so `claude auth login`
+        or logout after Gateway startup reaches the model picker without a restart.
         New sessions select saved subscription credentials by account order and
         use protected file-descriptor forwarding, including tokens saved with
         `openclaw models auth paste-token --provider anthropic`. API keys saved for
@@ -199,9 +204,9 @@ OpenClaw release:
     Direct Messages API requests using a setup token advertise a maintained
     Claude Code client version, or the installed CLI version when newer.
     Anthropic uses that identity to gate newer models. A missing, older, or
-    failed CLI probe uses OpenClaw's maintained version floor. Discovery is
+    failed CLI check uses OpenClaw's maintained version floor. Discovery is
     shared with the CLI backend and cached until process restart; API-key
-    requests do not run the probe.
+    requests do not run the check.
 
     ### Config example
 

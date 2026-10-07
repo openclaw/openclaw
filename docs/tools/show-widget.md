@@ -262,7 +262,15 @@ For a chosen cover image, supply a `poster` containing an embedded `data:` image
 Widgets do not generate thumbnails automatically, and HTTPS poster images are
 blocked by the image policy. With `preload="none"` and no poster, browsers may
 show a black player until playback starts. YouTube page URLs are not direct video
-files; YouTube iframe embeds are not supported.
+files, and YouTube iframes remain blocked inside widgets. In the Control UI, use a
+dedicated [YouTube card](/web/control-ui/chat#youtube-videos) instead:
+
+```text
+[embed url="https://www.youtube.com/watch?v=VIDEO_ID" title="Trailer" /]
+```
+
+Put this shortcode in the assistant reply, not in `widget_code`. It needs no
+`show_widget` call. On other surfaces, use a regular YouTube link.
 
 Media playback has its own content policy. It does not grant `fetch`, WebSocket,
 remote images, external scripts, or nested frames. API connections, including

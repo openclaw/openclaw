@@ -1,4 +1,5 @@
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
+import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import { getSafeSessionStorage } from "../../local-storage.ts";
 import { resolveUiConversationIdentity, hasUiSessionDefaults } from "../sessions/session-key.ts";
 import type {
@@ -8,16 +9,15 @@ import type {
   ChatReplyTarget,
   HumanMention,
 } from "./chat-types.ts";
-import {
-  observeOutboxRecoveryOwner,
-  outboxPayloadCanRecover,
-} from "./outbox-payload-store.runtime.ts";
+import { findChatSubmissionMessage } from "./history-message-identity.ts";
+import { outboxPayloadCanRecover } from "./outbox-payload-store.runtime.ts";
 import { normalizeStoredSession } from "./outbox-store-codec.ts";
 import { nextDraftRevision, readDraftRevisionState } from "./outbox-store-draft-state.ts";
 import type { ComposerStorageTarget, StoredChatOutboxScope } from "./outbox-store-scope.ts";
 import {
   hasStoredComposerDraftInput,
   notifyStoredChatOutboxChanges,
+  parseStoredChatOutboxScope,
   readStoredOutboxStore,
   resolvePendingComposerSessions,
   storedChatOutboxScopeKey,
@@ -45,6 +45,7 @@ type RecoveryHost = ChatComposerScope & {
   chatReplyTarget?: ChatReplyTarget | null;
   chatAttachments?: readonly ChatAttachment[];
   chatQueue?: readonly ChatQueueItem[];
+  chatMessages?: readonly unknown[];
 };
 
 // An existing recovery row owns an interrupted transfer, not a second live queue.
@@ -71,7 +72,7 @@ function readTransfer(id: string): { account: string; sourceId: string } | undef
 
 function sameRecovery(
   left: StoredComposerRecovery | undefined,
-  right: StoredComposerRecovery,
+  right: StoredComposerRecovery | undefined,
 ): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
@@ -199,7 +200,7 @@ export function captureChatOutboxRecoveryDestination(
   scope: StoredChatOutboxScope,
 ) {
   const storage = getSafeSessionStorage();
-  const recoveryScope = observeOutboxRecoveryOwner(state);
+  const recoveryScope = readOfflineStorageScope(state);
   if (
     !storage ||
     !recoveryScope ||
@@ -258,7 +259,59 @@ export function discardChatOutboxRecovery(
   return result === "completed" ? "discarded" : result;
 }
 
-// Restore and discard consume the same account claim. A partial transfer keeps
+/** Retire only exact durable user submissions in the currently loaded conversation. */
+export function retireDeliveredChatOutboxRecovery(
+  state: RecoveryHost,
+  entries: readonly ChatOutboxRecoveryEntry[],
+): "retired" | "unchanged" | "conflict" | "storage-failed" {
+  if (!entries.length || !state.sessionKey || !hasUiSessionDefaults(state)) {
+    return "unchanged";
+  }
+  const messages = state.chatMessages;
+  const sessionId = state.currentSessionId;
+  const scopeKey = storedChatOutboxScopeKey(resolveUiConversationIdentity(state, state.sessionKey));
+  const isCurrent = () =>
+    state.chatMessages === messages &&
+    state.currentSessionId === sessionId &&
+    Boolean(state.sessionKey) &&
+    storedChatOutboxScopeKey(resolveUiConversationIdentity(state, state.sessionKey!)) === scopeKey;
+  const delivered = (item: ChatQueueItem) => {
+    if (item.sessionId && item.sessionId !== sessionId) {
+      return false;
+    }
+    const proof = findChatSubmissionMessage(messages, item.sendRunId, true);
+    return Boolean(proof && (proof.id !== null || proof.sequence !== null));
+  };
+  let retired = false;
+  for (const entry of entries) {
+    const source = parseStoredChatOutboxScope(entry.sourceScopeKey);
+    if (
+      !source ||
+      storedChatOutboxScopeKey(source) !== scopeKey ||
+      !entry.session.queue?.some(delivered)
+    ) {
+      continue;
+    }
+    // Consuming an unowned legacy row transfers it to the current account. Only
+    // explicit Restore may adopt leftovers, so retire such rows only when nothing remains.
+    const unowned =
+      entry.id.startsWith("legacy-session:") || entry.id.startsWith("legacy-recovery:");
+    if (
+      unowned &&
+      (hasStoredComposerDraftInput(entry.session) || !entry.session.queue.every(delivered))
+    ) {
+      continue;
+    }
+    const result = consumeChatOutboxRecovery(state, entry, null, 0, isCurrent, delivered);
+    if (result !== "completed") {
+      return result;
+    }
+    retired = true;
+  }
+  return retired ? "retired" : "unchanged";
+}
+
+// Restore, discard, and delivery retirement consume the same account claim. A partial transfer keeps
 // one inert recovery owner, and canonical writes own verification and Blob cleanup.
 function consumeChatOutboxRecovery(
   state: RecoveryHost,
@@ -266,6 +319,7 @@ function consumeChatOutboxRecovery(
   destination: ReturnType<typeof captureChatOutboxRecoveryDestination>,
   minimumRevision = 0,
   isCurrentRequest: () => boolean = () => true,
+  delivered?: (item: ChatQueueItem) => boolean,
 ): "completed" | "conflict" | "storage-failed" {
   const storage = getSafeSessionStorage();
   if (!storage) {
@@ -498,16 +552,32 @@ function consumeChatOutboxRecovery(
         ),
       };
     }
-    // The only publication or discard consumes the account recovery row in the same write.
+    // Partial delivery retains the authoritative row's draft and unproven inputs.
+    const current = store.recovery[recoveryId]!;
+    const remainingQueue = delivered
+      ? current.session.queue?.filter((item) => !delivered(item))
+      : [];
+    const retained =
+      delivered && (hasStoredComposerDraftInput(current.session) || remainingQueue?.length)
+        ? {
+            ...current,
+            session: normalizeStoredSession({ ...current.session, queue: remainingQueue })!,
+          }
+        : undefined;
+    // Publication or retirement consumes the account recovery row in the same write.
     // No rollback is needed: every earlier failure retains an inert durable owner.
-    delete store.recovery[recoveryId];
+    if (retained) {
+      store.recovery[recoveryId] = retained;
+    } else {
+      delete store.recovery[recoveryId];
+    }
     if (!isCurrent()) {
       return "conflict";
     }
     commit(target, store, before, { requiredSessionKey: key, validate: sourceRetired });
     const written = readStoredOutboxStore(storage, target);
     if (
-      written.recovery[recoveryId] ||
+      !sameRecovery(written.recovery[recoveryId], retained) ||
       (key !== undefined &&
         JSON.stringify(written.sessions[key]) !==
           JSON.stringify(normalizeStoredSession(store.sessions[key])))

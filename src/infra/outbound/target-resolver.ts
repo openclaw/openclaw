@@ -92,7 +92,7 @@ export function formatTargetDisplay(params: {
   }
 
   const trimmedTarget = params.target.trim();
-  const lowered = normalizeLowercaseStringOrEmpty(trimmedTarget);
+  const lowered = trimmedTarget.toLowerCase();
   const display = params.display?.trim();
   const kind =
     params.kind ??
@@ -141,10 +141,6 @@ function detectTargetKind(
   if (preferred) {
     return preferred;
   }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return "group";
-  }
   const inferredChatType = (
     plugin ?? getRuntimeVisibleChannelPlugin(channel)
   )?.messaging?.inferTargetChatType?.({
@@ -160,10 +156,10 @@ function detectTargetKind(
     return "group";
   }
 
-  if (trimmed.startsWith("@") || /^<@!?/.test(trimmed) || /^user:/i.test(trimmed)) {
+  if (raw.startsWith("@") || /^<@!?/.test(raw) || /^user:/i.test(raw)) {
     return "user";
   }
-  if (trimmed.startsWith("#") || /^channel:/i.test(trimmed)) {
+  if (raw.startsWith("#") || /^channel:/i.test(raw)) {
     return "group";
   }
 
@@ -182,55 +178,6 @@ function normalizeDirectoryEntryId(
 ): string {
   const normalized = normalizeTargetForProvider(channel, entry.id, plugin);
   return normalized ?? entry.id.trim();
-}
-
-function matchesDirectoryEntry(params: {
-  channel: ChannelId;
-  entry: ChannelDirectoryEntry;
-  query: string;
-  plugin?: ChannelPlugin;
-  exactOnly?: boolean;
-}): boolean {
-  const query = normalizeLowercaseStringOrEmpty(params.query);
-  if (!query) {
-    return false;
-  }
-  const candidates = [
-    normalizeDirectoryEntryId(params.channel, params.entry, params.plugin),
-    params.entry.name,
-    params.entry.handle,
-  ]
-    .map((value) => (value ? stripTargetPrefixes(value, params.channel, params.plugin) : ""))
-    .map(normalizeLowercaseStringOrEmpty)
-    .filter(Boolean);
-  return candidates.some((value) =>
-    params.exactOnly ? value === query : value === query || value.includes(query),
-  );
-}
-
-function resolveMatch(params: {
-  channel: ChannelId;
-  entries: ChannelDirectoryEntry[];
-  query: string;
-  plugin?: ChannelPlugin;
-  exactOnly?: boolean;
-}) {
-  const matches = params.entries.filter((entry) =>
-    matchesDirectoryEntry({
-      channel: params.channel,
-      entry,
-      query: params.query,
-      plugin: params.plugin,
-      exactOnly: params.exactOnly,
-    }),
-  );
-  if (matches.length === 0) {
-    return { kind: "none" as const };
-  }
-  if (matches.length === 1) {
-    return { kind: "single" as const, entry: matches[0] };
-  }
-  return { kind: "ambiguous" as const, entries: matches };
 }
 
 async function listDirectoryEntries(params: {
@@ -391,18 +338,23 @@ export async function resolveChannelTarget(params: {
     preferLiveOnMiss: true,
     plugin,
   });
-  const match = resolveMatch({
-    channel: params.channel,
-    entries,
-    query,
-    plugin,
-    exactOnly: Boolean(reservedLiteral),
-  });
-  if (match.kind === "single") {
-    const entry = match.entry;
-    if (!entry) {
-      throw new Error("Single directory match is missing its entry");
-    }
+  const normalizedQuery = query.toLowerCase();
+  const matches = normalizedQuery
+    ? entries.filter((entry) => {
+        const candidates = [
+          normalizeDirectoryEntryId(params.channel, entry, plugin),
+          entry.name,
+          entry.handle,
+        ].map((value) =>
+          value ? stripTargetPrefixes(value, params.channel, plugin).toLowerCase() : "",
+        );
+        return candidates.some((value) =>
+          reservedLiteral ? value === normalizedQuery : value.includes(normalizedQuery),
+        );
+      })
+    : [];
+  const [entry] = matches;
+  if (matches.length === 1 && entry) {
     return {
       ok: true,
       target: {
@@ -415,11 +367,11 @@ export async function resolveChannelTarget(params: {
       },
     };
   }
-  if (match.kind === "ambiguous") {
+  if (matches.length > 1) {
     return {
       ok: false,
       error: ambiguousTargetError(providerLabel, raw, hint),
-      candidates: match.entries,
+      candidates: matches,
     };
   }
   // Directory misses are the fail-closed boundary for reserved literals.

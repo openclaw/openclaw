@@ -23,12 +23,11 @@ import {
   voiceStatusLabel,
 } from "./chat-voice-activity.ts";
 
-export type ChatRunControlsProps = Omit<
-  ComposerVoiceButtonProps,
-  "idleLabel" | "onDirectDictationStart"
-> & {
+export type ChatRunControlsProps = Omit<ComposerVoiceButtonProps, "idleLabel"> & {
   canAbort: boolean;
   canSend: boolean;
+  sending: boolean;
+  isBusy: boolean;
   submitPending?: boolean;
   draft: string;
   hasAttachments?: boolean;
@@ -294,9 +293,8 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
 // New Session shares the microphone without run controls or a Talk session.
 type ComposerVoiceButtonProps = {
   connected: boolean;
-  sending: boolean;
+  disabled?: boolean;
   submitDisabledReason?: string | null;
-  isBusy: boolean;
   dictation?: ComposerDictationController;
   microphonePicker?: TemplateResult | typeof nothing;
   /** Dictation-only surfaces must not promise Talk. */
@@ -361,8 +359,7 @@ export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
           ?disabled=${
             !active &&
             (!props.connected ||
-              props.sending ||
-              props.isBusy ||
+              props.disabled ||
               (!props.dictation && Boolean(props.submitDisabledReason)))
           }
           aria-disabled=${String(finalizing)}
@@ -385,7 +382,7 @@ export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
 
 export function renderComposerDictationSendAction(
   dictation: ComposerDictationController,
-  onSend: () => void,
+  onSend: (submissionAction?: Event) => void,
   onPointerDown?: (event: PointerEvent) => void,
 ) {
   if (!dictation.active) {
@@ -408,12 +405,14 @@ export function renderComposerDictationSendAction(
         class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-commit"
         type="button"
         @pointerdown=${onPointerDown}
-        @click=${async () => {
+        @click=${async (event: MouseEvent) => {
           if (dictation.finalizing) {
             return;
           }
           await dictation.finishActive();
-          onSend();
+          // Preserve the input action so submission publishes its pending state
+          // before yielding to delivery, just like typed Send.
+          onSend(event);
         }}
         aria-disabled=${String(dictation.finalizing)}
         aria-label=${t("chat.runControls.send")}
@@ -501,8 +500,6 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
         { inline: true },
       )}`
     : undefined;
-  // Preserve the click identity without mistaking it for a follow-up mode.
-  const send = (event: Event) => props.onSend(event);
   const abortAction = renderChatAbortAction(props);
 
   // An errored transport remains active. Keep Stop; the alert row owns its error.
@@ -510,7 +507,11 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const cameraLabel = t(
     props.voiceVideoEnabled ? "chat.composer.turnCameraOff" : "chat.composer.turnCameraOn",
   );
-  const voiceButton = renderComposerVoiceButton(props);
+  // Dictation edits the draft; only Talk-only controls depend on turn activity.
+  const voiceButton = renderComposerVoiceButton({
+    ...props,
+    disabled: !props.dictation && (props.sending || props.isBusy),
+  });
   // Either voice route keeps the microphone ahead of the primary action.
   const voiceControl = props.dictation || props.onToggleVoice ? voiceButton : nothing;
   const mobileDictationControl = props.dictation
@@ -518,10 +519,9 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
         <span class="chat-mobile-dictation-action">
           ${renderComposerVoiceButton({
             connected: props.connected,
-            sending: props.sending,
-            isBusy: props.isBusy,
             dictation: props.dictation,
             idleLabel: t("chat.composer.dictationCapability"),
+            onDirectDictationStart: props.onDirectDictationStart,
           })}
         </span>
       `
@@ -571,7 +571,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
       <button
         class="chat-send-btn chat-send-btn--send${props.sending ? " chat-send-btn--sending" : ""}"
         @pointerdown=${props.onPrimaryActionPointerDown}
-        @click=${send}
+        @click=${props.onSend}
         ?disabled=${!hasSendableContent}
         aria-label=${sendStatus ?? activeRunActionDescription}
         aria-busy=${sendBusy || props.preparingAttachments ? "true" : "false"}
@@ -585,24 +585,19 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
     props.dictation && (!props.submitDisabledReason || canSubmitBeforeChatHistory(props.draft))
       ? renderComposerDictationSendAction(
           props.dictation,
-          () => props.onSend(),
+          props.onSend,
           props.onPrimaryActionPointerDown,
         )
       : sendAction;
-  const desktopPrimaryAction = props.dictation?.active
+  const activePrimaryAction = props.dictation?.active
     ? dictationSendAction
     : props.canAbort && !hasSendableContent
       ? abortAction
-      : sendAction;
-  const mobilePrimaryAction = props.dictation?.active
-    ? dictationSendAction
-    : props.canAbort && !hasSendableContent
-      ? abortAction
-      : hasComposedContent
-        ? sendAction
-        : props.onToggleVoice
-          ? mobileTalkAction
-          : sendAction;
+      : null;
+  const desktopPrimaryAction = activePrimaryAction ?? sendAction;
+  const mobilePrimaryAction =
+    activePrimaryAction ??
+    (hasComposedContent || !props.onToggleVoice ? sendAction : mobileTalkAction);
   const primaryActions =
     mobilePrimaryAction === desktopPrimaryAction
       ? html`<span class="chat-mobile-primary-action chat-desktop-primary-action"

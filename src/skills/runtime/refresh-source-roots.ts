@@ -11,7 +11,7 @@ import {
 } from "../loading/plugin-skills.js";
 import { resolveAllowedSkillSymlinkTargetRealPaths } from "../loading/symlink-targets.js";
 import { resolveWorkspaceSkillDirectories } from "../loading/workspace-skill-roots.js";
-import type { WorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
+import type { WorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.types.js";
 import { resolveWorkshopWatchRoots } from "../workshop/skills-root.js";
 
 export function resolveSkillsWatchSourceRoots(

@@ -26,7 +26,7 @@ does not own model selection, channel behavior, auth, tool policy, or tool
 implementations.
 
 In scope: model-visible control/direct tool definitions, hidden tool catalog
-construction, executor selection, host callbacks for search/describe/call, resumable state for
+construction, executor selection, host callbacks for search/describe/call and session JSON storage, resumable state for
 suspended guest programs, output/timeout/memory/pending-call/snapshot limits,
 and telemetry/trajectory projection for nested tool calls.
 
@@ -67,6 +67,9 @@ signal, streaming updates where available, and trajectory/audit events.
 Completed nested calls persist as bounded, redacted display-only activity, retaining
 their original parent and invocation ids across history reloads. Provider replay
 contains only the actual model calls; child activity adds no synthetic model turns.
+Nested invocation ids include the cell's replay identity, so a provider can reuse
+a tool-call id in a later assistant response without colliding with earlier activity.
+Replaying the same call within the same run and assistant response preserves its nested ids.
 Runtime transcript views omit these persisted payloads. Finalization and agent-end
 hooks read the accepted activity for their attempt from the transcript when needed.
 If a `before_message_write` hook suppresses a nested activity row, finalization and
@@ -110,6 +113,9 @@ cancellation and policy checks.
 
 ## Run and snapshot lifecycle
 
+Every new `exec` starts a fresh JavaScript context. Variables, functions, and
+imports never carry over between cells; `wait` continues the original cell.
+
 Each code-mode run is tracked in an in-process map keyed by `runId` (not
 persisted to disk or a database). `exec`/`wait` return one of three result
 statuses: `completed`, `waiting`, or `failed`.
@@ -123,8 +129,8 @@ statuses: `completed`, `waiting`, or `failed`.
 run is unavailable or expired.` or `code mode run belongs to a different
 session.`.
 - A run's continuation is released as soon as it settles to
-  `completed` or `failed`, or is dropped on Gateway shutdown (nothing
-  survives a restart: this is transient runtime state).
+  `completed` or `failed`, or is dropped on Gateway shutdown. Continuations
+  do not survive a restart; committed session-store values do.
 - OpenClaw caps the number of concurrently suspended runs per process (64) and
   rejects new suspensions past that cap with `too many suspended code mode
 runs.`.
@@ -169,8 +175,43 @@ saved data. Appended client tools preserve the same result-store lifetime, inclu
 for cells already parked in `wait`. Each cell captures that store before execution,
 so stale cells cannot adopt a replacement store or retain references after a
 permission change.
-Saved references are data snapshots and never execution authority. They do not
-survive Gateway restart and cannot be used by another run or session.
+Saved references are data snapshots and never execution authority. They expire
+when the current reply ends and do not survive Gateway restart. Never reuse
+reference ids from earlier turns; use the session store for small values needed
+later.
+
+### Session-store persistence
+
+`await store(key, value)` and `await load(key)` use the same asynchronous host
+bridge and shared guest controller as `results` under both executors. Core keeps
+pending writes in the cell state keyed by `runId`, so they survive Node's live
+continuation and QuickJS snapshot/restore without extending the executor
+protocol. Loads overlay the cell's buffered sets and deletes on the run's
+committed session-store projection.
+
+The projection is initialized lazily at the first store operation and shares
+the admitted catalog/result-store lifetime. For a persisted session, core uses
+the existing off-thread `SessionManager.openAsync` API to read the full branch
+ending at the live session's current leaf. This includes custom entries older
+than the live manager's bounded hydration window. An unmatched leaf fails the
+operation rather than exposing a different branch. Subsequent operations use
+the projection, applying this run's own commits without rescanning the branch.
+
+Only a cell that settles `completed` commits its non-empty write set. Core
+appends one `custom` entry with type `openclaw.code-mode-store` through
+`appendCustomEntryAsync`, then updates the projection. The entry records sets,
+deletes, and per-key network-content provenance. Failed, timed-out, aborted,
+expired, and disposed cells discard their buffers. If appending fails, the
+completed result carries a warning and the projection remains unchanged.
+
+The transcript is the persistence owner: no separate database table, sidecar,
+or disk cache is created. Replay follows branch ancestry, survives compaction,
+and excludes other branches' writes. Custom entries stay outside model context.
+Loading a flagged value marks the receiving cell's runtime as containing
+network content, preserving the normal untrusted-content wrapper across turns.
+Store operations are unavailable in headless or `restartSafe` execution, or
+without a bound session manager. See the
+[guest store contract](/tools/code-mode/guest-api#session-store) for data limits.
 
 ## QuickJS-WASI runtime
 

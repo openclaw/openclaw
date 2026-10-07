@@ -1,4 +1,3 @@
-// Shared detection and text fallback for Slack's native chart and table blocks.
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { renderSlackBlockFallbackText } from "./blocks-fallback.js";
@@ -16,7 +15,6 @@ export const SLACK_MALFORMED_NATIVE_DATA_FALLBACK =
 const SLACK_RESPONSE_URL_BODY_LIMIT_BYTES = 16 * 1024;
 const SLACK_RESPONSE_URL_BODY_TIMEOUT_MS = 30_000;
 
-/** Detect a native Slack chart or table block. */
 export function hasSlackNativeDataBlock(blocks?: readonly unknown[]): boolean {
   return hasSlackDataVisualizationBlock(blocks) || hasSlackDataTableBlock(blocks);
 }

@@ -300,12 +300,12 @@ describe("runtime-context replay at prompt submission", () => {
       expect(nextTurn.slice(0, firstTurn.length)).toEqual(firstTurn);
       expect(firstTurn.slice(0, 2)).toMatchObject([
         { role: "user", content: [{ type: "text", text: "first" }] },
-        { role: "user", runtimeContextCarrier: true },
+        { role: "user", runtimeContext: {} },
       ]);
       expect(nextTurn.slice(firstTurn.length)).toMatchObject([
         { role: "assistant", content: [{ type: "text", text: "done" }] },
         { role: "user", content: [{ type: "text", text: "second" }] },
-        { role: "user", runtimeContextCarrier: true },
+        { role: "user", runtimeContext: {} },
       ]);
     }
   });

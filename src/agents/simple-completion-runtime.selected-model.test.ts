@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as sessionEntryRuntime from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   executeWorkerInference,
@@ -149,10 +149,12 @@ module.exports = {
           vi.spyOn(workerTurnOwner, "readWorkerTurnPromptCacheContext").mockReturnValue({
             boundaryCount: 0,
           });
-          vi.spyOn(sessionAccessor, "loadSessionEntry").mockImplementation((target) => {
-            expect(target).toEqual(sessionTarget);
-            return { sessionId: "selected-test", updatedAt: 0 };
-          });
+          vi.spyOn(sessionEntryRuntime, "readSessionEntryInWorker").mockImplementation(
+            async (target) => {
+              expect(target).toEqual(sessionTarget);
+              return { sessionId: "selected-test", updatedAt: 0 };
+            },
+          );
           vi.spyOn(sessionAuthRuntime, "resolveSessionAuthSelection").mockResolvedValue(undefined);
         }
 

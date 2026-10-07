@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Type Suppression Inventory reports unchecked any casts and expected TypeScript errors.
 
 import fs from "node:fs";
 import path from "node:path";

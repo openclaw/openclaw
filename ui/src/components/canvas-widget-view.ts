@@ -358,7 +358,10 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         this.postHostState();
       },
       onRendered: () => this.postHostState(),
-      onError: (error) => this.fail(error),
+      onError: (error) => {
+        this.clearSandbox();
+        this.error = formatUiError(error);
+      },
       onReadyTimeout: () => {
         this.pending = true;
       },
@@ -366,11 +369,6 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         this.pending = true;
       },
     });
-  }
-
-  private fail(error: unknown): void {
-    this.clearSandbox();
-    this.error = formatUiError(error);
   }
 
   private postHostState(): void {
@@ -494,7 +492,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         this.promptPort === port &&
         message.data?.type === "openclaw:widget-prompt"
       ) {
-        dispatchWidgetPrompt(
+        void dispatchWidgetPrompt(
           host.frame,
           message.data.prompt,
           `${this.sessionKey}\0${this.docId}\0${this.validated!.generation}`,
