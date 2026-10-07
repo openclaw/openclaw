@@ -531,14 +531,22 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
               }
               browser = await chromium.launch({
                 ...options.browserLaunchOptions,
-                // Full tile rasterization reduced cross-pass stroke noise in the capture fixtures.
-                args: ["--disable-partial-raster", ...(options.browserLaunchOptions?.args ?? [])],
+                // CPU rasterization avoids paint-history-dependent fractional-edge pixels.
+                args: [
+                  "--disable-partial-raster",
+                  "--disable-gpu-rasterization",
+                  ...(options.browserLaunchOptions?.args ?? []),
+                ],
                 executablePath: chromiumExecutablePath,
               });
             } else {
               browser = await chromium.launch({
                 ...options.browserLaunchOptions,
-                args: ["--disable-partial-raster", ...(options.browserLaunchOptions?.args ?? [])],
+                args: [
+                  "--disable-partial-raster",
+                  "--disable-gpu-rasterization",
+                  ...(options.browserLaunchOptions?.args ?? []),
+                ],
                 executablePath: chromiumExecutablePath,
               });
               if (stopping) {
