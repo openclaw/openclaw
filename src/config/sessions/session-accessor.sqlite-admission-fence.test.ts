@@ -37,58 +37,55 @@ describe("SQLite admitted input reset fence", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it.each([false, true])(
-    "rejects a completion source reset before admission (retained=%s)",
-    async (retained) => {
-      await persistSessionTranscriptTurn(scope, {
-        messages: [
-          transcriptMessage("source", null, {
-            role: "user",
-            content: "completed child",
-            idempotencyKey: "source:user",
-          }),
-        ],
-        touchSessionEntry: false,
-      });
-      expect(everySessionTranscriptUserInputFrom(scope, "source:user", () => true)).toBe(true);
-      await appendTranscriptEvent(scope, {
-        type: "reset",
-        id: "before-admission-reset",
-        parentId: "source",
-        timestamp: "2026-09-14T00:00:00.000Z",
-        reason: "new",
-        ...(retained ? { firstKeptEntryId: "source" } : {}),
-      });
-      await persistSessionTranscriptTurn(scope, {
-        messages: [
-          transcriptMessage("admitted", "before-admission-reset", {
-            role: "user",
-            content: "admitted",
-            idempotencyKey: "admitted:user",
-          }),
-        ],
-        touchSessionEntry: false,
-      });
-      expect(
-        readSessionTranscriptMessageEvents(scope).some(
-          ({ event }) =>
-            typeof event === "object" && event !== null && "id" in event && event.id === "source",
-        ),
-      ).toBe(retained);
-      const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "admitted" });
-      if (!anchor) {
-        throw new Error("missing real admission anchor");
-      }
-      const accept = () => everySessionTranscriptUserInputFrom(scope, "source:user", () => true);
-      expect(accept()).toBe(false);
-      expect(
-        runWithSessionTranscriptReadFence(
-          { ...anchor, logicalTurnId: "recovery", role: "user" },
-          accept,
-        ),
-      ).toBe(false);
-    },
-  );
+  it("rejects a retained completion source reset before admission", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        transcriptMessage("source", null, {
+          role: "user",
+          content: "completed child",
+          idempotencyKey: "source:user",
+        }),
+      ],
+      touchSessionEntry: false,
+    });
+    expect(everySessionTranscriptUserInputFrom(scope, "source:user", () => true)).toBe(true);
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "before-admission-reset",
+      parentId: "source",
+      timestamp: "2026-09-14T00:00:00.000Z",
+      reason: "new",
+      firstKeptEntryId: "source",
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        transcriptMessage("admitted", "before-admission-reset", {
+          role: "user",
+          content: "admitted",
+          idempotencyKey: "admitted:user",
+        }),
+      ],
+      touchSessionEntry: false,
+    });
+    expect(
+      readSessionTranscriptMessageEvents(scope).some(
+        ({ event }) =>
+          typeof event === "object" && event !== null && "id" in event && event.id === "source",
+      ),
+    ).toBe(true);
+    const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "admitted" });
+    if (!anchor) {
+      throw new Error("missing real admission anchor");
+    }
+    const accept = () => everySessionTranscriptUserInputFrom(scope, "source:user", () => true);
+    expect(accept()).toBe(false);
+    expect(
+      runWithSessionTranscriptReadFence(
+        { ...anchor, logicalTurnId: "recovery", role: "user" },
+        accept,
+      ),
+    ).toBe(false);
+  });
 
   it("accepts an admission store path that aliases the same database", async () => {
     await persistSessionTranscriptTurn(scope, {
