@@ -53,7 +53,10 @@ import {
 import { loadSessionEntry } from "../session-utils.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { resolveChatAbortRequester } from "./chat-abort-authorization.js";
-import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
+import {
+  handleChatAbortRequestWithLifecycle,
+  withAbortStateContentionGuard,
+} from "./chat-abort-handler.js";
 import {
   abortControlledSubagents,
   abortQueuedCollectorSession,
@@ -157,7 +160,7 @@ function resolveScopedAbortKey(params: {
 }
 
 export const sessionAbortHandlers: GatewayRequestHandlers = {
-  "sessions.abort": async (options) => {
+  "sessions.abort": withAbortStateContentionGuard(async (options) => {
     const { params, respond, context, client, sessionMutationAuthorization } = options;
     const authority = readGatewayRequestMutationAuthority(options);
     const requester = resolveChatAbortRequester(client, sessionMutationAuthorization);
@@ -702,5 +705,5 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         reason: "abort",
       });
     }
-  },
+  }),
 };
