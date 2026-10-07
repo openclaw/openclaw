@@ -121,16 +121,21 @@ export function assertDelegatedExecutionOwnershipDowngradeSafe(params: {
   }
 }
 
-/** Startup gate: rehydrate fully, then verify downgrade safety, before enabling execution. */
+/**
+ * Startup gate: verify downgrade safety, then rehydrate every retained
+ * reservation, before enabling execution.
+ *
+ * Downgrade safety is decided first so a database that published v19 without
+ * the registry is refused by name instead of being misread as an unreadable
+ * registry. A pre-v19 database legitimately has no registry and nothing to
+ * rehydrate, so it yields an empty rehydration rather than a read failure.
+ */
 export function prepareDelegatedExecutionOwnershipStartup(params: {
   db: DatabaseSync;
   supportedEnforcementVersion?: number;
   publishedSchemaVersion?: number;
   now?: number;
 }): DelegatedExecutionOwnershipRehydration {
-  const rehydration = rehydrateDelegatedExecutionOwnership(
-    params.now === undefined ? { db: params.db } : { db: params.db, now: params.now },
-  );
   assertDelegatedExecutionOwnershipDowngradeSafe({
     db: params.db,
     ...(params.supportedEnforcementVersion === undefined
@@ -140,5 +145,14 @@ export function prepareDelegatedExecutionOwnershipStartup(params: {
       ? {}
       : { publishedSchemaVersion: params.publishedSchemaVersion }),
   });
-  return rehydration;
+  if (!hasDelegatedExecutionOwnershipSchema(params.db)) {
+    return Object.freeze({
+      live: Object.freeze([]),
+      byRef: new Map<string, DelegatedExecutionOwnershipRecord>(),
+      completedAt: params.now ?? Date.now(),
+    });
+  }
+  return rehydrateDelegatedExecutionOwnership(
+    params.now === undefined ? { db: params.db } : { db: params.db, now: params.now },
+  );
 }
