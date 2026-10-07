@@ -233,69 +233,63 @@ function readSandboxHttpResponse(params: {
       }
       output.chunks.push(buffer);
     };
-    if (params.streamResponse) {
-      params.child.stdout.setEncoding("utf8");
-      params.child.stderr.setEncoding("utf8");
-    }
-    params.child.stdout.on("data", (chunk: Buffer | string) => {
-      if (failed) {
-        return;
+    for (const stream of ["stdout", "stderr"] as const) {
+      if (params.streamResponse) {
+        params.child[stream].setEncoding("utf8");
       }
-      if (!params.streamResponse) {
-        bufferOutput("stdout", chunk);
-        return;
-      }
-      const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-      stdoutBuffer += text;
-      let newline = stdoutBuffer.indexOf("\n");
-      while (newline >= 0) {
-        const line = stdoutBuffer.slice(0, newline).trim();
-        stdoutBuffer = stdoutBuffer.slice(newline + 1);
-        if (line) {
-          try {
-            const message = requireObject(JSON.parse(line) as JsonValue, "http stream message");
-            const type = requireString(message.type, "http stream message type");
-            if (type === "headers") {
-              headerResolved = true;
-              resolve({
-                status: requireNumber(message.status, "http status"),
-                headers: readHttpHeaders(message.headers),
-                bodyBase64: "",
-              });
-            } else if (type === "bodyDelta") {
-              const seq = requireNumber(message.seq, "http body sequence");
-              lastBodySeq = Math.max(lastBodySeq, seq);
-              params.notifications.send("http/request/bodyDelta", {
-                requestId: params.requestId,
-                seq,
-                deltaBase64: typeof message.deltaBase64 === "string" ? message.deltaBase64 : "",
-                done: message.done === true,
-                error: typeof message.error === "string" ? message.error : null,
-              });
-            }
-          } catch (error) {
-            fail(error instanceof Error ? error.message : String(error));
-          }
+      params.child[stream].on("data", (chunk: Buffer | string) => {
+        if (failed) {
+          return;
         }
-        newline = stdoutBuffer.indexOf("\n");
-      }
-      if (stdoutBuffer.length > SANDBOX_HTTP_STREAM_LINE_MAX_CHARS) {
-        fail(
-          `sandbox http/request produced an unterminated stdout line longer than ${SANDBOX_HTTP_STREAM_LINE_MAX_CHARS} characters`,
-        );
-      }
-    });
-    params.child.stderr.on("data", (chunk: Buffer | string) => {
-      if (failed) {
-        return;
-      }
-      if (!params.streamResponse) {
-        bufferOutput("stderr", chunk);
-        return;
-      }
-      const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-      stderr = sliceUtf16Safe(`${stderr}${text}`, -4096);
-    });
+        if (!params.streamResponse) {
+          bufferOutput(stream, chunk);
+          return;
+        }
+        const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+        if (stream === "stderr") {
+          stderr = sliceUtf16Safe(`${stderr}${text}`, -4096);
+          return;
+        }
+        stdoutBuffer += text;
+        let newline = stdoutBuffer.indexOf("\n");
+        while (newline >= 0) {
+          const line = stdoutBuffer.slice(0, newline).trim();
+          stdoutBuffer = stdoutBuffer.slice(newline + 1);
+          if (line) {
+            try {
+              const message = requireObject(JSON.parse(line) as JsonValue, "http stream message");
+              const type = requireString(message.type, "http stream message type");
+              if (type === "headers") {
+                headerResolved = true;
+                resolve({
+                  status: requireNumber(message.status, "http status"),
+                  headers: readHttpHeaders(message.headers),
+                  bodyBase64: "",
+                });
+              } else if (type === "bodyDelta") {
+                const seq = requireNumber(message.seq, "http body sequence");
+                lastBodySeq = Math.max(lastBodySeq, seq);
+                params.notifications.send("http/request/bodyDelta", {
+                  requestId: params.requestId,
+                  seq,
+                  deltaBase64: typeof message.deltaBase64 === "string" ? message.deltaBase64 : "",
+                  done: message.done === true,
+                  error: typeof message.error === "string" ? message.error : null,
+                });
+              }
+            } catch (error) {
+              fail(error instanceof Error ? error.message : String(error));
+            }
+          }
+          newline = stdoutBuffer.indexOf("\n");
+        }
+        if (stdoutBuffer.length > SANDBOX_HTTP_STREAM_LINE_MAX_CHARS) {
+          fail(
+            `sandbox http/request produced an unterminated stdout line longer than ${SANDBOX_HTTP_STREAM_LINE_MAX_CHARS} characters`,
+          );
+        }
+      });
+    }
     params.child.once("error", (error) => {
       // ChildProcess error can precede close while the helper is still alive.
       // Keep its backend lease until close provides the terminal exit state.

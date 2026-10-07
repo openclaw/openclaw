@@ -184,17 +184,13 @@ export async function ensureCodexComputerUse(
   if (!config.enabled) {
     return unavailableStatus(config, "disabled", "Computer Use is disabled.");
   }
-  const status = await inspectCodexComputerUse({
-    ...params,
+  const inspection = {
     computerUseConfig: config,
     runLiveTest: config.strictReadiness,
-    installMode: "none",
     refreshSharedCache: config.autoInstall,
-  });
-  if (status.ready) {
-    return status;
-  }
-  if (config.autoInstall) {
+  };
+  let status = await inspectCodexComputerUse({ ...params, ...inspection, installMode: "none" });
+  if (!status.ready && config.autoInstall) {
     if (config.marketplaceSource) {
       throw new CodexComputerUseSetupError(
         unavailableStatus(
@@ -204,19 +200,12 @@ export async function ensureCodexComputerUse(
         ),
       );
     }
-    const installedStatus = await inspectCodexComputerUse({
-      ...params,
-      computerUseConfig: config,
-      runLiveTest: config.strictReadiness,
-      installMode: "automatic",
-      refreshSharedCache: true,
-    });
-    if (!installedStatus.ready) {
-      throw new CodexComputerUseSetupError(installedStatus);
-    }
-    return installedStatus;
+    status = await inspectCodexComputerUse({ ...params, ...inspection, installMode: "automatic" });
   }
-  throw new CodexComputerUseSetupError(status);
+  if (!status.ready) {
+    throw new CodexComputerUseSetupError(status);
+  }
+  return status;
 }
 
 export async function installCodexComputerUse(
@@ -477,14 +466,11 @@ async function inspectCodexComputerUseWithoutFence(
   }
 
   return await readComputerUseTools({
+    ...params,
     request,
-    client: params.client,
-    signal: params.signal,
     config: computerUseConfig,
     plugin: pluginInspection.plugin,
-    runLiveTest: params.runLiveTest,
     installPlugin: params.installMode !== "none",
-    releaseNativeConfigFence: params.releaseNativeConfigFence,
   });
 }
 

@@ -65,24 +65,13 @@ function requireToolName(value: unknown): string {
 }
 
 function serializeToolArguments(value: unknown, projection: HistoryProjection): string {
-  if (typeof value === "string") {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(value);
-    } catch {
-      throw new CodexHistoryRejection("invalid_content");
-    }
+  let serialized: string;
+  try {
+    const parsed: unknown = typeof value === "string" ? JSON.parse(value) : value;
     if (!isRecord(parsed)) {
       throw new CodexHistoryRejection("invalid_content");
     }
-    return requireBoundedText(value, projection);
-  }
-  if (!isRecord(value)) {
-    throw new CodexHistoryRejection("invalid_content");
-  }
-  let serialized: string;
-  try {
-    serialized = JSON.stringify(value);
+    serialized = typeof value === "string" ? value : JSON.stringify(value);
   } catch {
     throw new CodexHistoryRejection("invalid_content");
   }

@@ -32,7 +32,13 @@ export async function startProcess(
   }
   const argv = requireStringArray(record.argv, "argv");
   const cwd = resolveExecServerPath(requireString(record.cwd, "cwd"), "process cwd");
-  rejectUnsupportedArg0(record.arg0);
+  if (record.arg0 !== undefined && record.arg0 !== null) {
+    throw new Error(
+      typeof record.arg0 === "string"
+        ? "Codex sandbox exec-server does not support arg0 overrides."
+        : "arg0 must be a string or null.",
+    );
+  }
   assertSupportedProcessSandbox(execServer, record);
   const env = readProcessEnv(record);
   const tty = record.tty === true;
@@ -107,9 +113,7 @@ export async function startProcess(
     notifyProcessWaiters(managed);
     throw error;
   } finally {
-    if (managed.startPromise === startPromise) {
-      managed.startPromise = undefined;
-    }
+    managed.startPromise = undefined;
   }
   return { processId, sandboxType: "none" };
 }
@@ -216,16 +220,14 @@ async function runProcess(
   const child = owner.process;
   child.stdout.on("data", (chunk: Buffer) => appendProcessChunk(managed, "stdout", chunk));
   child.stderr.on("data", (chunk: Buffer) => appendProcessChunk(managed, "stderr", chunk));
-  child.once("error", (error) => {
-    // Node can report an abort or transport error before the child exits. The
-    // backend lease and Codex terminal notifications stay owned until close.
+  // Node can report an abort or transport error before the child exits. The
+  // backend lease and Codex terminal notifications stay owned until close.
+  const onError = (error: Error) => {
     managed.failure ??= error.message;
     notifyProcessWaiters(managed);
-  });
-  child.stdin.on("error", (error: Error) => {
-    managed.failure ??= error.message;
-    notifyProcessWaiters(managed);
-  });
+  };
+  child.once("error", onError);
+  child.stdin.on("error", onError);
   owner.assertCurrent();
   if (!managed.tty && !managed.pipeStdin) {
     child.stdin.end();
@@ -333,7 +335,10 @@ export async function readProcess(
 ): Promise<JsonObject> {
   const record = requireObject(params, "process/read params");
   const processId = requireString(record.processId, "processId");
-  const managed = requireProcess(processes, processId);
+  const managed = processes.get(processId);
+  if (!managed) {
+    throw new Error(`unknown process: ${processId}`);
+  }
   const afterSeq = typeof record.afterSeq === "number" ? record.afterSeq : 0;
   const waitMs = typeof record.waitMs === "number" && record.waitMs > 0 ? record.waitMs : 0;
   if (!managed.closed && managed.nextSeq - 1 <= afterSeq && waitMs > 0) {
@@ -445,24 +450,6 @@ function notifyProcessWaiters(managed: ManagedProcess): void {
   }
 }
 
-function requireProcess(processes: Map<string, ManagedProcess>, processId: string): ManagedProcess {
-  const managed = processes.get(processId);
-  if (!managed) {
-    throw new Error(`unknown process: ${processId}`);
-  }
-  return managed;
-}
-
-function rejectUnsupportedArg0(value: unknown): void {
-  if (value === undefined || value === null) {
-    return;
-  }
-  if (typeof value === "string") {
-    throw new Error("Codex sandbox exec-server does not support arg0 overrides.");
-  }
-  throw new Error("arg0 must be a string or null.");
-}
-
 function readEnv(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
@@ -477,23 +464,10 @@ function readEnv(value: unknown): Record<string, string> {
 }
 
 function readProcessEnv(record: JsonObject): Record<string, string> {
-  const policyEnv = buildEnvFromPolicy(record.envPolicy);
-  const requestedEnv = {
-    ...policyEnv,
-    ...readEnv(record.env),
-  };
-  // Codex inherits its app-server's full environment by default. Scrub again at
-  // this last boundary so no credential can cross into any sandbox backend.
-  return sanitizeEnvVars(requestedEnv).allowed;
-}
-
-function buildEnvFromPolicy(value: unknown): Record<string, string> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  const policy = value as Record<string, unknown>;
-  const inheritedEnv = readEnv(policy.set);
-  const includeOnly = filterStringEntries(policy.includeOnly);
+  const value = record.envPolicy;
+  const policy = value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+  const inheritedEnv = readEnv(policy?.set);
+  const includeOnly = filterStringEntries(policy?.includeOnly);
   if (includeOnly.length > 0) {
     const regexes = includeOnly.map(wildcardPatternToRegex);
     for (const key of Object.keys(inheritedEnv)) {
@@ -502,7 +476,9 @@ function buildEnvFromPolicy(value: unknown): Record<string, string> {
       }
     }
   }
-  return inheritedEnv;
+  // Codex inherits its app-server's full environment by default. Scrub again at
+  // this last boundary so no credential can cross into any sandbox backend.
+  return sanitizeEnvVars({ ...inheritedEnv, ...readEnv(record.env) }).allowed;
 }
 
 function wildcardPatternToRegex(pattern: string): RegExp {

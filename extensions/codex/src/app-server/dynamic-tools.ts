@@ -816,17 +816,11 @@ function reportQuarantinedDynamicTools(params: {
 function dedupeQuarantinedDynamicTools(
   tools: readonly CodexDynamicToolSchemaQuarantine[],
 ): CodexDynamicToolSchemaQuarantine[] {
-  return [
-    ...new Map(
-      tools.map((tool) => [
-        tool.tool,
-        {
-          tool: tool.tool,
-          violations: tool.violations,
-        },
-      ]),
-    ).values(),
-  ];
+  const byName = new Map<string, CodexDynamicToolSchemaQuarantine>();
+  for (const { tool, violations } of tools) {
+    byName.set(tool, { tool, violations });
+  }
+  return [...byName.values()];
 }
 function toToolResultHookContext(
   ctx: CodexDynamicToolHookContext | undefined,

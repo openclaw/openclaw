@@ -96,7 +96,7 @@ const CODEX_APP_SERVER_PREPARED_AUTH_ENV_VARS = [
   OPENAI_API_KEY_ENV_VAR,
   CODEX_ACCESS_TOKEN_ENV_VAR,
 ];
-const CODEX_APP_SERVER_HOME_ENV_VARS = [CODEX_HOME_ENV_VAR, HOME_ENV_VAR];
+const CODEX_APP_SERVER_HOME_ENV_VARS = new Set([CODEX_HOME_ENV_VAR, HOME_ENV_VAR]);
 const MAX_COMPUTER_USE_ARTIFACT_OWNERS = 128;
 const activeComputerUseArtifactReconciliations = new Map<
   string,
@@ -151,11 +151,7 @@ export async function bridgeCodexAppServerStartOptions(params: {
   }
 
   const scopedStartOptions = await scopeStartOptions();
-  const shouldClearInheritedOpenAiApiKey = shouldClearOpenAiApiKeyForCodexAuthProfile({
-    store,
-    authProfileId,
-  });
-  return shouldClearInheritedOpenAiApiKey
+  return shouldClearOpenAiApiKeyForCodexAuthProfile({ store, authProfileId })
     ? withClearedEnvironmentVariables(scopedStartOptions, CODEX_APP_SERVER_API_KEY_ENV_VARS)
     : scopedStartOptions;
 }
@@ -423,9 +419,12 @@ async function withCodexHomeEnvironment(
       ...(nativeHome ? { [HOME_ENV_VAR]: nativeHome } : {}),
     },
   };
-  const clearEnv = withoutClearedCodexHomeEnv(startOptions.clearEnv);
-  if (clearEnv) {
-    nextStartOptions.clearEnv = clearEnv;
+  if (startOptions.clearEnv) {
+    const filtered = startOptions.clearEnv.filter(
+      (envVar) => !CODEX_APP_SERVER_HOME_ENV_VARS.has(envVar.trim().toUpperCase()),
+    );
+    nextStartOptions.clearEnv =
+      filtered.length === startOptions.clearEnv.length ? startOptions.clearEnv : filtered;
   } else {
     delete nextStartOptions.clearEnv;
   }
@@ -652,15 +651,6 @@ class CodexComputerUseCandidateArtifactsUnavailableError extends Error {
     super("The selected Codex desktop app does not contain complete Computer Use artifacts.");
     this.name = "CodexComputerUseCandidateArtifactsUnavailableError";
   }
-}
-
-function withoutClearedCodexHomeEnv(clearEnv: string[] | undefined): string[] | undefined {
-  if (!clearEnv) {
-    return undefined;
-  }
-  const reserved = new Set(CODEX_APP_SERVER_HOME_ENV_VARS);
-  const filtered = clearEnv.filter((envVar) => !reserved.has(envVar.trim().toUpperCase()));
-  return filtered.length === clearEnv.length ? clearEnv : filtered;
 }
 
 export async function applyCodexAppServerAuthProfile(params: {
@@ -948,17 +938,17 @@ async function resolveOAuthCredentialForCodexAppServer(
     agentDir: ownerAgentDir,
     profileId,
   });
+  const persistedProfile = params.store.runtimePersistedProfileIds?.includes(profileId);
   const useScopedCredential =
     params.preferStoreCredential &&
-    shouldUseScopedOAuthCredential({
-      store: params.store,
-      profileId,
-      persistedCredential,
-      suppliedCredential: credential,
-    });
+    (!persistedProfile ||
+      (persistedCredential?.type === "oauth" &&
+        isCodexAppServerAuthProvider(persistedCredential.provider) &&
+        !isDeepStrictEqual(persistedCredential, credential) &&
+        !hasMatchingOAuthIdentity(persistedCredential, credential)));
   if (
     params.preferStoreCredential &&
-    params.store.runtimePersistedProfileIds?.includes(profileId) &&
+    persistedProfile &&
     (persistedCredential?.type !== "oauth" ||
       !isCodexAppServerAuthProvider(persistedCredential.provider))
   ) {
@@ -1088,25 +1078,6 @@ function shouldReuseCompletedCodexOAuthRotation(params: {
   return (
     accountId === handoff.chatgptAccountId &&
     (!previousAccountId || previousAccountId === handoff.chatgptAccountId)
-  );
-}
-
-function shouldUseScopedOAuthCredential(params: {
-  store: AuthProfileStore;
-  profileId: string;
-  persistedCredential: AuthProfileCredential | undefined;
-  suppliedCredential: OAuthCredential;
-}): boolean {
-  if (!params.store.runtimePersistedProfileIds?.includes(params.profileId)) {
-    return true;
-  }
-  const persisted = params.persistedCredential;
-  if (persisted?.type !== "oauth" || !isCodexAppServerAuthProvider(persisted.provider)) {
-    return false;
-  }
-  return (
-    !isDeepStrictEqual(persisted, params.suppliedCredential) &&
-    !hasMatchingOAuthIdentity(persisted, params.suppliedCredential)
   );
 }
 
@@ -1252,11 +1223,7 @@ function resolveStableChatgptAccountId(credential: AuthProfileCredential): strin
 }
 
 function resolveExplicitChatgptAccountId(credential: AuthProfileCredential): string | undefined {
-  if ("accountId" in credential && typeof credential.accountId === "string") {
-    const accountId = credential.accountId.trim();
-    if (accountId) {
-      return accountId;
-    }
-  }
-  return undefined;
+  return "accountId" in credential && typeof credential.accountId === "string"
+    ? credential.accountId.trim() || undefined
+    : undefined;
 }

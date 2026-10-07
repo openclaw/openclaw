@@ -85,10 +85,34 @@ export function fingerprintJsonObject(value: JsonObject): string {
 
 /** Hash thread-creation identity; settings already applied by turn/start must not restart Codex. */
 export function fingerprintCodexThreadConfig(
-  request: JsonObject,
+  initialRequest: JsonObject,
   authProfileId?: string,
   dynamicToolsFingerprint?: string,
+  selection?: {
+    model?: string | null;
+    modelProvider?: string | null;
+    preserveNativeModel?: boolean;
+  },
 ): string {
+  let request = initialRequest;
+  if (selection) {
+    const preserve = selection.preserveNativeModel;
+    request = {
+      ...request,
+      model: preserve ? null : (selection.model ?? request.model ?? null),
+      requestedModel: preserve ? null : (request.model ?? null),
+      // A normalized native-auth provider is explicitly null; an absent warm
+      // observation falls back to the requested provider.
+      modelProvider: preserve
+        ? null
+        : selection.modelProvider === undefined
+          ? (request.modelProvider ?? null)
+          : selection.modelProvider,
+      requestedModelProvider: preserve
+        ? null
+        : (request.modelProvider ?? selection.modelProvider ?? null),
+    };
+  }
   return hashCodexAppServerBindingFingerprint(
     fingerprintJsonObject({
       authProfileId: authProfileId ?? null,

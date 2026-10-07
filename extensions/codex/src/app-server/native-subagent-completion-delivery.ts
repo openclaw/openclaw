@@ -13,10 +13,9 @@ type CompletionDeliveryDependencies = {
   deliver: NativeSubagentMonitorRuntime["deliverAgentHarnessCompletion"];
   retryDelaysMs?: readonly number[];
   maxRetries?: number;
-  isCurrentChild: (child: ChildState) => boolean;
-  isCurrentParent: (state: ParentState) => boolean;
-  isRetiredParent: (state: ParentState) => boolean;
-  getParent: (parentThreadId: string) => ParentState | undefined;
+  children: ReadonlyMap<string, ChildState>;
+  parents: ReadonlyMap<string, ParentState>;
+  retiredParents: Pick<WeakSet<ParentState>, "has">;
   unregisterChild: (child: ChildState) => void;
   releaseClientRetentionIfIdle: () => void;
 };
@@ -156,20 +155,16 @@ export class CodexNativeSubagentCompletionDelivery {
     void this.deliverPending(state, child);
   }
 
-  applyReceipts(
-    state: ParentState,
-    runIds: readonly string[],
-    children: ReadonlyMap<string, ChildState>,
-  ): void {
+  applyReceipts(state: ParentState, runIds: readonly string[]): void {
     for (const runId of runIds) {
-      const child = children.get(runId);
-      const deliveryParent = child && this.dependencies.getParent(child.parentThreadId);
+      const child = this.dependencies.children.get(runId);
+      const deliveryParent = child && this.dependencies.parents.get(child.parentThreadId);
       if (
         !child ||
         !deliveryParent ||
         !this.isCurrent(state, child) ||
-        !this.dependencies.isCurrentParent(deliveryParent) ||
-        this.dependencies.isRetiredParent(deliveryParent)
+        this.dependencies.parents.get(deliveryParent.parentThreadId) !== deliveryParent ||
+        this.dependencies.retiredParents.has(deliveryParent)
       ) {
         continue;
       }
@@ -203,8 +198,8 @@ export class CodexNativeSubagentCompletionDelivery {
     }
   }
 
-  deliverDetached(state: ParentState, children: Iterable<ChildState>): void {
-    for (const child of children) {
+  deliverDetached(state: ParentState): void {
+    for (const child of this.dependencies.children.values()) {
       if (child.parentThreadId === state.parentThreadId && child.pendingCompletion) {
         void this.deliverPending(state, child);
       }
@@ -225,9 +220,9 @@ export class CodexNativeSubagentCompletionDelivery {
 
   private isCurrent(state: ParentState, child: ChildState): boolean {
     return (
-      this.dependencies.isCurrentChild(child) &&
-      this.dependencies.isCurrentParent(state) &&
-      !this.dependencies.isRetiredParent(state)
+      this.dependencies.children.get(child.runId) === child &&
+      this.dependencies.parents.get(state.parentThreadId) === state &&
+      !this.dependencies.retiredParents.has(state)
     );
   }
 
@@ -252,7 +247,7 @@ export class CodexNativeSubagentCompletionDelivery {
     if (
       !childState.pendingCompletion ||
       childState.completionDeliveryTimer ||
-      !this.dependencies.isCurrentChild(childState)
+      this.dependencies.children.get(childState.runId) !== childState
     ) {
       return;
     }
@@ -270,10 +265,10 @@ export class CodexNativeSubagentCompletionDelivery {
     );
     childState.completionDeliveryTimer = setTimeout(() => {
       childState.completionDeliveryTimer = undefined;
-      if (!this.dependencies.isCurrentChild(childState)) {
+      if (this.dependencies.children.get(childState.runId) !== childState) {
         return;
       }
-      const state = this.dependencies.getParent(childState.parentThreadId);
+      const state = this.dependencies.parents.get(childState.parentThreadId);
       if (state) {
         void this.deliverPending(state, childState);
       }
