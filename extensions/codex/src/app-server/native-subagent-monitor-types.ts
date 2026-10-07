@@ -190,6 +190,8 @@ export type ChildState = NativeSubagentAssignment & {
   subscriptionClosed?: true;
   nativeCompletionDelivered: boolean;
   completionDeliveryAttempt: number;
+  /** Uncharged, separately bounded waits for an unresolved delivery owner. */
+  completionOwnerHoldAttempt?: number;
   completionDeliveryTimer?: ReturnType<typeof setTimeout>;
   deliveringCompletion: boolean;
   deliveryOwnerKey?: string;
