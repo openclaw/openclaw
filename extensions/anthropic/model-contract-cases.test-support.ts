@@ -44,7 +44,7 @@ export const claude5ContractCases: Claude5ContractCase[] = [
             cacheWrite: 0.125,
           },
           {
-            range: [100001, null],
+            range: [100001],
             input: 0.5,
             output: 2.5,
             cacheRead: 0.05,

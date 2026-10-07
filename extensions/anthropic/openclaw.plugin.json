@@ -207,7 +207,7 @@
               "input": 0.1, "output": 0.5, "cacheRead": 0.01, "cacheWrite": 0.125,
               "tieredPricing": [
                 { "range": [0, 100001], "input": 0.1, "output": 0.5, "cacheRead": 0.01, "cacheWrite": 0.125 },
-                { "range": [100001, null], "input": 0.5, "output": 2.5, "cacheRead": 0.05, "cacheWrite": 0.625 }
+                { "range": [100001], "input": 0.5, "output": 2.5, "cacheRead": 0.05, "cacheWrite": 0.625 }
               ]
             },
             "contextWindow": 1000000,
