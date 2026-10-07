@@ -8370,7 +8370,6 @@
 ["src/gateway/session-utils-provider.test-support.ts","../plugins/provider-public-artifacts.js","afe8d972155424145c03c68844fe95e124385b72e1f39a94e2311163430affd9",1]
 ["src/gateway/session-utils-store-lookup.test.ts","./github-publication-availability.js","d7a69e21aeca69d020a090493e198166cb11191dd65b3be572710ffd9d504a60",1]
 ["src/gateway/session-utils.agent-models.test.ts","../plugins/provider-public-artifacts.js","afe8d972155424145c03c68844fe95e124385b72e1f39a94e2311163430affd9",1]
-["src/gateway/session-utils.plugin-runtime.test.ts","../agents/provider-model-normalization.runtime.js","e64100e6aab1db23b75b7ceda307b92f866193237534d4fbc1a7e66c1d3bba38",1]
 ["src/gateway/session-utils.queued-collector.test-support.ts","../agents/runtime-plugins.js","10895c31eaa9abf6715e58c8d56399c4e12e4da5d917adc65f848c2301a809df",1]
 ["src/gateway/session-utils.queued-collector.test-support.ts","../browser-lifecycle-cleanup.js","932978110f5fb27f9735a219708e6b01d58d1d4296e97f78171c9eff879c4ce9",1]
 ["src/gateway/session-utils.search.test.ts","../agents/provider-model-normalization.runtime.js","4a213e154667ea78b1f705978d4be10e0de8a7705c6636ca80797ba944a915cb",1]

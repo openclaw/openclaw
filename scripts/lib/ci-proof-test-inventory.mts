@@ -3073,7 +3073,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/session-utils.filters.test.ts",
   "src/gateway/session-utils.navigation-lineage.test.ts",
   "src/gateway/session-utils.perf.test.ts",
-  "src/gateway/session-utils.plugin-runtime.test.ts",
   "src/gateway/session-utils.queued-collector-admission.test.ts",
   "src/gateway/session-utils.queued-collector-narrow-abort.test.ts",
   "src/gateway/session-utils.queued-collector.test.ts",
