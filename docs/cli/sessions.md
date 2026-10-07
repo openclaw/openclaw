@@ -247,6 +247,10 @@ Gateway lifecycle checks: `global` previews can still show an archive or delete
 action that the Gateway refuses. Explicitly selected non-default global deletion
 remains supported. The real archive or delete request is authoritative.
 
+Agent-qualified aliases keep their selected owner through lookup and mutation.
+For example, `sessions delete agent:work:main --yes` still targets `work` when
+the Gateway describes that session using the canonical key `global`.
+
 Example mixed-result JSON:
 
 ```json
