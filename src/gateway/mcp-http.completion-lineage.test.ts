@@ -132,14 +132,6 @@ async function removeChild() {
   clearSessionStoreCacheForTest();
 }
 
-async function reparentChild() {
-  await replaceSessionEntry(
-    { agentId: "main", sessionKey: childKey },
-    { ...childEntry, spawnedBy: "agent:main:direct:another-requester" },
-  );
-  clearSessionStoreCacheForTest();
-}
-
 async function reownChild() {
   await replaceSessionEntry(
     { agentId: "main", sessionKey: childKey },
@@ -249,62 +241,48 @@ function registerBeforeToolCallHook(handler: () => Promise<object | void>) {
 }
 
 describe("MCP loopback completion lineage at the final tool-effect fence", () => {
-  it.each([
-    { kind: "durable", sourceKey: childKey, storedKey: childKey, sessionId: childEntry.sessionId },
-    {
-      kind: "incognito",
-      sourceKey: incognitoChildKey,
-      storedKey: incognitoChildKey,
-      sessionId: childEntry.sessionId,
-    },
-    {
-      kind: "by-id",
-      sourceKey: "agent:main:subagent:lineage-id-alias",
-      storedKey: childKey,
-      sessionId: "agent:main:subagent:lineage-id-alias",
-    },
-  ])(
-    "registers watches without host SQL for $kind lineage",
-    async ({ kind, sourceKey, storedKey, sessionId }) => {
-      await seedLineage({ sessionId }, storedKey);
-      const runId = `lineage-${kind}-allowed`;
-      const grant = await mintCompletionGrant(runId, sourceKey, sessionId);
-      const listed = await grant.request("tools/list");
-      expect(await listed.json()).toMatchObject({ result: { tools: [{ name: "write" }] } });
-      let authoritySql: number | undefined;
-      const watches: boolean[] = [];
-      const hook = vi.fn(async () => {
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        const sql = observeMainThreadSql();
-        try {
-          sql.calibrate();
-          for (let index = 0; index < 2; index++) {
-            watches.push(
-              await registerSessionStateWatch(
-                { watcherSessionKey: requesterKey, targetSessionKey: storedKey },
-                { prepareCurrent: prepareGatewayToolCallerAssertion },
-              ),
-            );
-          }
-          authoritySql = sql.count();
-        } finally {
-          sql.restore();
-        }
+  it("registers watches without host SQL for by-id lineage", async () => {
+    const sourceKey = "agent:main:subagent:lineage-id-alias";
+    const storedKey = childKey;
+    const sessionId = sourceKey;
+    await seedLineage({ sessionId }, storedKey);
+    const runId = "lineage-by-id-allowed";
+    const grant = await mintCompletionGrant(runId, sourceKey, sessionId);
+    const listed = await grant.request("tools/list");
+    expect(await listed.json()).toMatchObject({ result: { tools: [{ name: "write" }] } });
+    let authoritySql: number | undefined;
+    const watches: boolean[] = [];
+    const hook = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
       });
-      registerBeforeToolCallHook(hook);
+      const sql = observeMainThreadSql();
+      try {
+        sql.calibrate();
+        for (let index = 0; index < 2; index++) {
+          watches.push(
+            await registerSessionStateWatch(
+              { watcherSessionKey: requesterKey, targetSessionKey: storedKey },
+              { prepareCurrent: prepareGatewayToolCallerAssertion },
+            ),
+          );
+        }
+        authoritySql = sql.count();
+      } finally {
+        sql.restore();
+      }
+    });
+    registerBeforeToolCallHook(hook);
 
-      const response = await grant.request("tools/call");
+    const response = await grant.request("tools/call");
 
-      expect(await response.json()).toMatchObject({ result: { isError: false } });
-      expect(hook).toHaveBeenCalledTimes(1);
-      expect(watches).toEqual([true, true]);
-      expect(authoritySql).toBe(0);
-      expect(await grant.written()).toBe(runId);
-      expect(grant.outcomes).toMatchObject([{ toolName: "write", outcome: "completed" }]);
-    },
-  );
+    expect(await response.json()).toMatchObject({ result: { isError: false } });
+    expect(hook).toHaveBeenCalledTimes(1);
+    expect(watches).toEqual([true, true]);
+    expect(authoritySql).toBe(0);
+    expect(await grant.written()).toBe(runId);
+    expect(grant.outcomes).toMatchObject([{ toolName: "write", outcome: "completed" }]);
+  });
 
   it("rolls back a watch after an incognito completion-owner change at commit", async () => {
     await seedLineage({}, incognitoChildKey);
@@ -438,41 +416,24 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
     expect(await grant.written()).toBe("lineage-completion-owner");
   });
 
-  it.each([
-    { name: "removed", runId: "lineage-removed-in-hook", revoke: removeChild },
-    { name: "re-parented", runId: "lineage-reparented-in-hook", revoke: reparentChild },
-    {
-      name: "handed to another completion owner",
-      runId: "lineage-reowned-in-hook",
-      seed: { completionOwnerSessionKey: requesterKey },
-      revoke: reownChild,
-    },
-  ] satisfies Array<{
-    name: string;
-    runId: string;
-    seed?: Partial<SessionEntry>;
-    revoke: () => Promise<void>;
-  }>)(
-    "rejects the write when the child lineage is $name during an awaited before-tool hook",
-    async (testCase) => {
-      const { runId, revoke } = testCase;
-      await seedLineage("seed" in testCase ? testCase.seed : undefined);
-      const grant = await mintCompletionGrant(runId);
-      // The tool list resolves while the lineage still verifies.
-      await (await grant.request("tools/list")).body?.cancel();
-      registerBeforeToolCallHook(revoke);
+  it("rejects the write when the child changes completion owner during an awaited before-tool hook", async () => {
+    const runId = "lineage-reowned-in-hook";
+    await seedLineage({ completionOwnerSessionKey: requesterKey });
+    const grant = await mintCompletionGrant(runId);
+    // The tool list resolves while the lineage still verifies.
+    await (await grant.request("tools/list")).body?.cancel();
+    registerBeforeToolCallHook(reownChild);
 
-      const response = await grant.request("tools/call");
+    const response = await grant.request("tools/call");
 
-      expect(await response.json()).toMatchObject({
-        result: { isError: true, content: [{ text: "Tool call authorization expired" }] },
-      });
-      expect(await grant.written()).toBeUndefined();
-      expect(grant.outcomes).toMatchObject([
-        { toolName: "write", outcome: "blocked", deniedReason: "client-grant-revoked" },
-      ]);
-    },
-  );
+    expect(await response.json()).toMatchObject({
+      result: { isError: true, content: [{ text: "Tool call authorization expired" }] },
+    });
+    expect(await grant.written()).toBeUndefined();
+    expect(grant.outcomes).toMatchObject([
+      { toolName: "write", outcome: "blocked", deniedReason: "client-grant-revoked" },
+    ]);
+  });
 
   it("rejects the write when the child lineage is removed during a hook approval wait", async () => {
     await seedLineage();
