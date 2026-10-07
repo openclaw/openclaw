@@ -24,7 +24,9 @@
   gap: 6px;
   min-width: 0;
 }
-.agent-chat__composer-notices:not(:has(> *)) {
+.agent-chat__composer-notices:not(
+  :has(> :not(openclaw-chat-child-attention), > openclaw-chat-child-attention > *)
+) {
   display: none;
 }
 
@@ -55,7 +57,8 @@
 .chat-footer__context:not(
   :has(
     > :not(.agent-chat__composer-notices, openclaw-plugin-contributions),
-    > .agent-chat__composer-notices > *,
+    > .agent-chat__composer-notices > :not(openclaw-chat-child-attention),
+    > .agent-chat__composer-notices > openclaw-chat-child-attention > *,
     > openclaw-plugin-contributions > *
   )
 ) {

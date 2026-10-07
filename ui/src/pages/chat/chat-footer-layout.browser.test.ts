@@ -448,6 +448,13 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         expect(await page.locator(".agent-chat__composer-notices").isVisible()).toBe(false);
         expect(await page.locator(".chat-footer__context").isVisible()).toBe(withPullRequest);
         const before = await geometry();
+        await page.locator(".agent-chat__composer-notices").evaluate((node) => {
+          const attention = document.createElement("openclaw-chat-child-attention");
+          attention.style.display = "contents";
+          node.append(attention);
+        });
+        await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
+        expect(await geometry()).toEqual(before);
         expect(before.fadeInsetLeft).toBeGreaterThanOrEqual(before.scrollbarSize);
         expect(before.fadeInsetRight).toBeGreaterThanOrEqual(before.scrollbarSize);
         expect(before.thread.bottom).toBeLessThanOrEqual(before.footer.top);
