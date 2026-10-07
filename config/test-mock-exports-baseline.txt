@@ -7684,7 +7684,6 @@
 ["src/gateway/server-methods/device-scope-upgrade.test.ts","../../infra/device-pairing.js","3d1e111c0c8cf07fdb5e48356bcf476b1dc0c1feb237a5a58aaf8ad6428f1296",1]
 ["src/gateway/server-methods/device-scope-upgrade.test.ts","../operator-role-policy.js","0ed98fcc3acbc28285e5122d9dd5a9b2c1de3f5a262c920af6861bfa362084aa",1]
 ["src/gateway/server-methods/diagnostics.cpu-profile.test.ts","../../logging/diagnostic-cpu-profile.js","7f8cef3100385e19e769997973dcdc6ed289a7673b9b00dea04c5ea446fff7ad",1]
-["src/gateway/server-methods/diagnostics.heap-profile.test.ts","../../logging/diagnostic-heap-profile.js","32085dc6a3f7447e49de800f26a0bc9c9a863d6bc3a96fbd5fef1abb996cea3b",1]
 ["src/gateway/server-methods/doctor.test-support.ts","../../agents/agent-scope.js","61052b5a312702d7b21f7e1d545756eb3267e51958156a5b126b8db1bf571d8a",1]
 ["src/gateway/server-methods/doctor.test-support.ts","../../agents/memory-search.js","5ed9470649e6a1443eafaff5ba886ac698fd8bca79fbdfdb0732a1cc717b8db5",1]
 ["src/gateway/server-methods/doctor.test-support.ts","../../config/config.js","b0e09a14d4817c7c0c3fe37cbf3fb04ff5bc0cdc4c39bd49ce3d5713e68a8fdf",1]

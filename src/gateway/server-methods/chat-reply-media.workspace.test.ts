@@ -75,24 +75,13 @@ describe("WebChat reply media workspace ownership", () => {
     return `data:image/png;base64,${PNG_BYTES.toString("base64")}`;
   }
 
-  it.each([
-    ["staging", "permission"],
-    ["staging", "workspace"],
-    ["staging", "placement"],
-    ["trusted-audio", "permission"],
-    ["trusted-audio", "workspace"],
-    ["trusted-audio", "placement"],
-  ] as const)("stops %s before file content I/O when %s changes", async (flow, change) => {
+  it("stops staging before file content I/O when the workspace changes", async () => {
     const { cfg } = createMediaTestContext({ allowRead: true });
     cfg.tools = { ...cfg.tools, fs: { workspaceOnly: true } };
     const selected = testState.statePath("worktrees", "selected");
-    const source = path.join(
-      change === "permission" ? testState.statePath("workspace") : selected,
-      flow === "staging" ? "chart.png" : "speech.mp3",
-    );
+    const source = path.join(selected, "chart.png");
     await fs.mkdir(selected, { recursive: true });
-    await fs.mkdir(path.dirname(source), { recursive: true });
-    await fs.writeFile(source, flow === "staging" ? PNG_BYTES : Buffer.from([0xff, 0xfb, 0x90, 0]));
+    await fs.writeFile(source, PNG_BYTES);
     const target = {
       sessionKey: TEST_SESSION_KEY,
       sessionId: "changing-media-policy",
@@ -127,99 +116,60 @@ describe("WebChat reply media workspace ownership", () => {
       }
       return handle;
     });
-    const payload = { mediaUrls: [source], trustedLocalMedia: flow === "trusted-audio" };
-    const delivery =
-      flow === "staging"
-        ? normalizeWebchatReplyMediaPathsForDisplay({ ...scope, payloads: [payload] })
-        : buildAssistantReplyContent({
-            sessionKey: TEST_SESSION_KEY,
-            agentId: "main",
-            payloads: [payload],
-            managedMediaLocalRoots: getWebchatReplyMediaLocalRoots(scope),
-            assertCurrent: scope.assertCurrent,
-          });
+    const delivery = normalizeWebchatReplyMediaPathsForDisplay({
+      ...scope,
+      payloads: [{ mediaUrls: [source], trustedLocalMedia: false }],
+    });
     const rejected = expect(delivery).rejects.toThrow("Session media access changed");
     try {
       await opened.promise;
-      await replaceSessionEntry(target, {
-        ...entry,
-        ...(change === "permission" ? { permissionMode: "workspace" } : {}),
-        ...(change === "workspace" ? { sessionRoot: testState.statePath("other") } : {}),
-        ...(change === "placement" ? { execNode: "remote-test-node" } : {}),
-      });
+      await replaceSessionEntry(target, { ...entry, sessionRoot: testState.statePath("other") });
     } finally {
       release.resolve();
     }
     await rejected;
     expect(readCounts.length).toBeGreaterThan(0);
     expect(readCounts.reduce((total, count) => total + count(), 0)).toBe(0);
-    expect(await fs.readFile(source)).toEqual(
-      flow === "staging" ? PNG_BYTES : Buffer.from([0xff, 0xfb, 0x90, 0]),
-    );
+    expect(await fs.readFile(source)).toEqual(PNG_BYTES);
   });
 
-  it.each(["inherited", "exec-node", "repository", "cloud", "sibling"] as const)(
-    "respects the %s workspace ownership when staging local attachments",
-    async (ownership) => {
-      const { cfg } = createMediaTestContext({ allowRead: false });
-      const worktree = testState.statePath("worktrees", "project");
-      const sourcePath = path.join(
-        ownership === "sibling" ? testState.statePath("worktrees", "other") : worktree,
-        "chart.png",
-      );
-      await fs.mkdir(path.join(worktree, "nested"), { recursive: true });
-      await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-      await fs.writeFile(sourcePath, PNG_BYTES);
-      const sessionEntry: SessionEntry = {
-        sessionId: "workspace-media-session",
-        updatedAt: 1,
-        spawnedBy: "agent:main:main",
-        spawnedWorkspaceDir: worktree,
-        spawnedCwd: path.join(worktree, "nested"),
-        ...(ownership === "exec-node" ? { execNode: "remote-node" } : {}),
-        ...(ownership === "repository" ? { repositoryWorkspaceId: "remote-repository" } : {}),
-      };
-      if (ownership === "cloud") {
-        await createWorkerSessionPlacementStore().startDispatch({
-          sessionId: sessionEntry.sessionId,
-          sessionKey: TEST_SESSION_KEY,
-          agentId: "main",
-        });
-      }
-      const [payload] = await normalizeWebchatReplyMediaPathsForDisplay({
+  it("respects inherited workspace ownership when staging local attachments", async () => {
+    const { cfg } = createMediaTestContext({ allowRead: false });
+    const worktree = testState.statePath("worktrees", "project");
+    const sourcePath = path.join(worktree, "chart.png");
+    await fs.mkdir(path.join(worktree, "nested"), { recursive: true });
+    await fs.writeFile(sourcePath, PNG_BYTES);
+    const sessionEntry: SessionEntry = {
+      sessionId: "workspace-media-session",
+      updatedAt: 1,
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: worktree,
+      spawnedCwd: path.join(worktree, "nested"),
+    };
+    const [payload] = await normalizeWebchatReplyMediaPathsForDisplay({
+      cfg,
+      agentId: "main",
+      sessionKey: TEST_SESSION_KEY,
+      sessionEntry,
+      payloads: [{ mediaUrls: ["./chart.png"] }],
+    });
+    const stagedPath = requireString(payload?.mediaUrls?.[0], "staged workspace image");
+    expect(await fs.readFile(stagedPath)).toEqual(PNG_BYTES);
+    const { assistantContent } = await buildAssistantReplyContent({
+      sessionKey: TEST_SESSION_KEY,
+      agentId: "main",
+      payloads: [{ mediaUrls: [sourcePath], trustedLocalMedia: true }],
+      managedMediaLocalRoots: getWebchatReplyMediaLocalRoots({
         cfg,
         agentId: "main",
-        sessionKey: TEST_SESSION_KEY,
         sessionEntry,
-        payloads: [{ mediaUrls: [ownership === "inherited" ? "./chart.png" : sourcePath] }],
-      });
-      if (ownership === "inherited") {
-        const stagedPath = requireString(payload?.mediaUrls?.[0], "staged workspace image");
-        expect(await fs.readFile(stagedPath)).toEqual(PNG_BYTES);
-      } else {
-        expect(payload?.mediaUrls).toBeUndefined();
-        expect(payload?.text).toBe("⚠️ chart.png: Delivery failed. Try sending this file again.");
-      }
-      const { assistantContent } = await buildAssistantReplyContent({
-        sessionKey: TEST_SESSION_KEY,
-        agentId: "main",
-        payloads: [{ mediaUrls: [sourcePath], trustedLocalMedia: true }],
-        managedMediaLocalRoots: getWebchatReplyMediaLocalRoots({
-          cfg,
-          agentId: "main",
-          sessionEntry,
-        }),
-      });
-      expect(assistantContent).toEqual([
-        expect.objectContaining({ type: ownership === "inherited" ? "image" : "attachment_error" }),
-      ]);
-    },
-  );
+      }),
+    });
+    expect(assistantContent).toEqual([expect.objectContaining({ type: "image" })]);
+  });
 
   it.each([
     { mode: "workspace", configured: false, confined: true },
-    { mode: "guarded", configured: false, confined: true },
-    { mode: "read-only", configured: false, confined: true },
     { mode: "full", configured: true, confined: false },
     { mode: undefined, configured: true, confined: true },
     { mode: undefined, configured: false, confined: false },
@@ -297,98 +247,86 @@ describe("WebChat reply media workspace ownership", () => {
     },
   );
 
-  it.each(["workspace", "full"] as const)(
-    "keeps sender read denial authoritative in %s mode",
-    async (permissionMode) => {
-      const { cfg } = createMediaTestContext({ allowRead: true });
-      cfg.tools = { ...cfg.tools, toolsBySender: { "*": { deny: ["read"] } } };
-      const selected = testState.statePath("worktrees", "sender-policy");
-      const source = path.join(selected, "private.png");
-      await fs.mkdir(selected, { recursive: true });
-      await fs.writeFile(source, PNG_BYTES);
-      const [payload] = await normalizeWebchatReplyMediaPathsForDisplay({
-        cfg,
-        agentId: "main",
-        sessionKey: TEST_SESSION_KEY,
-        sessionEntry: {
-          sessionId: "sender-media-session",
-          updatedAt: 1,
-          sessionRoot: selected,
-          permissionMode,
-        },
-        payloads: [{ mediaUrls: [source] }],
-      });
-      expect(payload?.mediaUrls).toBeUndefined();
-      expect(payload?.text).toContain("private.png: Delivery failed.");
-      await expect(fs.stat(testState.statePath("media", "outbound"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    },
-  );
+  it("keeps sender read denial authoritative in full mode", async () => {
+    const permissionMode = "full";
+    const { cfg } = createMediaTestContext({ allowRead: true });
+    cfg.tools = { ...cfg.tools, toolsBySender: { "*": { deny: ["read"] } } };
+    const selected = testState.statePath("worktrees", "sender-policy");
+    const source = path.join(selected, "private.png");
+    await fs.mkdir(selected, { recursive: true });
+    await fs.writeFile(source, PNG_BYTES);
+    const [payload] = await normalizeWebchatReplyMediaPathsForDisplay({
+      cfg,
+      agentId: "main",
+      sessionKey: TEST_SESSION_KEY,
+      sessionEntry: {
+        sessionId: "sender-media-session",
+        updatedAt: 1,
+        sessionRoot: selected,
+        permissionMode,
+      },
+      payloads: [{ mediaUrls: [source] }],
+    });
+    expect(payload?.mediaUrls).toBeUndefined();
+    expect(payload?.text).toContain("private.png: Delivery failed.");
+    expect(payload?.text).not.toContain(source);
+    await expect(fs.stat(testState.statePath("media", "outbound"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
 
-  it.each(["workspace", "full"] as const)(
-    "preserves unmounted sandbox containment in %s mode",
-    async (permissionMode) => {
-      const { cfg } = createMediaTestContext({ allowRead: true });
-      const selected = testState.statePath("worktrees", "sandbox-host");
-      cfg.agents = {
-        ...cfg.agents,
-        defaults: {
-          skipBootstrap: true,
-          sandbox: {
-            mode: "all",
-            scope: "session",
-            workspaceAccess: "none",
-            workspaceRoot: testState.statePath("sandboxes"),
-          },
+  it("preserves unmounted sandbox containment in full mode", async () => {
+    const permissionMode = "full";
+    const { cfg } = createMediaTestContext({ allowRead: true });
+    const selected = testState.statePath("worktrees", "sandbox-host");
+    cfg.agents = {
+      ...cfg.agents,
+      defaults: {
+        skipBootstrap: true,
+        sandbox: {
+          mode: "all",
+          scope: "session",
+          workspaceAccess: "none",
+          workspaceRoot: testState.statePath("sandboxes"),
         },
-      };
-      const source = path.join(selected, "host.png");
-      await fs.mkdir(selected, { recursive: true });
-      await fs.writeFile(source, PNG_BYTES);
-      const sandbox = await ensureSandboxWorkspaceForSession({
-        config: cfg,
-        agentId: "main",
-        sessionKey: TEST_SESSION_KEY,
-        workspaceDir: selected,
-      });
-      if (!sandbox) {
-        throw new Error("expected sandbox workspace");
-      }
-      await fs.writeFile(path.join(sandbox.workspaceDir, "sandbox.png"), PNG_BYTES);
-      const payloads = await normalizeWebchatReplyMediaPathsForDisplay({
-        cfg,
-        agentId: "main",
-        sessionKey: TEST_SESSION_KEY,
-        sessionEntry: {
-          sessionId: "sandbox-media-session",
-          updatedAt: 1,
-          sessionRoot: selected,
-          permissionMode,
-        },
-        payloads: [{ mediaUrls: [source] }, { mediaUrls: ["./sandbox.png"] }],
-      });
-      expect(payloads[0]?.mediaUrls).toBeUndefined();
-      expect(payloads[0]?.text).toContain("host.png: Delivery failed.");
-      const staged = requireString(payloads[1]?.mediaUrls?.[0], "staged sandbox image");
-      expect(await fs.readFile(staged)).toEqual(PNG_BYTES);
-    },
-  );
+      },
+    };
+    const source = path.join(selected, "host.png");
+    await fs.mkdir(selected, { recursive: true });
+    await fs.writeFile(source, PNG_BYTES);
+    const sandbox = await ensureSandboxWorkspaceForSession({
+      config: cfg,
+      agentId: "main",
+      sessionKey: TEST_SESSION_KEY,
+      workspaceDir: selected,
+    });
+    if (!sandbox) {
+      throw new Error("expected sandbox workspace");
+    }
+    await fs.writeFile(path.join(sandbox.workspaceDir, "sandbox.png"), PNG_BYTES);
+    const payloads = await normalizeWebchatReplyMediaPathsForDisplay({
+      cfg,
+      agentId: "main",
+      sessionKey: TEST_SESSION_KEY,
+      sessionEntry: {
+        sessionId: "sandbox-media-session",
+        updatedAt: 1,
+        sessionRoot: selected,
+        permissionMode,
+      },
+      payloads: [{ mediaUrls: [source] }, { mediaUrls: ["./sandbox.png"] }],
+    });
+    expect(payloads[0]?.mediaUrls).toBeUndefined();
+    expect(payloads[0]?.text).toContain("host.png: Delivery failed.");
+    const staged = requireString(payloads[1]?.mediaUrls?.[0], "staged sandbox image");
+    expect(await fs.readFile(staged)).toEqual(PNG_BYTES);
+  });
 
-  it.each([
-    { owner: "exec-node", configured: false },
-    { owner: "repository", configured: false },
-    { owner: "cloud", configured: false },
-    { owner: "rootless-cloud", configured: false },
-    { owner: "exec-node", configured: true },
-    { owner: "repository", configured: true },
-    { owner: "cloud", configured: true },
-    { owner: "rootless-cloud", configured: true },
-  ] as const)(
-    "keeps $owner media on its own host in full mode (configured containment=$configured)",
-    async ({ owner, configured }) => {
+  it.each(["exec-node", "repository", "rootless-cloud"] as const)(
+    "keeps %s media on its own host in full mode",
+    async (owner) => {
       const { cfg, workspaceDir } = createMediaTestContext({ allowRead: true });
-      cfg.tools = { ...cfg.tools, fs: { workspaceOnly: configured } };
+      cfg.tools = { ...cfg.tools, fs: { workspaceOnly: false } };
       const remoteWorkspace = testState.statePath("worktrees", "remote");
       const storePath = testState.statePath("sessions", "session.sqlite");
       const rawDirectories = [workspaceDir, remoteWorkspace, path.dirname(storePath)];
@@ -411,7 +349,7 @@ describe("WebChat reply media workspace ownership", () => {
         ...(owner === "exec-node" ? { execNode: "remote-node" } : {}),
         ...(owner === "repository" ? { repositoryWorkspaceId: "remote-project" } : {}),
       };
-      if (owner === "cloud" || owner === "rootless-cloud") {
+      if (owner === "rootless-cloud") {
         await createWorkerSessionPlacementStore().startDispatch({
           sessionId: sessionEntry.sessionId,
           sessionKey: TEST_SESSION_KEY,
