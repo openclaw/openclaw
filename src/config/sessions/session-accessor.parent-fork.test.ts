@@ -623,6 +623,53 @@ describe("forkSessionFromParentTranscript", () => {
     expect(serialized).not.toContain("missing-parent");
   });
 
+  it("keeps visible history when the next append explicitly starts a root branch", async () => {
+    const root = sessionDirs.make();
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir);
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await seedParentTranscript({
+      storePath,
+      parentSessionId: "parent-root-append",
+      events: [
+        {
+          type: "session",
+          version: 3,
+          id: "parent-root-append",
+          timestamp: "2026-06-15T00:00:00.000Z",
+          cwd: root,
+        },
+        {
+          type: "message",
+          id: "visible-root",
+          parentId: null,
+          timestamp: "2026-06-15T00:00:01.000Z",
+          message: { role: "assistant", content: "visible history" },
+        },
+        {
+          type: "leaf",
+          id: "root-append-control",
+          parentId: "inactive-tail",
+          timestamp: "2026-06-15T00:00:02.000Z",
+          targetId: "visible-root",
+          appendParentId: null,
+        },
+      ],
+    });
+
+    const fork = await forkChildTranscript(storePath, "parent-root-append");
+    const reopened = await openForkedChildSession(storePath, fork);
+    expect(reopened.buildSessionContext().messages).toHaveLength(1);
+    reopened.appendMessage({ role: "user", content: "new root", timestamp: Date.now() });
+    const records = (await loadTranscriptEvents({
+      agentId: "main",
+      sessionId: fork.sessionId,
+      sessionKey: "agent:main:child",
+      storePath,
+    })) as Record<string, unknown>[];
+    expect(records.at(-1)).toMatchObject({ type: "message", parentId: null });
+  });
+
   it("preserves supported current-version linear transcripts", async () => {
     const root = sessionDirs.make();
     const sessionsDir = path.join(root, "sessions");
