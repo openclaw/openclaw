@@ -6,10 +6,11 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -58,9 +59,47 @@ type SessionQueue = {
 
 const SYSTEM_EVENT_QUEUES_KEY = Symbol.for("openclaw.systemEvents.queues");
 
-const queues = resolveGlobalMap<string, SessionQueue>(SYSTEM_EVENT_QUEUES_KEY, "close-only");
+type PreparedAutomationNotice = {
+  assertCurrent: () => void;
+  bindCreation?: (operation: SessionEntryCreationOperation) => () => void;
+  release: () => void;
+};
+type AutomationNoticeOwner = {
+  jobId: string;
+  assertCurrent: () => void;
+  prepare?: () => Promise<PreparedAutomationNotice>;
+  coalescing?: { key: string; assertCurrent: () => void };
+};
+
+const turnOwners = resolveGlobalSingleton(
+  Symbol.for("openclaw.systemEvents.turnOwners"),
+  () =>
+    new WeakMap<
+      SystemEvent,
+      {
+        cancel: () => void;
+        started: boolean;
+        automation?: AutomationNoticeOwner;
+      }
+    >(),
+);
+function clearSystemEventQueues(value: Map<string, SessionQueue>) {
+  const removed = [...value.values()].flatMap((entry) => entry.queue.splice(0));
+  value.clear();
+  for (const event of removed) {
+    retireSystemEvent(event);
+  }
+}
+const queues = resolveGlobalMap<string, SessionQueue>(
+  SYSTEM_EVENT_QUEUES_KEY,
+  clearSystemEventQueues,
+  "close-and-restart",
+);
 registerSystemEventStoreOwner(SYSTEM_EVENT_QUEUES_KEY, () => {
   for (const [key, entry] of queues) {
+    const removed = entry.queue.filter(
+      (event) => !isSystemEventStoreCurrent(key, event.sessionStorePath),
+    );
     const retained = entry.queue.filter((event) =>
       isSystemEventStoreCurrent(key, event.sessionStorePath),
     );
@@ -69,6 +108,9 @@ registerSystemEventStoreOwner(SYSTEM_EVENT_QUEUES_KEY, () => {
     }
     entry.queue = retained;
     resetQueueState(key, entry);
+    for (const event of removed) {
+      retireSystemEvent(event);
+    }
     recordSystemEventStoreReplaced();
   }
 });
@@ -122,6 +164,13 @@ function cloneSystemEvent(event: SystemEvent): SystemEvent {
   };
 }
 
+function retireSystemEvent(event: SystemEvent): void {
+  const owner = turnOwners.get(event);
+  if (owner && !owner.started) {
+    owner.cancel();
+  }
+}
+
 export function isSystemEventContextChanged(
   sessionKey: string,
   contextKey?: string | null,
@@ -134,8 +183,22 @@ export function isSystemEventContextChanged(
 export function enqueueSystemEventEntry(
   text: string,
   options: SystemEventOptions,
+  receiptOptions?: ReceiptOptions,
 ): SystemEvent | null {
-  const event = enqueueOwnedSystemEventEntry(text, options);
+  const event = enqueueOwnedSystemEventEntry(text, options, receiptOptions);
+  return event ? cloneSystemEvent(event) : null;
+}
+
+/** Host-owned admission must report capacity refusal before claiming the occurrence. */
+export function enqueueRequiredSystemEventEntry(
+  text: string,
+  options: SystemEventOptions,
+  receiptOptions?: ReceiptOptions,
+): SystemEvent | null {
+  const event = enqueueOwnedSystemEventEntry(text, options, {
+    ...receiptOptions,
+    throwOnFull: true,
+  });
   return event ? cloneSystemEvent(event) : null;
 }
 
@@ -188,7 +251,8 @@ function enqueueOwnedSystemEventEntry(
     }
     return null;
   }
-  if (options.replace) {
+  const replaced = options.replace ? entry.queue.filter(matches) : [];
+  if (replaced.length > 0) {
     entry.queue = entry.queue.filter((event) => !matches(event));
   }
   if (normalizedContextKey !== null) {
@@ -204,11 +268,164 @@ function enqueueOwnedSystemEventEntry(
     ...(options.fromConversationTurn ? { fromConversationTurn: true as const } : {}),
   };
   entry.queue.push(event);
+  // Install the replacement before cancellation callbacks can enqueue more work.
+  for (const previous of replaced) {
+    retireSystemEvent(previous);
+  }
   return event;
 }
 
 export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   return enqueueOwnedSystemEventEntry(text, options) !== null;
+}
+
+/** Transfer one exact occurrence to ordinary session admission. */
+export function claimSystemEventTurn(
+  sessionKey: string,
+  occurrence: SystemEvent,
+  cancel: () => void,
+  agentId?: string,
+) {
+  const key = requireSessionKey(sessionKey);
+  if (agentId && parseAgentSessionKey(key)?.agentId !== agentId) {
+    return undefined;
+  }
+  const event = getSessionQueue(key)?.queue.find((entry) => entry.id === occurrence.id);
+  if (!event || turnOwners.has(event)) {
+    return undefined;
+  }
+  const owner = { cancel, started: false };
+  turnOwners.set(event, owner);
+  return {
+    start() {
+      if (owner.started || !getSessionQueue(key)?.queue.includes(event)) {
+        throw new Error("Session event occurrence was cancelled before admission");
+      }
+      owner.started = true;
+      consumeSelectedSystemEventEntries(key, [event]);
+    },
+    cancel: () => consumeSelectedSystemEventEntries(key, [event]).length > 0,
+  };
+}
+
+export function isSystemEventTurnOwned(sessionKey: string, occurrence: SystemEvent): boolean {
+  const event = getSessionQueue(sessionKey)?.queue.find((entry) => entry.id === occurrence.id);
+  return event !== undefined && turnOwners.has(event);
+}
+
+/** Legacy deferred wakes attach notices to one ordinary job, never a later user message. */
+export function enqueueAutomationSystemEvent(
+  text: string,
+  options: SystemEventOptions,
+  automation: AutomationNoticeOwner,
+): "queued" | "coalesced" {
+  const coalescing = automation.coalescing;
+  if (coalescing) {
+    coalescing.assertCurrent();
+    for (const event of getSessionQueue(requireSessionKey(options.sessionKey))?.queue ?? []) {
+      const owner = turnOwners.get(event);
+      const previous = owner?.automation;
+      if (
+        owner?.started ||
+        event.text !== text.trim() ||
+        previous?.jobId !== automation.jobId ||
+        previous.coalescing?.key !== coalescing.key
+      ) {
+        continue;
+      }
+      try {
+        previous.coalescing.assertCurrent();
+      } catch {
+        // Matching text cannot redeem a retired scheduled receiver.
+        continue;
+      }
+      coalescing.assertCurrent();
+      return "coalesced";
+    }
+  }
+  const event = enqueueOwnedSystemEventEntry(text, options, {
+    allowDuplicate: true,
+    throwOnFull: true,
+  });
+  if (!event) {
+    throw new Error("Deferred automation event was not accepted");
+  }
+  turnOwners.set(event, { cancel: () => {}, started: false, automation });
+  return "queued";
+}
+
+export async function prepareAutomationSystemEvents(sessionKey: string, jobId: string) {
+  let selected =
+    getSessionQueue(sessionKey)?.queue.filter(
+      (event) => turnOwners.get(event)?.automation?.jobId === jobId,
+    ) ?? [];
+  const leases: PreparedAutomationNotice[] = [];
+  let creationChecks: Array<() => void> | undefined;
+  const release = () => {
+    for (const lease of leases.splice(0)) {
+      lease.release();
+    }
+  };
+  const assertCurrent = () => {
+    for (const assertLeaseCurrent of creationChecks ?? leases.map((lease) => lease.assertCurrent)) {
+      assertLeaseCurrent();
+    }
+    for (const event of selected) {
+      if (!getSessionQueue(sessionKey)?.queue.includes(event)) {
+        throw new Error("Deferred automation notice was cancelled before execution");
+      }
+      turnOwners.get(event)!.automation!.assertCurrent();
+    }
+  };
+  try {
+    for (const event of selected) {
+      let lease: PreparedAutomationNotice | undefined;
+      try {
+        lease = await turnOwners.get(event)?.automation?.prepare?.();
+      } catch (error) {
+        const { isSessionDeliveryGenerationRevokedError } =
+          await import("../config/sessions/session-delivery-generation.js");
+        if (!isSessionDeliveryGenerationRevokedError(error)) {
+          throw error;
+        }
+        // A reset retires only this occurrence; storage unavailability stays retryable.
+        consumeSelectedSystemEventEntries(sessionKey, [event]);
+        selected = selected.filter((candidate) => candidate !== event);
+        continue;
+      }
+      if (lease) {
+        leases.push(lease);
+      }
+      assertCurrent();
+    }
+    assertCurrent();
+  } catch (error) {
+    release();
+    throw error;
+  }
+  return {
+    events: selected.map(cloneSystemEvent),
+    assertCurrent,
+    release,
+    bindCreation(operation: SessionEntryCreationOperation) {
+      assertCurrent();
+      if (creationChecks) {
+        throw new Error("Deferred automation notices already belong to a creation operation");
+      }
+      creationChecks = leases.map(
+        (lease) => lease.bindCreation?.(operation) ?? lease.assertCurrent,
+      );
+      return assertCurrent;
+    },
+    start() {
+      assertCurrent();
+      for (const event of selected) {
+        turnOwners.get(event)!.started = true;
+      }
+      consumeSelectedSystemEventEntries(sessionKey, selected);
+      release();
+    },
+  };
 }
 
 /** Enqueues one occurrence and returns one-use removal ownership for its UUID. */
@@ -238,12 +455,13 @@ function drainSystemEventsWith<T>(sessionKey: string, project: (event: SystemEve
   if (!entry || entry.queue.length === 0) {
     return [];
   }
-  const out = entry.queue.map(project);
-  // Reentrant consumers may hold this array; clear it in place before removing the queue.
-  entry.queue.length = 0;
+  const removed = entry.queue.splice(0);
   entry.lastContextKey = null;
   queues.delete(key);
-  return out;
+  for (const event of removed) {
+    retireSystemEvent(event);
+  }
+  return removed.map(project);
 }
 
 function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContext): boolean {
@@ -302,6 +520,7 @@ export function consumeSelectedSystemEventEntries(
     if (event) {
       if (!event.id || !deferredIds.has(event.id)) {
         entry.queue.splice(index, 1);
+        retireSystemEvent(event);
       }
       selected.push(cloneSystemEvent(event));
     }
@@ -337,5 +556,5 @@ export function resolveSystemEventDeliveryContext(
 }
 
 export function resetSystemEventsForTest() {
-  queues.clear();
+  clearSystemEventQueues(queues);
 }

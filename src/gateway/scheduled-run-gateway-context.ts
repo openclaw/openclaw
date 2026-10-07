@@ -1,7 +1,7 @@
 /**
  * Supplies a Gateway request context to scheduler-owned agent runs.
  *
- * Timer ticks, hook dispatch queues, and heartbeat wakeups have no Gateway
+ * Timer ticks, hook dispatch queues, and session events have no Gateway
  * request of their own, so trusted built-in tools (terminal, dashboard) resolve
  * no context and fail mid-run. RPC-triggered runs already inherit a scope from
  * their caller and must keep it.

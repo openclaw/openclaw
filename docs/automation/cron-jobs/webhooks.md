@@ -143,7 +143,7 @@ limits, routing policy, and error responses.
 
 <AccordionGroup>
   <Accordion title="POST /hooks/wake">
-    Enqueue a trusted notification for the selected agent's main session and optionally request an immediate heartbeat:
+    Enqueue a trusted notification for the selected agent's main session and request normal session processing:
 
     ```bash
     curl --include http://127.0.0.1:18789/hooks/wake \
@@ -152,7 +152,9 @@ limits, routing policy, and error responses.
       --data '{"text":"The sample import completed","mode":"now","agentId":"main"}'
     ```
 
-    HTTP `200` includes `eventOutcome: "queued"` when the queue accepts the wake or `eventOutcome: "coalesced"` when the same wake is already the queue's most recent pending event. With `mode: "now"`, a wake is requested in either case; the response does not mean a heartbeat completed. Use `mode: "next-heartbeat"` to avoid requesting an immediate wake.
+    HTTP `200` includes `eventOutcome: "queued"` when the queue accepts the notice or `eventOutcome: "coalesced"` when the same notice is already pending. With `mode: "now"`, a newly queued notice requests normal session processing; the response does not mean execution completed. The legacy `mode: "next-heartbeat"` spelling defers to a valid scheduled target and does not start a separate heartbeat engine.
+
+    Deferred wakes require Automations to be enabled and an enabled ordinary scheduled job targeting that agent's main session. The notice belongs to that job and is consumed when its session turn starts. Without an eligible receiver, direct and mapped wakes return HTTP `503` with guidance to use `mode: "now"` or create an automation. Coalescing applies only to notices pending for the same current job definition and session; an unrelated passive notice does not satisfy a deferred wake.
 
     A full session queue returns HTTP `503` with an actionable error instead of evicting an accepted event. Let the session process its pending events before retrying. This applies to mapped wake actions too; duplicate wakes can still coalesce when the queue is full.
 
@@ -171,6 +173,8 @@ limits, routing policy, and error responses.
     For direct channel delivery, supply both a concrete `channel` and `to`; add `accountId` to select an enabled channel account. Supplying only part of a destination, using `channel: "last"`, or selecting an invalid account returns `400` before dispatch. Direct hooks do not inherit the main session's last recipient.
 
     With no destination, the default `deliver: true` allows a completion system event on the target agent's main session. Set `deliver: false` to suppress successful announcements and ignore destination fields; completion is logged instead. Non-ok outcomes still produce a failure event. Disabling announcement is not a tool restriction: restrict the agent's tools separately if it must not send messages.
+
+    `wakeMode: "next-heartbeat"` defers completion announcements through the same scheduled receiver. The announcement retains the session captured before the run; a removed receiver or replaced session is logged as undelivered instead of redirecting it.
 
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">

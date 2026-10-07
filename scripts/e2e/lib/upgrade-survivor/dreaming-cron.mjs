@@ -324,11 +324,13 @@ function assertRepaired(fixture, rows) {
     "dreaming-authored-lookalike",
     "dreaming-foreign-declaration",
     "dreaming-authored-tagged",
-    ...fixture.baselineRows.map((row) => row.job_id),
   ];
+  const monitorId = fixture.baselineRows[0].job_id;
   assert.deepEqual(
     rows.map((row) => row.job_id).toSorted((left, right) => left.localeCompare(right)),
-    [...survivorIds, ...preservedIds].toSorted((left, right) => left.localeCompare(right)),
+    [...survivorIds, ...preservedIds, monitorId].toSorted((left, right) =>
+      left.localeCompare(right),
+    ),
     "Dreaming migration chose the wrong survivors or retained a duplicate/phase",
   );
   for (const row of rows) {
@@ -339,16 +341,46 @@ function assertRepaired(fixture, rows) {
       assert.deepEqual(row, before, `Preserved job changed: ${row.job_id}`);
       continue;
     }
-    for (const field of [
-      "store_key",
-      "job_id",
-      "sort_order",
-      "state_json",
-      "runtime_updated_at_ms",
-    ]) {
+    for (const field of ["store_key", "job_id", "sort_order"]) {
       assert.equal(row[field], before[field], `Survivor ${row.job_id} lost ${field}`);
     }
     const definition = JSON.parse(row.job_json);
+    const original = JSON.parse(before.job_json);
+    if (row.job_id === monitorId) {
+      assert.deepEqual(JSON.parse(row.state_json), JSON.parse(before.state_json));
+      assert(row.runtime_updated_at_ms >= before.runtime_updated_at_ms);
+      assert.equal(row.declaration_key, null);
+      assert.equal(row.payload_kind, "agentTurn");
+      assert.equal(row.agent_id, before.agent_id);
+      assert.equal(row.owner_agent_id, before.owner_agent_id);
+      assert.equal(row.enabled, before.enabled);
+      assert.equal(definition.declarationKey, undefined);
+      for (const field of [
+        "id",
+        "name",
+        "createdAtMs",
+        "schedule",
+        "enabled",
+        "owner",
+        "agentId",
+      ]) {
+        assert.deepEqual(definition[field], original[field], `Monitor lost ${field}`);
+      }
+      assert.equal(definition.sessionKey, "agent:main:main");
+      assert.equal(definition.sessionTarget, "session:agent:main:main");
+      assert.equal(definition.wakeMode, "now");
+      assert.equal(definition.idleOnly, true);
+      assert.equal(definition.activeHours, undefined);
+      assert.equal(definition.payload.kind, "agentTurn");
+      assert.equal(definition.payload.skipIfScratchEmpty, true);
+      assert.equal(definition.payload.timeoutSeconds, 600);
+      assert.match(definition.payload.message, /NO_REPLY/u);
+      assert.deepEqual(definition.delivery, { mode: "announce", target: "owner" });
+      continue;
+    }
+    for (const field of ["state_json", "runtime_updated_at_ms"]) {
+      assert.equal(row[field], before[field], `Survivor ${row.job_id} lost ${field}`);
+    }
     assert.equal(row.declaration_key, declarationKey);
     assert.equal(definition.declarationKey, declarationKey);
     assert.equal(definition.id, row.job_id);
@@ -358,7 +390,6 @@ function assertRepaired(fixture, rows) {
     assert.equal(definition.payload.lightContext, true);
     assert.equal(definition.payload.text, undefined);
     assert.equal(definition.delivery.mode, "none");
-    const original = JSON.parse(before.job_json);
     for (const field of ["createdAtMs", "schedule", "enabled", "owner", "agentId", "wakeMode"]) {
       assert.deepEqual(
         definition[field],
@@ -562,9 +593,10 @@ function prepareRuntime(artifacts) {
   const scheduled = new Date(Date.now() + 7 * 24 * 60 * 60_000);
   scheduled.setUTCHours(12, 17, 0, 0);
   const frequency = `17 12 ${scheduled.getUTCDate()} ${scheduled.getUTCMonth() + 1} *`;
-  // Only this post-Doctor runtime fixture runs the scheduler. Keep model work dormant.
-  config.cron.enabled = true;
-  config.agents.entries.main.heartbeat = { every: "0m" };
+  // Start with scheduling off until the ordinary monitor has been disabled through the CLI.
+  assert.equal(config.cron.enabled, false);
+  assert.equal(config.agents.defaults?.heartbeat, undefined);
+  assert.equal(config.agents.entries.main.heartbeat, undefined);
   config.skills ??= {};
   config.skills.workshop ??= {};
   config.skills.workshop.autonomous = { mode: "off" };
@@ -577,10 +609,58 @@ function prepareRuntime(artifacts) {
     frequency,
     storeKey: fixture.baselineRows[0].store_key,
     jobId: "dreaming-active-declared",
+    monitorId: fixture.baselineRows[0].job_id,
   });
   for (const name of ["dreaming-cron-runtime-reload.json", "dreaming-cron-runtime-reload.err"]) {
     fs.writeFileSync(path.join(artifacts, name), "", { mode: 0o600 });
   }
+}
+
+function enableRuntime(artifacts) {
+  const fixture = readJson(path.join(artifacts, "dreaming-cron-fixture.json"));
+  const runtime = readJson(path.join(artifacts, "dreaming-cron-runtime.json"));
+  const config = readJson(process.env.OPENCLAW_CONFIG_PATH);
+  assert.equal(config.cron.enabled, false);
+  assert.equal(runtimeStatus().enabled, false, "Scheduler ran before disabling the monitor");
+  const output = execFileSync("openclaw", ["automations", "disable", runtime.monitorId], {
+    encoding: "utf8",
+    timeout: readPositiveIntEnv("OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS", 90) * 1000,
+  });
+  fs.writeFileSync(path.join(artifacts, "dreaming-cron-monitor-disabled.json"), output, {
+    mode: 0o600,
+  });
+  const monitor = inspectRows(fixture.databasePath).find((row) => row.job_id === runtime.monitorId);
+  assert(monitor, "Disabling the migrated monitor lost its job");
+  assert.equal(monitor.enabled, 0);
+  assert.equal(JSON.parse(monitor.job_json).enabled, false);
+  assert.equal(JSON.parse(monitor.state_json).nextRunAtMs, undefined);
+  const before = runtime.before.rows.find((row) => row.job_id === runtime.monitorId);
+  const definition = JSON.parse(monitor.job_json);
+  const previous = JSON.parse(before.job_json);
+  assert.deepEqual(
+    { ...definition, enabled: previous.enabled },
+    previous,
+    "Disabling the monitor changed its migrated policy",
+  );
+  const state = JSON.parse(monitor.state_json);
+  const previousState = JSON.parse(before.state_json);
+  delete previousState.nextRunAtMs;
+  // Enablement changes establish the ordinary scheduler's new catch-up boundary.
+  previousState.scheduleActivatedAtMs = monitor.runtime_updated_at_ms;
+  assert.deepEqual(state, previousState, "Disabling the monitor changed retained run state");
+  writeJson(path.join(artifacts, "dreaming-cron-runtime.json"), { ...runtime, monitor });
+  config.cron.enabled = true;
+  writeJson(process.env.OPENCLAW_CONFIG_PATH, config);
+}
+
+function runtimeStatus() {
+  const output = execFileSync("openclaw", ["automations", "status", "--json"], {
+    encoding: "utf8",
+    timeout: readPositiveIntEnv("OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS", 90) * 1000,
+  });
+  const start = output.indexOf("{");
+  assert.notEqual(start, -1, "Automation status returned no JSON");
+  return JSON.parse(output.slice(start));
 }
 
 function assertRuntimeCanonical(row, runtime) {
@@ -616,10 +696,10 @@ async function waitRuntime(artifacts) {
   const runtime = readJson(path.join(artifacts, "dreaming-cron-runtime.json"));
   const deadline =
     Date.now() + readPositiveIntEnv("OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS", 90) * 1000;
-  // Plugin services start after HTTP readiness; the committed cron row is the barrier.
+  // Both the scheduler hot reload and plugin services must converge after HTTP readiness.
   while (Date.now() < deadline) {
     const row = inspectRows(fixture.databasePath).find((entry) => entry.job_id === runtime.jobId);
-    if (row?.enabled === 1) {
+    if (row?.enabled === 1 && runtimeStatus().enabled === true) {
       assertRuntimeCanonical(row, runtime);
       writeJson(path.join(artifacts, "dreaming-cron-runtime-converged.json"), row);
       return;
@@ -691,8 +771,7 @@ function assertRuntime(artifacts, gatewayLog) {
   );
   const activeRows = current.rows.filter((row) => row.store_key === runtime.storeKey);
   for (const before of runtime.before.rows) {
-    // The active heartbeat belongs to its own config owner after explicit runtime enablement.
-    if (before.job_id === runtime.jobId || before.job_id === fixture.baselineRows[0].job_id) {
+    if (before.job_id === runtime.jobId) {
       continue;
     }
     const row = current.rows.find(
@@ -703,15 +782,16 @@ function assertRuntime(artifacts, gatewayLog) {
       continue;
     }
     assert(row, `Runtime lost active cron row ${before.job_id}`);
+    const expected = before.job_id === runtime.monitorId ? runtime.monitor : before;
     // Enabled saves compact ordinals and project the retained runtime timestamp into config.
     assert.deepEqual(
       { ...row, job_json: JSON.parse(row.job_json) },
       {
-        ...before,
+        ...expected,
         sort_order: activeRows.findIndex((entry) => entry.job_id === before.job_id),
-        updated_at: before.runtime_updated_at_ms,
-        grant_definition_updated_at: before.runtime_updated_at_ms,
-        job_json: JSON.parse(before.job_json),
+        updated_at: expected.runtime_updated_at_ms,
+        grant_definition_updated_at: expected.runtime_updated_at_ms,
+        job_json: JSON.parse(expected.job_json),
       },
       `Runtime changed authored cron row ${before.job_id}`,
     );
@@ -740,6 +820,7 @@ function assertRuntime(artifacts, gatewayLog) {
     inactiveRowsUnchanged: true,
     doctorBackupUnchanged: true,
     settledPluginReloadNoop: true,
+    migratedMonitorDisabled: true,
     pluginGeneration: reload.runtime.generation,
   };
   writeJson(path.join(artifacts, "dreaming-cron-runtime-proof.json"), proof);
@@ -776,6 +857,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     assertUpdated(artifacts, ...args);
   } else if (command === "prepare-runtime") {
     prepareRuntime(artifacts);
+  } else if (command === "enable-runtime") {
+    enableRuntime(artifacts);
   } else if (command === "wait-runtime") {
     await waitRuntime(artifacts);
   } else if (command === "assert-runtime") {

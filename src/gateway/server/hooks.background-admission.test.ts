@@ -6,14 +6,26 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEventReceipt } from "../../auto-reply/reply/session-event-contract.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveHooksConfig } from "../hooks.js";
 
 const mocks = vi.hoisted(() => ({
-  enqueueSystemEvent: vi.fn(),
+  enqueueSessionEvent: vi.fn((_text: string, _options: unknown): SessionEventReceipt => ({
+    id: "hook-event",
+    cancel: () => false,
+    accepted: Promise.resolve({ ok: true }),
+    settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+  })),
+  captureSessionEventTarget: vi.fn(async (agentId: string, sessionKey: string) => ({
+    agentId,
+    sessionKey,
+    sessionId: "accepted-session",
+  })),
   getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
-  requestHeartbeat: vi.fn(),
   runCronIsolatedAgentTurn: vi.fn(),
 }));
 
@@ -23,14 +35,15 @@ vi.mock("../../config/io.js", () => ({
 vi.mock("../../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: mocks.runCronIsolatedAgentTurn,
 }));
-vi.mock("../../infra/heartbeat-wake.js", () => ({
-  requestHeartbeat: mocks.requestHeartbeat,
+// mock-isolation: Keep wake turns synthetic while testing background hook admission deadlines.
+vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
+  captureSessionEventTargetForHost: mocks.captureSessionEventTarget,
+  enqueueSessionEventForHost: mocks.enqueueSessionEvent,
 }));
+// mock-isolation: Background admission tests must not publish into the process-wide event queue.
 vi.mock("../../infra/system-events.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/system-events.js")>()),
-  enqueueSystemEvent: mocks.enqueueSystemEvent,
-  enqueueSystemEventWithReceipt: (...args: unknown[]) =>
-    mocks.enqueueSystemEvent(...args) ? () => true : null,
+  enqueueSystemEvent: vi.fn(),
 }));
 
 const { createGatewayHooksRequestHandler } = await import("./hooks.js");
@@ -95,6 +108,42 @@ async function post(
 describe("hook background admission", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetSystemEventsForTest();
+  });
+
+  it.each([true, false])("returns wake success only after acceptance succeeds: %s", async (ok) => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    const entered = createDeferredCore();
+    const acceptance = createDeferredCore<Awaited<SessionEventReceipt["accepted"]>>();
+    mocks.enqueueSessionEvent.mockImplementationOnce(() => {
+      entered.resolve(undefined);
+      return {
+        id: "pending-wake",
+        cancel: () => false,
+        accepted: acceptance.promise,
+        settled: Promise.resolve({
+          status: ok ? "completed" : "failed",
+          executionStarted: ok,
+          delivered: false,
+        }),
+      };
+    });
+    let responded = false;
+    const pending = post(createHandler(100), "/hooks/wake", {
+      text: "Fresh wake",
+      mode: "now",
+    }).then((result) => {
+      responded = true;
+      return result;
+    });
+    await entered.promise;
+    expect(responded).toBe(false);
+    acceptance.resolve(ok ? { ok: true } : { ok: false, error: "target replaced" });
+    const response = await pending;
+    expect(response.res.statusCode).toBe(ok ? 200 : 503);
+    if (!ok) {
+      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+    }
   });
 
   it("admits slow fan-out items past the bounded deadline instead of canceling them", async () => {
@@ -143,7 +192,7 @@ describe("hook background admission", () => {
     });
 
     expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(4);
-    expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+    expect(mocks.enqueueSessionEvent.mock.calls.map(([text]) => text)).toEqual([
       "Hook Gmail (skipped): model provider unavailable",
       "Hook Gmail (skipped): model provider unavailable",
     ]);
@@ -152,7 +201,7 @@ describe("hook background admission", () => {
     try {
       expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(502);
       expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(5);
-      expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+      expect(mocks.enqueueSessionEvent.mock.calls.map(([text]) => text)).toEqual([
         "Hook Gmail (skipped): model provider unavailable",
         "Hook Gmail (skipped): model provider unavailable",
         "Hook Gmail (skipped): model provider unavailable",
@@ -181,7 +230,7 @@ describe("hook background admission", () => {
     expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(200);
 
     await vi.waitFor(() =>
-      expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+      expect(mocks.enqueueSessionEvent.mock.calls.map(([text]) => text)).toEqual([
         "Hook Gmail (skipped): model provider unavailable",
         "Hook Gmail (error): execution failed",
       ]),
@@ -214,7 +263,6 @@ describe("hook background admission", () => {
   it.each([
     { deliverySuppressionReason: "empty", replyDisposition: "empty" },
     { deliverySuppressionReason: "silent", replyDisposition: "silent" },
-    { deliverySuppressionReason: "heartbeat", replyDisposition: "empty" },
     { deliverySuppressionReason: "channel_transform", replyDisposition: "visible" },
   ] as const)(
     "returns the $deliverySuppressionReason terminal suppression reason to an explicit waiter",

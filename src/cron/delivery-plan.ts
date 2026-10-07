@@ -18,7 +18,7 @@ import type { CronDelivery, CronJob, CronMessageChannel } from "./types.js";
 /** Normalized routing plan for a cron job's primary delivery behavior. */
 export type CronDeliveryPlan = Pick<
   CronDelivery,
-  "mode" | "channel" | "to" | "threadId" | "accountId"
+  "mode" | "target" | "directPolicy" | "channel" | "to" | "threadId" | "accountId"
 > & {
   source: "delivery";
   requested: boolean;
@@ -26,10 +26,14 @@ export type CronDeliveryPlan = Pick<
 
 /** Returns whether a delivery plan names a concrete channel, recipient, thread, or account. */
 export function hasExplicitCronDeliveryTarget(
-  plan: Pick<CronDeliveryPlan, "channel" | "to" | "threadId" | "accountId">,
+  plan: Pick<CronDeliveryPlan, "target" | "channel" | "to" | "threadId" | "accountId">,
 ): boolean {
   return Boolean(
-    (plan.channel && plan.channel !== "last") || plan.to || plan.threadId != null || plan.accountId,
+    plan.target ||
+    (plan.channel && plan.channel !== "last") ||
+    plan.to ||
+    plan.threadId != null ||
+    plan.accountId,
   );
 }
 
@@ -64,6 +68,8 @@ export function resolveCronDeliveryPlan(
         : deliveryChannel;
     return {
       mode: resolvedMode,
+      target: delivery.target,
+      directPolicy: delivery.directPolicy,
       channel: resolvedMode === "webhook" ? undefined : channel,
       to,
       threadId: resolvedMode === "webhook" ? undefined : deliveryThreadId,

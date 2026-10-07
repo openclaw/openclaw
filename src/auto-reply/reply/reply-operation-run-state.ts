@@ -1,10 +1,7 @@
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { ReplyCompletion } from "../../agents/reply-completion.js";
-import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
-import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatch-outcome.js";
-import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
 type ReplyOperationAdmissionSnapshot =
@@ -34,15 +31,6 @@ export type ReplyPreRunRejectionCode =
 
 export type ReplyOperationRunState = {
   replyCompletion?: ReplyCompletion;
-  heartbeat?: {
-    prepareReply: (
-      replyResult: ReplyPayload | ReplyPayload[] | undefined,
-      runState: ReplyOperationRunState,
-    ) => Promise<{
-      reply?: ReplyPayload;
-      settle?: (outcome: ReplyDispatchDeliveryOutcome) => Promise<void>;
-    }>;
-  };
   admission?: ReplyOperationAdmissionSnapshot;
   /** The Gateway accepted this question answer or rejected its values before commitment. */
   questionInputHandled?: true;
@@ -60,7 +48,7 @@ export type ReplyOperationRunState = {
 };
 
 // Carries this invocation's admission decision through reply option spreads so
-// heartbeat cleanup never infers it from whichever operation is active later.
+// settlement never infers it from whichever operation is active later.
 export const REPLY_OPERATION_RUN_STATE = Symbol("openclaw.replyOperationRunState");
 
 export type ReplyOptionsWithOperationRunState = {
@@ -111,8 +99,4 @@ export function recordReplyPreRunRejection(
   if (state && rejection) {
     state.preRunRejection ??= rejection;
   }
-}
-
-export function resolveReplyOperationAgentTurn(state: ReplyOperationRunState | undefined) {
-  return isReplyOperationSuperseded(state?.agentTurnOwner) ? "superseded" : state?.agentTurn;
 }

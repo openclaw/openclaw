@@ -248,7 +248,7 @@ export const discordChannelConfigUiHints = {
   },
   "guilds.*.presenceEvents": {
     label: "Discord Online Presence Events",
-    help: "Route selected human offline-to-online transitions into the configured guild channel as agent system events. Requires the Guild Presences privileged intent and an enabled agent heartbeat.",
+    help: "Route selected human offline-to-online transitions into the configured guild channel as agent system events. Requires the Guild Presences privileged intent; follow-ups use the conversation session queue.",
   },
   "guilds.*.presenceEvents.enabled": {
     label: "Discord Online Presence Events Enabled",

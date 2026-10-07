@@ -49,6 +49,9 @@ describe("Doctor plugin index persistence built CLI proof", () => {
     const repaired = await instance.cli(["doctor", "--repair", "--yes", "--non-interactive"]);
     expect(repaired.code, repaired.stderr).toBe(0);
     expect(repaired.signal).toBeNull();
+    expect(repaired.stdout.replace(/[│\s]+/gu, " ")).toContain(
+      "exist; leave them unchanged and move the legacy data manually before rerunning Doctor.",
+    );
     expect(fs.lstatSync(legacyDir).isDirectory(), repaired.stdout).toBe(true);
     expect(fs.readdirSync(legacyDir)).toEqual([]);
     expect(fs.realpathSync(legacyDir), repaired.stdout).not.toBe(

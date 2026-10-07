@@ -112,8 +112,8 @@ function createTestConfig(baseUrl: string): OpenClawConfig {
     plugins: { slots: { memory: "none" } },
     agents: {
       defaults: {
-        heartbeat: { every: "0m" },
         model: { primary: MODEL_REF },
+        modelPolicy: { allow: [MODEL_REF] },
         models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
         skipBootstrap: true,
         skills: [],

@@ -1,10 +1,10 @@
 /** Tests heartbeat prompt and token helpers. */
 import { describe, expect, it } from "vitest";
+import { isCronScratchEffectivelyEmpty } from "../cron/scratch-contract.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
   isHeartbeatAcknowledgementText,
-  isHeartbeatContentEffectivelyEmpty,
   resolveHeartbeatPromptForResponseTool,
   stripHeartbeatToken,
 } from "./heartbeat.js";
@@ -137,37 +137,36 @@ describe("isHeartbeatAcknowledgementText", () => {
   });
 });
 
-describe("isHeartbeatContentEffectivelyEmpty", () => {
+describe("isCronScratchEffectivelyEmpty", () => {
   it("returns false for missing scratch so the monitor can still run", () => {
-    expect(isHeartbeatContentEffectivelyEmpty(undefined)).toBe(false);
-    expect(isHeartbeatContentEffectivelyEmpty(null)).toBe(false);
+    expect(isCronScratchEffectivelyEmpty(undefined)).toBe(false);
   });
 
   it("returns true for comments only", () => {
-    expect(isHeartbeatContentEffectivelyEmpty("# Header\n# Another comment")).toBe(true);
-    expect(isHeartbeatContentEffectivelyEmpty("## Subheader\n### Another")).toBe(true);
+    expect(isCronScratchEffectivelyEmpty("# Header\n# Another comment")).toBe(true);
+    expect(isCronScratchEffectivelyEmpty("## Subheader\n### Another")).toBe(true);
     expect(
-      isHeartbeatContentEffectivelyEmpty(
+      isCronScratchEffectivelyEmpty(
         "<!-- Heartbeat template; comments-only content prevents scheduled heartbeat API calls. -->",
       ),
     ).toBe(true);
     expect(
-      isHeartbeatContentEffectivelyEmpty(`<!--
+      isCronScratchEffectivelyEmpty(`<!--
 Heartbeat template.
 Keep this comment-only scratch quiet.
 -->`),
     ).toBe(true);
     expect(
-      isHeartbeatContentEffectivelyEmpty(`<!--
+      isCronScratchEffectivelyEmpty(`<!--
 tasks:
   - name: inbox
     interval: 30m
     prompt: Check inbox
 -->`),
     ).toBe(true);
-    expect(isHeartbeatContentEffectivelyEmpty("<!-- One --> <!-- Two -->")).toBe(true);
-    expect(isHeartbeatContentEffectivelyEmpty("<!-- One -->\n# Header")).toBe(true);
-    expect(isHeartbeatContentEffectivelyEmpty("Reminder <!-- not scaffolding -->")).toBe(false);
+    expect(isCronScratchEffectivelyEmpty("<!-- One --> <!-- Two -->")).toBe(true);
+    expect(isCronScratchEffectivelyEmpty("<!-- One -->\n# Header")).toBe(true);
+    expect(isCronScratchEffectivelyEmpty("Reminder <!-- not scaffolding -->")).toBe(false);
   });
 
   it("returns false when a template includes plain instructional prose", () => {
@@ -175,7 +174,7 @@ tasks:
 
 Keep this scratch empty unless you want a tiny checklist. Keep it small.
     `;
-    expect(isHeartbeatContentEffectivelyEmpty(defaultTemplate)).toBe(false);
+    expect(isCronScratchEffectivelyEmpty(defaultTemplate)).toBe(false);
   });
 
   it("returns true for fenced monitor scratch without actionable content", () => {
@@ -187,7 +186,7 @@ Keep this scratch empty unless you want a tiny checklist. Keep it small.
 # Add tasks below when you want the agent to check something periodically.
 \`\`\`
 `;
-    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+    expect(isCronScratchEffectivelyEmpty(content)).toBe(true);
   });
 
   it("returns false when fenced heartbeat content includes a real task", () => {
@@ -197,7 +196,7 @@ Keep this scratch empty unless you want a tiny checklist. Keep it small.
 - Check email
 \`\`\`
 `;
-    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
+    expect(isCronScratchEffectivelyEmpty(content)).toBe(false);
   });
 });
 

@@ -9,9 +9,14 @@ import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawn
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { copyChannelParticipantAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
+import { resolveCronSessionWorkspaceOwnershipError } from "../../cron/run-authority.js";
 import { logVerbose } from "../../globals.js";
+import {
+  assertAgentRunLifecycleGenerationCurrent,
+  getAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import {
@@ -94,13 +99,21 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const runtimePolicySessionKey = resolveRuntimePolicySessionKey({ agentId, cfg, ctx, sessionKey });
   const { resolvedElevatedLevel, execOverrides, abortedLastRun } = params;
   const { sessionEntry } = params;
-  const isHeartbeat = opts?.isHeartbeat === true;
+  const isInternalEvent = ctx.InternalTurnSource === "event";
+  const contextGeneration = getAgentEventLifecycleGeneration();
+  const assertContextCurrent = () => {
+    assertAgentRunLifecycleGenerationCurrent(contextGeneration);
+    opts?.operatorAuthority?.assertCurrent();
+    opts?.abortSignal?.throwIfAborted();
+    opts?.queuedFollowupAbortSignal?.throwIfAborted();
+    opts?.replyOperation?.abortSignal.throwIfAborted();
+    opts?.scheduledAutomation?.assertCurrent();
+  };
   const explicitThinkingLevelOverride = normalizeThinkLevel(opts?.thinkingLevelOverride);
   const effectiveQueueMode = opts?.queueModeOverride ?? perMessageQueueMode;
   const traceAttributes = {
     provider,
     hasSessionKey: Boolean(sessionKey),
-    isHeartbeat,
     queueMode: effectiveQueueMode ?? "configured",
   };
   const traceRunPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
@@ -122,16 +135,10 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       : isInternalPromptChannel && opts?.sourceReplyDeliveryMode === undefined
         ? "automatic"
         : opts?.sourceReplyDeliveryMode;
-  // Direct resolver callers (heartbeat wakes, system events) skip dispatch's
-  // stable-mode injection; resolve the same session-stable fact here so their
-  // binding facts and messageToolPolicyHash match dispatched chat turns —
-  // otherwise chat<->heartbeat transitions ping-pong the CLI session (#121485).
-  // Synthetic turns must not fall back to their effective turn mode: a
-  // response-tool heartbeat's message_tool_only is per-turn enforcement, not
-  // session policy, and hashing it recreates the ping-pong.
+  // Internal follow-ups retain session delivery policy in CLI binding facts;
+  // their per-turn delivery mode must not rotate a reusable CLI session.
   const isSyntheticTurn = isSyntheticSourceReplyTurn({
     inputProvenance: promptSessionCtx.InputProvenance,
-    isHeartbeat,
   });
   const sessionPromptSourceReplyDeliveryMode =
     opts?.sessionPromptSourceReplyDeliveryMode ??
@@ -183,14 +190,12 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const { typingPolicy, suppressTyping } = resolveRunTypingPolicy({
     requestedPolicy: opts?.typingPolicy,
     suppressTyping: opts?.suppressTyping === true,
-    isHeartbeat,
     originatingChannel: ctx.OriginatingChannel,
   });
   const typingMode = resolveTypingMode({
     configured: resolveAgentConfig(cfg, agentId)?.typingMode ?? agentCfg?.typingMode,
     isGroupChat,
     wasMentioned: ctx.WasMentioned === true,
-    isHeartbeat,
     typingPolicy,
     suppressTyping,
     sourceReplyDeliveryMode,
@@ -229,7 +234,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const terminalReplyExpectation = resolveSourceReplyExpectation({
     ctx: promptSessionCtx,
     cfg,
-    isHeartbeat,
   });
   const replyOperationRunState = resolveReplyOperationRunState(opts);
   if (replyOperationRunState) {
@@ -333,6 +337,23 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     workspaceDir: sessionEntry?.spawnedWorkspaceDir,
     cwd: sessionEntry?.spawnedCwd,
   });
+  if (opts?.scheduledAutomation) {
+    assertContextCurrent();
+    if (!sessionKey) {
+      throw new Error("A scheduled session turn requires its admitted session key");
+    }
+    const ownershipError = resolveCronSessionWorkspaceOwnershipError({
+      cfg,
+      agentId,
+      sessionKey,
+      admissionSource: opts.scheduledAutomation.admissionSource,
+      ownerSessionKey: opts.scheduledAutomation.job.owner?.sessionKey,
+      hasWorkspaceBinding: Boolean(sessionWorkspaceOverride || sessionEntry?.worktree),
+    });
+    if (ownershipError) {
+      throw new Error(ownershipError);
+    }
+  }
   const workspaceDir = sessionWorkspaceOverride ?? configuredWorkspaceDir;
   const bareResetPromptState =
     isBareSessionReset && workspaceDir
@@ -390,15 +411,14 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
           : {}),
       }
     : { ...sessionCtx, ThreadStarterBody: undefined };
-  let inboundContextSessionEntry = isHeartbeat
+  let inboundContextSessionEntry = isInternalEvent
     ? undefined
     : ((sessionKey !== undefined ? sessionStore?.[sessionKey] : undefined) ??
       sessionEntryHandle?.getCurrent() ??
       sessionEntry);
   let activeGoalContext = formatActiveGoalContext(inboundContextSessionEntry);
-  // Heartbeats are synthetic system turns: delivery facts still drive routing and
-  // formatting, but must not be presented to the model as user-role inbound context.
-  let inboundUserContext = isHeartbeat
+  // Internal events retain delivery facts without presenting them as user input.
+  let inboundUserContext = isInternalEvent
     ? ""
     : buildInboundUserContextPrefix(
         inboundUserContextSessionCtx,
@@ -406,15 +426,20 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
         inboundContextSessionEntry,
       );
   const refreshInboundContextAfterAdmissionWait = async () => {
-    if (isHeartbeat) {
+    if (isInternalEvent) {
       return;
     }
-    inboundContextSessionEntry =
+    const refreshedEntry =
       storePath && sessionKey
-        ? loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })
+        ? await readSessionEntryInWorker(
+            { agentId, storePath, sessionKey, readConsistency: "latest" },
+            assertContextCurrent,
+          )
         : (sessionEntryHandle?.getCurrent() ??
           (sessionKey !== undefined ? sessionStore?.[sessionKey] : undefined) ??
           sessionEntry);
+    assertContextCurrent();
+    inboundContextSessionEntry = refreshedEntry;
     activeGoalContext = formatActiveGoalContext(inboundContextSessionEntry);
     inboundUserContext = buildInboundUserContextPrefix(
       inboundUserContextSessionCtx,
@@ -435,7 +460,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     startupAction,
     startupContextPrelude,
     softResetTail,
-    isHeartbeat,
     inboundEventKind,
     sourceReplyDeliveryMode,
   });
@@ -451,7 +475,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     kind: "ready",
     params,
     runtimePolicySessionKey,
-    isHeartbeat,
     explicitThinkingLevelOverride,
     effectiveQueueMode,
     traceRunPhase,

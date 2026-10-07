@@ -165,6 +165,11 @@ it("checks fallback versions before loading through the watcher child and preser
   for (const file of ["tsx-cli-shim.mjs", "local-check-runtime.mts", "tooling-dependencies.mjs"]) {
     copyFileSync(resolve("scripts/lib", file), join(lib, file));
   }
+  mkdirSync(join(checkout, "src", "infra"), { recursive: true });
+  copyFileSync(
+    resolve("src/infra/node-compiler-policy.mjs"),
+    join(checkout, "src", "infra", "node-compiler-policy.mjs"),
+  );
   copyFileSync(resolve("scripts/watch-pr-ci.mjs"), join(checkout, "scripts/watch-pr-ci.mjs"));
   writePackage(tooling, "fixture-pkg", "tooling");
   writePackage(root, "fixture-pkg", "stale ancestor", "0.0.0-stale");

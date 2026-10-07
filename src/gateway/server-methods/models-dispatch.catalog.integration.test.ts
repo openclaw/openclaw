@@ -146,7 +146,6 @@ it("dispatches a newly discovered model and preserves an admitted turn when disc
       agents: {
         defaults: {
           skipBootstrap: true,
-          heartbeat: { every: "0m" },
           modelPolicy: { allow: [`${provider}/*`] },
         },
         entries: { main: { workspace: state.workspaceDir } },

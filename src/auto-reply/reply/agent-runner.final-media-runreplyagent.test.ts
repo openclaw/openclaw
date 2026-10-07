@@ -200,7 +200,6 @@ describe("runReplyAgent final MEDIA replies", () => {
         throw new Error("runReplyAgent did not pass replyMediaContext to the agent turn");
       }
       const commonParams = {
-        isHeartbeat: false,
         didLogHeartbeatStrip: false,
         blockStreamingEnabled: false,
         blockReplyPipeline: null,

@@ -1,11 +1,14 @@
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
+import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { peekSystemEventEntries } from "../infra/system-events.js";
 import {
   startSecretEgressProxyServer,
   type SecretEgressProxyHandle,
@@ -18,6 +21,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   activateMcpLoopbackClientGrantCapture,
   mintMcpLoopbackClientGrant,
@@ -175,33 +179,81 @@ it("executes egress-enabled commands through cached CLI grants and rejects a ret
   });
 });
 
-it("marks a command started by a conversation's completion turn as the conversation's own", async () => {
+it("hands off background completion from an internal-event MCP grant to its originating session", async ({
+  signal,
+}) => {
   const sessionKey = "agent:probe:telegram:group:-100155462274:topic:42";
-  const { request } = await mintExecGrant(
-    "mcp-continuation",
+  const sessionId = "mcp-continuation-session";
+  const topic = "telegram:-100155462274:topic:42";
+  setRuntimeConfigSnapshot(config, config);
+  await replaceSessionEntry(
+    { agentId: "probe", sessionKey },
     {
-      sessionKey,
-      trigger: "heartbeat",
-      continuesConversation: true,
-      toolsAllow: ["exec", "process"],
-      messageProvider: "telegram",
-      currentChannelId: "telegram:-100155462274:topic:42",
-      currentThreadTs: "42",
+      sessionId,
+      updatedAt: 1,
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "telegram",
+          to: topic,
+          accountId: "work",
+          threadId: 42,
+        },
+      }),
     },
-    { command: "echo mcp-chain-ok", background: true },
   );
-  const started = await request("tools/call");
-  expect(started.status).toBe(200);
-  await started.body?.cancel();
-
-  await vi.waitFor(
-    () =>
-      expect(peekSystemEventEntries(sessionKey)).toEqual([
-        expect.objectContaining({
-          text: expect.stringContaining("mcp-chain-ok"),
-          fromConversationTurn: true,
-        }),
-      ]),
-    { timeout: 10_000 },
-  );
+  const notified = createDeferred<{
+    text: string;
+    options: Parameters<typeof sessionEvents.enqueueSessionEventForHost>[1];
+  }>();
+  const receipts: ReturnType<typeof sessionEvents.enqueueSessionEventForHost>[] = [];
+  const enqueue = sessionEvents.enqueueSessionEventForHost;
+  const handoff = vi
+    .spyOn(sessionEvents, "enqueueSessionEventForHost")
+    .mockImplementation((text, options) => {
+      const receipt = enqueue(text, options);
+      if (options.sessionKey === sessionKey) {
+        receipts.push(receipt);
+        notified.resolve({ text, options });
+      }
+      return receipt;
+    });
+  try {
+    const { request } = await mintExecGrant(
+      "mcp-continuation",
+      {
+        sessionKey,
+        trigger: "event",
+        toolsAllow: ["exec", "process"],
+        messageProvider: "telegram",
+        currentChannelId: topic,
+        currentThreadTs: "42",
+        accountId: "work",
+      },
+      { command: "echo mcp-chain-ok", background: true },
+    );
+    const started = await request("tools/call");
+    expect(started.status).toBe(200);
+    expect(await started.json()).toMatchObject({ result: { isError: false } });
+    const completion = await withinTest(notified.promise, signal);
+    expect(completion.text).toContain("mcp-chain-ok");
+    expect(completion.options).toMatchObject({
+      agentId: "probe",
+      sessionKey,
+      source: "exec",
+      deliveryContext: {
+        channel: "telegram",
+        to: topic,
+        accountId: "work",
+        threadId: "42",
+      },
+      expectedTarget: { agentId: "probe", sessionKey, sessionId },
+    });
+    expect(receipts).toHaveLength(1);
+  } finally {
+    for (const receipt of receipts) {
+      receipt.cancel();
+    }
+    await Promise.all(receipts.map((receipt) => receipt.settled));
+    handoff.mockRestore();
+  }
 });

@@ -60,46 +60,49 @@ describe("runAgentHarnessToolInvocation", () => {
     },
   );
 
-  it("snapshots executed arguments before result middleware can mutate them", async () => {
-    const result = textToolResult("added", { id: "job-1" });
-    const execution = await invokeTool(
-      result,
-      { action: "add", job: { name: "reminder" } },
-      async (event) => {
-        event.args.action = "status";
-        return event.result;
-      },
-    );
-    const telemetry = {
-      didSendViaMessagingTool: false,
-      messagingToolSentTexts: [],
-      messagingToolSentMediaUrls: [],
-      messagingToolSentTargets: [],
-      messagingToolSourceReplyPayloads: [],
-      confirmedMediaDeliveries: [],
-      toolMediaUrls: [],
-      toolAutoDeliveryMediaUrls: [],
-      coreTtsToolResults: [],
-      toolAudioAsVoice: false,
-      successfulCronAdds: 0,
-    };
-    recordAgentHarnessToolResultTelemetry({
-      toolName: "cron",
-      args: execution.executedArguments,
-      result: execution.result,
-      telemetry,
-      isError: execution.isError,
-      messagingDelivered: false,
-      mediaDeliveryConfirmed: false,
-      extractSourceReplyPayload: () => undefined,
-      collectMessagingMediaUrls: () => [],
-      resolveMessagingMediaSourceUrls: (urls) => urls,
-      signal: new AbortController().signal,
-    });
+  it.each(["automations", "cron"])(
+    "snapshots %s arguments before result middleware can mutate them",
+    async (toolName) => {
+      const result = textToolResult("added", { id: "job-1" });
+      const execution = await invokeTool(
+        result,
+        { action: "add", job: { name: "reminder" } },
+        async (event) => {
+          event.args.action = "status";
+          return event.result;
+        },
+      );
+      const telemetry = {
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [],
+        messagingToolSourceReplyPayloads: [],
+        confirmedMediaDeliveries: [],
+        toolMediaUrls: [],
+        toolAutoDeliveryMediaUrls: [],
+        coreTtsToolResults: [],
+        toolAudioAsVoice: false,
+        successfulCronAdds: 0,
+      };
+      recordAgentHarnessToolResultTelemetry({
+        toolName,
+        args: execution.executedArguments,
+        result: execution.result,
+        telemetry,
+        isError: execution.isError,
+        messagingDelivered: false,
+        mediaDeliveryConfirmed: false,
+        extractSourceReplyPayload: () => undefined,
+        collectMessagingMediaUrls: () => [],
+        resolveMessagingMediaSourceUrls: (urls) => urls,
+        signal: new AbortController().signal,
+      });
 
-    expect(execution.boundary.executionStarted).toBe(true);
-    expect(telemetry.successfulCronAdds).toBe(1);
-  });
+      expect(execution.boundary.executionStarted).toBe(true);
+      expect(telemetry.successfulCronAdds).toBe(1);
+    },
+  );
 });
 
 function textToolResult(text: string, details: unknown): AgentToolResult<unknown> {

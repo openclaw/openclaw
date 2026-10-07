@@ -20,6 +20,10 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./claws-monitors.js").then((module) => module.clawsMonitorHandlers),
   "claws-packages": () =>
     import("./claws-packages.js").then((module) => module.clawsPackageHandlers),
+  "claws-automations": () =>
+    import("./claws-automations.js").then((module) => module.clawsAutomationHandlers),
+  "claws-removal-journal": () =>
+    import("./claws-removal-journal.js").then((module) => module.clawsRemovalJournalHandlers),
   "agents-workspace": () =>
     import("./agents-workspace.js").then((module) => module.agentsWorkspaceHandlers),
   artifacts: () => import("./artifacts.js").then((module) => module.artifactsHandlers),

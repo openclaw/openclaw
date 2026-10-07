@@ -77,7 +77,7 @@ function virtualClock() {
 }
 
 describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () => {
-  it("reports the loaded stop policy until daemon-reload", () => {
+  it("reports the loaded stop policy for the published Gateway query until daemon-reload", () => {
     const { unit, systemctl, manager } = fixture();
     const query = () =>
       systemctl(
@@ -85,15 +85,15 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
         "openclaw-gateway.service",
         "--no-page",
         "--property",
-        "LoadState,TimeoutStopUSec",
+        "TimeoutStopUSec,InvocationID,LoadState",
       );
-    expect(query().stdout).toBe("LoadState=not-found\n");
+    expect(query().stdout).toBe("InvocationID=\nLoadState=not-found\n");
     const content = "[Service]\nExecStart=/usr/bin/true\nTimeoutStopSec=330\n";
     writeFileSync(unit, content);
     expect(systemctl("daemon-reload").status).toBe(0);
     expect(query()).toMatchObject({
       status: 0,
-      stdout: "LoadState=loaded\nTimeoutStopUSec=330s\n",
+      stdout: "TimeoutStopUSec=330s\nInvocationID=\nLoadState=loaded\n",
     });
     expect(manager("stop-timeout-ms").stdout).toBe("330000\n");
     writeFileSync(unit, content.replace("TimeoutStopSec=330", "TimeoutStopSec=30"));
@@ -117,8 +117,49 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
     expect(runtime.stdout).toContain("LoadState=loaded");
     expect(query().stdout).toContain("TimeoutStopUSec=30s");
     expect(systemctl("daemon-reload").status).toBe(0);
-    expect(query().stdout).toBe("LoadState=not-found\n");
+    expect(query().stdout).toBe("InvocationID=\nLoadState=not-found\n");
     expect(manager("stop-timeout-ms").status).not.toBe(0);
+  });
+
+  it("keeps stop-policy queries strict without claiming a caller invocation identity", () => {
+    const { home, env, unit, systemctl } = fixture();
+    writeFileSync(unit, "[Service]\nExecStart=/usr/bin/true\nTimeoutStopSec=330\n");
+    expect(systemctl("daemon-reload").status).toBe(0);
+    const query = (properties: string, user = true) =>
+      spawnSync(
+        join(home, "bin/systemctl"),
+        [
+          ...(user ? ["--user"] : []),
+          "show",
+          "openclaw-gateway.service",
+          "--no-page",
+          "--property",
+          properties,
+        ],
+        { env: { ...env, INVOCATION_ID: "a".repeat(32) }, encoding: "utf8" },
+      );
+    for (const properties of [
+      "TimeoutStopUSec,InvocationID,LoadState",
+      "LoadState,InvocationID,TimeoutStopUSec",
+      "TimeoutStopUSec,LoadState",
+    ]) {
+      const observed = query(properties);
+      expect(observed.status, observed.stderr).toBe(0);
+      expect(observed.stdout).toContain("LoadState=loaded\n");
+      expect(observed.stdout).toContain("TimeoutStopUSec=330s\n");
+      if (properties.includes("InvocationID")) {
+        expect(observed.stdout).toContain("InvocationID=\n");
+      }
+      expect(observed.stdout).not.toContain("a".repeat(32));
+    }
+    for (const properties of [
+      "LoadState,TimeoutStopUSec,MainPID",
+      "LoadState,TimeoutStopUSec,TimeoutStopUSec",
+      "TimeoutStopUSec,InvocationID",
+    ]) {
+      expect(query(properties).status).not.toBe(0);
+    }
+    expect(query("TimeoutStopUSec,InvocationID,LoadState", false).status).not.toBe(0);
   });
 
   it.each([

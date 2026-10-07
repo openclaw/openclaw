@@ -496,8 +496,8 @@ case "$command" in
       exit 0
     fi
     [ "$unit_name" = openclaw-gateway.service ] || exit 1
-    if [ "$property" = LoadState,TimeoutStopUSec ]; then
-      node "$manager_script" stop-policy
+    if [[ ",$property," == *,TimeoutStopUSec,* ]]; then
+      node "$manager_script" stop-policy "$property"
       exit 0
     fi
     # Published readers omit LoadState or ControlGroup; retain their exact queries.

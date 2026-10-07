@@ -40,12 +40,12 @@ modifications explicitly instead of relying on in-place mutation.
 | `priority`              | Ordering; higher runs first.                                                                                                                                                                                                                           |
 | `registrationId`        | Stable identity for one registration inside a plugin. Skill evaluators use it as `evaluatorId`; otherwise the plugin id is used.                                                                                                                       |
 | `timeoutMs`             | Per-handler asynchronous await budget. Expiry applies the hook's failure policy below; it does not cancel the handler or its side effects. Omit to use the runner's default, if any.                                                                   |
-| `eligibleTriggers`      | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `heartbeat`, or `user`.                                                                                                                                                  |
+| `eligibleTriggers`      | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `event`, `heartbeat`, or `user`.                                                                                                                                         |
 | `eligibleDispatchKinds` | For `reply_dispatch` only, limits host dispatch to `agent`, `acp`, or both. Omit to handle all dispatch kinds.                                                                                                                                         |
 | `requiresToolAuthority` | For `before_prompt_build` only, runs the handler after the host finalizes the current turn's tool surface and supplies ephemeral `ctx.toolAuthority`. Use this for context retrieval that must follow tool policy.                                     |
 
 Trigger eligibility is enforced by the host before it invokes the handler. A
-hook registered with `eligibleTriggers: ["heartbeat", "cron"]` is therefore
+hook registered with `eligibleTriggers: ["event", "cron"]` is therefore
 inactive for user turns, including a recovered user turn. Omitted, empty,
 malformed, or partly unknown lists remain unrestricted, so the hook runs for
 those turns. Other hook kinds do not accept this option.
@@ -131,7 +131,7 @@ contracts above; a modifying hook is not an observation hook.
 | `before_agent_reply`            | Claim   | Short-circuit the model turn with a synthetic reply or silence                                                                  |
 | `before_agent_finalize`         | Modify  | Inspect the natural final answer and request one more model pass                                                                |
 | `agent_end`                     | Observe | Observe final messages, success state, and run duration                                                                         |
-| `heartbeat_prompt_contribution` | Modify  | Add heartbeat-only context for background monitor and lifecycle plugins                                                         |
+| `heartbeat_prompt_contribution` | Modify  | Add context to receipt-owned migrated/default proactive automations                                                             |
 
 **Conversation observation**
 

@@ -13,7 +13,6 @@ describe("config schema", () => {
   let pluginUiHintInput: SchemaInput;
   let tokenHintInput: SchemaInput;
   let mergedSchemaInput: SchemaInput;
-  let heartbeatChannelInput: SchemaInput;
   let cachedMergeInput: SchemaInput;
 
   beforeAll(() => {
@@ -70,15 +69,6 @@ describe("config schema", () => {
             accessToken: { label: "Original Token", sensitive: true },
             " .accessToken ": { label: "Access Token", help: "Matrix credential" },
           },
-        },
-      ],
-    };
-    heartbeatChannelInput = {
-      channels: [
-        {
-          id: "imessage",
-          label: "iMessage",
-          configSchema: { type: "object" },
         },
       ],
     };
@@ -782,18 +772,6 @@ describe("config schema", () => {
     expect(providerChild?.key).toBe("provider");
     expect(providerChild?.path).toBe("plugins.entries.pack/one.config.provider");
     expect(providerChild?.type).toBe("string");
-  });
-
-  it("adds heartbeat target hints with dynamic channels", () => {
-    const res = buildConfigSchemaCore(heartbeatChannelInput);
-
-    const defaultsHint = res.uiHints["agents.defaults.heartbeat.target"];
-    const entryHint = res.uiHints["agents.entries.*.heartbeat.target"];
-    expect(defaultsHint?.help).toContain("imessage");
-    expect(defaultsHint?.help).toContain("owner");
-    expect(defaultsHint?.help).toContain("last");
-    expect(defaultsHint?.placeholder).toBe("owner");
-    expect(entryHint?.help).toContain("imessage");
   });
 
   it("caches merged schemas for identical plugin/channel metadata", () => {

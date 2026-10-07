@@ -94,7 +94,6 @@ async function runDefaultMemoryFlush(sessionEntry: SessionEntry, overrides: Flus
     resolvedVerboseLevel: "off",
     sessionEntry,
     sessionStore: { [overrides.sessionKey]: sessionEntry },
-    isHeartbeat: false,
     ...overrides,
     cfg: withTestModelContextTokens({
       cfg: overrides.cfg ?? {},

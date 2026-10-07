@@ -1,5 +1,11 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveUserPath } from "../../../utils.js";
+import {
+  findAcpUnsupportedInheritedToolAllow,
+  findAcpUnsupportedInheritedToolDeny,
+  formatAcpInheritedToolAllowError,
+  formatAcpInheritedToolDenyError,
+} from "../../inherited-tool-deny.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { resolveSpawnSandboxError } from "../../spawn-plan.js";
 import { resolveSenderRestrictedSpawnError } from "../../spawn-requester-policy.js";
@@ -11,17 +17,28 @@ export function resolveAcpSpawnRuntimePolicyError(params: {
   requesterSessionKey?: string;
   requesterSandboxed?: boolean;
   sandbox?: "inherit" | "require";
+  inheritedToolAllowlist?: string[];
+  inheritedToolDenylist?: string[];
 }): string | undefined {
   const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.requesterSessionKey,
     agentId: params.requesterAgentId,
   });
-  return resolveSpawnSandboxError({
+  const sandboxError = resolveSpawnSandboxError({
     backend: "acp",
     requesterSandboxed: params.requesterSandboxed === true || requesterRuntime.sandboxed,
     sandbox: params.sandbox === "require" ? "require" : "inherit",
   });
+  if (sandboxError) {
+    return sandboxError;
+  }
+  const unsupportedDeny = findAcpUnsupportedInheritedToolDeny(params.inheritedToolDenylist);
+  if (unsupportedDeny) {
+    return formatAcpInheritedToolDenyError(unsupportedDeny);
+  }
+  const unsupportedAllow = findAcpUnsupportedInheritedToolAllow(params.inheritedToolAllowlist);
+  return unsupportedAllow ? formatAcpInheritedToolAllowError(unsupportedAllow) : undefined;
 }
 
 export function resolveAcpSenderSpawnError(

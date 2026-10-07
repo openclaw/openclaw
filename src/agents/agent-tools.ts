@@ -1,4 +1,3 @@
-import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
@@ -122,11 +121,6 @@ function* assembleOpenClawCodingTools(
   const executionSessionKey = options?.runSessionKey ?? options?.sessionKey;
   const attachmentReadRoot = subagentAttachmentRootForRun(executionAgentId, executionSessionKey);
 
-  const enableHeartbeatTool =
-    options?.enableHeartbeatTool === true ||
-    (options?.trigger === "heartbeat" &&
-      options?.config?.messages?.visibleReplies === "message_tool");
-  const forceHeartbeatTool = options?.forceHeartbeatTool === true || enableHeartbeatTool;
   const toolSearchConfig = resolveToolSearchConfig(options?.config);
   const toolSearchControlsEnabled =
     options?.includeToolSearchControls === true && toolSearchConfig.enabled;
@@ -152,7 +146,6 @@ function* assembleOpenClawCodingTools(
   const runtimeProfileAlsoAllow = [
     ...(options && messageToolOwnsVisibleReply(options) ? ["message"] : []),
     ...(runtimeToolAllowlistIncludesMessage ? ["message"] : []),
-    ...(forceHeartbeatTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : []),
     ...toolSearchControlAllowlist,
   ];
   const sandboxWorkspaceMediaReadAllowed = isConversationToolAllowed(capabilityProfile, "read");
@@ -270,7 +263,6 @@ function* assembleOpenClawCodingTools(
             reviewer: options?.exec?.reviewer ?? execConfig.reviewer,
             reviewTranscript: options?.exec?.reviewTranscript,
             trigger: options?.trigger,
-            continuesConversation: options?.continuesConversation,
             node: options?.exec?.node ?? execConfig.node,
             pathPrepend: mergeGatewayAgentCliPath(
               options?.exec?.pathPrepend ?? execConfig.pathPrepend,
@@ -349,12 +341,14 @@ function* assembleOpenClawCodingTools(
     accountId: options?.agentAccountId,
     channel: resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider),
   });
+  const sessionEventToolsAllow: string[] = [];
   const wrapGatewayCaller = createCodingToolsGatewayCaller({
     options,
     agentId: executionAgentId,
     sessionKey: executionSessionKey,
     accountId: gatewayCaller.accountId,
     capabilityProfile,
+    sessionEventToolsAllow,
   });
   const pluginToolOptions = {
     ...options,
@@ -478,7 +472,6 @@ function* assembleOpenClawCodingTools(
                 : (options?.computerTransport ??
                   resolveSessionPlacementComputer(options?.operationalRunInstance)),
             sourceReplyOnly,
-            enableHeartbeatTool,
             disablePluginTools: !includePluginTools,
             wrapBeforeToolCallHook: false,
             ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
@@ -604,7 +597,7 @@ function* assembleOpenClawCodingTools(
     onToolOutcome: options?.onToolOutcome,
     allocateToolOutcomeOrdinal: options?.allocateToolOutcomeOrdinal,
   };
-  return finalizeAgentTools({
+  const finalizedTools = finalizeAgentTools({
     ...options,
     tools: filterRequesterYieldTools(authorizedTools, executionSessionKey),
     wrapBeforeToolCallHook: preparedTools
@@ -614,7 +607,9 @@ function* assembleOpenClawCodingTools(
       : options?.wrapBeforeToolCallHook,
     hookContext,
     ...(options?.swarmCollector ? { approvalMode: "deny" as const } : {}),
-  }).map(wrapGatewayCaller);
+  });
+  sessionEventToolsAllow.push(...finalizedTools.map((tool) => tool.name));
+  return finalizedTools.map(wrapGatewayCaller);
 }
 
 /** @deprecated Use createOpenClawCodingToolsInternalAsync for runtime construction. */

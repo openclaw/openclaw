@@ -74,7 +74,7 @@ export function readChatHistoryPaginationKey(message: unknown): string | undefin
   return seq === undefined ? undefined : `seq:${seq}`;
 }
 
-function capOffsetChatHistoryProjectedMessages(
+function capChatHistoryProjectedMessages(
   messages: unknown[],
   max: number,
   sequence = readChatHistoryMessageSeq,
@@ -345,12 +345,11 @@ async function readIncrementalChatHistoryTailAttempt(params: {
         (message) => (readSequence(message) ?? Infinity) <= (newestPageSeq ?? -1),
       );
     }
-    const projected =
-      offset === 0
-        ? projection.messages.length > params.max
-          ? projection.messages.slice(-params.max)
-          : projection.messages
-        : capOffsetChatHistoryProjectedMessages(projection.messages, params.max, readSequence);
+    const projected = capChatHistoryProjectedMessages(
+      projection.messages,
+      params.max,
+      readSequence,
+    );
     return { filteredRawMessages, projected, projection };
   };
   const projectWindow = async () => {

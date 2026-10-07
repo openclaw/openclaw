@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { TypingMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
@@ -137,7 +137,7 @@ export async function admitFollowupTurn(params: {
     sessionKey: replySessionKey ?? "",
     expectedSessionId: initialEntry?.sessionId,
     storePath: params.defaults.storePath,
-    kind: "queued_followup",
+    kind: params.queued.run.scheduledAutomation?.job.idleOnly ? "background" : "queued_followup",
     resetTriggered: false,
     routeThreadId: params.queued.originatingThreadId,
     originatingLeafEntryId: params.queued.turnAdoptionLifecycle?.originatingLeafEntryId,
@@ -152,6 +152,27 @@ export async function admitFollowupTurn(params: {
   }
   const operation = admission.operation;
   operation.retainFailureUntilComplete();
+  const readOwnedSessionEntry = async () => {
+    const assertCurrent = () => {
+      assertOperatorCurrent();
+      operation.abortSignal.throwIfAborted();
+      params.queued.run.scheduledAutomation?.assertCurrent();
+    };
+    return await withSessionEntryReadOnlyInWorker(
+      {
+        agentId: run.agentId,
+        storePath: params.defaults.storePath,
+        sessionKey: replySessionKey ?? "",
+      },
+      assertCurrent,
+      async (read) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        return read.value;
+      },
+    );
+  };
   let queuedFollowupAdmitted = false;
   try {
     await admitFollowupRunLifecycle(params.queued);
@@ -176,7 +197,7 @@ export async function admitFollowupTurn(params: {
     }
     const admittedEntry = replySessionKey
       ? params.defaults.storePath
-        ? loadSessionEntry({ storePath: params.defaults.storePath, sessionKey: replySessionKey })
+        ? await readOwnedSessionEntry()
         : params.defaults.sessionStore?.[replySessionKey]
       : undefined;
     const expectedPersistedEntry =
@@ -298,12 +319,9 @@ export async function admitFollowupTurn(params: {
       turn.sendPolicy = resolveTurnSendPolicy(entry, turn.queued);
       turn.queued = { ...turn.queued, currentInboundContext: refreshedInboundContext };
     };
-    const readTurnSessionEntry = () =>
+    const readTurnSessionEntry = async () =>
       replySessionKey && params.defaults.storePath
-        ? loadSessionEntry({
-            storePath: params.defaults.storePath,
-            sessionKey: replySessionKey,
-          })
+        ? await readOwnedSessionEntry()
         : replySessionKey && params.defaults.sessionStore
           ? params.defaults.sessionStore[replySessionKey]
           : session.current();
@@ -342,7 +360,7 @@ export async function admitFollowupTurn(params: {
               pendingTerminalCompactionNotice = { phase, text };
               return;
             }
-            const noticeEntry = readTurnSessionEntry();
+            const noticeEntry = await readTurnSessionEntry();
             try {
               assertPersistedGeneration(noticeEntry);
             } catch (error) {
@@ -379,7 +397,6 @@ export async function admitFollowupTurn(params: {
         sessionStore,
         sessionKey: replySessionKey,
         storePath: params.defaults.storePath,
-        isHeartbeat: false,
         abortSignal: operation.abortSignal,
         onCompactionStart: () => operation.setPhase("preflight_compacting"),
         onSessionIdChanged: (sessionId) => operation.updateSessionId(sessionId),
@@ -391,7 +408,7 @@ export async function admitFollowupTurn(params: {
         );
       }
       if (replySessionKey && params.defaults.storePath) {
-        const persistedEntry = readTurnSessionEntry();
+        const persistedEntry = await readTurnSessionEntry();
         if (
           (!persistedEntry && preflightEntry) ||
           (persistedEntry &&
@@ -420,7 +437,7 @@ export async function admitFollowupTurn(params: {
       turn.preflightCompactionApplied =
         generationRotated || (activeEntry?.compactionCount ?? 0) > previousCompactionCount;
     } catch (error) {
-      const failureEntry = readTurnSessionEntry();
+      const failureEntry = await readTurnSessionEntry();
       if (!isSameSessionGeneration(failureEntry, session.current())) {
         assertPersistedGeneration(failureEntry);
       }

@@ -755,9 +755,9 @@ describe("reply run registry", () => {
 
   it("keeps supersession attribution when backend cancellation re-enters user abort", () => {
     const operation = createTestReplyOperation({
-      sessionKey: "agent:main:heartbeat-preemption",
-      sessionId: "heartbeat-preemption-session",
-      turnKind: "heartbeat",
+      sessionKey: "agent:main:background-preemption",
+      sessionId: "background-preemption-session",
+      turnKind: "background",
     });
     const order: string[] = [];
     const cancel = vi.fn((reason) => {
@@ -766,13 +766,13 @@ describe("reply run registry", () => {
     });
     operation.attachBackend({
       kind: "embedded",
-      runId: "heartbeat-preemption-run",
+      runId: "background-preemption-run",
       cancel,
       isStreaming: () => true,
     });
     operation.setPhase("running");
 
-    expect(supersedeReplyRunByRunId("heartbeat-preemption-run", () => order.push("record"))).toBe(
+    expect(supersedeReplyRunByRunId("background-preemption-run", () => order.push("record"))).toBe(
       true,
     );
     expect(cancel).toHaveBeenCalledWith("superseded");
@@ -783,24 +783,24 @@ describe("reply run registry", () => {
     });
   });
 
-  it("supersedes an abort-frozen heartbeat owner without cancelling its backend", () => {
+  it("supersedes an abort-frozen background owner without cancelling its backend", () => {
     const beforeSupersede = vi.fn();
     const cancel = vi.fn();
     const operation = createTestReplyOperation({
-      sessionKey: "agent:main:heartbeat-frozen",
-      sessionId: "heartbeat-frozen-session",
-      turnKind: "heartbeat",
+      sessionKey: "agent:main:background-frozen",
+      sessionId: "background-frozen-session",
+      turnKind: "background",
     });
     operation.attachBackend({
       kind: "embedded",
-      runId: "heartbeat-frozen-run",
+      runId: "background-frozen-run",
       cancel,
       isStreaming: () => true,
     });
     operation.setPhase("running");
     operation.freezeAbort();
 
-    expect(supersedeReplyRunByRunId("heartbeat-frozen-run", beforeSupersede)).toBe(true);
+    expect(supersedeReplyRunByRunId("background-frozen-run", beforeSupersede)).toBe(true);
     expect(beforeSupersede).toHaveBeenCalledTimes(1);
     expect(cancel).not.toHaveBeenCalled();
     expect(operation.result).toEqual({

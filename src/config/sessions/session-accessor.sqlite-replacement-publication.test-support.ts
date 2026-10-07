@@ -2,6 +2,7 @@ import { afterEach, vi } from "vitest";
 
 // The canonical executor still owns real SQL, admission, and settlement; only reply delivery changes.
 const delivery = vi.hoisted(() => ({
+  afterPrepared: undefined as (() => void | Promise<void>) | undefined,
   afterResult: undefined as ((result: unknown) => void | Promise<void>) | undefined,
   releaseFailure: undefined as Error | undefined,
   afterRelease: undefined as (() => Promise<void>) | undefined,
@@ -21,6 +22,13 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
       const owned = actual.captureOpenClawAgentDatabaseExecution(...args);
       return {
         ...owned,
+        get fileIdentity() {
+          return owned.fileIdentity;
+        },
+        prepare: async (...prepareArgs) => {
+          await owned.prepare(...prepareArgs);
+          await delivery.afterPrepared?.();
+        },
         runExisting: (source, operation, options) =>
           owned.runExisting(
             source,
@@ -28,7 +36,10 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
               operation({
                 execute: async (command, commandOptions) => {
                   const result = await scope.execute(command, commandOptions);
-                  if (command.type === "session.entries.replace") {
+                  if (
+                    command.type === "session.entries.replace" ||
+                    command.type === "session.lifecycle.project"
+                  ) {
                     await delivery.afterResult?.(result);
                   }
                   return result;
@@ -51,6 +62,7 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
 });
 
 afterEach(() => {
+  delivery.afterPrepared = undefined;
   delivery.afterResult = undefined;
   delivery.releaseFailure = undefined;
   delivery.afterRelease = undefined;

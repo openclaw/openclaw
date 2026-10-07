@@ -106,7 +106,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             cronEnabled: true,
             log: createNoopLogger(),
             enqueueSystemEvent: vi.fn(),
-            requestHeartbeat: vi.fn(),
+            enqueueSessionEvent: vi.fn(),
             runCommandJob: commandRunner(),
             runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
             sendCronWebhook: async (params) =>
@@ -232,7 +232,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
               cronEnabled: false,
               log: createNoopLogger(),
               enqueueSystemEvent: vi.fn(),
-              requestHeartbeat: vi.fn(),
+              enqueueSessionEvent: vi.fn(),
               runIsolatedAgentJob: vi.fn(async () => ({
                 status: "ok" as const,
                 summary: "WEBHOOK_OUTCOME",
@@ -304,7 +304,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             cronEnabled: true,
             log: createNoopLogger(),
             enqueueSystemEvent: vi.fn(),
-            requestHeartbeat: vi.fn(),
+            enqueueSessionEvent: vi.fn(),
             runIsolatedAgentJob: vi.fn(async () => ({
               status: "error" as const,
               error: "monitor failed",
@@ -436,7 +436,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             nowMs: () => now,
             log: createNoopLogger(),
             enqueueSystemEvent: vi.fn(),
-            requestHeartbeat: vi.fn(),
+            enqueueSessionEvent: vi.fn(),
             runIsolatedAgentJob,
             sendCronFailureAlert: async (params) =>
               await sendGatewayCronFailureAlert({
@@ -553,8 +553,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-alert-fallback-" },
       async (state) => {
-        const enqueueSystemEvent = vi.fn();
-        const requestHeartbeat = vi.fn();
+        const enqueueSessionEvent = vi.fn();
         const storePath = state.path("cron", "jobs.json");
         const cron = new CronService({
           scheduler: createTestGatewayScheduler(),
@@ -562,8 +561,8 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
           storePath,
           cronEnabled: true,
           log: createNoopLogger(),
-          enqueueSystemEvent,
-          requestHeartbeat,
+          enqueueSystemEvent: vi.fn(),
+          enqueueSessionEvent,
           runIsolatedAgentJob: vi.fn(async () => ({
             status: "error" as const,
             error: "provider unavailable",
@@ -599,18 +598,11 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
           await cron.run(job.id, "force");
 
           await vi.waitFor(() =>
-            expect(enqueueSystemEvent).toHaveBeenCalledWith(
+            expect(enqueueSessionEvent).toHaveBeenCalledWith(
               expect.stringContaining('Automation "fallback owner" failed 1 times'),
               { agentId: "work", sessionKey, contextKey: `cron:${job.id}:failure-alert` },
             ),
           );
-          expect(requestHeartbeat).toHaveBeenCalledWith({
-            source: "notifications-event",
-            intent: "immediate",
-            reason: "wake",
-            agentId: "work",
-            sessionKey,
-          });
           await vi.waitFor(async () => {
             expect(await persistedJob(storePath, job.id)).toMatchObject({
               state: {
@@ -653,7 +645,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             },
             log: createNoopLogger(),
             enqueueSystemEvent: vi.fn(),
-            requestHeartbeat: vi.fn(),
+            enqueueSessionEvent: vi.fn(),
             runIsolatedAgentJob: vi.fn(async () => ({
               status: "skipped" as const,
               error: "requests-in-flight",
@@ -725,7 +717,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
           cronEnabled: true,
           log: createNoopLogger(),
           enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
+          enqueueSessionEvent: vi.fn(),
           runCommandJob: commandRunner(),
           runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         });

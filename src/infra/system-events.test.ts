@@ -16,8 +16,9 @@ import {
   enqueueSystemEvent as enqueueSdkSystemEvent,
   peekSystemEventEntries as peekSdkSystemEventEntries,
 } from "../plugin-sdk/system-event-runtime.js";
-import { withSystemEventOwner } from "./system-event-ownership.js";
+import { publishSystemEventStoreResolver, withSystemEventOwner } from "./system-event-ownership.js";
 import {
+  claimSystemEventTurn,
   consumeSelectedSystemEventEntries,
   drainSystemEventEntries,
   enqueueSystemEvent,
@@ -106,6 +107,7 @@ describe("system events (session routing)", () => {
   });
 
   afterEach(() => {
+    publishSystemEventStoreResolver(undefined);
     vi.useRealTimers();
   });
 
@@ -526,33 +528,116 @@ describe("system events (session routing)", () => {
     expect(second.peekSystemEvents(beta)).toEqual([]);
   });
 
-  it("filters heartbeat/noise lines, returning undefined", async () => {
-    const key = "agent:main:test-heartbeat-filter";
-    enqueueSystemEvent("Read HEARTBEAT.md before continuing", { sessionKey: key });
-    enqueueSystemEvent("heartbeat poll: pending", { sessionKey: key });
-    enqueueSystemEvent("reason periodic: 5m", { sessionKey: key });
-
-    const result = await drainFormattedEvents(key);
-    expect(result).toBeUndefined();
-    expect(peekSystemEvents(key)).toStrictEqual([]);
-  });
-
-  it.each([
-    "Exec finished (gateway id=abc12345, code 0)",
-    "Exec failed (abc12345, signal SIGTERM) :: browser auth timed out",
-  ])("drains generic events without consuming %s", async (completion) => {
-    const key = "agent:main:test-exec-completion-prefix";
-    enqueueSystemEvent("Model switched to gpt-5.5", { sessionKey: key });
-    enqueueSystemEvent(completion, { sessionKey: key });
+  it("leaves an owned occurrence pending when an unrelated user drains its context", async () => {
+    const key = "agent:main:test-owned-completion";
+    const occurrence = expectDefined(
+      enqueueSystemEventEntry("Build completed", { sessionKey: key }),
+      "owned occurrence",
+    );
+    const cancelled = vi.fn();
+    const owner = expectDefined(
+      claimSystemEventTurn(key, occurrence, cancelled, "main"),
+      "occurrence owner",
+    );
     enqueueSystemEvent("Node connected", { sessionKey: key });
 
-    const result = await drainFormattedEvents(key);
-    expect(result).toContain("Model switched to gpt-5.5");
-    expect(result).toContain("Node connected");
-    expect(peekSystemEvents(key)).toEqual([completion]);
+    expect(await drainFormattedEvents(key)).toContain("Node connected");
     expect(await drainFormattedEvents(key)).toBeUndefined();
-    expect(peekSystemEvents(key)).toEqual([completion]);
+    expect(peekSystemEventEntries(key).map((event) => event.id)).toEqual([occurrence.id]);
+    expect(cancelled).not.toHaveBeenCalled();
+
+    owner.start();
+    expect(peekSystemEvents(key)).toEqual([]);
+    expect(cancelled).not.toHaveBeenCalled();
+    expect(owner.cancel()).toBe(false);
   });
+
+  it("drains ordinary notices regardless of text that formerly selected heartbeat execution", async () => {
+    const key = "agent:main:test-ordinary-notices";
+    const notices = [
+      "Read HEARTBEAT.md before continuing",
+      "heartbeat poll: pending",
+      "reason periodic: 5m",
+      "Exec finished (gateway id=abc12345, code 0)",
+      "Exec failed (abc12345, signal SIGTERM) :: browser auth timed out",
+    ];
+    for (const text of notices) {
+      enqueueSystemEvent(text, { sessionKey: key });
+    }
+
+    const result = await drainFormattedEvents(key);
+    for (const text of notices) {
+      expect(result).toContain(text);
+    }
+    expect(peekSystemEvents(key)).toEqual([]);
+  });
+
+  it("cancels only the claimed occurrence among identical pending turns", () => {
+    const key = "agent:main:test-owned-identical";
+    const create = () =>
+      expectDefined(
+        enqueueSystemEventEntry(
+          "Build completed",
+          { sessionKey: key, contextKey: "build:reused" },
+          { allowDuplicate: true },
+        ),
+        "queued occurrence",
+      );
+    const first = create();
+    const second = create();
+    const firstCancelled = vi.fn();
+    const secondCancelled = vi.fn();
+    const firstOwner = expectDefined(
+      claimSystemEventTurn(key, first, firstCancelled, "main"),
+      "first owner",
+    );
+    const secondOwner = expectDefined(
+      claimSystemEventTurn(key, second, secondCancelled, "main"),
+      "second owner",
+    );
+
+    expect(firstOwner.cancel()).toBe(true);
+    expect(firstOwner.cancel()).toBe(false);
+    expect(firstCancelled).toHaveBeenCalledOnce();
+    expect(secondCancelled).not.toHaveBeenCalled();
+    expect(peekSystemEventEntries(key).map((event) => event.id)).toEqual([second.id]);
+    expect(() => firstOwner.start()).toThrow("cancelled before admission");
+
+    secondOwner.start();
+    expect(peekSystemEvents(key)).toEqual([]);
+    expect(secondCancelled).not.toHaveBeenCalled();
+  });
+
+  it.each(["store replacement", "teardown"] as const)(
+    "retires pending occurrence custody on %s without cancelling an already started turn",
+    (retirement) => {
+      const key = "agent:main:test-owned-retirement";
+      publishSystemEventStoreResolver(() => "/original/agent.sqlite");
+      const startedCancelled = vi.fn();
+      const pendingCancelled = vi.fn();
+      const create = (text: string, cancel: () => void) => {
+        const occurrence = expectDefined(
+          enqueueSystemEventEntry(text, { sessionKey: key }),
+          "queued occurrence",
+        );
+        return expectDefined(claimSystemEventTurn(key, occurrence, cancel, "main"), "owner");
+      };
+      create("Started", startedCancelled).start();
+      const pending = create("Pending", pendingCancelled);
+
+      if (retirement === "store replacement") {
+        publishSystemEventStoreResolver(() => "/replacement/agent.sqlite");
+      } else {
+        resetSystemEventsForTest();
+      }
+
+      expect(pendingCancelled).toHaveBeenCalledOnce();
+      expect(startedCancelled).not.toHaveBeenCalled();
+      expect(peekSystemEvents(key)).toEqual([]);
+      expect(() => pending.start()).toThrow("cancelled before admission");
+      expect(pending.cancel()).toBe(false);
+    },
+  );
 
   it.each([
     {

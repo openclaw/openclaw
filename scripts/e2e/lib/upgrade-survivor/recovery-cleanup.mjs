@@ -390,7 +390,6 @@ async function customRestore() {
       "set",
       "agents",
       JSON.stringify({
-        defaults: { heartbeat: { every: "0m" } },
         entries: { main: { agentDir, workspace: path.join(home, "workspace") } },
       }),
       "--strict-json",

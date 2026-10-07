@@ -11,6 +11,7 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-typ
 import { CLAUDE_CLI_OFF_THINKING_PROFILE, CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
 import { normalizeAnthropicProviderConfigForProvider } from "./config-defaults.js";
 export { applyAnthropicConfigDefaults as applyConfigDefaults } from "./config-defaults.js";
+export { resolveAnthropicProactiveCadenceMs as resolveProactiveCadenceMs } from "./config-defaults.js";
 
 export const normalizeConfig = normalizeAnthropicProviderConfigForProvider<ModelProviderConfig>;
 

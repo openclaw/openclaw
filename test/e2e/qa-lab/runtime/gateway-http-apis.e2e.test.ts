@@ -6,6 +6,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createConfigIO, resetConfigRuntimeState } from "../../../../src/config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../../../../src/config/sessions.js";
+import { saveCronJobsStore } from "../../../../src/cron/store.js";
 import {
   agentCommandMock,
   getGatewayTestPort,
@@ -14,6 +15,7 @@ import {
   testState,
 } from "../../../../src/gateway/test-helpers.js";
 import { peekSystemEventEntries } from "../../../../src/infra/system-events.js";
+import { setTestEnvValue } from "../../../../src/test-utils/env.js";
 
 installGatewayTestHooks();
 
@@ -120,6 +122,34 @@ describe("Gateway HTTP API product proof", () => {
         },
       };
       testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+      testState.cronEnabled = true;
+      testState.cronStorePath = path.join(
+        path.dirname(configPath),
+        "cron",
+        "http-api-receiver.json",
+      );
+      setTestEnvValue("OPENCLAW_SKIP_CRON", "0");
+      const now = Date.now();
+      const nextRunAtMs = now + 86_400_000;
+      await saveCronJobsStore(testState.cronStorePath, {
+        version: 1,
+        jobs: [
+          {
+            id: "qa-http-wake-receiver",
+            agentId: "main",
+            name: "Gateway HTTP wake receiver",
+            enabled: true,
+            createdAtMs: now,
+            updatedAtMs: now,
+            schedule: { kind: "at", at: new Date(nextRunAtMs).toISOString() },
+            sessionTarget: "main",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "Review pending notices." },
+            delivery: { mode: "none" },
+            state: { nextRunAtMs },
+          },
+        ],
+      });
       agentCommandMock
         .mockResolvedValueOnce({ payloads: [{ text: "qa chat response" }] } as never)
         .mockResolvedValueOnce({ payloads: [{ text: "qa responses response" }] } as never);
@@ -267,7 +297,7 @@ describe("Gateway HTTP API product proof", () => {
         },
         body: JSON.stringify({ text: "Gateway HTTP QA wake", mode: "next-heartbeat" }),
       });
-      expect(authenticatedWake.response.status).toBe(200);
+      expect(authenticatedWake.response.status, JSON.stringify(authenticatedWake.body)).toBe(200);
       expect(authenticatedWake.body).toEqual({
         ok: true,
         mode: "next-heartbeat",

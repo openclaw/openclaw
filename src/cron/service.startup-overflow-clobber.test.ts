@@ -25,7 +25,8 @@ function makeState(storePath: string, overrides: Partial<CronServiceDeps>) {
     log: noopLogger,
     nowMs: () => Date.now(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
+    runCommandJob: vi.fn(async () => ({ status: "ok" as const })),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...overrides,
   });
@@ -40,9 +41,9 @@ describe("CronService startup catch-up repair scoping", () => {
       createdAtMs: nextRunAtMs - 60_000,
       updatedAtMs: nextRunAtMs - 60_000,
       schedule,
-      sessionTarget: "main",
+      sessionTarget: "isolated",
       wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: `tick-${id}` },
+      payload: { kind: "command", argv: ["tick", id] },
       state: { nextRunAtMs },
     };
   }
@@ -186,7 +187,7 @@ describe("CronService startup catch-up repair scoping", () => {
       "cron:date-limit-1:auto-disabled",
       "cron:date-limit-2:auto-disabled",
     ]);
-    const enqueueSystemEvent = vi.fn((_text: string, context?: { contextKey?: string }) => {
+    const enqueueSessionEvent = vi.fn((_text: string, context?: { contextKey?: string }) => {
       if (context?.contextKey && deferredAutoDisableReasons.has(context.contextKey)) {
         if (!order.includes("persist")) {
           const rows = openOpenClawStateDatabase()
@@ -208,22 +209,9 @@ describe("CronService startup catch-up repair scoping", () => {
         order.push("notify");
       }
     });
-    const requestHeartbeat = vi.fn(
-      (request: { source?: string; intent?: string; reason?: string }) => {
-        if (
-          order.at(-1) === "notify" &&
-          request.source === "notifications-event" &&
-          request.intent === "immediate" &&
-          request.reason === "wake"
-        ) {
-          order.push("heartbeat");
-        }
-      },
-    );
     const state = makeState(store.storePath, {
       nowMs: () => now,
-      enqueueSystemEvent,
-      requestHeartbeat,
+      enqueueSessionEvent,
       maxMissedJobsPerRestart: 1,
       missedJobStaggerMs: 5_000,
     });
@@ -242,7 +230,7 @@ describe("CronService startup catch-up repair scoping", () => {
           consecutiveErrors: 1,
         });
       }
-      expect(order).toEqual(["persist", "notify", "heartbeat", "notify", "heartbeat"]);
+      expect(order).toEqual(["persist", "notify", "notify"]);
       expect((await loadCronStore(store.storePath)).jobs).toEqual(
         expect.arrayContaining(
           deferred.map((job) =>

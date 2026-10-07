@@ -2,6 +2,12 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  createOxlintFileScope,
+  createOxlintShards,
+  filterOxlintShards,
+  selectCoreOxlintStripe,
+} from "../../scripts/run-oxlint-shards.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { installDistArtifactScripts } from "./dist-artifact-fixture.js";
 
@@ -85,17 +91,35 @@ const direct = [
   "config/tsconfig/oxlint.core.json",
   "src/state/consumer.ts",
 ];
-const striped = [
-  "--import",
-  "./scripts/tsx.mjs",
-  "scripts/run-oxlint-shards.mts",
-  "--only=core",
-  "--split-core",
-  "--core-stripe=1/5",
-  "--files-json",
-  '["src/state/consumer.ts"]',
-  "--threads=1",
-];
+function striped(root: string) {
+  const total = 5;
+  const core = filterOxlintShards(
+    createOxlintShards({ cwd: root, splitCore: true }),
+    new Set(["core"]),
+  );
+  const scope = createOxlintFileScope(["src/state/consumer.ts"], root);
+  // Compiler-policy fixtures add source roots before this consumer's directory.
+  const index = Array.from({ length: total }, (_, offset) => offset + 1).find(
+    (stripeIndex) =>
+      scope.selectShards(
+        selectCoreOxlintStripe(core, { index: stripeIndex, total }, { isolateLargeTargets: true }),
+      ).length > 0,
+  );
+  if (index === undefined) {
+    throw new Error("Synthetic consumer has no canonical lint stripe");
+  }
+  return [
+    "--import",
+    "./scripts/tsx.mjs",
+    "scripts/run-oxlint-shards.mts",
+    "--only=core",
+    "--split-core",
+    `--core-stripe=${index}/${total}`,
+    "--files-json",
+    '["src/state/consumer.ts"]',
+    "--threads=1",
+  ];
+}
 
 describe("typed lint Kysely prerequisites", () => {
   it.each([
@@ -119,7 +143,7 @@ describe("typed lint Kysely prerequisites", () => {
         fixture.write("src/state/consumer.ts", "export const valid = true;\n");
       }
       expect(fs.existsSync(fixture.output)).toBe(false);
-      const result = fixture.run(args);
+      const result = fixture.run(typeof args === "function" ? args(fixture.root) : args);
       if (invalid) {
         expect(result.status, result.stdout + result.stderr).toBe(1);
         expect(result.stdout + result.stderr).toContain("syntax error");
@@ -143,7 +167,7 @@ describe("typed lint Kysely prerequisites", () => {
     for (const args of [
       ["scripts/run-oxlint.mjs", "--version"],
       [...direct, "--openclaw-focused-config"],
-      [...striped, "--openclaw-focused-config"],
+      [...striped(fixture.root), "--openclaw-focused-config"],
     ]) {
       const result = fixture.run(args);
       expect(result.status, result.stdout + result.stderr).toBe(0);

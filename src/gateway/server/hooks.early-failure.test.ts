@@ -31,9 +31,15 @@ import { resolveHooksConfig } from "../hooks.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "../server-lanes.js";
 
 const mocks = vi.hoisted(() => ({
-  enqueueSystemEvent: vi.fn(),
+  enqueueSessionEvent: vi.fn((_text: string, _options: Record<string, unknown>) => ({
+    settled: Promise.resolve({ status: "completed" }),
+  })),
+  captureSessionEventTarget: vi.fn(async (agentId: string, sessionKey: string) => ({
+    agentId,
+    sessionKey,
+    sessionId: "accepted-session",
+  })),
   getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
-  requestHeartbeat: vi.fn(),
   runCronIsolatedAgentTurn: vi.fn(),
 }));
 
@@ -43,14 +49,15 @@ vi.mock("../../config/io.js", () => ({
 vi.mock("../../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: mocks.runCronIsolatedAgentTurn,
 }));
-vi.mock("../../infra/heartbeat-wake.js", () => ({
-  requestHeartbeat: mocks.requestHeartbeat,
+// mock-isolation: Control recovery wake receipts while testing hook runner failures and lane admission.
+vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
+  captureSessionEventTargetForHost: mocks.captureSessionEventTarget,
+  enqueueSessionEventForHost: mocks.enqueueSessionEvent,
 }));
+// mock-isolation: Keep failure notices out of the process-wide queue while inspecting hook recovery.
 vi.mock("../../infra/system-events.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/system-events.js")>()),
-  enqueueSystemEvent: mocks.enqueueSystemEvent,
-  enqueueSystemEventWithReceipt: (...args: unknown[]) =>
-    mocks.enqueueSystemEvent(...args) ? () => true : null,
+  enqueueSystemEvent: vi.fn(),
 }));
 
 const { createGatewayHookDispatcher, createGatewayHooksRequestHandler } =
@@ -368,8 +375,7 @@ describe("gateway hook early-failure recovery", () => {
       expect(meta).not.toHaveProperty(key);
     }
     expect(result).toEqual(originalResult);
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(testCase.events);
-    expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(testCase.events);
+    expect(mocks.enqueueSessionEvent).toHaveBeenCalledTimes(testCase.events);
   });
 
   it.each([
@@ -500,8 +506,7 @@ describe("gateway hook early-failure recovery", () => {
         expect(line).toContain(message);
       }
       const events = outcome === "delivery" ? 0 : 1;
-      expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(events);
-      expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(events);
+      expect(mocks.enqueueSessionEvent).toHaveBeenCalledTimes(events);
     },
   );
 
@@ -520,19 +525,12 @@ describe("gateway hook early-failure recovery", () => {
     });
     expect(mocks.runCronIsolatedAgentTurn).not.toHaveBeenCalled();
 
-    await vi.waitFor(() => expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1));
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+    await vi.waitFor(() => expect(mocks.enqueueSessionEvent).toHaveBeenCalledTimes(1));
+    expect(mocks.enqueueSessionEvent).toHaveBeenCalledWith(
       "Hook Recovery (error): Error: required system config unavailable",
-      { sessionKey: global ? "agent:hooks:global" : testCase.eventSessionKey },
+      expect.objectContaining({ agentId: "hooks", sessionKey: testCase.eventSessionKey }),
     );
 
-    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
-      source: "hook",
-      intent: "immediate",
-      reason: expect.stringMatching(/^hook:[0-9a-f-]+:error$/),
-      agentId: "hooks",
-      ...(global ? {} : { sessionKey: testCase.eventSessionKey }),
-    });
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
@@ -669,7 +667,7 @@ describe("gateway hook early-failure recovery", () => {
     },
   );
 
-  it("announces successful plugin hook turns through the existing heartbeat path", async () => {
+  it("announces successful plugin hook turns through ordinary session events", async () => {
     mocks.getRuntimeConfig.mockReturnValue(createConfig(false));
     mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
       async (params: { onExecutionStarted?: () => void }) => {
@@ -684,18 +682,11 @@ describe("gateway hook early-failure recovery", () => {
     ).resolves.toEqual({ ok: true, runId: expect.any(String) });
 
     await vi.waitFor(() =>
-      expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect(mocks.enqueueSessionEvent).toHaveBeenCalledWith(
         "Hook IMAP fastmail: New email summarized",
-        { sessionKey: "agent:hooks:main" },
+        expect.objectContaining({ sessionKey: "agent:hooks:main" }),
       ),
     );
-    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
-      source: "hook",
-      intent: "immediate",
-      reason: expect.stringMatching(/^hook:[0-9a-f-]+$/),
-      agentId: "hooks",
-      sessionKey: "agent:hooks:main",
-    });
   });
 
   it("reports plugin hook execution errors through the existing failure path", async () => {
@@ -712,22 +703,18 @@ describe("gateway hook early-failure recovery", () => {
       expect.stringMatching(/^hook agent run completed /),
       expect.objectContaining({ status: "error", summary: "Error: runner preparation failed" }),
     );
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+    expect(mocks.enqueueSessionEvent).toHaveBeenCalledWith(
       "Hook IMAP fastmail (error): Error: runner preparation failed",
-      { sessionKey: "agent:hooks:main" },
+      expect.objectContaining({ sessionKey: "agent:hooks:main" }),
     );
-    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
-      source: "hook",
-      intent: "immediate",
-      reason: expect.stringMatching(/^hook:[0-9a-f-]+:error$/),
-      agentId: "hooks",
-      sessionKey: "agent:hooks:main",
-    });
   });
 
   it.each([
     { name: "missing agent ownership", override: { agentId: "  " }, reason: "agentId is required" },
-    { name: "non-hook session", override: { sessionKey: "agent:hooks:main" } },
+    {
+      name: "non-hook session",
+      override: { sessionKey: "agent:hooks:main" },
+    },
     { name: "empty hook session", override: { sessionKey: "hook:" } },
     { name: "session whitespace", override: { sessionKey: "hook:imap:bad value" } },
     { name: "trimmed session whitespace", override: { sessionKey: " hook:imap:message" } },

@@ -5,7 +5,7 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
-import { hasActiveCronJobs } from "../../cron/active-jobs.js";
+import { getActiveCronJobCount } from "../../cron/active-jobs.js";
 import { CronService, type CronEvent } from "../../cron/service.js";
 import { setupCronServiceSuite } from "../../cron/service.test-harness.js";
 import type { CronServiceDeps } from "../../cron/service/state.js";
@@ -101,7 +101,7 @@ describe("cron self-removal", () => {
           });
           expect(respond).toHaveBeenCalledWith(true, { ok: true, removed: true }, undefined);
           abortedAfterRemoval = abortSignal?.aborted;
-          activeAfterRemoval = hasActiveCronJobs();
+          activeAfterRemoval = getActiveCronJobCount() > 0;
           return {
             status: "ok" as const,
             summary: "final reply after self-cleanup",
@@ -119,7 +119,6 @@ describe("cron self-removal", () => {
         defaultAgentId: "main",
         log: logger,
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         onEvent: (event) => events.push(event),
         runIsolatedAgentJob: runJob,
         runScriptJob: runJob,
@@ -158,7 +157,7 @@ describe("cron self-removal", () => {
           ]);
           expect(abortedAfterRemoval).toBe(false);
           expect(activeAfterRemoval).toBe(true);
-          expect(hasActiveCronJobs()).toBe(false);
+          expect(getActiveCronJobCount()).toBe(0);
         });
         expect(await cron.readJob(job.id)).toBeUndefined();
       } finally {

@@ -1,13 +1,13 @@
-// Public library facade for consumers embedding OpenClaw reply runtime APIs.
-import type { getReplyFromConfig as getReplyFromConfigRuntime } from "./auto-reply/reply.runtime.js";
+import type { promptYesNo as promptYesNoRuntime } from "./cli/prompt.js";
 import "./auto-reply/templating.js";
 import "./cli/deps.js";
-import type { promptYesNo as promptYesNoRuntime } from "./cli/prompt.js";
+import type { ensureBinary as ensureBinaryRuntime } from "./infra/binaries.js";
 import "./cli/wait.js";
 import "./config/config.js";
 import "./config/sessions/paths.js";
 import "./config/sessions/session-key.js";
-import type { ensureBinary as ensureBinaryRuntime } from "./infra/binaries.js";
+// Public library facade for consumers embedding OpenClaw reply runtime APIs.
+import type { getReplyFromConfig as getReplyFromConfigRuntime } from "./plugin-sdk/reply-runtime.js";
 import "./infra/ports.js";
 import type { monitorWebChannel as monitorWebChannelRuntime } from "./plugins/runtime/runtime-web-channel-plugin.js";
 import type {
@@ -36,7 +36,7 @@ type RunExec = typeof runExecRuntime;
 type RunCommandWithTimeout = typeof runCommandWithTimeoutRuntime;
 type MonitorWebChannel = typeof monitorWebChannelRuntime;
 
-const loadReplyRuntime = createLazyRuntimeModule(() => import("./auto-reply/reply.runtime.js"));
+const loadReplyRuntime = createLazyRuntimeModule(() => import("./plugin-sdk/reply-runtime.js"));
 const loadPromptRuntime = createLazyRuntimeModule(() => import("./cli/prompt.js"));
 const loadBinariesRuntime = createLazyRuntimeModule(() => import("./infra/binaries.js"));
 const loadExecRuntime = createLazyRuntimeModule(() => import("./process/exec.js"));

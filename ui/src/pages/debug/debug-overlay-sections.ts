@@ -1,4 +1,5 @@
 import { formatByteSize } from "@openclaw/normalization-core";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
@@ -16,6 +17,7 @@ import {
 } from "../../components/gateway-vitals.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import {
   loadCommandLaneDiagnostics,
@@ -178,14 +180,56 @@ function renderActiveRuns({ sessions, totalCount, hasMore }: SessionsListResult)
   `;
 }
 
+function safeEventText(value: unknown): string {
+  return typeof value === "string"
+    ? truncateUtf16Safe(formatUiExternalText(value).replace(/[\r\n\t]/g, " "), 160)
+    : "";
+}
+
+function describeCronEvent(payload: unknown): string {
+  const event = asOptionalObjectRecord(payload);
+  if (!event) {
+    return "cron";
+  }
+  const parts = ["cron"];
+  const jobId = safeEventText(event.jobId);
+  const runId = safeEventText(event.runId);
+  if (jobId) {
+    parts.push(t("debug.overlay.eventJob", { id: jobId }));
+  }
+  if (runId) {
+    parts.push(t("debug.overlay.eventRun", { id: runId }));
+  }
+  const outcome = safeEventText(event.status) || safeEventText(event.action);
+  if (outcome) {
+    parts.push(outcome);
+  }
+  // Only owner-recorded fields belong here; do not infer identity or expose prompts/scratch.
+  const reason =
+    safeEventText(event.error) ||
+    safeEventText(event.deliveryError) ||
+    safeEventText(event.deliverySuppressionReason);
+  if (reason) {
+    parts.push(reason);
+  }
+  return parts.join(" · ");
+}
+
 function renderEvents(gateway: ApplicationGateway): TemplateResult {
   // The store prepends: eventLog is newest-first, so the head is the live tail.
-  const events = gateway.eventLog.slice(0, 8);
+  // Deprecated heartbeat aliases describe the same outcomes as canonical cron events.
+  const events = gateway.eventLog.filter((event) => event.event !== "heartbeat").slice(0, 8);
   return events.length > 0
     ? html`<ul class="debug-overlay__list debug-overlay__events">
         ${events.map(
           (event) => html`<li>
-            <span class="mono">${event.event}</span>
+            <span class="mono"
+              >${
+                event.event === "cron"
+                  ? describeCronEvent(event.payload)
+                  : safeEventText(event.event)
+              }</span
+            >
             <time>${formatRelativeTimestamp(event.ts)}</time>
           </li>`,
         )}

@@ -1,6 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import {
   createAdmittedRunOperatorAuthority,
   readAdmittedRunOperatorAuthority,
@@ -327,7 +331,6 @@ describe("followup queue authority", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       sendPolicyDenied: false,
       successfulSourceReplyDelivery: false,
-      isHeartbeat: false,
       isRoomEvent: false,
     });
     if (recovery.kind !== "retry") {
@@ -358,8 +361,8 @@ describe("followup queue authority", () => {
     }
   });
 
-  it("splits collect batches when queued authority facts change", async () => {
-    const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 3);
+  it("splits collect batches when queued authority or execution settings change", async () => {
+    const q = createQueueCase({ mode: "collect", debounceMs: 0 });
     const route = { originatingChannel: "slack" as const, originatingTo: "channel:A" };
     const pluginGrant = createRun({ prompt: "plugin grant", ...route });
     pluginGrant.run.runtimePluginToolGrant = {
@@ -377,19 +380,36 @@ describe("followup queue authority", () => {
       provider: "openai",
       model: "gpt-5.6-luna",
     };
-    q.add(pluginGrant);
-    q.add(scheduled);
-    q.add(handoff);
+    const lightweight = createRun({ prompt: "lightweight source", ...route });
+    lightweight.run.bootstrapContextMode = "lightweight";
+    const cleanup = createRun({ prompt: "one-shot cleanup", ...route });
+    cleanup.run.cleanupBundleMcpOnRunEnd = true;
+    const sources = [pluginGrant, scheduled, handoff, lightweight, cleanup];
+    const settled = sources.map(() => createDeferred());
+    for (const [index, run] of sources.entries()) {
+      run.turnAdoptionLifecycle = {
+        admission: "cancel-only",
+        onAdopted() {},
+        onSettled: () => settled[index]!.resolve(),
+      };
+      q.add(run);
+    }
     q.start();
-    await q.done.promise;
+    await Promise.all(settled.map(({ promise }) => promise));
     expect(q.calls.map((call) => call.prompt)).toEqual([
       expect.stringContaining("plugin grant"),
       expect.stringContaining("scheduled authority"),
       expect.stringContaining("trusted handoff"),
+      expect.stringContaining("lightweight source"),
+      expect.stringContaining("one-shot cleanup"),
     ]);
     expect(q.calls[0]?.run.runtimePluginToolGrant).toEqual(pluginGrant.run.runtimePluginToolGrant);
     expect(q.calls[1]?.run.scheduledToolPolicy).toEqual(scheduled.run.scheduledToolPolicy);
     expect(q.calls[2]?.run.trustedInternalHandoff).toEqual(handoff.run.trustedInternalHandoff);
+    expect(q.calls[3]?.run.bootstrapContextMode).toBe("lightweight");
+    expect(q.calls[3]?.run.cleanupBundleMcpOnRunEnd).toBeUndefined();
+    expect(q.calls[4]?.run.bootstrapContextMode).toBeUndefined();
+    expect(q.calls[4]?.run.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
   it.each([

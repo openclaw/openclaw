@@ -46,7 +46,7 @@ export function createAgentTurnPresentation(params: {
     if (params.turn.followupRun.run.silentExpected) {
       return { skip: true };
     }
-    if (!params.turn.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
+    if (text?.includes("HEARTBEAT_OK")) {
       const stripped = stripHeartbeatToken(text, { mode: "message" });
       if (stripped.didStrip && !params.heartbeatState.didLogStrip) {
         params.heartbeatState.didLogStrip = true;

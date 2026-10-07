@@ -93,7 +93,6 @@ function createConfig(url: string): OpenClawConfig {
     secrets: { egressProxy: { enabled: true } },
     agents: {
       defaults: {
-        heartbeat: { every: "0m" },
         model: { primary: MODEL_REF },
         models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
         skipBootstrap: true,

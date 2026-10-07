@@ -17,6 +17,7 @@ describe("Claw Gateway agent readiness", () => {
       config: { agents: { entries: { worker: {} } } },
       configRevisionHash: "revision-new",
       appliedConfigHash: "revision-new",
+      reloadSettled: true,
     });
 
     await expect(waitUntilGatewayAgentAvailable("worker")).resolves.toBeUndefined();
@@ -26,28 +27,42 @@ describe("Claw Gateway agent readiness", () => {
     expect(mocks.sleep).not.toHaveBeenCalled();
   });
 
-  it("waits for the requested agent in an applied revision after a cached response", async () => {
+  it("waits for the requested agent and settled revision after a cached response", async () => {
     mocks.callGatewayFromCli
       .mockResolvedValueOnce({
         config: { agents: { entries: { other: {} } } },
         configRevisionHash: "revision-old",
         appliedConfigHash: "revision-old",
+        reloadSettled: true,
       })
       .mockResolvedValueOnce({
         config: { agents: { entries: { worker: {} } } },
         configRevisionHash: "revision-new",
         appliedConfigHash: "revision-old",
+        reloadSettled: true,
       })
       .mockResolvedValueOnce({
         config: { agents: { entries: { worker: {} } } },
         configRevisionHash: "revision-new",
         appliedConfigHash: "revision-new",
+      })
+      .mockResolvedValueOnce({
+        config: { agents: { entries: { worker: {} } } },
+        configRevisionHash: "revision-new",
+        appliedConfigHash: "revision-new",
+        reloadSettled: false,
+      })
+      .mockResolvedValueOnce({
+        config: { agents: { entries: { worker: {} } } },
+        configRevisionHash: "revision-new",
+        appliedConfigHash: "revision-new",
+        reloadSettled: true,
       });
 
     await expect(waitUntilGatewayAgentAvailable("worker")).resolves.toBeUndefined();
 
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledTimes(3);
-    expect(mocks.sleep).toHaveBeenCalledTimes(2);
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledTimes(5);
+    expect(mocks.sleep).toHaveBeenCalledTimes(4);
     expect(mocks.sleep).toHaveBeenCalledWith(100);
   });
 

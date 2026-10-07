@@ -51,6 +51,7 @@ describe("check-script-erasability", () => {
         "scripts/check-script-erasability.mjs",
         "scripts/lib/tsx-cli-shim.mjs",
         "scripts/lib/local-check-runtime.mts",
+        "src/infra/node-compiler-policy.mjs",
         "src/infra/node-runtime-executable.ts",
       ]) {
         const destination = path.join(fixtureRoot, relativePath);

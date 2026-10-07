@@ -108,7 +108,7 @@ export async function checkCodexThreadAppAvailability(params: {
   });
   if (failures.length > 0) {
     // Availability is not authorization: Codex still filters and checks each tool.
-    // An optional app with no allowed tools must not prevent unrelated chat or heartbeats.
+    // An optional app with no allowed tools must not prevent unrelated chat or scheduled turns.
     embeddedAgentLog.warn("codex apps unavailable; continuing with remaining tools", {
       threadId: params.threadId,
       failures,

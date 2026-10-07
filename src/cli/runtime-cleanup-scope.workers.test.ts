@@ -19,6 +19,8 @@ const directories = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 it("joins shared-state workers after executable cleanup while preserving borrowed lifetimes", async () => {
+  await closeOpenClawStateDatabaseAsync();
+  await closeDefaultRetainedNativeWorkerSource();
   const root = directories.make("openclaw-cli-worker-exit-");
   const options = {
     path: path.join(root, "state", "openclaw.sqlite"),

@@ -20,12 +20,8 @@ export type ReplyCompletion =
     };
 
 /** Returns true when a lifecycle turn must not redefine session-stable reply policy. */
-export function isSyntheticSourceReplyTurn(params: {
-  inputProvenance?: InputProvenance;
-  isHeartbeat?: boolean;
-}): boolean {
+export function isSyntheticSourceReplyTurn(params: { inputProvenance?: InputProvenance }): boolean {
   return (
-    params.isHeartbeat === true ||
     params.inputProvenance?.kind === "inter_session" ||
     params.inputProvenance?.kind === "internal_system"
   );

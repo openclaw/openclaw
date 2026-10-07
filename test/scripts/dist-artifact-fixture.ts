@@ -31,6 +31,8 @@ export function installDistArtifactScripts(
     "scripts/windows-cmd-helpers.mjs",
     "packages/normalization-core/src",
     "packages/normalization-core/package.json",
+    "src/infra/node-compiler-policy.mjs",
+    "src/infra/node-compiler-policy.d.mts",
   ]) {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.cpSync(path.join(sourceRoot, file), path.join(root, file), { recursive: true });

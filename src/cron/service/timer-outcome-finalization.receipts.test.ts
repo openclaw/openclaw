@@ -369,7 +369,6 @@ describe("cron outcome receipt finalization", () => {
       log: { ...noopLogger, warn },
       nowMs: () => startedAt + 1,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
       onEvent: (event) => events.push(event),
     });

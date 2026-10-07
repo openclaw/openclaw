@@ -161,7 +161,7 @@ export default function register(api) {
       },
     },
 
-    async ingest({ sessionId, message, isHeartbeat }) {
+    async ingest({ sessionId, message }) {
       // Store the message in your data store
       return { ingested: true };
     },

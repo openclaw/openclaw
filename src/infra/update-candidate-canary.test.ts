@@ -9,6 +9,7 @@ import { createInvalidConfigError } from "../config/io.invalid-config.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import * as diskSpace from "./disk-space.js";
+import { resolveForwardedNodeCompilerArgs } from "./node-compiler-policy.mjs";
 import { registerCanaryMigrationPolicyTests } from "./update-candidate-canary-migration.test-support.js";
 import {
   registerCanaryProgressWorkerTests,
@@ -210,7 +211,7 @@ describe("update candidate canary", () => {
       expect(result.steps[0]?.warnings).toEqual(warnings);
       expect(mocks.snapshot.mock.calls[0]?.[0]).toEqual([
         nodeRunner,
-        ...runtimeArgs,
+        ...(runtime === "node" ? resolveForwardedNodeCompilerArgs() : runtimeArgs),
         path.join(root, "dist", "infra", "update-candidate-state.worker.js"),
       ]);
       expect(mocks.snapshot.mock.calls[0]?.[1].baseEnv.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);

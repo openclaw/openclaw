@@ -92,7 +92,7 @@ function sessionIdentities(index) {
     .toSorted((a, b) => a.sessionKey.localeCompare(b.sessionKey));
 }
 
-function readSeededAgents(stateDir, configFile, artifactRoot) {
+function readSeededAgents(stateDir, configFile, artifactRoot, explicitAgentIds) {
   const config = readJson(configFile);
   const entries =
     config.agents?.entries ??
@@ -100,10 +100,11 @@ function readSeededAgents(stateDir, configFile, artifactRoot) {
   const agentIds = Object.keys(entries).toSorted();
   const nativeEligibility = path.join(artifactRoot, "native-assignment-eligibility.json");
   const expectedAgentIds =
-    fs.existsSync(nativeEligibility) && readJson(nativeEligibility).status === "required"
+    explicitAgentIds ??
+    (fs.existsSync(nativeEligibility) && readJson(nativeEligibility).status === "required"
       ? ["main", "native-proof", "ops"]
-      : ["main", "ops"];
-  assert.deepEqual(agentIds, expectedAgentIds, "legacy operator seeded agent roster changed");
+      : ["main", "ops"]);
+  assert.deepEqual(agentIds, expectedAgentIds, "seeded agent roster changed");
   return agentIds.map((agentId) => {
     const agentRoot = path.join(stateDir, "agents", agentId);
     if (entries[agentId].agentDir) {
@@ -306,7 +307,27 @@ function assertSeededAgents(snapshot) {
   }
 }
 
-function prepare(baselineVersion, candidateTarball, stateDir, snapshotFile, configFile) {
+function prepare(
+  baselineVersion,
+  candidateTarball,
+  stateDir,
+  snapshotFile,
+  configFile,
+  expectedAgentIdsJson,
+) {
+  const expectedAgentIds =
+    expectedAgentIdsJson === undefined ? undefined : JSON.parse(expectedAgentIdsJson);
+  if (expectedAgentIds !== undefined) {
+    assert(
+      Array.isArray(expectedAgentIds) &&
+        expectedAgentIds.length > 0 &&
+        expectedAgentIds.every(
+          (id) => typeof id === "string" && /^[a-z0-9][a-z0-9_-]*$/u.test(id),
+        ) &&
+        new Set(expectedAgentIds).size === expectedAgentIds.length,
+      "Expected unique canonical agent IDs",
+    );
+  }
   const manifest = JSON.parse(
     execFileSync("tar", ["-xOf", candidateTarball.replace(/^file:/u, ""), "package/package.json"], {
       encoding: "utf8",
@@ -327,7 +348,12 @@ function prepare(baselineVersion, candidateTarball, stateDir, snapshotFile, conf
     candidateSchemaVersions: manifest.openclaw.schemaVersions,
     stateDir,
     databases: readSchemas(stateDir),
-    agents: readSeededAgents(stateDir, configFile, path.dirname(snapshotFile)),
+    agents: readSeededAgents(
+      stateDir,
+      configFile,
+      path.dirname(snapshotFile),
+      expectedAgentIds?.toSorted(),
+    ),
   };
   fs.writeFileSync(snapshotFile, `${JSON.stringify(snapshot, null, 2)}\n`);
   return "success";
@@ -371,8 +397,9 @@ function assertOutcome(snapshotFile, exitCode, installedVersion, acceptedOutcome
 try {
   const [command, ...args] = process.argv.slice(2);
   assert(
-    (command === "prepare" && args.length === 5) || (command === "assert" && args.length === 5),
-    "usage: schema-expectation.mjs prepare <baseline-version> <candidate.tgz> <state-dir> <snapshot.json> <config.json> | assert <snapshot.json> <exit-code> <installed-version> <accepted-outcome> <after.json>",
+    (command === "prepare" && (args.length === 5 || args.length === 6)) ||
+      (command === "assert" && args.length === 5),
+    "usage: schema-expectation.mjs prepare <baseline-version> <candidate.tgz> <state-dir> <snapshot.json> <config.json> [expected-agent-ids-json] | assert <snapshot.json> <exit-code> <installed-version> <accepted-outcome> <after.json>",
   );
   process.stdout.write(`${command === "prepare" ? prepare(...args) : assertOutcome(...args)}\n`);
 } catch (error) {

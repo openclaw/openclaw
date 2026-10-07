@@ -6,7 +6,7 @@ import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
+import type { dispatchInboundMessageInternal } from "../auto-reply/dispatch.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
@@ -119,7 +119,7 @@ describe("gateway WebSocket chat abort settlement", () => {
       const waitInstalled = createDeferred();
       const runId = `real-websocket-explicit-abort-before-${settlement}-dispatch`;
       const terminalStates = trackChatTerminalStates(socket, runId);
-      const dispatches: Array<ReturnType<typeof dispatchInboundMessage>> = [];
+      const dispatches: Array<ReturnType<typeof dispatchInboundMessageInternal>> = [];
       const frames: Promise<unknown>[] = [];
       let waitWork: ReturnType<typeof agentJobs.waitForAgentJob> | undefined;
       let waitSettled = false;

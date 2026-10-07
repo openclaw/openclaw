@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isSystemOwnedCronPayloadKind } from "../../../../src/cron/types.js";
 import type { CronJob, CronPayload } from "../../api/types.ts";
 
 function isCronPayload(value: unknown): value is CronPayload {
@@ -18,7 +17,7 @@ function isCronPayload(value: unknown): value is CronPayload {
   if (value.kind === "script") {
     return typeof value.script === "string";
   }
-  return isSystemOwnedCronPayloadKind(value.kind);
+  return false;
 }
 
 export function getCronJobPayload(job: CronJob): CronPayload | null {

@@ -117,14 +117,19 @@ export function registerSlackShortcutHandler(params: {
     runtimeContext.runtime.log?.(
       `slack:interaction ${interactionType} callback=${callbackId} user=${userId} channel=${channelId ?? "direct"}`,
     );
-    enqueueSlackInteractionEvent(params.formatSystemEvent(eventPayload), route, {
-      contextKey,
-      deliveryContext: {
-        channel: "slack",
-        to: deferredTarget.target,
-        accountId: runtimeContext.accountId,
-        threadId: threadTs,
+    enqueueSlackInteractionEvent(
+      params.formatSystemEvent(eventPayload),
+      route,
+      {
+        contextKey,
+        deliveryContext: {
+          channel: "slack",
+          to: deferredTarget.target,
+          accountId: runtimeContext.accountId,
+          threadId: threadTs,
+        },
       },
-    });
+      runtimeContext.runtime.log,
+    );
   });
 }

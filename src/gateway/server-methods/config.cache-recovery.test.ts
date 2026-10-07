@@ -79,6 +79,27 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+it("reports live reload settlement without rereading the cached config", async () => {
+  let reloadSettled = false;
+  const reader = createConfigHandlerHarness({
+    contextOverrides: {
+      getConfigReloaderHotReloadStatus: () => "active",
+      isConfigReloadSettled: () => reloadSettled,
+    },
+  });
+  const get = expectDefined(configHandlers["config.get"], "registered config.get");
+  for (const settled of [false, true, false]) {
+    reloadSettled = settled;
+    await get(reader.options);
+    expect(reader.respond).toHaveBeenLastCalledWith(
+      true,
+      expect.objectContaining({ hash: "base-hash", reloadSettled: settled }),
+      undefined,
+    );
+  }
+  expect(mocks.read).toHaveBeenCalledOnce();
+});
+
 it.each([
   { method: "config.patch", editAt: "before request" },
   { method: "config.patch", editAt: "during commit" },

@@ -166,6 +166,8 @@ describe("check-extension-package-tsc-boundary", () => {
       "packages/normalization-core/package.json",
       "src/shared/non-packaged-plugin-dirs.ts",
       "src/plugins/package-entrypoints.ts",
+      "src/infra/node-compiler-policy.mjs",
+      "src/infra/node-compiler-policy.d.mts",
     ]) {
       fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
       fs.cpSync(path.resolve(file), path.join(root, file), { recursive: true });

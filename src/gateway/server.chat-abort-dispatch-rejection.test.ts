@@ -10,7 +10,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
-import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
+import type { dispatchInboundMessageInternal } from "../auto-reply/dispatch.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import * as staging from "../auto-reply/reply/stage-sandbox-media.js";
 import { clearConfigCache } from "../config/config.js";
@@ -144,7 +144,7 @@ describe("gateway WebSocket chat abort ownership", () => {
     const connectionOffset = connectionReleases.length;
     const sockets: Array<{ socket: GatewaySocket; closed: Promise<void> }> = [];
     const frames: Promise<unknown>[] = [];
-    const dispatches: Array<ReturnType<typeof dispatchInboundMessage>> = [];
+    const dispatches: Array<ReturnType<typeof dispatchInboundMessageInternal>> = [];
     let admissionRelease: Promise<void> | undefined;
     const ownFrame = <T>(frame: Promise<T>) => {
       frames.push(frame);
@@ -194,7 +194,9 @@ describe("gateway WebSocket chat abort ownership", () => {
       return await response;
     };
     dispatchInboundMessageMock.mockImplementation((args: unknown) => {
-      const { dispatcher, replyOptions } = args as Parameters<typeof dispatchInboundMessage>[0];
+      const { dispatcher, replyOptions } = args as Parameters<
+        typeof dispatchInboundMessageInternal
+      >[0];
       const dispatchWork = (async () => {
         const recorder = replyOptions?.userTurnTranscriptRecorder;
         const signal = replyOptions?.abortSignal;

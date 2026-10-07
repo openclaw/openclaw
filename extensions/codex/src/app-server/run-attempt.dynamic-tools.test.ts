@@ -51,13 +51,17 @@ setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
   it("retains a required command as one native pending call until terminal collection", async () => {
+    const retainedWaitMs = 60_000;
     const command = createRequiredExecRuntimeContract();
     const harness = createStartedThreadHarness();
     const params = createTestParams();
+    // Required collection outlives exec yielding, but remains within the attempt budget.
+    params.timeoutMs = retainedWaitMs * 2;
     setCodexTestToolFactory(params, () => [{ ...command.tool, name: "sandbox_exec" }]);
     params.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(params, true);
     const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const run = runCodexAppServerAttempt(params);
     let response: ReturnType<typeof callTool> | undefined;
     try {
@@ -70,13 +74,16 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         collected = true;
         return value;
       });
-      await command.started;
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      await vi.advanceTimersByTimeAsync(60_000);
+      await Promise.race([
+        command.started,
+        response.then((result) => {
+          throw new Error("Required command settled before process start", { cause: result });
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(retainedWaitMs);
       expect(collected).toBe(false);
       expect(command.spawn).toHaveBeenCalledOnce();
       expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(1);
-      vi.useRealTimers();
       command.finish();
       await expect(response).resolves.toMatchObject({
         success: true,

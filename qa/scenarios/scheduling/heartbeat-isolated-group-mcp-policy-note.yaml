@@ -1,4 +1,4 @@
-title: Isolated group heartbeat keeps configured MCP after a policy note
+title: Isolated group automation keeps configured MCP after a policy note
 
 scenario:
   id: heartbeat-isolated-group-mcp-policy-note
@@ -20,51 +20,41 @@ scenario:
         host: node
     channels:
       qa-channel:
-        # A provider-qualified sender makes the isolated heartbeat carry the caller
+        # A provider-qualified sender makes the isolated automation carry the caller
         # group id that the final policy pass drops, which is the reported trigger.
         allowFrom:
           - qa-channel:group:qa-heartbeat-mcp-room
-    agents:
-      defaults:
-        heartbeat:
-          every: 5m
-          target: qa-channel
-          to: group:qa-heartbeat-mcp-room
-          directPolicy: block
-          isolatedSession: true
-          prompt: "Isolated group heartbeat MCP proof. Reply exactly: QA-HEARTBEAT-MCP-OK"
-  objective: Verify an isolated heartbeat addressed to a group keeps its configured MCP tool and does not receive the incomplete-MCP blocker when the only policy input is the dropped caller-provided group id.
+  objective: Verify an isolated automation addressed to a group keeps its configured MCP tool and does not receive the incomplete-MCP blocker when the only policy input is the dropped caller-provided group id.
   successCriteria:
-    - The heartbeat monitor job runs the isolated group heartbeat through a real Gateway, the Codex app-server harness, a real stdio MCP server, and the mock provider boundary.
+    - The ordinary automation naturally runs an isolated group turn through a real Gateway, the Codex app-server harness, a real stdio MCP server, and the mock provider boundary.
     - The heartbeat provider request offers the configured MCP server's tool.
     - That request carries no "Configured MCP is incomplete" blocker in its developer instructions or input.
     - The heartbeat reply is delivered to the configured qa-channel group.
   docsRefs:
-    - docs/gateway/heartbeat.md
+    - docs/automation/cron-jobs.md
     - docs/tools/mcp.md
   codeRefs:
     - src/agents/agent-bundle-mcp-harness.ts
-    - src/infra/heartbeat-runner-execution.ts
+    - src/cron/isolated-agent/run.ts
     - extensions/codex/src/app-server/run-attempt-tool-setup.ts
   execution:
     kind: flow
     runtime: codex
     suiteIsolation: isolated
-    isolationReason: Configures an isolated group heartbeat with an MCP server and forces the heartbeat monitor job on the real Gateway.
+    isolationReason: Configures an isolated group heartbeat with an MCP server and naturally schedules its ordinary job on the real Gateway.
     channel: qa-channel
     retryCount: 0
     timeoutMs: 300000
     summary: Prove an isolated group heartbeat with configured MCP reaches its normal assessment instead of a warning-only MCP blocker.
     config:
       requiredProviderMode: mock-openai
-      heartbeatPromptNeedle: Isolated group heartbeat MCP proof
+      heartbeatPromptNeedle: Isolated group automation MCP proof
       heartbeatRoom: qa-heartbeat-mcp-room
       heartbeatMarker: QA-HEARTBEAT-MCP-OK
-      heartbeatJobName: heartbeat-qa
       mcpServerName: proof
       expectedMcpTools: [proof__resources_list, proof__resources_read, proof__show]
       mcpServerScript: scripts/e2e/mcp-app-conformance-server.mjs
-      bridgedToolName: heartbeat_respond
+      bridgedToolName: automations
       blockerNeedle: Configured MCP is incomplete
 
 flow:
@@ -100,28 +90,34 @@ flow:
           args:
             - ref: env
             - 60000
-        - call: waitForCondition
-          saveAs: heartbeatJob
-          args:
-            - lambda:
-                expr: "(async () => { const listed = await env.gateway.call('cron.list', { includeDisabled: true }, { timeoutMs: 30000 }); const jobs = Array.isArray(listed) ? listed : (listed?.jobs ?? []); return jobs.find((job) => job?.name === config.heartbeatJobName || job?.payload?.kind === 'heartbeat'); })()"
-            - 60000
-            - 500
         - set: heartbeatRequestCursor
           value:
             expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
         - call: env.gateway.call
-          saveAs: runResponse
+          saveAs: heartbeatJob
           args:
-            - cron.run
-            - id:
-                expr: heartbeatJob.id
-              mode: force
+            - cron.add
+            - agentId: qa
+              name: qa-group-mcp-policy
+              enabled: true
+              deleteAfterRun: false
+              schedule:
+                kind: at
+                at: { expr: "new Date(Date.now() + 12000).toISOString()" }
+              sessionTarget: isolated
+              wakeMode: now
+              payload:
+                kind: agentTurn
+                message:
+                  {
+                    expr: "`${config.heartbeatPromptNeedle}. Reply exactly: ${config.heartbeatMarker}`",
+                  }
+              delivery:
+                mode: announce
+                channel: qa-channel
+                to: { expr: "`group:${config.heartbeatRoom}`" }
+                directPolicy: block
             - timeoutMs: 30000
-        - assert:
-            expr: "runResponse?.ok === true && runResponse?.ran !== false"
-            message:
-              expr: "`expected cron.run to start the heartbeat monitor job, got ${JSON.stringify(runResponse)}`"
         - call: waitForCondition
           saveAs: heartbeatRequest
           args:

@@ -253,8 +253,8 @@ describe("gateway silent scope-upgrade reconnect", () => {
       const admin = await callGateway({
         url: `ws://127.0.0.1:${started.port}`,
         token: "secret",
-        method: "set-heartbeats",
-        params: { enabled: false },
+        method: "system-event",
+        params: { text: "Local CLI admin scope proof" },
         scopes: ["operator.admin"],
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,

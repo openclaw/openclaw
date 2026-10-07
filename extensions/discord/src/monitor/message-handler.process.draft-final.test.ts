@@ -519,7 +519,9 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onPartialReply?.({ text: "HelloWorld" });
-      return createNoQueuedDispatchResult();
+      await params?.dispatcher.sendFinalReply({ text: "HelloWorld" });
+      await params?.dispatcher.waitForIdle();
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
     const ctx = await createBlockModeContext();
@@ -527,7 +529,8 @@ describe("processDiscordMessage draft streaming recovery", () => {
     await runProcessDiscordMessage(ctx);
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates).toEqual(["Hello", "HelloWorld"]);
+    expect(updates).toEqual(["Hello", "HelloWorl"]);
+    expect(getDeliveredFinalTexts()).toEqual(["HelloWorld"]);
     expect(firstDispatchParams().replyOptions?.disableBlockStreaming).toBe(true);
   });
 });

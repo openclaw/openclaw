@@ -4,6 +4,7 @@ import type { AcpTurnAttachment } from "../../../acp/control-plane/manager.types
 import { cleanupFailedAcpSpawn } from "../../../acp/control-plane/spawn.js";
 import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../../../acp/policy.js";
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
+import { captureSessionEventTargetForHost as captureSessionEventTarget } from "../../../auto-reply/reply/session-event-handoff.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
@@ -15,7 +16,10 @@ import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/sessi
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../../gateway/session-utils-store-worker.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { resolveEventSessionRoutingPolicy } from "../../../infra/event-session-routing.js";
+import {
+  resolveEventSessionKeyForPolicy,
+  resolveEventSessionRoutingPolicy,
+} from "../../../infra/event-session-routing.js";
 import {
   getSessionBindingService,
   type SessionBindingRecord,
@@ -27,14 +31,7 @@ import { waitForSessionParticipantRecording } from "../../../sessions/session-pa
 import { recordSubagentSpawned } from "../../../sessions/session-state-events.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
-import {
-  findAcpUnsupportedInheritedToolAllow,
-  findAcpUnsupportedInheritedToolDeny,
-  formatAcpInheritedToolAllowError,
-  formatAcpInheritedToolDenyError,
-  inheritedToolAllowPatch,
-  inheritedToolDenyPatch,
-} from "../../inherited-tool-deny.js";
+import { inheritedToolAllowPatch, inheritedToolDenyPatch } from "../../inherited-tool-deny.js";
 import { runSpawnPipeline, type SpawnBackendAdapter } from "../../spawn-pipeline.js";
 import {
   mintSpawnSessionKey,
@@ -193,6 +190,8 @@ export async function spawnAcpDirect(
     requesterSessionKey: ctx.agentSessionKey,
     requesterSandboxed: ctx.sandboxed,
     sandbox: params.sandbox,
+    inheritedToolAllowlist: ctx.inheritedToolAllowlist,
+    inheritedToolDenylist: ctx.inheritedToolDenylist,
   });
   if (runtimePolicyError) {
     return {
@@ -201,27 +200,6 @@ export async function spawnAcpDirect(
       error: runtimePolicyError,
     };
   }
-  const acpUnsupportedInheritedTool = findAcpUnsupportedInheritedToolDeny(
-    ctx.inheritedToolDenylist,
-  );
-  if (acpUnsupportedInheritedTool) {
-    return {
-      status: "forbidden",
-      errorCode: "runtime_policy",
-      error: formatAcpInheritedToolDenyError(acpUnsupportedInheritedTool),
-    };
-  }
-  const acpUnsupportedInheritedAllow = findAcpUnsupportedInheritedToolAllow(
-    ctx.inheritedToolAllowlist,
-  );
-  if (acpUnsupportedInheritedAllow) {
-    return {
-      status: "forbidden",
-      errorCode: "runtime_policy",
-      error: formatAcpInheritedToolAllowError(acpUnsupportedInheritedAllow),
-    };
-  }
-
   const spawnMode = resolveSpawnMode({
     requestedMode: params.mode,
     threadRequested: requestThreadBinding,
@@ -273,12 +251,13 @@ export async function spawnAcpDirect(
   const subagentStore = resolveSubagentCapabilityStore(parentSessionKey, {
     cfg,
   });
-  const requesterState = resolveAcpSpawnRequesterState({
+  const requesterState = await resolveAcpSpawnRequesterState({
     cfg,
     parentSessionKey,
     requesterAgentId,
     targetAgentId,
     ctx,
+    assertActive: ctx.assertActive,
   });
   const ownership = resolveSubagentSpawnOwnership({
     cfg,
@@ -426,6 +405,14 @@ export async function spawnAcpDirect(
   const parentEventRouting = parentSessionKey
     ? resolveEventSessionRoutingPolicy({ cfg, sessionKey: parentSessionKey })
     : undefined;
+  const parentEventTarget =
+    effectiveStreamToParent && parentSessionKey && parentEventRouting
+      ? await captureSessionEventTarget(
+          requesterAgentId,
+          resolveEventSessionKeyForPolicy(parentSessionKey, parentEventRouting),
+        )
+      : undefined;
+  ctx.assertActive?.();
   const gatewayAttachments = toGatewayImageAttachments(params.attachments);
   const requesterOrigin = requesterState.origin;
   const progressOrigin = {
@@ -581,11 +568,12 @@ export async function spawnAcpDirect(
         agentId: targetAgentId,
       });
       const startParentRelay = (runId: string) =>
-        effectiveStreamToParent && parentSessionKey && parentEventRouting
+        effectiveStreamToParent && parentSessionKey && parentEventRouting && parentEventTarget
           ? startAcpSpawnParentStreamRelay({
               runId,
               parentSessionKey,
               requesterAgentId,
+              expectedTarget: parentEventTarget,
               childSessionKey: sessionKey,
               childSessionId: state.initializedSession.sessionId,
               agentId: targetAgentId,

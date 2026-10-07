@@ -166,6 +166,8 @@ import {
 } from "./mcp-http.loopback-runtime.js";
 import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 import {
+  expectMcpResultText,
+  expectMcpToolNames,
   jsonHeaders,
   mcpToolCallBody,
   mcpToolCallMessage,
@@ -376,22 +378,6 @@ async function expectBrowserToolsListStatus(params: {
   });
 
   expect(response.status).toBe(params.status);
-}
-
-function expectMcpToolNames(payload: McpToolResultPayload, expected: string[]) {
-  const names = (payload.result?.tools ?? []).map((tool) => tool.name);
-  for (const name of expected) {
-    expect(names).toContain(name);
-  }
-}
-
-function expectMcpResultText(payload: McpToolResultPayload, text: string, isError?: boolean) {
-  if (isError === undefined) {
-    expect(payload.result?.isError).not.toBe(true);
-  } else {
-    expect(payload.result?.isError).toBe(isError);
-  }
-  expect(payload.result?.content?.[0]?.text).toBe(text);
 }
 
 function objectSchema(properties: Record<string, unknown>, required?: string[]) {
@@ -2361,6 +2347,10 @@ describe("collector result tool across the loopback MCP boundary", () => {
   });
 
   beforeEach(async () => {
+    getRuntimeConfigMock.mockImplementation(() => ({
+      session: { mainKey: "main" },
+      tools: { web: { search: { provider: "duckduckgo" } } },
+    }));
     const { resolveGatewayScopedTools: resolveActual } =
       await vi.importActual<typeof import("./tool-resolution.js")>("./tool-resolution.js");
     resolveGatewayScopedToolsMock.mockImplementation(

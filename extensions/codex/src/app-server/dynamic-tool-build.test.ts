@@ -27,11 +27,7 @@ import {
   getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import {
-  drainSystemEventEntries,
-  peekSystemEventEntries,
-} from "openclaw/plugin-sdk/system-event-runtime";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   disableCodexPluginThreadConfig,
   resolveCodexAppServerExecutionCwd,
@@ -293,10 +289,10 @@ describe("Codex app-server dynamic tool build", () => {
         "tool_search",
         "web_search",
         "message",
-        "heartbeat_respond",
+        "automations",
         "sessions_spawn",
       ],
-      expected: ["progress_card", "web_search", "message", "heartbeat_respond", "sessions_spawn"],
+      expected: ["progress_card", "web_search", "message", "automations", "sessions_spawn"],
     },
     {
       name: "disabled native tools with shell replacements",
@@ -700,43 +696,43 @@ describe("Codex app-server dynamic tool build", () => {
     expect(result.details).toMatchObject(testCase.expected);
   });
 
-  it("marks a command started by a conversation's completion turn as the conversation's own", async () => {
-    const workspaceDir = path.join(tempDir, "continuation-workspace");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    const params = createParams(path.join(tempDir, "continuation.jsonl"), workspaceDir);
-    params.disableTools = false;
-    const sessionKey = "agent:main:telegram:group:-100155462274:topic:42";
-    params.sessionKey = sessionKey;
-    params.trigger = "heartbeat";
-    params.continuesConversation = true;
+  it("preserves an internal event's originating conversation in public host tool construction", async () => {
+    const workspaceDir = path.join(tempDir, "event-workspace");
+    const params = createParams(path.join(tempDir, "event.jsonl"), workspaceDir);
+    params.sessionKey = "agent:main:telegram:group:-100155462274:topic:42";
+    params.sessionId = "codex-event-session";
+    params.trigger = "event";
+    params.messageProvider = "telegram";
+    params.agentAccountId = "work";
+    params.messageTo = "telegram:-100155462274:topic:42";
+    params.messageThreadId = "42";
+    params.currentChannelId = "telegram:-100155462274:topic:42";
+    params.currentThreadTs = "42";
     params.execOverrides = { host: "gateway", mode: "full" };
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    setCodexTestToolFactory(params, (options) =>
-      createOpenClawCodingTools(options).filter((tool) => ["exec", "process"].includes(tool.name)),
-    );
+    const factory = vi.fn((_options: Parameters<typeof createOpenClawCodingTools>[0]) => [
+      createRuntimeDynamicTool("exec"),
+    ]);
+    setCodexTestToolFactory(params, factory);
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
       nativeToolSurfaceEnabled: false,
     });
-    const exec = expectDefined(
-      tools.find((tool) => tool.name === "exec"),
-      "OpenClaw exec",
-    );
-    onTestFinished(() => {
-      drainSystemEventEntries(sessionKey);
-    });
-    await exec.execute("continuation-exec", { command: "echo codex-chain-ok", background: true });
 
-    await vi.waitFor(
-      () =>
-        expect(peekSystemEventEntries(sessionKey)).toEqual([
-          expect.objectContaining({
-            text: expect.stringContaining("codex-chain-ok"),
-            fromConversationTurn: true,
-          }),
-        ]),
-      { timeout: 10_000 },
+    expect(factory).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:telegram:group:-100155462274:topic:42",
+        sessionId: "codex-event-session",
+        trigger: "event",
+        messageProvider: "telegram",
+        agentAccountId: "work",
+        messageTo: "telegram:-100155462274:topic:42",
+        messageThreadId: "42",
+        currentChannelId: "telegram:-100155462274:topic:42",
+        currentThreadTs: "42",
+      }),
     );
+    expect(tools.map((tool) => tool.name)).toContain("exec");
   });
 
   it.each<{
@@ -1876,21 +1872,17 @@ describe("Codex app-server dynamic tool build", () => {
     runtimePlan.tools.normalize = planNormalize as typeof runtimePlan.tools.normalize;
     params.runtimePlan = runtimePlan;
     const messageTool = createRuntimeDynamicTool("message");
-    const heartbeatTool = createRuntimeDynamicTool("heartbeat_respond");
+    const automationTool = createRuntimeDynamicTool("automations");
     const invalidTool = {
       ...createRuntimeDynamicTool("invalid_registered_tool"),
       parameters: { type: "array", items: { type: "string" } },
     };
-    setCodexTestToolFactory(params, (options) => [
-      messageTool,
-      ...(options?.enableHeartbeatTool === true ? [heartbeatTool, invalidTool] : []),
-    ]);
+    setCodexTestToolFactory(params, () => [messageTool, automationTool, invalidTool]);
 
     const turnTools = await buildDynamicToolsForTest(params, workspaceDir, {
       sandbox: null as never,
     });
     const registeredTools = await buildDynamicToolsForTest(params, workspaceDir, {
-      forceHeartbeatTool: true,
       ignoreDisableMessageTool: true,
       ignoreRuntimePlan: true,
       sandbox: null as never,
@@ -1908,12 +1900,12 @@ describe("Codex app-server dynamic tool build", () => {
     expect(hoisted.normalizeAgentRuntimeTools.mock.calls[1]?.[0]).not.toHaveProperty(
       "runtimeHandle",
     );
-    expect(turnTools.map((tool) => tool.name)).toEqual(["message"]);
+    expect(turnTools.map((tool) => tool.name)).toEqual(["message", "automations"]);
     expect(turnTools[0]?.description).toBe(`turn:${messageTool.description}`);
-    expect(registeredTools.map((tool) => tool.name)).toEqual(["message", "heartbeat_respond"]);
+    expect(registeredTools.map((tool) => tool.name)).toEqual(["message", "automations"]);
     expect(registeredTools.map((tool) => tool.description)).toEqual([
       messageTool.description,
-      heartbeatTool.description,
+      automationTool.description,
     ]);
     expect(hoisted.resolveWebSearchToolPolicy).not.toHaveBeenCalled();
   });

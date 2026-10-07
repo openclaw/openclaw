@@ -1386,7 +1386,7 @@ describe("Codex plugin binding recovery", () => {
 describe("Codex thread-effective app attestation", () => {
   installLifecycleHooks();
 
-  it("keeps the heartbeat binding when its optional app is not-callable", async () => {
+  it("keeps the scheduled binding when its optional app is not-callable", async () => {
     const params = createThreadLifecycleParams();
     params.sessionKey = "agent:main:main";
     const provider = createProvisionalPluginThreadConfigProvider("linear-app");

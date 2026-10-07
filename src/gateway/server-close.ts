@@ -12,7 +12,6 @@ import { closeSessionTranscriptReconcileWorkerPool } from "../config/sessions/se
 import { drainCronReceiptAuthority } from "../cron/store/receipt-authority-owner.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
-import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closePluginStateDatabaseAsync } from "../plugin-state/plugin-state-store.js";
 import type { GatewayPluginMetadataOwner } from "../plugins/plugin-metadata-lifecycle.js";
@@ -172,7 +171,7 @@ export type GatewayCloseParams = {
   closeProviderTransportDispatcherPool: () => Promise<void>;
   cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
   stopCronMaintenance?: () => Promise<void>;
-  heartbeatRunner: HeartbeatRunner;
+  stopScheduledServices: () => Promise<void>;
   maintenance: GatewayMaintenanceHandles | null;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   agentUnsub: (() => Promise<void> | void) | null;
@@ -425,9 +424,7 @@ async function closeGatewayResources(
       recordShutdownWarning(warnings, "media-cleanup");
     }
     await shutdownStep("gmail-watcher", () => params.stopGmailWatcher());
-    // Cron heartbeat runs await this owner's queued wakes after handing off cancellation.
-    // Settle those waiters before joining cron so shutdown cannot wait on its own next step.
-    await shutdownStep("heartbeat-runner", () => params.heartbeatRunner.stop());
+    await shutdownStep("scheduled-services", params.stopScheduledServices);
     await shutdownStep("cron", () =>
       params.cron.stopAndDrain ? params.cron.stopAndDrain() : params.cron.stop(),
     );

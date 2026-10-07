@@ -101,8 +101,14 @@ export function baseParams(
     workspaceDir: "/tmp/workspace",
     abortedLastRun: false,
   };
-  const ctx = overrides.ctx ?? defaults.ctx;
-  const sessionCtx = overrides.sessionCtx ?? defaults.sessionCtx;
+  const eventContext = overrides.opts?.internalEventExecution
+    ? {
+        InputProvenance: { kind: "internal_system" as const, sourceTool: "session-event" },
+        InternalTurnSource: "event" as const,
+      }
+    : {};
+  const ctx = { ...eventContext, ...(overrides.ctx ?? defaults.ctx) };
+  const sessionCtx = { ...eventContext, ...(overrides.sessionCtx ?? defaults.sessionCtx) };
   const resolveTestCanonicalText = (value: Record<string, unknown>) => {
     const { commandText, agentText, rawText } = finalizeInboundContextForSdk({ ...value });
     return { commandText, agentText, rawText };
@@ -118,7 +124,6 @@ export function baseParams(
         sessionEntry:
           overrides.sessionStore?.[overrides.sessionKey ?? defaults.sessionKey] ??
           overrides.sessionEntry,
-        isHeartbeat: overrides.opts?.isHeartbeat,
       }),
     ctx: { ...ctx, ...resolveTestCanonicalText(ctx) },
     sessionCtx: {

@@ -61,13 +61,9 @@ it("authorizes linked admins through Discord's direct-recipient grammar and curr
         resolveUpdateRunNoticeTarget({
           cfg,
           session: {
-            cfg,
             agentId: "main",
             storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
-            store: {},
             canonicalKey: sessionKey,
-            storeKeys: [sessionKey],
-            legacyKey: undefined,
             entry: {
               sessionId: "notice-probe",
               updatedAt: 1,

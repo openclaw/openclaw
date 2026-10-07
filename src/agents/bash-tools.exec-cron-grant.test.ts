@@ -3,9 +3,16 @@ import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareReplyTurnExecution } from "../auto-reply/reply/agent-runner-admission.js";
+import {
+  createMockFollowupRun,
+  createMockTypingController,
+} from "../auto-reply/reply/test-helpers.js";
+import { createTypingSignaler } from "../auto-reply/reply/typing-mode.js";
 import { bindCronJobAdmittedRun, resetCronActiveJobs } from "../cron/active-jobs.js";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { prepareCronRunAdmission } from "../cron/run-admission.js";
+import { resolveCronRunAdmissionSource } from "../cron/run-authority.js";
 import { markServiceCronJobActive } from "../cron/service/run-receipts.js";
 import { createCronServiceState } from "../cron/service/state.js";
 import {
@@ -26,7 +33,10 @@ import {
   revokeCronStandingGrant,
   resolveOperatorApproval,
 } from "../gateway/operator-approval-store.js";
-import { registerCronRunExecSource } from "../infra/cron-run-exec-source.js";
+import {
+  lookupCronRunExecSource,
+  registerCronRunExecSource,
+} from "../infra/cron-run-exec-source.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -151,7 +161,10 @@ describe("cron standing grants", () => {
   let hadStateDirBackup = false;
   let workdir: string;
   let unregisterCronSource: (() => void) | undefined;
-  let runOwner: ReturnType<typeof prepareCronRunAdmission> | undefined;
+  let runOwner:
+    | ReturnType<typeof prepareCronRunAdmission>
+    | ReturnType<typeof prepareReplyTurnExecution>
+    | undefined;
   let controller: AbortController;
   const releases: Array<() => void> = [];
 
@@ -183,7 +196,7 @@ describe("cron standing grants", () => {
       }
       unregisterCronSource?.();
       unregisterCronSource = undefined;
-      runOwner?.close();
+      await runOwner?.close();
       runOwner = undefined;
       resetCronActiveJobs();
       resetProcessRegistryForTests();
@@ -208,7 +221,7 @@ describe("cron standing grants", () => {
     return { env: { ...process.env } };
   }
 
-  function seedCronJobRow() {
+  function seedCronJobRow(sessionTarget: "isolated" | "main") {
     const database = openOpenClawStateDatabase(databaseOptions());
     // SAFETY: minimal valid cron job shape for the storage codec round-trip.
     const job = {
@@ -219,7 +232,7 @@ describe("cron standing grants", () => {
       createdAtMs: Date.now() - 1_000,
       updatedAtMs: Date.now() - 1_000,
       schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
-      sessionTarget: "isolated",
+      sessionTarget,
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "run the backup" },
     } as CronStoredJob;
@@ -295,8 +308,13 @@ describe("cron standing grants", () => {
     ).rows.map((row) => row.use_count);
   }
 
-  async function prepareCronRun(mintGrant: boolean, expiresAtMs: number | null = null) {
-    const job = seedCronJobRow();
+  async function prepareCronRun(
+    mintGrant: boolean,
+    expiresAtMs: number | null = null,
+    sessionTarget: "isolated" | "main" = "isolated",
+  ) {
+    const job = seedCronJobRow(sessionTarget);
+    const admissionSource = resolveCronRunAdmissionSource(job);
     const revision = resolveCronJobConfigRevision(job);
     const receipt = claimCronRunReceiptForTest(CRON_STORE_KEY, job, Date.now());
     releases.push(() => releaseLocalCronRunReceiptOwnership(receipt));
@@ -307,21 +325,57 @@ describe("cron standing grants", () => {
         cronEnabled: true,
         log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(),
       }),
       job,
       receipt,
     );
-    runOwner = prepareCronRunAdmission({
-      cfg: {},
-      agentId: "main",
-      runId: "cron-run-1",
-      jobId: job.id,
-      sessionKey: "agent:main:cron:job-1",
-      deliveryAttemptFence: null,
-    });
     controller = new AbortController();
+    let isolatedAdmission: ReturnType<typeof prepareCronRunAdmission> | undefined;
+    if (sessionTarget === "main") {
+      runOwner = prepareReplyTurnExecution(
+        {
+          commandBody: "run the backup",
+          followupRun: createMockFollowupRun({
+            run: {
+              sessionKey: "agent:main:main",
+              scheduledAutomation: {
+                job,
+                admissionSource,
+                assertCurrent: () => controller.signal.throwIfAborted(),
+              },
+            },
+          }),
+          sessionCtx: {},
+          opts: { abortSignal: controller.signal },
+          typingSignals: createTypingSignaler({
+            typing: createMockTypingController(),
+            mode: "never",
+          }),
+          blockReplyPipeline: null,
+          blockStreamingEnabled: false,
+          resolvedBlockStreamingBreak: "message_end",
+          applyReplyToMode: (payload) => payload,
+          shouldEmitToolResult: () => false,
+          shouldEmitToolOutput: () => false,
+          pendingToolTasks: new Set(),
+          getActiveSessionEntry: () => undefined,
+          resolvedVerboseLevel: "off",
+        },
+        "cron-run-1",
+      );
+    } else {
+      isolatedAdmission = prepareCronRunAdmission({
+        admissionSource,
+        cfg: {},
+        agentId: "main",
+        runId: "cron-run-1",
+        jobId: job.id,
+        sessionKey: "agent:main:cron:job-1",
+        deliveryAttemptFence: null,
+      });
+      runOwner = isolatedAdmission;
+    }
     bindCronJobAdmittedRun(
       marker,
       await runOwner.preparedRunAdmission.admit("embedded"),
@@ -330,13 +384,15 @@ describe("cron standing grants", () => {
     if (mintGrant) {
       await mintStandingGrant(revision, expiresAtMs);
     }
-    unregisterCronSource = registerCronRunExecSource("cron-run-1", {
-      agentId: "main",
-      jobId: "job-1",
-      jobConfigRevision: revision,
-      jobName: "Nightly backup",
-      standingGrantAuthority: runOwner.standingGrantAuthority,
-    });
+    if (isolatedAdmission) {
+      unregisterCronSource = registerCronRunExecSource("cron-run-1", {
+        agentId: "main",
+        jobId: "job-1",
+        jobConfigRevision: revision,
+        jobName: "Nightly backup",
+        standingGrantAuthority: isolatedAdmission.standingGrantAuthority,
+      });
+    }
     return { job, receipt };
   }
 
@@ -422,6 +478,28 @@ describe("cron standing grants", () => {
     await expect(runNativeCron(result)).rejects.toThrow("exec denied by final preflight");
     expect(readNativeEffects()).toBe("cron-native-launch");
     expect(JSON.stringify(security.events)).toContain("standing-grant");
+    expect(readGrantUseCounts()).toEqual([1]);
+  });
+
+  it("uses ordinary reply admission for a standing grant and refuses retained launches after close", async () => {
+    await prepareCronRun(true, null, "main");
+    const approval = await runCron();
+    expect(approval.pendingResult).toBeUndefined();
+    expect(approval.deniedResult).toBeUndefined();
+    expect(approval.revalidateBeforeExecution).toBeDefined();
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+    await expect(runNativeCron(approval)).resolves.toMatchObject({
+      status: "completed",
+      exitCode: 0,
+    });
+    expect(readNativeEffects()).toBe("cron-native-launch");
+
+    const retained = await runCron();
+    expect(retained.revalidateBeforeExecution).toBeDefined();
+    await runOwner?.close();
+    expect(lookupCronRunExecSource("cron-run-1")).toBeUndefined();
+    await expect(runNativeCron(retained)).rejects.toThrow("exec denied by final preflight");
+    expect(readNativeEffects()).toBe("cron-native-launch");
     expect(readGrantUseCounts()).toEqual([1]);
   });
 

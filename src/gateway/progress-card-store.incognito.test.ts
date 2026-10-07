@@ -21,10 +21,6 @@ import {
   SessionReactionMessageMissingError,
   setSessionReactionAsync,
 } from "../config/sessions/session-reaction-store.js";
-import {
-  claimHeartbeatOutcomeForRun,
-  persistHeartbeatOutcome,
-} from "../infra/heartbeat-outcome-store.js";
 import * as workerStores from "../infra/sqlite-worker-store.js";
 import { IncognitoSessionEndedError } from "../state/incognito-session-error.js";
 import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
@@ -82,20 +78,13 @@ async function fixture(name: string, source = authority) {
     identityId: "viewer",
   };
   const store = createIncognitoProgressCardStore(() => scope);
-  const heartbeat = {
-    ...scope,
-    runSessionKey: scope.sessionKey,
-    response: { outcome: "progress" as const, summary: "Private progress", notify: false },
-    occurredAt: 10,
-  };
-  return { scope, reaction, store, heartbeat };
+  return { scope, reaction, store };
 }
 
-it("composes reactions, heartbeat claims, and progress-card revisions without caller SQL", async () => {
+it("composes reactions and progress-card revisions without caller SQL", async () => {
   const prepared = await fixture("composition");
   const { reaction } = prepared;
   const scope = { ...prepared.scope, incognito: undefined };
-  const heartbeat = { ...prepared.heartbeat, incognito: undefined };
   const store = progressCardStore;
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   const sql = observeHostDataSql();
@@ -113,12 +102,6 @@ it("composes reactions, heartbeat claims, and progress-card revisions without ca
       ).toEqual({
         [reaction.messageId]: [{ emoji: "👍", count: 1, identities: [{ id: "viewer" }] }],
       });
-      await persistHeartbeatOutcome(heartbeat);
-      expect(await claimHeartbeatOutcomeForRun({ ...scope, runId: "first" })).toMatchObject({
-        summary: "Private progress",
-      });
-      expect(await claimHeartbeatOutcomeForRun({ ...scope, runId: "first" })).toBeDefined();
-      expect(await claimHeartbeatOutcomeForRun({ ...scope, runId: "second" })).toBeUndefined();
       expect(await store.put(scope.sessionKey, { markdown: "First" })).toMatchObject({
         card: { revision: 1, markdown: "First" },
       });
@@ -239,51 +222,11 @@ it("rechecks native context authority after retained settlement", async () => {
   });
 });
 
-it.each(["run", "actor"] as const)(
-  "rechecks heartbeat %s authority after claim settlement without discarding the claim",
-  async (owner) => {
-    const { scope, heartbeat } = await fixture(`settled-authority-${owner}`);
-    await persistHeartbeatOutcome(heartbeat);
-    let allowed = true;
-    const assertCurrent = () => {
-      if (!allowed) {
-        throw new Error("Heartbeat caller authority ended");
-      }
-    };
-    const retain = actor.sessions.withSharedState.bind(actor.sessions);
-    const settle = async <T>(operation: () => Promise<T>): Promise<T> => {
-      const value = await retain(operation);
-      allowed = false;
-      return value;
-    };
-    const settled = vi.spyOn(actor.sessions, "withSharedState").mockImplementationOnce(settle);
-    try {
-      await expect(
-        claimHeartbeatOutcomeForRun({
-          ...scope,
-          runId: "accepted-claim",
-          assertCurrent: owner === "run" ? assertCurrent : undefined,
-          incognito: { actor, authority: owner === "actor" ? { assertCurrent } : authority },
-        }),
-      ).rejects.toThrow("Heartbeat caller authority ended");
-      actor.assertReadable();
-      expect(
-        await claimHeartbeatOutcomeForRun({ ...scope, runId: "accepted-claim" }),
-      ).toMatchObject({
-        summary: "Private progress",
-      });
-      expect(await claimHeartbeatOutcomeForRun({ ...scope, runId: "another-run" })).toBeUndefined();
-    } finally {
-      settled.mockRestore();
-    }
-  },
-);
-
 it.each(["transaction", "commit"] as const)(
   "rolls domain mutations back when current authority refuses at %s",
   async (stage) => {
     let refused = true;
-    const { scope, reaction, store, heartbeat } = await fixture(`refused-${stage}`, {
+    const { scope, reaction, store } = await fixture(`refused-${stage}`, {
       assertCurrent() {},
       authorize(currentStage) {
         if (refused && currentStage === stage) {
@@ -294,13 +237,11 @@ it.each(["transaction", "commit"] as const)(
     await expect(setSessionReactionAsync(scope, reaction)).rejects.toThrow(
       "Domain authority revoked",
     );
-    await expect(persistHeartbeatOutcome(heartbeat)).rejects.toThrow("Domain authority revoked");
     await expect(store.put(scope.sessionKey, { markdown: "Refused" })).rejects.toThrow(
       "Domain authority revoked",
     );
     refused = false;
     expect(await store.get(scope.sessionKey)).toBeNull();
-    expect(await claimHeartbeatOutcomeForRun({ ...scope, runId: "next" })).toBeUndefined();
     expect(await setSessionReactionAsync(scope, { ...reaction, remove: true })).toMatchObject({
       changed: false,
     });
@@ -308,7 +249,6 @@ it.each(["transaction", "commit"] as const)(
 );
 
 it.each([
-  "heartbeat",
   "acp",
   "pending",
   "board",
@@ -320,8 +260,7 @@ it.each([
   "board-write",
   "acp-write",
 ] as const)("refuses %s disclosure to a retained parent after release", async (reader) => {
-  const { scope, heartbeat, reaction, store: initialStore } = await fixture(`retained-${reader}`);
-  await persistHeartbeatOutcome(heartbeat);
+  const { scope, reaction, store: initialStore } = await fixture(`retained-${reader}`);
   if (reader === "progress-write") {
     await initialStore.put(scope.sessionKey, { markdown: "Stored private progress" });
   } else if (reader === "reaction-write") {
@@ -374,9 +313,7 @@ it.each([
     await expect(
       borrowed.sessions.withSharedState(async () => {
         reading = true;
-        if (reader === "heartbeat") {
-          await claimHeartbeatOutcomeForRun({ ...bound, runId: "retained-read" });
-        } else if (reader === "progress-write") {
+        if (reader === "progress-write") {
           await createIncognitoProgressCardStore(() => bound).put(scope.sessionKey, {
             expectedRevision: 999,
           });

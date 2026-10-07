@@ -14,7 +14,7 @@ read_when:
   </Accordion>
 
   <Accordion title="Do sessions reset automatically if I never send /new?">
-    No, not by default. Sessions keep the same `sessionId`, and compaction bounds the active model context as conversations grow. `/new` and `/reset` remain available, or you can opt into automatic resets with `mode: "daily"` or `mode: "idle"`. Daily mode rolls over at `session.reset.atHour` (default `4`, 0-23) on the gateway host; idle mode uses `session.reset.idleMinutes` since the last real interaction, not heartbeat/cron/exec system events.
+    No, not by default. Sessions keep the same `sessionId`, and compaction bounds the active model context as conversations grow. `/new` and `/reset` remain available, or you can opt into automatic resets with `mode: "daily"` or `mode: "idle"`. Daily mode rolls over at `session.reset.atHour` (default `4`, 0-23) on the gateway host; idle mode uses `session.reset.idleMinutes` since the last real interaction, not scheduled checks or background system events.
 
     ```json5
     {
@@ -94,23 +94,25 @@ read_when:
   </Accordion>
 
   <Accordion title="Why am I getting heartbeat messages every 30 minutes?">
-    Heartbeats run every **30m** by default, or **1h** when the resolved auth mode is Anthropic OAuth/token auth (including Claude CLI reuse) and `heartbeat.every` is unset. Tune or disable:
+    Periodic check-ins now run as ordinary **Automation jobs**. Open
+    **Automations** to change the job's schedule, delivery, or scratch checklist,
+    or disable it. From the CLI:
 
-    ```json5
-    {
-      agents: {
-        defaults: {
-          heartbeat: {
-            every: "2h", // or "0m" to disable recurring cadence
-          },
-        },
-      },
-    }
+    ```bash
+    openclaw cron list --all
+    openclaw cron edit <job-id> --every 2h
+    openclaw cron disable <job-id>
     ```
 
-    Heartbeat instructions live in the monitor's cron scratch. Effectively empty scratch skips the heartbeat run to save API calls; without scratch, the heartbeat still runs and the model decides what to do. `0m` does not block targeted event-driven wakes, such as a background exec completion follow-up; those can still run one agent turn without enabling recurring cadence.
+    If your config still has `agents.defaults.heartbeat` or
+    `agents.entries.*.heartbeat`, run `openclaw doctor --fix` to migrate supported
+    July 2026 or newer settings and remove those blocks. The converted job
+    preserves the schedule, session, active hours, delivery, and scratch checklist.
+    Job edits then become authoritative; deleting the job does not cause it to
+    reappear. Disabling it does not stop event-driven follow-ups, such as background
+    exec completion turns.
 
-    Per-agent overrides use `agents.entries.*.heartbeat`. Docs: [Heartbeat](/gateway/heartbeat).
+    Docs: [Heartbeat migration](/gateway/heartbeat), [Cron jobs](/automation/cron-jobs).
 
   </Accordion>
 

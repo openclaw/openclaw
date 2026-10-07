@@ -4,6 +4,7 @@ import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-ter
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
+import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
@@ -60,13 +61,13 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     turnLedger,
     waitForPendingDirectBlockReplyDelivery,
   } = state;
-  const heartbeat = state.replyOperationRunState.heartbeat;
-  const pendingFinalOptions = { preserveActivity: heartbeat !== undefined };
+  const pendingFinalOptions = {
+    preserveActivity: shouldPreserveUserFacingSessionStateForInputProvenance(
+      state.ctx.InputProvenance,
+    ),
+  };
   throwIfDispatchOperationAborted();
-  const heartbeatReply = await heartbeat?.prepareReply(replyResult, state.replyOperationRunState);
-  throwIfDispatchOperationAborted();
-  const finalResult = heartbeatReply ? heartbeatReply.reply : replyResult;
-  const replies = Array.isArray(finalResult) ? finalResult : finalResult ? [finalResult] : [];
+  const replies = Array.isArray(replyResult) ? replyResult : replyResult ? [replyResult] : [];
   const pendingFinalDeliveryIdentity = replies
     .map((reply) => getReplyPayloadMetadata(reply)?.pendingFinalDeliveryCompletion)
     .find((completion) => completion !== undefined);
@@ -121,7 +122,6 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         (reply.isCommentary === true && !state.commentaryPayloadsEnabled)
       ) {
         await suppressPendingFinalDelivery(reply, pendingFinalOptions);
-        await heartbeatReply?.settle?.("cancelled");
         continue;
       }
       if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply, state)) {
@@ -140,35 +140,23 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
           );
         }
         await suppressPendingFinalDelivery(reply, pendingFinalOptions);
-        await heartbeatReply?.settle?.("cancelled");
         continue;
       }
       const finalPayloadDedupeKey = createFinalDispatchPayloadDedupeKey(reply);
       if (sentFinalPayloadDedupeKeys.has(finalPayloadDedupeKey)) {
         await suppressPendingFinalDelivery(reply, pendingFinalOptions);
-        await heartbeatReply?.settle?.("cancelled");
         continue;
       }
       sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
       const shouldAttachDeferredText = deferFinalTtsText && isReplyPayloadTerminalContent(reply);
       const finalReply = await state.sendFinalPayload(reply, {
         deliveryId: String(replyIndex),
-        ...(heartbeat ? { skipTts: true } : {}),
         ...(shouldAttachDeferredText
           ? {
               deferredTtsText: deferredTtsTextPending,
             }
           : {}),
       });
-      if (heartbeatReply?.settle) {
-        const settle = heartbeatReply.settle;
-        const outcome =
-          finalReply.dispatcherOutcome ??
-          Promise.resolve(
-            finalReply.blockDeliveryOutcome ?? finalReply.routedOutcome ?? "cancelled",
-          );
-        registerReplyDispatcherSettledTask(dispatcher, () => outcome.then(settle));
-      }
       if (finalReply.sessionWriterDeliveryRevoked) {
         sessionWriterDeliveryRevoked = true;
         continue;

@@ -1,5 +1,6 @@
 // Whatsapp plugin module implements auto reply.broadcast groups harness behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { vi } from "vitest";
 import {
   createWebInboundDeliverySpies,
@@ -18,22 +19,22 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
       const runtime = createPluginRuntimeMock({
         channel: {
           reply: {
-            dispatchReplyWithBufferedBlockDispatcher: async (dispatchParams) => {
-              const resolver = dispatchParams.replyResolver;
-              if (!resolver) {
-                throw new Error("Missing broadcast reply resolver");
-              }
-              const reply = await resolver(
-                dispatchParams.ctx,
-                dispatchParams.replyOptions,
-                dispatchParams.cfg,
-              );
-              const finalCount = Array.isArray(reply) ? reply.length : reply ? 1 : 0;
-              return {
-                queuedFinal: finalCount > 0,
-                counts: { tool: 0, block: 0, final: finalCount },
-              };
-            },
+            dispatchReplyWithBufferedBlockDispatcher: (dispatchParams) =>
+              dispatchReplyWithBufferedBlockDispatcher({
+                ...dispatchParams,
+                dispatchReplyFromConfig: async ({ ctx, replyOptions, cfg }) => {
+                  const resolver = dispatchParams.replyResolver;
+                  if (!resolver) {
+                    throw new Error("Missing broadcast reply resolver");
+                  }
+                  const reply = await resolver(ctx, replyOptions, cfg);
+                  const finalCount = Array.isArray(reply) ? reply.length : reply ? 1 : 0;
+                  return {
+                    queuedFinal: finalCount > 0,
+                    counts: { tool: 0, block: 0, final: finalCount },
+                  };
+                },
+              }),
           },
         },
       });

@@ -34,6 +34,8 @@ describe("export name collision guard", () => {
     ["src/example.test-harness.ts", true],
     ["src/example.e2e-harness.ts", true],
     ["src/example.d.ts", true],
+    ["src/example.d.mts", true],
+    ["src/example.d.cts", true],
     ["src/test/example.ts", true],
     ["src/nested/__fixtures__/example.mts", true],
     ["src/example.ts", false],
@@ -420,13 +422,18 @@ describe("export name collision guard", () => {
     expect([...result.definitions]).toEqual(["resolveThing"]);
   });
 
-  it("discovers JavaScript source collisions", async () => {
+  it("discovers JavaScript collisions without counting type declarations as implementations", async () => {
     await withTempDir("openclaw-export-collisions-", async (repoRoot) => {
       const sourceRoot = path.join(repoRoot, "src");
       await fs.mkdir(sourceRoot);
       await Promise.all([
         fs.writeFile(path.join(sourceRoot, "alpha.js"), "export const sharedValue = 1;\n"),
         fs.writeFile(path.join(sourceRoot, "beta.mjs"), "export const sharedValue = 2;\n"),
+        fs.writeFile(path.join(sourceRoot, "typed.mjs"), "export function typedBehavior() {}\n"),
+        fs.writeFile(
+          path.join(sourceRoot, "typed.d.mts"),
+          "export function typedBehavior(): void;\n",
+        ),
       ]);
       expect(await collectRepositoryCollisions(repoRoot)).toEqual([
         { name: "sharedValue", files: ["src/alpha.js", "src/beta.mjs"] },

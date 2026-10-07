@@ -1,4 +1,4 @@
-export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
+export type EmbeddedRunTrigger = "cron" | "event" | "manual" | "memory" | "overflow" | "user";
 
 /** Bounded internal diagnostic labels, independent of execution policy triggers. */
 export type IsolatedCompletionPurpose =

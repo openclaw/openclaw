@@ -21,7 +21,7 @@ openclaw gateway status
 openclaw automations status
 openclaw automations list
 openclaw automations runs <jobId> --limit 20
-openclaw system heartbeat last
+openclaw automations show <jobId>
 openclaw logs --follow
 openclaw doctor
 ```
@@ -34,12 +34,13 @@ openclaw doctor
     - `reason: not-due` in run output means the manual run was checked with `openclaw automations run <jobId> --due` and the job was not due yet.
     - If the job's execution agent cannot be resolved, automatic and manual attempts record a failed task and a skipped run-history entry with the reason. Select an agent with `openclaw automations edit <jobId> --agent <id>`.
     - A run can finish `ok` after an exec call fails and the agent replies. Check `diagnostic:` in `openclaw automations show <jobId>` or `diagnostics` in run history; unresolved exec failures produce a warning without exposing command arguments.
-    - `handler-unavailable` means the heartbeat service was not registered or stopped during the wait. The attempt is recorded as skipped. Check Gateway startup and sidecar errors before retrying the job.
+    - Check the job's `activeHours`, `idleOnly`, and `payload.skipIfScratchEmpty` policies. An active window or busy agent can defer execution; explicitly empty scratch skips a scratch-gated check. Missing scratch still runs.
+    - If old heartbeat configuration or payloads remain, run `openclaw doctor --fix` to migrate supported July 2026 and later shapes. The retired `openclaw system heartbeat` commands are no longer the management surface; inspect the migrated automation and its history.
     - If a capped job's stored named creator account is unavailable, the run fails before model/tool execution. Job details, run history, and warning logs name the account. Re-add it to the channel configuration, or recreate the automation from the intended account; changing the delivery `--account` does not change creator authority. Legacy jobs without account metadata keep their existing execution policy.
 
   </Accordion>
   <Accordion title="Job fired but no delivery">
-    - `System event queue is full` means the session already has 20 pending events. OpenClaw keeps those accepted events and records the overflowing reminder as a failed run instead of dropping an older reminder. Let the session process its pending events, then retry the failed reminder with `openclaw automations run <jobId>`. If heartbeats were paused, enable them with `openclaw system heartbeat enable`. Pending system events are process-local, not a durable delivery receipt across Gateway restarts.
+    - `System event queue is full` means the session already has 20 pending events. OpenClaw keeps those accepted events and records the overflowing reminder as a failed run instead of dropping an older reminder. Let the session process its pending events, then retry the failed reminder with `openclaw automations run <jobId>`. If the migrated monitor is disabled, enable its job with `openclaw automations enable <jobId>`. Pending system events are process-local, not a durable delivery receipt across Gateway restarts.
     - Delivery mode `none` means no runner fallback send is expected. The agent can still send directly with the `message` tool when a chat route is available.
     - Delivery target missing/invalid (`channel`/`to`) means outbound was skipped.
     - For Matrix, copied or legacy jobs with lowercased `delivery.to` room IDs can fail because Matrix room IDs are case-sensitive. Edit the job to the exact `!room:server` or `room:!room:server` value from Matrix.
@@ -49,16 +50,18 @@ openclaw doctor
     - If the agent should message the user itself, check that the job has a usable route (`channel: "last"` with a previous chat, or an explicit channel/target).
 
   </Accordion>
-  <Accordion title="Automations or heartbeat appear to prevent /new-style rollover">
+  <Accordion title="Automations appear to prevent /new-style rollover">
+    <a id="automations-or-heartbeat-appear-to-prevent-new-style-rollover" />
+
     - Daily and idle reset freshness is not based on `updatedAt`; see [Session management](/concepts/session#session-lifecycle).
-    - Automation wakeups, heartbeat runs, exec notifications, and gateway bookkeeping may update the session row for routing/status, but they do not extend `sessionStartedAt` or `lastInteractionAt`.
+    - Automation runs, session notices, exec notifications, and Gateway bookkeeping may update the session row for routing/status, but they do not extend `sessionStartedAt` or `lastInteractionAt`.
     - For legacy rows created before those fields existed, OpenClaw can recover `sessionStartedAt` from the transcript JSONL session header when the file is still available. Legacy idle rows without `lastInteractionAt` use that recovered start time as their idle baseline.
 
   </Accordion>
   <Accordion title="Timezone gotchas">
     - Cron expressions without `--tz` use the gateway host timezone.
     - `at` schedules without timezone are treated as UTC.
-    - Heartbeat `activeHours` uses configured timezone resolution.
+    - A job's `activeHours.timezone` is independent of its schedule timezone. It defaults to the configured user timezone; use `local` for the Gateway host or an explicit IANA zone.
 
   </Accordion>
 </AccordionGroup>

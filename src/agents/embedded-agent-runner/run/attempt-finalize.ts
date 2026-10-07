@@ -9,7 +9,6 @@ import {
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
-import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.js";
 import { isSignalTimeoutReason } from "../../failover-error.js";
 import { runAgentEndSideEffectsAsync } from "../../harness/agent-end-side-effects.js";
@@ -93,7 +92,6 @@ export function finalizeEmbeddedAttempt(
     successfulCronAdds: result.successfulCronAdds ?? 0,
     synthesizedPayloadCount: params.synthesizedPayloadCount,
     acceptedSessionSpawns: result.acceptedSessionSpawns,
-    heartbeatToolResponse: result.heartbeatToolResponse,
     clientToolCalls: result.clientToolCalls,
     yieldDetected: result.yieldDetected,
     lastToolError: result.lastToolError,
@@ -245,7 +243,6 @@ export async function completeEmbeddedAttemptAfterTurn(
         }),
       sessionManager,
       warn: (message) => log.warn(message),
-      isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
     });
   }
 

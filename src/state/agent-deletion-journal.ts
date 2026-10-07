@@ -19,7 +19,11 @@ import { captureAgentDatabasePreparationDeletion } from "./agent-database-admiss
 import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
 import { resolveAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.js";
 import { parseAgentDeletionDatabasePaths } from "./agent-deletion-journal.read.js";
-import type { AgentDeletionJournalPurpose } from "./agent-deletion-journal.types.js";
+import type {
+  AgentDeletionJournalPurpose,
+  AgentDeletionJournalCleanupPath,
+  AgentDeletionJournalEntry,
+} from "./agent-deletion-journal.types.js";
 import { deleteAgentProvenanceForAgent, ensureAgentProvenanceSchema } from "./agent-provenance.js";
 import type {
   OpenClawStateDatabase,
@@ -31,6 +35,10 @@ import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "./openclaw-state-db.paths.js";
+export type {
+  AgentDeletionJournalCleanupPath,
+  AgentDeletionJournalEntry,
+} from "./agent-deletion-journal.types.js";
 
 type AgentDeletionDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -64,19 +72,6 @@ type AgentDeletionPathFenceSnapshot = {
   }>;
 };
 
-export type AgentDeletionJournalCleanupPath = {
-  path: string;
-  canonicalPath: string;
-  parentPath: string;
-  kind: "target" | "symlink";
-  sourcePaths: string[];
-  dev: number | null;
-  ino: number | null;
-  coversDescendants: boolean;
-  done: boolean;
-  note?: string;
-};
-
 function assertAgentDeletionIdentityClaimAllowed(
   claimAgentId: string,
   deletedAgentId: string | undefined,
@@ -87,19 +82,6 @@ function assertAgentDeletionIdentityClaimAllowed(
     );
   }
 }
-
-export type AgentDeletionJournalEntry = {
-  agentId: string;
-  operationId: string;
-  agentDir: string;
-  workspaceDir: string;
-  sessionsDir: string;
-  databasePaths: string[];
-  cleanupPaths: AgentDeletionJournalCleanupPath[];
-  createdAt: number;
-  cleanupCompleted: boolean;
-  deleteFiles: boolean;
-};
 
 function readAgentDeletionPathFenceRows(
   database: OpenClawStateDatabase["db"],

@@ -1,7 +1,7 @@
 ---
 summary: "Agent defaults, multi-agent routing, session, messages, and talk config"
 read_when:
-  - Tuning agent defaults (models, thinking, workspace, heartbeat, media, skills)
+  - Tuning agent defaults (models, thinking, workspace, media, skills)
   - Configuring multi-agent routing and bindings
   - Adjusting session, message delivery, and talk-mode behavior
 title: "Configuration — agents"
@@ -32,7 +32,7 @@ the shared auth store into `state/openclaw.sqlite`. After both repairs, the new
 - [Configuration — agent workspace and bootstrap](/gateway/config-agents/workspace-and-bootstrap) — workspace, cwd, repo root, skills, bootstrap injection, context budgets, images, and timezone.
 - [Configuration — agent models](/gateway/config-agents/models) — `agents.defaults.model`, fallback chains, per-purpose model slots, and model selection scope.
 - [Configuration — agent runtime and CLI backends](/gateway/config-agents/runtime-and-cli-backends) — runtime policy on providers and models, CLI backend selection, and GPT-5 personality.
-- [Configuration — agent heartbeat, compaction, and streaming](/gateway/config-agents/heartbeat-compaction-and-streaming) — heartbeat runs, the system agent, compaction, context pruning, block streaming, and typing indicators.
+- [Configuration — heartbeat migration, compaction, and streaming](/gateway/config-agents/heartbeat-compaction-and-streaming) — retired heartbeat settings, the system agent, compaction, context pruning, block streaming, and typing indicators.
 - [Configuration — agent sandboxing](/gateway/config-agents/sandbox) — the `agents.defaults.sandbox` block: image, workspace mode, mounts, and network policy.
 - [Configuration — per-agent entries and multi-agent routing](/gateway/config-agents/entries-and-multi-agent) — `agents.entries` overrides, `multiAgent` bindings, binding match fields, and access profiles.
 - [Configuration — agent sessions](/gateway/config-agents/sessions) — `session.*` scope, identity links, reset policy, sharing, and retention.
@@ -71,7 +71,7 @@ entry points at the page that now holds the content.
 - <a id="runtime-policy" />[Runtime policy](/gateway/config-agents/runtime-and-cli-backends#runtime-policy)
 - <a id="cli-backend-selection" />[CLI backend selection](/gateway/config-agents/runtime-and-cli-backends#cli-backend-selection)
 - <a id="openai-gpt-5-personality" />[OpenAI GPT-5 personality](/gateway/config-agents/runtime-and-cli-backends#openai-gpt-5-personality)
-- <a id="agents.defaults.heartbeat" /><a id="agents-defaults-heartbeat" />[`agents.defaults.heartbeat`](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.heartbeat)
+- <a id="agents.defaults.heartbeat" /><a id="agents-defaults-heartbeat" />[Retired `agents.defaults.heartbeat` settings](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.heartbeat)
 - <a id="agents.defaults.systemagent" /><a id="agents-defaults-systemagent" />[`agents.defaults.systemAgent`](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.systemagent)
 - <a id="agents.defaults.compaction" /><a id="agents-defaults-compaction" />[`agents.defaults.compaction`](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.compaction)
 - <a id="agents.defaults.contextpruning" /><a id="agents-defaults-contextpruning" />[`agents.defaults.contextPruning`](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.contextpruning)

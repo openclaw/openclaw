@@ -378,7 +378,7 @@ describe("cron tool", () => {
       {
         name: "infers the calling session and agent",
         agentSessionKey: "agent:agent-123:telegram:direct:channing",
-        input: { text: "ping", mode: "now" },
+        input: { text: "ping" },
         expected: {
           mode: "now",
           text: "ping",
@@ -391,7 +391,7 @@ describe("cron tool", () => {
         agentSessionKey: undefined,
         input: { text: "manual", sessionKey: "agent:agent-456:discord:thread-xyz", agentId: "ops" },
         expected: {
-          mode: "next-heartbeat",
+          mode: "now",
           text: "manual",
           sessionKey: "agent:agent-456:discord:thread-xyz",
           agentId: "ops",
@@ -401,7 +401,7 @@ describe("cron tool", () => {
         name: "preserves an unparseable explicit session for Gateway caller binding",
         agentSessionKey: "agent:agent-123:telegram:direct:channing",
         input: { text: "x", sessionKey: "subagent:weird:format" },
-        expected: { mode: "next-heartbeat", text: "x", sessionKey: "subagent:weird:format" },
+        expected: { mode: "now", text: "x", sessionKey: "subagent:weird:format" },
       },
     ])("$name", async ({ agentSessionKey, input, expected }) => {
       await executeCron({ action: "wake", ...input }, { agentSessionKey });

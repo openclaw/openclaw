@@ -104,6 +104,7 @@ export const SOURCE_ADMISSION_PATHS = [
   "src/utils/run-with-concurrency.ts",
   "scripts/tsx.mjs",
   "scripts/lib/tsx-cli-shim.mjs",
+  "src/infra/node-compiler-policy.mjs",
   "scripts/lib/local-check-runtime.mts",
   "scripts/full-release-publication-observations.mts",
   "scripts/lib/plugin-clawhub-release.ts",

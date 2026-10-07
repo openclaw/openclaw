@@ -26,6 +26,7 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "../channel-mention-gating.js";
+import { publicReplyOptions } from "../reply-options.js";
 import { createPluginGatewayRuntimeMock } from "./plugin-runtime-gateway-mock.js";
 import {
   mergePluginRuntimeMockOverrides,
@@ -34,6 +35,7 @@ import {
 import { createPluginModelRuntimeMock } from "./plugin-runtime-model-mock.js";
 import { createPluginSessionRuntimeMock } from "./plugin-runtime-session-mock.js";
 import { createPluginStateRuntimeMock } from "./plugin-runtime-state-mock.js";
+import { createPluginSystemRuntimeMock } from "./plugin-runtime-system-mock.js";
 import { createPluginThreadBindingsRuntimeMock } from "./plugin-runtime-thread-bindings-mock.js";
 
 type InboundDebounceFlush = ReturnType<InboundDebounceCreateParams<unknown>["onFlush"]>;
@@ -229,13 +231,13 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
         },
         onError: delivery.onError,
       },
-      replyOptions: {
+      replyOptions: publicReplyOptions({
         ...(onModelSelected ? { onModelSelected } : {}),
         ...params.replyOptions,
         ...(params.turnAdoptionLifecycle
           ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
           : {}),
-      },
+      }),
       replyResolver: params.replyResolver,
     });
     const dispatchResult =
@@ -618,19 +620,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
           .mockResolvedValue(null),
       },
     },
-    system: {
-      enqueueSystemEvent: vi.fn<PluginRuntime["system"]["enqueueSystemEvent"]>(),
-      requestHeartbeat: vi.fn<PluginRuntime["system"]["requestHeartbeat"]>(),
-      requestHeartbeatNow: vi.fn<PluginRuntime["system"]["requestHeartbeatNow"]>(),
-      runHeartbeatOnce: vi.fn<PluginRuntime["system"]["runHeartbeatOnce"]>(async () => ({
-        status: "ran" as const,
-        durationMs: 0,
-      })),
-      runCommandWithTimeout: vi.fn<PluginRuntime["system"]["runCommandWithTimeout"]>(),
-      formatNativeDependencyHint: vi.fn<PluginRuntime["system"]["formatNativeDependencyHint"]>(
-        () => "",
-      ),
-    },
+    system: createPluginSystemRuntimeMock(),
     media: {
       loadWebMedia: vi.fn<PluginRuntime["media"]["loadWebMedia"]>(),
       detectMime: vi.fn<PluginRuntime["media"]["detectMime"]>(),

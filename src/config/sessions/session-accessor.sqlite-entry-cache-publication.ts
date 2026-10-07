@@ -39,6 +39,7 @@ import {
   type CreationRecord,
   type PendingSessionEntryPublication,
   type PlaceholderReceipt,
+  type CreatedSessionEntryReceipt,
   type SessionEntryPublicationRecord,
   type PreparedSessionEntryChanges,
   type SessionEntryReplacementPublication,
@@ -253,12 +254,17 @@ export function assertSessionEntryCreationPublication(
   assertSessionEntryCreationTarget(preparedSharingChanges.operations.get(operation), target);
 }
 
-export function readSessionEntryCreationTransition(
+function readSessionEntryCreationReceipt(
   change: SessionRowChange,
   operation: SessionEntryCreationOperation,
-): SessionEntryPlaceholder | undefined {
+): PlaceholderReceipt | CreatedSessionEntryReceipt | undefined {
   const record = preparedSharingChanges.changes.get(change);
-  const receipt = record?.kind === "placeholder" ? record.receipt : undefined;
+  const receipt =
+    record?.kind === "placeholder"
+      ? record.receipt
+      : record?.kind === "metadata"
+        ? record.creation
+        : undefined;
   const creation = preparedSharingChanges.operations.get(operation);
   if (!creation) {
     return undefined;
@@ -272,8 +278,25 @@ export function readSessionEntryCreationTransition(
     receipt.creation === creation &&
     receipt.databaseIdentity === readSessionEntryCreationIdentity(creation) &&
     receipt.sessionKey === creation.sessionKey
-    ? receipt.placeholder
+    ? receipt
     : undefined;
+}
+
+export function readSessionEntryCreationTransition(
+  change: SessionRowChange,
+  operation: SessionEntryCreationOperation,
+): SessionEntryPlaceholder | undefined {
+  const receipt = readSessionEntryCreationReceipt(change, operation);
+  return receipt?.kind === "placeholder" ? receipt.placeholder : undefined;
+}
+
+/** Full-row creation is authoritative only from the bound writer's settled COMMIT receipt. */
+export function readSessionEntryCreatedEntry(
+  change: SessionRowChange,
+  operation: SessionEntryCreationOperation,
+) {
+  const receipt = readSessionEntryCreationReceipt(change, operation);
+  return receipt?.kind === "entry" ? receipt.entry : undefined;
 }
 
 /** Only the actual inserted-placeholder producer supplies these known row facts. */
@@ -291,6 +314,7 @@ export function publishSessionEntryPlaceholderInsertion(
       ? current
       : undefined;
   const receipt: PlaceholderReceipt = {
+    kind: "placeholder",
     creation,
     databaseIdentity: creation ? readSessionEntryCreationIdentity(creation) : database.db,
     sessionKey,
@@ -674,6 +698,7 @@ export function retainSessionEntryWorkerPublication(params: {
                   sharingChange: "changed",
                   databaseIdentity: params.databaseIdentity,
                   receipt: {
+                    kind: "placeholder",
                     creation,
                     databaseIdentity: params.databaseIdentity,
                     sessionKey,
@@ -683,7 +708,28 @@ export function retainSessionEntryWorkerPublication(params: {
                 }
               : prepared &&
                   (replacement?.previous.has(sessionKey) || replacement?.current.has(sessionKey))
-                ? { kind: "metadata", sharingChange, prepared }
+                ? {
+                    kind: "metadata",
+                    sharingChange,
+                    prepared,
+                    ...(!unknown &&
+                    ownsCreation &&
+                    current(sessionKey) &&
+                    sharingEntry &&
+                    !replacement?.previous.has(sessionKey) &&
+                    !owner.metadataSuperseded.has(sessionKey)
+                      ? {
+                          creation: {
+                            kind: "entry" as const,
+                            creation,
+                            databaseIdentity: params.databaseIdentity,
+                            sessionKey,
+                            entry: sharingEntry,
+                            committed: true as const,
+                          },
+                        }
+                      : {}),
+                  }
                 : { kind: "marker", sharingChange, databaseIdentity: params.databaseIdentity },
           );
         } else {

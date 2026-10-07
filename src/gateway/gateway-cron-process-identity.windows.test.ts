@@ -49,7 +49,7 @@ describe.skipIf(process.platform !== "win32")("Windows cron process identity", (
               schedule: { kind: "at", at: new Date(Date.now() + 2_000).toISOString() },
               sessionTarget: "main",
               wakeMode: "next-heartbeat",
-              payload: { kind: "systemEvent", text: "Windows process identity proof fired" },
+              payload: { kind: "script", script: "return {}", toolsAllow: [] },
             },
             { signal },
           );
@@ -95,7 +95,10 @@ describe.skipIf(process.platform !== "win32")("Windows cron process identity", (
             database.close();
           }
 
-          expect(terminal).toMatchObject({ status: "ok", completionStatus: "succeeded" });
+          expect(terminal, JSON.stringify(terminal)).toMatchObject({
+            status: "ok",
+            completionStatus: "succeeded",
+          });
           expect(receipt).toMatchObject({
             status: "ok",
             ownerPid: expect.any(Number),

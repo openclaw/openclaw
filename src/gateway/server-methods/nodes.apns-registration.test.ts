@@ -9,10 +9,13 @@ import { nodeEventHandlers } from "./nodes.event.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const handleEvent = vi.hoisted(() => vi.fn<typeof handleNodeEvent>());
+const isPairingCurrent = vi.hoisted(() => vi.fn(() => true));
 vi.mock("../server-node-events.js", () => ({ handleNodeEvent: handleEvent }));
-vi.mock("../../infra/device-pairing-node-state.js", () => ({
+vi.mock("../../infra/device-pairing-node-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing-node-state.js")>()),
   captureNodePairingGeneration: async (nodeId: string) => ({ nodeId, key: "generation-a" }),
   isNodePairingGenerationCurrent: async () => true,
+  isPairedDeviceNodeBindingCurrent: isPairingCurrent,
 }));
 
 const registries = new Set<NodeRegistry>();
@@ -25,11 +28,22 @@ afterEach(() => {
   registries.clear();
   setActiveNodeContexts([]);
   handleEvent.mockReset();
+  isPairingCurrent.mockReset().mockReturnValue(true);
 });
 
-it.each(["current", "replacement", "invalidated"])(
-  "binds APNs worker admission to the original live node session (%s)",
-  async (state) => {
+it.each([
+  { event: "push.apns.register", state: "current" },
+  { event: "push.apns.register", state: "replacement" },
+  { event: "push.apns.register", state: "invalidated" },
+  { event: "notifications.changed", state: "current" },
+  { event: "notifications.changed", state: "replacement" },
+  { event: "notifications.changed", state: "invalidated" },
+  { event: "notifications.changed", state: "disconnected" },
+  { event: "notifications.changed", state: "generation-replaced" },
+  { event: "notifications.changed", state: "pairing-revoked" },
+])(
+  "binds $event admission to the original live node session ($state)",
+  async ({ event, state }) => {
     const registry = new NodeRegistry();
     registries.add(registry);
     const client = makeClient("conn-a", "node-a");
@@ -40,24 +54,36 @@ it.each(["current", "replacement", "invalidated"])(
     const entered = createDeferred();
     const release = createDeferred();
     let registered = false;
-    handleEvent.mockImplementation(async (_context, _nodeId, event, options) => {
-      expect(await options?.resolveApnsRegistrationGeneration?.()).toBe("generation-a");
+    handleEvent.mockImplementation(async (_context, _nodeId, nodeEvent, options) => {
+      if (nodeEvent.event === "push.apns.register") {
+        expect(await options?.resolveApnsRegistrationGeneration?.()).toBe("generation-a");
+      }
       entered.resolve();
       await release.promise;
-      expect(options?.assertApnsRegistrationCurrent).toBeTypeOf("function");
+      const assertCurrent =
+        nodeEvent.event === "push.apns.register"
+          ? options?.assertApnsRegistrationCurrent
+          : options?.assertSessionEventCurrent;
+      expect(assertCurrent).toBeTypeOf("function");
       try {
-        options?.assertApnsRegistrationCurrent?.();
+        assertCurrent?.();
         registered = true;
         return undefined;
       } catch (error) {
-        if (!(error instanceof ApnsRegistrationPairingChangedError)) {
+        if (
+          !(error instanceof ApnsRegistrationPairingChangedError) &&
+          !(
+            error instanceof Error &&
+            error.message === "Node pairing changed during session event admission"
+          )
+        ) {
           throw error;
         }
-        return { ok: true, event: event.event, handled: false, reason: "pairing_changed" };
+        return { ok: true, event: nodeEvent.event, handled: false, reason: "pairing_changed" };
       }
     });
     const params = {
-      event: "push.apns.register",
+      event,
       payload: { token: "abcd1234".repeat(4), topic: "ai.openclaw.ios" },
     };
     const respond = vi.fn();
@@ -81,9 +107,24 @@ it.each(["current", "replacement", "invalidated"])(
       });
     } else if (state === "invalidated") {
       registry.invalidateConnectionForPairingChange("conn-a");
+    } else if (state === "disconnected") {
+      registry.unregister("conn-a");
+    } else if (state === "generation-replaced") {
+      registerNodeSession(registry, makeClient("conn-a", "node-a"), {
+        pairingIdentity: "identity-a",
+        pairingGeneration: "generation-b",
+      });
+    } else if (state === "pairing-revoked") {
+      isPairingCurrent.mockReturnValue(false);
     }
     release.resolve();
     await pending;
+    const guardedOptions = handleEvent.mock.calls[0]?.[3];
+    expect(
+      event === "push.apns.register"
+        ? guardedOptions?.assertApnsRegistrationCurrent
+        : guardedOptions?.assertSessionEventCurrent,
+    ).toBeTypeOf("function");
     expect(registered).toBe(state === "current");
     expect(respond.mock.calls[0]?.[0]).toBe(state === "current");
   },

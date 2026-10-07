@@ -506,7 +506,7 @@ describe("CLI attempt execution", () => {
   }
 
   async function runOuterCliFallback(params: {
-    suppression?: "heartbeat" | "preserved-state";
+    suppression?: "cron" | "preserved-state";
     sessionKey: string;
     sessionEntry: SessionEntry;
     sessionStore: Record<string, SessionEntry>;
@@ -536,7 +536,7 @@ describe("CLI attempt execution", () => {
       ({
         message: "outer fallback",
         modelFallbacksOverride: ["claude-cli/opus"],
-        bootstrapContextRunKind: params.suppression === "heartbeat" ? "heartbeat" : undefined,
+        bootstrapContextRunKind: params.suppression === "cron" ? "cron" : undefined,
       } satisfies RunAgentAttemptParams["opts"]);
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const manifestMetadataSnapshot = params.configuredSelection?.metadataSnapshot;
@@ -638,7 +638,7 @@ describe("CLI attempt execution", () => {
         lifecycleGeneration,
         onLifecycleGenerationChanged: () => {},
         suppressVisibleSessionEffects: false,
-        preserveUserFacingSessionModelState: params.suppression === "preserved-state",
+        preserveUserFacingSessionModelState: params.suppression !== undefined,
         trackInternalModelRunTarget: () => {},
         embeddedSessionState: {
           sessionEntry: selectedPrepared.sessionEntry,
@@ -820,11 +820,10 @@ describe("CLI attempt execution", () => {
     expect(runCliAgentMock).toHaveBeenCalledOnce();
   });
 
-  it.each(["rejected", "rejected-clear", "outer-fallback", "heartbeat", "preserved-state"])(
+  it.each(["rejected", "rejected-clear", "outer-fallback", "cron", "preserved-state"])(
     "settles a cold %s CLI binding before the next queued command starts",
     async (outcome) => {
-      const suppression =
-        outcome === "heartbeat" || outcome === "preserved-state" ? outcome : undefined;
+      const suppression = outcome === "cron" || outcome === "preserved-state" ? outcome : undefined;
       const outerFallback = outcome === "outer-fallback" || suppression !== undefined;
       const accepted = outcome === "accepted" || outerFallback;
       const previousBinding = { sessionId: "previous-native-session" };

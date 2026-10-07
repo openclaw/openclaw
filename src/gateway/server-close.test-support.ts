@@ -73,7 +73,7 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       disposeAllCodeModeRuns: mocks.disposeAllCodeModeRuns,
       closeProviderTransportDispatcherPool: mocks.closeProviderTransportDispatcherPool,
       cron: { stop: vi.fn() },
-      heartbeatRunner: { stop: vi.fn() } as never,
+      stopScheduledServices: vi.fn(async () => {}),
       updateCheckStop: null,
       broadcast: vi.fn(),
       maintenance: {

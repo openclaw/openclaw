@@ -93,7 +93,7 @@ function writeAssistantResponse(response: ServerResponse, text: string): void {
 
 describe("PR #126853 real Gateway lane proof", () => {
   it(
-    "starts a visible turn while an independent heartbeat is held",
+    "starts a visible turn while an independent background session event is held",
     { timeout: 90_000 },
     async () => {
       const envSnapshot = captureEnv([...envKeys]);
@@ -103,15 +103,15 @@ describe("PR #126853 real Gateway lane proof", () => {
       const providerResponsesReleased = new Promise<void>((resolve) => {
         releaseProviderResponses = resolve;
       });
-      let heartbeatRequestStarted!: () => void;
-      const heartbeatRequest = new Promise<void>((resolve) => {
-        heartbeatRequestStarted = resolve;
+      let backgroundRequestStarted!: () => void;
+      const backgroundRequest = new Promise<void>((resolve) => {
+        backgroundRequestStarted = resolve;
       });
       let visibleRequestStarted!: () => void;
       const visibleRequest = new Promise<void>((resolve) => {
         visibleRequestStarted = resolve;
       });
-      const heartbeatMarker = "PR126853_HEARTBEAT_HELD";
+      const backgroundMarker = "PR126853_BACKGROUND_HELD";
       const visibleMarker = "PR126853_VISIBLE_TURN";
       const providerOrder: string[] = [];
       let visibleTurnDispatched = false;
@@ -127,10 +127,6 @@ describe("PR #126853 real Gateway lane proof", () => {
           fs.mkdir(bundledPluginsDir, { recursive: true }),
           fs.mkdir(path.dirname(configPath), { recursive: true }),
         ]);
-        await fs.writeFile(
-          path.join(workspaceDir, "HEARTBEAT.md"),
-          "Handle pending system events and reply with a concise acknowledgement.\n",
-        );
         const token = "pr126853-proof-token";
         for (const [key, value] of Object.entries({
           HOME: tempHome,
@@ -148,6 +144,8 @@ describe("PR #126853 real Gateway lane proof", () => {
         })) {
           setTestEnvValue(key, value);
         }
+        // Load the real Gateway graph inside this fixture's environment before startup timing.
+        await import("../src/gateway/server-start.js");
 
         providerServer = createServer((request, response) => {
           void (async () => {
@@ -161,19 +159,22 @@ describe("PR #126853 real Gateway lane proof", () => {
             }
             const body = Buffer.concat(chunks).toString("utf8");
             const kind = !visibleTurnDispatched
-              ? "heartbeat"
+              ? "background"
               : body.includes(visibleMarker)
                 ? "visible"
                 : "unexpected";
             providerOrder.push(kind);
             console.log(`PR126853_PROVIDER_REQUEST ${kind}`);
-            if (kind === "heartbeat") {
-              heartbeatRequestStarted();
+            if (kind === "background") {
+              backgroundRequestStarted();
             } else if (kind === "visible") {
               visibleRequestStarted();
             }
             await providerResponsesReleased;
-            writeAssistantResponse(response, kind === "heartbeat" ? "HEARTBEAT_OK" : "VISIBLE_OK");
+            writeAssistantResponse(
+              response,
+              kind === "background" ? "BACKGROUND_OK" : "VISIBLE_OK",
+            );
           })().catch((error: unknown) => {
             response.writeHead(500).end(error instanceof Error ? error.message : String(error));
           });
@@ -196,8 +197,8 @@ describe("PR #126853 real Gateway lane proof", () => {
               workspace: workspaceDir,
               skipBootstrap: true,
               maxConcurrent: 1,
-              heartbeat: { every: "5m", target: "none" },
               model: { primary: provider.modelRef },
+              modelPolicy: { allow: [provider.modelRef] },
               models: {
                 [provider.modelRef]: {
                   params: { transport: "sse", openaiWsWarmup: false },
@@ -229,31 +230,20 @@ describe("PR #126853 real Gateway lane proof", () => {
         }
         withFastReplyConfig(runtimeConfig);
 
-        const heartbeatSessionKey = "agent:main:pr126853-heartbeat";
+        const backgroundSessionKey = "agent:main:pr126853-background";
         await gateway.client.request("sessions.create", {
-          key: heartbeatSessionKey,
+          key: backgroundSessionKey,
           agentId: "main",
           cwd: workspaceDir,
         });
         await expect(
-          gateway.client.request<{ ok: boolean }>("wake", {
-            mode: "now",
-            text: heartbeatMarker,
-            sessionKey: heartbeatSessionKey,
-            agentId: "main",
+          gateway.client.request<{ ok: boolean }>("system-event", {
+            wake: true,
+            text: backgroundMarker,
+            sessionKey: backgroundSessionKey,
           }),
         ).resolves.toEqual({ ok: true });
-        await within(heartbeatRequest, "waiting for the heartbeat provider request").catch(
-          async (error: unknown) => {
-            const lastHeartbeat = await gateway?.client
-              .request("last-heartbeat", {})
-              .catch((lookupError: unknown) => ({ lookupError: String(lookupError) }));
-            throw new Error(
-              `heartbeat did not reach provider; order=${JSON.stringify(providerOrder)} last=${JSON.stringify(lastHeartbeat)}`,
-              { cause: error },
-            );
-          },
-        );
+        await within(backgroundRequest, "waiting for the background provider request");
 
         const visibleSessionKey = "agent:main:pr126853-visible";
         const visibleRunId = "pr126853-visible-run";
@@ -275,10 +265,10 @@ describe("PR #126853 real Gateway lane proof", () => {
           {},
         );
         const main = diagnostics.lanes.find((lane) => lane.lane === "main");
-        const heartbeat = diagnostics.lanes.find((lane) => lane.lane === "cron-nested");
-        expect(providerOrder.slice(0, 2)).toEqual(["heartbeat", "visible"]);
+        const background = diagnostics.lanes.find((lane) => lane.lane === "cron-nested");
+        expect(providerOrder.slice(0, 2)).toEqual(["background", "visible"]);
         expect(main).toMatchObject({ lane: "main", activeCount: 1, queuedCount: 0 });
-        expect(heartbeat).toMatchObject({
+        expect(background).toMatchObject({
           lane: "cron-nested",
           activeCount: 1,
           queuedCount: 0,
@@ -286,8 +276,8 @@ describe("PR #126853 real Gateway lane proof", () => {
         console.log(
           `PR126853_RUNTIME_TRACE ${JSON.stringify({
             providerOrder: providerOrder.slice(0, 2),
-            lanes: [main, heartbeat],
-            heartbeatSessionKey,
+            lanes: [main, background],
+            backgroundSessionKey,
             visibleSessionKey,
           })}`,
         );
@@ -302,14 +292,19 @@ describe("PR #126853 real Gateway lane proof", () => {
         ).resolves.toMatchObject({ status: "ok" });
         await expect
           .poll(
-            async () =>
-              await gateway?.client.request<{ status: string; preview?: string }>(
-                "last-heartbeat",
-                {},
-              ),
+            async () => {
+              const history = await gateway?.client.request<{
+                messages: Array<{ role?: string; content?: unknown }>;
+              }>("chat.history", { sessionKey: backgroundSessionKey });
+              return history?.messages.filter(
+                (message) =>
+                  message.role === "assistant" &&
+                  JSON.stringify(message.content).includes("BACKGROUND_OK"),
+              );
+            },
             { timeout: 15_000, interval: 50 },
           )
-          .toMatchObject({ status: "ok-empty" });
+          .toHaveLength(1);
       } finally {
         releaseProviderResponses();
         if (gateway) {

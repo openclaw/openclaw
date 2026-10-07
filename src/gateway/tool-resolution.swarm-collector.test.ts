@@ -27,7 +27,7 @@ function buildConfig(tools?: OpenClawConfig["tools"]): OpenClawConfig {
   return {
     plugins: { enabled: false },
     agents: { entries: { main: {} } },
-    tools: { swarm: true, ...tools },
+    tools: { swarm: true, web: { search: { provider: "duckduckgo" } }, ...tools },
   } as OpenClawConfig;
 }
 

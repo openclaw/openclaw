@@ -1,13 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
+import { createAutomationResultRecorder } from "../../infra/agent-run-registry.automation.js";
 import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   callGatewayMock,
+  appendSessionRuntimeContextMock,
   dispatchCronDeliveryMock,
   loadRunCronIsolatedAgentTurn,
   resolveCronDeliveryPlanMock,
   resolveCronPayloadOutcomeMock,
+  readCronScratchSnapshotMock,
   runWithModelFallbackMock,
   mockRunCronFallbackPassthrough,
   resolveDeliveryTargetMock,
@@ -81,6 +84,133 @@ async function useRealOutcome() {
 
 describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
   setupRunCronIsolatedAgentTurnSuite();
+
+  it.each([
+    { mode: "announce", blocked: false },
+    { mode: "none", blocked: false },
+    { mode: "announce", blocked: true },
+  ] as const)(
+    "executes with missing owner route, mode=$mode and DM block=$blocked",
+    async ({ mode, blocked }) => {
+      mockRunCronFallbackPassthrough();
+      const summary =
+        "Owner delivery unavailable (no-route); configure an authorized owner DM or edit this automation's delivery";
+      resolveCronDeliveryPlanMock.mockReturnValue({
+        mode,
+        target: "owner",
+        requested: mode === "announce",
+      });
+      resolveDeliveryTargetMock.mockResolvedValue({
+        ok: false,
+        mode: "explicit",
+        channel: "none",
+        error: new Error(summary),
+        ...(blocked ? { deliverySuppressionReason: "channel_transform" } : {}),
+      });
+      const result = await runTurn({
+        job: makeIsolatedAgentJobFixture({ delivery: { mode, target: "owner" } }),
+      });
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(result.status).toBe("ok");
+      expectDispatch({
+        deliveryRequested: mode === "announce",
+        skipDelivery: blocked ? "channel_transform" : undefined,
+        resolvedDelivery: expect.objectContaining({ ok: false, error: expect.any(Error) }),
+      });
+    },
+  );
+
+  it("defers a prepared run when its active window closes before inference", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-02T09:00:00Z"));
+    try {
+      mockRunCronFallbackPassthrough();
+      runEmbeddedAgentMock.mockImplementationOnce(async (request) => {
+        clock.mockReturnValue(Date.parse("2026-10-02T11:00:00Z"));
+        await request.onExecutionStarted?.();
+        throw new Error("a deferred run must not continue");
+      });
+      const result = await runTurn({
+        job: makeIsolatedAgentJobFixture({
+          activeHours: { start: "09:00", end: "10:00", timezone: "UTC" },
+        }),
+      });
+      expect(result).toMatchObject({
+        status: "skipped",
+        executionStarted: false,
+        admissionDeferred: true,
+      });
+      expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("supplies bounded job scratch and warns before replacing a partial view", async () => {
+    mockRunCronFallbackPassthrough();
+    readCronScratchSnapshotMock.mockResolvedValueOnce({
+      jobId: "test-job",
+      state: {
+        currentRevision: 3,
+        scratch: { content: "x".repeat(2200), revision: 3, updatedAtMs: 1 },
+      },
+    });
+    await runTurn();
+    const prompt = runEmbeddedAgentMock.mock.calls[0]?.[0]?.prompt;
+    expect(prompt).toContain("Automation scratch (revision 3)");
+    expect(prompt).toContain("x".repeat(2000));
+    expect(prompt).not.toContain("x".repeat(2001));
+    expect(prompt).toContain("reread the complete scratch before replacing it");
+  });
+
+  it.each(["no_change", "needs_attention"] as const)(
+    "settles the structured %s outcome through ordinary delivery",
+    async (outcome) => {
+      mockRunCronFallbackPassthrough();
+      await useRealOutcome();
+      resolveCronDeliveryPlanMock.mockReturnValue({
+        requested: true,
+        mode: "announce",
+        channel: "messagechat",
+        to: "test-target",
+      });
+      runEmbeddedAgentMock.mockImplementationOnce(async ({ runId }) => {
+        createAutomationResultRecorder(
+          runId,
+          "test-job",
+        )({ outcome, summary: "Inspection complete" });
+        return {
+          payloads: [{ text: "Inspection complete" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+      const result = await runTurn();
+      expect(result).toMatchObject({ status: "ok", summary: `${outcome}: Inspection complete` });
+      expectDispatch({ skipDelivery: outcome === "no_change" ? "silent" : undefined });
+      expect(appendSessionRuntimeContextMock).toHaveBeenCalledTimes(
+        outcome === "no_change" ? 0 : 1,
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "includes reasoning only when explicitly requested (%s)",
+    async (includeReasoning) => {
+      mockRunCronFallbackPassthrough();
+      await useRealOutcome();
+      const reasoning = { text: "Inspection reasoning", isReasoning: true };
+      const answer = { text: "Inspection complete" };
+      runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [reasoning, answer],
+        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      });
+      await runTurn({
+        job: makeIsolatedAgentJobFixture({
+          payload: { kind: "agentTurn", message: "inspect", includeReasoning },
+        }),
+      });
+      expectDispatch({ deliveryPayloads: includeReasoning ? [reasoning, answer] : [answer] });
+    },
+  );
 
   it("preserves a run-level error with partial text when delivery is pending", async () => {
     mockAgentRun({
@@ -166,12 +296,12 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expectObjectFields(await runTurn(), testCase.expected);
   });
 
-  it("preserves a heartbeat-only accepted child handoff failure as a cron error", async () => {
-    const heartbeatPayload = { text: "HEARTBEAT_OK" };
+  it("preserves a silent accepted child handoff failure as a cron error", async () => {
+    const silentPayload = { text: "NO_REPLY" };
     const error = "cron child-session handoff timed out before producing a final assistant payload";
-    mockChildRun([heartbeatPayload]);
-    mockAnnounceOutcome([heartbeatPayload], heartbeatPayload.text, {
-      deliveryDisposition: { kind: "heartbeat", controlOnly: true },
+    mockChildRun([silentPayload]);
+    mockAnnounceOutcome([silentPayload], silentPayload.text, {
+      deliveryDisposition: { kind: "silent", controlOnly: true },
     });
     dispatchCronDeliveryMock.mockImplementationOnce(() => ({
       disposition: { kind: "error", error },
@@ -184,8 +314,8 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     }));
     const result = await runTurn();
     expectObjectFields(result, { status: "error", error, delivered: false });
-    expect(result.summary).not.toBe(heartbeatPayload.text);
-    expect(result.outputText).not.toBe(heartbeatPayload.text);
+    expect(result.summary).not.toBe(silentPayload.text);
+    expect(result.outputText).not.toBe(silentPayload.text);
   });
 
   it("preserves structured-parent delivery failures after accepting a child", async () => {

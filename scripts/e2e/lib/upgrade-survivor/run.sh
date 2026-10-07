@@ -2320,6 +2320,7 @@ if [ "$SCENARIO" = "dreaming-cron-doctor" ]; then
   phase prepare-dreaming-runtime node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs prepare-runtime
   OPENCLAW_SKIP_CRON=0 phase dreaming-runtime-gateway-start start_gateway
   phase dreaming-runtime-gateway-probes check_gateway_probes
+  phase enable-dreaming-runtime node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs enable-runtime
   phase wait-dreaming-runtime node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs wait-runtime
   phase reload-dreaming-runtime openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
     openclaw plugins reload memory-core --json \

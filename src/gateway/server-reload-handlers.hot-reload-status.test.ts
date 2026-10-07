@@ -113,7 +113,6 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       getState: () => ({
         hooksConfig: {} as never,
         hookClientIpConfig: {} as never,
-        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
         cronState: {
           cron: { start: vi.fn(async () => {}), stop: vi.fn() },
           storePath: "/tmp/cron.json",

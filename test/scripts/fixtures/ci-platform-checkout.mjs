@@ -85,6 +85,9 @@ function prepareDocsPublisher() {
       output,
     );
   }
+  const compilerPolicy = path.join("src", "infra", "node-compiler-policy.mjs");
+  fs.mkdirSync(path.dirname(path.join(target, compilerPolicy)), { recursive: true });
+  fs.copyFileSync(path.join(source, compilerPolicy), path.join(target, compilerPolicy));
   fs.mkdirSync(path.join(target, "docs"));
   fs.writeFileSync(path.join(target, "docs", "page.mdx"), "# Valid page\n");
   fs.symlinkSync(
@@ -1063,7 +1066,8 @@ async function command() {
   } else if (
     operation === "diff" &&
     ((options.docsPublish &&
-      args.join(" ") === "--quiet -- docs .openclaw-sync package.json package-lock.json") ||
+      args.join(" ") ===
+        "--quiet -- docs .openclaw-sync src/infra/node-compiler-policy.mjs package.json package-lock.json") ||
       (options.docsAgent && args.join(" ") === "HEAD --quiet") ||
       options.maturity)
   ) {

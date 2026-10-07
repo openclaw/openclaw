@@ -160,11 +160,11 @@ describe("Gateway completed requester replay", () => {
 
 function config(url: string): OpenClawConfig {
   return {
+    cron: { enabled: false },
     plugins: { enabled: false },
     messages: { groupChat: { visibleReplies: "message_tool" } },
     agents: {
       defaults: {
-        heartbeat: { every: "0m" },
         model: { primary: MODEL_REF },
         models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
         skipBootstrap: true,

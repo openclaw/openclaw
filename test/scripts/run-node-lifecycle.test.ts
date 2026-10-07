@@ -162,7 +162,7 @@ it.runIf(process.platform !== "win32")(
       ]) {
         copyFileSync(filename, path.join(checkoutRoot, filename));
       }
-      mkdirSync(path.join(checkoutRoot, "src"));
+      mkdirSync(path.join(checkoutRoot, "src"), { recursive: true });
       mkdirSync(path.join(checkoutRoot, "dist"));
       mkdirSync(path.join(fixtureRoot, "home"));
       writeFileSync(path.join(checkoutRoot, "package.json"), '{"type":"module"}');

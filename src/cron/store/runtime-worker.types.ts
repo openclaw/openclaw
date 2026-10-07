@@ -1,3 +1,5 @@
+import type { ClawPortableRemovalPrecondition } from "../../claws/portable-heartbeat-removal.types.js";
+import type { AgentDeletionRecoveryHoldPredicate } from "../../state/agent-deletion-journal.types.js";
 import type { CronJobScratchWriteInput } from "../scratch-contract.js";
 import type {
   CronFailureNotificationDelivery,
@@ -5,6 +7,7 @@ import type {
   CronRunDiagnostics,
   CronRunStatus,
   CronStoreFile,
+  CronStoredJob,
 } from "../types.js";
 import type { CronJobFamilyIdentity } from "./row-codec.js";
 import type {
@@ -109,6 +112,12 @@ export type CronExternalStateChange =
     };
 
 export type CronRuntimeMutationInputs = {
+  "cron.provisionDefaultProactive": {
+    storePath: string | undefined;
+    agentId: string;
+    planned: CronStoredJob;
+    recoveryHoldPredicate?: AgentDeletionRecoveryHoldPredicate;
+  };
   "cron.recordSkippedRuns": { storeKey: string; change: CronSkippedRunChange };
   "cron.planStartup": { storeKey: string; jobIds: string[]; skipJobIds?: string[] };
   "cron.mutateExternalState": {
@@ -127,6 +136,7 @@ export type CronRuntimeMutationInputs = {
       options?: CronStoreSaveOptions;
     };
     expectedJob?: { id: string; configRevision: string };
+    clawPrecondition?: ClawPortableRemovalPrecondition;
     preconditionJob?: CronJob;
     receiptMutation?: {
       jobId: string;

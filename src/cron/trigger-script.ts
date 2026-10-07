@@ -7,7 +7,7 @@ import {
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  resolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
 import { bindAgentToolSourceExecutionGuard } from "../agents/agent-tool-source-execution-guard.js";
 import { wrapToolWithAbortSignal } from "../agents/agent-tools.abort.js";
@@ -69,7 +69,6 @@ import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.j
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import {
   resolveCronActiveRuntimeConfig,
   resolveCronAgentConfig,
@@ -171,17 +170,13 @@ type CachedTriggerRuntime = PreparedTriggerRuntime & {
   invalidate: () => void;
 };
 
-function resolveTriggerAgentId(config: OpenClawConfig, agentId?: string): string {
-  return agentId?.trim() ? normalizeAgentId(agentId) : resolveDefaultAgentId(config);
-}
-
 async function prepareTriggerRuntime(
   params: Parameters<PrepareTriggerRuntime>[0],
   loadPluginRegistry: LoadTriggerPluginRegistry = loadAgentRuntimePluginRegistryHandle,
 ): Promise<PreparedTriggerRuntime> {
   const { signal: preparationSignal } = params;
   preparationSignal?.throwIfAborted();
-  const agentId = resolveTriggerAgentId(params.runtimeConfig, params.agentId);
+  const agentId = resolveAmbientOwnerAgentId(params.runtimeConfig, params.agentId);
   const selectedAgentConfig = resolveAgentConfig(params.runtimeConfig, agentId);
   const agentConfigOverride = params.agentId?.trim() ? selectedAgentConfig : undefined;
   const { agentDefaults, cfgWithAgentDefaults: config } = resolveCronAgentConfig({
@@ -367,7 +362,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     request: Parameters<PrepareTriggerRuntime>[0],
     scope: ReturnType<typeof createHeadlessDeadlineScope>,
   ): Promise<CachedTriggerRuntime> => {
-    const agentId = resolveTriggerAgentId(request.runtimeConfig, request.agentId);
+    const agentId = resolveAmbientOwnerAgentId(request.runtimeConfig, request.agentId);
     const toolsAllowKey = JSON.stringify([
       request.toolsAllow ?? null,
       request.scheduledToolPolicy ?? null,

@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   rootWrite: vi.fn(),
   mkdir: vi.fn(),
   recordAgentProvenance: vi.fn(),
+  provisionDefaultProactiveJob: vi.fn(),
   readAgentDeletionJournal: vi.fn(() => undefined as Record<string, unknown> | undefined),
   claimCompletedAgentDeletion: vi.fn(() => true),
   migrateLegacyMainSessionKeys: vi.fn(),
@@ -53,6 +54,10 @@ vi.mock("../state/agent-deletion-journal.js", () => ({
 
 vi.mock("../state/agent-provenance.js", () => ({
   recordAgentProvenance: mocks.recordAgentProvenance,
+}));
+// mock-isolation: Keep automation provisioning outside the config fixture's synthetic stores.
+vi.mock("../cron/default-proactive-job.js", () => ({
+  provisionDefaultProactiveJob: mocks.provisionDefaultProactiveJob,
 }));
 
 vi.mock("../config/sessions/legacy-main-session-migration.js", () => ({

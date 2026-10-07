@@ -81,7 +81,6 @@ export async function prepareReplyAgentPayloads(state: {
     blockStreamingEnabled,
     cfg,
     followupRun,
-    isHeartbeat,
     opts,
     replyMediaContext,
     replyOperation,
@@ -129,7 +128,6 @@ export async function prepareReplyAgentPayloads(state: {
         InputProvenance: followupRun.run.inputProvenance,
       },
       cfg,
-      isHeartbeat,
     });
   const blocked =
     runResult.meta?.error?.kind === "hook_block" ||
@@ -256,7 +254,6 @@ export async function prepareReplyAgentPayloads(state: {
       sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
       sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
       successfulSourceReplyDelivery: completedSourceReplyDelivery,
-      isHeartbeat,
       isRoomEvent: false,
     });
     return recovery.kind === "diagnostic" ? recovery.payload : undefined;
@@ -291,7 +288,6 @@ export async function prepareReplyAgentPayloads(state: {
       config: cfg,
       payloads,
       conversationContext: sessionCtx.agentText ?? sessionCtx.BodyForAgent,
-      isHeartbeat,
       didLogHeartbeatStrip,
       silentExpected: followupRun.run.silentExpected,
       blockStreamingEnabled,
@@ -363,7 +359,6 @@ export async function prepareReplyAgentPayloads(state: {
     followupRun.currentInboundEventKind !== "room_event" &&
     !isSyntheticSourceReplyTurn({
       inputProvenance: followupRun.run.inputProvenance,
-      isHeartbeat,
     }) &&
     context.execution.status === "ok" &&
     runResult.meta?.aborted !== true &&

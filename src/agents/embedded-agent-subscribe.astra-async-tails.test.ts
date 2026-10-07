@@ -8,7 +8,6 @@ import { Type } from "typebox";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createResponsesAssistantOutput } from "../../packages/ai/src/providers/openai-responses-shared.js";
 import { processResponsesStream } from "../../packages/ai/src/transports/openai-responses-stream-internal.js";
-import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import { buildReplyPayloads } from "../auto-reply/reply/agent-runner-payloads.js";
 import { createBlockReplyPipeline } from "../auto-reply/reply/block-reply-pipeline.js";
 import { createBlockReplyDeliveryHandler } from "../auto-reply/reply/reply-delivery.js";
@@ -156,13 +155,13 @@ describe("Astra async response tails", () => {
       reply: keptReply,
     },
     {
-      name: "a heartbeat turn without block streaming keeps the completed answer",
+      name: "an automation turn without block streaming keeps the completed answer",
       delivery: "off",
       requests: [answered, "NO_REPLY"],
       transcript: answeredTail,
       delivered: ["Use counter B."],
       reply: keptReply,
-      heartbeat: true,
+      trigger: "cron",
     },
     {
       name: "a live answer followed by commentary is not resent after NO_REPLY",
@@ -268,7 +267,6 @@ describe("Astra async response tails", () => {
       reasoning: true,
     },
   ] as const)("$name", async ({ delivery, requests, transcript, delivered, ...row }) => {
-    const heartbeat = "heartbeat" in row;
     const quiet = "quiet" in row;
     const sent: string[] = [];
     const show = (payload: { text?: string; mediaUrl?: string }) =>
@@ -289,7 +287,6 @@ describe("Astra async response tails", () => {
       typingSignals: createTypingSignaler({
         typing: createTypingController({}),
         mode: "never",
-        isHeartbeat: heartbeat,
       }),
       blockStreamingEnabled,
       reasoningPayloadsEnabled: "reasoning" in row,
@@ -409,7 +406,7 @@ describe("Astra async response tails", () => {
       workspaceDir: "/tmp/openclaw-test",
       prompt: "Where do I store my bag?",
       timeoutMs: 60_000,
-      trigger: heartbeat ? ("heartbeat" as const) : ("user" as const),
+      trigger: "trigger" in row ? row.trigger : ("user" as const),
       ...(quiet ? { sourceReplyDeliveryMode: "message_tool_only" as const } : {}),
       ...("reasoning" in row ? { reasoningLevel: "on" as const } : {}),
     };
@@ -460,12 +457,8 @@ describe("Astra async response tails", () => {
         ),
       ).toBe(visibleText);
     }
-    if (heartbeat) {
-      expect(resolveHeartbeatReplyPayload(prepared.payloads)?.text).toBe("Use counter B.");
-    }
     const { replyPayloads } = await buildReplyPayloads({
       payloads: prepared.payloads,
-      isHeartbeat: heartbeat,
       didLogHeartbeatStrip: false,
       blockStreamingEnabled,
       blockReplyPipeline: pipeline,

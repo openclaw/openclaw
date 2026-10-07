@@ -1,19 +1,17 @@
-// Exercise notification ownership through real Gateway reload/replacement and provider HTTP.
+// Exercise producer target ownership through real Gateway reload/replacement and provider HTTP.
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import path from "node:path";
 import { json } from "node:stream/consumers";
 import { describe, expect, it } from "vitest";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "../../test/helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import {
+  captureSessionEventTargetForHost,
+  enqueueSessionEventForHost,
+} from "../auto-reply/reply/session-event-handoff.js";
+import { prepareGatewayRestartIteration } from "../cli/gateway-cli/run-loop-startup.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
-import { requestHeartbeatAndWait, setHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
@@ -25,76 +23,24 @@ import {
 import type { SessionsListResult } from "./session-utils.types.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
-const WORKER = "OLD-STORE-CHILD";
-type Receipt = { status: string; runId: string; childSessionKey: string };
-type ProviderRequest = {
-  model: string;
-  input: Array<{ type?: string; role?: string; call_id?: string; output?: string }>;
-};
+const NOTICE = "RECOVERED-SESSION-NOTICE";
+type ProviderRequest = { model: string; input: unknown[] };
 
 async function startProvider() {
   const requests: ProviderRequest[] = [];
   const errors: unknown[] = [];
-  let heartbeat = createDeferredCore<ProviderRequest>();
-  let spawn: Receipt | undefined;
-  let spawnRequested = false;
   const server = createServer((request, response) => {
     void (async () => {
       const body = (await json(request)) as ProviderRequest;
-      requests.push(body);
       const title = JSON.stringify(body.input).includes("Generate a concise session title");
-      const isHeartbeat = JSON.stringify(body.input).includes(
-        "Follow the heartbeat monitor scratch context",
-      );
-      const output = body.input.find(
-        (item) => item.type === "function_call_output" && item.call_id === "call_spawn",
-      )?.output;
-      if (output) {
-        spawn = JSON.parse(output) as Receipt;
+      if (!title) {
+        requests.push(body);
       }
-      if (!title && !isHeartbeat && !spawnRequested) {
-        spawnRequested = true;
-        const item = {
-          type: "function_call",
-          id: "fc_spawn",
-          call_id: "call_spawn",
-          name: "sessions_spawn",
-          arguments: JSON.stringify({
-            task: `Return CHILD-DONE. ${WORKER}`,
-            visible: true,
-            mode: "run",
-            expectsCompletionMessage: false,
-          }),
-        };
-        writeOpenAiResponsesSse(response, [
-          { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-          {
-            type: "response.function_call_arguments.delta",
-            item_id: item.id,
-            output_index: 0,
-            delta: item.arguments,
-          },
-          { type: "response.output_item.done", output_index: 0, item },
-          {
-            type: "response.completed",
-            response: {
-              id: "resp_spawn",
-              status: "completed",
-              output: [item],
-              usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-            },
-          },
-        ]);
-      } else {
-        writeOpenAiResponsesText(response, {
-          text: title ? "Store lifecycle proof" : isHeartbeat ? "NO_REPLY" : "CHILD-DONE",
-          messageId: `msg_${requests.length}`,
-          responseId: `resp_${requests.length}`,
-        });
-      }
-      if (isHeartbeat) {
-        heartbeat.resolve(body);
-      }
+      writeOpenAiResponsesText(response, {
+        text: title ? "Store lifecycle proof" : NOTICE,
+        messageId: `msg_${requests.length}`,
+        responseId: `resp_${requests.length}`,
+      });
     })().catch((error: unknown) => {
       errors.push(error);
       if (!response.headersSent) {
@@ -115,13 +61,6 @@ async function startProvider() {
     baseUrl: `http://127.0.0.1:${address.port}/v1`,
     requests,
     errors,
-    armHeartbeatObservation() {
-      heartbeat = createDeferredCore<ProviderRequest>();
-      return heartbeat.promise;
-    },
-    get spawn() {
-      return spawn;
-    },
     async stop() {
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
@@ -131,13 +70,12 @@ async function startProvider() {
   };
 }
 
-describe("heartbeat notification store ownership through the Gateway", () => {
+describe("session event target ownership through the Gateway", () => {
   it.each(["different store", "same-store replacement"] as const)(
-    "handles a queued child notice after %s",
+    "rejects a retired producer after %s",
     async (transition) => {
       resetGatewayTestState();
-      resetHeartbeatEventsForTest();
-      const home = await setupGatewayTempHome({ prefix: "openclaw-heartbeat-store-" });
+      const home = await setupGatewayTempHome({ prefix: "openclaw-event-store-" });
       let provider: Awaited<ReturnType<typeof startProvider>> | undefined;
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       await runQaGatewayFixture(
@@ -154,12 +92,13 @@ describe("heartbeat notification store ownership through the Gateway", () => {
                 workspace: home.workspaceDir,
                 skipBootstrap: true,
                 model: "proof/primary",
-                heartbeat: { every: "30m" },
-                subagents: { allowAgents: ["*"], maxConcurrent: 2 },
                 models: Object.fromEntries(
                   ["primary", "backup"].map((model) => [
                     `proof/${model}`,
-                    { params: { transport: "sse", openaiWsWarmup: false } },
+                    {
+                      agentRuntime: { id: "openclaw" },
+                      params: { transport: "sse", openaiWsWarmup: false },
+                    },
                   ]),
                 ),
               },
@@ -186,11 +125,12 @@ describe("heartbeat notification store ownership through the Gateway", () => {
               },
             },
             session: { store: oldStore },
-            // The provider scripts a direct spawn to isolate notification-store ownership.
-            tools: { profile: "coding", toolSearch: false },
+            tools: { profile: "minimal" },
+            plugins: { slots: { memory: "none" } },
             gateway: { auth: { mode: "token", token } },
             hooks: { enabled: false },
           };
+          const configPath = await createGatewayConfigPath(home.tempHome);
           const start = () =>
             startGatewayWithClient({
               cfg,
@@ -200,53 +140,12 @@ describe("heartbeat notification store ownership through the Gateway", () => {
               mode: GATEWAY_CLIENT_MODES.CLI,
               scopes: ["operator.admin"],
             });
-          const configPath = await createGatewayConfigPath(home.tempHome);
           gateway = await start();
           await gateway.server.startupSettled;
-          const parentKey = `agent:main:store-proof-${randomUUID()}`;
-          const wait = (runId: string) =>
-            gateway!.client.request<{ status: string }>(
-              "agent.wait",
-              { runId, timeoutMs: 120_000 },
-              { timeoutMs: 125_000 },
-            );
-          const accepted = await gateway.client.request<{ runId: string }>(
-            "chat.send",
-            {
-              sessionKey: parentKey,
-              message: "Spawn one worker now.",
-              deliver: false,
-              idempotencyKey: randomUUID(),
-            },
-            { expectFinal: false },
-          );
-          expect((await wait(accepted.runId)).status).toBe("ok");
-          expect(provider.spawn?.status).toBe("accepted");
-          const child = provider.spawn;
-          if (!child) {
-            throw new Error("Parent did not receive sessions_spawn receipt");
-          }
-          expect((await wait(child.runId)).status).toBe("ok");
-          const before = await gateway.client.request<SessionsListResult>("sessions.list", {
-            agentId: "main",
-            limit: 100,
-          });
-          const parentSessionId = before.sessions.find(
-            (entry) => entry.key === parentKey,
-          )?.sessionId;
-          expect(parentSessionId).toBeTypeOf("string");
-          const followup = await gateway.client.request<{ runId: string }>(
-            "agent",
-            {
-              sessionKey: child.childSessionKey,
-              message: `Human followup ${WORKER}`,
-              deliver: false,
-              idempotencyKey: randomUUID(),
-            },
-            { expectFinal: false },
-          );
-          const followupResult = await wait(followup.runId);
-          expect(followupResult.status, JSON.stringify(followupResult)).toBe("ok");
+          const sessionKey = `agent:main:store-proof-${randomUUID()}`;
+          await gateway.client.request("sessions.create", { key: sessionKey });
+          const retiredTarget = await captureSessionEventTargetForHost("main", sessionKey);
+          expect(retiredTarget.sessionId).not.toBe("");
 
           if (transition === "different store") {
             const { hash } = await gateway.client.request<{ hash: string }>("config.get", {});
@@ -257,63 +156,80 @@ describe("heartbeat notification store ownership through the Gateway", () => {
                 agents: { defaults: { model: "proof/backup" } },
               }),
             });
-            expect(await gateway.client.request("last-heartbeat", {})).toMatchObject({
-              status: "skipped",
-              reason: "store-replaced",
-            });
+            expect(() =>
+              enqueueSessionEventForHost(NOTICE, {
+                agentId: "main",
+                sessionKey,
+                source: "session",
+                expectedTarget: retiredTarget,
+              }),
+            ).toThrow("destination was reset or replaced");
             const after = await gateway.client.request<SessionsListResult>("sessions.list", {
               agentId: "main",
               limit: 100,
             });
-            expect(after.sessions.map((entry) => entry.key)).not.toContain(parentKey);
-            expect(after.sessions.map((entry) => entry.key)).not.toContain(child.childSessionKey);
-            expect(provider.requests.map((request) => request.model)).not.toContain("backup");
+            expect(after.sessions.map((entry) => entry.key)).not.toContain(sessionKey);
+            expect(provider.requests).toEqual([]);
           } else {
             await disconnectGatewayClient(gateway.client);
             await gateway.server.close({ reason: "same-store replacement" });
             gateway = undefined;
-            const replacementRequestOffset = provider.requests.length;
-            const replacementHeartbeat = provider.armHeartbeatObservation();
+            await prepareGatewayRestartIteration(
+              await import("../cli/gateway-cli/lifecycle.runtime.js"),
+              {
+                warn: (message) => {
+                  throw new Error(message);
+                },
+              },
+            );
             gateway = await start();
             await gateway.server.startupSettled;
-            // Await the actual delayed notification; replacement must not need another wake.
-            const heartbeat = await replacementHeartbeat;
-            expect(provider.requests.indexOf(heartbeat)).toBeGreaterThanOrEqual(
-              replacementRequestOffset,
-            );
-            expect(heartbeat.model).toBe("primary");
-            expect(JSON.stringify(heartbeat.input)).toContain(child.childSessionKey);
-            expect(JSON.stringify(heartbeat.input)).toContain(WORKER);
-            const after = await gateway.client.request<SessionsListResult>("sessions.list", {
+            const currentTarget = await captureSessionEventTargetForHost("main", sessionKey);
+            expect(currentTarget.storePath).toBe(retiredTarget.storePath);
+            expect(currentTarget.sessionId).toBe(retiredTarget.sessionId);
+            expect(currentTarget.generation).not.toBe(retiredTarget.generation);
+            expect(() =>
+              enqueueSessionEventForHost(NOTICE, {
+                agentId: "main",
+                sessionKey,
+                source: "session",
+                expectedTarget: retiredTarget,
+              }),
+            ).toThrow("stale gateway lifecycle");
+            expect(provider.requests).toEqual([]);
+            // Recovery captures new runtime authority for the retained physical session.
+            const receipt = enqueueSessionEventForHost(NOTICE, {
               agentId: "main",
-              limit: 100,
+              sessionKey,
+              source: "session",
+              expectedTarget: currentTarget,
             });
-            expect(after.sessions.find((entry) => entry.key === parentKey)?.sessionId).toBe(
-              parentSessionId,
-            );
+            expect(await receipt.settled).toMatchObject({
+              status: "completed",
+              executionStarted: true,
+            });
+            expect(provider.requests).toHaveLength(1);
+            expect(provider.requests[0]?.model).toBe("primary");
+            expect(JSON.stringify(provider.requests[0]?.input)).toContain(NOTICE);
+            const history = await gateway.client.request<{
+              sessionId: string;
+              messages: Array<{ role?: string; content?: unknown }>;
+            }>("chat.history", { sessionKey });
+            expect(history.sessionId).toBe(retiredTarget.sessionId);
+            expect(
+              history.messages.filter(
+                (message) =>
+                  message.role === "assistant" && JSON.stringify(message.content).includes(NOTICE),
+              ),
+            ).toHaveLength(1);
           }
           expect(provider.errors).toEqual([]);
         },
-        async () => {
-          if (!gateway) {
-            return;
-          }
-          setHeartbeatsEnabled(false);
-          await requestHeartbeatAndWait({
-            source: "manual",
-            intent: "immediate",
-            reason: "wake",
-            coalesceMs: 0,
-          });
-        },
         () => gateway && disconnectGatewayClient(gateway.client),
-        () => gateway?.server.close({ reason: "heartbeat store proof complete" }),
+        () => gateway?.server.close({ reason: "session event store proof complete" }),
         () => provider?.stop(),
-        () => resetSubagentRegistryForTests({ persist: false }),
         () => removeGatewayTempHome(home.tempHome),
         () => home.envSnapshot.restore(),
-        () => setHeartbeatsEnabled(true),
-        resetHeartbeatEventsForTest,
         resetGatewayTestState,
       );
     },

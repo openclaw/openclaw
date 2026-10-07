@@ -44,7 +44,7 @@ read_when:
   <Accordion title="What are the top five everyday use cases for OpenClaw?">
     - **Personal briefings**: summaries of inbox, calendar, and news you care about.
     - **Research and drafting**: quick research, summaries, and first drafts for emails or docs.
-    - **Reminders and follow-ups**: cron- or heartbeat-driven nudges and checklists.
+    - **Reminders and follow-ups**: scheduled nudges and checklists through Automation jobs.
     - **Browser automation**: filling forms, collecting data, repeating web tasks.
     - **Cross-device coordination**: send a task from your phone, let the Gateway run it on a server, get the result back in chat.
 

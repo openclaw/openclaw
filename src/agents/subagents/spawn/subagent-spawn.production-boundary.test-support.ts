@@ -529,3 +529,14 @@ export function readBoundExecutionState(
     runtimeWarningCount: getPreparedModelRuntimeMocks().warn.mock.calls.length,
   };
 }
+
+export function throwBoundFailures(failures: unknown[]) {
+  if (failures.length === 1) {
+    throw failures[0];
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Spawn proof and fixture cleanup failed", {
+      cause: failures[0],
+    });
+  }
+}

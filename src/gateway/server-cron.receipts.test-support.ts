@@ -6,9 +6,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { CronService } from "../cron/service.js";
 import type { CronServiceState } from "../cron/service/state.js";
 import { findActiveCronRunReceiptInDatabase } from "../cron/store/run-receipt-store.js";
-import type { CronJobCreate } from "../cron/types.js";
+import type { CronJobCreate, CronRunOutcome } from "../cron/types.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
@@ -253,11 +252,9 @@ export function registerGatewayCronHandoffTests({
   getConcreteCron,
   addCronJob,
   runExit,
-  requestHeartbeatAndWaitMock,
-  enqueueSystemEventMock,
+  runSessionEventMock,
 }: Omit<GatewayCronReceiptTestHarness, "getCronDeps"> & {
-  requestHeartbeatAndWaitMock: Mock<(...args: unknown[]) => Promise<HeartbeatRunResult>>;
-  enqueueSystemEventMock: Mock;
+  runSessionEventMock: Mock<(...args: unknown[]) => Promise<CronRunOutcome>>;
 }) {
   it.each(["start", "start failure", "stop"] as const)(
     "holds adopted on-exit work until the previous scheduler drains (%s)",
@@ -269,21 +266,19 @@ export function registerGatewayCronHandoffTests({
       const releaseFirst = createDeferred();
       const releaseSecond = createDeferred();
       const { spawn } = mockCronSupervisor(...watched);
-      requestHeartbeatAndWaitMock
+      runSessionEventMock
         .mockReset()
         .mockImplementationOnce(async () => {
           firstStarted.resolve();
           await releaseFirst.promise;
-          return { status: "ran", durationMs: 1 };
+          return { status: "ok", summary: "done" };
         })
         .mockImplementationOnce(async () => {
           secondStarted.resolve();
           await releaseSecond.promise;
-          return { status: "ran", durationMs: 1 };
+          return { status: "ok", summary: "done" };
         });
       const cfg = createCronConfig("server-cron-on-exit-handoff");
-      // Only the two on-exit wakes belong to this handoff fixture.
-      cfg.agents = { defaults: { heartbeat: { every: "0m" } } };
       const previous = loadCronService(cfg);
       const start =
         outcome === "start failure"
@@ -314,7 +309,7 @@ export function registerGatewayCronHandoffTests({
         expect(spawn).toHaveBeenCalledTimes(2);
         exits[0].resolve(runExit({ reason: "exit", exitCode: 0 }));
         await firstStarted.promise;
-        expect(requestHeartbeatAndWaitMock).toHaveBeenCalledOnce();
+        expect(runSessionEventMock).toHaveBeenCalledOnce();
         const oldHandoff = expectDefined(
           await previous.prepareExitWatcherHandoff?.(),
           "previous handoff",
@@ -326,27 +321,29 @@ export function registerGatewayCronHandoffTests({
         );
         await waitForImmediate();
         expect(nextRun).not.toHaveBeenCalled();
-        expect(requestHeartbeatAndWaitMock).toHaveBeenCalledOnce();
+        expect(runSessionEventMock).toHaveBeenCalledOnce();
 
         releaseFirst.resolve();
         await adoption;
         await oldHandoff.stopOwner();
         expect(nextRun).not.toHaveBeenCalled();
-        expect(requestHeartbeatAndWaitMock).toHaveBeenCalledOnce();
+        expect(runSessionEventMock).toHaveBeenCalledOnce();
         const secondId = expectDefined(jobs[1], "second job").id;
         if (outcome !== "stop") {
           if (outcome === "start failure") {
             await expect(next.cron.start()).rejects.toThrow("start failed");
-            expect(requestHeartbeatAndWaitMock).toHaveBeenCalledOnce();
+            expect(runSessionEventMock).toHaveBeenCalledOnce();
           }
           await next.cron.start();
           await secondStarted.promise;
-          expect(requestHeartbeatAndWaitMock).toHaveBeenCalledTimes(2);
+          expect(runSessionEventMock).toHaveBeenCalledTimes(2);
           expect(nextRun).toHaveBeenCalledOnce();
-          expect(requestHeartbeatAndWaitMock).toHaveBeenNthCalledWith(
+          expect(runSessionEventMock).toHaveBeenNthCalledWith(
             2,
-            expect.objectContaining({ reason: "cron:" + secondId }),
-            expect.anything(),
+            expect.objectContaining({
+              job: expect.objectContaining({ id: secondId }),
+              text: expect.stringContaining("completed before reload"),
+            }),
           );
           releaseSecond.resolve();
           const completion = expectDefined(nextRun.mock.results[0], "adopted on-exit run");
@@ -355,14 +352,10 @@ export function registerGatewayCronHandoffTests({
           }
           await completion.value;
           expect(next.cron.getJob(secondId)?.state.lastRunStatus).toBe("ok");
-          expect(enqueueSystemEventMock).toHaveBeenLastCalledWith(
-            expect.stringContaining("completed before reload"),
-            expect.anything(),
-          );
           expect(spawn).toHaveBeenCalledTimes(2);
         } else {
           await next.cron.stopAndDrain?.();
-          expect(requestHeartbeatAndWaitMock).toHaveBeenCalledOnce();
+          expect(runSessionEventMock).toHaveBeenCalledOnce();
           expect(
             (await next.cron.list({ includeDisabled: true })).find((job) => job.id === secondId)
               ?.enabled,
@@ -382,8 +375,8 @@ export function registerGatewayCronHandoffTests({
         } finally {
           nextRun.mockRestore();
           start?.mockRestore();
-          // The stop case deliberately leaves its second heartbeat unconsumed.
-          requestHeartbeatAndWaitMock.mockReset();
+          // The stop case deliberately leaves its second session execution unconsumed.
+          runSessionEventMock.mockReset();
         }
       }
     },

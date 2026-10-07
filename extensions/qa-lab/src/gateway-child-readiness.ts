@@ -64,23 +64,31 @@ async function fetchLocalGatewayProbe(params: {
   kind: "health" | "listening";
   timeoutMs?: number;
 }): Promise<boolean> {
-  const { response, release } = await fetchWithSsrFGuard({
-    url: `${params.baseUrl}/${params.kind === "health" ? "readyz" : "healthz"}`,
-    init: {
-      method: "HEAD",
-      headers: {
-        connection: "close",
+  const signal = AbortSignal.timeout(params.timeoutMs ?? 2_000);
+  // Readiness can be green while agent inspection is pending; both probes share one budget.
+  const endpoints = params.kind === "health" ? ["startupz", "readyz"] : ["healthz"];
+  for (const endpoint of endpoints) {
+    const { response, release } = await fetchWithSsrFGuard({
+      url: `${params.baseUrl}/${endpoint}`,
+      init: {
+        method: "HEAD",
+        headers: {
+          connection: "close",
+        },
+        signal,
       },
-      signal: AbortSignal.timeout(params.timeoutMs ?? 2_000),
-    },
-    policy: { allowPrivateNetwork: true },
-    auditContext: `qa-lab-gateway-child-${params.kind}`,
-  });
-  try {
-    return params.kind === "listening" || response.ok;
-  } finally {
-    await release();
+      policy: { allowPrivateNetwork: true },
+      auditContext: `qa-lab-gateway-child-${params.kind}`,
+    });
+    try {
+      if (params.kind === "health" && !response.ok) {
+        return false;
+      }
+    } finally {
+      await release();
+    }
   }
+  return true;
 }
 
 export async function waitForQaGatewayRestartBoundary(params: {

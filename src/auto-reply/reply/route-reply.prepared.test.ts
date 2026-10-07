@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { installDeliveryQueueTmpDirHooks } from "../../infra/outbound/delivery-queue.test-helpers.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
@@ -91,6 +92,72 @@ describe("prepared reply routing", () => {
           replyToId: "routed-target",
         },
       ]);
+    },
+  );
+
+  it.each([
+    { operation: "raw", revoked: false },
+    { operation: "prepared", revoked: false },
+    { operation: "raw", revoked: true },
+    { operation: "prepared", revoked: true },
+  ] as const)(
+    "refreshes producer authority before $operation durable handoff (revoked=$revoked)",
+    async ({ operation, revoked }) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      let preparationComplete = false;
+      let current = true;
+      const payload = { text: "producer-owned reply" };
+      const params = {
+        cfg: {},
+        channel: "matrix" as const,
+        to: "!room:example.invalid",
+        replyKind: "final" as const,
+        mirror: false,
+        beforeDeliver: async () => {
+          entered.resolve();
+          await release.promise;
+          preparationComplete = true;
+        },
+        assertCurrent: () => {
+          if (!preparationComplete) {
+            throw new Error("Producer delivery preparation did not run");
+          }
+          if (!current) {
+            throw new Error("Producer delivery authority was revoked");
+          }
+        },
+      };
+      const plan = createStructuredOutboundPayloadPlan([payload])[0];
+      if (!plan) {
+        throw new Error("Expected a renderable prepared reply");
+      }
+      const delivery =
+        operation === "prepared"
+          ? routePreparedReply({ ...params, plan })
+          : routeReply({ ...params, payload });
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          delivery,
+          "Producer delivery preparation did not run before handoff",
+        );
+        expect(visible).toEqual([]);
+        current = !revoked;
+        release.resolve();
+        const result = await delivery;
+        if (revoked) {
+          expect(result).toMatchObject({ ok: false, delivered: false });
+          expect(result.error).toContain("Producer delivery authority was revoked");
+          expect(visible).toEqual([]);
+        } else {
+          expect(result).toMatchObject({ ok: true, delivered: true, messageId: "text-sent" });
+          expect(visible).toEqual([{ text: "producer-owned reply transformed" }]);
+        }
+      } finally {
+        release.resolve();
+        await delivery;
+      }
     },
   );
 

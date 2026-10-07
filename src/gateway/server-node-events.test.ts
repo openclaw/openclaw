@@ -1,150 +1,45 @@
 import "./server-node-events.test-support.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
-import type { CliDeps } from "../cli/deps.js";
 import {
   getCurrentActiveNodeContext,
   setActiveNodeContexts,
 } from "../infra/active-node-context.js";
 import {
-  prepareGatewaySuspend,
-  resumeGatewaySuspend,
-} from "../infra/gateway-suspend-coordinator.js";
-import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
-  tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import type { HealthSummary } from "./health/types.js";
 import { NodeRegistry } from "./node-registry.js";
-import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
+import type { NodeEventContext } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
 
 const {
   buildSessionLookup,
+  buildCtx,
+  nodeEvent,
+  eventResult,
+  waitForFast,
+  runAdmittedNodeEvent,
+  expectSuspendBusyWithRootWork,
+  expectSuspendReady,
+  resetNodeEventTestState,
   makeNodeClient,
   loadOrCreateProcessDeviceIdentityMock,
-  parseMessageWithAttachmentsMock,
-  persistInboundImagesForTranscriptMock,
   runtimeMocks,
   updatePairedDevicePresenceMock,
 } = await import("./server-node-events.test-support.js");
 
-const sentDurableMessageBatchResult: Extract<DurableMessageBatchSendResult, { status: "sent" }> = {
-  status: "sent",
-  results: [],
-  receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
-};
-
-function nodeEvent(event: string, payload: unknown): NodeEvent {
-  return { event, payloadJSON: JSON.stringify(payload) };
-}
-
-function eventResult(event: string, reason: string, handled = false) {
-  return { ok: true, event, handled, reason };
-}
-
-function waitForFast<T>(callback: () => T | Promise<T>) {
-  return vi.waitFor(callback, { interval: 1 });
-}
-
-const enqueueSystemEventMock = runtimeMocks.enqueueSystemEvent;
-const requestHeartbeatMock = runtimeMocks.requestHeartbeat;
+const enqueueSessionEventMock = runtimeMocks.enqueueSessionEvent;
+const enqueueSystemEventEntryMock = runtimeMocks.enqueueSystemEventEntry;
 const agentCommandMock = runtimeMocks.agentCommandFromIngress;
 const upsertSessionEntryMock = runtimeMocks.upsertSessionEntryCore;
 const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
+const resolveSessionTargetMock = runtimeMocks.resolveGatewaySessionStoreTargetInWorker;
 const registerApnsRegistrationVi = runtimeMocks.registerApnsRegistration;
-const normalizeChannelIdVi = runtimeMocks.normalizeChannelId;
-const sendDurableMessageBatchMock = runtimeMocks.sendDurableMessageBatch;
 
-beforeEach(() => {
-  resetGatewayWorkAdmission();
-  enqueueSystemEventMock.mockReset().mockReturnValue(true);
-  requestHeartbeatMock.mockClear();
-  agentCommandMock.mockClear();
-  upsertSessionEntryMock.mockClear();
-  loadSessionEntryMock.mockClear();
-  loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
-  agentCommandMock.mockResolvedValue({ status: "ok" } as never);
-  upsertSessionEntryMock.mockImplementation(async (_scope, patch) => patch);
-});
+beforeEach(resetNodeEventTestState);
 
 afterEach(resetGatewayWorkAdmission);
-
-async function runAdmittedNodeEvent(
-  ctx: NodeEventContext,
-  nodeId: string,
-  event: Parameters<typeof handleNodeEvent>[2],
-): Promise<void> {
-  const admission = tryBeginGatewayRootWorkAdmission();
-  expect(admission).not.toBeNull();
-  try {
-    await admission?.run(() => handleNodeEvent(ctx, nodeId, event));
-  } finally {
-    admission?.release();
-  }
-}
-
-function expectSuspendBusyWithRootWork(requestId: string): void {
-  expect(
-    prepareGatewaySuspend({
-      requestId,
-      pauseScheduling: vi.fn(),
-      resumeScheduling: vi.fn(),
-    }),
-  ).toMatchObject({
-    status: "busy",
-    blockers: expect.arrayContaining([expect.objectContaining({ kind: "root-request", count: 1 })]),
-  });
-}
-
-function expectSuspendReady(requestId: string): void {
-  const result = prepareGatewaySuspend({
-    requestId,
-    pauseScheduling: vi.fn(),
-    resumeScheduling: vi.fn(),
-  });
-  expect(result).toMatchObject({ status: "ready", activeCount: 0, blockers: [] });
-  if (result.status === "ready") {
-    expect(resumeGatewaySuspend(result.suspensionId)).toMatchObject({
-      ok: true,
-      status: "running",
-      resumed: true,
-    });
-  }
-}
-
-const execEventHeartbeatOptions = (sessionKey?: string) => ({
-  source: "exec-event",
-  intent: "event",
-  reason: "exec-event",
-  coalesceMs: 0,
-  ...(sessionKey ? { sessionKey } : {}),
-});
-
-function buildCtx(
-  opts: { authorizeNodeSystemRunEvent?: NodeEventContext["authorizeNodeSystemRunEvent"] } = {},
-): NodeEventContext {
-  return {
-    deps: {} as CliDeps,
-    broadcast: () => {},
-    nodeSendToSession: () => {},
-    nodeSubscribe: () => {},
-    nodeUnsubscribe: () => {},
-    broadcastVoiceWakeChanged: () => {},
-    addChatRun: () => {},
-    removeChatRun: () => undefined,
-    chatAbortControllers: new Map(),
-    dedupe: new Map(),
-    agentRunSeq: new Map(),
-    getHealthCache: () => null,
-    refreshHealthSnapshot: async () => ({}) as HealthSummary,
-    loadGatewayModelCatalog: async () => [],
-    authorizeNodeSystemRunEvent: opts.authorizeNodeSystemRunEvent ?? (() => false),
-    logGateway: { warn: () => {} },
-  };
-}
 
 function presenceConnection(deviceId: string, generation = `${deviceId}-generation`) {
   return {
@@ -175,6 +70,42 @@ describe("node exec events", () => {
     loadOrCreateProcessDeviceIdentityMock.mockClear();
   });
 
+  it.each(["exec.finished", "notifications.changed"])(
+    "rejects a replaced connection while %s prepares its session target",
+    async (event) => {
+      const captureStarted = createDeferred();
+      const capturedTarget = createDeferred<{ agentId: string; sessionKey: string }>();
+      runtimeMocks.captureSessionEventTarget.mockImplementationOnce(async () => {
+        captureStarted.resolve();
+        return await capturedTarget.promise;
+      });
+      const authorizeNodeSystemRunEvent = vi.fn(() => true);
+      let current = true;
+      const handling = handleNodeEvent(
+        buildCtx({ authorizeNodeSystemRunEvent }),
+        "node-replaced",
+        nodeEvent(event, {
+          sessionKey: "agent:main:main",
+          runId: "replaced-connection",
+          exitCode: 0,
+          output: "finished",
+          change: "posted",
+          key: "replaced-notification",
+        }),
+        { isConnectionCurrent: async () => current },
+      );
+      await captureStarted.promise;
+      current = false;
+      capturedTarget.resolve({ agentId: "main", sessionKey: "agent:main:main" });
+
+      await expect(handling).resolves.toEqual(eventResult(event, "pairing_changed"));
+      expect(authorizeNodeSystemRunEvent).not.toHaveBeenCalled();
+      expect(loadSessionEntryMock).not.toHaveBeenCalled();
+      expect(enqueueSystemEventEntryMock).not.toHaveBeenCalled();
+      expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([false, true])(
     "preserves exec authorization and terminal consumption with suppressNotifyOnExit=%s",
     async (suppressNotifyOnExit) => {
@@ -182,7 +113,13 @@ describe("node exec events", () => {
       const connection = { connId: "conn-1" };
       const runId = `run-seq-suppress-${suppressNotifyOnExit}`;
       const sessionKey = "agent:main:main";
-      const eventRouting = { sessionKey, contextKey: `exec:${runId}` };
+      const eventRouting = {
+        agentId: "main",
+        sessionKey,
+        source: "node",
+        contextKey: `exec:${runId}`,
+        expectedTarget: { agentId: "main", sessionKey },
+      };
       const startedPayload = { runId, sessionKey, command: "printf ok" };
       const finishedPayload = {
         ...startedPayload,
@@ -214,9 +151,7 @@ describe("node exec events", () => {
         ).resolves.toBeUndefined();
 
         const started = [`Exec started (node=node-1 id=${runId}): printf ok`, eventRouting];
-        const wake = [execEventHeartbeatOptions(sessionKey)];
-        expect(enqueueSystemEventMock.mock.calls).toEqual([started]);
-        expect(requestHeartbeatMock.mock.calls).toEqual([wake]);
+        expect(enqueueSessionEventMock.mock.calls).toEqual([started]);
 
         await expect(
           handleNodeEvent(ctx, "node-1", finishedEvent, connection),
@@ -231,11 +166,8 @@ describe("node exec events", () => {
           ),
         ).resolves.toEqual(unmatchedEvent);
         const finished = [`Exec finished (node=node-1 id=${runId}, code 0)\ndone`, eventRouting];
-        expect(enqueueSystemEventMock.mock.calls).toEqual(
+        expect(enqueueSessionEventMock.mock.calls).toEqual(
           suppressNotifyOnExit ? [started] : [started, finished],
-        );
-        expect(requestHeartbeatMock.mock.calls).toEqual(
-          suppressNotifyOnExit ? [wake] : [wake, wake],
         );
       } finally {
         registry.unregister(connection.connId);
@@ -324,14 +256,15 @@ describe("node exec events", () => {
       sessionKey: "agent:main:main",
       terminal: true,
     });
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+    expect(enqueueSessionEventMock).toHaveBeenCalledWith(
       "Exec finished (node=node-2, code 0)\ndone",
-      {
+      expect.objectContaining({
+        agentId: "main",
         sessionKey: "agent:main:main",
+        source: "node",
         contextKey: "exec",
-      },
+      }),
     );
-    expect(requestHeartbeatMock).toHaveBeenCalledWith(execEventHeartbeatOptions("agent:main:main"));
   });
 
   it("dedupes duplicate exec.finished events for the same runId on the same session", async () => {
@@ -353,14 +286,14 @@ describe("node exec events", () => {
       payloadJSON,
     });
 
-    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+    expect(enqueueSessionEventMock).toHaveBeenCalledTimes(1);
+    expect(enqueueSessionEventMock).toHaveBeenCalledWith(
       "Exec finished (node=node-2 id=run-dup-finished, code 0)\ndone",
-      {
+      expect.objectContaining({
+        agentId: "main",
         sessionKey: "agent:main:main",
         contextKey: "exec:run-dup-finished",
-      },
+      }),
     );
   });
 
@@ -384,8 +317,7 @@ describe("node exec events", () => {
           output: mode === "empty output" ? "   " : "some output",
         }),
       );
-      expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-      expect(requestHeartbeatMock).not.toHaveBeenCalled();
+      expect(enqueueSessionEventMock).not.toHaveBeenCalled();
     },
   );
 });
@@ -593,8 +525,7 @@ describe("notifications changed events", () => {
       nodeEvent("notifications.changed", { change: "posted", key: "notif-unowned" }),
     );
 
-    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(
       "notification event not delivered node=node-unowned: Set agents.defaults.systemAgent.agentId",
     );
@@ -602,9 +533,9 @@ describe("notifications changed events", () => {
 
   it("rejects missing reserved notification contexts before enqueue", async () => {
     const sessionKey = "agent:main:harness:codex:supervision:missing-notification";
-    loadSessionEntryMock.mockReturnValueOnce({
+    resolveSessionTargetMock.mockResolvedValueOnce({
       ...buildSessionLookup(sessionKey),
-      entry: undefined,
+      store: {},
     });
 
     await handleNodeEvent(
@@ -613,12 +544,13 @@ describe("notifications changed events", () => {
       nodeEvent("notifications.changed", { change: "posted", key: "notif", sessionKey }),
     );
 
-    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
   });
 
-  it("does not wake heartbeat when notifications.changed event is deduped", async () => {
-    enqueueSystemEventMock.mockReturnValueOnce(true).mockReturnValueOnce(false);
+  it("does not admit another turn when notifications.changed is deduped", async () => {
+    enqueueSystemEventEntryMock
+      .mockReturnValueOnce({ id: "notification", text: "notification" })
+      .mockReturnValueOnce(undefined);
     const ctx = buildCtx();
     const event = nodeEvent("notifications.changed", {
       change: "posted",
@@ -630,8 +562,8 @@ describe("notifications changed events", () => {
     await handleNodeEvent(ctx, "node-n6", event);
     await handleNodeEvent(ctx, "node-n6", event);
 
-    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2);
-    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEventEntryMock).toHaveBeenCalledTimes(2);
+    expect(enqueueSessionEventMock).toHaveBeenCalledTimes(1);
   });
   it("enqueues notifications.changed removed events", async () => {
     const ctx = buildCtx();
@@ -645,24 +577,23 @@ describe("notifications changed events", () => {
       }),
     );
 
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+    expect(enqueueSessionEventMock).toHaveBeenCalledWith(
       "Notification removed (node=node-n2 key=notif-2 package=com.example.mail)",
       expect.objectContaining({
         sessionKey: "agent:ops:main",
         contextKey: "notification:notif-2",
       }),
     );
-    expect(requestHeartbeatMock).toHaveBeenCalledWith({
-      source: "notifications-event",
-      intent: "event",
-      reason: "notifications-event",
+    expect(enqueueSessionEventMock.mock.calls[0]?.[1]).toMatchObject({
       agentId: "ops",
-      sessionKey: "agent:ops:main",
+      source: "device",
+      expectedTarget: { agentId: "ops", sessionKey: "agent:ops:main" },
+      occurrence: { id: "event" },
     });
   });
 
   it("canonicalizes notifications session key before enqueue and wake", async () => {
-    loadSessionEntryMock.mockReturnValueOnce({
+    resolveSessionTargetMock.mockResolvedValueOnce({
       ...buildSessionLookup("node-node-n5"),
       canonicalKey: "agent:main:node-node-n5",
     });
@@ -677,20 +608,22 @@ describe("notifications changed events", () => {
       }),
     );
 
-    expect(loadSessionEntryMock).toHaveBeenCalledWith("node-node-n5", { agentId: undefined });
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+    expect(resolveSessionTargetMock).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      key: "node-node-n5",
+      agentId: undefined,
+    });
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+    expect(enqueueSessionEventMock).toHaveBeenCalledWith(
       "Notification posted (node=node-n5 key=notif-5)",
-      {
+      expect.objectContaining({
         sessionKey: "agent:main:node-node-n5",
         contextKey: "notification:notif-5",
-      },
+      }),
     );
-    expect(requestHeartbeatMock).toHaveBeenCalledWith({
-      source: "notifications-event",
-      intent: "event",
-      reason: "notifications-event",
+    expect(enqueueSessionEventMock.mock.calls[0]?.[1]).toMatchObject({
       agentId: "main",
-      sessionKey: "agent:main:node-node-n5",
+      expectedTarget: { agentId: "main", sessionKey: "agent:main:node-node-n5" },
     });
   });
 
@@ -704,294 +637,11 @@ describe("notifications changed events", () => {
       }),
     );
 
-    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
   });
 });
 
-describe("agent request events", () => {
-  beforeEach(() => {
-    parseMessageWithAttachmentsMock.mockReset();
-    persistInboundImagesForTranscriptMock.mockReset();
-    persistInboundImagesForTranscriptMock.mockResolvedValue({ entries: [], omission: "none" });
-    runtimeMocks.deleteMediaBuffer.mockClear();
-    normalizeChannelIdVi.mockClear();
-    normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
-    sendDurableMessageBatchMock.mockReset();
-    sendDurableMessageBatchMock.mockResolvedValue(sentDurableMessageBatchResult);
-    parseMessageWithAttachmentsMock.mockResolvedValue({
-      message: "parsed message",
-      images: [],
-      imageOrder: [],
-      offloadedRefs: [],
-    });
-  });
-
-  it("rejects a missing harness-owned session before touching the store", async () => {
-    const sessionKey = "agent:main:harness:codex:supervision:missing-request";
-    loadSessionEntryMock.mockReturnValueOnce({
-      ...buildSessionLookup(sessionKey),
-      entry: undefined,
-    });
-
-    await handleNodeEvent(
-      buildCtx(),
-      "node-harness-request-missing",
-      nodeEvent("agent.request", { message: "do not create this", sessionKey }),
-    );
-
-    expect(upsertSessionEntryMock).not.toHaveBeenCalled();
-    expect(agentCommandMock).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["wrong owner", { agentHarnessId: "other", modelSelectionLocked: true }],
-    ["missing session id", { agentHarnessId: "codex", modelSelectionLocked: true, sessionId: "" }],
-  ] as const)(
-    "rejects a harness-owned agent request with %s before side effects",
-    async (_label, entry) => {
-      const sessionKey = `agent:main:harness:codex:supervision:invalid-request-${_label.replaceAll(" ", "-")}`;
-      loadSessionEntryMock.mockReturnValueOnce(buildSessionLookup(sessionKey, entry));
-
-      await handleNodeEvent(
-        buildCtx(),
-        "node-harness-request-invalid",
-        nodeEvent("agent.request", {
-          message: "do not dispatch this",
-          sessionKey,
-          attachments: [{ type: "image", mimeType: "image/png", content: "aGVsbG8=" }],
-        }),
-      );
-
-      expect(runtimeMocks.resolveSessionAgentId).not.toHaveBeenCalled();
-      expect(runtimeMocks.resolveSessionModelRef).not.toHaveBeenCalled();
-      expect(runtimeMocks.resolveGatewayModelSupportsImages).not.toHaveBeenCalled();
-      expect(parseMessageWithAttachmentsMock).not.toHaveBeenCalled();
-      expect(upsertSessionEntryMock).not.toHaveBeenCalled();
-      expect(persistInboundImagesForTranscriptMock).not.toHaveBeenCalled();
-      expect(agentCommandMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it("keeps an accepted detached agent dispatch visible to suspension", async () => {
-    const dispatch = createDeferred<never>();
-    agentCommandMock.mockImplementationOnce(() => dispatch.promise);
-
-    await runAdmittedNodeEvent(
-      buildCtx(),
-      "node-agent-suspend",
-      nodeEvent("agent.request", {
-        message: "finish before suspension",
-        sessionKey: "agent:main:suspend-agent",
-      }),
-    );
-
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
-    expectSuspendBusyWithRootWork("agent-dispatch-busy");
-    dispatch.resolve(undefined as never);
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    expectSuspendReady("agent-dispatch-ready");
-  });
-
-  it("keeps an accepted detached receipt delivery visible to suspension", async () => {
-    const receipt = createDeferred<DurableMessageBatchSendResult>();
-    sendDurableMessageBatchMock.mockImplementationOnce(() => receipt.promise);
-
-    await runAdmittedNodeEvent(
-      buildCtx(),
-      "node-receipt-suspend",
-      nodeEvent("agent.request", {
-        message: "acknowledge before suspension",
-        sessionKey: "agent:main:suspend-receipt",
-        deliver: true,
-        receipt: true,
-        channel: "telegram",
-        to: "123",
-      }),
-    );
-
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
-    expectSuspendBusyWithRootWork("receipt-delivery-busy");
-    receipt.resolve(sentDurableMessageBatchResult);
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    expectSuspendReady("receipt-delivery-ready");
-  });
-
-  it("does not launch agent work when pairing changes during model lookup", async () => {
-    const modelCatalog =
-      createDeferred<Awaited<ReturnType<NodeEventContext["loadGatewayModelCatalog"]>>>();
-    const ctx = buildCtx();
-    ctx.loadGatewayModelCatalog = vi.fn(() => modelCatalog.promise);
-    let connectionCurrent = true;
-    const isConnectionCurrent = vi.fn(async () => connectionCurrent);
-
-    const request = handleNodeEvent(
-      ctx,
-      "node-revoked-during-model-lookup",
-      nodeEvent("agent.request", {
-        message: "describe this image",
-        sessionKey: "agent:main:revoked-during-model-lookup",
-        attachments: [{ type: "image", mimeType: "image/png", content: "AAAA" }],
-        deliver: true,
-        receipt: true,
-        channel: "telegram",
-        to: "123",
-      }),
-      { isConnectionCurrent },
-    );
-
-    await waitForFast(() => expect(ctx.loadGatewayModelCatalog).toHaveBeenCalledTimes(1));
-    connectionCurrent = false;
-    modelCatalog.resolve([]);
-
-    await expect(request).resolves.toEqual(eventResult("agent.request", "pairing_changed"));
-    expect(parseMessageWithAttachmentsMock).not.toHaveBeenCalled();
-    expect(upsertSessionEntryMock).not.toHaveBeenCalled();
-    expect(sendDurableMessageBatchMock).not.toHaveBeenCalled();
-    expect(persistInboundImagesForTranscriptMock).not.toHaveBeenCalled();
-    expect(agentCommandMock).not.toHaveBeenCalled();
-  });
-
-  it("cleans persisted transcript media when detached agent admission is revoked", async () => {
-    persistInboundImagesForTranscriptMock.mockResolvedValueOnce({
-      entries: [
-        {
-          id: "saved-after-admission",
-          path: "/media/inbound/saved-after-admission.png",
-          sourceIndex: 0,
-          imageKind: "inline",
-          fact: { url: "media://inbound/saved-after-admission.png", contentType: "image/png" },
-        },
-      ],
-      omission: "none",
-    });
-    let currentnessChecks = 0;
-    const isConnectionCurrent = vi.fn(async () => {
-      currentnessChecks += 1;
-      return currentnessChecks < 6;
-    });
-
-    await handleNodeEvent(
-      buildCtx(),
-      "node-revoked-before-detached-start",
-      nodeEvent("agent.request", {
-        message: "do not retain this media",
-        sessionKey: "agent:main:revoked-before-detached-start",
-      }),
-      { isConnectionCurrent },
-    );
-
-    await waitForFast(() => {
-      expect(runtimeMocks.deleteMediaBuffer).toHaveBeenCalledWith("saved-after-admission");
-    });
-    expect(agentCommandMock).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])(
-    "delivers only through the current session route (available: %s)",
-    async (available) => {
-      const warn = vi.fn();
-      if (available) {
-        loadSessionEntryMock.mockReturnValueOnce(
-          buildSessionLookup("agent:main:main", {
-            sessionId: "sid-current",
-            lastChannel: "telegram",
-            lastTo: "123",
-          }),
-        );
-      }
-      await handleNodeEvent(
-        { ...buildCtx(), logGateway: { warn } },
-        "node-route",
-        nodeEvent("agent.request", {
-          message: "summarize this",
-          sessionKey: "agent:main:main",
-          deliver: true,
-        }),
-      );
-      expect(agentCommandMock).toHaveBeenCalledTimes(1);
-      const opts: unknown = agentCommandMock.mock.calls[0]?.[0];
-      expect(opts).toMatchObject({
-        message: "summarize this",
-        sessionKey: "agent:main:main",
-        deliver: available,
-        channel: available ? "telegram" : undefined,
-        to: available ? "123" : undefined,
-      });
-      if (available) {
-        expect(opts).toMatchObject({ runId: "sid-current", sessionId: "sid-current" });
-      } else {
-        expect(warn).toHaveBeenCalledTimes(1);
-        expect(String(warn.mock.calls[0]?.[0])).toContain(
-          "agent delivery disabled node=node-route",
-        );
-      }
-    },
-  );
-  it("records a visible durable omission when inline image persistence fails", async () => {
-    parseMessageWithAttachmentsMock.mockResolvedValueOnce({
-      message: "describe",
-      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg", sourceIndex: 0 }],
-      imageOrder: ["inline"],
-      offloadedRefs: [],
-    });
-    persistInboundImagesForTranscriptMock.mockResolvedValueOnce({
-      entries: [],
-      omission: "inline-image-save-failed",
-    });
-
-    await handleNodeEvent(
-      buildCtx(),
-      "node-media-omission",
-      nodeEvent("agent.request", {
-        message: "describe",
-        sessionKey: "agent:main:main",
-        attachments: [{ type: "image", mimeType: "image/jpeg", content: "AAAA" }],
-      }),
-    );
-
-    expect(agentCommandMock.mock.calls[0]?.[0]).toMatchObject({
-      message: "describe",
-      transcriptMessage:
-        "describe\n[image attachment omitted: durable managed media claim unavailable]",
-    });
-  });
-
-  it("declines non-image attachments cleanly when parse throws UnsupportedAttachmentError", async () => {
-    const warn = vi.fn();
-    const ctx = buildCtx();
-    ctx.logGateway = { warn };
-
-    parseMessageWithAttachmentsMock.mockRejectedValueOnce(
-      Object.assign(new Error("attachment a.pdf: non-image attachments not supported"), {
-        name: "UnsupportedAttachmentError",
-        reason: "unsupported-non-image",
-      }),
-    );
-
-    await handleNodeEvent(
-      ctx,
-      "node-non-image-refusal",
-      nodeEvent("agent.request", {
-        message: "read this",
-        sessionKey: "agent:main:main",
-        attachments: [
-          {
-            type: "file",
-            mimeType: "application/pdf",
-            fileName: "a.pdf",
-            content: "JVBERi0=",
-          },
-        ],
-      }),
-    );
-
-    expect(agentCommandMock).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(
-      "agent.request attachment parse failed: attachment a.pdf: non-image attachments not supported",
-    );
-  });
-
+describe("node presence and host stats events", () => {
   beforeEach(() => {
     updatePairedDevicePresenceMock.mockClear();
     updatePairedDevicePresenceMock.mockResolvedValue(true);
@@ -1083,7 +733,7 @@ describe("agent request events", () => {
         { dropIfSlow: true },
       );
       expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "active-computer" });
-      expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+      expect(enqueueSessionEventMock).not.toHaveBeenCalled();
       expect(updatePairedDevicePresenceMock).not.toHaveBeenCalled();
     } finally {
       nowSpy.mockRestore();
@@ -1184,7 +834,7 @@ describe("agent request events", () => {
       },
       { dropIfSlow: true },
     );
-    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
   });
 
   it("rejects node activity without the advertised accessibility permission", async () => {
@@ -1226,7 +876,7 @@ describe("agent request events", () => {
       { nodeId: "mac-node", lastActiveAtMs: null, presenceUpdatedAtMs: null },
       { dropIfSlow: true },
     );
-    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
   });
 });
 
@@ -1259,4 +909,3 @@ describe("chat subscribe/unsubscribe events", () => {
     expect(nodeSubscribe).not.toHaveBeenCalled();
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

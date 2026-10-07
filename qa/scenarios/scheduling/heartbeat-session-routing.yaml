@@ -1,4 +1,4 @@
-title: Heartbeat session routing after Gateway restart
+title: Automation and legacy wake routing after Gateway restart
 
 scenario:
   id: heartbeat-session-routing
@@ -10,19 +10,19 @@ scenario:
     secondary:
       - session-memory.session-routing
   objective: >-
-    Verify configured heartbeat delivery and explicit wake requests use their
+    Verify an ordinary automation and explicit legacy wake requests use their
     distinct authoritative sessions after a Gateway restart.
   successCriteria:
-    - A monitor wake records history and delivery only in the configured heartbeat session.
+    - An ordinary automation created before restart records history and delivery only in its configured session.
     - An explicit wake records history and delivery only in its explicitly requested session.
-    - The main session receives neither monitor nor explicit-wake content.
+    - The main session receives neither automation nor explicit-wake content.
     - After a real Gateway restart, both wake paths preserve their routing boundaries without duplicate delivery.
   docsRefs:
     - docs/gateway/heartbeat.md
     - docs/concepts/session.md
   codeRefs:
-    - src/infra/heartbeat-runner.ts
-    - src/infra/heartbeat-runner-execution.ts
+    - src/cron/session-run.ts
+    - src/auto-reply/reply/session-event-handoff.ts
     - src/gateway/server-methods/cron.ts
     - test/e2e/qa-lab/runtime/gateway-heartbeat-session-routing.e2e.test.ts
   execution:
@@ -30,5 +30,5 @@ scenario:
     path: test/e2e/qa-lab/runtime/gateway-heartbeat-session-routing.e2e.test.ts
     summary: >-
       Run a real Gateway with a deterministic capture channel and provider,
-      restart it, then route configured and explicit heartbeat wakes and assert
+      restart it, then run the persisted automation and explicit legacy wake and assert
       session history and delivery isolation.

@@ -37,7 +37,6 @@ describe("scheduled exec target recovery", () => {
         cronEnabled: true,
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         evaluateCronTrigger,
         runScriptJob,
         runIsolatedAgentJob,
@@ -63,7 +62,6 @@ describe("scheduled exec target recovery", () => {
       cronEnabled: true,
       log: createNoopLogger(),
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
     const job = makeCronJob({
@@ -128,7 +126,6 @@ describe("scheduled agent admission", () => {
         cronEnabled: true,
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob,
       });
       const job: CronStoredJob = { ...makeCronJob({}), ...overrides };

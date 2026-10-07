@@ -13,6 +13,7 @@ import {
 import { loadSessionEntryForAdmission } from "../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
+import { prepareSessionGenerationFacts } from "../config/sessions/session-delivery-generation.js";
 import {
   captureNativeSessionEntryCurrentRead,
   captureSessionEntryCurrentRead,
@@ -556,6 +557,42 @@ it("preserves the original 24-hour deadline and refuses claims after actor repla
   expect(
     (await successor.sessions.read(authority, { sessionKey: siblingKey })).entry,
   ).toBeUndefined();
+});
+
+it("keeps actor session policy settings bound to the current authority", async () => {
+  const sessionKey = key("policy-settings");
+  const initial = {
+    ...entry("policy-settings"),
+    permissionMode: "read-only",
+    toolOverrides: { webSearch: false },
+  } satisfies SessionEntry;
+  await actor.sessions.create(authority, { sessionKey, entry: initial });
+  const signal = new AbortController();
+  await withIncognitoSessionActor(
+    actor,
+    async () => {
+      const generation = await prepareSessionGenerationFacts({
+        agentId: "main",
+        storePath: actor.path,
+        sessionKey,
+        sessionId: initial.sessionId,
+        lifecycleRevision: initial.lifecycleRevision,
+      });
+      try {
+        expect(generation.readSessionSettings()).toEqual({
+          permissionMode: "read-only",
+          toolOverrides: { webSearch: false },
+        });
+        signal.abort(new Error("authority revoked"));
+        expect(generation.readSessionSettings).toThrow(
+          "Session delivery generation is unavailable",
+        );
+      } finally {
+        generation.release();
+      }
+    },
+    signal.signal,
+  );
 });
 
 it("retains actor identity before sharing waits for storage readiness", async () => {

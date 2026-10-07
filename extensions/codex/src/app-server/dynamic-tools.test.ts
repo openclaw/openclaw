@@ -4,7 +4,6 @@ import path from "node:path";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { createOpenClawCodingTools, type AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import {
-  HEARTBEAT_RESPONSE_TOOL_NAME,
   embeddedAgentLog,
   getPluginToolMeta,
   wrapToolWithBeforeToolCallHook,
@@ -475,13 +474,13 @@ describe("createCodexDynamicToolBridge", () => {
   });
 
   it("can register a durable tool schema while denying execution for the current turn", async () => {
-    const heartbeatExecute = vi.fn(async () => textToolResult("heartbeat recorded"));
+    const automationExecute = vi.fn(async () => textToolResult("automation recorded"));
     const onToolOutcome = vi.fn();
     const bridge = createCodexDynamicToolBridge({
       tools: [createTool({ name: "message" })],
       registeredTools: [
         createTool({ name: "message" }),
-        createTool({ name: HEARTBEAT_RESPONSE_TOOL_NAME, execute: heartbeatExecute }),
+        createTool({ name: "automations", execute: automationExecute }),
       ],
       signal: new AbortController().signal,
       hookContext: { runId: "run-unavailable", onToolOutcome },
@@ -489,20 +488,16 @@ describe("createCodexDynamicToolBridge", () => {
 
     expect(specNames(bridge.availableSpecs)).toEqual(["message"]);
     expect(bridge.availableTools.map((tool) => tool.name)).toEqual(["message"]);
-    expect(specNames(bridge.specs)).toEqual([HEARTBEAT_RESPONSE_TOOL_NAME, "message"]);
+    expect(specNames(bridge.specs)).toEqual(["automations", "message"]);
 
-    const result = await bridge.handleToolCall(createDynamicToolCall(HEARTBEAT_RESPONSE_TOOL_NAME));
+    const result = await bridge.handleToolCall(createDynamicToolCall("automations"));
 
-    expectInputText(
-      result,
-      `OpenClaw tool is not available for this turn: ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
-      false,
-    );
+    expectInputText(result, "OpenClaw tool is not available for this turn: automations", false);
     expect(result.executionStarted).toBe(false);
     expect(result.executedArguments).toEqual({});
-    expect(heartbeatExecute).not.toHaveBeenCalled();
+    expect(automationExecute).not.toHaveBeenCalled();
     expect(onToolOutcome).toHaveBeenLastCalledWith({
-      toolName: HEARTBEAT_RESPONSE_TOOL_NAME,
+      toolName: "automations",
       argsHash: "",
       resultHash: "",
       terminalPresentation: undefined,

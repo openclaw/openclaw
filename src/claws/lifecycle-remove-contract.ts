@@ -13,6 +13,7 @@ import type {
   ClawReferencedCleanup,
   PackageRemovalDeps,
 } from "./package-remove.js";
+import type { ClawRemovalJournalGateway } from "./removal-journal-contract.js";
 import { CLAW_OUTPUT_STABILITY } from "./types.js";
 
 export const CLAW_REMOVE_PLAN_SCHEMA_VERSION = "openclaw.clawRemovePlan.v1" as const;
@@ -76,6 +77,7 @@ export type ClawRemovePlanOptions = OpenClawStateDatabaseOptions & {
 };
 
 export type ClawRemoveApplyOptions = ClawRemovePlanOptions & {
+  journalGateway?: ClawRemovalJournalGateway;
   packageGateway?: ClawPackageRemovalGateway;
   purgeSessions?: (
     ...args: Parameters<typeof purgeAgentSessionStoreEntries>
@@ -83,7 +85,7 @@ export type ClawRemoveApplyOptions = ClawRemovePlanOptions & {
   trashPath?: ClawTrashPath;
   consentPlanIntegrity?: string;
   unsetMcpServer?: typeof unsetConfiguredMcpServer;
-  cronGateway?: Pick<ClawCronGateway, "get" | "remove">;
+  cronGateway?: Pick<ClawCronGateway, "get" | "list" | "remove" | "mutateAutomation">;
 };
 
 export const CLAW_REMOVE_RESULT_SCHEMA_VERSION = "openclaw.clawRemoveResult.v1" as const;

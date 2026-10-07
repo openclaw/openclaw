@@ -269,8 +269,6 @@ export type ReplyPayloadMetadata = {
   contextFreeCommand?: true;
   /** Host-owned acknowledgement after this final payload is confirmed delivered. */
   onFinalDeliverySuccess?: () => void;
-  /** Host-projected monitoring final; notification policy already normalized its text. */
-  heartbeatReply?: true;
   /** Exact key for replacing a runtime-owned assistant row after media materialization. */
   assistantTranscriptIdempotencyKey?: string;
   /** Original session-writer claim that must still hold at final delivery. */
@@ -340,12 +338,6 @@ export type ReplyPayloadMetadata = {
   nonTerminalToolErrorWarning?: boolean;
   /** Host label or status about the run (truncation, restart, compaction); not the answer. */
   hostNotice?: true;
-  /** Unresolved mutating tool failure that makes a heartbeat run terminally failed. */
-  heartbeatTerminalToolFailure?: {
-    toolName: string;
-  };
-  /** Private scratch must survive reply copies without becoming serializable channel data. */
-  heartbeatScratchProposal?: string;
 };
 
 // Source Gateways and native plugin SDK chunks must share the same payload identity.
@@ -521,15 +513,6 @@ export function isReplyPayloadStatusNotice(
   payload: Pick<ReplyPayload, "isCompactionNotice" | "isFallbackNotice" | "isStatusNotice">,
 ): boolean {
   return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
-}
-
-/** Host-generated errors, warnings, status lines and run labels; never the model's answer. */
-export function isHostNoticePayload(payload: ReplyPayload): boolean {
-  return (
-    payload.isError === true ||
-    isReplyPayloadStatusNotice(payload) ||
-    getReplyPayloadMetadata(payload)?.hostNotice === true
-  );
 }
 
 /** Classifies terminal vs. supplemental reply lanes, not content, sendability, or authority. */

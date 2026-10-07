@@ -1,8 +1,76 @@
 import { existsSync, readFileSync } from "node:fs";
 import { withTestTimeout } from "../../test/helpers/promise.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readServiceChildMessage } from "../process/supervisor/service-child-protocol.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
 import { waitFor, type PtyRun } from "./tui-pty-test-support.js";
+
+export function buildMockModelProvider(baseUrl: string, modelIds: string[]): ModelProviderConfig {
+  return {
+    baseUrl: `${baseUrl}/v1`,
+    apiKey: "test",
+    api: "openai-responses",
+    request: { allowPrivateNetwork: true },
+    models: modelIds.map((id) => ({
+      id,
+      name: id,
+      api: "openai-responses",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    })),
+  };
+}
+
+export function buildLocalModeConfig(params: {
+  workspaceDir: string;
+  providerBaseUrl: string;
+  toolsProfile?: "minimal" | "coding";
+}) {
+  return {
+    plugins: {
+      enabled: false,
+      slots: {
+        memory: "none",
+      },
+    },
+    agents: {
+      defaults: {
+        workspace: params.workspaceDir,
+        model: { primary: "tui-pty-mock/gpt-5.5" },
+        modelPolicy: { allow: ["tui-pty-mock/gpt-5.5"] },
+        models: {
+          "tui-pty-mock/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+        },
+        skills: [],
+        skipBootstrap: true,
+      },
+      entries: {
+        main: {
+          skills: [],
+          model: { primary: "tui-pty-mock/gpt-5.5" },
+        },
+      },
+    },
+    tools: {
+      profile: params.toolsProfile ?? "minimal",
+    },
+    models: {
+      mode: "replace",
+      providers: {
+        "tui-pty-mock": buildMockModelProvider(params.providerBaseUrl, ["gpt-5.5"]),
+      },
+    },
+    gateway: {
+      mode: "local",
+      auth: { mode: "token", token: "tui-pty-local" },
+    },
+    discovery: { mdns: { mode: "off" } },
+  } satisfies OpenClawConfig;
+}
 
 const STARTUP_TIMEOUT_MS = 60_000;
 const OUTPUT_TIMEOUT_MS = 120_000;

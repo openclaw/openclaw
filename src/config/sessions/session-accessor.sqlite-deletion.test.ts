@@ -188,7 +188,7 @@ describe("session deletion and native owner state", () => {
     const ambientScope = { agentId: "main", sessionKey, storePath, env: ambientEnv };
     await replaceSessionEntry(ambientScope, {
       sessionId: "ambient-sentinel",
-      updatedAt: 1,
+      updatedAt: Date.now(),
       repositoryWorkspaceId: ambientRepository.workspaceId,
     });
     const ambientEntry = loadSessionEntry(ambientScope);
@@ -214,7 +214,7 @@ describe("session deletion and native owner state", () => {
         });
         await replaceSessionEntry(scope, {
           sessionId: "explicit-environment-session",
-          updatedAt: 1,
+          updatedAt: Date.now(),
           repositoryWorkspaceId: repository.workspaceId,
         });
         const artifactRoot = repositories.artifactPath(repository.workspaceId);
@@ -276,12 +276,12 @@ describe("session deletion and native owner state", () => {
       });
       await replaceSessionEntry(scope, {
         sessionId: "global-session",
-        updatedAt: 1,
+        updatedAt: Date.now(),
         repositoryWorkspaceId: repository.workspaceId,
       });
       await replaceSessionEntry(siblingScope, {
         sessionId: "worker-sibling",
-        updatedAt: 1,
+        updatedAt: Date.now(),
         repositoryWorkspaceId: siblingRepository.workspaceId,
       });
       const siblingEntry = loadSessionEntry(siblingScope);

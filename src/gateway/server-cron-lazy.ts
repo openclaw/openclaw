@@ -306,6 +306,23 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
 
   return {
     cron,
+    deferHookWake: async (opts) => {
+      const generation = lifecycleGeneration;
+      const commitGuard = () => {
+        opts.commitGuard();
+        if (stopped || lifecycleGeneration !== generation) {
+          throw new Error("Scheduled Hook wake owner changed; retry the request");
+        }
+      };
+      commitGuard();
+      const current = await load();
+      commitGuard();
+      const defer = current.state.deferHookWake;
+      if (!defer) {
+        throw new Error("Scheduled Hook wake admission is unavailable; restart the Gateway");
+      }
+      return await defer({ ...opts, commitGuard });
+    },
     storePath,
     cronEnabled,
     prepareExitWatcherHandoff: async (): Promise<GatewayCronExitWatcherHandoff | undefined> => {

@@ -301,12 +301,23 @@ export function retainPreparedSessionGenerationFacts(params: {
   sessionKey: string;
   entry: SessionSharingEntry | undefined;
 }) {
+  const generation: NonNullable<PreparedSessionSharingRead["generation"]> = {
+    current: params.entry ?? null,
+    initiallyAbsent: params.entry ? undefined : true,
+  };
   const retained = retainPreparedSessionSharingFacts({
     ...params,
     membership: new Set(),
-    generation: { current: params.entry ?? null, initiallyAbsent: params.entry ? undefined : true },
+    generation,
   });
   return {
+    adoptCreatedEntry: (entry: SessionSharingEntry) => {
+      if (!generation.initiallyAbsent || retained.readGeneration() !== entry) {
+        return false;
+      }
+      generation.initiallyAbsent = undefined;
+      return true;
+    },
     readCurrent: retained.readGeneration,
     prepareRead: retained.prepareRead,
     release: retained.release,

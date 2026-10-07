@@ -78,8 +78,6 @@ export type RunCliAgentParams = {
   runtimePolicySessionKey?: string;
   sessionEntry?: SessionEntry;
   trigger?: EmbeddedRunTrigger;
-  /** Heartbeat-transported turn that continues a conversation (its own command completion). */
-  continuesConversation?: boolean;
   sessionFile: string;
   /** Host-owned task root; preparation must mediate all tools through its filesystem policy. */
   rootedExecution?: RootedExecutionRequest;

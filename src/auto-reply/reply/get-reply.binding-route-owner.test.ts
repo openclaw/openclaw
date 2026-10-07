@@ -34,7 +34,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { dispatchReplyFromConfig } from "./dispatch-from-config.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
-import { getReplyFromConfig } from "./get-reply.js";
+import { getReplyFromConfigInternal } from "./get-reply.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { claimInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
 
@@ -143,10 +143,10 @@ function makeContext(
 async function invoke(
   entrypoint: "getReply" | "dispatch" | "inbound",
   ctx: Parameters<typeof dispatchReplyFromConfig>[0]["ctx"],
-  replyOptions?: Parameters<typeof getReplyFromConfig>[1],
+  replyOptions?: Parameters<typeof getReplyFromConfigInternal>[1],
 ) {
   if (entrypoint === "getReply") {
-    const reply = await getReplyFromConfig(ctx, replyOptions, cfg);
+    const reply = await getReplyFromConfigInternal(ctx, replyOptions, cfg);
     return Array.isArray(reply) ? reply : reply ? [reply] : [];
   }
   const replies: ReplyPayload[] = [];

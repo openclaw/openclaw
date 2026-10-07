@@ -12,7 +12,8 @@ import {
 } from "../../../../extensions/qa-lab/api.js";
 import type { ChannelAccountSnapshot } from "../../../../src/channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import type { HeartbeatEventPayload } from "../../../../src/infra/heartbeat-events.js";
+import type { CronRunLogEntry } from "../../../../src/cron/run-log-types.js";
+import type { CronJob } from "../../../../src/cron/types.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
   connectHotReloadClient,
@@ -70,20 +71,6 @@ export async function proveHotReloadChannels({
           ...cfg,
           gateway: { ...cfg.gateway, reload: { mode: "hybrid" } },
           session: { ...cfg.session, dmScope: "per-account-channel-peer" },
-          agents: {
-            ...cfg.agents,
-            defaults: {
-              ...cfg.agents?.defaults,
-              heartbeat: {
-                agentId: "qa",
-                every: "24h",
-                target: CHANNEL,
-                to: "dm:hot-reload-heartbeat",
-                accountId: "default",
-                prompt: "Reply exactly `HEARTBEAT_OK`",
-              },
-            },
-          },
           channels: {
             ...cfg.channels,
             [CHANNEL]: {
@@ -243,64 +230,102 @@ export async function proveHotReloadChannels({
           "The same QA conversation delivered three real replies through provider models A→B→A; the running account restarted and the manually stopped account stayed stopped",
         );
       });
-      await group("channels.defaults", async () => {
-        for (const [index, showOk] of [false, true, false].entries()) {
-          await patch({
-            channels: {
-              defaults: { heartbeatVisibility: { showOk, showAlerts: false, useIndicator: true } },
-            },
-          });
-          const before = await rpc<HeartbeatEventPayload | null>("last-heartbeat");
-          const cursor = (await providerRequests()).at(-1)?.cursor ?? 0;
-          const outboundBefore = state
-            .getSnapshot()
-            .messages.filter(
-              (message) =>
-                message.direction === "outbound" &&
-                message.conversation.id === "hot-reload-heartbeat",
-            ).length;
-          await rpc("wake", {
-            agentId: "qa",
-            mode: "now",
-            text: `Run the configured heartbeat check: CHANNEL_HEARTBEAT_${index}.`,
-          });
-          const event = await waitForHotReloadFact(
-            "heartbeat completion",
-            async () => {
-              const current = await rpc<HeartbeatEventPayload | null>("last-heartbeat");
-              return current && current.ts > (before?.ts ?? 0) ? current : undefined;
-            },
-            40_000,
-          );
-          // Reply normalization removes plain HEARTBEAT_OK before the heartbeat owner,
-          // which receives an empty successful result and still applies showOk.
-          assert.equal(event.status, "ok-empty", JSON.stringify(event));
-          assert.equal(event.channel, CHANNEL);
-          assert.equal(event.silent, !showOk);
-          const requests = (await providerRequests()).filter((request) => request.cursor > cursor);
-          assert(requests.length > 0, "Heartbeat completion must follow an actual model run");
-          const delivered = state
-            .getSnapshot()
-            .messages.filter(
-              (message) =>
-                message.direction === "outbound" &&
-                message.conversation.id === "hot-reload-heartbeat",
+      await group("channels.qa-channel automation delivery", async () => {
+        const conversationId = "hot-reload-automation";
+        const automation = await rpc<CronJob>("cron.add", {
+          agentId: "qa",
+          name: "Channel hot-reload automation",
+          enabled: false,
+          deleteAfterRun: false,
+          schedule: { kind: "every", everyMs: 86_400_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "Synthetic channel reload automation" },
+          delivery: { mode: "none" },
+        });
+        try {
+          for (const [index, notify] of [false, true, false].entries()) {
+            const botDisplayName = `QA Hot Reload ${index}`;
+            await patch({ channels: { [CHANNEL]: { botDisplayName } } });
+            const marker = `CHANNEL_AUTOMATION_${index}`;
+            const cursor = (await providerRequests()).at(-1)?.cursor ?? 0;
+            const outboundBefore = state
+              .getSnapshot()
+              .messages.filter(
+                (message) =>
+                  message.direction === "outbound" && message.conversation.id === conversationId,
+              ).length;
+            const scheduledAtMs = Date.now() + 1000;
+            await rpc("cron.update", {
+              id: automation.id,
+              patch: {
+                enabled: true,
+                schedule: { kind: "at", at: new Date(scheduledAtMs).toISOString() },
+                payload: { kind: "agentTurn", message: `Reply exactly \`${marker}\`` },
+                delivery: notify
+                  ? {
+                      mode: "announce",
+                      channel: CHANNEL,
+                      to: `dm:${conversationId}`,
+                      accountId: "default",
+                    }
+                  : { mode: "none" },
+              },
+            });
+            const run = await waitForHotReloadFact(
+              "scheduled automation completion",
+              async () => {
+                const { entries } = await rpc<{ entries: CronRunLogEntry[] }>("cron.runs", {
+                  id: automation.id,
+                  limit: 10,
+                  sortDir: "desc",
+                });
+                return entries.find(
+                  (entry) =>
+                    (entry.runAtMs ?? 0) >= scheduledAtMs &&
+                    ["ok", "error", "skipped"].includes(entry.status ?? ""),
+                );
+              },
+              40_000,
             );
-          assert.equal(delivered.length - outboundBefore, showOk ? 1 : 0);
-          if (showOk) {
-            assert.equal(delivered.at(-1)?.text, "HEARTBEAT_OK");
+            assert.equal(run.status, "ok", JSON.stringify(run));
+            assert.equal(run.deliveryStatus, notify ? "delivered" : "not-requested");
+            const requests = (await providerRequests()).filter(
+              (request) => request.cursor > cursor && request.prompt.includes(marker),
+            );
+            assert(requests.length > 0, "Automation completion must follow an actual model run");
+            const delivered = state
+              .getSnapshot()
+              .messages.filter(
+                (message) =>
+                  message.direction === "outbound" && message.conversation.id === conversationId,
+              );
+            assert.equal(delivered.length - outboundBefore, notify ? 1 : 0);
+            if (notify) {
+              const reply = delivered.at(-1);
+              assert(reply);
+              assert.equal(reply.text, marker);
+              assert.equal(reply.accountId, "default");
+              assert.equal(reply.conversation.kind, "direct");
+              assert.equal(reply.senderName, botDisplayName);
+            }
+            observations.push({
+              prefix: "channels.qa-channel automation delivery",
+              notify,
+              botDisplayName,
+              jobId: automation.id,
+              run,
+              delivered: delivered.length,
+            });
+            await checkStopped();
           }
-          observations.push({
-            prefix: "channels.defaults",
-            showOk,
-            event,
-            delivered: delivered.length,
-          });
+          await record(
+            "channels.qa-channel automation delivery",
+            "Naturally scheduled model turns changed non-delivery→one announcement→non-delivery; the announcement used the reloaded channel identity, and the manually stopped account stayed stopped",
+          );
+        } finally {
+          await rpc("cron.remove", { id: automation.id });
         }
-        await record(
-          "channels.defaults",
-          "Real heartbeat model runs changed silent→delivered HEARTBEAT_OK→silent through the QA channel; the running account restarted and the manually stopped account stayed stopped",
-        );
       });
       await proveHotReloadChannelPolicy({
         transport,

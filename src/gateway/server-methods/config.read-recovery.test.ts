@@ -72,7 +72,11 @@ it("config.get keeps recorded publication failure across an older read and recon
   });
   readBeforeFailure.resolve(valid);
   await pendingRead;
-  expect(oldRead.respond).toHaveBeenCalledWith(true, { ...valid, writeError }, undefined);
+  expect(oldRead.respond).toHaveBeenCalledWith(
+    true,
+    { ...valid, reloadSettled: true, writeError },
+    undefined,
+  );
 
   const invalid = {
     ...valid,
@@ -83,16 +87,24 @@ it("config.get keeps recorded publication failure across an older read and recon
     vi.mocked(readConfigGetResponse).mockResolvedValueOnce(snapshot);
     const reader = getHarness();
     await get(reader.options);
-    expect(reader.respond).toHaveBeenCalledWith(true, { ...snapshot, writeError }, undefined);
+    expect(reader.respond).toHaveBeenCalledWith(
+      true,
+      { ...snapshot, reloadSettled: true, writeError },
+      undefined,
+    );
   }
   vi.mocked(readConfigGetResponse).mockResolvedValueOnce(valid);
   const restored = getHarness();
   await get(restored.options);
-  expect(restored.respond).toHaveBeenCalledWith(true, valid, undefined);
+  expect(restored.respond).toHaveBeenCalledWith(true, { ...valid, reloadSettled: true }, undefined);
   vi.mocked(readConfigGetResponse).mockResolvedValueOnce(invalid);
   const laterInvalid = getHarness();
   await get(laterInvalid.options);
-  expect(laterInvalid.respond).toHaveBeenCalledWith(true, invalid, undefined);
+  expect(laterInvalid.respond).toHaveBeenCalledWith(
+    true,
+    { ...invalid, reloadSettled: true },
+    undefined,
+  );
 });
 
 it("reports only the committed config with a projected hash and redacted secrets after failed application", async () => {

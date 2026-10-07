@@ -81,6 +81,29 @@ function mergeBuiltInFactoryAllowlist(...lists: Array<string[] | undefined>): st
   return uniqueStrings(["*", ...withoutDefaultPluginMarker]);
 }
 
+/** Excluded built-in tools must not acquire provider or credential state during assembly. */
+export function isToolAllowedByFactoryPolicy(params: {
+  toolName: string;
+  config?: OpenClawConfig;
+  toolAllowlist?: string[];
+  toolDenylist?: string[];
+}): boolean {
+  const deny = expandShippedCoreToolPolicyNames(
+    mergeFactoryPolicyList(params.config?.tools?.deny, params.toolDenylist),
+  );
+  return [params.config?.tools?.allow, params.toolAllowlist].every((allowlist) => {
+    const restrictions = allowlist && readToolAllowlistIntersection(allowlist);
+    return (restrictions ?? [allowlist]).every(
+      (allow) =>
+        (!restrictions || (allow !== undefined && allow.length > 0)) &&
+        isToolAllowedByPolicyName(params.toolName, {
+          allow: expandShippedCoreToolPolicyNames(mergeBuiltInFactoryAllowlist(allow)),
+          deny,
+        }),
+    );
+  });
+}
+
 export function resolveImageToolFactoryAvailable(params: {
   config?: OpenClawConfig;
   agentDir?: string;

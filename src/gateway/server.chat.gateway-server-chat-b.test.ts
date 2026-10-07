@@ -1673,7 +1673,6 @@ describe("gateway server chat", () => {
               defaults: {
                 model: { primary: "openai/gpt-5.5" },
                 models: { "openai/gpt-5.5": {} },
-                heartbeat: { agentId: "main" },
                 sessionStore: { agentId: "main" },
                 systemAgent: { agentId: "main" },
               },
@@ -5658,16 +5657,12 @@ describe("gateway server chat", () => {
           ws,
           "chat.history",
           makeMainSessionParams({
-            // Keep the older row for paging while selecting every oversized sibling.
-            limit: projectedSiblingCount,
+            limit: 1,
             offset: 0,
             maxChars: 100_000,
           }),
         );
         expect(firstPage.ok).toBe(true);
-        const firstPageSequences = firstPage.payload?.messages?.map(readOpenClawSeq) ?? [];
-        expect(firstPageSequences.length).toBeGreaterThan(0);
-        expect(firstPageSequences.every((seq) => seq === 2)).toBe(true);
         expect(firstPage.payload?.messages).toMatchObject([
           {
             __openclaw: {

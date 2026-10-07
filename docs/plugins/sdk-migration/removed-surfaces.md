@@ -46,6 +46,68 @@ subpaths, including older published `@openclaw/discord` packages. Upgrade affect
 plugins before upgrading the host. Not every export has a path-only replacement;
 see the [per-surface mappings](/plugins/sdk-migration/import-paths#removed-command-and-channel-facades).
 
+### Heartbeat execution and reply helpers
+
+The Heartbeat-to-Automations cutover removes the following SDK surfaces with
+explicit maintainer approval on October 3, 2026:
+
+- `openclaw/plugin-sdk/heartbeat-runtime`, including `requestHeartbeat`.
+- `api.runtime.system.requestHeartbeat`, `requestHeartbeatNow`, and
+  `runHeartbeatOnce`.
+- The `reply-runtime` exports `HEARTBEAT_PROMPT`, `HEARTBEAT_TOKEN`,
+  `DEFAULT_HEARTBEAT_ACK_MAX_CHARS`, `resolveHeartbeatPromptCore`,
+  `stripHeartbeatToken`, and `resolveHeartbeatReplyPayload`.
+- The `agent-harness-runtime` exports `HeartbeatToolResponse`,
+  `HEARTBEAT_RESPONSE_TOOL_NAME`, and `normalizeHeartbeatToolResponse`.
+- The `provider-model-shared` exports `GPT5_HEARTBEAT_PROMPT_OVERLAY` and
+  `GPT5_FRIENDLY_PROMPT_OVERLAY`, plus the `includeHeartbeatGuidance` option on
+  `resolveGpt5SystemPromptContribution`.
+- The `GetReplyOptions` fields `isHeartbeat`, `useHeartbeatFailureCopy`,
+  `heartbeatModelOverride`, `enableHeartbeatTool`, and `forceHeartbeatTool`, plus
+  the `typingPolicy: "heartbeat"` value.
+- The `isHeartbeat` input on `ContextEngine.ingest`, `ingestBatch`, `afterTurn`,
+  and `commitTurn`.
+- The `"heartbeat"` member of `EmbeddedRunTrigger`. Scheduled runs use `"cron"`;
+  immediate session follow-ups use `"event"`.
+
+This is a breaking plugin-SDK change. Plugins importing removed names must be
+updated before upgrading the host; deprecated aliases are not retained.
+Schedule recurring work through ordinary [Automations](/automation/cron-jobs).
+For immediate follow-ups, use `api.runtime.system.enqueueSessionEvent` with an
+explicit agent and session, and inspect the returned admission and settlement receipt. Capture
+the original destination before awaited work with `captureSessionEventTarget`;
+see [system utilities](/plugins/sdk-runtime/state-and-system#state-config-and-system-namespaces).
+Capture does not create storage. Authorized fresh ingress explicitly opts in with
+`createIfMissing: true`; delayed completions retain their original session and
+fail when it no longer exists. Await `receipt.accepted` when acknowledging
+admission to a caller; the result is `{ ok: true }` or `{ ok: false, error }`.
+Configure model and delivery policy on the automation instead of reply options.
+Ordinary internal events use `typingPolicy: "system_event"`; silent replies use
+`SILENT_REPLY_TOKEN` and `isSilentReplyText` from `reply-runtime`.
+
+Custom in-process Gateway handlers must also await `context.cron.wake(...)`
+before inspecting `ok` or `reason`. The method returned a result synchronously
+in `2026.9.7`; it now returns a result or a Promise of that result, because deferred
+wake admission can await storage preparation and current target and owner checks. Awaiting handles both
+immediate and deferred admission:
+
+```typescript
+const result = await context.cron.wake({
+  mode: "next-heartbeat",
+  text: "Check the pending work.",
+  agentId: "main",
+});
+```
+
+A successful wake result confirms admission, not completed model execution or
+transport delivery. This is a breaking change to the in-process SDK contract;
+the protocol-v4 `wake` JSON request and response shapes remain unchanged.
+
+The non-deprecated `heartbeat_prompt_contribution` hook remains available only for
+receipt-owned migrated/default proactive automations. Historical transcript
+recognition and the protocol-v4 wire adapters also remain supported; they do not
+provide a plugin execution API.
+
 ### Process-global API-provider publication
 
 `registerApiProvider(...)` and `unregisterApiProviders(...)` were removed from

@@ -7,7 +7,7 @@ import type {
   AgentEntryConfig,
   OpenClawConfig,
 } from "../../../config/types.js";
-import { resolveHeartbeatAgents } from "../../../infra/heartbeat-config.js";
+import { resolveHeartbeatAgents } from "../../doctor-heartbeat-legacy.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 import { prepareLegacyConfigMigrationRuntime } from "./legacy-config-migrate.test-support.js";
@@ -58,8 +58,8 @@ describe("ambient owner migration", () => {
     const migrated = result.config!;
     expect(migrated.agents?.defaults).toMatchObject({
       systemAgent: { agentId: "main" },
-      heartbeat: { agentId: "main" },
     });
+    expect(migrated).not.toHaveProperty("agents.defaults.heartbeat");
     expect(resolveAmbientOwnerAgentId(migrated)).toBe("main");
     expect(resolveHeartbeatAgents(migrated).map(({ agentId }) => agentId)).toEqual(["main"]);
     expect(migrate(migrated)).toEqual({ next: null, changes: [] });
@@ -79,9 +79,7 @@ describe("ambient owner migration", () => {
       expect(migrated.agents?.defaults?.systemAgent).toEqual(
         materialized ? { agentId: owner } : undefined,
       );
-      expect(migrated.agents?.defaults?.heartbeat).toEqual(
-        materialized ? { agentId: owner } : undefined,
-      );
+      expect(migrated).not.toHaveProperty("agents.defaults.heartbeat");
       expect(migrated.agents?.entries?.ops).not.toHaveProperty("default");
       expect(resolveAmbientOwnerAgentId(migrated)).toBe(owner);
       expect(migrate(migrated)).toEqual({ next: null, changes: [] });

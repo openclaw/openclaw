@@ -43,6 +43,7 @@ import { doctorConfigRuntimeEntrypoints } from "../../src/commands/doctor-config
 import { sessionNativeProcessEntrypoints } from "../../src/config/sessions/native-process-runtime.test-support.ts";
 import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.ts";
 import { serviceProcessEnvEntrypoints } from "../../src/daemon/service-process-env-runtime.test-support.ts";
+import { clawJournalReplacementEntrypoint } from "../../src/gateway/claws-removal-journal-replacement-runtime.test-support.ts";
 import { sessionChildCacheRetentionEntrypoint } from "../../src/gateway/session-child-cache-retention-entrypoint.test-support.ts";
 import { sessionTitleRetentionEntrypoints } from "../../src/gateway/session-title-retention.test-support.ts";
 import { workspaceProcessTestEntrypoints } from "../../src/gateway/worker-environments/workspace-process-runtime.test-support.ts";
@@ -371,6 +372,7 @@ export const vitestWorkerBuildEntries = {
     workboardSqliteBackendEntrypoint,
     ...Object.values(agentDatabaseModuleIdentityEntrypoints),
     stateLeaseProcessExitRuntimeEntrypoint,
+    clawJournalReplacementEntrypoint,
     stateLeaseRetentionRuntimeEntrypoint,
     agentDatabaseHeldRuntimeEntrypoint,
     databaseVerifyHostRuntimeEntrypoint,

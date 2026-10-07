@@ -41,6 +41,7 @@ export type {
   CronJob,
   CronRunLogEntry,
   CronScratchGetResult,
+  CronScratchSetResult,
   UpdateAvailable,
   UpdateHoldResult,
   UpdateReportResult,

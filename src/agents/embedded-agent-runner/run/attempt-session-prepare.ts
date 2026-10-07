@@ -361,6 +361,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
   // A failed user dispatch can leave the next continuation an unanswered user.
   // Keep that input in user history instead of reclassifying it as announcement context.
   const preserveUnansweredUser =
+    !isMainSessionRestartRecoveryInputProvenance(attempt.inputProvenance) &&
     shouldPreserveUserFacingSessionStateForInputProvenance(attempt.inputProvenance) &&
     (!orphanProvenance || orphanProvenance.kind === "external_user");
   const orphanRepair =

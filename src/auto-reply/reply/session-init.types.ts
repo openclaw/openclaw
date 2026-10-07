@@ -3,9 +3,26 @@ import type {
   SessionEntry,
   SessionScope,
 } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.js";
-import type { FinalizedTemplateContext } from "../templating.js";
+import type { ProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
+import type { FinalizedTemplateContext, FinalizedRuntimeMsgContext } from "../templating.js";
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
+import type { SessionEventExecution } from "./session-event-contract.js";
+
+export type InitSessionStateParams = {
+  providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
+  cfg: OpenClawConfig;
+  commandAuthorized: boolean;
+  ctx: FinalizedRuntimeMsgContext;
+  expectedExistingSessionId?: string;
+  pinExpectedExistingSession?: boolean;
+  newlyCreatedSessionId?: string;
+  requestedSessionId?: string;
+  resumeRequestedSession?: boolean;
+  signal?: AbortSignal;
+  bindSessionCreation?: SessionEventExecution["bindSessionCreation"];
+};
 
 export type SessionInitResult = {
   sessionCtx: FinalizedTemplateContext;

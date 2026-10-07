@@ -7,13 +7,12 @@ scenario:
   coverage:
     primary:
       - gateway.agent-and-automation-apis
-      - agent-runtime.session-heartbeat-target-none
-  objective: Verify the real Gateway persists cron RPC mutations, wakes a heartbeat into the agent runtime, and cancels a Gateway-created agent run.
+  objective: Verify the real Gateway persists cron RPC mutations, routes the legacy wake RPC to ordinary session execution, and cancels a Gateway-created agent run.
   successCriteria:
     - Cron add, get, list, update, and remove RPCs expose the persisted job state after each mutation.
-    - A wake RPC with mode now executes a real heartbeat turn whose provider returns a concrete reply.
-    - last-heartbeat records skipped status, target-none reason, and the provider reply preview.
-    - This scenario makes no channel delivery claim; target-none is asserted through the recorded heartbeat outcome.
+    - A legacy wake RPC with mode now reaches the real provider and commits its concrete reply to the explicitly requested session.
+    - Ordinary session completion does not fabricate a legacy heartbeat reporting event.
+    - This scenario proves session history, with no external channel delivery claim.
     - A real agent RPC returns the admitted run identity.
     - chat.abort cancels that exact session run, and agent.wait observes its terminal lifecycle.
   docsRefs:
@@ -27,4 +26,4 @@ scenario:
   execution:
     kind: vitest
     path: test/e2e/qa-lab/runtime/gateway-rpc-automation.e2e.test.ts
-    summary: Run one isolated real-Gateway scenario over cron CRUD, wake-to-heartbeat delivery, and Gateway-created agent run admission, abort, and wait.
+    summary: Run one isolated real-Gateway scenario over cron CRUD, legacy-wake session execution, and Gateway-created agent run admission, abort, and wait.

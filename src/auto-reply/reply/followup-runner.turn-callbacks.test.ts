@@ -56,6 +56,8 @@ function createObservers() {
     onAgentRunTerminalOutcome:
       vi.fn<NonNullable<FollowupRunObservers["onAgentRunTerminalOutcome"]>>(),
     onModelSelected: vi.fn<NonNullable<FollowupRunObservers["onModelSelected"]>>(),
+    onDeliberateSilentTerminalReply:
+      vi.fn<NonNullable<FollowupRunObservers["onDeliberateSilentTerminalReply"]>>(),
     prepareAssistantTranscriptMessage: vi.fn<
       NonNullable<FollowupRunObservers["prepareAssistantTranscriptMessage"]>
     >((message) => message),
@@ -104,6 +106,7 @@ describe("queued turn callback ownership", () => {
         params.opts?.prepareAssistantTranscriptMessage?.(message, item);
         await params.opts?.resolveReplyDelivery?.(1);
         params.opts?.onAgentRunTerminalOutcome?.("completed");
+        params.opts?.onDeliberateSilentTerminalReply?.();
         // End at the execution seam without introducing transport or accounting work.
         return { runId, outcome: { kind: "aborted", reason: "user" } };
       });
@@ -160,6 +163,7 @@ describe("queued turn callback ownership", () => {
             thinkLevel: undefined,
           });
           expect(own.onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("completed");
+          expect(own.onDeliberateSilentTerminalReply).toHaveBeenCalledOnce();
           expect(own.prepareAssistantTranscriptMessage).toHaveBeenCalledExactlyOnceWith(
             message,
             item,

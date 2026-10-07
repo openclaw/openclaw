@@ -383,7 +383,7 @@ describe("executeAgentTurn: runtime selection", () => {
     });
   });
 
-  it("keeps catalog-adopted Codex sessions on Codex during heartbeat model overrides", async () => {
+  it("keeps catalog-adopted Codex sessions on Codex during event model overrides", async () => {
     state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "claude-cli");
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run(
@@ -396,7 +396,7 @@ describe("executeAgentTurn: runtime selection", () => {
       attempts: [],
     }));
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "heartbeat" }],
+      payloads: [{ text: "event" }],
       meta: {},
     });
 
@@ -404,6 +404,7 @@ describe("executeAgentTurn: runtime selection", () => {
     const followupRun = createFollowupRun();
     followupRun.run.provider = "anthropic";
     followupRun.run.model = "claude-opus-4-6";
+    followupRun.run.internalEventExecution = { onStarted: vi.fn(), onTerminal: vi.fn() };
     followupRun.run.config = {
       agents: {
         defaults: {
@@ -416,7 +417,7 @@ describe("executeAgentTurn: runtime selection", () => {
 
     const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
-      isHeartbeat: true,
+      opts: { internalEventExecution: followupRun.run.internalEventExecution },
       getActiveSessionEntry: () =>
         ({
           sessionId: "catalog-adopted-session",
@@ -439,8 +440,7 @@ describe("executeAgentTurn: runtime selection", () => {
     expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
       provider: "anthropic",
       model: "claude-opus-4-6",
-      trigger: "heartbeat",
-      lane: "cron-nested",
+      trigger: "event",
       agentHarnessId: "codex",
       agentHarnessRuntimeOverride: "codex",
     });

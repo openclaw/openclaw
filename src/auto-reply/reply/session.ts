@@ -52,7 +52,6 @@ import {
   SESSION_TOTAL_TOKENS_VERSION,
   type SessionEntry,
 } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
@@ -136,7 +135,7 @@ import {
   ReplySessionInitConflictError,
   runWithSessionInitConflictRetry,
 } from "./session-init-conflict-retry.js";
-import type { SessionInitResult } from "./session-init.types.js";
+import type { InitSessionStateParams, SessionInitResult } from "./session-init.types.js";
 import {
   canReplaceRestartTombstoneFromParent,
   prepareReplySessionParentFork,
@@ -151,19 +150,6 @@ import { resolveReplySessionRolloverState } from "./session-rollover-state.js";
 import { stripThreadFromSessionRoute, stripThreadId } from "./session-route-reset.js";
 
 const log = createSubsystemLogger("session-init");
-
-type InitSessionStateParams = {
-  providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
-  cfg: OpenClawConfig;
-  commandAuthorized: boolean;
-  ctx: FinalizedRuntimeMsgContext;
-  expectedExistingSessionId?: string;
-  pinExpectedExistingSession?: boolean;
-  newlyCreatedSessionId?: string;
-  requestedSessionId?: string;
-  resumeRequestedSession?: boolean;
-  signal?: AbortSignal;
-};
 
 type InitSessionStateAttemptContext = {
   agentId: string;
@@ -953,6 +939,7 @@ async function initSessionStateAttemptLocked(
   let previousSessionMemory: SessionMemoryTranscript | undefined;
   let previousSessionResetMessages: unknown[] | undefined;
   const committed = await commitReplySessionInitialization({
+    bindCreation: params.bindSessionCreation,
     commitGuard: !entry
       ? () => {
           params.signal?.throwIfAborted();

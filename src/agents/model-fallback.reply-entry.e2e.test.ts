@@ -87,7 +87,7 @@ function installReplyEntryMocks() {
   });
 }
 
-let getReplyFromConfig: typeof import("../auto-reply/reply/get-reply.js").getReplyFromConfig;
+let getReplyFromConfigInternal: typeof import("../auto-reply/reply/get-reply.js").getReplyFromConfigInternal;
 let withFullRuntimeReplyConfig: typeof import("../auto-reply/reply/get-reply-fast-path.js").withFullRuntimeReplyConfig;
 let createReplyDispatcher: typeof import("../auto-reply/reply/reply-dispatcher.js").createReplyDispatcher;
 const RATE_LIMIT_ERROR_MESSAGE = "rate limit exceeded";
@@ -104,7 +104,7 @@ const completedWriteToolMetas = [
 
 beforeAll(async () => {
   installReplyEntryMocks();
-  ({ getReplyFromConfig } = await import("../auto-reply/reply/get-reply.js"));
+  ({ getReplyFromConfigInternal } = await import("../auto-reply/reply/get-reply.js"));
   ({ withFullRuntimeReplyConfig } = await import("../auto-reply/reply/get-reply-fast-path.js"));
   ({ createReplyDispatcher } = await import("../auto-reply/reply/reply-dispatcher.js"));
 });
@@ -123,7 +123,7 @@ function countProviderAttempts(provider: string): number {
     .length;
 }
 
-describe("getReplyFromConfig fallback availability", () => {
+describe("getReplyFromConfigInternal fallback availability", () => {
   it.each([
     {
       title: "returns the pinned rate-limit surface through the reply entry",
@@ -265,7 +265,7 @@ describe("getReplyFromConfig fallback availability", () => {
       };
       const replyConfig = withFullRuntimeReplyConfig(cfg);
       setRuntimeConfigSnapshot(replyConfig, replyConfig);
-      let result: Awaited<ReturnType<typeof getReplyFromConfig>>;
+      let result: Awaited<ReturnType<typeof getReplyFromConfigInternal>>;
       const delivered: Array<{ payload: ReplyPayload; kind: ReplyDispatchKind }> = [];
       const dispatcher = createReplyDispatcher({
         deliver: async (payload, { kind }) => {
@@ -276,7 +276,7 @@ describe("getReplyFromConfig fallback availability", () => {
         result = await withReplyDispatcher({
           dispatcher,
           run: async () => {
-            const replies = await getReplyFromConfig(ctx, undefined, replyConfig);
+            const replies = await getReplyFromConfigInternal(ctx, undefined, replyConfig);
             for (const payload of Array.isArray(replies) ? replies : replies ? [replies] : []) {
               dispatcher.sendFinalReply(payload);
             }

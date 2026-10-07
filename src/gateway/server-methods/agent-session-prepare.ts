@@ -44,7 +44,7 @@ type PrepareAgentSessionParams = {
   request: AgentRunRequest;
   canUseCronRunContinuation: boolean;
   lifecycleGeneration: string;
-  effectiveBootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  effectiveBootstrapContextRunKind?: "default" | "cron";
   preAttachmentSession?: { canonicalKey: string; sessionId?: string };
   respond: GatewayRequestHandlerOptions["respond"];
   assertCurrent?: () => void;
@@ -228,9 +228,7 @@ async function prepareAdmittedAgentSession(
     }),
   });
   const visibleRequest =
-    effectiveBootstrapContextRunKind !== "cron" &&
-    effectiveBootstrapContextRunKind !== "heartbeat" &&
-    !params.request.internalEvents?.length;
+    effectiveBootstrapContextRunKind !== "cron" && !params.request.internalEvents?.length;
   const failedSessionTranscriptMissing = (candidateEntry: SessionEntry | undefined): boolean => {
     if (candidateEntry?.status !== "failed" || !candidateEntry.sessionId?.trim()) {
       return false;
@@ -248,8 +246,7 @@ async function prepareAdmittedAgentSession(
     }
   };
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: canonicalSessionAgentId });
-  const isSystemGatewayRun =
-    effectiveBootstrapContextRunKind === "cron" || effectiveBootstrapContextRunKind === "heartbeat";
+  const isSystemGatewayRun = effectiveBootstrapContextRunKind === "cron";
   const reuse = await evaluateAgentSessionReuse({
     freshEntry: entry,
     cfg,

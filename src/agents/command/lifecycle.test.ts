@@ -1,6 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as agentEvents from "../../infra/agent-events.js";
 import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
 import { createCliTimeoutError } from "../cli-runner/no-output-timeout-policy.js";
@@ -13,7 +14,10 @@ const { emitAgentEvent, lifecycleLog } = vi.hoisted(() => ({
   lifecycleLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock("../../infra/agent-events.js", () => ({ emitAgentEvent }));
+beforeEach(() => {
+  vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(emitAgentEvent);
+});
+afterEach(() => vi.restoreAllMocks());
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => lifecycleLog,
 }));

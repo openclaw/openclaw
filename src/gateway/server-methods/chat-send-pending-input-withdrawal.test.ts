@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
-import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import type { dispatchInboundMessageInternal } from "../../auto-reply/dispatch.js";
 import {
   createQueueSettings,
   createQueueTestRun,
@@ -123,7 +123,7 @@ describe("queued chat input withdrawal", () => {
         };
         if (target === "queued") {
           const dispatch = dispatchInboundMessageMock.mock.calls.at(-1)?.[0] as
-            | Parameters<typeof dispatchInboundMessage>[0]
+            | Parameters<typeof dispatchInboundMessageInternal>[0]
             | undefined;
           const run = createQueueTestRun({ prompt: fixture.params.message });
           run.abortSignal = active.controller.signal;
@@ -246,7 +246,7 @@ describe("queued chat input withdrawal", () => {
         }
         if (target === "queued-consumed") {
           const dispatch = dispatchInboundMessageMock.mock.calls.at(-1)?.[0] as
-            | Parameters<typeof dispatchInboundMessage>[0]
+            | Parameters<typeof dispatchInboundMessageInternal>[0]
             | undefined;
           const run = createQueueTestRun({ prompt: fixture.params.message });
           run.abortSignal = active.controller.signal;
@@ -313,7 +313,7 @@ describe("queued chat input withdrawal", () => {
           throw new Error("Expected the pending input's abort owner");
         }
         const dispatch = dispatchInboundMessageMock.mock.calls.at(-1)?.[0] as
-          | Parameters<typeof dispatchInboundMessage>[0]
+          | Parameters<typeof dispatchInboundMessageInternal>[0]
           | undefined;
         const run = createQueueTestRun({ prompt: fixture.params.message });
         run.abortSignal = active.controller.signal;

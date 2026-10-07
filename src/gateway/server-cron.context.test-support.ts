@@ -9,8 +9,7 @@ import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gatew
 import type { OpenClawConfig } from "../config/config.js";
 import type { CronServiceState } from "../cron/service/state.js";
 import { armTimer } from "../cron/service/timer.js";
-import type { CronJobCreate } from "../cron/types.js";
-import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
+import type { CronJobCreate, CronRunOutcome } from "../cron/types.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -49,8 +48,8 @@ type GatewayCronContextTestHarness = {
       implementation: () => Promise<{ status: "ok"; summary: string }>,
     ) => unknown;
   };
-  requestHeartbeatAndWaitMock: {
-    mockImplementationOnce: (implementation: () => Promise<HeartbeatRunResult>) => unknown;
+  runSessionEventMock: {
+    mockImplementationOnce: (implementation: () => Promise<CronRunOutcome>) => unknown;
   };
 };
 
@@ -62,7 +61,7 @@ export function registerGatewayCronContextTests({
   addSystemEventJob,
   loadConfigMock,
   runCronIsolatedAgentTurnMock,
-  requestHeartbeatAndWaitMock,
+  runSessionEventMock,
 }: GatewayCronContextTestHarness) {
   const createBroker = useSpawnBrokerTestFixture(afterEach);
   it("owns timer execution and settlement after its creator context closes", async () => {
@@ -241,13 +240,11 @@ export function registerGatewayCronContextTests({
     }
   });
 
-  it("gives a scheduled heartbeat wake a resolvable gateway context", async () => {
+  it("gives a scheduled shared-session turn a resolvable gateway context", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-21T03:00:00.000Z"));
     const clock = createGatewaySchedulerClock(Date.now());
-    // Main-session cron jobs and heartbeat monitors reach the agent through the
-    // heartbeat adapter, which shares the isolated path's contextless defect.
-    const cfg = createCronConfig("server-cron-heartbeat-gateway-context");
+    const cfg = createCronConfig("server-cron-session-gateway-context");
     loadConfigMock.mockReturnValue(cfg);
     const gatewayContext = {
       terminalSessions: {},
@@ -255,10 +252,10 @@ export function registerGatewayCronContextTests({
     } as never;
     let observed: unknown = "never-ran";
     const ran = createDeferred();
-    requestHeartbeatAndWaitMock.mockImplementationOnce(async () => {
+    runSessionEventMock.mockImplementationOnce(async () => {
       observed = getInProcessGatewayToolContext();
       ran.resolve();
-      return { status: "ran", durationMs: 1 };
+      return { status: "ok", summary: "done" };
     });
 
     const state = createCronService(cfg, {
@@ -267,7 +264,7 @@ export function registerGatewayCronContextTests({
     });
     try {
       await state.cron.start();
-      await addSystemEventJob(state, "scheduled-heartbeat", "run it", {
+      await addSystemEventJob(state, "scheduled-session", "run it", {
         deleteAfterRun: false,
         schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
         sessionTarget: "main",

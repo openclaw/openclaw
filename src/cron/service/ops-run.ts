@@ -29,7 +29,7 @@ import {
 import { clearManualCronJobActive } from "./ops-shared.js";
 import { releaseQueuedCronRun, runWithCronAdmission } from "./run-admission.js";
 import { createCronOwnerExecutionIdentityAdmission } from "./run-history.js";
-import type { CronRunMode, CronServiceState, CronWakeMode } from "./state.js";
+import type { CronRunMode, CronServiceState } from "./state.js";
 import { isImmediateCronRunMode } from "./state.js";
 import { emitCronRunFinished, type ManualRunTerminalTracker } from "./timer-outcome-events.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
@@ -439,9 +439,6 @@ export async function waitForManualRun(
 }
 
 /** Enqueues manual wake text through the cron wake API. */
-export function wakeNow(
-  state: CronServiceState,
-  opts: { mode: CronWakeMode; text: string; sessionKey?: string; agentId?: string },
-) {
+export function wakeNow(state: CronServiceState, opts: Parameters<typeof wake>[1]) {
   return wake(state, opts);
 }

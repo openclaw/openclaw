@@ -75,7 +75,6 @@ it.each([
         return (
           await buildReplyPayloads({
             payloads: [{ text: chunks.join(""), ...(mediaUrl ? { mediaUrl } : {}) }],
-            isHeartbeat: false,
             didLogHeartbeatStrip: false,
             blockStreamingEnabled: true,
             blockReplyPipeline: pipeline,
@@ -154,7 +153,6 @@ it("preserves a failed terminal bracket after the real producer filters its fina
       await pipeline.flush({ force: true });
       const { replyPayloads } = await buildReplyPayloads({
         payloads: [{ text: "See [" }],
-        isHeartbeat: false,
         didLogHeartbeatStrip: false,
         blockStreamingEnabled: true,
         blockReplyPipeline: pipeline,

@@ -367,7 +367,7 @@ it("releases cron custody before Doctor finishes, without waiting for CLI cleanu
       await successor.release();
       const jobs = await loadCronStore(resolveCronJobsStorePathFromConfig(cfg, state.env));
       expect(jobs.jobs).toHaveLength(1);
-      expect(jobs.jobs[0]?.payload.kind).toBe("heartbeat");
+      expect(jobs.jobs[0]?.payload.kind).toBe("agentTurn");
     },
   );
 });

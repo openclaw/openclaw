@@ -33,6 +33,7 @@ import {
   expectMockCallArgFields,
   requireMockCall,
   createMinimalRunAgentTurnParams,
+  createScheduledAutomation,
 } from "./agent-runner-execution.test-support.js";
 import type {
   FallbackRunnerParams,
@@ -804,7 +805,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
   });
 
-  it("requires explicit message targets on heartbeat CLI runs", async () => {
+  it("requires explicit message targets on scheduled CLI runs", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("claude-cli", "sonnet-4.6", initialFallbackAttemptOptions(params)),
@@ -821,21 +822,19 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     followupRun.run.model = "sonnet-4.6";
     const params = createMinimalRunAgentTurnParams({
       followupRun,
-      opts: { isHeartbeat: true },
     });
-    params.isHeartbeat = true;
+    params.followupRun.run.scheduledAutomation = createScheduledAutomation();
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     await executeAgentTurn(params);
 
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-      trigger: "heartbeat",
+      trigger: "cron",
       requireExplicitMessageTarget: true,
     });
   });
 
-  it("requires explicit message targets on heartbeat embedded runs", async () => {
-    // Heartbeat ambient From/To must not become implicit message-tool recipients.
+  it("forwards bundle MCP retirement to isolated event embedded runs", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
       provider: "anthropic",
@@ -843,55 +842,27 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       attempts: [],
     }));
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "HEARTBEAT_OK" }],
+      payloads: [{ text: "NO_REPLY" }],
       meta: {},
     });
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const params = createMinimalRunAgentTurnParams({
-      opts: { isHeartbeat: true },
-    });
-    params.isHeartbeat = true;
-
-    await executeAgentTurn(params);
-
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "heartbeat embedded run params", {
-      trigger: "heartbeat",
-      requireExplicitMessageTarget: true,
-    });
-  });
-
-  it("forwards bundle MCP retirement to isolated heartbeat embedded runs", async () => {
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
-      provider: "anthropic",
-      model: "claude",
-      attempts: [],
-    }));
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "HEARTBEAT_OK" }],
-      meta: {},
-    });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const opts: InternalGetReplyOptions = { isHeartbeat: true, cleanupBundleMcpOnRunEnd: true };
+    const opts: InternalGetReplyOptions = {
+      internalEventExecution: { onStarted: vi.fn(), onTerminal: vi.fn() },
+      cleanupBundleMcpOnRunEnd: true,
+    };
     const params = createMinimalRunAgentTurnParams({ opts });
-    params.isHeartbeat = true;
+    params.followupRun.run.internalEventExecution = opts.internalEventExecution;
 
     await executeAgentTurn(params);
 
-    expectMockCallArgFields(
-      state.runEmbeddedAgentMock,
-      0,
-      "isolated heartbeat embedded run params",
-      {
-        trigger: "heartbeat",
-        cleanupBundleMcpOnRunEnd: true,
-      },
-    );
+    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "isolated event embedded run params", {
+      trigger: "event",
+      cleanupBundleMcpOnRunEnd: true,
+    });
   });
 
-  it("forwards bundle MCP retirement to isolated heartbeat CLI runs", async () => {
+  it("forwards bundle MCP retirement to isolated event CLI runs", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("claude-cli", "sonnet-4.6", initialFallbackAttemptOptions(params)),
@@ -906,15 +877,18 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "sonnet-4.6";
-    const opts: InternalGetReplyOptions = { isHeartbeat: true, cleanupBundleMcpOnRunEnd: true };
+    const opts: InternalGetReplyOptions = {
+      internalEventExecution: { onStarted: vi.fn(), onTerminal: vi.fn() },
+      cleanupBundleMcpOnRunEnd: true,
+    };
     const params = createMinimalRunAgentTurnParams({ followupRun, opts });
-    params.isHeartbeat = true;
+    params.followupRun.run.internalEventExecution = opts.internalEventExecution;
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     await executeAgentTurn(params);
 
-    expectMockCallArgFields(state.runCliAgentMock, 0, "isolated heartbeat CLI run params", {
-      trigger: "heartbeat",
+    expectMockCallArgFields(state.runCliAgentMock, 0, "isolated event CLI run params", {
+      trigger: "event",
       cleanupBundleMcpOnRunEnd: true,
     });
   });

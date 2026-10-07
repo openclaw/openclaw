@@ -41,7 +41,7 @@ Behavior:
 - Spawned exec commands receive `OPENCLAW_SHELL=exec` for context-aware shell/profile rules.
 - For long-running work that starts now: start it once and rely on automatic completion wake (when enabled). The wake fires when the command emits output or fails, and on chat channels also when it exits cleanly with no output.
 - A completion wake lets the agent continue outstanding work; it does not require a new chat message. The agent is instructed to report requested results not yet delivered, meaningful outcome changes, or new actionable failures, and stay silent for routine, duplicate, superseded, or already-recovered results. A completion without captured output, such as a command that redirected its output to a file, continues the same way, so the agent can read that file and report. This is a model instruction, not a deterministic notification filter, and it does not disable the completion turn.
-- A command started in a chat conversation completes in that conversation: the completion turn runs in its session with its history, and any reply goes back to that chat or topic. Heartbeat `isolatedSession`, `lightContext`, `target`, `to`, and `directPolicy` settings apply to periodic heartbeats, not to this continuation. See [Heartbeat delivery](/gateway/heartbeat#delivery-behavior).
+- A command started in a chat conversation completes through ordinary session execution, with its full history and captured channel, account, and topic. A command started during that continuation follows the same route. Unrelated scheduled automation policies do not govern these follow-ups. Commands started by an automation with `delivery.mode: "none"` retain its no-fallback-delivery policy, including commands started during their completion turns. Explicitly targeted message tools remain available under normal tool policy. Normal reply handling delivers useful results, while `NO_REPLY` stays silent. See [Immediate follow-ups](/gateway/heartbeat#immediate-follow-ups).
 - A failed background command wakes its originating session even when other sessions or automations are busy. If that session is still running, the completion waits until it is free. This also applies when a watcher exits before the work it was watching finishes.
 - Timeouts also wake the session when the command produced no output. The completion includes retry-safety guidance: verify any external side effects before retrying.
 - Manually canceled commands do not trigger completion notifications, even when they produced output. Retained output remains available through `process poll` or `process log`. Cleanup failures still notify.
@@ -67,15 +67,15 @@ Behavior:
 | `tools.exec.backgroundMs`             | 10000   | Same as `OPENCLAW_BASH_YIELD_MS`.                                                                                   |
 | `tools.exec.timeoutSeconds`           | 1800    | Default per-call timeout.                                                                                           |
 | `tools.exec.cleanupMs`                | 1800000 | Same as `OPENCLAW_BASH_JOB_TTL_MS`.                                                                                 |
-| `tools.exec.notifyOnExit`             | true    | Enqueue a system event + request heartbeat when a backgrounded exec exits.                                          |
+| `tools.exec.notifyOnExit`             | true    | Submit an ordinary session follow-up when a backgrounded exec exits.                                                |
 | `tools.exec.notifyOnExitEmptySuccess` | false   | Also enqueue completion events for successful backgrounded runs with no output. Defaults to true for chat channels. |
 
 ### Disable automatic completion turns
 
 Background exec completion notifications are enabled by default. They can run a
-model turn marked `[OpenClaw exec completion]` even when
-`agents.defaults.heartbeat.every` is `"0m"`: that setting disables recurring polls,
-not completion follow-ups.
+model turn marked `[OpenClaw exec completion]` independently of scheduled
+automations. Disabling or deleting a periodic check, or disabling the scheduler,
+does not disable completion follow-ups.
 
 To keep background commands running without automatic completion turns, set:
 

@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import {
+  claimSystemEventTurn,
   consumeSelectedSystemEventEntries,
   enqueueSystemEvent,
   enqueueSystemEventEntry,
@@ -35,6 +36,12 @@ it("refuses overflow without invalidating pending occurrences or removal receipt
   expect(peekSystemEventEntries(sessionKey)).toEqual(pending);
   expect(isSystemEventContextChanged(sessionKey, "cron:19")).toBe(false);
   expect(enqueueSystemEvent("Reminder 19", { sessionKey, contextKey: "cron:19" })).toBe(false);
+  let admittedDuringReplacement: boolean | undefined;
+  expect(
+    claimSystemEventTurn(sessionKey, pending[19]!, () => {
+      admittedDuringReplacement = enqueueSystemEvent("Reentrant notice", overflow);
+    }),
+  ).toBeDefined();
   expect(
     enqueueSystemEvent("Revised reminder", {
       sessionKey,
@@ -42,6 +49,7 @@ it("refuses overflow without invalidating pending occurrences or removal receipt
       replace: true,
     }),
   ).toBe(true);
+  expect(admittedDuringReplacement).toBe(false);
   expect(remove?.()).toBe(true);
   expect(remove?.()).toBe(false);
   expect(enqueueSystemEvent("Admitted after consumption", overflow)).toBe(true);

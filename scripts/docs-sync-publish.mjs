@@ -40,6 +40,10 @@ const SYNC_SUPPORT_FILES = [
     target: path.join(".openclaw-sync", file),
   })),
   {
+    source: new URL("../src/infra/node-compiler-policy.mjs", import.meta.url),
+    target: path.join("src", "infra", "node-compiler-policy.mjs"),
+  },
+  {
     source: path.join(ROOT, ".github", "codex", "prompts", "docs-mdx-repair.md"),
     target: path.join(".openclaw-sync", "docs-mdx-repair.md"),
   },

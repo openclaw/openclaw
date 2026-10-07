@@ -40,6 +40,7 @@ docker_e2e_build_or_reuse "$MUSL_IMAGE_NAME" docker-package-install-musl "$ROOT_
 # script roots so all three managers install the same candidate dependency bytes.
 for harness_path in \
   packages/normalization-core/src \
+  src/infra/node-compiler-policy.mjs \
   scripts; do
   mkdir -p "$PACKAGE_HARNESS_DIR/$(dirname "$harness_path")"
   cp -R "$ROOT_DIR/$harness_path" "$PACKAGE_HARNESS_DIR/$harness_path"

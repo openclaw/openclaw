@@ -302,41 +302,56 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         verifyContinuity,
         proveGroup,
       };
-      await proveGroup("heartbeat and Workshop monitors", async () => {
-        for (const [every, mode] of [
-          ["1h", "auto"],
-          ["0m", "off"],
-          ["2h", "auto"],
-        ] as const) {
-          await patch({
-            agents: { entries: { qa: { heartbeat: { every } } } },
-            skills: { workshop: { autonomous: { mode } } },
-          });
-          await waitForHotReloadFact("accepted system monitor config", async () => {
-            const { jobs } = await rpc<{
-              jobs: CronJob[];
-            }>("cron.list", { includeDisabled: true, includeDeliveryPreviews: false });
-            const heartbeat = jobs.find(
-              (job) => job.agentId === "qa" && job.payload.kind === "heartbeat",
-            );
-            const review = jobs.find((job) => skillCollectionReviewMonitorAgentId(job) === "qa");
-            return heartbeat?.enabled === (every !== "0m") &&
-              heartbeat.schedule.kind === "every" &&
-              review?.enabled === (mode === "auto") &&
-              (every === "0m" ||
-                heartbeat.schedule.everyMs === (every === "1h" ? 3_600_000 : 7_200_000))
-              ? true
-              : undefined;
-          });
-        }
-        await patch({
-          agents: { entries: { qa: { heartbeat: { every: "0m" } } } },
-          skills: { workshop: { autonomous: { mode: "off" } } },
+      await proveGroup("Automations and Workshop monitors", async () => {
+        const automation = await rpc<CronJob>("cron.add", {
+          agentId: "qa",
+          name: `hot-reload-automation-${randomUUID()}`,
+          enabled: true,
+          schedule: { kind: "every", everyMs: 3_600_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "Synthetic hot-reload automation" },
+          delivery: { mode: "none" },
         });
-        await verifyContinuity(
-          "heartbeat and Workshop monitors",
-          "Real config.patch writes changed persisted monitor cadence and enablement on the same Gateway boot",
-        );
+        try {
+          for (const [everyMs, enabled, mode] of [
+            [3_600_000, true, "auto"],
+            [3_600_000, false, "off"],
+            [7_200_000, true, "auto"],
+          ] as const) {
+            await rpc("cron.update", {
+              id: automation.id,
+              patch: { enabled, schedule: { kind: "every", everyMs } },
+            });
+            await patch({ skills: { workshop: { autonomous: { mode } } } });
+            await waitForHotReloadFact("ordinary job and Workshop inventory", async () => {
+              const { jobs } = await rpc<{ jobs: CronJob[] }>("cron.list", {
+                includeDisabled: true,
+                includeDeliveryPreviews: false,
+              });
+              const ownedJobs = jobs.filter((job) => job.name === automation.name);
+              const current = ownedJobs.find((job) => job.id === automation.id);
+              const review = jobs.find((job) => skillCollectionReviewMonitorAgentId(job) === "qa");
+              return ownedJobs.length === 1 &&
+                current?.agentId === "qa" &&
+                current.payload.kind === "agentTurn" &&
+                current.enabled === enabled &&
+                current.schedule.kind === "every" &&
+                current.schedule.everyMs === everyMs &&
+                current.delivery?.mode === "none" &&
+                review?.enabled === (mode === "auto")
+                ? true
+                : undefined;
+            });
+          }
+          await verifyContinuity(
+            "Automations and Workshop monitors",
+            "Ordinary cadence and enablement changed through cron.update; Workshop config reload preserved the automation identity on the same Gateway boot",
+          );
+        } finally {
+          await rpc("cron.remove", { id: automation.id });
+          await patch({ skills: { workshop: { autonomous: { mode: "off" } } } });
+        }
       });
       await proveHotReloadTerminalStartup(terminalProof);
 

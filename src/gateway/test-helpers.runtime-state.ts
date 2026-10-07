@@ -31,7 +31,7 @@ type AgentCommandFn = (...args: unknown[]) => Promise<AgentCommandResult | void>
 type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
 export type RunBtwSideQuestionFn = (...args: unknown[]) => Promise<unknown>;
 type DispatchInboundMessageFn = (
-  ...args: Parameters<typeof import("../auto-reply/dispatch.js").dispatchInboundMessage>
+  ...args: Parameters<typeof import("../auto-reply/dispatch.js").dispatchInboundMessageInternal>
 ) => Promise<unknown>;
 type CompactEmbeddedAgentSessionFn = (...args: unknown[]) => Promise<unknown>;
 

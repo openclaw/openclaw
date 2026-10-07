@@ -4,6 +4,7 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -55,6 +56,7 @@ for (const transport of ["dispatch", "HTTP"] as const) {
     `MCP ${transport} preserves archive final-effect authority: %s`,
     async (scenario) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const authProfileStore: AuthProfileStore = { version: 1, profiles: {} };
         const cfg: OpenClawConfig = {
           ...rolePolicyConfig(),
           agents: { entries: { main: { workspace: state.workspaceDir } } },
@@ -153,6 +155,7 @@ for (const transport of ["dispatch", "HTTP"] as const) {
                           const grant = mintMcpLoopbackClientGrant({
                             runtimeOwnerToken: runtime.ownerToken,
                             admittedRunContext,
+                            toolAuth: { store: authProfileStore },
                             context: {
                               sessionKey: requesterKey,
                               sessionId: "mcp-archive-requester-id",
@@ -216,6 +219,7 @@ for (const transport of ["dispatch", "HTTP"] as const) {
                                 const scoped = await new McpLoopbackToolCache().resolve({
                                   cfg,
                                   context: bound.context,
+                                  authProfileStore: bound.toolAuth?.store,
                                   admittedRunContext,
                                   grantToken: grant.token,
                                   isGrantCurrent: bound.isCurrent,

@@ -18,6 +18,12 @@ import {
 import { stampFixtureVersion } from "../update-first-hop-package-fixtures.mjs";
 import { assertNoIncognitoArtifacts } from "./incognito-artifacts.mjs";
 import {
+  capturePublishedHeartbeatProof,
+  seedPublishedDriverHeartbeat,
+  sha256,
+  verifyPublishedHeartbeatProof,
+} from "./published-driver-heartbeat.mjs";
+import {
   assertPublishedDriverReclaimed,
   inspectPublishedDriverSqlite,
   publishedDriverSqliteTargets,
@@ -26,8 +32,15 @@ import {
 } from "./published-driver-sqlite.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
-const [candidateArg, artifactsArg, driverTag = "latest"] = process.argv.slice(2);
+const [candidateArg, artifactsArg, driverTag = "latest", scenario = "normal"] =
+  process.argv.slice(2);
 const legacySqlite = process.env.OPENCLAW_PUBLISHED_DRIVER_LEGACY_SQLITE === "1";
+assert(["normal", "heartbeat"].includes(scenario), "Unknown published-driver scenario");
+const heartbeatRetirement = scenario === "heartbeat";
+assert(
+  !heartbeatRetirement || (driverTag === "2026.9.7" && !legacySqlite),
+  "Heartbeat proof requires only the audited 2026.9.7 cell",
+);
 assert.equal(process.platform, "linux", "The managed-service fixture requires Linux");
 assert(fs.existsSync("/.dockerenv"), "Run through the bare Docker E2E runner");
 const accountHome = os.userInfo().homedir;
@@ -88,7 +101,7 @@ function writeJson(name, value) {
   fs.writeFileSync(path.join(artifacts, `${name}.json`), `${JSON.stringify(value, null, 2)}\n`);
 }
 
-async function run(name, command, args, allowFailure = false) {
+async function run(name, command, args, allowFailure = false, commandEnv = env) {
   const started = Date.now();
   const diagnostic = name === "recorded-run" || name === "stop-service";
   const deadline = diagnostic ? cellDeadline - 5_000 : workDeadline;
@@ -108,7 +121,7 @@ async function run(name, command, args, allowFailure = false) {
       bin: command,
       args,
       cwd: root,
-      env,
+      env: commandEnv,
       stdio: ["ignore", out, err],
       signal: diagnostic ? undefined : commandSignal,
       timeoutMs,
@@ -225,7 +238,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       "npm latest must resolve to stable",
     );
     const driverSeed = "/tmp/published-driver-cache/driver.tar";
-    if (fs.existsSync(driverSeed)) {
+    if (!heartbeatRetirement && fs.existsSync(driverSeed)) {
       await run("restore-driver", "tar", ["-xf", driverSeed, "-C", prefix]);
     } else {
       await run("install-driver", "npm", [
@@ -248,13 +261,26 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       // Match the relabeled dist/build-info.json exactly; the installed bytes carry no source label.
       build = { ...build, version: driverVersion };
     }
-    const driverBuild = legacySqlite
-      ? readJson(path.join(packageRoot, "dist/build-info.json"))
-      : undefined;
+    const driverBuild =
+      legacySqlite || heartbeatRetirement
+        ? readJson(path.join(packageRoot, "dist/build-info.json"))
+        : undefined;
+    if (heartbeatRetirement) {
+      await run("published-driver-metadata", "npm", [
+        "view",
+        `openclaw@${driverVersion}`,
+        "version",
+        "dist",
+        "--json",
+      ]);
+      assert.equal(output("published-driver-metadata").version, driverVersion);
+    }
     writeJson("inputs", {
       driverVersion,
       candidate: build,
-      ...(legacySqlite
+      candidateSha256: sha256(candidatePackage),
+      ...(heartbeatRetirement ? { publishedDriver: output("published-driver-metadata") } : {}),
+      ...(legacySqlite || heartbeatRetirement
         ? {
             driverBuild,
             expectedSqliteStores: publishedDriverSqliteTargets(state),
@@ -284,6 +310,9 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     for (const agent of config.agents.list) {
       fs.mkdirSync(agent.workspace, { recursive: true });
     }
+    if (heartbeatRetirement) {
+      seedPublishedDriverHeartbeat(config);
+    }
     fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, `${JSON.stringify(config)}\n`);
     // 2026.9.7 Doctor keeps unreferenced OAuth sidecars; the update must carry them unchanged.
     const orphanSidecar = path.join(state, "credentials/auth-profiles", `${"e".repeat(32)}.json`);
@@ -307,12 +336,12 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       "scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh",
     ]);
     fixtureInstalled = true;
-    if (legacySqlite) {
+    if (legacySqlite || heartbeatRetirement) {
       seedPublishedDriverSessionSources(state);
     }
     // PRs start from the serving Gateway's state; main/release proofs also seed
     // Doctor's broader repair state before exercising the same managed update.
-    if (legacySqlite || process.env.GITHUB_EVENT_NAME !== "pull_request") {
+    if (legacySqlite || heartbeatRetirement || process.env.GITHUB_EVENT_NAME !== "pull_request") {
       await run("seed-state", "openclaw", ["doctor", "--fix", "--non-interactive"]);
     }
     if (legacySqlite) {
@@ -320,7 +349,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     }
     await run("install-service", "openclaw", ["gateway", "install", "--force", "--json"]);
     await ready("before-ready", port);
-    if (legacySqlite) {
+    if (legacySqlite || heartbeatRetirement) {
       await run("running-before", "openclaw", [
         "gateway",
         "probe",
@@ -405,6 +434,21 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       writeJson(name, assertNoIncognitoArtifacts([state, ...backups], sessions[1].marker));
     };
     inspectIncognito("incognito-artifacts-before");
+    const heartbeatContext = {
+      run,
+      output,
+      writeJson,
+      candidate,
+      driverVersion,
+      state,
+      runtime,
+      prefix,
+      env,
+      artifacts,
+    };
+    const heartbeatProof = heartbeatRetirement
+      ? await capturePublishedHeartbeatProof(heartbeatContext)
+      : undefined;
     let update;
     let updateFailure;
     const sqliteBefore = legacySqlite ? inspectPublishedDriverSqlite(state, 0) : undefined;
@@ -497,6 +541,11 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       }
     }
     inspectIncognito("incognito-artifacts-after");
+    if (heartbeatProof) {
+      assert.equal(typeof build.buildId, "string", "Candidate build identity is missing");
+      assert.equal(target.server.buildId, build.buildId);
+      await verifyPublishedHeartbeatProof({ ...heartbeatContext, build, update }, heartbeatProof);
+    }
     if (sqliteBefore) {
       assert.equal(typeof build.buildId, "string", "Candidate build identity is missing");
       assert.equal(target.server.buildId, build.buildId);

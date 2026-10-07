@@ -51,6 +51,10 @@ import {
   setCachedResult,
 } from "./recall-state.js";
 import {
+  expectSingleTranscriptArtifact,
+  writeTranscriptJsonl,
+} from "./transcript-fixture.test-support.js";
+import {
   readPartialAssistantText,
   resetActiveMemoryTranscriptForTests,
   setTimeoutPartialDataGraceMsForTests,
@@ -62,12 +66,6 @@ import { resetTriggerRecallRunsForTests } from "./trigger-recall.js";
 // Match only lone surrogates so valid supplementary-plane characters remain allowed.
 const UNPAIRED_SURROGATE_RE =
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
-
-async function expectSingleTranscriptArtifact(directory: string): Promise<string> {
-  const files = await fs.readdir(directory);
-  expect(files).toEqual([expect.stringMatching(/^active-memory-[a-z0-9]+-[a-f0-9]{8}\.jsonl$/)]);
-  return path.join(directory, expectDefined(files[0], "transcript artifact"));
-}
 
 const hoisted = vi.hoisted(() => {
   const sessionStore: Record<string, Record<string, unknown>> = {
@@ -412,14 +410,6 @@ describe("active-memory plugin", () => {
   };
   const expectLinesNotToContain = (lines: string[], text: string) => {
     expect(lines.join("\n")).not.toContain(text);
-  };
-  const writeTranscriptJsonl = async (sessionFile: string, records: unknown[]) => {
-    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-    await fs.writeFile(
-      sessionFile,
-      `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
-      "utf8",
-    );
   };
   let runtimeTranscriptCounter = 0;
   const writeRuntimeTranscript = async (
@@ -1950,6 +1940,7 @@ describe("active-memory plugin", () => {
         "exec",
         "read",
         "web_search",
+        "automations",
         " MEMORY_SEARCH ",
         " lcm_grep ",
         "",
@@ -4040,7 +4031,7 @@ describe("active-memory plugin", () => {
 
     const result = await runPromptBuild(
       { prompt: "what wings should i order?" },
-      { trigger: "heartbeat", sessionKey, messageProvider: "webchat" },
+      { trigger: "cron", sessionKey, messageProvider: "webchat" },
     );
 
     expect(result).toBeUndefined();

@@ -39,6 +39,10 @@ import {
 import { scheduleRestartSentinelWakeAfterReady } from "./server-startup-restart-sentinel.js";
 
 const mocks = vi.hoisted(() => ({
+  resolveSessionTarget:
+    vi.fn<
+      typeof import("./session-utils-store-worker.js").resolveGatewaySessionStoreTargetInWorker
+    >(),
   loadSessionEntry: vi.fn<typeof import("./session-utils.js").loadSessionEntry>(),
   sendDurableMessageBatchCore: vi.fn(async () => ({
     status: "sent" as const,
@@ -64,9 +68,25 @@ vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
   loadSessionEntry: mocks.loadSessionEntry,
 }));
-vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/heartbeat-wake.js")>()),
-  requestHeartbeat: vi.fn(),
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  resolveGatewaySessionStoreTargetInWorker: mocks.resolveSessionTarget,
+}));
+
+vi.mock("../auto-reply/reply/session-event-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auto-reply/reply/session-event-handoff.js")>()),
+  enqueueSessionEventForHost: vi.fn<
+    typeof import("../auto-reply/reply/session-event-handoff.js").enqueueSessionEventForHost
+  >((_text, options) => ({
+    id: "restart-state-event",
+    accepted: Promise.resolve({ ok: true }),
+    cancel: () => true,
+    settled: Promise.resolve().then(async () => {
+      options.assertCurrent?.();
+      await options.onAdopted?.();
+      return { status: "completed", executionStarted: true, delivered: false };
+    }),
+  })),
 }));
 vi.mock("../channels/message/runtime.js", () => ({
   sendDurableMessageBatchCore: mocks.sendDurableMessageBatchCore,
@@ -93,8 +113,10 @@ vi.mock("../auto-reply/reply/dispatch-from-config.runtime-loaders.js", () => ({
   loadGetReplyFromConfigRuntime: async () => ({ prewarmConfigDrivenReplyRuntime: async () => {} }),
 }));
 const { startGatewaySidecars } = await import("./server-startup-post-attach.js");
-const { loadSessionEntry: realLoadSessionEntry } =
-  await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
+const { resolveGatewaySessionStoreTargetInWorker: realResolveSessionTarget } =
+  await vi.importActual<typeof import("./session-utils-store-worker.js")>(
+    "./session-utils-store-worker.js",
+  );
 const sidecars: Array<{ stop: () => void | Promise<void> }> = [];
 const gatewayLocks: Array<{ release: () => Promise<void> }> = [];
 const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
@@ -132,6 +154,15 @@ beforeEach(() => {
   ]);
   setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "");
   vi.clearAllMocks();
+  mocks.resolveSessionTarget.mockImplementation(async ({ key, agentId, env, assertActive }) => {
+    assertActive?.();
+    const loaded = mocks.loadSessionEntry(key, { agentId, env });
+    return {
+      ...loaded,
+      store: loaded.entry ? { ...loaded.store, [loaded.canonicalKey]: loaded.entry } : loaded.store,
+    };
+  });
+  setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: ["matrix:!operator:example"] } });
   mocks.loadSessionEntry.mockReturnValue({
     cfg: { commands: { ownerAllowFrom: ["matrix:!operator:example"] } },
     agentId: "main",
@@ -520,7 +551,7 @@ it.each(["verifying", "terminal-before-marker", "replaced-handoff", "replaced-ki
     const context = captureDeliveryQueueStateContext();
     const cfg = { commands: { ownerAllowFrom: ["matrix:!operator:example"] } };
     setRuntimeConfigSnapshot(cfg);
-    mocks.loadSessionEntry.mockImplementation(realLoadSessionEntry);
+    mocks.resolveSessionTarget.mockImplementation(realResolveSessionTarget);
     const sessionKey = "agent:main:main";
     for (const [env, sessionId, to] of [
       [originalEnv, "original-session", "!operator:example"],
@@ -619,9 +650,8 @@ it.each(["verifying", "terminal-before-marker", "replaced-handoff", "replaced-ki
       undefined,
       expect.objectContaining({ stateDir: originalRoot }),
     );
-    expect(mocks.loadSessionEntry.mock.results.at(-1)?.value.entry.sessionId).toBe(
-      "original-session",
-    );
+    const selected = await mocks.resolveSessionTarget.mock.results.at(-1)?.value;
+    expect(selected?.store[selected.canonicalKey]?.sessionId).toBe("original-session");
     expect(await readRestartSentinel(originalEnv)).toBeNull();
     expect(await readRestartSentinel(unrelatedEnv)).toEqual(unrelated);
     expect(

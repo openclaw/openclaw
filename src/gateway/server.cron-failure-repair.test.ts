@@ -1,8 +1,8 @@
-// A failing owned job's repair runs as an ordinary owner-conversation turn, never a heartbeat.
+// A failing owned job's repair runs as an ordinary owner-conversation turn.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "vitest";
+import { beforeEach, expect, test } from "vitest";
 import type WebSocket from "ws";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { saveCronStore } from "../cron/store.js";
@@ -19,14 +19,66 @@ import {
   writeSessionStore,
 } from "./test-helpers.js";
 
-installGatewayTestHooks({ scope: "suite" });
+const group = "-100155462274";
+const ownerSessionKey = `agent:main:telegram:group:${group}:topic:42`;
+let dir: string;
+let prevSkipCron: string | undefined;
+let acquisition: ReturnType<typeof startServerWithClient> | undefined;
+let preparation: Promise<void> | undefined;
 
-const cleanups: Array<() => Promise<void> | void> = [];
-afterEach(async () => {
-  for (const cleanup of cleanups.splice(0).toReversed()) {
-    await cleanup();
-  }
+installGatewayTestHooks({
+  scope: "suite",
+  setup: async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-cron-repair-"));
+    prevSkipCron = process.env.OPENCLAW_SKIP_CRON;
+    process.env.OPENCLAW_SKIP_CRON = "0";
+    testState.cronStorePath = path.join(dir, "cron", "jobs.json");
+    await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
+    await saveCronStore(testState.cronStorePath, { version: 1, jobs: [] });
+    acquisition = startServerWithClient();
+    const { ws } = await acquisition;
+    await connectOk(ws);
+  },
+  cleanup: async () => {
+    await preparation?.catch(() => undefined);
+    if (acquisition) {
+      const { server, ws } = await acquisition;
+      ws.close();
+      await server.close();
+    }
+    if (prevSkipCron === undefined) {
+      delete process.env.OPENCLAW_SKIP_CRON;
+    } else {
+      process.env.OPENCLAW_SKIP_CRON = prevSkipCron;
+    }
+    await fs.rm(dir, { recursive: true, force: true });
+  },
 });
+
+beforeEach(
+  () =>
+    (preparation = (async () => {
+      // The suite hook resets runtime selectors while retaining the serving Gateway.
+      process.env.OPENCLAW_SKIP_CRON = "0";
+      testState.cronStorePath = path.join(dir, "cron", "jobs.json");
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      await writeSessionStore({
+        agentId: "main",
+        entries: {
+          [ownerSessionKey]: {
+            sessionId: "owner-topic-session",
+            updatedAt: Date.now(),
+            chatType: "group",
+            deliveryContext: { channel: "telegram", to: group, threadId: 42 },
+            lastChannel: "telegram",
+            lastTo: group,
+            lastThreadId: 42,
+          },
+        },
+      });
+      await prepareGatewayReplyRuntimeForTest({ force: true });
+    })()),
+);
 
 async function runAndWaitForFinished(ws: WebSocket, jobId: string) {
   const finished = onceMessage(
@@ -42,62 +94,11 @@ async function runAndWaitForFinished(ws: WebSocket, jobId: string) {
   await finished;
 }
 
-test("repairs an owned job with an ordinary owner-topic turn whatever the heartbeat config", async ({
-  signal,
-}) => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-cron-repair-"));
-  const prevSkipCron = process.env.OPENCLAW_SKIP_CRON;
-  process.env.OPENCLAW_SKIP_CRON = "0";
-  cleanups.push(async () => {
-    if (prevSkipCron === undefined) {
-      delete process.env.OPENCLAW_SKIP_CRON;
-    } else {
-      process.env.OPENCLAW_SKIP_CRON = prevSkipCron;
-    }
-    await fs.rm(dir, { recursive: true, force: true });
-  });
-  testState.cronStorePath = path.join(dir, "cron", "jobs.json");
-  await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
-  await saveCronStore(testState.cronStorePath, { version: 1, jobs: [] });
-  const group = "-100155462274";
-  const ownerSessionKey = `agent:main:telegram:group:${group}:topic:42`;
-  const hour = new Date().getUTCHours();
-  // Our production heartbeat shape: none of it may apply to the repair turn.
-  testState.agentConfig = {
-    heartbeat: {
-      every: "1h",
-      target: "none",
-      isolatedSession: true,
-      lightContext: true,
-      activeHours: {
-        start: `${String((hour + 2) % 24).padStart(2, "0")}:00`,
-        end: `${String((hour + 3) % 24).padStart(2, "0")}:00`,
-        timezone: "UTC",
-      },
-    },
-  };
-  testState.sessionStorePath = path.join(dir, "sessions.json");
-  await writeSessionStore({
-    agentId: "main",
-    entries: {
-      [ownerSessionKey]: {
-        sessionId: "owner-topic-session",
-        updatedAt: Date.now(),
-        chatType: "group",
-        deliveryContext: { channel: "telegram", to: group, threadId: 42 },
-        lastChannel: "telegram",
-        lastTo: group,
-        lastThreadId: 42,
-      },
-    },
-  });
-  const { server, ws } = await startServerWithClient();
-  cleanups.push(async () => {
-    ws.close();
-    await server.close();
-  });
-  await connectOk(ws);
-  await prepareGatewayReplyRuntimeForTest({ force: true });
+test("repairs an isolated job with an ordinary owner-topic turn", async ({ signal }) => {
+  if (!acquisition) {
+    throw new Error("Gateway repair fixture was not acquired");
+  }
+  const { ws } = await acquisition;
   const repairTurnStarted = createDeferred();
   agentCommandMock.mockImplementationOnce(async () => {
     repairTurnStarted.resolve();

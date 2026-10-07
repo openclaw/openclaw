@@ -21,7 +21,6 @@ import {
   claimPendingEmbeddedAgentQuestionAnswer,
   clearActiveEmbeddedRun,
   formatEmbeddedAgentQueueFailureSummary,
-  preemptAndDrainEmbeddedHeartbeatRun,
   queueEmbeddedAgentMessageWithOutcome as queueSync,
   queueEmbeddedAgentMessageWithOutcomeAsync as queueAsync,
   queueGuardedEmbeddedAgentMessageWithOutcomeAsync as queueGuarded,
@@ -243,31 +242,20 @@ describe("embedded-agent active-run steering", () => {
     },
   );
 
-  it("keeps handle and session waiters distinct through replacements", async () => {
+  it("keeps session waiters pending through replacements", async () => {
     vi.useFakeTimers();
-    const preempt = vi.fn(() => true),
-      visibleAbort = vi.fn();
-    const heartbeat = start({ isAbortable: () => false, preemptByVisibleTurn: preempt });
+    const visibleAbort = vi.fn();
+    const original = start({ isAbortable: () => false });
     const replacement = createEmbeddedRunHandle({ abort: visibleAbort });
     setActiveEmbeddedRun("visible", replacement);
-    const heartbeatWait = preemptAndDrainEmbeddedHeartbeatRun(sessionId, 1_000);
     const sessionWait = waitForEmbeddedAgentRunEnd(sessionId, null);
-    let heartbeatDrained = false,
-      sessionDrained = false;
-    void heartbeatWait.then(() => {
-      heartbeatDrained = true;
-    });
+    let sessionDrained = false;
     void sessionWait.then(() => {
       sessionDrained = true;
     });
-    await expect(preemptAndDrainEmbeddedHeartbeatRun("visible", 1_000)).resolves.toBe(
-      "not-heartbeat",
-    );
     setActiveEmbeddedRun(sessionId, replacement);
     await Promise.resolve();
-    expect(heartbeatDrained).toBe(false);
-    clearActiveEmbeddedRun(sessionId, heartbeat);
-    await expect(heartbeatWait).resolves.toBe("drained");
+    clearActiveEmbeddedRun(sessionId, original);
     expect(sessionDrained).toBe(false);
     clearActiveEmbeddedRun(sessionId, replacement);
     const successor = createEmbeddedRunHandle();
@@ -277,7 +265,6 @@ describe("embedded-agent active-run steering", () => {
     expect(sessionDrained).toBe(false);
     clearActiveEmbeddedRun(sessionId, successor);
     await expect(sessionWait).resolves.toBe(true);
-    expect(preempt).toHaveBeenCalledOnce();
     expect(visibleAbort).not.toHaveBeenCalled();
   });
 

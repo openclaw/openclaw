@@ -21,9 +21,9 @@ import {
   getPluginRecordRegistry,
   getPluginRegistryResourceOwner,
   isPluginRecordActive,
-  isPluginRegistryPreparing,
   revokePluginRecord,
 } from "./registry-lifecycle.js";
+import { createPluginSystemRuntime } from "./registry-runtime-system.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import {
@@ -294,25 +294,14 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           } satisfies PluginRuntime["config"];
         }
         if (prop === "system") {
-          const system: PluginRuntime["system"] = getRuntimeProperty();
-          const route = <T>(run: () => T): T => {
-            assertRuntimeCurrent();
-            if (isPluginRegistryPreparing(registry) && !isPluginRecordActive(registry, record)) {
-              throw new Error(
-                `Plugin "${pluginId}" cannot route system events during replacement preparation.`,
-              );
-            }
-            return runWithPluginScope(run);
-          };
-          return {
-            ...system,
-            enqueueSystemEvent: (...args) => route(() => system.enqueueSystemEvent(...args)),
-            requestHeartbeat: (...args) => route(() => system.requestHeartbeat(...args)),
-            requestHeartbeatNow: (...args) => route(() => system.requestHeartbeatNow(...args)),
-            runHeartbeatOnce: (...args) => route(() => system.runHeartbeatOnce(...args)),
-            runCommandWithTimeout: (...args) =>
-              runWithPluginScope(() => system.runCommandWithTimeout(...args)),
-          } satisfies PluginRuntime["system"];
+          return createPluginSystemRuntime({
+            state,
+            record,
+            system: getRuntimeProperty(),
+            currentRegistry,
+            assertRuntimeCurrent,
+            runWithPluginScope,
+          });
         }
         if (prop === "channel") {
           return resolveRecordChannelRuntime(record);

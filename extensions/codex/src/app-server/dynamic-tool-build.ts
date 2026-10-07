@@ -114,7 +114,6 @@ type DynamicToolBuildParams = {
   cronCreatorToolAllowlistCaptureRef?: OpenClawCodingToolsOptions["cronCreatorToolAllowlistCaptureRef"];
   resolveCronCreatorToolAuthority?: Parameters<typeof createCodexHostToolSurface>[3];
   cronCreatorAuthorityUnavailableReason?: OpenClawCodingToolsOptions["cronCreatorAuthorityUnavailableReason"];
-  forceHeartbeatTool?: boolean;
   ignoreDisableMessageTool?: boolean;
   ignoreRuntimePlan?: boolean;
   /** Host fact resolver; injectable only for focused plugin contract tests. */
@@ -288,8 +287,6 @@ export async function buildDynamicTools(
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     disableMessageTool: input.ignoreDisableMessageTool ? false : params.disableMessageTool,
     forceMessageTool: shouldForceMessageTool(messagePolicyParams),
-    enableHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
-    forceHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
     onYield: (message, acknowledgment) => {
       input.onYieldDetected(message, acknowledgment);
       input.onCodexAppServerEvent?.({
@@ -442,7 +439,7 @@ export async function buildDynamicTools(
   }
   const summary = toolBuildStages.snapshot();
   if (shouldWarnCodexDynamicToolBuildStageSummary(summary, input.profilerEnabled)) {
-    const phase = input.forceHeartbeatTool ? "registered-tools" : "runtime-tools";
+    const phase = input.ignoreRuntimePlan ? "registered-tools" : "runtime-tools";
     embeddedAgentLog.warn(
       `codex app-server dynamic tool build timings runId=${params.runId} sessionId=${params.sessionId} phase=${phase} totalMs=${summary.totalMs} stages=${formatStageTimings(summary.stages)}`,
       {
@@ -456,7 +453,6 @@ export async function buildDynamicTools(
         visionFilteredToolCount: visionFilteredTools.length,
         filteredToolCount: filteredTools.length,
         normalizedToolCount: exposedTools.length,
-        forceHeartbeatTool: input.forceHeartbeatTool === true,
         ignoreRuntimePlan: input.ignoreRuntimePlan === true,
         nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled === true,
       },

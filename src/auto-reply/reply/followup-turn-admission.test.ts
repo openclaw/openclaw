@@ -41,9 +41,24 @@ vi.mock("./queue.js", () => ({
   resolveFollowupAbortSignal: (run: FollowupRun) => run.abortSignal ?? run.queueAbortSignal,
 }));
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntry: (...args: unknown[]) => state.loadEntry(...args),
-}));
+// mock-isolation: Control session generations across admission awaits without opening real SQLite workers.
+vi.mock(
+  "../../config/sessions/session-entry-read-runtime.js",
+  (): Pick<
+    typeof import("../../config/sessions/session-entry-read-runtime.js"),
+    "withSessionEntryReadOnlyInWorker"
+  > => ({
+    withSessionEntryReadOnlyInWorker: async (scope, assertCurrent, consume) => {
+      assertCurrent();
+      const result = await consume(
+        { ok: true, value: state.loadEntry(scope) },
+        { kind: "native", assertCurrent },
+      );
+      assertCurrent();
+      return result;
+    },
+  }),
+);
 
 vi.mock("../../sessions/send-policy.js", () => ({
   resolveSendPolicy: (...args: unknown[]) => state.resolveSendPolicy(...args),

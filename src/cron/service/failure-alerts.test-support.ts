@@ -42,6 +42,7 @@ export function createAlertState(params: {
     storePath: params.storePath,
     nowMs: params.nowMs,
     sendCronFailureAlert: params.sendCronFailureAlert,
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: vi.fn(),
   });
 }

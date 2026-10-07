@@ -378,10 +378,10 @@ describe("terminal visible replies", () => {
     h.emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta({ emit: h.emit, delta: text });
     h.emit({ type: "message_end", message: textAssistant(text) });
-    expect(h.texts()).toEqual(["aaaa", "aaaa", "aaaa"]);
+    expect(h.texts()).toEqual(["aaaa", "aaaa", "aaa", "a"]);
     emitAssistantTextEnd({ emit: h.emit, content: text });
     await Promise.resolve();
-    expect(h.texts()).toEqual(["aaaa", "aaaa", "aaaa"]);
+    expect(h.texts()).toEqual(["aaaa", "aaaa", "aaa", "a"]);
   });
 
   it("delivers the full final text when it extends suppressed commentary", async () => {

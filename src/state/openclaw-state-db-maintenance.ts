@@ -136,7 +136,9 @@ const STATE_V5_ADDITIVE_TABLES = [
   "worker_transcript_commits",
   ...STATE_V6_ADDITIVE_TABLES,
 ] as const;
-const STATE_MIGRATION_VERSIONS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19] as const;
+const STATE_MIGRATION_VERSIONS = [
+  5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+] as const;
 type OpenClawStateMigrationVersion = (typeof STATE_MIGRATION_VERSIONS)[number];
 
 /** Require canonical shared-state ownership without requiring the latest schema. */

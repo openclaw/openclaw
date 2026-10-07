@@ -16,6 +16,7 @@ type RequiredReplyFixture = {
     followupRun: FollowupRun;
     run: () => Promise<ReplyPayload | ReplyPayload[] | undefined>;
   };
+  requireScheduledFollowupRunner: () => (run: FollowupRun) => Promise<void>;
   state: {
     runEmbeddedAgentMock: Pick<Mock, "mockImplementationOnce" | "mockResolvedValueOnce">;
   };
@@ -23,6 +24,7 @@ type RequiredReplyFixture = {
 
 export function registerRequiredReplyCompletionCases({
   createMinimalRun,
+  requireScheduledFollowupRunner,
   state,
 }: RequiredReplyFixture): void {
   it("suppresses narrated silent-turn partials, block replies, and final payloads", async () => {
@@ -38,7 +40,7 @@ export function registerRequiredReplyCompletionCases({
     });
 
     const { run } = createMinimalRun({
-      opts: { isHeartbeat: false, onPartialReply, onBlockReply, onReasoningStream },
+      opts: { onPartialReply, onBlockReply, onReasoningStream },
       blockStreamingEnabled: true,
       runOverrides: { silentExpected: true, terminalReplyExpectation: "optional" },
     });
@@ -65,7 +67,7 @@ export function registerRequiredReplyCompletionCases({
       });
 
       const { run } = createMinimalRun({
-        opts: { isHeartbeat: false, onPartialReply, onBlockReply, onReasoningStream },
+        opts: { onPartialReply, onBlockReply, onReasoningStream },
         blockStreamingEnabled: true,
         runOverrides: { silentExpected: true, terminalReplyExpectation },
       });
@@ -82,6 +84,57 @@ export function registerRequiredReplyCompletionCases({
       }
     },
   );
+
+  it("keeps a queued user's execution settings and required reply under an event-owned drain", async () => {
+    state.runEmbeddedAgentMock
+      .mockImplementationOnce(async (params: AgentRunParams) => {
+        expect(params.bootstrapContextMode).toBe("lightweight");
+        expect(params.cleanupBundleMcpOnRunEnd).toBe(true);
+        return { payloads: [], meta: {} };
+      })
+      .mockImplementationOnce(async (params: AgentRunParams) => {
+        expect(params.bootstrapContextMode).toBeUndefined();
+        expect(params.cleanupBundleMcpOnRunEnd).toBeUndefined();
+        expect(params.sourceReplyDeliveryMode).toBeUndefined();
+        expect(params.terminalReplyExpectation).toBe("required");
+        return {
+          payloads: [{ text: "NO_REPLY" }],
+          meta: { finalAssistantRawText: "NO_REPLY", finalAssistantVisibleText: "" },
+        };
+      });
+    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
+    const internalEventExecution = { onStarted: vi.fn(), onTerminal: vi.fn() };
+    const event = createMinimalRun({
+      opts: {
+        internalEventExecution,
+        onBlockReply,
+        bootstrapContextMode: "lightweight",
+        cleanupBundleMcpOnRunEnd: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+      runOverrides: {
+        internalEventExecution,
+        inputProvenance: { kind: "internal_system", sourceTool: "exec" },
+        messageProvider: "event",
+        sourceReplyDeliveryMode: "message_tool_only",
+        terminalReplyExpectation: "optional",
+      },
+    });
+    await expect(event.run()).resolves.toBeUndefined();
+    expect(onBlockReply).not.toHaveBeenCalled();
+
+    const queued = createMinimalRun({
+      currentInboundEventKind: "user_request",
+      runOverrides: { terminalReplyExpectation: "required" },
+    });
+    await requireScheduledFollowupRunner()(queued.followupRun);
+
+    expect(onBlockReply).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ isError: true, text: expect.any(String) }),
+    );
+    expect(onBlockReply.mock.calls[0]?.[0].text).not.toContain("NO_REPLY");
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+  });
 
   it.each([
     { label: "empty output", payloads: [] },

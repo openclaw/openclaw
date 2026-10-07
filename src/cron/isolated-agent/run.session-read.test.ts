@@ -3,7 +3,9 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearBootstrapSnapshot, getOrLoadBootstrapFiles } from "../../agents/bootstrap-cache.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
+import * as lifecycleProjection from "../../config/sessions/session-lifecycle-projection.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -45,6 +47,102 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("cron session preparation", () => {
+  it("preserves a stale session when its Cron occurrence retires at reset commit", async () => {
+    resetRunCronIsolatedAgentTurnHarness();
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-reset-refused-"));
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: process.env });
+    const sessionKey = "agent:main:persistent-cron";
+    const target = { agentId: "main", storePath: database.path, sessionKey };
+    const staleAt = Date.now() - 86_400_000;
+    const sessionId = "stale-cron-session";
+    await actualAccessor.replaceSessionEntry(target, {
+      sessionId,
+      lifecycleRevision: "original-revision",
+      updatedAt: staleAt,
+      sessionStartedAt: staleAt,
+      lastInteractionAt: staleAt,
+    });
+    const transcript = { ...target, sessionId };
+    actualAccessor.replaceTranscriptEventsSync(transcript, [
+      { type: "session", id: sessionId, version: 3, timestamp: new Date(staleAt).toISOString() },
+      {
+        type: "message",
+        id: "original-message",
+        parentId: null,
+        message: { role: "user", content: "Original context", timestamp: staleAt },
+      },
+    ]);
+    const originalEntry = actualAccessor.loadSessionEntry(target);
+    const originalTranscript = JSON.stringify(actualAccessor.loadTranscriptEventsSync(transcript));
+    resolveCronSessionMock.mockImplementation(actualSession.prepareCronSession);
+    loadSessionEntryMock.mockImplementation(actualSession.loadCronSessionEntryLatest);
+    patchSessionEntryMock.mockImplementation(actualAccessor.patchSessionEntryCore);
+
+    const refusal = new Error("Cron occurrence retired before reset commit");
+    let occurrenceActive = true;
+    let resetCommitActive = false;
+    let retiredAtCommit = false;
+    const commit = lifecycleProjection.commitSessionLifecycleProjectionInWorker;
+    const reset = vi
+      .spyOn(lifecycleProjection, "commitSessionLifecycleProjectionInWorker")
+      .mockImplementation((params) => {
+        resetCommitActive = params.input.projected.upsertedEntries.some(
+          (entry) => entry.sessionKey === sessionKey && entry.resetBoundary !== undefined,
+        );
+        return commit(params).finally(() => {
+          resetCommitActive = false;
+        });
+      });
+    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+    const admission = vi
+      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((callback, attachment) =>
+        createAdmission((request, grant) => {
+          if (resetCommitActive && request.stage === "commit") {
+            occurrenceActive = false;
+            retiredAtCommit = true;
+          }
+          callback(request, grant);
+        }, attachment),
+      );
+    let prepared: Awaited<ReturnType<typeof prepareCronRunContext>> | undefined;
+    try {
+      prepared = await prepareCronRunContext({
+        input: makeIsolatedAgentParamsFixture({
+          agentId: "main",
+          cfg: { session: { store: database.path, reset: { mode: "idle", idleMinutes: 1 } } },
+          sessionKey,
+          job: makeIsolatedAgentJobFixture({
+            sessionTarget: `session:${sessionKey}`,
+            delivery: { mode: "none" },
+          }),
+          assertCurrent: () => {
+            if (!occurrenceActive) {
+              throw refusal;
+            }
+          },
+        }),
+        isFastTestEnv: true,
+        onLifecycleInterrupt: () => {},
+      });
+      expect(retiredAtCommit).toBe(true);
+      expect(actualAccessor.loadSessionEntry({ ...target, readConsistency: "latest" })).toEqual(
+        originalEntry,
+      );
+      expect(JSON.stringify(actualAccessor.loadTranscriptEventsSync(transcript))).toBe(
+        originalTranscript,
+      );
+    } finally {
+      admission.mockRestore();
+      reset.mockRestore();
+      if (prepared?.ok) {
+        await using _ = prepared.context.preparedModelRuntimeLease;
+        prepared.context.sessionWorkAdmission.release();
+        await prepared.context.workspaceLease?.release();
+      }
+    }
+  });
+
   it("persists scheduled session rows through the worker without caller SQL", async () => {
     resetRunCronIsolatedAgentTurnHarness();
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-session-write-"));

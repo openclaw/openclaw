@@ -48,9 +48,9 @@ export function configureLiveGatewayBenchmark(
       workspace: path.join(root, "workspace"),
       maxConcurrent: concurrency,
       model: { primary: LIVE_GATEWAY_MODEL },
+      modelPolicy: { allow: [LIVE_GATEWAY_MODEL] },
       utilityModel: LIVE_GATEWAY_MODEL,
       thinkingDefault: "off",
-      heartbeat: { every: "0m" },
       models: {
         [LIVE_GATEWAY_MODEL]: {
           agentRuntime: { id: "openclaw" },
@@ -143,12 +143,12 @@ export function createLiveGatewayEvidence(agentIds: string[], turnsPerSession: n
               utilityModel?: string;
               maxConcurrent?: number;
               thinkingDefault?: string;
-              heartbeat?: { every?: string };
               models?: Record<string, { params?: { maxTokens?: number } }>;
             };
             entries?: Record<string, { model?: unknown }>;
           };
           plugins?: { entries?: Record<string, { config?: { dreaming?: { enabled?: boolean } } }> };
+          cron?: { enabled?: boolean };
           tools?: { deny?: string[] };
         };
       }>("config.get", {});
@@ -161,7 +161,7 @@ export function createLiveGatewayEvidence(agentIds: string[], turnsPerSession: n
           defaults.utilityModel === LIVE_GATEWAY_MODEL &&
           defaults.maxConcurrent === agentIds.length &&
           defaults.thinkingDefault === "off" &&
-          defaults.heartbeat?.every === "0m" &&
+          config.cron?.enabled === false &&
           defaults.models?.[LIVE_GATEWAY_MODEL]?.params?.maxTokens === 128 &&
           config.tools?.deny?.length === 1 &&
           config.tools.deny[0] === "*" &&
@@ -173,10 +173,6 @@ export function createLiveGatewayEvidence(agentIds: string[], turnsPerSession: n
           ),
         "Live model, roster, token cap, or fixture configuration mismatch",
       );
-      const heartbeat = await rpc<{ ok: boolean; enabled: boolean }>("set-heartbeats", {
-        enabled: false,
-      });
-      need(heartbeat.ok && !heartbeat.enabled, "Live heartbeat disable failed");
     },
     register(runId: string, sessionKey: string, index: number): string {
       const agentId = sessionKey.split(":")[1] ?? "";

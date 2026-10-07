@@ -16,9 +16,11 @@ import {
   WORKER_BUNDLE_MANIFEST_VERSION,
 } from "../../shared/worker-bundle-hash.js";
 import {
+  BOOTSTRAP_OUTPUT_TAG,
   commandFailure,
   isSuccess,
   matchesCommandFailure,
+  parseTaggedOutput,
   runSshScript,
   type WorkerBootstrapCommandRunner,
 } from "./bootstrap-command.js";
@@ -43,7 +45,6 @@ const LOCK_MAX_AGE_SECONDS = 60 * 60;
 const NODE_MISSING_MARKER = "OPENCLAW_WORKER_NODE_MISSING";
 const NODE_UNSUPPORTED_MARKER = "OPENCLAW_WORKER_NODE_UNSUPPORTED";
 const NPM_MISSING_MARKER = "OPENCLAW_WORKER_NPM_MISSING";
-const BOOTSTRAP_OUTPUT_TAG = "OPENCLAW_WORKER_BOOTSTRAP_V1";
 const BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const NPM_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
 
@@ -551,21 +552,6 @@ async function cleanupRemoteUpload(params: {
       port,
     });
   }).catch(() => undefined);
-}
-
-function parseTaggedOutput(stdout: string): { action: string; payload: string } | undefined {
-  const prefix = `${BOOTSTRAP_OUTPUT_TAG}\t`;
-  const record = stdout.split(/\r?\n/u).findLast((line) => line.startsWith(prefix));
-  if (!record) {
-    return undefined;
-  }
-  const actionEnd = record.indexOf("\t", prefix.length);
-  if (actionEnd === -1) {
-    return undefined;
-  }
-  const action = record.slice(prefix.length, actionEnd);
-  const payload = record.slice(actionEnd + 1).trim();
-  return action && payload ? { action, payload } : undefined;
 }
 
 function parsePreflight(

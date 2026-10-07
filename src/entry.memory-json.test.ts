@@ -345,12 +345,12 @@ describe("registered memory_search through Gateway /tools/invoke (infra)", () =>
             signal,
             verifyCleanup,
             config: {
+              cron: { enabled: false },
               agents: {
                 ownership: "explicit",
                 defaults: {
                   workspace,
                   skipBootstrap: true,
-                  heartbeat: { every: "0m" },
                   model: { primary: "fixture/unused" },
                 },
                 entries: { main: {} },

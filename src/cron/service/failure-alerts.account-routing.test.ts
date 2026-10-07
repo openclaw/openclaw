@@ -143,7 +143,7 @@ describe("cron failure alert account routing", () => {
       cronConfig: { failureAlert: globalAlert },
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      enqueueSessionEvent: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     const job = makeCronJob({
@@ -177,7 +177,7 @@ describe("cron failure alert account routing", () => {
       cronConfig: { failureAlert: { enabled: true, after: 1 } },
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      enqueueSessionEvent: vi.fn(),
       sendCronFailureAlert,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
@@ -246,7 +246,7 @@ describe("cron failure alert account routing", () => {
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       nowMs: () => endedAt,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      enqueueSessionEvent: vi.fn(),
       sendCronFailureAlert,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
@@ -287,7 +287,7 @@ describe("cron failure alert account routing", () => {
       cronConfig: { failureAlert: { enabled: true, after: 1 } },
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      enqueueSessionEvent: vi.fn(),
       sendCronFailureAlert,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });

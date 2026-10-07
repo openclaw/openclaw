@@ -14,10 +14,12 @@ export async function waitUntilGatewayAgentAvailable(agentId: string): Promise<v
         config?: OpenClawConfig;
         configRevisionHash?: unknown;
         appliedConfigHash?: unknown;
+        reloadSettled?: unknown;
       };
       // Matching tokens can describe a cached roster from before this agent was added.
       if (
         Object.hasOwn(response.config?.agents?.entries ?? {}, agentId) &&
+        response.reloadSettled === true &&
         typeof response.configRevisionHash === "string" &&
         response.configRevisionHash === response.appliedConfigHash
       ) {

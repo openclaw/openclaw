@@ -97,7 +97,10 @@ export function registerControlUiOwnerBootstrapSuite(): void {
         throw new Error("expected control ui owner device token");
       }
       expect(recoveryScope).toMatch(/^[A-Za-z0-9_-]+$/u);
-      expect((await rpcReq(wsBootstrap, "set-heartbeats", { enabled: false })).ok).toBe(true);
+      const adminMutation = await rpcReq(wsBootstrap, "system-event", {
+        text: "Control UI owner admin scope proof",
+      });
+      expect(adminMutation.ok, JSON.stringify(adminMutation)).toBe(true);
       wsBootstrap.close();
 
       const iconResponse = await fetch(
@@ -214,7 +217,9 @@ export function registerControlUiOwnerBootstrapSuite(): void {
       expect(auth?.scopes).toEqual([...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES]);
       expect(auth?.scopes).not.toContain("operator.admin");
       expect(auth?.scopes).not.toContain("operator.pairing");
-      const adminMutation = await rpcReq(wsBootstrap, "set-heartbeats", { enabled: false });
+      const adminMutation = await rpcReq(wsBootstrap, "system-event", {
+        text: "Control UI owner admin scope proof",
+      });
       expect(adminMutation.ok).toBe(false);
       expect(adminMutation.error?.message ?? "").toContain("missing scope");
       wsBootstrap.close();
@@ -288,7 +293,10 @@ export function registerControlUiOwnerBootstrapSuite(): void {
       }
       expect(upgradedToken).not.toBe(previousToken);
       expect(auth?.scopes).toEqual([...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES]);
-      expect((await rpcReq(wsUpgrade, "set-heartbeats", { enabled: false })).ok).toBe(true);
+      const adminMutation = await rpcReq(wsUpgrade, "system-event", {
+        text: "Control UI owner admin scope proof",
+      });
+      expect(adminMutation.ok, JSON.stringify(adminMutation)).toBe(true);
       wsUpgrade.close();
 
       expect(

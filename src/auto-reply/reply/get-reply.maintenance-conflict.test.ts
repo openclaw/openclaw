@@ -16,7 +16,7 @@ import * as backoff from "../../infra/backoff.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
-import { getReplyFromConfig } from "./get-reply.js";
+import { getReplyFromConfigInternal } from "./get-reply.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 
 vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
@@ -94,7 +94,7 @@ it.each([2, Infinity])(
         const sleep = vi.spyOn(backoff, "sleepWithAbort").mockResolvedValue();
         try {
           const body = "Take over the unfinished work too";
-          const dispatch = getReplyFromConfig(
+          const dispatch = getReplyFromConfigInternal(
             finalizeInboundContext({
               Body: body,
               RawBody: body,

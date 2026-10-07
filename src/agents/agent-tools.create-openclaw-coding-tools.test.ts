@@ -49,7 +49,6 @@ import {
   createSandboxFsBridgeFromResolver,
 } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { attachToolAllowlistIntersection } from "./tool-policy.js";
-import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
@@ -721,14 +720,6 @@ describe("createOpenClawCodingTools", () => {
     expect(extractToolText(next)).toBe(original.slice(continuation?.cursor));
   });
 
-  const pluginOnlyConstructionPlan = {
-    includeBaseCodingTools: false,
-    includeShellTools: false,
-    includeChannelTools: false,
-    includeOpenClawTools: false,
-    includePluginTools: true,
-  };
-
   it("includes plugin tools declared for the active built-in profile", () => {
     const resolvePluginToolsSpy = vi
       .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
@@ -773,74 +764,6 @@ describe("createOpenClawCodingTools", () => {
       expect(tools.map((tool) => tool.name)).toEqual(["profiled_plugin_tool"]);
       expect(resolvePluginToolsSpy.mock.calls[0]?.[0].options?.pluginToolAllowlist).toContain(
         "profiled_plugin_tool",
-      );
-    } finally {
-      resolvePluginToolsSpy.mockRestore();
-    }
-  });
-
-  it("wraps plugin-only tools with scheduled creator authority and live routing context", async () => {
-    let observedIdentity: ReturnType<typeof getGatewayToolCallerIdentity>;
-    const resolvePluginToolsSpy = vi
-      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
-      .mockReturnValue([
-        {
-          name: "file_fetch",
-          label: "File fetch",
-          description: "Fetch a file",
-          parameters: { type: "object", properties: {} },
-          execute: async () => {
-            observedIdentity = getGatewayToolCallerIdentity();
-            return { content: [{ type: "text" as const, text: "ok" }], details: {} };
-          },
-        },
-      ]);
-
-    try {
-      const tools = createOpenClawCodingTools({
-        config: {
-          ...testConfig,
-          channels: {
-            discord: {
-              accounts: {
-                creator: {},
-              },
-            },
-          },
-        },
-        agentId: "main",
-        sessionKey: "agent:main:telegram:direct:alice",
-        messageProvider: "discord-voice",
-        messageChannel: "discord",
-        messageTo: "channel:123",
-        agentAccountId: "work",
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:main:discord:group:ops",
-          ownerAccountId: "creator",
-          ownerOrigin: { kind: "external", channel: "discord" },
-        },
-        messageThreadId: "42",
-        includeCoreTools: false,
-        runtimeToolAllowlist: ["file_fetch"],
-        inheritRuntimeToolAllowlist: true,
-        toolConstructionPlan: pluginOnlyConstructionPlan,
-      });
-
-      await requireTool(tools, "file_fetch").execute?.("tool-call-1", {});
-      expect(observedIdentity).toEqual({
-        agentId: "main",
-        assertToolAllowed: expect.any(Function),
-        sessionKey: "agent:main:telegram:direct:alice",
-        turnSourceChannel: "discord",
-        turnSourceTo: "channel:123",
-        turnSourceAccountId: "creator",
-        turnSourceThreadId: "42",
-      });
-      expect(() => observedIdentity?.assertToolAllowed?.("file_fetch")).not.toThrow();
-      expect(() => observedIdentity?.assertToolAllowed?.("exec")).toThrow(
-        "exec is not allowed by this conversation's tool policy",
       );
     } finally {
       resolvePluginToolsSpy.mockRestore();
@@ -1082,18 +1005,6 @@ describe("createOpenClawCodingTools", () => {
       } as OpenClawConfig,
     });
     expect(toolNameList(profileStageAlsoAllow)).toContain("browser");
-  });
-
-  it("enables heartbeat response when visible replies are message-tool-only", () => {
-    const tools = createOpenClawCodingTools({
-      config: {
-        messages: { visibleReplies: "message_tool" },
-        tools: { profile: "coding" },
-      } as OpenClawConfig,
-      trigger: "heartbeat",
-    });
-
-    expect(toolNameList(tools)).toContain("heartbeat_respond");
   });
 
   it("can keep message available when a cron route needs it under a provider coding profile", () => {

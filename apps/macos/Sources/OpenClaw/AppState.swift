@@ -257,14 +257,6 @@ final class AppState {
     var earBoostActive: Bool = false
     var blinkTick: Int = 0
     var sendCelebrationTick: Int = 0
-    var heartbeatsEnabled: Bool {
-        didSet {
-            self.ifNotPreview {
-                AppDefaults.standard.set(self.heartbeatsEnabled, forKey: heartbeatsEnabledKey)
-                Task { _ = await GatewayConnection.shared.setHeartbeatsEnabled(self.heartbeatsEnabled) }
-            }
-        }
-    }
 
     var connectionMode: ConnectionMode {
         didSet {
@@ -481,7 +473,6 @@ final class AppState {
         self.talkEnabled = AppDefaults.standard.bool(forKey: talkEnabledKey)
         self.talkPhaseSoundsEnabled = Self.loadEnabledPreference(key: talkPhaseSoundsEnabledKey)
         self.talkShiftToStopEnabled = Self.loadEnabledPreference(key: talkShiftToStopEnabledKey)
-        self.heartbeatsEnabled = Self.loadEnabledPreference(key: heartbeatsEnabledKey)
         if let storedOverride = AppDefaults.standard.string(forKey: iconOverrideKey),
            let selection = IconOverrideSelection(rawValue: storedOverride)
         {

@@ -2,6 +2,7 @@ import { validateNodeEventParams } from "../../../packages/gateway-protocol/src/
 import {
   captureNodePairingGeneration,
   isNodePairingGenerationCurrent,
+  isPairedDeviceNodeBindingCurrent,
 } from "../../infra/device-pairing-node-state.js";
 import { recordPairedNodeHostStats } from "../../infra/device-pairing-node.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -25,6 +26,24 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
       const nodeSession = context.nodeRegistry.get(nodeId);
       const eventConnId = client?.connId;
       const eventPairingGeneration = nodeSession?.pairingGeneration;
+      const eventPairingIdentity = nodeSession?.pairingIdentity;
+      const assertSessionEventCurrent = () => {
+        const current = eventPairingGeneration
+          ? context.nodeRegistry.getForPairingGeneration(nodeId, eventPairingGeneration)
+          : undefined;
+        if (
+          !current ||
+          current !== nodeSession ||
+          current.connId !== eventConnId ||
+          !eventPairingIdentity ||
+          !isPairedDeviceNodeBindingCurrent(nodeId, {
+            identity: eventPairingIdentity,
+            generation: eventPairingGeneration,
+          })
+        ) {
+          throw new Error("Node pairing changed during session event admission");
+        }
+      };
       const isEventConnectionCurrent = async (): Promise<boolean> => {
         if (!eventConnId || !eventPairingGeneration) {
           return false;
@@ -133,6 +152,7 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
             : undefined,
           presenceAllowed,
           isConnectionCurrent: isEventConnectionCurrent,
+          assertSessionEventCurrent,
           assertApnsRegistrationCurrent: () => {
             const current = apnsGeneration
               ? context.nodeRegistry.getForPairingGeneration(nodeId, apnsGeneration.key)

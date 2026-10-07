@@ -293,7 +293,7 @@ describe("scripts/test-live-shard", () => {
     "native-live-src-gateway-core",
     "native-live-src-infra",
     "native-live-test",
-    "src/infra/heartbeat-runner.live.test.ts",
+    "src/commands/doctor-config-preflight.legacy-driver.live.test.ts",
     "test/e2e/qa-lab/runtime/gateway-node-mcp.live.test.ts",
   ])("prepares the built gateway runtime before %s starts Vitest", (target) => {
     const files = target.endsWith(".live.test.ts")

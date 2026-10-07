@@ -121,6 +121,8 @@ export function registerSteeringReceiptCases({
         signal,
       );
       expect(onDeferred).toHaveBeenCalledOnce();
+      expect(getExistingFollowupQueue("main")?.items).toEqual([followupRun]);
+      expect(followupRun.steerPending).toBeUndefined();
       expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
       expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
       expect(onAdopted).not.toHaveBeenCalled();

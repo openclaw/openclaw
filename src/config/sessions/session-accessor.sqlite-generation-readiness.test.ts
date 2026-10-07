@@ -14,13 +14,98 @@ import { bindMemoryProvider } from "../../plugins/memory-provider-adapter.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import {
+  commitReplySessionInitialization,
+  loadReplySessionInitializationSnapshot,
+} from "./session-accessor.reset.js";
+import {
+  loadSessionEntryReadOnly,
+  replaceSessionEntrySync,
+} from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { prepareSessionGenerationFacts } from "./session-delivery-generation.js";
 
 const { getReplacementPublicationDelivery } =
   await import("./session-accessor.sqlite-replacement-publication.test-support.js");
 const delivery = getReplacementPublicationDelivery();
+
+it.for(["owned", "foreign", "reset", "superseded", "cancelled"] as const)(
+  "adopts only its bound ordinary creation and revokes later replacement: %s",
+  async (kind) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const scope = {
+        agentId: "main",
+        storePath: database.path,
+        sessionKey: "agent:main:generation-birth",
+      };
+      const generation = await prepareSessionGenerationFacts({
+        ...scope,
+        sessionId: null,
+        lifecycleRevision: null,
+      });
+      try {
+        let intercepted = false;
+        if (kind === "superseded" || kind === "cancelled") {
+          delivery.afterResult = () => {
+            intercepted = true;
+            if (kind === "cancelled") {
+              generation.release();
+            } else {
+              replaceSessionEntrySync(scope, {
+                sessionId: "created",
+                lifecycleRevision: "birth",
+                updatedAt: 2,
+                permissionMode: "read-only",
+              });
+            }
+          };
+        }
+        const snapshot = await loadReplySessionInitializationSnapshot(scope);
+        const created = await commitReplySessionInitialization({
+          ...scope,
+          activeSessionKey: scope.sessionKey,
+          expectedRevision: snapshot.revision,
+          sessionEntry: { sessionId: "created", lifecycleRevision: "birth", updatedAt: 1 },
+          ...(kind === "foreign" ? {} : { bindCreation: generation.bindCreation }),
+        });
+        expect(created.ok).toBe(true);
+        if (kind === "superseded" || kind === "cancelled") {
+          expect(intercepted).toBe(true);
+          expect(loadSessionEntryReadOnly(scope)).toMatchObject({
+            sessionId: "created",
+            lifecycleRevision: "birth",
+            ...(kind === "superseded" ? { permissionMode: "read-only" } : {}),
+          });
+        }
+        if (kind === "reset") {
+          generation.assertCurrent();
+          replaceSessionEntrySync(scope, {
+            sessionId: "replacement",
+            lifecycleRevision: "reset",
+            updatedAt: 2,
+          });
+        }
+        if (kind === "owned") {
+          generation.assertCurrent();
+          expect(generation.isCreationAdopted()).toBe(true);
+        } else {
+          expect(generation.assertCurrent).toThrow(
+            expect.objectContaining({
+              code:
+                kind === "cancelled"
+                  ? "SESSION_DELIVERY_GENERATION_UNAVAILABLE"
+                  : "SESSION_DELIVERY_GENERATION_REVOKED",
+            }),
+          );
+        }
+      } finally {
+        delivery.afterResult = undefined;
+        generation.release();
+      }
+    });
+  },
+);
 
 it.for(["metadata", "replacement"] as const)(
   "joins admitted %s publication before checking the retained session generation",

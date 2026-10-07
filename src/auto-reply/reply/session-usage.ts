@@ -52,7 +52,6 @@ export async function persistSessionUsageUpdate(params: {
   contextTokensSource?: SessionEntry["contextTokensSource"];
   contextBudgetStatus?: SessionEntry["contextBudgetStatus"];
   promptTokens?: number;
-  isHeartbeat?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
   /** Presence overrides usage inference; undefined tokens explicitly mean current context is unknown. */
   currentContextSnapshot?: { tokens: number | undefined };
@@ -109,7 +108,6 @@ export async function persistSessionUsageUpdate(params: {
           }
           const updatedAt = Date.now();
           const preserveSessionModelState =
-            params.isHeartbeat === true ||
             params.preserveRuntimeModel === true ||
             params.preserveUserFacingSessionModelState === true;
           const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;

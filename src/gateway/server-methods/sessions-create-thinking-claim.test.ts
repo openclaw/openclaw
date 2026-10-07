@@ -7,7 +7,7 @@ import {
 } from "../../../ui/src/lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../../ui/src/test-helpers/gateway-client.ts";
 import * as embeddedAgent from "../../agents/embedded-agent.js";
-import { getReplyFromConfig } from "../../auto-reply/reply/get-reply.js";
+import { getReplyFromConfigInternal } from "../../auto-reply/reply/get-reply.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -101,7 +101,7 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
       replyEntered.resolve(undefined);
       await releaseReply.promise;
       try {
-        const result = await getReplyFromConfig(...args);
+        const result = await getReplyFromConfigInternal(...args);
         order.push("directive-complete");
         return result;
       } catch (error) {

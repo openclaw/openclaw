@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
+import { resolveForwardedNodeCompilerArgs } from "./node-compiler-policy.mjs";
 
 /** Resolve an explicit installed root, source sibling, or stable packaged worker path. */
 export function resolveRuntimeWorkerUrl(params: {
@@ -61,10 +62,17 @@ export function runtimeNeedsTypeScriptLoader(modulePath: string, execPath = proc
 
 export function resolveRuntimeWorkerArgv(url: URL, execPath = process.execPath): string[] {
   const entry = fileURLToPath(url);
+  if (isBunTargetRuntime(execPath)) {
+    return ["--no-install", entry];
+  }
   // Resolve the preload here: Node resolves bare imports from the child cwd.
-  return runtimeNeedsTypeScriptLoader(entry, execPath)
-    ? ["--import", import.meta.resolve("tsx"), entry]
-    : [...resolveRuntimeArgs(execPath), entry];
+  return [
+    ...resolveForwardedNodeCompilerArgs(),
+    ...(runtimeNeedsTypeScriptLoader(entry, execPath)
+      ? ["--import", import.meta.resolve("tsx")]
+      : []),
+    entry,
+  ];
 }
 
 /** Select the source Worker preload without feeding Node's TypeScript loader to Bun. */

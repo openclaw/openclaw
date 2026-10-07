@@ -19,8 +19,6 @@ import {
 } from "../infra/delivery-queue-state-context.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { RESTART_CONTINUATION_CONTEXT_PREFIX } from "../infra/heartbeat-events-filter.js";
-import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import {
   clearRestartSentinelIfRevision,
   formatRestartSentinelMessage,
@@ -42,8 +40,6 @@ import {
   SessionDeliverySafeRetryError,
   type QueuedSessionDelivery,
 } from "../infra/session-delivery-queue.records.js";
-import { withSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";
 import { recordUpdateRunVerification } from "../infra/update-run-ledger.js";
 import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
@@ -69,13 +65,15 @@ import {
   deliverRestartSentinelNotice,
   enqueueRestartSentinelNotice,
 } from "./server-restart-sentinel-notice.js";
+import { deliverRestartSentinelEvent } from "./server-restart-sentinel-session-event.js";
 import {
   readRestartSentinelStartupSnapshot,
   type PendingUpdateSentinelIdentity,
 } from "./server-restart-sentinel-snapshot.js";
 import { finalizeRestartUpdateRun } from "./server-restart-update-run.js";
 import { recordLatestUpdateRestartSentinel } from "./server-update-sentinel.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
 import {
   recordUpdateRunNoticeSkipped,
@@ -97,37 +95,6 @@ export const settleQueuedSessionDelivery: SettleSessionDeliveryFn = async (
   await removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id, queueContext);
 };
 
-function enqueueRestartSentinelWake(
-  entry: QueuedSessionDelivery,
-  sessionKey: string,
-  agentId: string,
-) {
-  const message = entry.kind === "systemEvent" ? entry.text : entry.message;
-  const deliveryContext =
-    entry.kind === "agentTurn" && entry.route
-      ? {
-          channel: entry.route.channel,
-          to: entry.route.to,
-          ...(entry.route.accountId ? { accountId: entry.route.accountId } : {}),
-          ...(entry.route.threadId ? { threadId: entry.route.threadId } : {}),
-        }
-      : entry.deliveryContext;
-  const eventOptions = {
-    sessionKey,
-    // Recovered work keeps its ordinary turn budget when delivered by heartbeat.
-    contextKey: `${RESTART_CONTINUATION_CONTEXT_PREFIX}${entry.id}`,
-    ...(deliveryContext ? { deliveryContext } : {}),
-  };
-  enqueueSystemEvent(message, withSystemEventOwner(eventOptions, agentId));
-  requestHeartbeat({
-    source: "restart-sentinel",
-    intent: "immediate",
-    reason: "wake",
-    agentId,
-    sessionKey,
-  });
-}
-
 export async function deliverQueuedSessionDelivery(params: {
   deps: CliDeps;
   entry: QueuedSessionDelivery;
@@ -146,16 +113,25 @@ export async function deliverQueuedSessionDelivery(params: {
     });
     return;
   }
-  const { cfg, agentId, entry, storePath, canonicalKey } = loadSessionEntry(
-    queuedEntry.sessionKey,
-    {
+  const cfg = getRuntimeConfig();
+  const { agentId, store, storeKeys, storePath, canonicalKey } =
+    await resolveGatewaySessionStoreTargetInWorker({
+      cfg,
+      key: queuedEntry.sessionKey,
       env: params.queueContext.environment,
+      assertActive: () => params.queueContext.admission.assertCurrent(),
       ...(queuedEntry.kind === "systemEvent" ? { agentId: queuedEntry.agentId } : {}),
-    },
-  );
+    });
+  params.queueContext.admission.assertCurrent();
+  const entry = findCanonicalStoreMatch(store, storeKeys)?.entry;
   if (queuedEntry.kind === "systemEvent") {
     const systemEventAgentId = queuedEntry.agentId ?? agentId;
-    enqueueRestartSentinelWake(queuedEntry, canonicalKey, systemEventAgentId);
+    await deliverRestartSentinelEvent(
+      queuedEntry,
+      canonicalKey,
+      systemEventAgentId,
+      params.queueContext,
+    );
     return;
   }
 
@@ -171,7 +147,7 @@ export async function deliverQueuedSessionDelivery(params: {
   }
 
   if (sessionChanged || !queuedEntry.route) {
-    enqueueRestartSentinelWake(queuedEntry, canonicalKey, agentId);
+    await deliverRestartSentinelEvent(queuedEntry, canonicalKey, agentId, params.queueContext);
     return;
   }
 
@@ -486,16 +462,28 @@ async function loadRestartSentinelStartupTask(params: {
     }
 
     const continuation = sessionKey ? payload.continuation : undefined;
-    const session = loadSessionEntry(routedSessionKey, { env });
-    const { cfg, entry, canonicalKey } = session;
+    const cfg = getRuntimeConfig();
+    const sessionTarget = await resolveGatewaySessionStoreTargetInWorker({
+      cfg,
+      key: routedSessionKey,
+      agentId: wakeAgentId,
+      env,
+      assertActive: () => queueContext.admission.assertCurrent(),
+    });
+    queueContext.admission.assertCurrent();
+    const { canonicalKey } = sessionTarget;
+    const entry = findCanonicalStoreMatch(sessionTarget.store, sessionTarget.storeKeys)?.entry;
+    const session = { ...sessionTarget, entry };
     const target = await resolveUpdateRunNoticeTarget({
       cfg,
       sessionKey,
       session,
       env,
+      assertActive: () => queueContext.admission.assertCurrent(),
       explicitDeliveryContext: sessionKey ? payload.deliveryContext : undefined,
       threadId: sessionKey ? payload.threadId : undefined,
     });
+    queueContext.admission.assertCurrent();
     if (target.kind === "none") {
       recordUpdateRunNoticeSkipped(updateRunId, target.reason, env);
       // A diagnostic wake would bypass the same owner-only notice decision.
@@ -544,8 +532,7 @@ async function loadRestartSentinelStartupTask(params: {
     const routedAgentTurnContinuation =
       continuation?.kind === "agentTurn" && continuationRoute !== undefined;
     // Inline transcript publication also broadcasts to Control UI. An update
-    // outcome needs no model wake unless continuation work remains; heartbeats
-    // can silently suppress the notice or contradict the recorded outcome.
+    // outcome needs no model turn unless continuation work remains.
     const updateComplete =
       (internalNoticeWritten || (updateRunId && route)) &&
       payload.kind === "update" &&
@@ -613,35 +600,45 @@ async function loadRestartSentinelStartupTask(params: {
       });
     }
 
-    if (wakeQueueId) {
-      await drainRestartContinuationQueue({
-        deps: params.deps,
-        entryId: wakeQueueId,
-        log,
-        queueContext,
-      });
-    }
-
-    if (route && noticeQueueId && noticeQueueCreated) {
-      const delivered = await deliverRestartSentinelNotice(
-        {
-          deps: params.deps,
-          cfg,
-          sessionKey: canonicalKey,
-          summary,
-          message: noticeMessage,
-          ...route,
-          queueId: noticeQueueId,
-        },
-        noticeContext,
-      );
-      if (delivered && updateRunId) {
-        recordUpdateRunVerification(updateRunId, { noticeDelivered: true }, { env });
+    // The direct notice must not wait for a model turn, but both durable owners
+    // must settle before startup recovery releases its admission.
+    const deliveries = await Promise.allSettled([
+      wakeQueueId
+        ? drainRestartContinuationQueue({
+            deps: params.deps,
+            entryId: wakeQueueId,
+            log,
+            queueContext,
+          })
+        : undefined,
+      (async () => {
+        if (route && noticeQueueId && noticeQueueCreated) {
+          const delivered = await deliverRestartSentinelNotice(
+            {
+              deps: params.deps,
+              cfg,
+              sessionKey: canonicalKey,
+              summary,
+              message: noticeMessage,
+              ...route,
+              queueId: noticeQueueId,
+            },
+            noticeContext,
+          );
+          if (delivered && updateRunId) {
+            recordUpdateRunVerification(updateRunId, { noticeDelivered: true }, { env });
+          }
+        } else if (noticeQueueId && !noticeQueueCreated) {
+          log.info(`${summary}: durable restart notice already owned`, {
+            sessionKey: canonicalKey,
+          });
+        }
+      })(),
+    ]);
+    for (const delivery of deliveries) {
+      if (delivery.status === "rejected") {
+        throw delivery.reason;
       }
-    } else if (noticeQueueId && !noticeQueueCreated) {
-      log.info(`${summary}: durable restart notice already owned`, {
-        sessionKey: canonicalKey,
-      });
     }
 
     if (continuationQueueId) {

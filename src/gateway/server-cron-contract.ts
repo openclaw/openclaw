@@ -2,12 +2,15 @@
 // types do not pull scheduler implementation dependencies into their graph.
 import type { CronJobScratchState, CronJobScratchWriteResult } from "../cron/scratch-contract.js";
 import type { CronServiceContract } from "../cron/service-contract.js";
+import type { CronRemoveOptions } from "../cron/service/remove-options.js";
 
 export type GatewayCronServiceContract = CronServiceContract & {
+  remove(id: string, opts?: CronRemoveOptions): ReturnType<CronServiceContract["remove"]>;
   /** Cancel exact current definitions under the serving scheduler's operation lock. */
   quiesceJobs(
     jobs: readonly { id: string; revision: string }[],
     commitGuard: () => void,
+    withCurrent?: (cancel: () => void) => Promise<void>,
   ): Promise<void>;
   /** Remove an owned declarative job family from obsolete SQLite store partitions. */
   removeStaleJobFamily(
@@ -36,7 +39,7 @@ export type GatewayCronServiceContract = CronServiceContract & {
   resumeScheduling(): void;
   /** Scheduler-owned work not represented by active cron run markers. */
   getSuspensionBlockerCount?(): number;
-  /** Materialize lazy cron dependencies before a synchronous operator wake. */
+  /** Materialize lazy cron dependencies before operator wake admission. */
   prepareWake?(): Promise<void>;
   /** Stop cron and await scheduler-owned child process teardown. */
   stopAndDrain?(): Promise<void>;

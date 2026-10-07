@@ -47,6 +47,24 @@ async function startGatewayServerWithSdkHost(
     const transport = await createGatewayHttpTransport({
       ...gatewayKernel.createHttpTransportOptions(),
       updateCanary: opts.updateCanary,
+      deferHookWake: async (request) => {
+        const owner = gatewayKernel.kernel.getReloadState().cronState;
+        const defer = owner.deferHookWake;
+        if (!defer) {
+          throw new Error("Scheduled Hook wake admission is unavailable; restart the Gateway");
+        }
+        const commitGuard = () => {
+          request.commitGuard();
+          if (
+            gatewayKernel.lifecycle.closePreludeStarted ||
+            gatewayKernel.kernel.getReloadState().cronState !== owner
+          ) {
+            throw new Error("Scheduled Hook wake owner changed; retry the request");
+          }
+        };
+        commitGuard();
+        return await defer({ ...request, commitGuard });
+      },
       ...(!gatewayKernel.minimalTestGateway && gatewayKernel.tailscaleMode !== "off"
         ? {
             prepareManagedTailscaleIngress: async (backend) => {

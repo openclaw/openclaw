@@ -220,14 +220,15 @@ describe("formatQaGatewayProcessBoundaryStartupFailure", () => {
 });
 
 describe("waitForGatewayReady", () => {
-  it("does not accept a healthy listener as readiness", async () => {
+  it.each(["startupz", "readyz"])("requires successful %s", async (pending) => {
     vi.useFakeTimers();
     const baseUrl = "http://127.0.0.1:43124";
     const release = vi.fn(async () => {});
-    let ready = false;
+    const completed = vi.fn();
+    let available = false;
 
     fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
-      const status = url.endsWith("/healthz") || ready ? 200 : 503;
+      const status = url.endsWith(`/${pending}`) && !available ? 503 : 200;
       return { response: { ok: status === 200, status }, release };
     });
 
@@ -237,29 +238,27 @@ describe("waitForGatewayReady", () => {
         logs: () => "startup logs",
         child: { exitCode: null, signalCode: null },
         timeoutMs: 1_000,
-      });
+      }).then(completed);
 
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url)).toEqual([
-        `${baseUrl}/readyz`,
-      ]);
+      expect(completed).not.toHaveBeenCalled();
       const healthRequest = requireSsrFetchCall();
       expect(healthRequest.init?.method).toBe("HEAD");
       expect(healthRequest.init?.headers).toEqual({ connection: "close" });
       expect(healthRequest.policy).toEqual({ allowPrivateNetwork: true });
       expect(healthRequest.auditContext).toBe("qa-lab-gateway-child-health");
-      expect(release).toHaveBeenCalledTimes(1);
+      expect(release).toHaveBeenCalledTimes(pending === "startupz" ? 1 : 2);
 
-      ready = true;
+      available = true;
       await vi.advanceTimersByTimeAsync(250);
 
       await expect(readiness).resolves.toBeUndefined();
-      expect(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url)).toEqual([
-        `${baseUrl}/readyz`,
+      expect(fetchWithSsrFGuardMock.mock.calls.slice(-2).map(([request]) => request.url)).toEqual([
+        `${baseUrl}/startupz`,
         `${baseUrl}/readyz`,
       ]);
-      expect(release).toHaveBeenCalledTimes(2);
+      expect(release).toHaveBeenCalledTimes(pending === "startupz" ? 3 : 4);
     } finally {
       vi.useRealTimers();
     }

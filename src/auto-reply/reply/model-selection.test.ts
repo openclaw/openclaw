@@ -541,10 +541,10 @@ describe("session override precedence and persistence", () => {
     expect(state).toMatchObject({ provider: "anthropic", model: "claude-opus-4-6" });
   });
 
-  it.each([undefined, "gpt-4o", "stale-again"])(
-    "adopts concurrent repair state (automatic origin: %s)",
-    async (automaticOrigin) => {
-      const automatic = automaticOrigin !== undefined;
+  it.each(["user", "auto"] as const)(
+    "adopts a concurrent %s selection when repairing a disallowed pin",
+    async (source) => {
+      const automatic = source === "auto";
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -557,23 +557,17 @@ describe("session override precedence and persistence", () => {
       const entry = makeEntry({
         providerOverride: "openai",
         modelOverride: "gpt-4o-mini",
-        ...(automatic
-          ? {
-              modelOverrideSource: "auto",
-              modelOverrideFallbackOriginProvider: "openai",
-              modelOverrideFallbackOriginModel: "stale-primary",
-            }
-          : {}),
+        modelOverrideSource: "user",
       });
       const concurrentEntry = makeEntry({
         updatedAt: entry.updatedAt + 1,
         providerOverride: "openai",
         modelOverride: "gpt-5.5",
-        modelOverrideSource: automatic ? "auto" : "user",
+        modelOverrideSource: source,
         ...(automatic
           ? {
               modelOverrideFallbackOriginProvider: "openai",
-              modelOverrideFallbackOriginModel: automaticOrigin,
+              modelOverrideFallbackOriginModel: "gpt-4o",
             }
           : {}),
       });
@@ -586,12 +580,11 @@ describe("session override precedence and persistence", () => {
         sessionStore,
         storePath: "sessions.json",
         model: "gpt-4o-mini",
-        isHeartbeat: automatic,
       });
       expect(state.modelPolicy.allows({ provider: "openai", model: "gpt-5.5" })).toBe(!automatic);
       expect(state).toMatchObject({
         provider: "openai",
-        model: automaticOrigin === "stale-again" ? "gpt-4o" : "gpt-5.5",
+        model: "gpt-5.5",
         resetModelOverride: false,
       });
       expect(sessionPersistenceMocks.persistReplySessionEntry).toHaveBeenCalledOnce();
@@ -609,7 +602,7 @@ describe("session override precedence and persistence", () => {
       expect(entry).toMatchObject({
         providerOverride: "openai",
         modelOverride: "gpt-5.5",
-        modelOverrideSource: automatic ? "auto" : "user",
+        modelOverrideSource: source,
       });
       expect(sessionStore[sessionKey]).toEqual(entry);
     },
@@ -701,7 +694,6 @@ describe("automatic fallback provenance", () => {
         modelOverrideFallbackOriginModel: "gpt-4o",
       },
       options: {
-        isHeartbeat: true,
         primaryProvider: "openai",
         primaryModel: "gpt-4o",
         provider: "openrouter",
@@ -709,13 +701,7 @@ describe("automatic fallback provenance", () => {
       },
     },
     {
-      name: "clears a heartbeat pin without origin metadata",
-      reset: true,
-      usePrimary: true,
-      options: { isHeartbeat: true, provider: "openrouter", model: "minimax/minimax-m2.7" },
-    },
-    {
-      name: "recovers a legacy heartbeat origin from its notice",
+      name: "recovers a legacy fallback origin from its notice",
       entry: {
         fallbackNotice: {
           kind: "active",
@@ -723,7 +709,7 @@ describe("automatic fallback provenance", () => {
           activeModel: "openrouter/minimax/minimax-m2.7",
         },
       },
-      options: { isHeartbeat: true, provider: "openrouter", model: "minimax/minimax-m2.7" },
+      options: { provider: "openrouter", model: "minimax/minimax-m2.7" },
     },
   ])("$name", async (fixture) => {
     const entry = makeEntry({
@@ -1013,26 +999,4 @@ describe("refused pins use the primary instead of catalog order", () => {
       }
     },
   );
-
-  it("uses the primary for a stale caller without a session store", async () => {
-    const entry = makeEntry({
-      providerOverride: "provider-c",
-      modelOverride: "model-c1",
-      modelOverrideSource: "auto",
-      modelOverrideRouteResolution: "resolved",
-      modelOverrideFallbackOriginProvider: "provider-c",
-      modelOverrideFallbackOriginModel: "model-c2",
-    });
-    const state = await createInitialState(cfg, "provider-b", "model-b1", {
-      sessionEntry: entry,
-      provider: "provider-c",
-      model: "model-c1",
-      isHeartbeat: true,
-    });
-    expect(state).toMatchObject({
-      resetModelOverride: false,
-      provider: "provider-b",
-      model: "model-b1",
-    });
-  });
 });

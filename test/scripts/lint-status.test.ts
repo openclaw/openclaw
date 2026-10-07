@@ -73,6 +73,7 @@ export function waitForFile(file) {
   }
   for (const file of [
     "scripts/lib/process-memory.mts",
+    "src/infra/node-compiler-policy.mjs",
     "packages/normalization-core/src/mountinfo-path.ts",
   ]) {
     write(file, fs.readFileSync(path.resolve(file), "utf8"));

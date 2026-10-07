@@ -94,7 +94,7 @@ const settings: QueueSettings = { mode: "followup", debounceMs: 0 };
 
 function createStalledRun(
   options: {
-    isHeartbeat?: boolean;
+    inputProvenance?: FollowupRun["run"]["inputProvenance"];
     operatorAuthority?: AdmittedRunOperatorAuthority;
     queuedFollowupReplyDisposition?: FollowupRun["queuedFollowupReplyDisposition"];
     originatingChannel?: string;
@@ -112,6 +112,7 @@ function createStalledRun(
   followupRun.operatorAuthority = options.operatorAuthority;
   followupRun.queuedFollowupReplyDisposition = options.queuedFollowupReplyDisposition;
   followupRun.run.skillLibraryAuthoring = options.skillLibraryAuthoring;
+  followupRun.run.inputProvenance = options.inputProvenance;
   followupRun.images = [{ type: "image", data: "aW1n", mimeType: "image/png" }];
   followupRun.transcriptPrompt = "what is good at the hotel restaurant?";
   const transcriptTarget = createSqliteTranscriptTarget({
@@ -142,7 +143,6 @@ function createStalledRun(
     replyOperation: operation,
     opts: {
       [REPLY_OPERATION_RUN_STATE]: runState,
-      ...(options.isHeartbeat ? { isHeartbeat: true } : {}),
     },
     typing: createMockTypingController(),
     sessionCtx: {
@@ -493,8 +493,8 @@ describe("runReplyAgent stalled turn continuation", () => {
     expect(drainedRuns).not.toHaveBeenCalled();
   });
 
-  it("does not arm a continuation for heartbeat turns", async () => {
-    const stalled = createStalledRun({ isHeartbeat: true });
+  it("does not arm a continuation for internal events with optional replies", async () => {
+    const stalled = createStalledRun({ inputProvenance: { kind: "internal_system" } });
     await stallBeforeOutput(stalled);
 
     expect(stalled.runState.continueStalledTurn).toBeUndefined();

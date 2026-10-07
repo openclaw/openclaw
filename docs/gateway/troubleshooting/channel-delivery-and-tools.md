@@ -1,10 +1,10 @@
 ---
-summary: "Channels that connect but do not deliver, cron and heartbeat delivery, and node or browser tool failures"
+summary: "Channels that connect but do not deliver, automation delivery, and node or browser tool failures"
 title: "Channel delivery and tools"
 sidebarTitle: "Channel delivery and tools"
 read_when:
   - A channel is connected but messages are not flowing
-  - Cron or heartbeat deliveries do not arrive
+  - Automation deliveries do not arrive
   - A paired node fails on tool calls, or the browser tool fails
 ---
 
@@ -39,15 +39,19 @@ Related:
 - [Telegram](/channels/telegram)
 - [WhatsApp](/channels/whatsapp)
 
-## Cron and heartbeat delivery
+<a id="cron-and-heartbeat-delivery" />
 
-If cron or heartbeat did not run or did not deliver, verify scheduler state first, then delivery target.
+## Automation delivery
+
+If a scheduled job did not run or deliver, verify scheduler state first, then
+the job's execution policy and delivery target. Former heartbeat monitors are
+ordinary jobs after [Doctor migration](/gateway/heartbeat).
 
 ```bash
 openclaw automations status
-openclaw automations list
+openclaw automations list --all
+openclaw automations show <jobId>
 openclaw automations runs <jobId> --limit 20
-openclaw system heartbeat last
 openclaw logs --follow
 ```
 
@@ -55,25 +59,25 @@ Look for:
 
 - Cron enabled and next wake present.
 - Job run history status (`ok`, `skipped`, `error`).
-- Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `cron-in-progress`, `alerts-disabled`, `empty-heartbeat-file`).
+- The job's active-hours window, idle-only policy, scratch, and resolved delivery diagnostics.
 
 <AccordionGroup>
   <Accordion title="Common signatures">
     - `cron: scheduler disabled; jobs will not run automatically` → cron disabled.
     - `cron: timer tick failed` → scheduler tick failed; check file/log/runtime errors.
-    - `heartbeat skipped` with `reason=quiet-hours` → outside active hours window.
-    - `heartbeat skipped` with `reason=empty-heartbeat-file` → heartbeat monitor scratch only contains blank, comment, header, fence, or empty-checklist scaffolding, so OpenClaw skips the model call.
-    - `heartbeat skipped` with `reason=no-route` → the default `owner` target has no concrete owner in `commands.ownerAllowFrom` or channel `allowFrom`, the owner cannot resolve to a DM, or no channel is configured. Explicit `last` also needs a session conversation route.
-    - `heartbeat: unknown accountId` → invalid account id for heartbeat delivery target.
-    - `session event wake failed; no wake retry scheduled` → a wake ended with a failure. The error log records its source, intent, agent/session target, wake reason, and error. Inspect that session and fix the reported cause before requesting another wake; the wake scheduler does not replay failed turns, which may already have performed work. Outbound messages already held by the durable delivery queue keep their separate recovery policy.
-    - `heartbeat skipped` with `reason=dm-blocked` → heartbeat target resolved to a DM-style destination while `agents.defaults.heartbeat.directPolicy` (or per-agent override) is set to `block`.
+    - A skipped run outside its active-hours window → check the job's timezone and start/end times. Manual force-runs still respect the window.
+    - `Automation deferred while its agent is busy` → the job's `idleOnly` policy gave foreground work priority.
+    - `Automation scratch is explicitly empty` → `skipIfScratchEmpty` is enabled and scratch contains only blank, comment, heading, fence, or empty-checklist scaffolding. Missing scratch is different and does not suppress a run.
+    - `Owner delivery unavailable` → owner targeting could not resolve a permitted DM. Check `commands.ownerAllowFrom`, channel `allowFrom`, the selected account, and `delivery.directPolicy`. A `block` policy prevents owner DM delivery.
+    - A missing last-conversation route → select a concrete channel target or configure owner delivery instead.
+    - `session event execution failed` → the error log identifies the source, agent/session target, occurrence, and error. Inspect the session and fix the reported cause before replaying work that may already have performed actions. The event owner controls retries; messages held by the durable outbound queue keep their separate recovery policy.
 
   </Accordion>
 </AccordionGroup>
 
 Related:
 
-- [Heartbeat](/gateway/heartbeat)
+- [Heartbeat migration](/gateway/heartbeat)
 - [Scheduled tasks](/automation/cron-jobs)
 - [Scheduled tasks: troubleshooting](/automation/cron-jobs#troubleshooting)
 

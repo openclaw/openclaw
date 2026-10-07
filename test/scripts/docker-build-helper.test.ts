@@ -5162,6 +5162,7 @@ export async function sha256File(file) {
       "scripts/lib/docker-e2e-watchdog.mjs",
       "scripts/lib/docker-e2e-resource-diagnostics.sh",
       PREPUBLISH_PLUGIN_REGISTRY_HELPER_PATH,
+      "src/infra/node-compiler-policy.mjs",
     ]) {
       mkdirSync(dirname(join(root, file)), { recursive: true });
       copyFileSync(file, join(root, file));

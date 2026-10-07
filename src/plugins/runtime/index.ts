@@ -21,6 +21,7 @@ import {
   resolveNativePluginModelAuth,
   resolveNativePluginModelConfig,
 } from "../loader-runtime-load.js";
+import { bindGatewayContextResolver, getGatewayContextResolver } from "./gateway-request-scope.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { createRuntimeBase } from "./runtime-base.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -327,6 +328,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     const value = runtime[key];
     Object.defineProperty(runtime, key, { get: () => value });
   }
+  bindGatewayContextResolver(runtime, getGatewayContextResolver(runtime.subagent));
   return runtime;
 };
 

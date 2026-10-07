@@ -1,13 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
+import * as agentEvents from "../../infra/agent-events.js";
 import * as providerFailover from "../../plugins/provider-failover.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 
 const { emitAgentEvent } = vi.hoisted(() => ({ emitAgentEvent: vi.fn() }));
 
-vi.mock("../../infra/agent-events.js", () => ({ emitAgentEvent }));
+beforeEach(() => {
+  vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(emitAgentEvent);
+});
+afterEach(() => vi.restoreAllMocks());
 
 describe("createAgentLifecycleTerminalBackstop", () => {
   it.each([false, true])("keeps only the selected attempt receipt (retry=%s)", (retry) => {

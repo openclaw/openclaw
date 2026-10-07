@@ -79,9 +79,6 @@ async function main() {
       },
       agents: {
         defaults: {
-          heartbeat: {
-            every: "0m",
-          },
           skipBootstrap: true,
           contextInjection: "never",
           skills: [],

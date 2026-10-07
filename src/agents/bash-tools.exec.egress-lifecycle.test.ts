@@ -2,7 +2,15 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { createServer, type Server } from "node:https";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { dispatchInboundMessageWithRoutedChannelDispatcher } from "../auto-reply/dispatch.js";
+import type { SessionEventReceipt } from "../auto-reply/reply/session-event-contract.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { drainSystemEvents, peekSystemEventEntries } from "../infra/system-events.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -15,6 +23,8 @@ import {
   clearSecretEgressProxy,
   publishSecretEgressProxy,
 } from "../secrets/egress-proxy/registry.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -32,6 +42,47 @@ import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
+
+const notificationReceipts = vi.hoisted(() => new Set<SessionEventReceipt>());
+vi.mock("../auto-reply/reply/session-event-handoff.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../auto-reply/reply/session-event-handoff.js")>();
+  return {
+    ...actual,
+    enqueueSessionEventForHost: (...args: Parameters<typeof actual.enqueueSessionEventForHost>) => {
+      const receipt = actual.enqueueSessionEventForHost(...args);
+      notificationReceipts.add(receipt);
+      return receipt;
+    },
+  };
+});
+// mock-isolation: Defer model turns while real process, egress, and notification owners settle.
+vi.mock("../auto-reply/dispatch.js", () => ({
+  dispatchInboundMessageWithRoutedChannelDispatcher: vi.fn<
+    typeof dispatchInboundMessageWithRoutedChannelDispatcher
+  >(async ({ replyOptions }) => {
+    const lifecycle = expectDefined(replyOptions?.turnAdoptionLifecycle, "notification lifecycle");
+    const signal = expectDefined(lifecycle.abortSignal, "notification cancellation");
+    lifecycle.onDeferred?.();
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      try {
+        lifecycle.onAbandoned?.();
+      } finally {
+        lifecycle.onSettled?.();
+      }
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    }
+    return {
+      deferredToActiveRun: "followup",
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    };
+  }),
+}));
 
 const sessionKey = "agent:probe:egress-lifecycle";
 let state: OpenClawTestState;
@@ -203,6 +254,13 @@ beforeEach(async () => {
     secrets: { egressProxy: { enabled: true } },
   };
   await state.writeConfig(config);
+  setRuntimeConfigSnapshot(config);
+  openOpenClawStateDatabase({ env: state.env });
+  writeSessionEntry(openOpenClawAgentDatabase({ agentId: "probe", env: state.env }), sessionKey, {
+    sessionId: "egress-origin",
+    lifecycleRevision: "original-revision",
+    updatedAt: Date.now(),
+  });
   // A real child retains its inherited proxy environment across caller turns.
   await state.writeText(
     "watcher.cjs",
@@ -246,6 +304,11 @@ afterEach(async () => {
     deleteSession(sessionId);
   }
   drainSystemEvents(sessionKey);
+  for (const receipt of notificationReceipts) {
+    receipt.cancel();
+  }
+  await Promise.all([...notificationReceipts].map((receipt) => receipt.settled));
+  notificationReceipts.clear();
   if (proxy) {
     clearSecretEgressProxy(proxy);
     await proxy.stop();
@@ -256,6 +319,7 @@ afterEach(async () => {
       origin.close(() => resolve());
     });
   }
+  clearRuntimeConfigSnapshot();
   await state?.cleanup();
 });
 
@@ -299,6 +363,7 @@ describe.skipIf(process.platform === "win32")("background exec egress lifetime",
     await vi.waitFor(() => expect(hasExitEvent(survivor.sessionId)).toBe(true), {
       timeout: 10_000,
     });
+    await expect([...notificationReceipts][0]?.accepted).resolves.toEqual({ ok: true });
     const exited = await later.process({ action: "poll", sessionId: survivor.sessionId });
     expect(exited.details).toMatchObject({ status: "completed", exitCode: 0 });
     await expect(requestWithGrant(survivor.grant)).resolves.toBe(407);
@@ -311,6 +376,7 @@ describe.skipIf(process.platform === "win32")("background exec egress lifetime",
     await vi.waitFor(() => expect(hasExitEvent(watcher.sessionId)).toBe(true), {
       timeout: 10_000,
     });
+    await expect([...notificationReceipts][0]?.accepted).resolves.toEqual({ ok: true });
     const result = await owner.process({ action: "poll", sessionId: watcher.sessionId });
     expect(result.details).toMatchObject({ status: "failed", exitReason: "overall-timeout" });
     await expect(requestWithGrant(watcher.grant)).resolves.toBe(407);

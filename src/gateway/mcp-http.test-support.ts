@@ -66,6 +66,26 @@ export async function readOkMcpPayload(response: Response) {
   return payload;
 }
 
+export function expectMcpToolNames(payload: McpToolResultPayload, expected: string[]) {
+  const names = (payload.result?.tools ?? []).map((tool) => tool.name);
+  for (const name of expected) {
+    expect(names).toContain(name);
+  }
+}
+
+export function expectMcpResultText(
+  payload: McpToolResultPayload,
+  text: string,
+  isError?: boolean,
+) {
+  if (isError === undefined) {
+    expect(payload.result?.isError).not.toBe(true);
+  } else {
+    expect(payload.result?.isError).toBe(isError);
+  }
+  expect(payload.result?.content?.[0]?.text).toBe(text);
+}
+
 export async function sendLoopbackToolCall(params: {
   token?: string;
   name: string;

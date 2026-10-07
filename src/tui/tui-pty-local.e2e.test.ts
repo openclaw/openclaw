@@ -19,7 +19,6 @@ import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-res
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
 import {
@@ -42,6 +41,8 @@ import {
   waitForSynchronizedFrameRows,
 } from "./tui-pty-harness-assertion-test-support.js";
 import {
+  buildLocalModeConfig,
+  buildMockModelProvider,
   cleanupStartedFixture,
   createChatTerminalObserver,
   createIdempotentCleanup,
@@ -453,71 +454,6 @@ async function startMockModelServer(
   });
 }
 
-function buildMockModelProvider(baseUrl: string, modelIds: string[]): ModelProviderConfig {
-  return {
-    baseUrl: `${baseUrl}/v1`,
-    apiKey: "test",
-    api: "openai-responses",
-    request: { allowPrivateNetwork: true },
-    models: modelIds.map((id) => ({
-      id,
-      name: id,
-      api: "openai-responses",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
-      maxTokens: 4096,
-    })),
-  };
-}
-
-function buildLocalModeConfig(params: {
-  workspaceDir: string;
-  providerBaseUrl: string;
-  toolsProfile?: "minimal" | "coding";
-}) {
-  return {
-    plugins: {
-      enabled: false,
-      slots: {
-        memory: "none",
-      },
-    },
-    agents: {
-      defaults: {
-        workspace: params.workspaceDir,
-        model: { primary: "tui-pty-mock/gpt-5.5" },
-        models: {
-          "tui-pty-mock/gpt-5.5": { agentRuntime: { id: "openclaw" } },
-        },
-        skills: [],
-        skipBootstrap: true,
-      },
-      entries: {
-        main: {
-          skills: [],
-          model: { primary: "tui-pty-mock/gpt-5.5" },
-        },
-      },
-    },
-    tools: {
-      profile: params.toolsProfile ?? "minimal",
-    },
-    models: {
-      mode: "replace",
-      providers: {
-        "tui-pty-mock": buildMockModelProvider(params.providerBaseUrl, ["gpt-5.5"]),
-      },
-    },
-    gateway: {
-      mode: "local",
-      auth: { mode: "token", token: "tui-pty-local" },
-    },
-    discovery: { mdns: { mode: "off" } },
-  } satisfies OpenClawConfig;
-}
-
 async function cleanupLocalModeResources(params: {
   run?: PtyRun;
   mockModel: MockModelServer;
@@ -691,12 +627,12 @@ function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: stri
       defaults: {
         workspace: path.join(params.tempDir, defaultScenario.agentId),
         model: { primary: defaultModelRef },
+        modelPolicy: { allow: modelRefs },
         models: Object.fromEntries(
           modelRefs.map((modelRef) => [modelRef, { agentRuntime: { id: "openclaw" } }]),
         ),
         skills: [],
         skipBootstrap: true,
-        heartbeat: { agentId: defaultScenario.agentId },
         systemAgent: { agentId: defaultScenario.agentId },
         authInheritance: { agentId: defaultScenario.agentId },
       },
@@ -1063,6 +999,7 @@ describe("TUI PTY real backends", () => {
                       ...config.agents,
                       defaults: {
                         ...config.agents?.defaults,
+                        modelPolicy: { allow: ["tui-pty-mock/gpt-5.5", cliModelRef] },
                         models: {
                           ...config.agents?.defaults?.models,
                           [cliModelRef]: {},

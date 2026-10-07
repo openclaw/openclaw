@@ -9,12 +9,19 @@ export type AgentRunModel = { provider: string; model: string };
 
 export type AgentRunEventState = { seq: number; terminalPublication?: symbol };
 
+export type AutomationResult = {
+  outcome: "no_change" | "progress" | "done" | "blocked" | "needs_attention";
+  summary: string;
+};
+
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 export type AgentRunContext = {
   /** Trusted refusal fact consumed only by this run's existing terminal mutation. */
   providerReviewTerminal?: import("../sessions/provider-review-terminal.js").ProviderReviewTerminalFact;
   /** Queued reply delivery, rather than runtime execution, owns chat completion. */
   completionSource?: "reply-dispatch";
+  /** Retained background work cannot add automatic delivery to a private run. */
+  sessionEventDelivery?: false;
   sessionKey?: string;
   /** Resolved agent owner, including for unscoped session keys. */
   agentId?: string;
@@ -28,7 +35,6 @@ export type AgentRunContext = {
   eventState?: AgentRunEventState;
   activeModel?: AgentRunModel;
   verboseLevel?: VerboseLevel;
-  isHeartbeat?: boolean;
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
   projectSessionActive?: boolean;
@@ -41,8 +47,17 @@ export type AgentRunContext = {
   projectSessionLifecycle?: boolean;
   /** Sticky diagnostic provenance only; never authorization for recovery work. */
   mainSessionRestartRecovery?: true;
-  /** Active cadence state by job; admission permits one invocation per job. */
-  cronRunsByJobId?: Map<string, { pacingEnabled: boolean; nextCheckMs?: number }>;
+  /** Active invocation state by job; admission permits one invocation per job. */
+  cronRunsByJobId?: Map<
+    string,
+    {
+      pacingEnabled: boolean;
+      nextCheckMs?: number;
+      assertCurrent?: () => void;
+      closed?: boolean;
+      result?: AutomationResult;
+    }
+  >;
   /** Timestamp when this context was first registered (for TTL-based cleanup). */
   registeredAt?: number;
   /** Bounded presentation facts from this registration's accepted events; never authority. */

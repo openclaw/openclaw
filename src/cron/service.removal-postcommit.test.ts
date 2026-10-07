@@ -52,7 +52,7 @@ async function createFixture(path: RemovalPath, captureRemoval = false) {
     log: logger,
     nowMs: () => nowMs,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({
       status: "ok" as const,
       summary: "done",

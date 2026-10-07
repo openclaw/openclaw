@@ -1180,6 +1180,10 @@
     "target": "Heartbeat"
   },
   {
+    "source": "Heartbeat migration",
+    "target": "Heartbeat 迁移"
+  },
+  {
     "source": "Scheduled tasks",
     "target": "定时任务"
   },
@@ -1204,8 +1208,8 @@
     "target": "配置 — 智能体运行时和 CLI 后端"
   },
   {
-    "source": "Configuration — agent heartbeat, compaction, and streaming",
-    "target": "配置 — 智能体心跳、压缩和流式输出"
+    "source": "Configuration — heartbeat migration, compaction, and streaming",
+    "target": "配置 — 心跳迁移、压缩和流式输出"
   },
   {
     "source": "Configuration — agent sandboxing",

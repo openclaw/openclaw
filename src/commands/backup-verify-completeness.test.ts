@@ -72,6 +72,7 @@ describe("standalone backup database completeness", () => {
         const dormantWorkspace = state.statePath("agents", "dormant");
         await state.writeConfig({
           agents: {
+            ownership: "explicit",
             defaults: { workspace: state.home },
             entries: {
               main: { workspace: dormantWorkspace },

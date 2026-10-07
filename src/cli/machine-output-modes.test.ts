@@ -15,13 +15,8 @@ describe("built-in machine-output resolvers", () => {
     expect(isMachineOutputStdoutTTY({ isTTY: true })).toBe(true);
   });
 
-  it.each([
-    ["heartbeat last", ["system", "heartbeat", "last"]],
-    ["heartbeat enable", ["system", "heartbeat", "enable"]],
-    ["heartbeat disable", ["system", "heartbeat", "disable"]],
-    ["presence", ["system", "presence"]],
-  ])("detects system %s", (_name, path) => {
-    expect(isSystemMachineOutput(["node", "openclaw", ...path])).toBe(true);
+  it("detects system presence", () => {
+    expect(isSystemMachineOutput(["node", "openclaw", "system", "presence"])).toBe(true);
   });
 
   it("detects non-TTY doctor lint without changing terminal output", () => {

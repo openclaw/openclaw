@@ -38,10 +38,8 @@ export type ResolvedPromptBuildHookResult = PluginHookBeforePromptBuildResult & 
 };
 
 type PromptBuildHookRunner = Pick<HookRunner, "runBeforePromptBuild"> &
-  Partial<Pick<HookRunner, "runAgentTurnPrepare" | "runHeartbeatPromptContribution">> & {
-    hasHooks: (
-      hookName: "agent_turn_prepare" | "heartbeat_prompt_contribution" | "before_prompt_build",
-    ) => boolean;
+  Partial<Pick<HookRunner, "runAgentTurnPrepare">> & {
+    hasHooks: (hookName: "agent_turn_prepare" | "before_prompt_build") => boolean;
   };
 
 // Draining consumes durable injections. Retain them for retries of the same run.
@@ -90,7 +88,7 @@ export async function resolvePromptBuildHookResult(params: {
     rememberDrainedInjections(runId, queuedContext.queuedInjections);
   }
   // Hook ordering mirrors the prompt assembly boundary: queued injections first,
-  // then prepare/heartbeat contributions, then prompt-build hooks.
+  // then prepare contributions, then prompt-build hooks.
   const turnPrepareResult =
     params.hookRunner?.runAgentTurnPrepare && params.hookRunner.hasHooks("agent_turn_prepare")
       ? await params.hookRunner
@@ -104,24 +102,6 @@ export async function resolvePromptBuildHookResult(params: {
           )
           .catch((hookErr: unknown) => {
             log.warn(`agent_turn_prepare hook failed: ${String(hookErr)}`);
-            return undefined;
-          })
-      : undefined;
-  const heartbeatContribution =
-    params.hookCtx.trigger === "heartbeat" &&
-    params.hookRunner?.runHeartbeatPromptContribution &&
-    params.hookRunner.hasHooks("heartbeat_prompt_contribution")
-      ? await params.hookRunner
-          .runHeartbeatPromptContribution(
-            {
-              sessionKey: params.hookCtx.sessionKey,
-              agentId: params.hookCtx.agentId,
-              heartbeatName: "heartbeat",
-            },
-            params.hookCtx,
-          )
-          .catch((hookErr: unknown) => {
-            log.warn(`heartbeat_prompt_contribution hook failed: ${String(hookErr)}`);
             return undefined;
           })
       : undefined;
@@ -161,9 +141,7 @@ export async function resolvePromptBuildHookResult(params: {
       queuedContext.prependContext?.trim() ||
       queuedContext.appendContext?.trim() ||
       turnPrepareResult?.prependContext?.trim() ||
-      turnPrepareResult?.appendContext?.trim() ||
-      heartbeatContribution?.prependContext?.trim() ||
-      heartbeatContribution?.appendContext?.trim(),
+      turnPrepareResult?.appendContext?.trim(),
     ),
     ...(decisionPromptBuildFields && Object.keys(decisionPromptBuildFields).length > 0
       ? { decisionPromptBuildFields }
@@ -175,13 +153,11 @@ export async function resolvePromptBuildHookResult(params: {
     prependContext: joinPresentTextSegments([
       queuedContext.prependContext,
       turnPrepareResult?.prependContext,
-      heartbeatContribution?.prependContext,
       promptBuildResult?.prependContext,
     ]),
     appendContext: joinPresentTextSegments([
       queuedContext.appendContext,
       turnPrepareResult?.appendContext,
-      heartbeatContribution?.appendContext,
       promptBuildResult?.appendContext,
     ]),
     prependSystemContext: wrapPluginSystemContextSection(promptBuildResult?.prependSystemContext),

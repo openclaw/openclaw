@@ -50,6 +50,10 @@ import type {
   VerboseLevel,
 } from "../directives.js";
 import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
+import type {
+  ScheduledSessionAutomation,
+  SessionEventExecution,
+} from "../session-event-contract.js";
 
 export type { QueueDropPolicy } from "../../../config/types.queue.js";
 
@@ -117,6 +121,7 @@ type FollowupRunObservers = Pick<
 > & {
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   resolveReplyDelivery?: ReplyDeliveryObserver;
+  onDeliberateSilentTerminalReply?: () => void;
 };
 
 export type FollowupRun = {
@@ -213,6 +218,8 @@ export type FollowupRun = {
   /** Chat type for context-aware threading (e.g., DM vs channel). */
   originatingChatType?: string;
   run: {
+    scheduledAutomation?: ScheduledSessionAutomation;
+    internalEventExecution?: SessionEventExecution;
     providerReviewAcknowledgment?: import("../../../sessions/provider-review.js").ProviderReviewAcknowledgment;
     agentId: string;
     agentDir: string;
@@ -299,6 +306,8 @@ export type FollowupRun = {
     runtimePluginToolGrant?: RuntimePluginToolGrant;
     extraSystemPrompt?: string;
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    bootstrapContextMode?: RunEmbeddedAgentParams["bootstrapContextMode"];
+    cleanupBundleMcpOnRunEnd?: boolean;
     taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
     silentReplyPromptMode?: SilentReplyPromptMode;
     extraSystemPromptStatic?: string;

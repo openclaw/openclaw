@@ -129,6 +129,9 @@ export default { id: plugin.id, register(api) {
     }
     if (pending) {
       expect(result.stderr).toContain("gateway_stop hook exceeded 2500ms; continuing");
+      expect(result.stderr).toContain(
+        "CLI cleanup timed out: plugin-registration-resources after 5000ms",
+      );
     }
   });
 });

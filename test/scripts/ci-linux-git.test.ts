@@ -854,6 +854,7 @@ const diff = [
   "--",
   "docs",
   ".openclaw-sync",
+  "src/infra/node-compiler-policy.mjs",
   "package.json",
   "package-lock.json",
 ];
@@ -864,7 +865,14 @@ const dependencyReads = [
 const commit = [
   ["config", "user.name", "openclaw-docs-sync[bot]"],
   ["config", "user.email", "openclaw-docs-sync[bot]@users.noreply.github.com"],
-  ["add", "docs", ".openclaw-sync", "package.json", "package-lock.json"],
+  [
+    "add",
+    "docs",
+    ".openclaw-sync",
+    "src/infra/node-compiler-policy.mjs",
+    "package.json",
+    "package-lock.json",
+  ],
   ["commit", "-m", `chore(sync): mirror docs from fixture/checkout@${candidate}`],
 ];
 

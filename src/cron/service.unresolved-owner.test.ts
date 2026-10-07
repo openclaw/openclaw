@@ -67,7 +67,7 @@ describe("cron jobs with unresolved owners", () => {
       ...(phase === "reload" ? { defaultAgentId: "main" } : {}),
       resolveDefaultAgentId: () => currentOwner,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      enqueueSessionEvent: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
       runCommandJob,
       onEvent,

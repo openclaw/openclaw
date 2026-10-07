@@ -5,7 +5,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { isExecLikeToolName } from "../../agents/tool-error-summary.js";
-import { isHeartbeatAcknowledgementText } from "../../auto-reply/heartbeat.js";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
@@ -28,7 +27,7 @@ type CronPayloadOutcome = {
   deliveryPayloads: DeliveryPayload[];
   deliveryDisposition:
     | { kind: "visible" }
-    | { kind: "heartbeat"; controlOnly: boolean }
+    | { kind: "silent"; controlOnly: boolean }
     | { kind: "empty" };
   deliveryPayloadHasStructuredContent: boolean;
   hasFatalErrorPayload: boolean;
@@ -141,13 +140,11 @@ function resolveCronDeliveryPayloads(params: {
   // an acknowledgement. Only the payload owner can safely preserve that batch.
   const hasNonTextContent = params.payloads.some(payloadHasNonTextDeliveryContent);
   const terminalText = params.finalAssistantVisibleText ?? params.payloads.at(-1)?.text;
-  if (!hasNonTextContent && isHeartbeatAcknowledgementText(terminalText)) {
-    const controlOnly = params.payloads.every((payload) =>
-      isHeartbeatAcknowledgementText(payload.text, 0),
-    );
+  if (!hasNonTextContent && isSilentReplyPayloadText(terminalText)) {
+    const controlOnly = params.payloads.every((payload) => isSilentReplyPayloadText(payload.text));
     return {
       deliveryPayloads: params.payloads,
-      deliveryDisposition: { kind: "heartbeat", controlOnly },
+      deliveryDisposition: { kind: "silent", controlOnly },
     };
   }
   return {
@@ -155,7 +152,7 @@ function resolveCronDeliveryPayloads(params: {
     // later result or fail before that result reaches recipient custody.
     deliveryPayloads: params.payloads.filter(
       (payload) =>
-        payloadHasNonTextDeliveryContent(payload) || !isHeartbeatAcknowledgementText(payload.text),
+        payloadHasNonTextDeliveryContent(payload) || !isSilentReplyPayloadText(payload.text),
     ),
     deliveryDisposition: { kind: "visible" },
   };

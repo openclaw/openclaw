@@ -208,6 +208,14 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
       if (key === INCLUDE_KEY) {
         continue;
       }
+      // Only the durable migration may retire heartbeat input. In preview mode
+      // accepting unrelated cleanup must not discard schedules before conversion.
+      if (
+        (key === "heartbeat" && issuePath[0] === "agents") ||
+        (key === "heartbeatVisibility" && issuePath[0] === "channels")
+      ) {
+        continue;
+      }
       delete target[key];
       removed.push(formatConfigKeyPath([...issuePath, key]));
     }

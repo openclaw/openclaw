@@ -50,6 +50,7 @@ const MAX_TRACKED_CRON_STORE_REVISIONS = 64;
 // Stale receipts must never equal a nonnegative publication fact, even after eviction.
 const STALE_CRON_STORE_REVISION = -1;
 const cronStoreRevisions = new Map<string, number>();
+const cronMutationListeners = new Map<string, Set<() => void>>();
 let nextCronStoreRevision = 0;
 
 /** Reads the process-local committed revision for one canonical SQLite partition. */
@@ -65,6 +66,37 @@ export function noteCronJobsStoreCommit(storeKey: string): void {
   cronStoreRevisions.delete(storeKey);
   cronStoreRevisions.set(storeKey, ++nextCronStoreRevision);
   pruneMapToMaxSize(cronStoreRevisions, MAX_TRACKED_CRON_STORE_REVISIONS);
+}
+
+/** Empty schedulers need explicit lifecycle publication because they have no next tick. */
+export function subscribeCronJobsStoreMutations(
+  storePath: string,
+  listener: () => void,
+): () => void {
+  const storeKey = cronStoreKey(storePath);
+  const listeners = cronMutationListeners.get(storeKey) ?? new Set<() => void>();
+  cronMutationListeners.set(storeKey, listeners);
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) {
+      cronMutationListeners.delete(storeKey);
+    }
+  };
+}
+
+/** Explicit provisioning publishes after the outer commit; runtime saves only invalidate revisions. */
+export function publishCronJobsStoreMutation(storePath: string, db?: DatabaseSync): void {
+  const storeKey = cronStoreKey(storePath);
+  const publish = () => {
+    noteCronJobsStoreCommit(storeKey);
+    for (const listener of cronMutationListeners.get(storeKey) ?? []) {
+      listener();
+    }
+  };
+  if (!db || !deferSqlitePostCommitPublication(db, publish)) {
+    publish();
+  }
 }
 
 /** Loads cron jobs plus config/runtime sidecars from the SQLite-backed store. */

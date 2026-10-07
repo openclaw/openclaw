@@ -63,6 +63,7 @@ import {
   logClawAgentConfiguration,
   logClawExperimentalWarning,
 } from "./claws-cli-output.js";
+import { clawAutomationMutationGateway } from "./claws-cli.automation-gateway.js";
 import { waitUntilGatewayAgentAvailable } from "./claws-cli.gateway-readiness.js";
 import type {
   ClawsAddOptions,
@@ -73,6 +74,7 @@ import type {
 } from "./claws-cli.js";
 import { clawMonitorCleanupGateway } from "./claws-cli.monitor-cleanup.js";
 import { clawPackageRemovalGateway } from "./claws-cli.package-removal.js";
+import { clawRemovalJournalGateway } from "./claws-cli.removal-journal.js";
 import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { resolvePluginBatchReload } from "./plugins-lifecycle-client.js";
@@ -440,7 +442,9 @@ export async function runClawsAddCommand(
       resumePlan: legacyResumePlan,
       runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
       cronGateway: {
+        mutateAutomation: clawAutomationMutationGateway,
         add: async (input) => await callGatewayFromCli("cron.add", {}, input),
+        get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
         list: async (agentId) =>
           await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
         waitUntilAgentAvailable: waitUntilGatewayAgentAvailable,
@@ -560,12 +564,16 @@ export async function runClawsRemoveCommand(
   }
   try {
     const result = await applyClawRemovePlan(plan, {
+      journalGateway: clawRemovalJournalGateway,
       monitorGateway: clawMonitorCleanupGateway,
       packageGateway: clawPackageRemovalGateway,
       consentPlanIntegrity: opts.planIntegrity,
       referencedCleanup,
       cronGateway: {
+        mutateAutomation: clawAutomationMutationGateway,
         get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
+        list: async (agentId) =>
+          await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
         remove: async (id) => await callGatewayFromCli("cron.remove", {}, { id }),
       },
     });

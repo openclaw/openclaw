@@ -10,9 +10,9 @@ import type { FollowupRun } from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import {
   REPLY_OPERATION_RUN_STATE,
-  resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
+import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test-support.js";
 
 type FailureRunParams = {
   blockStreamingEnabled?: boolean;

@@ -33,7 +33,7 @@ describe("embedded agent callback rejection containment", () => {
        }
        console.log("assistant callback rejection contained");`,
       {
-        imports: resolveRuntimeWorkerArgv(callbackUrl, resolveTestNodeExecPath()).slice(1, -1),
+        execArgv: resolveRuntimeWorkerArgv(callbackUrl, resolveTestNodeExecPath()).slice(0, -1),
         timeout: 20_000,
       },
     );

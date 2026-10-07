@@ -559,18 +559,42 @@ function run() {
     readUnit(true);
     return;
   }
-  if (["stop-policy", "stop-timeout-ms", "stop-context"].includes(operation) && !args.length) {
+  if (
+    (operation === "stop-policy" && args.length <= 1) ||
+    (["stop-timeout-ms", "stop-context"].includes(operation) && !args.length)
+  ) {
+    const properties = (args[0] ?? "LoadState,TimeoutStopUSec").split(",");
+    if (
+      !properties.includes("LoadState") ||
+      !properties.includes("TimeoutStopUSec") ||
+      new Set(properties).size !== properties.length ||
+      properties.some(
+        (property) => !["LoadState", "TimeoutStopUSec", "InvocationID"].includes(property),
+      )
+    ) {
+      fail("Unsupported survivor stop-policy properties.");
+    }
     // A running generation keeps its loaded policy even if an on-disk edit is
     // invalid or removed. Only a successful reload replaces that snapshot.
     const unit = fs.existsSync(loadedPath)
       ? parseUnit(fs.readFileSync(loadedPath, "utf8"))
       : readUnit();
     if (operation === "stop-policy") {
-      console.log(`LoadState=${unit ? "loaded" : "not-found"}`);
-      if (unit) {
-        console.log(
-          `TimeoutStopUSec=${unit.stopTimeoutMs === Infinity ? "infinity" : `${unit.stopTimeoutMs / 1_000}s`}`,
-        );
+      const values = {
+        LoadState: unit ? "loaded" : "not-found",
+        // This fixture has no native systemd invocation; never echo caller authority.
+        InvocationID: "",
+        ...(unit
+          ? {
+              TimeoutStopUSec:
+                unit.stopTimeoutMs === Infinity ? "infinity" : `${unit.stopTimeoutMs / 1_000}s`,
+            }
+          : {}),
+      };
+      for (const property of properties) {
+        if (Object.hasOwn(values, property)) {
+          console.log(`${property}=${values[property]}`);
+        }
       }
     } else {
       if (!unit) {

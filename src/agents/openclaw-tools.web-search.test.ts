@@ -11,8 +11,13 @@ import {
 } from "./auth-profiles/runtime-snapshots.js";
 import * as authSource from "./auth-profiles/source-check.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
-import { createOpenClawToolsAsync } from "./openclaw-tools.js";
+import { createOpenClawTools, createOpenClawToolsAsync } from "./openclaw-tools.js";
+import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
+import {
+  attachToolAllowlistIntersection,
+  DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+} from "./tool-policy.js";
 import {
   createToolSearchCatalogRef,
   registerHeadlessToolSearchCatalog,
@@ -74,6 +79,101 @@ describe("unconfigured web search tool surface", () => {
     } else {
       expect(onWebSearchConfiguration).toHaveBeenCalledExactlyOnceWith(fact);
     }
+  });
+
+  it.each<{
+    label: string;
+    options: Pick<OpenClawToolsOptions, "config" | "pluginToolAllowlist" | "pluginToolDenylist">;
+    allowed: boolean;
+  }>([
+    { label: "default", options: {}, allowed: true },
+    { label: "empty default", options: { pluginToolAllowlist: [] }, allowed: true },
+    { label: "web group", options: { pluginToolAllowlist: ["group:web"] }, allowed: true },
+    {
+      label: "additive default",
+      options: { pluginToolAllowlist: ["group:memory", DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY] },
+      allowed: true,
+    },
+    { label: "other tool", options: { pluginToolAllowlist: ["agents_list"] }, allowed: false },
+    {
+      label: "global restriction",
+      options: { config: { tools: { allow: ["agents_list"] } }, pluginToolAllowlist: ["*"] },
+      allowed: false,
+    },
+    {
+      label: "inherited denial",
+      options: { pluginToolAllowlist: ["*"], pluginToolDenylist: ["web_*"] },
+      allowed: false,
+    },
+    {
+      label: "denied additive default",
+      options: {
+        config: { tools: { deny: ["web_search"] } },
+        pluginToolAllowlist: [DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY],
+      },
+      allowed: false,
+    },
+    {
+      label: "intersecting web grants",
+      options: {
+        pluginToolAllowlist: attachToolAllowlistIntersection(
+          ["group:web", "web_*"],
+          [["group:web"], ["web_*"]],
+        ),
+      },
+      allowed: true,
+    },
+    {
+      label: "intersecting restriction",
+      options: {
+        pluginToolAllowlist: attachToolAllowlistIntersection(
+          ["*", "agents_list"],
+          [["*"], ["agents_list"]],
+        ),
+      },
+      allowed: false,
+    },
+    {
+      label: "empty inherited grant",
+      options: { pluginToolAllowlist: attachToolAllowlistIntersection(["*"], [["*"], []]) },
+      allowed: false,
+    },
+  ])("checks $label policy before search provider discovery", async ({ options, allowed }) => {
+    resolveProviders.mockReturnValue([
+      createWebSearchTestProvider({
+        pluginId: "fixture-search",
+        id: "fixture-search",
+        credentialPath: "plugins.entries.fixture-search.config.apiKey",
+        getConfiguredCredentialValue: () => "fixture-key",
+      }),
+    ]);
+    const onWebSearchConfiguration = vi.fn();
+    const tools = await createOpenClawToolsAsync({
+      ...options,
+      disableMessageTool: true,
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
+      onWebSearchConfiguration,
+    });
+    expect(tools.some((tool) => tool.name === "web_search")).toBe(allowed);
+    if (allowed) {
+      expect(resolveProviders).toHaveBeenCalled();
+      expect(onWebSearchConfiguration).toHaveBeenCalledExactlyOnceWith(true);
+    } else {
+      expect(resolveProviders).not.toHaveBeenCalled();
+      expect(onWebSearchConfiguration).not.toHaveBeenCalled();
+    }
+  });
+
+  it("keeps excluded search out of the synchronous factory without provider discovery", () => {
+    const tools = createOpenClawTools({
+      pluginToolAllowlist: ["agents_list"],
+      disableMessageTool: true,
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
+    });
+    expect(tools.some((tool) => tool.name === "web_search")).toBe(false);
+    expect(resolveProviders).not.toHaveBeenCalled();
   });
 
   it.each([

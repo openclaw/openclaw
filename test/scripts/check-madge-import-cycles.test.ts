@@ -9,10 +9,11 @@ afterEach(() => fixtures.cleanup());
 
 function createCheckerFixture(files: Record<string, string>, config: object = {}) {
   const root = fixtures.createTempDir("madge-import-cycles-");
-  for (const directory of ["src", "extensions", "ui", "scripts/lib"]) {
+  for (const directory of ["src/infra", "extensions", "ui", "scripts/lib"]) {
     fs.mkdirSync(path.join(root, directory), { recursive: true });
   }
   for (const file of [
+    "src/infra/node-compiler-policy.mjs",
     "scripts/check-madge-import-cycles.ts",
     "scripts/tsx.mjs",
     "scripts/lib/tsx-cli-shim.mjs",

@@ -28,6 +28,7 @@ import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js
 import { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 import { createHostedGatewayTools } from "./openclaw-tools.gateway.js";
 import {
+  isToolAllowedByFactoryPolicy,
   isToolExplicitlyAllowedByFactoryPolicy,
   mergeFactoryPolicyList,
   resolveImageToolFactoryAvailable,
@@ -70,7 +71,6 @@ import {
   createGetGoalTool,
   createUpdateGoalTool,
 } from "./tools/goal-tools.js";
-import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { callAgentToolGatewayRequest } from "./tools/in-process-gateway.js";
@@ -137,8 +137,16 @@ export async function createOpenClawToolsWithPreparation(
     : await createOpenClawDelegateToolsForRunAsync({ ...captured, sessionAgentId }, shared);
   shared.assertCurrent();
   captured.assertInvocationCurrent?.();
+  const webSearchEnabled =
+    captured.webSearchEnabled !== false &&
+    isToolAllowedByFactoryPolicy({
+      toolName: "web_search",
+      config: captured.config,
+      toolAllowlist: captured.pluginToolAllowlist,
+      toolDenylist: captured.pluginToolDenylist,
+    });
   const webSearchConfigured =
-    captured.webSearchEnabled === false || captured.config?.tools?.web?.search?.enabled === false
+    !webSearchEnabled || captured.config?.tools?.web?.search?.enabled === false
       ? undefined
       : await prepareWebSearchConfiguration({
           config: captured.config,
@@ -151,7 +159,7 @@ export async function createOpenClawToolsWithPreparation(
         });
   shared.assertCurrent();
   captured.assertInvocationCurrent?.();
-  return createOpenClawTools(captured, delegated, webSearchConfigured);
+  return createOpenClawTools({ ...captured, webSearchEnabled }, delegated, webSearchConfigured);
 }
 
 /** @deprecated Use createOpenClawToolsAsync for runtime construction. */
@@ -283,7 +291,14 @@ export function createOpenClawTools(
   let webSearchTool = createWebSearchTool({
     ...options,
     agentDir: webSearchAgentDir,
-    enabled: options?.webSearchEnabled,
+    enabled:
+      options?.webSearchEnabled !== false &&
+      isToolAllowedByFactoryPolicy({
+        toolName: "web_search",
+        config: availabilityConfig ?? resolvedConfig,
+        toolAllowlist: options?.pluginToolAllowlist,
+        toolDenylist: options?.pluginToolDenylist,
+      }),
     runtimeWebSearch: runtimeWebTools?.search,
     lateBindRuntimeConfig: true,
   });
@@ -333,7 +348,6 @@ export function createOpenClawTools(
         requesterSenderId: options?.requesterSenderId ?? undefined,
         workspaceDir,
       });
-  const heartbeatTool = options?.enableHeartbeatTool ? createHeartbeatResponseTool() : null;
   options?.recordToolPrepStage?.("openclaw-tools:message-tool");
   const nodesToolBase = createNodesTool({
     ...options,
@@ -473,7 +487,6 @@ export function createOpenClawTools(
           presenters: widgetPresentation.presenters,
           presenterContext: widgetPresentation.context,
         }),
-    heartbeatTool,
     createDecisionTool(sessionAgentId, options),
     createTtsTool({ ...options, agentId: sessionAgentId }),
     options?.githubPublicationAvailable !== undefined ? createGitHubIdentityStatusTool() : null,

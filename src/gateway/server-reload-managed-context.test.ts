@@ -133,7 +133,6 @@ function startManagedGatewayConfigReloader(
   let state: ReturnType<ManagedReloaderParams["getState"]> = {
     hooksConfig: {} as never,
     hookClientIpConfig: {} as never,
-    heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
     cronState: createTestCronState(),
   };
   return startManagedGatewayConfigReloaderImpl({

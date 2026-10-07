@@ -1,7 +1,9 @@
 import { vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -19,6 +21,16 @@ export function createDatabaseOptions() {
   const stateDir = makeTempDir(tempDirs, "openclaw-session-state-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+}
+
+export async function createWatcherSession(
+  database: ReturnType<typeof createDatabaseOptions>,
+  watcherSessionKey = watcher,
+) {
+  await upsertSessionEntryCore(
+    { sessionKey: watcherSessionKey, env: database.env },
+    { sessionId: `session-${watcherSessionKey}`, updatedAt: Date.now() },
+  );
 }
 
 export function eventInput(
@@ -74,10 +86,11 @@ export function seedChild(
 
 export async function cleanupSessionStateTestState() {
   vi.useRealTimers();
+  resetSystemEventsForTest();
+  await drainGlobalSingletonLifecycleState("restart");
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
-  resetSystemEventsForTest();
   resetHeartbeatEventsForTest();
   cleanupTempDirs(tempDirs);
   vi.unstubAllEnvs();

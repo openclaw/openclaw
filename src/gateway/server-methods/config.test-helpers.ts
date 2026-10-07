@@ -74,6 +74,7 @@ export function createConfigHandlerHarness(args?: {
       },
       logGateway,
       disconnectClientsUsingSharedGatewayAuth,
+      isConfigReloadSettled: () => true,
       ...args?.contextOverrides,
     },
     ...args?.overrides,

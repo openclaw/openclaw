@@ -296,7 +296,6 @@ describe("Doctor report process output", () => {
           `${JSON.stringify({
             agents: {
               ownership: "explicit",
-              defaults: { heartbeat: { every: "30m" } },
               entries: { main: {} },
             },
           })}\n`,

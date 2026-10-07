@@ -1,7 +1,6 @@
 // Applies metadata defaults and plugin-dependent rules to a core-validated config.
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntriesWithSource } from "../agents/agent-scope.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { normalizePluginId } from "../plugins/config-state.js";
@@ -29,9 +28,7 @@ import {
   bundledChannelIds,
   collectChannelDmPolicyDependencyWarnings,
   hasChannelDmPolicyDependencyWarningCandidates,
-  normalizeBundledChannelId,
 } from "./validation-channel-rules.js";
-import { collectHeartbeatOwnerWarnings } from "./validation-core.js";
 import {
   formatChannelConfigIssueMessage,
   resolveDeferredChannelConfigWarning,
@@ -136,7 +133,6 @@ export function validatePreparedConfigWithPlugins(
   const deferredPluginIds = new Set(
     opts.deferredPluginMigrations?.map(({ pluginId }) => normalizePluginId(pluginId)),
   );
-  warnings.push(...collectHeartbeatOwnerWarnings(config));
   const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
 
   let compatPluginIds: ReadonlySet<string> | null = null;
@@ -530,52 +526,6 @@ export function validatePreparedConfigWithPlugins(
     }
   }
 
-  const heartbeatChannelIds = new Set(bundledChannelIds);
-  const validateHeartbeatTarget = (target: string | undefined, issuePath: string): void => {
-    if (typeof target !== "string") {
-      return;
-    }
-    const trimmed = target.trim();
-    if (!trimmed) {
-      issues.push({ path: issuePath, message: "heartbeat target must not be empty" });
-      return;
-    }
-    const normalized = normalizeLowercaseStringOrEmpty(trimmed);
-    if (
-      normalized === "owner" ||
-      normalized === "last" ||
-      normalized === "none" ||
-      normalizeBundledChannelId(trimmed)
-    ) {
-      return;
-    }
-    if (!heartbeatChannelIds.has(normalized)) {
-      for (const record of ensureRegistry().registry.plugins) {
-        for (const channelId of record.channels) {
-          const pluginChannel = channelId.trim();
-          if (pluginChannel) {
-            heartbeatChannelIds.add(normalizeLowercaseStringOrEmpty(pluginChannel));
-          }
-        }
-      }
-    }
-    if (!heartbeatChannelIds.has(normalized)) {
-      if (preserveUnavailableConfig(issuePath)) {
-        return;
-      }
-      issues.push({ path: issuePath, message: `unknown heartbeat target: ${target}` });
-    }
-  };
-
-  validateHeartbeatTarget(
-    config.agents?.defaults?.heartbeat?.target,
-    "agents.defaults.heartbeat.target",
-  );
-  for (const { entry, source } of listAgentEntriesWithSource(config)) {
-    const pathPrefix =
-      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
-    validateHeartbeatTarget(entry?.heartbeat?.target, `${pathPrefix}.heartbeat.target`);
-  }
   validateWebSearchProvider();
   validateConfiguredModelRefs();
 

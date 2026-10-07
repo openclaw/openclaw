@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -188,25 +187,32 @@ async function runChat(
   return { runId, terminal };
 }
 
-async function forceHeartbeat(runtime: Runtime, gateway: QaGatewayChild, proof: ProofCase) {
+async function forceAutomation(
+  runtime: Runtime,
+  gateway: QaGatewayChild,
+  proof: ProofCase,
+  automationId: string,
+) {
   const listed = await gateway.call("cron.list", { includeDisabled: true });
   assert.ok(runtime.isRecord(listed) && Array.isArray(listed.jobs), "cron.list omitted jobs");
-  const monitor = listed.jobs.find(
-    (job) => runtime.isRecord(job) && job.declarationKey === "heartbeat:qa",
-  );
+  const monitor = listed.jobs.find((job) => runtime.isRecord(job) && job.id === automationId);
   assert.ok(
     runtime.isRecord(monitor) && typeof monitor.id === "string",
-    "heartbeat monitor missing",
+    "ordinary automation missing",
   );
-  assert.equal(monitor.agentId, "qa", "Heartbeat monitor changed agent ownership");
-  assert.equal(monitor.declarationKey, "heartbeat:qa", "Heartbeat declaration changed");
-  assert.equal(monitor.sessionTarget, "main", "Heartbeat monitor changed its target mode");
-  const configuredSession = gateway.cfg.agents?.defaults?.heartbeat?.session;
+  assert.equal(monitor.agentId, "qa", "Automation changed agent ownership");
   assert.equal(
-    `agent:qa:${configuredSession}`,
-    proof.sessionKey,
-    "Heartbeat config does not resolve to the canonical proof session",
+    monitor.sessionTarget,
+    `session:${proof.sessionKey}`,
+    "Automation changed its target session",
   );
+  assert.equal(
+    monitor.sessionKey,
+    proof.sessionKey,
+    "Automation lost its explicit session identity",
+  );
+  assert.ok(runtime.isRecord(monitor.payload));
+  assert.equal(monitor.payload.kind, "agentTurn", "Automation lost its ordinary payload");
   const targetEntry = readCompactionEntry(runtime, gateway, proof);
   assert.equal(
     targetEntry.sessionId,
@@ -226,7 +232,6 @@ async function forceHeartbeat(runtime: Runtime, gateway: QaGatewayChild, proof: 
     runId: started.runId,
     target: {
       agentId: monitor.agentId,
-      declarationKey: monitor.declarationKey,
       sessionTarget: monitor.sessionTarget,
       sessionKey: proof.sessionKey,
       sessionId: proof.sessionId,
@@ -314,7 +319,6 @@ async function runCase(params: {
   let caseFailure: unknown;
   let pendingReset: Promise<unknown> | undefined;
   try {
-    const sessionName = proof.sessionKey.split(":").slice(2).join(":");
     gateway = await owner.start({
       repoRoot,
       command: {
@@ -341,10 +345,6 @@ async function runCase(params: {
       mutateConfig: (config) => {
         const workspaceDir = config.agents?.defaults?.workspace;
         assert.ok(workspaceDir && path.isAbsolute(workspaceDir), "QA workspace must be explicit");
-        writeFileSync(
-          path.join(workspaceDir, "HEARTBEAT.md"),
-          "Process pending system events and report what was handled.\n",
-        );
         const heartbeatHookName = stageHeartbeatCompactionProofHook(workspaceDir, provider.baseUrl);
         const afterHookName =
           mode === "heartbeat-upgraded-native-failure"
@@ -391,7 +391,6 @@ async function runCase(params: {
               ...config.agents?.defaults,
               // Keep Activity recaps off the controlled compaction provider.
               utilityModel: "",
-              heartbeat: { every: "24h", session: sessionName, target: "last" },
               compaction: {
                 ...config.agents?.defaults?.compaction,
                 mode: "default",
@@ -427,9 +426,27 @@ async function runCase(params: {
         agentHarnessId: "openclaw",
       });
     }
+    const automation = await gateway.call("cron.add", {
+      agentId: "qa",
+      name: `Compaction authority (${mode})`,
+      enabled: true,
+      schedule: { kind: "every", everyMs: 86_400_000 },
+      sessionTarget: `session:${proof.sessionKey}`,
+      sessionKey: proof.sessionKey,
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "Review this session's pending context. Use NO_REPLY when no action is needed.",
+      },
+      delivery: { mode: "none" },
+    });
+    assert.ok(
+      runtime.isRecord(automation) && typeof automation.id === "string",
+      "cron.add omitted the automation identity",
+    );
     const before = snapshotCompactionSession(runtime, gateway, proof);
     evidence.before = before;
-    const heartbeat = await forceHeartbeat(runtime, gateway, proof);
+    const heartbeat = await forceAutomation(runtime, gateway, proof, automation.id);
     evidence.heartbeat = heartbeat;
     await waitForCompactionProofCheckpoint(
       proof.beforeHookHeld.promise,
@@ -720,7 +737,7 @@ async function runCase(params: {
           interruptedRunningAtMs,
         );
         recordCompactionProofCheckpoint(proof, "interrupted-heartbeat-recovered");
-        terminalHeartbeat = await forceHeartbeat(runtime, gateway, proof);
+        terminalHeartbeat = await forceAutomation(runtime, gateway, proof, automation.id);
         assert.equal(
           terminalHeartbeat.monitorId,
           heartbeat.monitorId,
@@ -905,10 +922,10 @@ async function runCase(params: {
         "failed",
         "Substituted heartbeat completion status changed",
       );
-      assert.equal(
-        terminal.error,
-        "heartbeat failed: agent-runner-failure",
-        "Substituted heartbeat reason changed",
+      assert.ok(typeof terminal.error === "string", "Substituted automation omitted its refusal");
+      assert.ok(
+        terminal.error.includes("session writer claim changed before transcript persistence"),
+        `Substituted automation lost its writer-fence refusal: ${terminal.error}`,
       );
       assert.deepEqual(
         snapshotProviderCounters(proof),
@@ -923,11 +940,14 @@ async function runCase(params: {
       assertUncommittedCompactionHistory(before, afterTerminal);
     } else {
       assert.equal(terminal.runId, heartbeat.runId, "Cron terminal changed heartbeat run identity");
-      assert.equal(terminal.status, "skipped", "Revoked heartbeat did not skip");
-      assert.equal(
-        terminal.error,
-        "heartbeat skipped: agent-runner-cancelled",
-        "Revoked heartbeat reason changed",
+      assert.equal(terminal.status, "error", "Revoked automation did not fail");
+      assert.equal(terminal.completionStatus, "failed", "Revoked automation completion changed");
+      assert.equal(terminal.sessionKey, proof.sessionKey, "Reset cancellation changed its session");
+      // Reset can settle through different cleanup owners; the exact run, reset
+      // receipt, revoked lifecycle, and zero stale effects below establish cause.
+      assert.ok(
+        typeof terminal.error === "string" && terminal.error.trim().length > 0,
+        "Revoked automation omitted its recorded cancellation reason",
       );
       assert.equal(
         nativeCompactRequests.length,

@@ -314,18 +314,18 @@ function buildTemplateSenderContext(sessionCtx: TemplateContext) {
 
 /** Bind either runtime to the same trusted source turn and requester. */
 export function mintReplyMessageActionTurnCapability(
-  turn: Pick<
-    AgentTurnParams,
-    "followupRun" | "sessionCtx" | "opts" | "isHeartbeat" | "runtimePolicySessionKey"
-  >,
+  turn: Pick<AgentTurnParams, "followupRun" | "sessionCtx" | "opts" | "runtimePolicySessionKey">,
   runId: string,
 ): string | undefined {
+  // An event's captured delivery route is not a new trusted channel turn.
+  if (turn.followupRun.run.internalEventExecution) {
+    return undefined;
+  }
   const channelIngress = isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider);
   const dashboardAdmission = turn.opts?.dashboardReadAdmission;
   if (
-    turn.isHeartbeat ||
-    (!channelIngress &&
-      (turn.sessionCtx.Provider !== "webchat" || dashboardAdmission?.runId !== runId))
+    !channelIngress &&
+    (turn.sessionCtx.Provider !== "webchat" || dashboardAdmission?.runId !== runId)
   ) {
     return undefined;
   }

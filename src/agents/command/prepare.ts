@@ -329,7 +329,6 @@ export async function prepareAgentCommandExecution(
     ...(sessionEntryRaw &&
     isSyntheticSourceReplyTurn({
       inputProvenance: commandOpts.inputProvenance,
-      isHeartbeat: commandOpts.bootstrapContextRunKind === "heartbeat",
     })
       ? {
           // Direct Gateway wakes have no inbound dispatcher to apply effective reply policy.

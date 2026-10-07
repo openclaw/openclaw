@@ -1354,7 +1354,6 @@ export async function runGatewayMatrixCell(
         workspace,
         skipBootstrap: true,
         thinkingDefault: params.thinking,
-        heartbeat: { every: "0m" },
         systemAgent: { agentId: "qa" },
       },
       entries: { qa: {} },

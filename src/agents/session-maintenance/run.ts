@@ -285,7 +285,6 @@ export function scheduleSessionMaintenance(
                   sessionKey,
                   runtimePolicySessionKey: prepared.runtimePolicySessionKey ?? sessionKey,
                   storePath: prepared.storePath,
-                  isHeartbeat: false,
                   abortSignal: owner.signal,
                 });
                 // Flush reports aborted attempts as failed outcomes; cancellation still forbids compaction.
@@ -308,7 +307,6 @@ export function scheduleSessionMaintenance(
                   runtimePolicySessionKey: prepared.runtimePolicySessionKey ?? sessionKey,
                   storePath: prepared.storePath,
                   defaultModel: followupRun.run.model,
-                  isHeartbeat: false,
                   agentHarnessId: request.agentHarnessId,
                   abortSignal: owner.signal,
                   authorize: () => {

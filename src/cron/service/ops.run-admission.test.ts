@@ -443,6 +443,7 @@ describe("cron service run admission", () => {
     const dueAt = Date.parse("2026-02-06T10:05:06.200Z");
     const job = makeJob("invalid-manual-stale-notification", dueAt, dueAt);
     job.sessionTarget = "main";
+    job.payload = { kind: "command", argv: ["true"] };
     job.failureAlert = { after: 1, cooldownMs: 60_000, includeSkipped: true };
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
     const sendCronFailureAlert = vi.fn(async () => {});

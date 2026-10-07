@@ -574,15 +574,18 @@ describe("memory_search real manager", () => {
       );
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync();
 
     const tool = searchTool(cfg, { agentSessionKey: "agent:main:main" });
 
     const first = await tool.execute("migration-first", { query: "operator recovery" });
+    await closeOpenClawAgentDatabasesAsync();
     openOpenClawAgentDatabase({ agentId: "main" })
       .db.prepare("DELETE FROM session_nodes WHERE session_key = ?")
       .run("Agent:Main:Main");
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync();
     const replay = await tool.execute("migration-replay", {
       query: "different anti-cheat query",
     });

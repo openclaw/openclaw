@@ -3,6 +3,10 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { readConfigFileSnapshotForWrite } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  readDefaultProactiveJobReceiptsAsync,
+  readDefaultProactiveJobsAsync,
+} from "../cron/proactive-job-receipt.js";
 import * as fsSafe from "../infra/fs-safe.js";
 import * as snapshots from "../infra/sqlite-readonly-worker.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
@@ -100,7 +104,7 @@ it("refuses bootstrap publication when a recovery hold arrives during root prepa
   }
 });
 
-it("records operator and agent creation provenance after roster commits", async () => {
+it("records creation provenance and provisions the first agent without SQL in worker grants", async () => {
   const state = await createOpenClawTestState({
     layout: "state-only",
     scenario: "empty",
@@ -138,15 +142,33 @@ it("records operator and agent creation provenance after roster commits", async 
       }, attachment),
     );
   try {
-    await createAgent({ name: "Operator Child", workspace: state.path("operator-child") });
-    await createAgent({
-      name: "Agent Child",
-      workspace: state.path("agent-child"),
-      provenance: { createdVia: "agent", creatorAgentId: "main" },
-    });
+    expect(
+      await createAgent({
+        name: "Operator Child",
+        workspace: state.path("operator-child"),
+        bootstrapFirstAgent: true,
+        proactiveCadenceMs: 60_000,
+      }),
+    ).toMatchObject({ status: "created", agentId: "operator-child" });
+    expect(
+      await createAgent({
+        name: "Agent Child",
+        workspace: state.path("agent-child"),
+        provenance: { createdVia: "agent", creatorAgentId: "operator-child" },
+      }),
+    ).toMatchObject({ status: "created", agentId: "agent-child" });
 
     expect(preparation).toHaveBeenCalled();
     expect(grants).toBeGreaterThan(0);
+    expect(
+      await readDefaultProactiveJobsAsync(undefined, ["operator-child", "agent-child"]),
+    ).toMatchObject([
+      {
+        agentId: "operator-child",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "agentTurn", skipIfScratchEmpty: true },
+      },
+    ]);
     expect(readAgentProvenance("operator-child", { env: state.env })).toMatchObject({
       agentId: "operator-child",
       createdVia: "operator",
@@ -156,12 +178,42 @@ it("records operator and agent creation provenance after roster commits", async 
     expect(readAgentProvenance("agent-child", { env: state.env })).toMatchObject({
       agentId: "agent-child",
       createdVia: "agent",
-      creatorAgentId: "main",
+      creatorAgentId: "operator-child",
       createdAtMs: expect.any(Number),
     });
   } finally {
     spy.mockRestore();
     preparation.mockRestore();
+    await state.cleanup();
+  }
+});
+
+it("refuses default-job provisioning when a recovery hold arrives after roster publication", async () => {
+  const state = await createOpenClawTestState({
+    layout: "state-only",
+    scenario: "empty",
+    label: "agent-creation-proactive-recovery-hold",
+  });
+  const onCommitted = vi.fn(() => addRecoveryHold("guarded", state.path("held.sqlite")));
+  try {
+    const result = await createAgent({
+      name: "Guarded",
+      workspace: state.path("guarded-workspace"),
+      bootstrapFirstAgent: true,
+      proactiveCadenceMs: 60_000,
+      onCommitted,
+    });
+
+    expect(onCommitted).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "already-exists",
+      agentId: "guarded",
+      message: expect.stringContaining("held databases"),
+    });
+    expect(await readDefaultProactiveJobsAsync(undefined, ["guarded"])).toEqual([]);
+    expect(await readDefaultProactiveJobReceiptsAsync(undefined, ["guarded"])).toEqual({});
+  } finally {
     await state.cleanup();
   }
 });

@@ -1,10 +1,15 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
+import {
+  createPluginManifestRecordFixture,
+  createPluginMetadataSnapshotFixture,
+} from "./plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationRegistryScope } from "./runtime/generation-state.js";
+import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import type { WebProviderRuntimeResolution } from "./web-provider-runtime-shared.js";
 
 const mocks = vi.hoisted(() => ({
@@ -45,7 +50,8 @@ vi.mock("./runtime.js", () => ({
   getActivePluginRegistryWorkspaceDir: mocks.getActivePluginRegistryWorkspaceDir,
 }));
 
-vi.mock("./runtime/load-context.js", () => ({
+vi.mock("./runtime/load-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime/load-context.js")>()),
   buildPluginRuntimeLoadOptions: mocks.buildPluginRuntimeLoadOptions,
   createPluginRuntimeLoaderLogger: mocks.createPluginRuntimeLoaderLogger,
 }));
@@ -72,6 +78,29 @@ function resolution(
     resolveCandidatePluginIds: () => ["brave"],
     ...overrides,
   };
+}
+
+function createInspection({ withManifest = true, withLoadContext = true } = {}) {
+  const registry = createEmptyPluginRegistry();
+  const resources = new PluginRegistryInspectionResources(async () => {});
+  resources.attach(registry);
+  const config = {};
+  if (withLoadContext) {
+    const snapshot = withManifest ? createPluginMetadataSnapshotFixture() : undefined;
+    setPluginRuntimeLoadContext(registry, {
+      rawConfig: config,
+      config,
+      activationSourceConfig: config,
+      autoEnabledReasons: {},
+      env: process.env,
+      workspaceDir: undefined,
+      logger: mocks.createPluginRuntimeLoaderLogger(),
+      ...(snapshot
+        ? { manifestRegistry: snapshot.manifestRegistry, metadataSnapshot: snapshot }
+        : {}),
+    });
+  }
+  return { registry, resources, config };
 }
 
 describe("web-provider-runtime-shared", () => {
@@ -394,6 +423,168 @@ describe("web-provider-runtime-shared", () => {
       expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
     },
   );
+
+  it.each([{ providers: [] }, { providers: ["legacy-provider"] }])(
+    "keeps recorded inspection providers $providers without broad registration",
+    async ({ providers }) => {
+      const inspection = createInspection();
+      try {
+        const result = withPluginRuntimeRegistryScope(inspection.registry, () =>
+          resolvePluginWebProviders(
+            { config: inspection.config },
+            resolution({
+              resolveCandidatePluginIds: () => undefined,
+              mapRegistryProviders: ({ registry }) =>
+                registry === inspection.registry ? providers : ["unexpected-provider"],
+            }),
+          ),
+        );
+        expect(result).toEqual(providers);
+        expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+      } finally {
+        await inspection.resources.release();
+      }
+    },
+  );
+
+  it.each(["manifest", "config", "workspace"] as const)(
+    "retains a complete request-owned inventory with changed %s inputs",
+    async (kind) => {
+      const inspection = createInspection();
+      const mapRegistryProviders = vi.fn(() => ["owned-provider"]);
+      try {
+        const result = withPluginRuntimeRegistryScope(inspection.registry, () =>
+          resolvePluginWebProviders(
+            {
+              config: kind === "config" ? { plugins: { enabled: false } } : inspection.config,
+              ...(kind === "manifest" ? { manifestRecords: [] } : {}),
+              ...(kind === "workspace" ? { workspaceDir: "/different-workspace" } : {}),
+            },
+            resolution({ resolveCandidatePluginIds: () => undefined, mapRegistryProviders }),
+          ),
+        );
+        expect(result).toEqual(["owned-provider"]);
+        expect(mapRegistryProviders).toHaveBeenCalledExactlyOnceWith({
+          registry: inspection.registry,
+          onlyPluginIds: undefined,
+        });
+        expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+      } finally {
+        await inspection.resources.release();
+      }
+    },
+  );
+
+  it.each(["environment", "unknown inventory", "declared candidate"] as const)(
+    "falls back without an authoritative inspection selection (%s)",
+    async (kind) => {
+      const inspection = createInspection({ withManifest: kind !== "unknown inventory" });
+      const loaded = createEmptyPluginRegistry();
+      mocks.loadOpenClawPlugins.mockReturnValue(loaded);
+      try {
+        const result = withPluginRuntimeRegistryScope(inspection.registry, () =>
+          resolvePluginWebProviders(
+            {
+              config: inspection.config,
+              ...(kind === "environment" ? { env: {} } : {}),
+            },
+            resolution({
+              resolveCandidatePluginIds: () =>
+                kind === "declared candidate" ? ["provider-plugin"] : undefined,
+              mapRegistryProviders: ({ registry }) =>
+                registry === loaded ? ["loaded-provider"] : [],
+            }),
+          ),
+        );
+        expect(result).toEqual(["loaded-provider"]);
+        expect(mocks.loadOpenClawPlugins).toHaveBeenCalledOnce();
+      } finally {
+        await inspection.resources.release();
+      }
+    },
+  );
+
+  it.each(["compatible", "environment", "manifest", "missing context", "setup"] as const)(
+    "refuses a released inspection with %s inputs instead of reloading",
+    async (kind) => {
+      const inspection = createInspection({ withLoadContext: kind !== "missing context" });
+      await inspection.resources.release();
+      const mapRegistryProviders = vi.fn(() => ["stale-provider"]);
+      expect(() =>
+        withPluginRuntimeRegistryScope(inspection.registry, () =>
+          resolvePluginWebProviders(
+            {
+              config: inspection.config,
+              ...(kind === "environment" ? { env: {} } : {}),
+              ...(kind === "manifest" ? { manifestRecords: [] } : {}),
+              ...(kind === "setup" ? { mode: "setup" as const } : {}),
+            },
+            resolution({
+              resolveCandidatePluginIds: () => undefined,
+              mapRegistryProviders,
+            }),
+          ),
+        ),
+      ).toThrow("Plugin tool inspection has been released");
+      expect(mapRegistryProviders).not.toHaveBeenCalled();
+      expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["runtime", "setup"] as const)(
+    "fences a released exact generation above a live request during %s resolution",
+    async (mode) => {
+      const request = createInspection();
+      const generation = createInspection();
+      await generation.resources.release();
+      const mapRegistryProviders = vi.fn(() => ["stale-provider"]);
+      try {
+        expect(() =>
+          withPluginRuntimeRegistryScope(request.registry, () =>
+            withPluginRuntimeGenerationRegistryScope(generation.registry, () =>
+              resolvePluginWebProviders(
+                { config: generation.config, mode },
+                resolution({ resolveCandidatePluginIds: () => undefined, mapRegistryProviders }),
+              ),
+            ),
+          ),
+        ).toThrow("Plugin tool inspection has been released");
+        expect(mapRegistryProviders).not.toHaveBeenCalled();
+        expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+      } finally {
+        await generation.resources.release();
+        await request.resources.release();
+      }
+    },
+  );
+
+  it("uses a live exact generation above a released request inspection", async () => {
+    const request = createInspection();
+    const generation = createInspection();
+    await request.resources.release();
+    const mapRegistryProviders = vi.fn(({ registry }) =>
+      registry === generation.registry ? ["owned-provider"] : ["stale-provider"],
+    );
+    try {
+      const result = withPluginRuntimeRegistryScope(request.registry, () =>
+        withPluginRuntimeGenerationRegistryScope(generation.registry, () =>
+          resolvePluginWebProviders(
+            { config: generation.config },
+            resolution({ resolveCandidatePluginIds: () => undefined, mapRegistryProviders }),
+          ),
+        ),
+      );
+      expect(result).toEqual(["owned-provider"]);
+      expect(mapRegistryProviders).toHaveBeenCalledExactlyOnceWith({
+        registry: generation.registry,
+        onlyPluginIds: undefined,
+      });
+      expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+    } finally {
+      await generation.resources.release();
+      await request.resources.release();
+    }
+  });
 
   it("does not treat an active registry missing declared candidates as authoritative", () => {
     // Regression: an active registry with SOME web providers used to win even when a

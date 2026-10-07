@@ -1,5 +1,4 @@
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import type { HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
@@ -120,16 +119,9 @@ export type ExecuteJobCoreOptions = {
   deliveryAttemptFence?: CronCompletionDeliveryFence;
   activeJobMarker?: CronActiveJobMarker;
   owningCronLaneTaskMarker?: CommandLaneTaskMarker;
-  onPayloadExecutionStarted?: () => void;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
-  onHeartbeatExecutionStarted?: (opts: HeartbeatWakeRequest & { agentId: string }) =>
-    | {
-        onAttemptStarted?: () => void;
-        onQueued?: () => void;
-      }
-    | undefined;
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
   /** Revalidates the durable run fence after awaited planning and before effects. */
   assertRunCurrent?: () => Promise<void>;
@@ -140,15 +132,10 @@ export type ExecuteJobCoreOptions = {
   streamSourceIdentity?: string;
 };
 
-/** Payloads that execute outside the main session own cancellable task-run state. */
-export function runsDetachedFromMainSession(job: CronJob): boolean {
-  return job.sessionTarget !== "main" || job.payload.kind === "script";
-}
-
-export function resolveMainSessionCronDeliveryContext(
+export async function resolveMainSessionCronDeliveryContext(
   state: CronServiceState,
   job: CronJob,
-): DeliveryContext | undefined {
+): Promise<DeliveryContext | undefined> {
   const targetSessionKey = job.sessionKey?.trim();
   if (!targetSessionKey) {
     return undefined;
@@ -166,11 +153,14 @@ export function resolveMainSessionCronDeliveryContext(
     return undefined;
   }
   try {
-    const sessionEntry = loadSessionEntryReadOnly({
-      agentId,
-      sessionKey: targetSessionKey,
-      storePath,
-    });
+    const sessionEntry = await readSessionEntryInWorker(
+      {
+        agentId,
+        sessionKey: targetSessionKey,
+        storePath,
+      },
+      () => {},
+    );
     return deliveryContextFromSession(sessionEntry);
   } catch {
     return undefined;

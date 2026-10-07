@@ -10,12 +10,14 @@ import {
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 
-type GetReplyFromConfig = typeof import("./reply/get-reply.js").getReplyFromConfig;
+type GetReplyFromConfig = typeof import("./reply/get-reply.js").getReplyFromConfigInternal;
 
 const usageMocks = getProviderUsageMocks();
 
-function getReplyFromConfigNow(getReplyFromConfig: () => GetReplyFromConfig): GetReplyFromConfig {
-  return getReplyFromConfig();
+function getReplyFromConfigNow(
+  getReplyFromConfigInternal: () => GetReplyFromConfig,
+): GetReplyFromConfig {
+  return getReplyFromConfigInternal();
 }
 
 function replyText(reply: Awaited<ReturnType<GetReplyFromConfig>>): string {
@@ -42,16 +44,16 @@ function seedUsageSummary(): void {
 }
 
 export function registerTriggerHandlingUsageSummaryCases(params: {
-  getReplyFromConfig: () => GetReplyFromConfig;
+  getReplyFromConfigInternal: () => GetReplyFromConfig;
 }): void {
   describe("usage and status command handling", () => {
     it("shows status without invoking the agent", async () => {
       await withTempHome(async (home) => {
         const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
-        const getReplyFromConfig = getReplyFromConfigNow(params.getReplyFromConfig);
+        const getReplyFromConfigInternal = getReplyFromConfigNow(params.getReplyFromConfigInternal);
         seedUsageSummary();
 
-        const res = await getReplyFromConfig(
+        const res = await getReplyFromConfigInternal(
           {
             Body: "/status",
             From: "+1000",
@@ -74,12 +76,12 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
     it("cycles usage footer modes and persists the final selection", async () => {
       await withTempHome(async (home) => {
         const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
-        const getReplyFromConfig = getReplyFromConfigNow(params.getReplyFromConfig);
+        const getReplyFromConfigInternal = getReplyFromConfigNow(params.getReplyFromConfigInternal);
         const cfg = makeCfg(home);
         cfg.session = { ...cfg.session, store: join(home, "usage-cycle.sessions.json") };
         const usageStorePath = requireSessionStorePath(cfg);
 
-        const r0 = await getReplyFromConfig(
+        const r0 = await getReplyFromConfigInternal(
           {
             Body: "/usage on",
             From: "+1000",
@@ -93,7 +95,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
         );
         expect(replyText(r0)).toContain("Usage footer: tokens");
 
-        const r1 = await getReplyFromConfig(
+        const r1 = await getReplyFromConfigInternal(
           {
             Body: "/usage",
             From: "+1000",
@@ -107,7 +109,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
         );
         expect(replyText(r1)).toContain("Usage footer: full");
 
-        const r2 = await getReplyFromConfig(
+        const r2 = await getReplyFromConfigInternal(
           {
             Body: "/usage",
             From: "+1000",
@@ -121,7 +123,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
         );
         expect(replyText(r2)).toContain("Usage footer: off");
 
-        const r3 = await getReplyFromConfig(
+        const r3 = await getReplyFromConfigInternal(
           {
             Body: "/usage",
             From: "+1000",

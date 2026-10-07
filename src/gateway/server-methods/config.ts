@@ -782,17 +782,18 @@ export const configHandlers: GatewayRequestHandlers = {
       loadUiHints: () => loadSchemaWithPlugins().uiHints,
       revisionProjector: context.configRevisionProjector,
     });
+    // Matching revisions can precede reload settlement; never cache this live owner fact.
+    const response = { ...snapshot, reloadSettled: context.isConfigReloadSettled() };
     const recovery = configWriteRecovery.get(gateway);
     if (recovery?.configPath === snapshot.path) {
       // Only a read started after this failure can reconcile its recorded outcome.
       if (recovery === recoveryAtStart && snapshot.exists && snapshot.valid) {
         configWriteRecovery.delete(gateway);
       } else {
-        respond(true, { ...snapshot, writeError: recovery.error }, undefined);
-        return;
+        return respond(true, { ...response, writeError: recovery.error }, undefined);
       }
     }
-    respond(true, snapshot, undefined);
+    respond(true, response, undefined);
   },
   "config.schema": ({ params, respond }) => {
     if (!assertValidParams(params, validateConfigSchemaParams, "config.schema", respond)) {

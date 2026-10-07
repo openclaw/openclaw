@@ -563,7 +563,10 @@ export const gatewayCoreTestExclude = [
   "src/gateway/sessions-history-http.test.ts",
 ];
 
-export const gatewayServerExcludedTestFiles = ["src/gateway/gateway.test.ts"];
+export const gatewayServerExcludedTestFiles = [
+  ...databaseWorkerCoreTestFiles,
+  "src/gateway/gateway.test.ts",
+];
 
 const gatewayServerBackedHttpTestFileSet = new Set(gatewayServerBackedHttpTestFiles);
 const gatewayServerExcludedTestFileSet = new Set(gatewayServerExcludedTestFiles);

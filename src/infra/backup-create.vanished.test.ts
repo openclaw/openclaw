@@ -84,6 +84,7 @@ it("reports transient files in a second workspace and preserves its dangling abs
     await fs.mkdir(second);
     await state.writeConfig({
       agents: {
+        ownership: "explicit",
         entries: { main: { workspace: state.workspaceDir }, second: { workspace: second } },
       },
     });

@@ -119,6 +119,7 @@ vi.mock("./config-model-validation.js", () => ({
   checkTouchedTextModelRefs: (...args: unknown[]) => mockCheckTouchedTextModelRefs(...args),
 }));
 
+// mock-isolation: Keep config command reload decisions independent of the active Gateway plugin registry.
 vi.mock("../gateway/config-reload-plan.js", () => ({
   buildGatewayReloadPlan: (changedPaths: string[]) => {
     const hotReasons = changedPaths.filter(
@@ -138,7 +139,7 @@ vi.mock("../gateway/config-reload-plan.js", () => ({
       reloadHooks: false,
       restartGmailWatcher: false,
       restartCron: false,
-      restartHeartbeat: hotReasons.length > 0,
+      reconcileSystemJobs: hotReasons.length > 0,
       reloadPlugins: false,
       restartChannels: new Set(),
       disposeMcpRuntimes: false,

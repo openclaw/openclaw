@@ -67,7 +67,7 @@ describe("agent roster ownership", () => {
 describe("explicit ambient agent targets", () => {
   it("rejects an unknown explicit target", () => {
     const result = OpenClawSchema.safeParse({
-      agents: { defaults: { heartbeat: { agentId: "missing" } }, entries: { main: {} } },
+      agents: { defaults: { systemAgent: { agentId: "missing" } }, entries: { main: {} } },
     });
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -75,12 +75,11 @@ describe("explicit ambient agent targets", () => {
     }
   });
 
-  it("accepts configured heartbeat, system-agent, compatibility, and Talk targets", () => {
+  it("accepts configured system-agent, compatibility, and Talk targets", () => {
     expect(
       OpenClawSchema.safeParse({
         agents: {
           defaults: {
-            heartbeat: { agentId: "ops" },
             systemAgent: { agentId: "ops" },
             authInheritance: { agentId: "ops" },
             sessionStore: { agentId: "ops" },

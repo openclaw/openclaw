@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
@@ -17,8 +17,18 @@ const repoSourceEntry = path.join(repoRoot, "src", "entry.ts");
 const trustedTsxLoader = pathToFileURL(requireFromHere.resolve("tsx", { paths: [repoRoot] })).href;
 const sourceEnv = { TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json") };
 const commandArgs = ["sessions", "export-trajectory"];
+const compilerArgs = ["--no-maglev", "--no-concurrent-sparkplug"];
 
 describe("resolveCurrentOpenClawCliInvocation", () => {
+  let originalExecArgv: string[];
+  beforeEach(() => {
+    originalExecArgv = process.execArgv;
+    process.execArgv = [...compilerArgs];
+  });
+  afterEach(() => {
+    process.execArgv = originalExecArgv;
+  });
+
   it("keeps child runtime flags without inheriting debugger ownership", () => {
     expect(
       filterOpenClawChildExecArgv([
@@ -72,7 +82,7 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
       }),
     ).toEqual({
       command: "/usr/bin/node",
-      args: ["--import", trustedTsxLoader, repoSourceEntry, ...commandArgs],
+      args: [...compilerArgs, "--import", trustedTsxLoader, repoSourceEntry, ...commandArgs],
       cwd: repoRoot,
       env: sourceEnv,
     });
@@ -200,7 +210,7 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
       }),
     ).toEqual({
       command: "/usr/bin/node",
-      args: ["--import", trustedTsxLoader, repoSourceEntry, ...commandArgs],
+      args: [...compilerArgs, "--import", trustedTsxLoader, repoSourceEntry, ...commandArgs],
       cwd: repoRoot,
       env: sourceEnv,
     });
@@ -215,7 +225,7 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
       }),
     ).toEqual({
       command: "/usr/bin/node",
-      args: ["--import", trustedTsxLoader, repoSourceEntry, ...commandArgs],
+      args: [...compilerArgs, "--import", trustedTsxLoader, repoSourceEntry, ...commandArgs],
       cwd: repoRoot,
       env: sourceEnv,
     });

@@ -24,7 +24,7 @@ vi.mock("./model-selection.js", async (importOriginal) => ({
   ),
 }));
 
-let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
+let getReplyFromConfigInternal: typeof import("./get-reply.js").getReplyFromConfigInternal;
 const agentMocks = createReplyRuntimeMocks();
 const { withTempHome } = createTempHomeHarness({ prefix: "openclaw-getreply-fast-" });
 
@@ -42,15 +42,17 @@ function installRuntimeChannels() {
   );
 }
 
-describe("getReplyFromConfig fast-path runtime", () => {
+describe("getReplyFromConfigInternal fast-path runtime", () => {
   beforeAll(async () => {
     installRuntimeChannels();
-    ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
+    ({ getReplyFromConfigInternal } = await loadGetReplyModuleForTest({
+      cacheKey: import.meta.url,
+    }));
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     resetReplyRuntimeMocks(agentMocks);
     agentMocks.runEmbeddedAgent.mockResolvedValue(makeEmbeddedTextResult("warm runtime"));
     await withTempHome(async (home) => {
-      await getReplyFromConfig(
+      await getReplyFromConfigInternal(
         {
           Body: "warm runtime",
           BodyForAgent: "warm runtime",
@@ -90,7 +92,7 @@ describe("getReplyFromConfig fast-path runtime", () => {
         return makeEmbeddedTextResult("ok");
       });
 
-      const res = await getReplyFromConfig(
+      const res = await getReplyFromConfigInternal(
         {
           Body: "hello",
           BodyForAgent: "hello",
@@ -122,7 +124,7 @@ describe("getReplyFromConfig fast-path runtime", () => {
     await withTempHome(async (home) => {
       agentMocks.runEmbeddedAgent.mockResolvedValue(makeEmbeddedTextResult("ok"));
 
-      await getReplyFromConfig(
+      await getReplyFromConfigInternal(
         {
           Body: "hello",
           BodyForAgent: "hello",
@@ -155,7 +157,7 @@ describe("getReplyFromConfig fast-path runtime", () => {
     await withTempHome(async (home) => {
       agentMocks.runEmbeddedAgent.mockResolvedValue(makeEmbeddedTextResult("ok"));
 
-      await getReplyFromConfig(
+      await getReplyFromConfigInternal(
         {
           Body: "hello",
           BodyForAgent: "hello",

@@ -16,6 +16,7 @@ on:
       - scripts/lib/docs-redirects.mjs
       - scripts/lib/tsx-cli-shim.mjs
       - scripts/lib/local-check-runtime.mts
+      - src/infra/node-compiler-policy.mjs
       - .github/workflows/docs-sync-publish.yml
   workflow_dispatch:
 
@@ -51,6 +52,7 @@ jobs:
           sparse-checkout: |
             docs
             scripts
+            src/infra
             .github/codex/prompts
 
       - name: Checkout ClawHub docs source
@@ -202,7 +204,7 @@ jobs:
               raise SystemExit(0)
 
           try:
-              run_git(publish, "diff", "--quiet", "--", "docs", ".openclaw-sync", "package.json", "package-lock.json")
+              run_git(publish, "diff", "--quiet", "--", "docs", ".openclaw-sync", "src/infra/node-compiler-policy.mjs", "package.json", "package-lock.json")
           except GitFailure:
               pass
           else:
@@ -218,7 +220,7 @@ jobs:
 
           run_git(publish, "config", "user.name", "openclaw-docs-sync[bot]", reclaim_locks=True)
           run_git(publish, "config", "user.email", "openclaw-docs-sync[bot]@users.noreply.github.com", reclaim_locks=True)
-          run_git(publish, "add", "docs", ".openclaw-sync", "package.json", "package-lock.json", reclaim_locks=True)
+          run_git(publish, "add", "docs", ".openclaw-sync", "src/infra/node-compiler-policy.mjs", "package.json", "package-lock.json", reclaim_locks=True)
           run_git(publish, "commit", "-m", f"chore(sync): mirror docs from {os.environ['GITHUB_REPOSITORY']}@{source_sha}", reclaim_locks=True)
           for attempt in range(1, 6):
               try:

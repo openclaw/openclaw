@@ -47,6 +47,7 @@ async function createHarness(params: {
   const events: CronEvent[] = [];
   const eventContexts: Array<CronEventContext | undefined> = [];
   const enqueueSystemEvent = vi.fn();
+  const runSessionEvent = vi.fn(async () => ({ status: "ok" as const }));
   const runIsolatedAgentJob =
     params.runIsolatedAgentJob ?? vi.fn(async () => ({ status: "ok" as const }));
   const deps: CronServiceDeps = {
@@ -57,7 +58,8 @@ async function createHarness(params: {
     cronConfig: { triggers: { enabled: true } },
     log: logger,
     enqueueSystemEvent,
-    requestHeartbeat: vi.fn(),
+    runSessionEvent,
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob,
     ...(params.evaluateCronTrigger ? { evaluateCronTrigger: params.evaluateCronTrigger } : {}),
     ...(params.runScriptJob ? { runScriptJob: params.runScriptJob } : {}),
@@ -69,7 +71,16 @@ async function createHarness(params: {
   };
   const cron = new CronService(deps);
   await cron.start();
-  return { cron, deps, enqueueSystemEvent, eventContexts, events, runIsolatedAgentJob, storePath };
+  return {
+    cron,
+    deps,
+    enqueueSystemEvent,
+    runSessionEvent,
+    eventContexts,
+    events,
+    runIsolatedAgentJob,
+    storePath,
+  };
 }
 
 async function runWhenDue(cron: CronService, jobId: string) {
@@ -239,7 +250,7 @@ describe("cron trigger evaluation", () => {
         }),
       );
       await runWhenDue(harness.cron, job.id);
-      expect(harness.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(harness.runSessionEvent).not.toHaveBeenCalled();
       await expect(waitForActiveCronTaskRuns(0)).resolves.toEqual({ drained: true, active: 0 });
       const state = harness.cron.getJob(job.id)?.state;
       expect(state?.triggerEvalCount).toBeUndefined();
@@ -289,7 +300,7 @@ describe("cron trigger evaluation", () => {
         evaluation.resolve({ kind: "evaluated", fire: true, state: { owner: "late result" } });
         await run;
         expect(signal.aborted).toBe(true);
-        expect(harness.enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(harness.runSessionEvent).not.toHaveBeenCalled();
         expect(harness.runIsolatedAgentJob).not.toHaveBeenCalled();
         expect(harness.events.filter((event) => event.action === "finished")).toEqual([
           expect.objectContaining({
@@ -387,9 +398,8 @@ describe("cron trigger evaluation", () => {
         );
         await runWhenDue(harness.cron, job.id);
         if (sessionTarget === "main") {
-          expect(harness.enqueueSystemEvent).toHaveBeenCalledWith(
-            "base message\n\nCI became red",
-            expect.any(Object),
+          expect(harness.runSessionEvent).toHaveBeenCalledWith(
+            expect.objectContaining({ text: "base message\n\nCI became red" }),
           );
         } else {
           expect(harness.runIsolatedAgentJob).toHaveBeenCalledWith(

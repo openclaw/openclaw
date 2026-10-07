@@ -314,12 +314,12 @@ export function makeCfg(home: string): OpenClawConfig {
 }
 
 async function loadGetReplyFromConfig() {
-  return (await import("../../../src/auto-reply/reply/get-reply.js")).getReplyFromConfig;
+  return (await import("../../../src/auto-reply/reply/get-reply.js")).getReplyFromConfigInternal;
 }
 
 export function installTriggerHandlingReplyHarness(
   setGetReplyFromConfig: (
-    getReplyFromConfig: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfig,
+    getReplyFromConfigInternal: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfigInternal,
   ) => void,
 ): void {
   beforeAll(async () => {
@@ -338,7 +338,7 @@ export function requireSessionStorePath(cfg: { session?: { store?: string } }): 
 
 export async function expectInlineCommandHandledAndStripped(params: {
   home: string;
-  getReplyFromConfig: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfig;
+  getReplyFromConfigInternal: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfigInternal;
   body: string;
   stripToken: string;
   blockReplyContains: string;
@@ -347,7 +347,7 @@ export async function expectInlineCommandHandledAndStripped(params: {
   const runEmbeddedAgentMock = mockRunEmbeddedAgentOk();
   runEmbeddedAgentMock.mockClear();
   const { blockReplies, handlers } = createBlockReplyCollector();
-  const res = await params.getReplyFromConfig(
+  const res = await params.getReplyFromConfigInternal(
     {
       Body: params.body,
       From: "+1002",
@@ -372,7 +372,7 @@ export async function expectInlineCommandHandledAndStripped(params: {
 export async function expectBareNewOrResetAcknowledged(params: {
   home: string;
   body: "/new" | "/reset";
-  getReplyFromConfig: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfig;
+  getReplyFromConfigInternal: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfigInternal;
 }) {
   const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
   runEmbeddedAgentMock.mockClear();
@@ -384,7 +384,7 @@ export async function expectBareNewOrResetAcknowledged(params: {
     },
   });
 
-  const res = await params.getReplyFromConfig(
+  const res = await params.getReplyFromConfigInternal(
     {
       Body: params.body,
       From: "+1003",

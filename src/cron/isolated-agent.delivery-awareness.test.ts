@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import "./isolated-agent.mocks.js";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions.js";
 import {
   peekSystemEventEntries,
@@ -32,12 +36,14 @@ async function withAnnounce(
     await fs.writeFile(storePath, JSON.stringify(options.entries ?? {}), "utf-8");
     const deps = createCliDeps();
     mockAgentPayloads(options.texts.map((text) => ({ text })));
+    const cfg = makeCfg(home, storePath, {
+      ...options.cfg,
+      ...(options.cfg?.session ? { session: { store: storePath, ...options.cfg.session } } : {}),
+    });
+    setRuntimeConfigSnapshot(cfg);
     const result = await runCronIsolatedAgentTurn({
       deliveryAttemptFence: null,
-      cfg: makeCfg(home, storePath, {
-        ...options.cfg,
-        ...(options.cfg?.session ? { session: { store: storePath, ...options.cfg.session } } : {}),
-      }),
+      cfg,
       deps,
       job: {
         ...makeJob({ kind: "agentTurn", message: "do it" }),
@@ -56,11 +62,13 @@ describe("isolated cron delivery awareness", () => {
     setupIsolatedAgentTurnMocks();
     resetSystemEventsForTest();
     await withAnnounce({ texts: ["warm runtime"] });
+    clearRuntimeConfigSnapshot();
   });
   beforeEach(() => {
     setupIsolatedAgentTurnMocks();
     resetSystemEventsForTest();
   });
+  afterEach(clearRuntimeConfigSnapshot);
 
   it("queues delivered text for the next main-session turn", async () => {
     await withAnnounce({ texts: ["hello from cron"] }, (result) => {

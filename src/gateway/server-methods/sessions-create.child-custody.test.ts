@@ -12,7 +12,7 @@ import {
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
 import { callInProcessGatewayToolWithCreation } from "../../agents/tools/in-process-gateway.js";
-import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import type { dispatchInboundMessageInternal } from "../../auto-reply/dispatch.js";
 import {
   bindChildSessionPublication,
   admitChildSessionPublication,
@@ -165,7 +165,7 @@ async function createHostedChildFixture(
   });
   initializeGlobalHookRunner(registry);
   dispatchInboundMessageMock.mockImplementation(async (params: unknown) => {
-    const { replyOptions } = params as Parameters<typeof dispatchInboundMessage>[0];
+    const { replyOptions } = params as Parameters<typeof dispatchInboundMessageInternal>[0];
     const recorder = expectDefined(replyOptions?.userTurnTranscriptRecorder, "child input owner");
     dispatchEntered.resolve();
     await releaseDispatch.promise;

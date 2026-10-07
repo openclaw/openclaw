@@ -145,7 +145,6 @@ describe("Gateway cron startup recovery", () => {
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       nowMs: () => endedAtMs,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
 

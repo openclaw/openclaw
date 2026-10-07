@@ -68,7 +68,7 @@ it.each([
         text: "Check the monitor.",
         provenance: hidden
           ? { kind: "inter_session", sourceChannel: "internal", sourceTool: "agent_harness_task" }
-          : { kind: "internal_system", sourceTool: "heartbeat" },
+          : { kind: "internal_system", sourceTool: "automations" },
         ...(hidden ? { display: false } : {}),
         ...(recovery === "excluded" || recovery === "closed" ? { excludeFromContext: true } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
@@ -130,12 +130,12 @@ it.each([
       });
       projector.recordDynamicToolCall({
         callId: "result",
-        tool: "heartbeat_respond",
+        tool: "automations",
         arguments: {},
       });
       projector.recordDynamicToolResult({
         callId: "result",
-        tool: "heartbeat_respond",
+        tool: "automations",
         success: true,
         terminalType: "completed",
         contentItems: [{ type: "inputText", text: "Monitor completed." }],

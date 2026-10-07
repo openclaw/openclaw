@@ -287,9 +287,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           params.setState(nextState);
           runtimeCommitted = true;
         }
-        if (plan.restartHeartbeat) {
-          nextState.heartbeatRunner.updateConfig(nextConfig);
-        }
         revokeActiveSkillReviewsBeforeConfigPublication(nextConfig);
         if (refreshModelRuntime) {
           // Retire model/auth inputs together so requests cannot mix generations.
@@ -352,7 +349,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           failConfigCommit(error);
         }
       }
-      if (plan.restartHeartbeat) {
+      if (plan.reconcileSystemJobs) {
         await reviveAgentDatabasesAfterConfigCommit(listAgentIds(nextConfig), (message) =>
           params.logReload.warn(message),
         );

@@ -39,7 +39,10 @@ export async function withCronMessageRun<T>(
     scheduledToolPolicy,
   };
   await saveCronStore(params.storePath, { version: 1, jobs: [job] });
-  const result: { outcome?: { ok: true; value: T } | { ok: false; error: unknown } } = {};
+  const result: {
+    entered?: true;
+    outcome?: { ok: true; value: T } | { ok: false; error: unknown };
+  } = {};
   const cron = new CronService({
     storePath: params.storePath,
     scheduler: createTestGatewayScheduler(),
@@ -47,23 +50,32 @@ export async function withCronMessageRun<T>(
     defaultAgentId: "main",
     log: { debug() {}, info() {}, warn() {}, error() {} },
     enqueueSystemEvent() {},
-    requestHeartbeat() {},
     runIsolatedAgentJob: async (execution) => {
+      result.entered = true;
       const runId = "message-entrypoint-run";
-      const admission = prepareCronRunAdmission({
-        cfg: params.cfg,
+      const executionInfo = {
+        jobId: job.id,
         agentId: "main",
         runId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
-        jobId: job.id,
-        admissionSource: execution.admissionSource,
-        deliveryAttemptFence: execution.deliveryAttemptFence,
-        executionIdentity: execution.executionIdentity,
-        toolsAllow: ["message"],
-        scheduledToolPolicy,
-      });
+      };
+      let admission: ReturnType<typeof prepareCronRunAdmission> | undefined;
       try {
+        execution.onExecutionStarted?.({ ...executionInfo, phase: "runner_entered" });
+        admission = prepareCronRunAdmission({
+          cfg: params.cfg,
+          agentId: "main",
+          runId,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          jobId: job.id,
+          admissionSource: execution.admissionSource,
+          deliveryAttemptFence: execution.deliveryAttemptFence,
+          executionIdentity: execution.executionIdentity,
+          toolsAllow: ["message"],
+          scheduledToolPolicy,
+        });
         const admitted = await admission.preparedRunAdmission.admit("embedded");
         const messageActionTurnCapability = admission.messageActionTurnCapability;
         if (!messageActionTurnCapability) {
@@ -86,6 +98,9 @@ export async function withCronMessageRun<T>(
           catalog: () => ({ tools: catalog }),
           isAvailable: () => catalog.some((tool) => tool.name === "message"),
         });
+        await execution.executionIdentity?.onExecutionStarted?.();
+        execution.onExecutionPhase?.({ ...executionInfo, phase: "attempt_dispatch" });
+        const closeAdmission = admission.close;
         const value = await run({
           admitted,
           messageActionTurnCapability,
@@ -116,7 +131,7 @@ export async function withCronMessageRun<T>(
           },
           revokeMessage: () =>
             cron.update(job.id, { payload: { kind: "agentTurn", toolsAllow: ["read"] } }),
-          closeAdmission: () => admission.close(),
+          closeAdmission,
         });
         result.outcome = { ok: true, value };
         return { status: "ok" };
@@ -124,15 +139,21 @@ export async function withCronMessageRun<T>(
         result.outcome = { ok: false, error };
         return { status: "error", error: String(error) };
       } finally {
-        admission.close();
+        admission?.close();
       }
     },
   });
   try {
-    await cron.run(job.id, "force");
+    const completed = await cron.run(job.id, "force");
     const outcome = result.outcome;
     if (!outcome) {
-      throw new Error("Cron did not enter its isolated runner");
+      throw new Error(
+        `Cron settled before the fixture completed: ${JSON.stringify({
+          entered: result.entered === true,
+          completed,
+          state: cron.getJob(job.id)?.state,
+        })}`,
+      );
     }
     if (!outcome.ok) {
       throw outcome.error;

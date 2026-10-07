@@ -339,29 +339,23 @@ describe("cron batch outcome finalization", () => {
       schedule: { kind: "every", everyMs: 60_000, anchorMs: DUE_AT - 60_000 },
       state: { nextRunAtMs: DUE_AT, consecutiveErrors: 9, runningAtMs: DUE_AT },
     });
-    const order: string[] = [];
+    let persistedAtNotification: unknown;
     const deliveryContext = { channel: "discord", to: "channel-1", accountId: "default" };
     const resolveOriginDeliveryContext = vi.fn(() => deliveryContext);
-    const enqueueSystemEvent = vi.fn<CronServiceDeps["enqueueSystemEvent"]>(() => {
-      const persisted = openOpenClawStateDatabase()
+    const enqueueSessionEvent = vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>(() => {
+      persistedAtNotification = openOpenClawStateDatabase()
         .db.prepare("SELECT enabled FROM cron_jobs WHERE store_key = ? AND job_id = ?")
         .get(cronStoreKey(storePath), job.id);
-      expect(persisted).toMatchObject({ enabled: 0 });
-      order.push("notify");
-    });
-    const requestHeartbeat = vi.fn(() => {
-      order.push("heartbeat");
     });
     const { state, storePath } = await fixture([job], {
       nowMs: () => DUE_AT + 10,
       defaultAgentId: "main",
-      enqueueSystemEvent,
+      enqueueSessionEvent,
       resolveOriginDeliveryContext,
-      requestHeartbeat,
     });
     await finalizeError(state, job, "cron: job execution timed out at /private/agent/work");
-    expect(order).toEqual(["notify", "heartbeat"]);
-    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+    expect(persistedAtNotification).toMatchObject({ enabled: 0 });
+    expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
       expect.stringContaining(`openclaw automations enable ${job.id}`),
       {
         agentId: "main",
@@ -370,7 +364,7 @@ describe("cron batch outcome finalization", () => {
         deliveryContext,
       },
     );
-    const text = enqueueSystemEvent.mock.calls[0]?.[0];
+    const text = enqueueSessionEvent.mock.calls[0]?.[0];
     expect(text).toContain("Recurring report");
     expect(text).toContain(job.id);
     expect(text).toContain("10 consecutive run failures");
@@ -380,14 +374,6 @@ describe("cron batch outcome finalization", () => {
       agentId: "main",
       sessionKey: undefined,
     });
-    expect(requestHeartbeat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        source: "notifications-event",
-        intent: "immediate",
-        reason: "wake",
-        agentId: "main",
-      }),
-    );
     expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
       enabled: false,
       state: {

@@ -1,4 +1,5 @@
 import type { ServerResponse } from "node:http";
+import type { CronAgentAdmissionDisposition } from "../../cron/isolated-agent/run.types.js";
 import type { HookAgentCompletion, HookAgentDispatchResult } from "../hooks.types.js";
 import { sendJson } from "../http-common.js";
 
@@ -7,6 +8,33 @@ import { sendJson } from "../http-common.js";
 export const HOOK_FAN_OUT_RESPONSE_DEADLINE_MS = 8_000;
 
 export type WakeResult = { eventOutcome: "queued" | "coalesced" };
+
+export class HookWakeUnavailableError extends Error {}
+
+export const HOOK_AGENT_START_ADMISSION_TIMEOUT_ERROR =
+  "hook agent run did not start before admission timeout";
+const HOOK_AGENT_SESSION_CONFLICT_ERROR =
+  "hook agent run was rejected because the target session changed";
+const HOOK_AGENT_PREPARATION_ERROR = "hook agent run failed before entering the agent runner";
+
+export function createHookAdmissionFailure(params: {
+  runId: string;
+  disposition?: CronAgentAdmissionDisposition;
+  statusCode?: 409 | 502 | 503;
+}): HookAgentDispatchResult {
+  const statusCode = params.statusCode ?? (params.disposition === "session-conflict" ? 409 : 502);
+  return {
+    ok: false,
+    statusCode,
+    error:
+      statusCode === 409
+        ? HOOK_AGENT_SESSION_CONFLICT_ERROR
+        : statusCode === 503
+          ? HOOK_AGENT_START_ADMISSION_TIMEOUT_ERROR
+          : HOOK_AGENT_PREPARATION_ERROR,
+    runId: params.runId,
+  };
+}
 
 const FAN_OUT_PENDING = Symbol("hook-fanout-pending");
 type FanOutSettled = HookAgentDispatchResult | typeof FAN_OUT_PENDING;

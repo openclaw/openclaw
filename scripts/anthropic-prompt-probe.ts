@@ -883,9 +883,6 @@ async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
           agents: {
             defaults: {
               model: "anthropic/claude-sonnet-4-6",
-              heartbeat: {
-                includeSystemPromptSection: false,
-              },
             },
           },
         },

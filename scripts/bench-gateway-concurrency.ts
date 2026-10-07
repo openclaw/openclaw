@@ -1152,6 +1152,11 @@ function buildConfig(
   } else {
     // The mock emits shell exec calls, not Code Mode JavaScript cells.
     config.tools = { codeMode: false };
+    config.agents = {
+      defaults: {
+        modelPolicy: { allow: ["openai/gpt-5.6-luna", `openai/${UTILITY_MODEL_ID}`] },
+      },
+    };
     applyMockOpenAiModelConfig(config, {
       mockPort,
       modelRef: "openai/gpt-5.6-luna",
@@ -1160,11 +1165,11 @@ function buildConfig(
   }
   const plugins = config.plugins as { entries: Record<string, unknown> };
   plugins.entries["memory-core"] = { config: { dreaming: { enabled: false } } };
+  config.cron = { enabled: false };
   const agents = config.agents as Record<string, unknown>;
   agents.defaults = {
     ...(agents.defaults as Record<string, unknown>),
     maxConcurrent: concurrency,
-    heartbeat: { every: "0m" },
   };
   const pluginFixtures =
     pluginCount > 0 ? writePluginFixtures(root, { count: pluginCount }) : undefined;

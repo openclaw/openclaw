@@ -33,7 +33,6 @@ export async function withLocalAgentCronJobsRemoved<T>(
         (configuredId) => normalizeAgentId(configuredId) === id,
       ),
     enqueueSystemEvent: () => false,
-    requestHeartbeat: () => {},
     runIsolatedAgentJob: async () => {
       throw new Error("Cron execution is unavailable in local service context.");
     },

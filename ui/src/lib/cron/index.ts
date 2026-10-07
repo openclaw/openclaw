@@ -7,7 +7,6 @@ import {
 import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-limits.js";
 import { hasCanonicalCronDeliveryMode } from "../../../../src/cron/store/delivery-codec.js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
-import { isSystemOwnedCronPayloadKind } from "../../../../src/cron/types.js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob, CronRunResult, CronStatus, CronPayload } from "../../api/types.ts";
@@ -27,6 +26,7 @@ import {
   hasUnchangedCronSchedule,
   buildCronSchedule,
 } from "./form-schedule.ts";
+import { DEFAULT_CRON_FORM } from "./initial-state.ts";
 import { loadCronJobsPage } from "./jobs.ts";
 import { getCronJobPayload } from "./payload.ts";
 import { cronRunNotStartedMessage } from "./run-feedback.ts";
@@ -34,6 +34,7 @@ import { clearCronRunsPage, loadCronRuns, retireCronRunsRequest } from "./runs.t
 import type { CronFieldErrors, CronFormState, CronState } from "./types.ts";
 import { resolveCronWebhookDeliveryError } from "./webhook-url.ts";
 
+export { createInitialCronState } from "./initial-state.ts";
 export { loadCronScopeStats } from "./scope.ts";
 export { loadCronJobsPage } from "./jobs.ts";
 export { getCronJobPayload } from "./payload.ts";
@@ -48,104 +49,6 @@ function isCronFormSessionTarget(value: string): value is CronFormState["session
     value === "current" ||
     (value.startsWith("session:") && value.length > "session:".length)
   );
-}
-
-const DEFAULT_CRON_FORM: CronFormState = {
-  name: "",
-  description: "",
-  agentId: "",
-  sessionKey: "",
-  clearAgent: false,
-  enabled: true,
-  deleteAfterRun: false,
-  scheduleKind: "every",
-  scheduleAt: "",
-  everyAmount: "30",
-  everyUnit: "minutes",
-  cronExpr: "0 7 * * *",
-  cronTz: "",
-  scheduleExact: false,
-  staggerAmount: "",
-  staggerUnit: "seconds",
-  triggerEnabled: false,
-  triggerScript: "",
-  triggerOnce: false,
-  sessionTarget: "isolated",
-  wakeMode: "now",
-  payloadKind: "agentTurn",
-  payloadLocked: false,
-  payloadText: "",
-  payloadModel: "",
-  payloadThinking: "",
-  payloadLightContext: false,
-  deliveryMode: "none",
-  deliveryChannel: "last",
-  deliveryTo: "",
-  deliveryAccountId: "",
-  deliveryBestEffort: false,
-  deliveryThreadId: undefined,
-  deliveryCompletionDestination: undefined,
-  deliveryFailureDestination: undefined,
-  failureAlertMode: "inherit",
-  failureAlertAfter: "",
-  failureAlertCooldownSeconds: "",
-  failureAlertChannel: "last",
-  failureAlertTo: "",
-  failureAlertDeliveryMode: "",
-  failureAlertAccountId: "",
-  timeoutSeconds: "",
-};
-
-export function createInitialCronState<Row = CronJob>(
-  snapshot: Partial<Pick<CronState, "client" | "connected">> = {},
-): CronState<Row> {
-  return {
-    client: snapshot.client ?? null,
-    connected: snapshot.connected ?? false,
-    cronLoading: false,
-    cronJobsError: null,
-    cronJobsLoadingMore: false,
-    cronJobsReloadPending: false,
-    cronJobsReloadPendingTableFilters: false,
-    cronJobs: [],
-    cronJobsSnapshotRevision: null,
-    cronJobsTotal: 0,
-    cronJobsHasMore: false,
-    cronJobsNextOffset: null,
-    cronJobsLimit: 50,
-    cronJobsQuery: "",
-    cronJobsEnabledFilter: "all",
-    cronJobsScheduleKindFilter: "all",
-    cronJobsLastStatusFilter: "all",
-    cronJobsTriggerFilter: "all",
-    cronJobsSortBy: "nextRunAtMs",
-    cronJobsSortDir: "asc",
-    cronAgentId: null,
-    cronStatus: null,
-    cronScopedTotal: null,
-    cronScopedNextWakeAtMs: null,
-    cronError: null,
-    cronForm: { ...DEFAULT_CRON_FORM },
-    cronCreateOpen: false,
-    cronFieldErrors: {},
-    cronEditingJob: null,
-    cronCloningJob: null,
-    cronRunsError: null,
-    cronRunsJobId: null,
-    cronRunsLoadingMore: false,
-    cronRuns: [],
-    cronRunsTotal: 0,
-    cronRunsHasMore: false,
-    cronRunsNextOffset: null,
-    cronRunsLimit: 50,
-    cronRunsScope: "all",
-    cronRunsStatuses: [],
-    cronRunsDeliveryStatuses: [],
-    cronRunsStatusFilter: "all",
-    cronRunsQuery: "",
-    cronRunsSortDir: "desc",
-    cronBusy: false,
-  };
 }
 
 function supportsAnnounceDelivery(
@@ -238,6 +141,29 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
   }
   if (!form.deliveryMode) {
     errors.deliveryMode = "cron.errors.deliveryModeRequired";
+  }
+  if (form.activeHoursEnabled) {
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(form.activeHoursStart)) {
+      errors.activeHoursStart = "cron.errors.activeHoursTime";
+    }
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(form.activeHoursEnd) && form.activeHoursEnd !== "24:00") {
+      errors.activeHoursEnd = "cron.errors.activeHoursTime";
+    }
+    const timezone = form.activeHoursTimezone.trim();
+    if (timezone && timezone !== "local" && timezone !== "user") {
+      try {
+        new Intl.DateTimeFormat("en", { timeZone: timezone }).format();
+      } catch {
+        errors.activeHoursTimezone = "cron.errors.activeHoursTimezone";
+      }
+    }
+  }
+  if (
+    form.deliveryMode === "announce" &&
+    form.deliveryTarget === "owner" &&
+    form.deliveryDirectPolicy === "block"
+  ) {
+    errors.deliveryDirectPolicy = "cron.errors.ownerDirectBlocked";
   }
   if (form.deliveryMode === "webhook") {
     const error = resolveCronWebhookDeliveryError(form.deliveryTo);
@@ -467,7 +393,6 @@ function isReadOnlyCronPayload(payload: CronPayload | null, declarationKey?: str
   return (
     payload?.kind === "command" ||
     payload?.kind === "script" ||
-    isSystemOwnedCronPayloadKind(payload?.kind) ||
     isSystemMonitorDeclaration(declarationKey)
   );
 }
@@ -494,11 +419,19 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     scheduleExact: false,
     staggerAmount: "",
     staggerUnit: "seconds",
+    activeHoursEnabled: job.activeHours !== undefined,
+    activeHoursStart: job.activeHours?.start ?? DEFAULT_CRON_FORM.activeHoursStart,
+    activeHoursEnd: job.activeHours?.end ?? DEFAULT_CRON_FORM.activeHoursEnd,
+    activeHoursTimezone: job.activeHours?.timezone ?? "",
+    idleOnly: job.idleOnly === true,
+    payloadSkipIfScratchEmpty: payload?.kind === "agentTurn" && payload.skipIfScratchEmpty === true,
+    deliveryTarget: job.delivery?.mode === "announce" ? (job.delivery.target ?? "") : "",
+    deliveryDirectPolicy:
+      job.delivery?.mode === "announce" ? (job.delivery.directPolicy ?? "") : "",
     triggerEnabled: job.trigger !== undefined,
     triggerScript: job.trigger?.script ?? "",
     triggerOnce: job.trigger?.once === true,
     sessionTarget: job.sessionTarget,
-    wakeMode: job.wakeMode,
     payloadKind: payload?.kind ?? DEFAULT_CRON_FORM.payloadKind,
     payloadLocked,
     payloadText:
@@ -514,6 +447,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     payloadModel: payload?.kind === "agentTurn" ? (payload.model ?? "") : "",
     payloadThinking: payload?.kind === "agentTurn" ? (payload.thinking ?? "") : "",
     payloadLightContext: payload?.kind === "agentTurn" ? payload.lightContext === true : false,
+    payloadIncludeReasoning: payload?.kind === "agentTurn" && payload.includeReasoning === true,
     deliveryMode: hasCanonicalCronDeliveryMode(job.delivery) ? (job.delivery?.mode ?? "none") : "",
     deliveryChannel: job.delivery?.channel ?? CRON_CHANNEL_LAST,
     deliveryTo: job.delivery?.to ?? "",
@@ -603,10 +537,16 @@ function buildCronPayload(form: CronFormState, source: CronPayload | null, isUpd
         ? { timeoutSeconds: null }
         : {}),
     ...(lightContext !== undefined ? { lightContext } : {}),
+    ...(form.payloadSkipIfScratchEmpty || original?.skipIfScratchEmpty !== undefined
+      ? { skipIfScratchEmpty: form.payloadSkipIfScratchEmpty }
+      : {}),
     ...restrictions,
     ...(cloned?.fallbacks ? { fallbacks: [...cloned.fallbacks] } : {}),
     ...(cloned?.allowUnsafeExternalContent !== undefined
       ? { allowUnsafeExternalContent: cloned.allowUnsafeExternalContent }
+      : {}),
+    ...(form.payloadIncludeReasoning || original?.includeReasoning !== undefined
+      ? { includeReasoning: form.payloadIncludeReasoning }
       : {}),
   };
 }
@@ -724,22 +664,38 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       selectedDeliveryMode === "announce"
         ? normalizedDeliveryAccountId || (editingJob?.delivery?.accountId ? null : undefined)
         : undefined;
+    const ownerTarget = selectedDeliveryMode === "announce" && form.deliveryTarget === "owner";
+    const previousAnnounce =
+      editingJob?.delivery?.mode === "announce" ? editingJob.delivery : undefined;
+    // Owner lookup may be account-scoped, but must never inherit a conversation or thread target.
+    const ownerChannel =
+      form.deliveryChannel !== "last" ? form.deliveryChannel.trim() || undefined : undefined;
     const delivery =
       selectedDeliveryMode && selectedDeliveryMode !== "none"
         ? {
             mode: selectedDeliveryMode,
-            channel:
-              selectedDeliveryMode === "announce"
+            channel: ownerTarget
+              ? (ownerChannel ?? (editingJob?.delivery?.channel !== undefined ? null : undefined))
+              : selectedDeliveryMode === "announce"
                 ? normalizePersistedDeliveryChannel(form.deliveryChannel, {
                     preserveLast: Boolean(editingJob?.delivery?.channel),
                   })
                 : undefined,
             to:
-              form.deliveryTo.trim() ||
+              (ownerTarget ? "" : form.deliveryTo.trim()) ||
               (selectedDeliveryMode === "announce" && editingJob?.delivery?.to ? null : undefined),
+            target: ownerTarget ? "owner" : previousAnnounce?.target ? null : undefined,
+            directPolicy:
+              selectedDeliveryMode === "announce"
+                ? form.deliveryDirectPolicy || (previousAnnounce?.directPolicy ? null : undefined)
+                : undefined,
             accountId: deliveryAccountId,
             bestEffort: form.deliveryBestEffort,
-            ...(form.deliveryThreadId !== undefined ? { threadId: form.deliveryThreadId } : {}),
+            threadId: ownerTarget
+              ? editingJob?.delivery?.threadId !== undefined
+                ? null
+                : undefined
+              : form.deliveryThreadId,
             ...(selectedDeliveryMode === "announce" && form.deliveryCompletionDestination
               ? { completionDestination: form.deliveryCompletionDestination }
               : {}),
@@ -780,8 +736,20 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
         ? { deleteAfterRun: form.deleteAfterRun }
         : {}),
       sessionTarget: form.sessionTarget,
-      wakeMode: form.wakeMode,
+      ...(!editingJob ? { wakeMode: "now" } : {}),
       trigger,
+      activeHours: form.activeHoursEnabled
+        ? {
+            start: form.activeHoursStart,
+            end: form.activeHoursEnd,
+            ...(form.activeHoursTimezone.trim()
+              ? { timezone: form.activeHoursTimezone.trim() }
+              : {}),
+          }
+        : editingJob?.activeHours
+          ? null
+          : undefined,
+      idleOnly: form.idleOnly || editingJob?.idleOnly !== undefined ? form.idleOnly : undefined,
       delivery,
       failureAlert,
     };
