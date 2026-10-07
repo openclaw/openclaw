@@ -423,7 +423,9 @@ repositories, and the workspace-root `hooks` and `git-hooks` directories in both
 directions. Repository credentials, history, and trusted hook code remain on
 the OpenClaw Gateway host instead of being copied into an untrusted sandbox.
 Host `.git` entries are preserved even when the sandbox deletes or replaces
-their parent directory. Nested `hooks` directories, such as application source
+their parent directory. If the sandbox has a file where the host has a directory
+containing `.git`, the host directory and its Git metadata are kept, the
+sandbox file is skipped, and a warning names the skipped path. Nested `hooks` directories, such as application source
 folders, still synchronize normally.
 Nested exclusions match the exact name `.git`, including submodule gitdir files;
 names such as `.GIT` or `.git` with surrounding spaces still synchronize.

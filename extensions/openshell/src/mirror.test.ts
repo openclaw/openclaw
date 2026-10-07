@@ -12,6 +12,12 @@ import {
   stageDirectoryContents,
 } from "./mirror.js";
 
+const { warnMock } = vi.hoisted(() => ({ warnMock: vi.fn() }));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  createSubsystemLogger: () => ({ warn: warnMock }),
+}));
+
 const dirs: string[] = [];
 
 async function makeTmpDir(): Promise<string> {
@@ -213,6 +219,30 @@ describe("replaceDirectoryContents", () => {
     expect(await fs.readFile(path.join(target, "kept", ".git", "HEAD"), "utf8")).toBe(
       "ref: refs/heads/main\n",
     );
+  });
+
+  it("keeps a host directory holding nested repository metadata and warns about the skipped sandbox file", async () => {
+    const source = await makeTmpDir();
+    const target = await makeTmpDir();
+    warnMock.mockClear();
+
+    await fs.writeFile(path.join(source, "sub"), "sandbox file");
+    await fs.mkdir(path.join(target, "sub", ".git"), { recursive: true });
+    await fs.writeFile(path.join(target, "sub", ".git", "HEAD"), "ref: refs/heads/main\n");
+    await fs.writeFile(path.join(target, "sub", "stale.txt"), "stale");
+
+    await replaceDirectoryContents({
+      sourceDir: source,
+      targetDir: target,
+      excludeDirs: DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
+    });
+
+    expect(await fs.readdir(path.join(target, "sub"))).toEqual([".git"]);
+    expect(await fs.readFile(path.join(target, "sub", ".git", "HEAD"), "utf8")).toBe(
+      "ref: refs/heads/main\n",
+    );
+    expect(warnMock).toHaveBeenCalledTimes(1);
+    expect(warnMock.mock.calls[0]?.[0]).toContain(path.join(target, "sub"));
   });
 
   it("skips symbolic links when copying into the host workspace", async () => {

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import pLimit from "p-limit";
@@ -7,6 +8,7 @@ import pLimit from "p-limit";
 export const DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS = ["hooks", "git-hooks", ".git"] as const;
 const NESTED_MIRROR_EXCLUDE_DIRS = new Set([".git"]);
 const COPY_TREE_FS_CONCURRENCY = 16;
+const log = createSubsystemLogger("openshell");
 
 function createExcludeMatcher(excludeDirs?: readonly string[], exactNames = false) {
   const excluded = new Set((excludeDirs ?? []).map((d) => normalizeLowercaseStringOrEmpty(d)));
@@ -55,6 +57,11 @@ async function reconcileMirrorPath(params: {
     });
     // A remote file cannot replace a directory containing preserved host entries.
     if (sourceDir || preservedEntries) {
+      if (sourceFile) {
+        log.warn(
+          `OpenShell mirror kept host directory ${params.targetPath} because it contains preserved host entries; skipped the sandbox file at that path.`,
+        );
+      }
       return preservedEntries;
     }
     await runLimitedFs(fs.rmdir, params.targetPath);
