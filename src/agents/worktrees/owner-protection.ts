@@ -1,7 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
+import {
+  readResolvedSessionEntriesInWorker,
+  resolveSessionEntryAccessTarget,
+} from "../../config/sessions/session-accessor.entry.js";
+import type { ResolvedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionWorkerPlacementContext } from "../../gateway/session-worker-placement-context.js";
@@ -19,7 +23,10 @@ export function createManagedWorktreeOwnerPolicy(
   cfg: OpenClawConfig,
   now: () => number = Date.now,
 ): Required<
-  Pick<WorktreeCleanupOwnerPolicy, "shouldProtectOwner" | "shouldRemoveOwner" | "withOwnerCleanup">
+  Pick<
+    WorktreeCleanupOwnerPolicy,
+    "prepareOwners" | "shouldProtectOwner" | "shouldRemoveOwner" | "withOwnerCleanup"
+  >
 > {
   const placementChecks = new Map<string, { sessionId?: string; assertCurrent: () => void }>();
   const cleanupOwner = new AsyncLocalStorage<{
@@ -28,13 +35,23 @@ export function createManagedWorktreeOwnerPolicy(
     entry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "archivedAt" | "worktree">;
     lifecycleHeld?: boolean;
   }>();
-  const state = (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => {
+  const state = (
+    ownerKind: ManagedWorktreeOwnerKind,
+    ownerId: string,
+    prepared?: ResolvedSessionEntryAccessTarget,
+  ) => {
     if (ownerKind !== "session") {
       return "other";
     }
     try {
-      const target = resolveSessionEntryAccessTarget({ cfg, sessionKey: ownerId });
+      const target =
+        prepared ??
+        resolveSessionEntryAccessTarget({ cfg, sessionKey: ownerId }, { projection: "worktree" });
       const entry = target.entry;
+      const activityAt = Math.max(entry?.lastInteractionAt ?? 0, entry?.updatedAt ?? 0);
+      if (entry?.archivedAt === undefined && activityAt > 0 && now() - activityAt <= IDLE_GC_MS) {
+        return "active";
+      }
       const scope = resolveSessionStorePathCore(cfg.session?.store, { agentId: target.agentId });
       const identities = [target.canonicalKey, ownerId, entry?.sessionId];
       const cleanup = cleanupOwner.getStore();
@@ -87,19 +104,43 @@ export function createManagedWorktreeOwnerPolicy(
         placementChecks.set(target.canonicalKey, placementCheck);
       }
       placementCheck.assertCurrent();
-      if (!entry || entry.archivedAt !== undefined) {
-        return "retired";
-      }
-      const activityAt = Math.max(entry?.lastInteractionAt ?? 0, entry?.updatedAt ?? 0);
-      return activityAt > 0 && now() - activityAt <= IDLE_GC_MS ? "active" : "idle";
+      return !entry || entry.archivedAt !== undefined ? "retired" : "idle";
     } catch {
       // GC is destructive. Unknown session state must defer cleanup instead of
       // turning a transient owner lookup failure into worktree removal.
       return "active";
     }
   };
-  // Re-read at each mutation guard: an unarchive or new turn can invalidate an earlier cleanup decision.
+  // Census facts live for one pass; synchronous mutation guards always reread the narrow row.
   return {
+    prepareOwners: async (records) => {
+      const ownerIds = [
+        ...new Set(
+          records.flatMap((record) =>
+            record.removedAt === undefined && record.ownerKind === "session" && record.ownerId
+              ? [record.ownerId]
+              : [],
+          ),
+        ),
+      ];
+      const states = new Map<string, ReturnType<typeof state>>();
+      try {
+        const targets = await readResolvedSessionEntriesInWorker(
+          { cfg, sessionKeys: ownerIds },
+          "worktree",
+        );
+        for (const id of ownerIds) {
+          states.set(id, state("session", id, targets.get(id)));
+        }
+      } catch {
+        // A failed census supplies no authority to remove a session-owned checkout.
+      }
+      return {
+        shouldProtectOwner: (kind, id) =>
+          kind === "session" && (states.get(id) ?? "active") === "active",
+        shouldRemoveOwner: (kind, id) => kind === "session" && states.get(id) === "retired",
+      };
+    },
     shouldProtectOwner: (kind, id) => state(kind, id) === "active",
     shouldRemoveOwner: (kind, id) => state(kind, id) === "retired",
     withOwnerCleanup: async (record, run, signal) => {
@@ -107,18 +148,16 @@ export function createManagedWorktreeOwnerPolicy(
         return await run((mutation) => mutation());
       }
       const ownerId = record.ownerId;
-      const target = resolveSessionEntryAccessTarget({ cfg, sessionKey: ownerId });
+      const target = resolveSessionEntryAccessTarget(
+        { cfg, sessionKey: ownerId },
+        { projection: "worktree" },
+      );
       const scope = resolveSessionStorePathCore(cfg.session?.store, { agentId: target.agentId });
       const entry = target.entry;
       const owner = {
         ownerId,
         scope,
-        entry: entry && {
-          sessionId: entry.sessionId,
-          lifecycleRevision: entry.lifecycleRevision,
-          archivedAt: entry.archivedAt,
-          worktree: entry.worktree && { ...entry.worktree },
-        },
+        entry: entry && { ...entry, worktree: entry.worktree && { ...entry.worktree } },
       };
       const identities = [target.canonicalKey, ownerId, owner.entry?.sessionId];
       // The registry removal claim fences checkout consumers during Git work.

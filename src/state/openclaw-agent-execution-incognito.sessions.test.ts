@@ -6,7 +6,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createSubagentControllerRead } from "../agents/subagents/registry/subagent-controller-read.js";
 import { loadCombinedSessionStoreForGatewayCoreAsync } from "../config/sessions/combined-store-gateway-read.js";
 import { createSessionEntryWithTranscript } from "../config/sessions/session-accessor.entry-mutation.js";
-import { resolveSessionEntryCandidateTargetForRuntime } from "../config/sessions/session-accessor.entry.js";
+import {
+  readResolvedSessionEntryInWorker,
+  resolveSessionEntryCandidateTargetForRuntime,
+} from "../config/sessions/session-accessor.entry.js";
 import { loadSessionEntryForAdmission } from "../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
@@ -736,6 +739,7 @@ it("composes entry reads, currency, candidates and admission without caller-thre
     const sql = observeMainThreadSql();
     try {
       const scope = { agentId: "main", sessionKey };
+      expect(await readResolvedSessionEntryInWorker({ ...scope, cfg: {} })).toMatchObject(initial);
       await withSessionEntryReadOnlyInWorker(
         { ...scope, sessionKey: `  ${sessionKey.toUpperCase()}  ` },
         authority.assertCurrent,
