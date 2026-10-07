@@ -87,15 +87,9 @@ export async function authorizeDiscordVoiceIngress(initialParams: {
   }
 
   const channelAllowlistConfigured = hasConfiguredDiscordChannels(guildInfo?.channels);
-  if (!params.channelId && groupPolicy === "allowlist" && channelAllowlistConfigured) {
-    return {
-      ok: false,
-      message: `${params.channelLabel ?? "This channel"} is not allowlisted for voice commands.`,
-    };
-  }
-
   const channelAllowed = channelConfig ? channelConfig.allowed : !channelAllowlistConfigured;
   if (
+    (!params.channelId && groupPolicy === "allowlist" && channelAllowlistConfigured) ||
     !isDiscordGroupAllowedByPolicy({
       groupPolicy,
       guildAllowlisted: Boolean(guildInfo),

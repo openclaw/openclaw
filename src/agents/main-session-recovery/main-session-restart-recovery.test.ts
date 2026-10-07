@@ -36,9 +36,11 @@ import {
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
-import { loadDeliveryQueueEntry } from "../../infra/delivery-queue-sqlite.js";
 import { completeDeliveryQueueEntryInDatabase } from "../../infra/delivery-queue-sqlite.kernel.js";
-import { seedDeliveryQueueEntry } from "../../infra/delivery-queue-sqlite.test-support.js";
+import {
+  loadDeliveryQueueEntry,
+  seedDeliveryQueueEntry,
+} from "../../infra/delivery-queue-sqlite.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-media-staging.js";
 import type { QueuedDelivery } from "../../infra/outbound/delivery-queue-types.js";
 import { createUnmodifiedPreparedOutboundBatch } from "../../infra/outbound/prepared-batch.js";
@@ -121,6 +123,7 @@ import {
   mainSessionEntry,
   makePendingFinalDelivery,
   readStore,
+  runningSessionEntry,
 } from "./main-session-restart-recovery-fixture.test-support.js";
 import { discoverRestartRecoveryStoreTargets } from "./main-session-restart-recovery-shared.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
@@ -264,15 +267,6 @@ afterEach(async () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });
-
-function runningSessionEntry(sessionId: string, overrides: SessionEntryFixture = {}): SessionEntry {
-  return createSessionEntry({
-    sessionId,
-    updatedAt: Date.now() - 10_000,
-    restartRecoveryDeliveryRunId: `${sessionId}-run`,
-    ...overrides,
-  });
-}
 
 function activeRestartRun(
   sessionKey = "agent:main:main",

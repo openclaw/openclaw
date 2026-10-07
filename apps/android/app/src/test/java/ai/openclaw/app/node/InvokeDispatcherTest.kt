@@ -351,7 +351,9 @@ internal fun newInvokeDispatcher(
     notificationsHandler =
       NotificationsHandler(
         appContext = appContext,
-        stateProvider = InvokeDispatcherFakeNotificationsStateProvider(),
+        readSnapshot = { DeviceNotificationSnapshot(enabled = false, connected = false, notifications = emptyList()) },
+        requestServiceRebind = {},
+        executeAction = { NotificationActionResult(ok = true, code = null, message = null) },
       ),
     systemHandler = SystemHandler(InvokeDispatcherFakeSystemNotificationPoster()),
     talkHandler = talkHandler,
@@ -386,17 +388,6 @@ private fun newCameraHandler(appContext: Context): CameraHandler =
     camera = CameraCaptureManager(appContext),
     setCameraAudioCaptureActive = { true },
   )
-
-private class InvokeDispatcherFakeNotificationsStateProvider : NotificationsStateProvider {
-  override fun readSnapshot(context: Context): DeviceNotificationSnapshot = DeviceNotificationSnapshot(enabled = false, connected = false, notifications = emptyList())
-
-  override fun requestServiceRebind(context: Context) = Unit
-
-  override fun executeAction(
-    context: Context,
-    request: NotificationActionRequest,
-  ): NotificationActionResult = NotificationActionResult(ok = true, code = null, message = null)
-}
 
 private class InvokeDispatcherFakeSystemNotificationPoster : SystemNotificationPoster {
   override fun post(request: SystemNotifyRequest) = Unit

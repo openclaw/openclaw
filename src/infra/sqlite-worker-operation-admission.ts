@@ -83,9 +83,12 @@ export function observeSqliteWorkerCommittedFacts(
   bind(observer);
 }
 
-/** The caller retains real source custody before invoking the synchronous grant. */
+/** The optional continuation runs under live host authority before releasing the native writer. */
 export function createSqliteWorkerOperationAdmission(
-  admit: (request: SqliteWorkerAdmissionRequest, grant: () => boolean) => void,
+  admit: (
+    request: SqliteWorkerAdmissionRequest,
+    grant: (beforeRelease?: () => void) => boolean,
+  ) => void,
   attachment?: unknown,
 ): SqliteWorkerOperationAdmission {
   const { port1, port2 } = new MessageChannel();
@@ -229,7 +232,7 @@ export function createSqliteWorkerOperationAdmission(
       );
       return;
     }
-    const grant = () => {
+    const grant = (beforeRelease?: () => void) => {
       if (closed || Atomics.load(decision, 0) !== REQUESTED) {
         return false;
       }
@@ -240,6 +243,10 @@ export function createSqliteWorkerOperationAdmission(
         refuse(decision, error, "authority");
         return false;
       }
+      if (closed || Atomics.load(decision, 0) !== REQUESTED) {
+        return false;
+      }
+      beforeRelease?.();
       const granted = Atomics.compareExchange(decision, 0, REQUESTED, GRANTED) === REQUESTED;
       if (granted) {
         Atomics.notify(decision, 0);

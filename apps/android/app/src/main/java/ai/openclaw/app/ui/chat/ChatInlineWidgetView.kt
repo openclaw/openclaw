@@ -152,7 +152,6 @@ internal fun ChatInlineWidget(
     }
     if (refreshRequestId != null) return
     if (recoveryAttempts >= ChatWidgetSurfaceRole.entries.size) {
-      refreshRequestId = null
       resolvedResource = null
       unavailable = true
       return
@@ -378,15 +377,11 @@ private class InlineWidgetWebViewClient(
     } else {
       view.stopLoading()
     }
-    closeDocumentClient()
+    allowsStaticResources = false
+    documentClient?.let(::closeWidgetClientAsync)
     if (!rendererGone) view.removeAllViews()
     view.destroy()
     return true
-  }
-
-  private fun closeDocumentClient() {
-    allowsStaticResources = false
-    documentClient?.let(::closeWidgetClientAsync)
   }
 
   override fun onPageCommitVisible(

@@ -25,6 +25,7 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import type { SessionEntryPatchGuard } from "../../config/sessions/session-entry-patch.types.js";
 import { inheritSessionCreationPolicy } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -236,6 +237,7 @@ type OutboundSessionEntryParams = {
   sourceSessionKey?: string;
   /** Revalidates caller-owned route authority at the final persistence boundary. */
   assertCommitAllowed?: () => void;
+  workerGuard?: SessionEntryPatchGuard;
 };
 
 type CapturedOutboundSessionBinding = {
@@ -354,6 +356,7 @@ async function persistOutboundSessionEntry(
     threadId: params.route.threadId,
     ctx,
     ...(params.assertCommitAllowed ? { assertCommitAllowed: params.assertCommitAllowed } : {}),
+    ...(params.workerGuard ? { workerGuard: params.workerGuard } : {}),
   };
   return prepared
     ? await updateSessionLastRouteInScope(

@@ -32,10 +32,6 @@ function hasReasoningItalics(text: string): boolean {
   return /^(?:Reasoning:|Thinking\.{0,3})\n+_/u.test(text) && text.trimEnd().endsWith("_");
 }
 
-function resolveDiscordChunkLimit(value: unknown, fallback: number) {
-  return resolveIntegerOption(value, fallback, { min: 1 });
-}
-
 function countLines(text: string) {
   if (!text) {
     return 0;
@@ -67,8 +63,8 @@ function closesFence(open: OpenFence, close: OpenFence): boolean {
 
 type DiscordFrame = { start: number; end: number };
 function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string[] {
-  const hardMaxChars = resolveDiscordChunkLimit(opts.maxChars, DEFAULT_MAX_CHARS);
-  const maxLines = resolveDiscordChunkLimit(opts.maxLines, DEFAULT_MAX_LINES);
+  const hardMaxChars = resolveIntegerOption(opts.maxChars, DEFAULT_MAX_CHARS, { min: 1 });
+  const maxLines = resolveIntegerOption(opts.maxLines, DEFAULT_MAX_LINES, { min: 1 });
   if (!text) {
     return [];
   }
@@ -201,7 +197,7 @@ export function chunkDiscordTextWithMode(
   }
   const lineChunks = chunkByParagraph(
     text,
-    resolveDiscordChunkLimit(opts.maxChars, DEFAULT_MAX_CHARS),
+    resolveIntegerOption(opts.maxChars, DEFAULT_MAX_CHARS, { min: 1 }),
     { splitLongParagraphs: false },
   );
   return lineChunks.flatMap((line) => {

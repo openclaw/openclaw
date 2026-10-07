@@ -87,14 +87,8 @@ class NodeForegroundService : Service() {
           runtime.micIsListening,
           runtime.talkModeListening,
           runtime.talkModeSpeaking,
-        ) { micEnabled, micListening, talkListening, talkSpeaking ->
-          VoiceNotificationCapture(
-            micEnabled = micEnabled,
-            micListening = micListening,
-            talkListening = talkListening,
-            talkSpeaking = talkSpeaking,
-          )
-        },
+          ::VoiceNotificationCapture,
+        ),
       ) { base, capture ->
         base to capture
       }

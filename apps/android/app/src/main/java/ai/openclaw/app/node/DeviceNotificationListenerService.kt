@@ -209,38 +209,29 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     val packageName = removed.packageName.trim()
     val payload =
       notificationChangedPayload(
-        entry = null,
+        entry =
+          DeviceNotificationEntry(
+            key = key,
+            packageName = packageName,
+            title = null,
+            text = null,
+            subText = null,
+            category = null,
+            channelId = null,
+            postTimeMs = removed.postTime,
+            isOngoing = removed.isOngoing,
+            isClearable = removed.isClearable,
+          ),
         change = "removed",
-        key = key,
-        packageName = packageName,
-        postTimeMs = removed.postTime,
-        isOngoing = removed.isOngoing,
-        isClearable = removed.isClearable,
       ) ?: return
     emitNotificationsChanged(payload)
   }
 
-  private fun notificationChangedPayload(entry: DeviceNotificationEntry): String? =
-    notificationChangedPayload(
-      entry = entry,
-      change = "posted",
-      key = entry.key,
-      packageName = entry.packageName,
-      postTimeMs = entry.postTimeMs,
-      isOngoing = entry.isOngoing,
-      isClearable = entry.isClearable,
-    )
-
   private fun notificationChangedPayload(
-    entry: DeviceNotificationEntry?,
-    change: String,
-    key: String,
-    packageName: String,
-    postTimeMs: Long,
-    isOngoing: Boolean,
-    isClearable: Boolean,
+    entry: DeviceNotificationEntry,
+    change: String = "posted",
   ): String? {
-    val normalizedPackage = packageName.trim()
+    val normalizedPackage = entry.packageName.trim()
     if (normalizedPackage.isEmpty()) {
       return null
     }
@@ -261,17 +252,17 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     }
     return buildJsonObject {
       put("change", JsonPrimitive(change))
-      put("key", JsonPrimitive(key))
+      put("key", JsonPrimitive(entry.key))
       put("packageName", JsonPrimitive(normalizedPackage))
-      put("postTimeMs", JsonPrimitive(postTimeMs))
-      put("isOngoing", JsonPrimitive(isOngoing))
-      put("isClearable", JsonPrimitive(isClearable))
+      put("postTimeMs", JsonPrimitive(entry.postTimeMs))
+      put("isOngoing", JsonPrimitive(entry.isOngoing))
+      put("isClearable", JsonPrimitive(entry.isClearable))
       policy.sessionKey?.let { put("sessionKey", JsonPrimitive(it)) }
-      entry?.title?.let { put("title", JsonPrimitive(it)) }
-      entry?.text?.let { put("text", JsonPrimitive(it)) }
-      entry?.subText?.let { put("subText", JsonPrimitive(it)) }
-      entry?.category?.let { put("category", JsonPrimitive(it)) }
-      entry?.channelId?.let { put("channelId", JsonPrimitive(it)) }
+      entry.title?.let { put("title", JsonPrimitive(it)) }
+      entry.text?.let { put("text", JsonPrimitive(it)) }
+      entry.subText?.let { put("subText", JsonPrimitive(it)) }
+      entry.category?.let { put("category", JsonPrimitive(it)) }
+      entry.channelId?.let { put("channelId", JsonPrimitive(it)) }
     }.toString()
   }
 

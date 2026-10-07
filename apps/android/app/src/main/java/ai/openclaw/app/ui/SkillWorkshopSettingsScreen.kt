@@ -166,16 +166,20 @@ internal fun SkillWorkshopSettingsScreen(
 
     when {
       !isConnected -> {
-        SkillWorkshopEmptyPanel(
+        SettingsMessagePanel(
+          spacing = 4.dp,
+          titleStyle = ClawTheme.type.title,
           title = nativeString("Gateway offline"),
-          detail = nativeString("Connect to a Gateway to load Skill Workshop proposals."),
+          text = nativeString("Connect to a Gateway to load Skill Workshop proposals."),
         )
       }
 
       filteredProposals.isEmpty() -> {
-        SkillWorkshopEmptyPanel(
+        SettingsMessagePanel(
+          spacing = 4.dp,
+          titleStyle = ClawTheme.type.title,
           title = nativeString("No proposals"),
-          detail = nativeString("Matching proposals will appear here after agents create reusable skill drafts."),
+          text = nativeString("Matching proposals will appear here after agents create reusable skill drafts."),
         )
       }
 
@@ -535,17 +539,6 @@ private fun SkillWorkshopProposalDetail(
         }
       }
     }
-  }
-}
-
-@Composable
-private fun SkillWorkshopEmptyPanel(
-  title: String,
-  detail: String,
-) {
-  ClawPanel(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-    Text(text = title, style = ClawTheme.type.title, color = ClawTheme.colors.text)
-    Text(text = detail, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
   }
 }
 

@@ -8,10 +8,7 @@ import { DiscordAudioTransport } from "./audio-transport.js";
 import { stopVoiceCaptureState } from "./capture-state.js";
 import { resolveDiscordVoiceRealtimeAgentContext } from "./ingress.js";
 import type { DiscordVoiceMembershipTracker } from "./membership.js";
-import {
-  createVoiceReceiveRecoveryState,
-  DAVE_RECEIVE_PASSTHROUGH_INITIAL_EXPIRY_SECONDS,
-} from "./receive-recovery.js";
+import { DAVE_RECEIVE_PASSTHROUGH_INITIAL_EXPIRY_SECONDS } from "./receive-recovery.js";
 import {
   CAPTURE_FINALIZE_GRACE_MS,
   isDiscordRealtimeVoiceMode,
@@ -133,9 +130,9 @@ export class DiscordVoiceSessions {
     const { guildId, channelId } = params;
     const voiceConfig = this.params.discordConfig.voice;
     const voiceMode = resolveDiscordVoiceMode(voiceConfig);
-    const cancelledJoinResult = (): VoiceOperationResult => ({
+    const failedJoinResult = (message: string): VoiceOperationResult => ({
       ok: false,
-      message: "Discord voice join was cancelled.",
+      message,
       guildId,
       channelId,
     });
@@ -156,12 +153,7 @@ export class DiscordVoiceSessions {
           isCurrent: authority?.isCurrent,
         });
         if (!realtimeResult.ok) {
-          return {
-            ok: false,
-            message: realtimeResult.message,
-            guildId,
-            channelId,
-          };
+          return failedJoinResult(realtimeResult.message);
         }
       }
       logVoiceVerbose(`join: already connected to guild ${guildId} channel ${channelId}`);
@@ -180,7 +172,7 @@ export class DiscordVoiceSessions {
     const resolved = await this.resolveChannel(params);
     // Leave or replacement wins over a lookup that failed after this join lost ownership.
     if (authority && !authority.isCurrent()) {
-      return cancelledJoinResult();
+      return failedJoinResult("Discord voice join was cancelled.");
     }
     if (!resolved.ok) {
       return resolved.error;
@@ -196,7 +188,7 @@ export class DiscordVoiceSessions {
       cfg: this.params.cfg,
     });
     if (authority && !authority.isCurrent()) {
-      return cancelledJoinResult();
+      return failedJoinResult("Discord voice join was cancelled.");
     }
     const adapterCreator = voicePlugin.getGatewayAdapterCreator(guildId);
     const daveEncryption = voiceConfig?.daveEncryption;
@@ -218,7 +210,7 @@ export class DiscordVoiceSessions {
     // Leave/destroy can win while the previous worker is releasing its sockets.
     // Revalidate before a replacement can send a new voice-state update.
     if (this.params.destroyed() || authority?.isCurrent() === false) {
-      return cancelledJoinResult();
+      return failedJoinResult("Discord voice join was cancelled.");
     }
     const audio = new DiscordAudioTransport(
       {
@@ -244,16 +236,11 @@ export class DiscordVoiceSessions {
       await audio.ready;
     } catch (error) {
       await this.stopTransport(guildId);
-      return {
-        ok: false,
-        message: "Failed to join voice channel: " + formatErrorMessage(error),
-        guildId,
-        channelId,
-      };
+      return failedJoinResult("Failed to join voice channel: " + formatErrorMessage(error));
     }
     if (this.params.destroyed() || authority?.isCurrent() === false) {
       await this.stopTransport(guildId);
-      return cancelledJoinResult();
+      return failedJoinResult("Discord voice join was cancelled.");
     }
 
     const sessionChannelId = channelInfo?.id ?? channelId;
@@ -275,12 +262,9 @@ export class DiscordVoiceSessions {
       });
     } catch (err) {
       await this.stopTransport(guildId);
-      return {
-        ok: false,
-        message: `Failed to resolve Discord voice agent session: ${formatErrorMessage(err)}`,
-        guildId,
-        channelId,
-      };
+      return failedJoinResult(
+        `Failed to resolve Discord voice agent session: ${formatErrorMessage(err)}`,
+      );
     }
     const { route, voiceRoute, agentSessionMode, agentSessionTarget } = routeInfo;
     logger.info(
@@ -364,7 +348,11 @@ export class DiscordVoiceSessions {
       get transcripts(): VoiceSessionEntry["transcripts"] {
         return getTranscripts(entry);
       },
-      receiveRecovery: createVoiceReceiveRecoveryState(),
+      receiveRecovery: {
+        decryptFailureCount: 0,
+        lastDecryptFailureAt: 0,
+        decryptRecoveryInFlight: false,
+      },
       realtimeLifecycle: { status: "inactive", generation: 0 },
       stop(reason) {
         return stopEntry(reason ?? `stop guild ${guildId} channel ${channelId}`);
@@ -390,12 +378,7 @@ export class DiscordVoiceSessions {
       });
       if (!realtimeResult.ok) {
         await entry.stop(`realtime setup failed guild ${guildId} channel ${channelId}`);
-        return {
-          ok: false,
-          message: realtimeResult.message,
-          guildId,
-          channelId,
-        };
+        return failedJoinResult(realtimeResult.message);
       }
     }
     if (
@@ -406,14 +389,11 @@ export class DiscordVoiceSessions {
       await entry.stop(
         `${this.params.destroyed() ? "manager stopped" : "join cancelled"} during setup guild ${guildId} channel ${channelId}`,
       );
-      return {
-        ok: false,
-        message: this.params.destroyed()
+      return failedJoinResult(
+        this.params.destroyed()
           ? "Discord voice manager is stopped."
           : "Discord voice join was cancelled.",
-        guildId,
-        channelId,
-      };
+      );
     }
 
     entry.audio.enablePassthrough(

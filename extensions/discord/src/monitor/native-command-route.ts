@@ -14,10 +14,8 @@ type ConfiguredBindingResolution = NonNullable<
 >;
 
 type DiscordNativeInteractionRouteState = {
-  route: ResolvedAgentRoute;
   effectiveRoute: ResolvedAgentRoute;
   boundSessionKey?: string;
-  configuredRoute: ResolvedConfiguredBindingRoute | null;
   configuredBinding: ConfiguredBindingResolution | null;
 };
 
@@ -57,11 +55,5 @@ export function resolveDiscordNativeInteractionRouteState(params: {
     configuredRoute,
     matchedBy: configuredBinding ? "binding.channel" : undefined,
   });
-  return {
-    route,
-    effectiveRoute,
-    boundSessionKey,
-    configuredRoute,
-    configuredBinding,
-  };
+  return { effectiveRoute, boundSessionKey, configuredBinding };
 }

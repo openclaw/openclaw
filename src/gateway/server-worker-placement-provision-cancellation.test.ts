@@ -1,5 +1,5 @@
 import { setImmediate } from "node:timers/promises";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { getWorkerPlacementStartupMocks } from "./server-worker-placement-startup.test-harness.js";
 import {
   publishWorkerEnvironmentFixture,
@@ -30,6 +30,7 @@ import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-pla
 import {
   createHeldWorkspacePreflight,
   createRuntime,
+  setupSessionFixture,
 } from "./server-worker-placement-provision-cancellation.test-support.js";
 import { installWorkerPlacementReconcileGuard } from "./server-worker-placement-reconcile-guard.js";
 import {
@@ -52,42 +53,7 @@ const REQUEST = {
 describe("dispatch Stop before provider allocation", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  beforeEach(async () => {
-    const actual = await vi.importActual<
-      typeof import("./worker-environments/placement-dispatch.js")
-    >("./worker-environments/placement-dispatch.js");
-    runtimeFactoryMocks.createDispatch.mockImplementation(
-      actual.createWorkerPlacementDispatchService,
-    );
-    runtimeFactoryMocks.createDiskSpace.mockReturnValue({ read: vi.fn(), version: () => 0 });
-    const entry = {
-      sessionId: REQUEST.sessionId,
-      updatedAt: 1,
-      lifecycleRevision: "original",
-      worktree: { id: "workspace", branch: "fixture", repoRoot: support.testState.root },
-    };
-    const target = {
-      agentId: REQUEST.agentId,
-      canonicalKey: REQUEST.sessionKey,
-      store: { [REQUEST.sessionKey]: entry },
-      storeKeys: [REQUEST.sessionKey],
-      storePath: `${support.testState.root}/sessions.sqlite`,
-    };
-    const worktree = { id: "workspace", ownerId: REQUEST.sessionKey, path: support.testState.root };
-    moveDestinationMocks.getRuntimeConfig.mockReturnValue(support.testState.config);
-    moveDestinationMocks.resolveGatewaySessionTarget.mockReturnValue(target);
-    moveDestinationMocks.resolveCanonicalSession.mockReturnValue(entry);
-    moveDestinationMocks.findManagedWorktree.mockReturnValue(worktree);
-    moveDestinationMocks.resolveSessionTarget.mockResolvedValue({
-      assertCurrent: () => {},
-      assertBindingCurrent: () => {},
-      config: support.testState.config,
-      target,
-      entry,
-      worktree,
-      workspace: { kind: "local", path: worktree.path },
-    });
-  });
+  setupSessionFixture(REQUEST);
 
   it("lends local dispatch admission to targeted recovery while interrupting work after writing requested", async () => {
     const createDispatch = runtimeFactoryMocks.createDispatch.getMockImplementation()!;
@@ -729,9 +695,17 @@ describe("dispatch Stop before provider allocation", () => {
       const entry = {
         sessionId: reason === "replaced" ? "replacement-session" : REQUEST.sessionId,
         lifecycleRevision: "original",
-        worktree: { id: "workspace" },
+        worktree: { id: "workspace", branch: "fixture", repoRoot: support.testState.root },
         ...(reason.startsWith("archived") ? { archivedAt: 1 } : {}),
       };
+      await upsertSessionEntryCore(
+        {
+          agentId: REQUEST.agentId,
+          sessionKey: REQUEST.sessionKey,
+          storePath: moveDestinationMocks.resolveGatewaySessionTarget().storePath,
+        },
+        entry,
+      );
       moveDestinationMocks.resolveCanonicalSession.mockReturnValue(entry);
       if (reason === "started-failure") {
         vi.mocked(support.testState.bootstrapWorker).mockRejectedValueOnce(

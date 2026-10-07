@@ -7,13 +7,8 @@ export function clearActiveRunSessionIndex(
   key?: string,
 ): void {
   // File aliases always use the sweep: cleanup may not retain the registration's file token.
-  if (key) {
-    if (index.get(key) === sessionId) {
-      index.delete(key);
-    }
-    return;
-  }
-  for (const [entryKey, activeSessionId] of index) {
+  const candidates = key ? [[key, index.get(key)] as const] : index;
+  for (const [entryKey, activeSessionId] of candidates) {
     if (activeSessionId === sessionId) {
       index.delete(entryKey);
     }

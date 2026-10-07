@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   createNodeWorkspaceTestTransport,
@@ -30,25 +29,6 @@ import {
 } from "../../../../src/state/openclaw-state-db.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
-vi.mock("openclaw/plugin-sdk/agent-workspace-runtime", async (importOriginal) => {
-  const original =
-    await importOriginal<typeof import("../../../../src/plugin-sdk/agent-workspace-runtime.js")>();
-  return {
-    ...original,
-    resolveWorkspaceWorkerArgv(kind: "memory" | "skills") {
-      const argv = original.resolveWorkspaceWorkerArgv(kind);
-      const register =
-        "import { register } from " +
-        JSON.stringify(import.meta.resolve("tsx/esm/api")) +
-        "; register({ tsconfig: " +
-        JSON.stringify(fileURLToPath(new URL("../../../../tsconfig.json", import.meta.url))) +
-        " });";
-      return argv[0] === "--import"
-        ? ["--import", "data:text/javascript," + encodeURIComponent(register), ...argv.slice(2)]
-        : argv;
-    },
-  };
-});
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   await closeSkillsWatchers(true);

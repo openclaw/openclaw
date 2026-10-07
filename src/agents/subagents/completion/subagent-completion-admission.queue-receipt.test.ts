@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { getDeliveryQueueEntryStatus } from "../../../infra/delivery-queue-sqlite.js";
 import {
   deleteDeliveryQueueEntryInDatabase,
   upsertDeliveryQueueEntryInDatabase,
 } from "../../../infra/delivery-queue-sqlite.kernel.js";
+import { getDeliveryQueueEntryStatus } from "../../../infra/delivery-queue-sqlite.test-support.js";
 import {
   scheduleSessionDelivery,
   startSessionDeliveryRuntime,

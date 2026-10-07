@@ -27,10 +27,7 @@ import { resolveOperatorSessionCreation } from "../session-creation-provenance.j
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveGatewayModelSupportsImages } from "../session-utils.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
-import {
-  explicitOriginTargetsAcpSession,
-  explicitOriginTargetsPluginBinding,
-} from "./chat-origin-routing.js";
+import { resolveExplicitOriginBindingTargets } from "./chat-origin-routing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
@@ -246,20 +243,21 @@ export async function prepareChatSendAttachments(params: {
   let imageOrder: Awaited<ReturnType<typeof parseMessageWithAttachments>>["imageOrder"] = [];
   let offloadedRefs: OffloadedRef[] = [];
   let mediaPathOffloads: MediaFact[] = [];
-  const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(explicitOrigin);
+  let explicitOriginTargetsPlugin = false;
   let prepareAttachmentsMs: number | undefined;
 
-  if (normalizedAttachments.length > 0) {
-    const prepareAttachmentsStartedAtMs = performance.now();
-    try {
+  try {
+    const explicitOriginTargets = await resolveExplicitOriginBindingTargets(explicitOrigin);
+    assertInputCurrent();
+    explicitOriginTargetsPlugin = explicitOriginTargets.plugin;
+
+    if (normalizedAttachments.length > 0) {
+      const prepareAttachmentsStartedAtMs = performance.now();
       await measureDiagnosticsTimelineSpan(
         "gateway.chat_send.prepare_attachments",
         async () => {
           const imageSupport: { value: boolean | undefined } = {
-            value:
-              explicitOriginTargetsAcpSession(explicitOrigin) || explicitOriginTargetsPlugin
-                ? true
-                : undefined,
+            value: explicitOriginTargets.acp || explicitOriginTargetsPlugin ? true : undefined,
           };
           const resolveSupportsImages = async (): Promise<boolean> => {
             imageSupport.value ??= await resolveGatewayModelSupportsImages({
@@ -329,38 +327,36 @@ export async function prepareChatSendAttachments(params: {
       prepareAttachmentsMs = roundedChatSendTimingMs(
         performance.now() - prepareAttachmentsStartedAtMs,
       );
-    } catch (err) {
-      const aborted =
-        activeRunAbort.controller.signal.aborted &&
-        (context.chatRunState.hasAbortMarker(clientRunId) ||
-          Object.is(err, activeRunAbort.controller.signal.reason));
-      // Retire failed-run cancellation before cleanup yields, but retain work
-      // admission until deletion finishes so a late abort cannot replace the error.
-      if (!aborted) {
-        activeRunAbort.cleanup();
-      }
-      await discardPreparedInboundMedia(offloadedRefs);
-      if (aborted) {
-        finishAbortedChatSend();
-        return { ok: false as const };
-      }
-      cleanupAdmittedRun();
-      clearAgentRunContext(clientRunId, lifecycleGeneration);
-      logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
-      respond(
-        false,
-        undefined,
-        err instanceof SessionMutationAuthorizationChangedError
-          ? err.error
-          : errorShape(
-              err instanceof MediaOffloadError
-                ? ErrorCodes.UNAVAILABLE
-                : ErrorCodes.INVALID_REQUEST,
-              String(err),
-            ),
-      );
+    }
+  } catch (err) {
+    const aborted =
+      activeRunAbort.controller.signal.aborted &&
+      (context.chatRunState.hasAbortMarker(clientRunId) ||
+        Object.is(err, activeRunAbort.controller.signal.reason));
+    // Retire failed-run cancellation before cleanup yields, but retain work
+    // admission until deletion finishes so a late abort cannot replace the error.
+    if (!aborted) {
+      activeRunAbort.cleanup();
+    }
+    await discardPreparedInboundMedia(offloadedRefs);
+    if (aborted) {
+      finishAbortedChatSend();
       return { ok: false as const };
     }
+    cleanupAdmittedRun();
+    clearAgentRunContext(clientRunId, lifecycleGeneration);
+    logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
+    respond(
+      false,
+      undefined,
+      err instanceof SessionMutationAuthorizationChangedError
+        ? err.error
+        : errorShape(
+            err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+            String(err),
+          ),
+    );
+    return { ok: false as const };
   }
   return {
     ok: true as const,

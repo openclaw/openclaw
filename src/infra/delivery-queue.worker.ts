@@ -20,6 +20,8 @@ import {
 } from "./delivery-queue-sqlite-namespace.kernel.js";
 import {
   countFailedDeliveryQueueEntriesInDatabase,
+  countPendingDeliveryQueueEntriesInDatabase,
+  inspectDeliveryQueueReceiptInDatabase,
   deleteDeliveryQueueEntryInDatabase,
   pruneExpiredDeliveryQueueTombstonesInDatabase,
   prepareDeliveryQueueTerminalEntry,
@@ -456,8 +458,14 @@ export const deliveryQueueOperations = {
     input: Parameters<typeof findDeliveryIntentOwnersInDatabase>[1],
     { open },
   ) => findDeliveryIntentOwnersInDatabase(open(), input),
+  "deliveryQueue.inspectReceipt": (
+    input: Parameters<typeof inspectDeliveryQueueReceiptInDatabase>[1],
+    { open },
+  ) => inspectDeliveryQueueReceiptInDatabase(open(), input),
   "deliveryQueue.countFailed": (_input: undefined, { open }) =>
     countFailedDeliveryQueueEntriesInDatabase(open()),
+  "deliveryQueue.countPending": (input: { queueNames: string[] }, { open }) =>
+    countPendingDeliveryQueueEntriesInDatabase(open(), input.queueNames),
   "deliveryQueue.pruneTombstones": (_input: undefined, { open }) =>
     pruneExpiredDeliveryQueueTombstonesInDatabase(open()),
   "deliveryQueue.createMediaRetention": writeOperation(

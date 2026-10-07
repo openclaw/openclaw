@@ -35,18 +35,17 @@ export type DiscordThreadBindingLookup = {
   touchThread?: (params: { threadId: string; at?: number; persist?: boolean }) => unknown;
 };
 
+function formatDiscordReplyContext(target: string, sessionKey?: string): string {
+  return `target=${target}${sessionKey ? ` session=${sessionKey}` : ""}`;
+}
+
 export function formatDiscordReplyDeliveryFailure(params: {
   kind: string;
   err: unknown;
   target: string;
   sessionKey?: string;
 }) {
-  const context = [
-    `target=${params.target}`,
-    params.sessionKey ? `session=${params.sessionKey}` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const context = formatDiscordReplyContext(params.target, params.sessionKey);
   return `discord ${params.kind} reply failed (${context}): ${String(params.err)}`;
 }
 
@@ -58,12 +57,7 @@ export function formatDiscordReplySkip(params: {
   target: string;
   sessionKey?: string;
 }) {
-  const context = [
-    `target=${params.target}`,
-    params.sessionKey ? `session=${params.sessionKey}` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const context = formatDiscordReplyContext(params.target, params.sessionKey);
   return `discord ${params.kind} reply skipped (${params.reason}): ${context}`;
 }
 

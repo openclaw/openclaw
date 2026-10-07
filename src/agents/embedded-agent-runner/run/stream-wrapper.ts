@@ -19,14 +19,15 @@ export function wrapStreamObjectSettlement(
   beforeEvent: (event: AssistantMessageEvent) => boolean = () => true,
   close: () => Promise<unknown> = settle,
 ): MutableAssistantMessageEventStream {
-  const originalResult = stream.result.bind(stream);
-  stream.result = async () => {
+  const finishAfter = async <T>(run: () => T | Promise<T>, finish = close): Promise<T> => {
     try {
-      return await originalResult();
+      return await run();
     } finally {
-      await settle();
+      await finish();
     }
   };
+  const originalResult = stream.result.bind(stream);
+  stream.result = () => finishAfter(originalResult, settle);
   const originalIterator = stream[Symbol.asyncIterator].bind(stream);
   stream[Symbol.asyncIterator] = () =>
     createStreamIteratorWrapper({
@@ -44,23 +45,15 @@ export function wrapStreamObjectSettlement(
         }
         return next;
       },
-      onReturn: async (iterator, value) => {
-        try {
-          return (await iterator.return?.(value)) ?? { done: true, value: undefined };
-        } finally {
-          await close();
-        }
-      },
-      onThrow: async (iterator, error) => {
-        try {
+      onReturn: async (iterator, value) =>
+        (await finishAfter(() => iterator.return?.(value))) ?? { done: true, value: undefined },
+      onThrow: (iterator, error) =>
+        finishAfter(() => {
           if (iterator.throw) {
-            return await iterator.throw(error);
+            return iterator.throw(error);
           }
           throw error;
-        } finally {
-          await close();
-        }
-      },
+        }),
     });
   return stream;
 }

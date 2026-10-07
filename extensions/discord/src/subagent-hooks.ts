@@ -91,17 +91,14 @@ function resolveDiscordDeliveryTarget(
     ...(requesterAccountId ? { accountId: requesterAccountId } : {}),
     targetKind: "subagent",
   });
-  let binding: (typeof bindings)[number] | undefined;
-  if (requesterThreadId) {
-    binding = bindings.find(
-      (entry) =>
-        entry.threadId === requesterThreadId &&
-        (!requesterAccountId || entry.accountId === requesterAccountId),
-    );
-  }
-  if (!binding && bindings.length === 1) {
-    binding = bindings[0];
-  }
+  const binding =
+    (requesterThreadId
+      ? bindings.find(
+          (entry) =>
+            entry.threadId === requesterThreadId &&
+            (!requesterAccountId || entry.accountId === requesterAccountId),
+        )
+      : undefined) ?? (bindings.length === 1 ? bindings[0] : undefined);
   if (!binding) {
     return undefined;
   }

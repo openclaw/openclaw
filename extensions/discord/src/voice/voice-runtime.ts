@@ -122,33 +122,27 @@ export class DiscordVoiceManager implements DiscordVoiceListenerManager {
       params.accountId,
     );
     this.receive = new DiscordVoiceReceive({
+      ...params,
       bindCaptureReceipts: ({ guildId, channelId }) =>
         bindDiscordCaptureReceipts({ accountId: params.accountId, guildId, channelId }, this),
       readPolicy: this.readPolicy,
-      accountId: params.accountId,
       admissionAllowFrom,
       botUserId: () => this.botUserId,
-      cfg: params.cfg,
-      client: params.client,
-      discordConfig: params.discordConfig,
       getSession: (guildId) => this.sessions.get(guildId),
       isEntryCurrent: (entry) => this.isEntryCurrent(entry),
       isFollowOwnedGuild: (guildId) => this.following.isFollowOwnedGuild(guildId),
       join: (entry, options) => this.join(entry, options),
       leave: (entry, options) => this.leave(entry, options),
       membership: this.membership,
-      runtime: params.runtime,
       speakerContext,
     });
     this.following = new DiscordVoiceFollowing({
-      scheduler: params.scheduler,
+      ...params,
       allowedChannels: this.allowedChannels,
       autoJoinChannels: this.autoJoinChannels,
       botUserId: () => this.botUserId,
-      client: params.client,
       deleteRecoveryAttempt: (guildId) => this.receive.daveRecoveryAttempts.delete(guildId),
       stopTransport: (guildId) => this.voiceSessions.stopTransport(guildId),
-      discordConfig: params.discordConfig,
       getRecoveryAttempt: (guildId) => this.receive.daveRecoveryAttempts.get(guildId),
       getSession: (guildId) => this.sessions.get(guildId),
       hasVoiceLifecycle: (guildId) => {
@@ -162,12 +156,9 @@ export class DiscordVoiceManager implements DiscordVoiceListenerManager {
       voiceEnabled: this.voiceEnabled,
     });
     this.voiceSessions = new DiscordVoiceSessions({
-      accountId: params.accountId,
+      ...params,
       botUserId: () => this.botUserId,
-      cfg: params.cfg,
-      client: params.client,
       destroyed: () => this.destroyed,
-      discordConfig: params.discordConfig,
       getTranscripts: this.getTranscripts,
       membership: this.membership,
       onLeaveFollowState: (guildId) => {

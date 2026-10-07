@@ -12,8 +12,9 @@ import type { ConversationRouteContext } from "./conversation-route-context.js";
 import { retainLegacyAcpMigrationSourcesForEntry } from "./session-accessor.sqlite-acp-provenance.js";
 import {
   linkSessionConversation,
+  prepareConversationIdentities,
   prepareSessionConversationForWrite,
-  upsertConversationIdentity,
+  upsertConversationIdentities,
 } from "./session-accessor.sqlite-conversation.js";
 import { commitSqliteSessionDeletion } from "./session-accessor.sqlite-deletion.js";
 import {
@@ -552,7 +553,11 @@ export function writeSessionEntry(
     sessionScope: boundSessionRoot.session_scope,
   });
   if (conversation) {
-    upsertConversationIdentity(database, conversation.identity, updatedAt);
+    upsertConversationIdentities(
+      database,
+      prepareConversationIdentities([conversation.identity]),
+      updatedAt,
+    );
   }
   const boundSessionRow = {
     ...boundSessionRoot,

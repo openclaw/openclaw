@@ -207,7 +207,7 @@ export type WorkerPlacementDispatchRequest = WorkerSessionPlacementDispatchIdent
 
 export type WorkerPlacementDispatchAdmission = <T>(
   request: Pick<WorkerPlacementDispatchRequest, "sessionId" | "sessionKey" | "agentId">,
-  run: (signal?: AbortSignal) => Promise<T>,
+  run: (signal?: AbortSignal, assertSessionCurrent?: () => void) => Promise<T>,
   authorize?: () => void,
   signal?: AbortSignal,
 ) => Promise<T>;
