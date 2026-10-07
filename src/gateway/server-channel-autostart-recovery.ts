@@ -1,8 +1,7 @@
-import type { ChannelAutostartSuppression } from "./server-channels.js";
 import { isChannelStartupSuppressedByEnvironment } from "./server-sidecar-startup-mode.js";
 
-export function createChannelAutostartRecovery(params: {
-  getSuppression: () => ChannelAutostartSuppression | null;
+export function createChannelAutostartRecovery<Suppression extends object>(params: {
+  getSuppression: () => Suppression | null;
   clearSuppression: () => void;
   tryRecover?: () => Promise<boolean>;
   isClosing?: () => boolean;
