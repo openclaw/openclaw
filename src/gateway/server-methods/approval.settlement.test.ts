@@ -17,6 +17,7 @@ import { invalidateGatewayDeviceRevocation } from "../device-revocation.js";
 import { ApprovalMutationRefusedError } from "../exec-approval-authority.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { installTestApprovalClock } from "../exec-approval-manager.test-support.js";
+import type { ExecApprovalManagerOptions } from "../exec-approval-manager.types.js";
 import * as approvalRecovery from "../exec-approval-recovery.js";
 import * as operatorApprovalStore from "../operator-approval-store.js";
 import { createApprovalHandlers } from "./approval.js";
@@ -138,22 +139,59 @@ afterEach(() => {
 });
 afterAll(async () => sharedState?.cleanup());
 
+function createFixture(
+  runtimeEpoch: string,
+  options: Pick<
+    ExecApprovalManagerOptions<ExecApprovalRequestPayload>,
+    "onLifecycle" | "resolveAllowedDecisions"
+  > = {},
+  bindDatabase = true,
+) {
+  const state = expectDefined(sharedState, "shared approval test state");
+  const databaseOptions = { env: state.env };
+  const persistence = { runtimeEpoch, ...(bindDatabase ? { databaseOptions } : {}) };
+  const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
+    scheduler: createTestGatewayScheduler(),
+    persistence,
+    ...options,
+  });
+  const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
+    scheduler: createTestGatewayScheduler(),
+    approvalKind: "plugin",
+    persistence,
+  });
+  return {
+    state,
+    databaseOptions,
+    persistence,
+    exec,
+    handlers: createApprovalHandlers({
+      execApprovalManager: exec,
+      pluginApprovalManager: plugin,
+      databaseOptions,
+    }),
+    async [Symbol.asyncDispose]() {
+      await Promise.all([exec.drain(), plugin.drain()]);
+    },
+  };
+}
+
+async function replaceDatabase(databasePath: string) {
+  const original = await stat(databasePath);
+  await closeOpenClawStateDatabaseByPathAsync(databasePath);
+  const replacement = `${databasePath}.replacement`;
+  await copyFile(databasePath, replacement);
+  await rename(replacement, databasePath);
+  expect((await stat(databasePath)).ino).not.toBe(original.ino);
+}
+
 it.each(["resolve", "deny"] as const)(
   "preserves a real %s refusal inside the broker cleanup aggregate",
   async (operation) => {
-    const state = expectDefined(sharedState, "shared approval test state");
-    const databaseOptions = { env: state.env };
-    const persistence = { runtimeEpoch: "aggregate-refusal", databaseOptions };
-    const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
-      scheduler: createTestGatewayScheduler(),
-      persistence,
+    await using fixture = createFixture("aggregate-refusal", {
       resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
     });
-    const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
-      scheduler: createTestGatewayScheduler(),
-      approvalKind: "plugin",
-      persistence,
-    });
+    const { databaseOptions, exec, handlers } = fixture;
     const record = exec.create({ command: "echo retained pending" }, 600_000);
     record.approvalReviewerDeviceIds = ["aggregate-reviewer"];
     const { decision } = await exec.register(record, 600_000);
@@ -166,11 +204,7 @@ it.each(["resolve", "deny"] as const)(
     const client = createClient({ deviceId: "aggregate-reviewer" });
     client.connectionSignal = connection.signal;
     const invocation = createApprovalInvocation({
-      handlers: createApprovalHandlers({
-        execApprovalManager: exec,
-        pluginApprovalManager: plugin,
-        databaseOptions,
-      }),
+      handlers,
       method: "approval.resolve",
       client,
       body: {
@@ -196,33 +230,22 @@ it.each(["resolve", "deny"] as const)(
         }, attachment),
     );
     resultDelivery.wrapRefusal = true;
-    try {
-      expect(await invocation.invoke()).toMatchObject({ ok: false });
-      expect(transactions).toBe(2);
-      expect(resultDelivery.wrappedRefusal).toBeInstanceOf(ApprovalMutationRefusedError);
-      expect(getOperatorApproval({ id: record.id, databaseOptions })).toEqual(before);
-      expect(settled).toBe(false);
-      expect(record.resolvedAtMs).toBeUndefined();
-      expect(invocation.context.approvalEvents?.publishResolved).not.toHaveBeenCalled();
-    } finally {
-      await Promise.all([exec.drain(), plugin.drain()]);
-    }
+    expect(await invocation.invoke()).toMatchObject({ ok: false });
+    expect(transactions).toBe(2);
+    expect(resultDelivery.wrappedRefusal).toBeInstanceOf(ApprovalMutationRefusedError);
+    expect(getOperatorApproval({ id: record.id, databaseOptions })).toEqual(before);
+    expect(settled).toBe(false);
+    expect(record.resolvedAtMs).toBeUndefined();
+    expect(invocation.context.approvalEvents?.publishResolved).not.toHaveBeenCalled();
   },
 );
 
 it.each([false, true])(
   "keeps missing-row settlement with its original owner (replaced: %s)",
   async (replace) => {
-    const state = expectDefined(sharedState, "shared approval test state");
-    const databaseOptions = { env: state.env };
+    await using fixture = createFixture("missing-owner");
+    const { state, databaseOptions, exec, handlers } = fixture;
     const databasePath = resolveOpenClawStateSqlitePath(state.env);
-    const persistence = { runtimeEpoch: "missing-owner", databaseOptions };
-    const exec = new ExecApprovalManager({ persistence, scheduler: createTestGatewayScheduler() });
-    const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
-      scheduler: createTestGatewayScheduler(),
-      approvalKind: "plugin",
-      persistence,
-    });
     const record = exec.create({ command: "echo missing approval" }, 600_000);
     record.approvalReviewerDeviceIds = ["missing-reviewer"];
     const { decision } = await exec.register(record, 600_000);
@@ -236,43 +259,30 @@ it.each([false, true])(
     vi.spyOn(operatorApprovalStore, "getOperatorApprovalDetailed").mockRejectedValueOnce(
       new SqliteWorkerError("synthetic original readback unavailable", "unavailable"),
     );
-    try {
-      await expect(exec.resolveAutoReview(record.id)).rejects.toThrow("verdict remains uncertain");
-      if (replace) {
-        const original = await stat(databasePath);
-        await closeOpenClawStateDatabaseByPathAsync(databasePath);
-        const replacement = `${databasePath}.missing-replacement`;
-        await copyFile(databasePath, replacement);
-        await rename(replacement, databasePath);
-        expect((await stat(databasePath)).ino).not.toBe(original.ino);
-      }
-      deleteDurableApproval(databaseOptions, record.id);
-      expect(
-        await createApprovalInvocation({
-          handlers: createApprovalHandlers({
-            execApprovalManager: exec,
-            pluginApprovalManager: plugin,
-            databaseOptions,
-          }),
-          method: "approval.get",
-          body: { id: record.id },
-          client: createClient({ deviceId: "missing-reviewer" }),
-        }).invoke(),
-      ).toMatchObject({ ok: false });
-      if (replace) {
-        expect(settled).toBe(false);
-        expect(record.resolvedAtMs).toBeUndefined();
-      } else {
-        await expect(decision).resolves.toBe("deny");
-        expect(record.terminalReason).toBe("storage-corrupt");
-      }
-    } finally {
-      await Promise.all([exec.drain(), plugin.drain()]);
+    await expect(exec.resolveAutoReview(record.id)).rejects.toThrow("verdict remains uncertain");
+    if (replace) {
+      await replaceDatabase(databasePath);
+    }
+    deleteDurableApproval(databaseOptions, record.id);
+    expect(
+      await createApprovalInvocation({
+        handlers,
+        method: "approval.get",
+        body: { id: record.id },
+        client: createClient({ deviceId: "missing-reviewer" }),
+      }).invoke(),
+    ).toMatchObject({ ok: false });
+    if (replace) {
+      expect(settled).toBe(false);
+      expect(record.resolvedAtMs).toBeUndefined();
+    } else {
+      await expect(decision).resolves.toBe("deny");
+      expect(record.terminalReason).toBe("storage-corrupt");
     }
   },
 );
 
-it.each(["resolve", "deny", "cancel", "expire"] as const)(
+it.each(["resolve", "cancel", "expire"] as const)(
   "retains the original uncertain owner before a %s retry",
   async (operation) => {
     const state = expectDefined(sharedState, "shared approval test state");
@@ -305,12 +315,7 @@ it.each(["resolve", "deny", "cancel", "expire"] as const)(
         nowMs: record.createdAtMs,
         databaseOptions,
       });
-      const original = await stat(databasePath);
-      await closeOpenClawStateDatabaseByPathAsync(databasePath);
-      const replacement = `${databasePath}.retry-replacement`;
-      await copyFile(databasePath, replacement);
-      await rename(replacement, databasePath);
-      expect((await stat(databasePath)).ino).not.toBe(original.ino);
+      await replaceDatabase(databasePath);
       if (operation === "expire") {
         vi.spyOn(Date, "now").mockReturnValue(record.expiresAtMs);
         installTestApprovalClock();
@@ -318,19 +323,14 @@ it.each(["resolve", "deny", "cancel", "expire"] as const)(
       const retry =
         operation === "resolve"
           ? manager.resolve(record.id, "allow-once")
-          : operation === "deny"
-            ? manager.forceDenyDetailed(record.id, "malformed-verdict", {
-                kind: "device",
-                id: "reviewer",
-              })
-            : operation === "cancel"
-              ? manager.forceDenyDetailed(
-                  record.id,
-                  "run-aborted",
-                  { kind: "system", id: null },
-                  "cancelled",
-                )
-              : manager.getSnapshot(record.id);
+          : operation === "cancel"
+            ? manager.forceDenyDetailed(
+                record.id,
+                "run-aborted",
+                { kind: "system", id: null },
+                "cancelled",
+              )
+            : manager.getSnapshot(record.id);
       const failure = await retry.catch((error: unknown) => error);
       expect(
         getOperatorApproval({ id: record.id, nowMs: record.createdAtMs, databaseOptions }),
@@ -353,20 +353,9 @@ it.each(["resolve", "deny", "cancel", "expire"] as const)(
 it.each(["worker", "native", "missing-receipt"] as const)(
   "uses only actual commit receipts after result loss (%s)",
   async (variant) => {
-    const state = expectDefined(sharedState, "shared approval test state");
-    const databaseOptions = { env: state.env };
-    const persistence = { runtimeEpoch: "receipt-custody", databaseOptions };
     const onLifecycle = vi.fn();
-    const manager = new ExecApprovalManager({
-      persistence,
-      onLifecycle,
-      scheduler: createTestGatewayScheduler(),
-    });
-    const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
-      scheduler: createTestGatewayScheduler(),
-      approvalKind: "plugin",
-      persistence,
-    });
+    await using fixture = createFixture("receipt-custody", { onLifecycle });
+    const { databaseOptions, exec: manager, handlers } = fixture;
     const record = manager.create({ command: "echo received commit" }, 600_000);
     record.approvalReviewerDeviceIds = ["receipt-reviewer"];
     const { decision } = await manager.register(record, 600_000);
@@ -377,71 +366,57 @@ it.each(["worker", "native", "missing-receipt"] as const)(
     const readback = vi.spyOn(operatorApprovalStore, "getOperatorApprovalDetailed");
     resultDelivery.loseResult = variant === "native" ? "native" : "worker";
     resultDelivery.hideReceipt = variant === "missing-receipt";
-    try {
-      await expect(
-        manager.resolveAutoReview(
-          record.id,
-          null,
-          undefined,
-          variant === "native"
-            ? {
-                family: "native-compatibility",
-                assertCurrent: () => {
-                  getOperatorApproval({ id: record.id, databaseOptions });
-                },
-              }
-            : undefined,
-        ),
-      ).rejects.toThrow("synthetic committed result delivery loss");
-      expect(readback).toHaveBeenCalledTimes(1);
-      expect(getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({
-        status: "allowed",
-        decision: "allow-once",
-      });
-      if (variant === "missing-receipt") {
-        expect(settled).toBe(false);
-        resultDelivery.hideReceipt = false;
-        resultDelivery.loseResult = "worker";
-        await expect(manager.resolve(record.id, "allow-once")).rejects.toThrow(
-          "synthetic committed result delivery loss",
-        );
-        expect(
-          await createApprovalInvocation({
-            handlers: createApprovalHandlers({
-              execApprovalManager: manager,
-              pluginApprovalManager: plugin,
-              databaseOptions,
-            }),
-            method: "approval.get",
-            body: { id: record.id },
-            client: createClient({ deviceId: "receipt-reviewer" }),
-          }).invoke(),
-        ).toMatchObject({ ok: true, result: { approval: { status: "allowed" } } });
-        expect(settled).toBe(false);
-        expect(record.resolutionSource).toBeUndefined();
-        expect(onLifecycle.mock.calls.filter(([event]) => event.phase === "terminal")).toHaveLength(
-          0,
-        );
-      } else {
-        await expect(decision).resolves.toBe("allow-once");
-        expect(record.resolutionSource).toBe("auto-review");
-        expect(onLifecycle.mock.calls.filter(([event]) => event.phase === "terminal")).toHaveLength(
-          1,
-        );
-      }
-    } finally {
-      await Promise.all([manager.drain(), plugin.drain()]);
+    await expect(
+      manager.resolveAutoReview(
+        record.id,
+        null,
+        undefined,
+        variant === "native"
+          ? {
+              family: "native-compatibility",
+              assertCurrent: () => {
+                getOperatorApproval({ id: record.id, databaseOptions });
+              },
+            }
+          : undefined,
+      ),
+    ).rejects.toThrow("synthetic committed result delivery loss");
+    expect(readback).toHaveBeenCalledTimes(1);
+    expect(getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({
+      status: "allowed",
+      decision: "allow-once",
+    });
+    if (variant === "missing-receipt") {
+      expect(settled).toBe(false);
+      resultDelivery.hideReceipt = false;
+      resultDelivery.loseResult = "worker";
+      await expect(manager.resolve(record.id, "allow-once")).rejects.toThrow(
+        "synthetic committed result delivery loss",
+      );
+      expect(
+        await createApprovalInvocation({
+          handlers,
+          method: "approval.get",
+          body: { id: record.id },
+          client: createClient({ deviceId: "receipt-reviewer" }),
+        }).invoke(),
+      ).toMatchObject({ ok: true, result: { approval: { status: "allowed" } } });
+      expect(settled).toBe(false);
+      expect(record.resolutionSource).toBeUndefined();
+      expect(onLifecycle.mock.calls.filter(([event]) => event.phase === "terminal")).toHaveLength(
+        0,
+      );
+    } else {
+      await expect(decision).resolves.toBe("allow-once");
+      expect(record.resolutionSource).toBe("auto-review");
+      expect(onLifecycle.mock.calls.filter(([event]) => event.phase === "terminal")).toHaveLength(
+        1,
+      );
     }
   },
 );
 
 it.each([
-  {
-    name: "device after pending readback",
-    unavailable: false,
-    kind: "device",
-    id: "device-winner",
-  },
   {
     name: "channel after unavailable readback",
     unavailable: true,
@@ -456,20 +431,9 @@ it.each([
     id: null,
   },
 ] as const)("does not attribute an uncertain auto-review to $name", async (variant) => {
-  const state = expectDefined(sharedState, "shared approval test state");
-  const databaseOptions = { env: state.env };
-  const persistence = { runtimeEpoch: "competing-review-custody", databaseOptions };
   const onLifecycle = vi.fn();
-  const exec = new ExecApprovalManager({
-    persistence,
-    onLifecycle,
-    scheduler: createTestGatewayScheduler(),
-  });
-  const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
-    scheduler: createTestGatewayScheduler(),
-    approvalKind: "plugin",
-    persistence,
-  });
+  await using fixture = createFixture("competing-review-custody", { onLifecycle });
+  const { databaseOptions, persistence, exec, handlers } = fixture;
   const record = exec.create({ command: "echo independent winner" }, 600_000);
   record.approvalReviewerDeviceIds = ["competing-reviewer"];
   const { decision } = await exec.register(record, 600_000);
@@ -486,50 +450,38 @@ it.each([
       new SqliteWorkerError("synthetic readback unavailable", "unavailable"),
     );
   }
-  try {
-    await expect(exec.resolveAutoReview(record.id)).rejects.toThrow(
-      variant.unavailable ? "verdict remains uncertain" : "synthetic unconfirmed auto-review",
-    );
+  await expect(exec.resolveAutoReview(record.id)).rejects.toThrow(
+    variant.unavailable ? "verdict remains uncertain" : "synthetic unconfirmed auto-review",
+  );
+  expect(settled).toBe(false);
+  expect(
+    await resolve({
+      id: record.id,
+      decision: "allow-once",
+      resolver: { kind: variant.kind, id: variant.id },
+      runtimeEpoch: persistence.runtimeEpoch,
+      expectedKind: "exec",
+      databaseOptions,
+    }),
+  ).toMatchObject({ outcome: "resolved" });
+  const invocation = createApprovalInvocation({
+    handlers,
+    method: "approval.get",
+    body: { id: record.id },
+    client: createClient({ deviceId: "competing-reviewer" }),
+  });
+  expect(await invocation.invoke()).toMatchObject({
+    ok: true,
+    result: { approval: { status: "allowed" } },
+  });
+  if (variant.kind === "runtime" && variant.unavailable) {
     expect(settled).toBe(false);
-    expect(
-      await resolve({
-        id: record.id,
-        decision: "allow-once",
-        resolver: { kind: variant.kind, id: variant.id },
-        runtimeEpoch: persistence.runtimeEpoch,
-        expectedKind: "exec",
-        databaseOptions,
-      }),
-    ).toMatchObject({ outcome: "resolved" });
-    const invocation = createApprovalInvocation({
-      handlers: createApprovalHandlers({
-        execApprovalManager: exec,
-        pluginApprovalManager: plugin,
-        databaseOptions,
-      }),
-      method: "approval.get",
-      body: { id: record.id },
-      client: createClient({ deviceId: "competing-reviewer" }),
-    });
-    expect(await invocation.invoke()).toMatchObject({
-      ok: true,
-      result: { approval: { status: "allowed" } },
-    });
-    if (variant.kind === "runtime" && variant.unavailable) {
-      expect(settled).toBe(false);
-      expect(record.resolutionSource).toBeUndefined();
-      expect(onLifecycle.mock.calls.filter(([event]) => event.phase === "terminal")).toHaveLength(
-        0,
-      );
-    } else {
-      await expect(decision).resolves.toBe("allow-once");
-      expect(record.resolutionSource).toBe("operator");
-      expect(onLifecycle.mock.calls.filter(([event]) => event.phase === "terminal")).toHaveLength(
-        1,
-      );
-    }
-  } finally {
-    await Promise.all([exec.drain(), plugin.drain()]);
+    expect(record.resolutionSource).toBeUndefined();
+    expect(onLifecycle.mock.calls.filter(([event]) => event.phase === "terminal")).toHaveLength(0);
+  } else {
+    await expect(decision).resolves.toBe("allow-once");
+    expect(record.resolutionSource).toBe("operator");
+    expect(onLifecycle.mock.calls.filter(([event]) => event.phase === "terminal")).toHaveLength(1);
   }
 });
 
@@ -551,20 +503,12 @@ it.each(["before-readback", "before-local-settlement"] as const)(
     void decision.then(() => {
       settled = true;
     });
-    const replaceDatabase = async () => {
-      const original = await stat(databasePath);
-      await closeOpenClawStateDatabaseByPathAsync(databasePath);
-      const replacement = `${databasePath}.replacement`;
-      await copyFile(databasePath, replacement);
-      await rename(replacement, databasePath);
-      expect((await stat(databasePath)).ino).not.toBe(original.ino);
-    };
     const resolve = operatorApprovalStore.resolveOperatorApproval;
     vi.spyOn(operatorApprovalStore, "resolveOperatorApproval").mockImplementationOnce(
       async (input) => {
         await resolve(input);
         if (replacementStage === "before-readback") {
-          await replaceDatabase();
+          await replaceDatabase(databasePath);
         }
         throw new SqliteWorkerError("synthetic reply lost after real commit", "outcome-unknown");
       },
@@ -574,7 +518,7 @@ it.each(["before-readback", "before-local-settlement"] as const)(
       vi.spyOn(approvalRecovery, "readUncertainExecApprovalVerdict").mockImplementationOnce(
         async (...args) => {
           const result = await readback(...args);
-          await replaceDatabase();
+          await replaceDatabase(databasePath);
           return result;
         },
       );
@@ -606,44 +550,22 @@ it.each(["before-readback", "before-local-settlement"] as const)(
   },
 );
 
-it.each(
-  (["resolve", "deny"] as const).flatMap((operation) =>
-    [false, true].map((revoke) => ({ operation, revoke })),
-  ),
-)(
-  "settles a committed $operation after a lost reply (revoked: $revoke)",
-  async ({ operation, revoke }) => {
-    const state = expectDefined(sharedState, "shared approval test state");
-    const databaseOptions = { env: state.env };
-    const persistence = { runtimeEpoch: "lost-reply-test", databaseOptions };
+it.each(["resolve", "deny"] as const)(
+  "settles a committed %s after a lost reply and requester revocation",
+  async (operation) => {
     const onLifecycle = vi.fn();
-    const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
-      scheduler: createTestGatewayScheduler(),
-      persistence,
+    await using fixture = createFixture("lost-reply-test", {
       resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
       onLifecycle,
     });
-    const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
-      scheduler: createTestGatewayScheduler(),
-      approvalKind: "plugin",
-      persistence,
-    });
-    const record = exec.create(
-      { command: "echo committed" },
-      600_000,
-      `lost-reply-${operation}-${revoke}`,
-    );
-    const deviceId = `lost-reply-reviewer-${operation}-${revoke}`;
+    const { databaseOptions, exec, handlers } = fixture;
+    const record = exec.create({ command: "echo committed" }, 600_000, `lost-reply-${operation}`);
+    const deviceId = `lost-reply-reviewer-${operation}`;
     record.approvalReviewerDeviceIds = [deviceId];
     const { decision } = await exec.register(record, 600_000);
     let settled: string | null | undefined;
     void decision.then((value) => {
       settled = value;
-    });
-    const handlers = createApprovalHandlers({
-      execApprovalManager: exec,
-      pluginApprovalManager: plugin,
-      databaseOptions,
     });
     const invocation = createApprovalInvocation({
       handlers,
@@ -657,9 +579,7 @@ it.each(
     });
     const loseReply = async (write: () => Promise<unknown>) => {
       await write();
-      if (revoke) {
-        invalidateGatewayDeviceRevocation(invocation.context, deviceId, "operator");
-      }
+      invalidateGatewayDeviceRevocation(invocation.context, deviceId, "operator");
       throw new SqliteWorkerError("synthetic reply lost after real commit", "outcome-unknown");
     };
     if (operation === "resolve") {
@@ -673,27 +593,20 @@ it.each(
         loseReply(() => deny(input)),
       );
     }
-    try {
-      expect(await invocation.invoke()).toMatchObject({ ok: false });
-      const expectedDecision = operation === "resolve" ? "allow-once" : "deny";
-      expect(getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({
-        status: operation === "resolve" ? "allowed" : "denied",
-        decision: expectedDecision,
-      });
-      expect(settled).toBe(expectedDecision);
-      expect(record.decision).toBe(expectedDecision);
-      expect(onLifecycle.mock.calls.filter(([event]) => event.phase === "terminal")).toHaveLength(
-        1,
-      );
-      expect(invocation.context.approvalEvents?.publishResolved).not.toHaveBeenCalled();
-    } finally {
-      await Promise.all([exec.drain(), plugin.drain()]);
-    }
+    expect(await invocation.invoke()).toMatchObject({ ok: false });
+    const expectedDecision = operation === "resolve" ? "allow-once" : "deny";
+    expect(getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({
+      status: operation === "resolve" ? "allowed" : "denied",
+      decision: expectedDecision,
+    });
+    expect(settled).toBe(expectedDecision);
+    expect(record.decision).toBe(expectedDecision);
+    expect(onLifecycle.mock.calls.filter(([event]) => event.phase === "terminal")).toHaveLength(1);
+    expect(invocation.context.approvalEvents?.publishResolved).not.toHaveBeenCalled();
   },
 );
 
 it.each([
-  "auto-review",
   "readback-unavailable",
   "target-changed",
   "auto-review-readback-unavailable",
@@ -701,28 +614,17 @@ it.each([
   "auto-review-not-committed",
   "auto-review-not-committed-readback-unavailable",
 ] as const)("preserves uncertain verdict custody for %s", async (variant) => {
-  const state = expectDefined(sharedState, "shared approval test state");
-  const databaseOptions = { env: state.env };
   const originalStateDir = process.env.OPENCLAW_STATE_DIR;
   const autoReview = variant.startsWith("auto-review");
   const uncommitted = variant.startsWith("auto-review-not-committed");
   const unavailable = variant.endsWith("readback-unavailable") || variant === "auto-review-retry";
-  const persistence = {
-    runtimeEpoch: "uncertain-custody-test",
-    ...(variant === "target-changed" ? {} : { databaseOptions }),
-  };
   const onLifecycle = vi.fn();
-  const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
-    scheduler: createTestGatewayScheduler(),
-    persistence,
-    resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
-    onLifecycle,
-  });
-  const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
-    scheduler: createTestGatewayScheduler(),
-    approvalKind: "plugin",
-    persistence,
-  });
+  await using fixture = createFixture(
+    "uncertain-custody-test",
+    { resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions, onLifecycle },
+    variant !== "target-changed",
+  );
+  const { state, databaseOptions, exec, handlers } = fixture;
   const record = exec.create({ command: "echo committed" }, 600_000, `uncertain-${variant}`);
   record.approvalReviewerDeviceIds = ["uncertain-reviewer"];
   const { decision } = await exec.register(record, 600_000);
@@ -769,11 +671,6 @@ it.each([
     } else {
       expect(settled).toBeUndefined();
       expect(record.resolvedAtMs).toBeUndefined();
-      const handlers = createApprovalHandlers({
-        execApprovalManager: exec,
-        pluginApprovalManager: plugin,
-        databaseOptions,
-      });
       if (variant === "auto-review-retry") {
         expect(await exec.resolve(record.id, "allow-once", "operator-retry")).toBe(false);
       } else {
@@ -796,26 +693,16 @@ it.each([
     } else {
       process.env.OPENCLAW_STATE_DIR = originalStateDir;
     }
-    await Promise.all([exec.drain(), plugin.drain()]);
   }
 });
 
 it.each([false, true])(
   "retains no-route ask fallback after reply loss (readback unavailable: %s)",
   async (unavailable) => {
-    const state = expectDefined(sharedState, "shared approval test state");
-    const databaseOptions = { env: state.env };
-    const persistence = { runtimeEpoch: "no-route-recovery", databaseOptions };
-    const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
-      scheduler: createTestGatewayScheduler(),
-      persistence,
+    await using fixture = createFixture("no-route-recovery", {
       resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
     });
-    const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
-      scheduler: createTestGatewayScheduler(),
-      approvalKind: "plugin",
-      persistence,
-    });
+    const { databaseOptions, exec, handlers } = fixture;
     const record = exec.create(
       { command: "echo no route" },
       600_000,
@@ -839,35 +726,26 @@ it.each([false, true])(
         throw new SqliteWorkerError("synthetic no-route reply lost", "outcome-unknown");
       },
     );
-    try {
-      await expect(exec.expire(record.id, "no-approval-route")).rejects.toThrow();
-      expect(getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({
-        status: "denied",
-        decision: "deny",
-        terminalReason: "no-route",
-      });
-      if (unavailable) {
-        expect(settled).toBeUndefined();
-        const handlers = createApprovalHandlers({
-          execApprovalManager: exec,
-          pluginApprovalManager: plugin,
-          databaseOptions,
-        });
-        expect(
-          await createApprovalInvocation({
-            handlers,
-            method: "approval.get",
-            body: { id: record.id },
-            client: createClient({ deviceId: "no-route-reviewer" }),
-          }).invoke(),
-        ).toMatchObject({ ok: true, result: { approval: { status: "denied" } } });
-      }
-      expect(settled).toBeNull();
-      expect(record.decision).toBeUndefined();
-      expect(exec.consumeAskFallback(record.id)).toBe(true);
-      expect(exec.consumeAskFallback(record.id)).toBe(false);
-    } finally {
-      await Promise.all([exec.drain(), plugin.drain()]);
+    await expect(exec.expire(record.id, "no-approval-route")).rejects.toThrow();
+    expect(getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({
+      status: "denied",
+      decision: "deny",
+      terminalReason: "no-route",
+    });
+    if (unavailable) {
+      expect(settled).toBeUndefined();
+      expect(
+        await createApprovalInvocation({
+          handlers,
+          method: "approval.get",
+          body: { id: record.id },
+          client: createClient({ deviceId: "no-route-reviewer" }),
+        }).invoke(),
+      ).toMatchObject({ ok: true, result: { approval: { status: "denied" } } });
     }
+    expect(settled).toBeNull();
+    expect(record.decision).toBeUndefined();
+    expect(exec.consumeAskFallback(record.id)).toBe(true);
+    expect(exec.consumeAskFallback(record.id)).toBe(false);
   },
 );

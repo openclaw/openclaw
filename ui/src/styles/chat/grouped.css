@@ -461,10 +461,7 @@
   letter-spacing: -0.02em;
 }
 
-.chat-author-avatar__fallback {
-  display: none;
-}
-
+.chat-author-avatar__fallback,
 .chat-author-avatar.is-fallback .chat-author-avatar__image {
   display: none;
 }
@@ -842,10 +839,7 @@ img.chat-avatar.user {
   display: grid;
 }
 
-.chat-avatar-slot > :not(img, .identity-avatar__hat) {
-  display: none;
-}
-
+.chat-avatar-slot > :not(img, .identity-avatar__hat),
 .chat-avatar-slot.is-fallback > img.chat-avatar,
 .chat-avatar-slot.is-fallback > .identity-avatar__hat {
   display: none;
@@ -1239,7 +1233,8 @@ button.chat-reply-attribution__target:disabled {
   /* Every control in message content, including openable attachment cards,
      wins hit-testing over that upward extension; plain text keeps the tap
      area. Zero specificity keeps any position or stacking they already
-     declare. Tool cards and the action row keep their own stacking. */
+     declare. Tool cards and the action row keep their own stacking.
+     GitHub reference chips reset their link positioning; lift them too. */
   :where(.chat-group-messages)
     :where(
       a,
@@ -1253,12 +1248,7 @@ button.chat-reply-attribution__target:disabled {
       label,
       video,
       audio
-    ):where(:not(.chat-tool-card *, .chat-message-actions-row *)) {
-    position: relative;
-    z-index: 1;
-  }
-
-  /* GitHub reference chips reset their link positioning; lift them too. */
+    ):where(:not(.chat-tool-card *, .chat-message-actions-row *)),
   .chat-group-messages .chat-text a.markdown-github-item {
     position: relative;
     z-index: 1;

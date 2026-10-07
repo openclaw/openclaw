@@ -400,6 +400,7 @@ describe("worker placement dispatch authority", () => {
             enabled: true as const,
             capacity: { total: 2, available: 2 },
             capturedExecPolicy: true,
+            promptContext: 1,
           },
           commands: ["system.run"],
         };

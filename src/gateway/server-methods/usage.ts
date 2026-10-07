@@ -1,4 +1,3 @@
-// Gateway usage methods validate requests and assemble owner-scoped usage reports.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -331,7 +330,6 @@ export const usageHandlers: GatewayRequestHandlers = {
           });
           const mergedEntries = matchedEntries.map(({ entry }) => entry);
 
-          // Load usage for each session
           const sessions: SessionUsageEntry[] = [];
           const accumulator = createUsageAggregateAccumulator();
           const { summaries: usageByEntryIndex, cacheStatus } = await loadUsageSessionSummaries({

@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { withPreparedAuthStorePathForDisplay } from "./auth-profiles/paths.js";
@@ -15,9 +16,16 @@ import type {
   ModelServiceTierObservation,
   PreparedAccountCatalogAccess,
   PreparedModelCatalogAuth,
+  PreparedModelRuntimeAuth,
+  PreparedModelRuntimeAuthScope,
 } from "./prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeCatalogAccessParams } from "./prepared-model-runtime.catalog-contract.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
+import { preparedSyntheticAuthProviderScope } from "./prepared-model-runtime.synthetic-auth.js";
+
+// Startup captures each CLI login once; ordinary reads recheck it after this window.
+const NATIVE_LOGIN_RECHECK_MS = 60_000;
 
 const SERVICE_TIER_OBSERVATION_TTL_MS = 5 * 60_000;
 function readDirectBinding(config: OpenClawConfig, provider: string) {
@@ -415,5 +423,73 @@ export async function prepareInitialModelCatalogAuth(
     credentials: agentFacts.credentials,
     authModes: resolveUsableAgentCredentialModes(agentFacts.credentials),
     providerAuthLabels,
+  };
+}
+
+type PreparedModelCatalogAuthOwner = {
+  pluginGeneration: PreparedModelRuntimeCatalogAccessParams["pluginGeneration"];
+  accountCatalog: PreparedAccountCatalogAccess;
+  normalizeProvider: (provider: string) => string;
+  assertCurrent: () => void;
+  readAuth: () => PreparedModelCatalogAuth;
+  refreshAuth: (
+    scope: PreparedModelRuntimeAuthScope,
+  ) => Promise<Parameters<typeof replacePreparedModelCatalogAuth>[1]>;
+};
+
+async function refreshScopedModelCatalogAuth(
+  owner: PreparedModelCatalogAuthOwner,
+  { providerIds, profileIds }: PreparedModelRuntimeAuthScope,
+): Promise<PreparedModelCatalogAuth> {
+  owner.assertCurrent();
+  await using _ = {
+    [Symbol.asyncDispose]: retainPreparedPluginGeneration(owner.pluginGeneration),
+  };
+  const refreshed = await owner.refreshAuth({
+    providerIds,
+    ...(profileIds?.length ? { profileIds } : {}),
+  });
+  owner.assertCurrent();
+  const scope = preparedSyntheticAuthProviderScope(providerIds.map(owner.normalizeProvider));
+  const includesProvider = (provider: string) => scope.has(owner.normalizeProvider(provider));
+  owner.accountCatalog.reconcileAuth(refreshed.authStore, includesProvider, profileIds);
+  return replacePreparedModelCatalogAuth(owner.readAuth(), refreshed, includesProvider);
+}
+
+/** Refreshes scoped auth and merges it over the owner's current catalog auth. */
+export async function loadScopedModelCatalogAuth(
+  owner: PreparedModelCatalogAuthOwner,
+  scope: PreparedModelRuntimeAuthScope,
+): Promise<PreparedModelRuntimeAuth> {
+  const { authStore, authModes } = await refreshScopedModelCatalogAuth(owner, scope);
+  return { authStore, authModes: Object.freeze(authModes) };
+}
+
+/** Rechecks CLI backend logins on demand and publishes only a changed result. */
+export function createNativeLoginRecheck(
+  owner: PreparedModelCatalogAuthOwner,
+  eligibleProviders: readonly string[],
+  publish: (auth: PreparedModelCatalogAuth) => void,
+): () => void {
+  const { owners, index } = owner.pluginGeneration.pluginMetadataSnapshot;
+  const refs = new Set(listManifestSyntheticAuthProviderRefs(index).map(owner.normalizeProvider));
+  const providerIds = eligibleProviders.filter(
+    (provider) => owners.cliBackends.has(provider) && refs.has(provider),
+  );
+  let checkedAt = Date.now();
+  return () => {
+    const now = Date.now();
+    if (!providerIds.length || now - checkedAt < NATIVE_LOGIN_RECHECK_MS) {
+      return;
+    }
+    checkedAt = now;
+    void refreshScopedModelCatalogAuth(owner, { providerIds })
+      .then((auth) => {
+        const current = owner.readAuth().authModes;
+        if (providerIds.some((provider) => current[provider] !== auth.authModes[provider])) {
+          publish(auth);
+        }
+      })
+      .catch(() => undefined);
   };
 }

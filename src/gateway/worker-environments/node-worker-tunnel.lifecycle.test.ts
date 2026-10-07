@@ -155,6 +155,7 @@ describe("node worker tunnel lifetime", () => {
     const nodeTransport = transport();
     const nodes = await nodeTransport.listCurrentNodes();
     nodes[0]!.workerHost.capturedExecPolicy = true;
+    nodes[0]!.workerHost.promptContext = 1;
     nodeTransport.listCurrentNodes = async () => nodes;
     nodeTransport.invoke = withWorkspaceDrain(async (request) => {
       invoked.push(request.command);

@@ -1,5 +1,3 @@
-// Talk client methods create browser-owned realtime voice sessions and route
-// client tool calls back into OpenClaw agent consult/control flows.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -46,7 +44,7 @@ import {
 import {
   ensureTalkRealtimeRelayVoiceSession,
   flushTalkRealtimeRelayVoiceWrites,
-} from "../relay/index.js";
+} from "../relay/operations.js";
 import { resolveOwnedActiveTalkRunTarget } from "../run-ownership.js";
 import { prepareTalkSessionTarget, requirePreparedTalkSessionTarget } from "../session-target.js";
 import { unregisterTalkVoiceSession } from "../voice-selection.js";
@@ -57,12 +55,6 @@ import {
   rememberLegacyVoiceBinding,
 } from "./client-legacy-voice-bindings.js";
 
-/**
- * Gateway methods for browser-owned realtime Talk sessions.
- *
- * These handlers create provider browser sessions and bridge client-owned tool
- * calls back into OpenClaw agent consult runs.
- */
 export const talkClientHandlers: GatewayRequestHandlers = {
   "talk.client.create": createTalkClient,
   "talk.client.toolCall": defineValidatedGatewayHandler(

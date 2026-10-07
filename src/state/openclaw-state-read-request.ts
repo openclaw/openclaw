@@ -481,7 +481,12 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     );
   }
   if (command.type === "userProfiles.githubIdentity.cached") {
-    return bytes + Buffer.byteLength(command.email, "utf8") + 8;
+    return (
+      bytes +
+      ("login" in command
+        ? Buffer.byteLength(command.login, "utf8")
+        : Buffer.byteLength(command.email, "utf8") + 8)
+    );
   }
   if (
     command.type === "userProfiles.githubAttribution.resolve" ||

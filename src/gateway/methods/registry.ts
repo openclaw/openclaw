@@ -68,7 +68,6 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
   };
 }
 
-/** Creates a read-only registry for gateway method lookup, listing, and policy metadata. */
 export function createGatewayMethodRegistry(
   inputs: readonly GatewayMethodDescriptorInput[],
   pluginRegistry?: PluginRegistry,
@@ -111,7 +110,6 @@ export function createGatewayMethodRegistry(
   };
 }
 
-/** Converts a plain handler map into scoped descriptors owned by one gateway surface. */
 export function createGatewayMethodDescriptorsFromHandlers(params: {
   handlers: Record<string, GatewayMethodHandler>;
   owner: GatewayMethodOwner;
