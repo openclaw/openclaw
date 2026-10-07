@@ -131,14 +131,14 @@ export function createDeliveryResultRecorder(params: {
     }
   };
   return {
-    async recordIdentifiedDeliveryResult(delivery: OutboundDeliveryResult): Promise<boolean> {
+    recordIdentifiedDeliveryResult: async (delivery: OutboundDeliveryResult): Promise<boolean> => {
       const [recorded] = await recordIdentifiedDeliveryResults([delivery], {
         finalResultIsLastReported: true,
       });
       return recorded ?? false;
     },
     recordIdentifiedDeliveryResults,
-    async reportIdentifiedDeliveryResult(delivery: OutboundDeliveryResult): Promise<void> {
+    reportIdentifiedDeliveryResult: async (delivery: OutboundDeliveryResult): Promise<void> => {
       if (!observeDeliveryResult(delivery)) {
         return;
       }

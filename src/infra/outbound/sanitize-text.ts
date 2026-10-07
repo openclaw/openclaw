@@ -29,10 +29,11 @@ const EMPTY_HTML_ELEMENT_RE =
   /<((?!(?:br|p|div)(?=[\s>]))[a-z][a-z0-9_.:-]*)(?=[\s>])(?:[^"'<>]|"[^"]*"|'[^']*')*>(?:[^\S\r\n\u2028\u2029]|<(?!\/?(?:br|p|div)(?=[\s/>]))\/?[a-z][a-z0-9_.:-]*(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>)*<\/\1\s*>/gi;
 
 function removeMatchesUntilStable(
-  text: string,
+  input: string,
   pattern: RegExp,
   replacement?: (match: string, offset: number, source: string) => string,
 ): string {
+  let text = input;
   let previous: string;
   do {
     previous = text;

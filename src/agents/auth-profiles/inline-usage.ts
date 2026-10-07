@@ -109,7 +109,7 @@ export async function persistInlineAuthFailure(
                   input: {},
                 },
               );
-              const result = await withAuthProfileCleanup(
+              const executionResult = await withAuthProfileCleanup(
                 () =>
                   client.run(async (scope) => {
                     const readTarget = () =>
@@ -172,10 +172,10 @@ export async function persistInlineAuthFailure(
                   }
                 },
               );
-              if (!result.ok) {
-                throw inlineAuthFailureError(result.error);
+              if (!executionResult.ok) {
+                throw inlineAuthFailureError(executionResult.error);
               }
-              return result.receipt;
+              return executionResult.receipt;
             },
             assertCurrent,
           ),
@@ -210,22 +210,26 @@ export async function persistInlineAuthFailure(
     }
   };
   return withAuthProfileCleanup(runWithAdmission, async () => {
+    let releaseFailure: { error: unknown } | undefined;
     try {
       await execution.release();
     } catch (error) {
+      releaseFailure = { error };
+    }
+    if (releaseFailure) {
       if (durableReceipt) {
         reportCommittedInlineAuthFailure(
           "auth usage committed before captured owner release failed",
-          error,
+          releaseFailure.error,
         );
       } else if (failure) {
         throw new AggregateError(
-          [failure.error, error],
+          [failure.error, releaseFailure.error],
           "Auth usage and captured owner release failed",
           { cause: failure.error },
         );
       } else {
-        throw error;
+        throw releaseFailure.error;
       }
     }
   });

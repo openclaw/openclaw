@@ -73,17 +73,19 @@ function applySessionAuthProfileOverrideState(
   state: SessionAuthProfileOverrideState,
   updatedAt: number,
 ): void {
-  const apply = <K extends keyof SessionAuthProfileOverrideState>(key: K) => {
-    const value = state[key];
+  const apply = <K extends keyof SessionAuthProfileOverrideState>(
+    key: K,
+    value: SessionAuthProfileOverrideState[K],
+  ) => {
     if (value === undefined) {
       delete entry[key];
     } else {
       entry[key] = value;
     }
   };
-  apply("authProfileOverride");
-  apply("authProfileOverrideSource");
-  apply("authProfileOverrideCompactionCount");
+  apply("authProfileOverride", state.authProfileOverride);
+  apply("authProfileOverrideSource", state.authProfileOverrideSource);
+  apply("authProfileOverrideCompactionCount", state.authProfileOverrideCompactionCount);
   entry.updatedAt = Math.max(entry.updatedAt ?? 0, updatedAt);
 }
 

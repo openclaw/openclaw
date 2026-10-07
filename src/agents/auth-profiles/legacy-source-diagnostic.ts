@@ -191,7 +191,7 @@ export class AuthProfileMigrationRequiredError extends Error {
             ownerId: shortenHomePath(
               params.databasePath ?? resolveAuthProfileOwnerPath(params.agentDir, params.env),
             ),
-            sourceKinds: params.sources.map((source) => source.kind),
+            sourceKinds: params.sources.map((candidate) => candidate.kind),
             affectedProviders: readLegacyAuthProfileProviders(params.sources),
           };
     const { ownerId, affectedProviders: providers } = source;

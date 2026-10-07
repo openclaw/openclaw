@@ -305,12 +305,12 @@ export async function restoreDeliveryAttemptBeforeDispatch(
   });
 }
 
-function deliveryPlatformSendRecorder<Claim extends string | null>(kind: "start" | "dispatch") {
+function deliveryPlatformSendRecorder(kind: "start" | "dispatch") {
   return async (
     id: string,
     stateDir?: string,
     route?: { replyToId?: string | null },
-    expectedPlatformSendAttemptId?: Claim,
+    expectedPlatformSendAttemptId?: string | null,
     context?: DeliveryQueueStateContext,
   ): Promise<void> => {
     await executeDeliveryQueueOperation(context, stateDir, {
@@ -325,10 +325,14 @@ function deliveryPlatformSendRecorder<Claim extends string | null>(kind: "start"
   };
 }
 
-export const markDeliveryPlatformSendAttemptStarted = deliveryPlatformSendRecorder<string>("start");
-export const markDeliveryPlatformSendDispatched = deliveryPlatformSendRecorder<string | null>(
-  "dispatch",
-);
+export const markDeliveryPlatformSendAttemptStarted: (
+  id: string,
+  stateDir?: string,
+  route?: { replyToId?: string | null },
+  producerClaimId?: string,
+  context?: DeliveryQueueStateContext,
+) => Promise<void> = deliveryPlatformSendRecorder("start");
+export const markDeliveryPlatformSendDispatched = deliveryPlatformSendRecorder("dispatch");
 
 export async function markDeliveryPlatformOutcomeUnknown(
   id: string,
