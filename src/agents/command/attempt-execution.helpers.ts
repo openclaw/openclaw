@@ -465,26 +465,17 @@ export function createAcpVisibleTextAccumulator() {
           pendingSilentPrefix = leadCandidate;
           return null;
         }
-        if (startsWithSilentToken(trimmedLeadCandidate, SILENT_REPLY_TOKEN)) {
-          const stripped = stripLeadingSilentToken(leadCandidate, SILENT_REPLY_TOKEN);
-          if (stripped) {
-            pendingSilentPrefix = "";
-            rawVisibleText = leadCandidate;
-            visibleText = stripped;
-            return { text: stripped, delta: stripped };
-          }
+        const text = startsWithSilentToken(trimmedLeadCandidate, SILENT_REPLY_TOKEN)
+          ? stripLeadingSilentToken(leadCandidate, SILENT_REPLY_TOKEN)
+          : leadCandidate;
+        if (!text) {
           pendingSilentPrefix = leadCandidate;
           return null;
         }
-        if (pendingSilentPrefix) {
-          pendingSilentPrefix = "";
-          rawVisibleText = leadCandidate;
-          visibleText = leadCandidate;
-          return {
-            text: visibleText,
-            delta: leadCandidate,
-          };
-        }
+        pendingSilentPrefix = "";
+        rawVisibleText = leadCandidate;
+        visibleText = text;
+        return { text, delta: text };
       }
 
       const delta =

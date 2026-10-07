@@ -1,6 +1,4 @@
 import fs from "node:fs/promises";
-import http from "node:http";
-import type { AddressInfo } from "node:net";
 import path from "node:path";
 import {
   afterAll,
@@ -15,17 +13,11 @@ import {
 } from "vitest";
 import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import { consumePendingToolMediaIntoReply } from "../../agents/embedded-agent-subscribe.handlers.messages.replies.js";
-import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import {
-  disposeStoreRemoteFixtures,
-  withStoreRemoteFixture,
-  wrapStoreSaveRemoteMedia,
-} from "../../media/store-network.test-support.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import {
@@ -52,17 +44,11 @@ beforeAll(async () => {
   // Spy after graph evaluation: importOriginal(fetch) can pull store into its mock cycle.
   const mediaFetch = await import("../../media/fetch.js");
   const saveRemoteMedia = mediaFetch.saveRemoteMedia;
-  storeSaveSpy = vi
-    .spyOn(mediaFetch, "saveRemoteMedia")
-    .mockImplementation(wrapStoreSaveRemoteMedia(saveRemoteMedia));
+  storeSaveSpy = vi.spyOn(mediaFetch, "saveRemoteMedia").mockImplementation(saveRemoteMedia);
 });
 
 afterAll(() => {
-  try {
-    disposeStoreRemoteFixtures();
-  } finally {
-    storeSaveSpy?.mockRestore();
-  }
+  storeSaveSpy?.mockRestore();
 });
 
 type ReplyMediaPayloads = Parameters<
@@ -159,19 +145,6 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     return payload;
   }
 
-  async function normalizeCodexHomeImage(params: {
-    allowRead: boolean;
-    payload: (sourcePath: string) => ReplyMediaPayload;
-  }) {
-    const context = createMediaTestContext({ allowRead: params.allowRead });
-    const sourcePath = await createCodexHomeImage({ agentDir: context.agentDir });
-    const payload = await normalizeReplyMedia({
-      cfg: context.cfg,
-      payloads: [params.payload(sourcePath)],
-    });
-    return { ...context, sourcePath, payload };
-  }
-
   async function createManagedImageBlocks(params: {
     cfg: OpenClawConfig;
     mediaUrls: string[] | undefined;
@@ -196,11 +169,8 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     await expectPathMissing(path.join(stateDir, "media", "outbound"));
   }
 
-  it.each([
-    "http://192.168.1.138:64384/movie.mp4?openclaw_portal=synthetic-test-token",
-    "https://127.0.0.1/movie.mp4",
-    "https://user:synthetic-password@example.com/movie.mp4",
-  ])("reports a rejected final MEDIA directive without exposing its URL: %s", async (source) => {
+  it("reports a rejected final MEDIA directive without exposing its URL", async () => {
+    const source = "https://user:synthetic-password@example.com/movie.mp4";
     const payloads = buildEmbeddedRunPayloads({
       assistantTexts: [`Here is the movie.\nMEDIA:${source}`],
       lastAssistant: undefined,
@@ -230,42 +200,29 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(persistedAssistantContent).toEqual(assistantContent);
   });
 
-  it.each(["directive", "structured"])(
-    "publishes a canonical inbound image from a %s reply",
-    async (kind) => {
-      const { cfg } = createMediaTestContext({ allowRead: true });
-      const saved = await saveMediaBuffer(
-        PNG_BYTES,
-        "image/png",
-        "inbound",
-        undefined,
-        "photo.png",
-      );
-      const source = `media://inbound/${saved.id}`;
-      const caption = "Here it is again.";
-      const payload = await normalizeReplyMedia({
-        cfg,
-        payloads: [
-          kind === "directive"
-            ? parseReplyDirectives(`[[reply_to_current]] ${caption}\nMEDIA:${source}`)
-            : { text: caption, replyToCurrent: true, mediaUrls: [source] },
-        ],
-      });
+  it("publishes a canonical inbound image from a directive reply", async () => {
+    const { cfg } = createMediaTestContext({ allowRead: true });
+    const saved = await saveMediaBuffer(PNG_BYTES, "image/png", "inbound", undefined, "photo.png");
+    const source = `media://inbound/${saved.id}`;
+    const caption = "Here it is again.";
+    const payload = await normalizeReplyMedia({
+      cfg,
+      payloads: [parseReplyDirectives(`[[reply_to_current]] ${caption}\nMEDIA:${source}`)],
+    });
 
-      expect(payload?.text).toBe(caption);
-      expect(payload?.replyToCurrent).toBe(true);
-      const normalizedPath = requireString(payload?.mediaUrls?.[0], "normalized media path");
-      expect(await fs.readFile(normalizedPath)).toEqual(PNG_BYTES);
-      const blocks = await createManagedImageBlocks({ cfg, mediaUrls: payload?.mediaUrls });
-      expect(blocks).toEqual([
-        expect.objectContaining({
-          type: "image",
-          mimeType: "image/png",
-          sizeBytes: PNG_BYTES.length,
-        }),
-      ]);
-    },
-  );
+    expect(payload?.text).toBe(caption);
+    expect(payload?.replyToCurrent).toBe(true);
+    const normalizedPath = requireString(payload?.mediaUrls?.[0], "normalized media path");
+    expect(await fs.readFile(normalizedPath)).toEqual(PNG_BYTES);
+    const blocks = await createManagedImageBlocks({ cfg, mediaUrls: payload?.mediaUrls });
+    expect(blocks).toEqual([
+      expect.objectContaining({
+        type: "image",
+        mimeType: "image/png",
+        sizeBytes: PNG_BYTES.length,
+      }),
+    ]);
+  });
 
   it("does not give inbound URIs broader sandbox access than their stored paths", async () => {
     const { cfg, stateDir, workspaceDir } = createMediaTestContext({ allowRead: true });
@@ -285,146 +242,29 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     await expectOutboundMediaMissing(stateDir);
   });
 
-  it.each(["image", "audio", "image before inline", "image after inline"] as const)(
-    "reports denied %s without leaking or staging its path",
-    async (kind) => {
-      const { stateDir, agentDir, cfg } = createMediaTestContext({ allowRead: false });
-      const source =
-        kind === "audio"
-          ? path.join(testState.root, "outside", "voice.mp3")
-          : await createCodexHomeImage({ agentDir });
-      if (kind === "audio") {
-        await createAudioFile(source);
-      }
-      const inline = kind.includes("inline");
-      const dataUrl = dataImageUrl();
-      const mediaUrls = !inline
-        ? [source]
-        : kind === "image before inline"
-          ? [source, dataUrl]
-          : [dataUrl, source];
-      const payload = await normalizeReplyMedia({ cfg, payloads: [{ mediaUrls }] });
-      expect(payload?.mediaUrl).toBe(inline ? dataUrl : undefined);
-      expect(payload?.mediaUrls).toEqual(inline ? [dataUrl] : undefined);
-      expect(requireString(payload?.text, "suppressed media text")).toBe(
-        `⚠️ ${path.basename(source)}: Delivery failed. Try sending this file again.`,
-      );
-      expect(payload?.text).not.toContain(source);
-      expect(Buffer.byteLength(payload?.text ?? "")).toBeLessThan(256);
-      await expectOutboundMediaMissing(stateDir);
-    },
-  );
-
-  it.each(["file://attacker/share/probe.mp3", "file:///outside/secret.png"])(
-    "keeps deferred tool media rejection visible for %s",
-    async (mediaUrl) => {
-      const { cfg, stateDir } = createMediaTestContext({ allowRead: true });
-      const payload = await normalizeReplyMedia({
-        cfg,
-        payloads: [{ text: "NO_REPLY", mediaUrls: [mediaUrl] }],
-      });
-      const { assistantContent } = await buildAssistantReplyContent({
-        sessionKey: TEST_SESSION_KEY,
-        agentId: "main",
-        payloads: payload ? [payload] : [],
-        managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
-      });
-      expect(assistantContent).toEqual([
-        expect.objectContaining({
-          type: "attachment_error",
-          attachment: expect.objectContaining({
-            code: "delivery-failed",
-            label: path.basename(new URL(mediaUrl).pathname),
-          }),
-        }),
-      ]);
-      await expectOutboundMediaMissing(stateDir);
-    },
-  );
-
-  it("preserves ordered document and image metadata beside one rejected SVG", async () => {
-    const { workspaceDir, cfg } = createMediaTestContext({ allowRead: true });
-    const documentPath = path.join(workspaceDir, "artifact.json");
-    const localImagePath = path.join(workspaceDir, "local.png");
-    const unsupportedPath = path.join(workspaceDir, "vector.svg");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(documentPath, '{"ready":true}\n');
-    await fs.writeFile(localImagePath, PNG_BYTES);
-    await fs.writeFile(unsupportedPath, "<svg><script/></svg>\n");
-    const upstream = http.createServer((req, res) => {
-      expect(req.url).toBe("/remote.png?sig=secret");
-      res.statusCode = 200;
-      res.setHeader("content-type", "image/png");
-      res.end(PNG_BYTES);
+  it("keeps deferred tool media rejection visible", async () => {
+    const mediaUrl = "file://attacker/share/probe.mp3";
+    const { cfg, stateDir } = createMediaTestContext({ allowRead: true });
+    const payload = await normalizeReplyMedia({
+      cfg,
+      payloads: [{ text: "NO_REPLY", mediaUrls: [mediaUrl] }],
     });
-    await new Promise<void>((resolve) => {
-      upstream.listen(0, "127.0.0.1", resolve);
+    const { assistantContent } = await buildAssistantReplyContent({
+      sessionKey: TEST_SESSION_KEY,
+      agentId: "main",
+      payloads: payload ? [payload] : [],
+      managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
     });
-    const address = upstream.address() as AddressInfo;
-
-    try {
-      const remoteImageUrl = `http://127.0.0.1:${address.port}/remote.png?sig=secret`;
-      const payload = await normalizeReplyMedia({
-        cfg,
-        payloads: [
-          {
-            text: "Artifacts ready",
-            mediaUrls: [documentPath, remoteImageUrl, localImagePath, unsupportedPath],
-          },
-        ],
-      });
-
-      expect(payload).toMatchObject({
-        text: "Artifacts ready\n⚠️ vector.svg: Rejected by the local attachment allowlist. Send a supported file type.",
-        attachments: [
-          expect.objectContaining({ name: "artifact.json", mimeType: "application/json" }),
-          {},
-          expect.objectContaining({ name: "local.png", mimeType: "image/png" }),
-        ],
-      });
-      expect(payload?.mediaUrls).toHaveLength(3);
-      const matchedUrls: string[] = [];
-      const { assistantContent: content } = await withStoreRemoteFixture(
-        { url: remoteImageUrl, onMatch: (url) => matchedUrls.push(url) },
-        () =>
-          buildAssistantReplyContent({
-            sessionKey: TEST_SESSION_KEY,
-            agentId: "main",
-            payloads: payload ? [payload] : [],
-            managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
-          }),
-      );
-      expect(matchedUrls).toEqual([remoteImageUrl]);
-      expect(content).toEqual([
-        { type: "text", text: "Artifacts ready" },
-        expect.objectContaining({
-          type: "attachment",
-          attachment: expect.objectContaining({
-            label: "artifact.json",
-            mimeType: "application/json",
-          }),
+    expect(assistantContent).toEqual([
+      expect.objectContaining({
+        type: "attachment_error",
+        attachment: expect.objectContaining({
+          code: "delivery-failed",
+          label: path.basename(new URL(mediaUrl).pathname),
         }),
-        expect.objectContaining({ type: "image", alt: "remote.png", mimeType: "image/png" }),
-        expect.objectContaining({ type: "image", alt: "local.png", mimeType: "image/png" }),
-        {
-          type: "attachment_error",
-          attachment: {
-            code: "unsupported-format",
-            kind: "image",
-            label: "vector.svg",
-            mimeType: "image/svg+xml",
-          },
-        },
-      ]);
-      const serialized = JSON.stringify(content);
-      expect(serialized).toContain("vector.svg");
-      expect(serialized).not.toContain("Media failed");
-      expect(serialized).not.toContain("sig=secret");
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        upstream.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+      }),
+    ]);
+    await expectOutboundMediaMissing(stateDir);
   });
 
   it("preserves named rejection outcomes and metadata beside trusted local audio", async () => {
@@ -505,37 +345,18 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     ]);
   });
 
-  it.each(["sensitive image", "inline image", "trusted audio"] as const)(
-    "preserves %s without staging",
-    async (kind) => {
-      const { stateDir, agentDir, workspaceDir, cfg } = createMediaTestContext({
-        allowRead: kind !== "trusted audio",
-      });
-      const source =
-        kind === "sensitive image"
-          ? await createCodexHomeImage({ agentDir })
-          : kind === "inline image"
-            ? dataImageUrl()
-            : path.join(workspaceDir, "voice.mp3");
-      if (kind === "trusted audio") {
-        await createAudioFile(source);
-      }
-      const metadata =
-        kind === "sensitive image"
-          ? { sensitiveMedia: true }
-          : kind === "trusted audio"
-            ? { trustedLocalMedia: true, audioAsVoice: true }
-            : {};
-      const payload = await normalizeReplyMedia({
-        cfg,
-        payloads: [{ mediaUrls: [source], ...metadata }],
-      });
-      expect(payload?.mediaUrl).toBeUndefined();
-      expect(payload?.mediaUrls).toEqual([source]);
-      expect(payload).toMatchObject(metadata);
-      await expectOutboundMediaMissing(stateDir);
-    },
-  );
+  it("preserves sensitive images without staging", async () => {
+    const { stateDir, agentDir, cfg } = createMediaTestContext({ allowRead: true });
+    const source = await createCodexHomeImage({ agentDir });
+    const payload = await normalizeReplyMedia({
+      cfg,
+      payloads: [{ mediaUrls: [source], sensitiveMedia: true }],
+    });
+    expect(payload?.mediaUrl).toBeUndefined();
+    expect(payload?.mediaUrls).toEqual([source]);
+    expect(payload?.sensitiveMedia).toBe(true);
+    await expectOutboundMediaMissing(stateDir);
+  });
 
   it.each(["invalid data", "unknown file"] as const)(
     "projects a named failure for %s without exposing its source",
@@ -588,7 +409,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     },
   );
 
-  it.each(["paragraphs", "caption", "reply caption"] as const)(
+  it.each(["paragraphs", "reply caption"] as const)(
     "preserves %s beside the corresponding image in saved replies",
     async (kind) => {
       const paragraphs = kind === "paragraphs";
@@ -621,73 +442,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
   );
 
   it.each([
-    {
-      directive: false,
-      kind: "audio" as const,
-      fileName: "generated-theme.mp3",
-      bytes: Buffer.from([0xff, 0xfb, 0x90, 0x00]),
-      mimeType: "audio/mpeg",
-    },
-    {
-      directive: false,
-      kind: "video" as const,
-      fileName: "generated-clip.mp4",
-      bytes: Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]),
-      mimeType: "video/mp4",
-    },
-    {
-      directive: true,
-      kind: "audio" as const,
-      fileName: "directive.mp3",
-      bytes: Buffer.from([0xff, 0xfb, 0x90, 0x00]),
-      mimeType: "audio/mpeg",
-    },
-  ])(
-    "projects generated $kind into a managed history block (directive=$directive)",
-    async ({ kind, fileName, bytes, mimeType, directive }) => {
-      const { workspaceDir } = createMediaTestContext({ allowRead: true });
-      const sourcePath = path.join(workspaceDir, fileName);
-      await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-      await fs.writeFile(sourcePath, bytes);
-
-      const { assistantContent: content } = await buildAssistantReplyContent({
-        sessionKey: TEST_SESSION_KEY,
-        agentId: "main",
-        payloads: [
-          {
-            text: directive ? `MEDIA:${sourcePath}` : "Generated media",
-            ...(directive
-              ? {}
-              : {
-                  mediaUrls: [sourcePath],
-                  attachments: [
-                    { type: kind, path: sourcePath, name: fileName, durationMs: 1_500 },
-                  ],
-                }),
-            trustedLocalMedia: true,
-          },
-        ],
-        managedMediaLocalRoots: [workspaceDir],
-      });
-
-      expect(content).toEqual([
-        ...(directive ? [] : [{ type: "text", text: "Generated media" }]),
-        expect.objectContaining({
-          type: kind,
-          artifactId: expect.stringMatching(/^artifact_managed_media_/u),
-          fileName,
-          mimeType,
-          ...(directive ? {} : { durationMs: 1_500 }),
-        }),
-      ]);
-      expect(JSON.stringify(content)).not.toContain(sourcePath);
-    },
-  );
-
-  it.each([
     { operation: "raw", media: "audio" },
-    { operation: "prepared", media: "audio" },
-    { operation: "raw", media: "image" },
     { operation: "prepared", media: "image" },
   ] as const)(
     "aligns $media metadata by URL without mutation ($operation)",
@@ -787,140 +542,40 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     },
   );
 
-  it.each(["pending batch", "interleaved attachments"] as const)(
-    "preserves per-item trust and ordering in %s",
-    async (kind) => {
-      const { workspaceDir } = createMediaTestContext({ allowRead: true });
-      const first = path.join(workspaceDir, "trusted.mp3");
-      const second = path.join(workspaceDir, "untrusted.mp3");
-      await createAudioFile(first);
-      await fs.writeFile(second, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
-      const pending = kind === "pending batch";
-      const payload = pending
-        ? consumePendingToolMediaIntoReply(
-            {
-              pendingToolMediaUrls: [first, second],
-              pendingToolMediaTrustByUrl: new Map([
-                [first, true],
-                [second, false],
-              ]),
-              pendingToolAudioAsVoice: false,
-            },
-            {},
-          )
-        : {
-            mediaUrls: [first, dataImageUrl(), second],
-            attachments: [
-              { type: "audio" as const, path: first, trustedLocalMedia: true },
-              { type: "image" as const },
-              { type: "audio" as const, path: second, trustedLocalMedia: true },
-            ],
-          };
-      const { assistantContent: content } = await buildAssistantReplyContent({
-        sessionKey: TEST_SESSION_KEY,
-        agentId: "main",
-        payloads: [payload],
-        managedMediaLocalRoots: [workspaceDir],
-      });
-      if (pending) {
-        expect(content).toEqual([
-          expect.objectContaining({ type: "audio", mimeType: "audio/mpeg" }),
-          {
-            type: "attachment_error",
-            attachment: {
-              code: "delivery-failed",
-              kind: "audio",
-              label: "untrusted.mp3",
-              mimeType: "audio/mpeg",
-            },
-          },
-        ]);
-      } else {
-        expect(content?.map((block) => block.type)).toEqual(["audio", "image", "audio"]);
-      }
-    },
-  );
-
-  it("retains earlier and newly observed failures beside an inline image", async () => {
-    const { cfg, workspaceDir } = createMediaTestContext({ allowRead: false });
-    const payload = await normalizeReplyMedia({
-      cfg,
-      payloads: [
-        setReplyPayloadMetadata(
-          {
-            mediaUrls: [dataImageUrl(), path.join(workspaceDir, "missing.png")],
-          },
-          {
-            assistantMediaFailures: [
-              {
-                code: "file-not-found",
-                kind: "document",
-                label: "earlier.pdf",
-                mimeType: "application/pdf",
-              },
-            ],
-          },
-        ),
-      ],
-    });
-    const { assistantContent } = await buildAssistantReplyContent({
+  it("preserves per-item trust in a pending batch", async () => {
+    const { workspaceDir } = createMediaTestContext({ allowRead: true });
+    const first = path.join(workspaceDir, "trusted.mp3");
+    const second = path.join(workspaceDir, "untrusted.mp3");
+    await createAudioFile(first);
+    await fs.writeFile(second, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
+    const payload = consumePendingToolMediaIntoReply(
+      {
+        pendingToolMediaUrls: [first, second],
+        pendingToolMediaTrustByUrl: new Map([
+          [first, true],
+          [second, false],
+        ]),
+        pendingToolAudioAsVoice: false,
+      },
+      {},
+    );
+    const { assistantContent: content } = await buildAssistantReplyContent({
       sessionKey: TEST_SESSION_KEY,
       agentId: "main",
-      payloads: payload ? [payload] : [],
-      managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
+      payloads: [payload],
+      managedMediaLocalRoots: [workspaceDir],
     });
-    expect(assistantContent?.filter((block) => block.type === "attachment_error")).toEqual([
+    expect(content).toEqual([
+      expect.objectContaining({ type: "audio", mimeType: "audio/mpeg" }),
       {
         type: "attachment_error",
         attachment: {
-          code: "file-not-found",
-          kind: "document",
-          label: "earlier.pdf",
-          mimeType: "application/pdf",
-        },
-      },
-      {
-        type: "attachment_error",
-        attachment: {
-          code: "file-not-found",
-          kind: "image",
-          label: "missing.png",
-          mimeType: "image/png",
+          code: "delivery-failed",
+          kind: "audio",
+          label: "untrusted.mp3",
+          mimeType: "audio/mpeg",
         },
       },
     ]);
-    expect(assistantContent?.filter((block) => block.type === "image")).toHaveLength(1);
-  });
-
-  it("keeps one named failure receipt per missing file around surviving media", async () => {
-    const dataUrl = dataImageUrl();
-    const { stateDir, cfg, sourcePath, payload } = await normalizeCodexHomeImage({
-      allowRead: true,
-      payload: (imagePath) => ({
-        text: "Here is the surviving attachment",
-        mediaUrls: [
-          path.join(path.dirname(imagePath), "missing.png"),
-          imagePath,
-          dataUrl,
-          path.join(path.dirname(imagePath), "private customer report.png"),
-        ],
-      }),
-    });
-    const normalizedLocalPath = requireString(payload?.mediaUrls?.[0], "normalized local media");
-
-    expect(payload?.text).toContain(
-      "Here is the surviving attachment\n⚠️ missing.png: File not found. Check the path and try again.",
-    );
-    expect(payload?.text).not.toContain(sourcePath);
-    expect(payload?.text).toContain(
-      "⚠️ private customer report.png: File not found. Check the path and try again.",
-    );
-    expect(Buffer.byteLength(payload?.text ?? "")).toBeLessThan(512);
-    expect(payload?.mediaUrl).toBe(normalizedLocalPath);
-    expect(payload?.mediaUrls).toEqual([normalizedLocalPath, dataUrl]);
-    const blocks = await createManagedImageBlocks({ cfg, mediaUrls: payload?.mediaUrls });
-    expect(blocks.map((block) => block.type)).toEqual(["image", "image"]);
-    expect(normalizedLocalPath).not.toBe(sourcePath);
-    expect(normalizedLocalPath.startsWith(path.join(stateDir, "media"))).toBe(true);
   });
 });

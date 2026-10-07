@@ -12,6 +12,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import { createMockGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime.test-support.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -199,7 +200,7 @@ vi.mock("../../internal-session-effects.js", () => ({
 describe("subagent registry seam flow", () => {
   let mod: SubagentRegistryHarness;
   let bindWakeMutation: Awaited<ReturnType<typeof mockRegistryRequesterWakeMutation>>;
-  const recoveryRuntime: GatewayRecoveryRuntime = {
+  const recoveryRuntime = createMockGatewayRecoveryRuntime({
     dispatchSessionMethod: async <T>(
       method: string,
       params: unknown,
@@ -217,8 +218,7 @@ describe("subagent registry seam flow", () => {
         params: params as unknown as Record<string, unknown>,
         timeoutMs,
       }) as never,
-    sendRecoveryNotice: vi.fn(),
-  };
+  });
   const activateRegistry = () => activateSubagentRegistryWithRecoveryRuntime(mod, recoveryRuntime);
   const hydrateAndActivateRegistry = async () => {
     await mod.initSubagentRegistry();

@@ -76,6 +76,7 @@ export function sessionChangeAffectsStoredRow(
   return (
     change.scope !== "automation" &&
     change.scope !== "runtime" &&
+    change.scope !== "acp" &&
     change.storePath !== undefined &&
     matchesStore(change.storePath) &&
     target.sessionKeys.includes(change.sessionKey)

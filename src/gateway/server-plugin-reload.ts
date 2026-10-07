@@ -5,7 +5,6 @@ import { validateConfiguredBindings } from "../channels/plugins/configured-bindi
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import { prepareDecisionProviderReload } from "../decisions/runtime.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { prepareGatewayPluginMetadataSnapshotPublication } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
@@ -50,6 +49,7 @@ import {
   GatewayConfigReloadSupersededError,
   type GatewayReloadHandlerParams,
 } from "./server-reload-contracts.js";
+import { isChannelStartupSuppressedByEnvironment } from "./server-sidecar-startup-mode.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-scheduler.js";
 import { listPluginNodeCapabilities } from "./server/plugins-http/route-capability.js";
 
@@ -127,9 +127,7 @@ export async function reloadGatewayPlugins(
   const channels = createPluginReloadChannels({
     channelManager,
     previousRegistry,
-    skipChannels:
-      isTruthyEnvValue(params.env?.OPENCLAW_SKIP_CHANNELS) ||
-      isTruthyEnvValue(params.env?.OPENCLAW_SKIP_PROVIDERS),
+    skipChannels: isChannelStartupSuppressedByEnvironment(params.env ?? {}),
     previousStopStarted: () => previousStopStarted,
     reloadParams: params,
     ambientEnvTriggers,

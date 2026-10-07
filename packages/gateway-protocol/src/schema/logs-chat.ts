@@ -191,6 +191,12 @@ export const ChatMetadataParamsSchema = Object.assign(
           "Include model and account selection metadata (default true). Set false when reading models.list separately.",
       }),
     ),
+    ifRevision: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description: "For includeModels:false, omit unchanged commands.",
+      }),
+    ),
     authProfileId: Type.Optional(
       Type.String({
         minLength: 1,

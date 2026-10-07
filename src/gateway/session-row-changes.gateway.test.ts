@@ -109,8 +109,8 @@ describe("gateway session row change publications", () => {
         if (source === "observer digests") {
           expect(committed).toBe(true);
         }
-        expect(changed).toHaveBeenCalledExactlyOnceWith(target);
-        expect(facts).toHaveBeenCalledExactlyOnceWith({ ...target, facts: { kind: "unchanged" } });
+        expect(changed).toHaveBeenCalledExactlyOnceWith({ ...target, scope: "runtime" });
+        expect(facts).toHaveBeenCalledExactlyOnceWith({ ...target, scope: "runtime" });
         if (source === "lifecycle errors") {
           await write("replaced-generation");
         } else {

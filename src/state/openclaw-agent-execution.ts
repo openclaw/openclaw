@@ -165,6 +165,7 @@ function createAgentDatabaseExecution(
   const assertAgentAdmitted = captureAgentDatabaseAdmission(agentId, { env: context.environment });
   let retired = false;
   let revoked = false;
+  let retainIdle = true;
   let borrowers = 0;
   let creationIdentity = expectedCreationIdentity;
   let creationBorrowers = 0;
@@ -175,7 +176,6 @@ function createAgentDatabaseExecution(
   let closing: Promise<void> | undefined;
   let unregisterShared: (() => void) | undefined;
   let unregisterConfig: (() => void) | undefined;
-  let configGeneration = 0;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let idleDrainListener: Disposable | undefined;
 
@@ -192,15 +192,6 @@ function createAgentDatabaseExecution(
     } catch {
       // The resource owner still retains the cleanup failure.
     }
-  };
-  const watchConfig = () => {
-    unregisterConfig ??= watchAgentDatabaseExecutionConfig(agentId, context.environment, () => {
-      unregisterConfig?.();
-      unregisterConfig = undefined;
-      configGeneration += 1;
-      // Old borrowers lose authority immediately; fresh borrowers join native drainage.
-      void owner.closeIdle().catch(reportCleanupFailure);
-    });
   };
   const finishRetirement = () => {
     retired = true;
@@ -225,14 +216,6 @@ function createAgentDatabaseExecution(
     context.admission.assertCurrent();
     assertAgentAdmitted();
     creationClaim?.assertCurrent();
-  };
-  const assertConfigCurrent = (captured: number) => {
-    assertCurrent();
-    if (captured !== configGeneration) {
-      throw new AgentDatabaseExecutionAdmissionClosedError(
-        "Agent database execution admission is closed",
-      );
-    }
   };
   const closeNative = (expected?: AgentDatabaseNativeGeneration): Promise<void> => {
     if (expected && generation !== expected) {
@@ -306,12 +289,11 @@ function createAgentDatabaseExecution(
       signal?.throwIfAborted();
     }
     if (!generation) {
-      const generationConfig = configGeneration;
       const created = createAgentDatabaseNativeGeneration(
         agentId,
         identity.canonicalPath,
         context,
-        () => assertConfigCurrent(generationConfig),
+        assertCurrent,
         () => {
           if (executions.get(pathname) !== owner || generation !== created || !nativeClosing) {
             throw new Error("Agent cleanup no longer owns its original execution reference");
@@ -419,12 +401,10 @@ function createAgentDatabaseExecution(
       return creationIdentity;
     },
     borrow(borrowedPath, expected, creating, requestedPath) {
-      const borrowedConfigGeneration = configGeneration;
-      let borrowedGeneration: AgentDatabaseNativeGeneration | undefined;
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;
       const creatingTarget = creating ? Object.freeze({ ...creating }) : undefined;
       const assertReferenceCurrent = (nativeIdentity?: AgentDatabaseExecutionFileIdentity) => {
-        assertConfigCurrent(borrowedConfigGeneration);
+        assertCurrent();
         assertBorrowedAgentDatabaseFileIdentity({
           borrowedPath,
           identity,
@@ -435,7 +415,6 @@ function createAgentDatabaseExecution(
         });
       };
       assertReferenceCurrent();
-      watchConfig();
       if (creatingTarget && !creationIdentity && !fileIdentity && generation) {
         throw new Error("Agent creation cannot capture another pending native opener");
       }
@@ -502,9 +481,7 @@ function createAgentDatabaseExecution(
           assertCreationReference(true);
           const result = run(
             source,
-            async () => {
-              borrowedGeneration = generation;
-            },
+            async () => undefined,
             (nativeIdentity) => {
               assertReferenceCurrent(nativeIdentity);
               assertCreationReference(true);
@@ -521,8 +498,7 @@ function createAgentDatabaseExecution(
           await result;
         },
         async runExisting(source, operation, runOptions) {
-          const capturedGeneration =
-            borrowedConfigGeneration === configGeneration ? generation : borrowedGeneration;
+          const capturedGeneration = released ? undefined : generation;
           const completion = createDeferredCore();
           pending.add(completion.promise);
           try {
@@ -530,10 +506,7 @@ function createAgentDatabaseExecution(
             assertCreationReference(false);
             return await run(
               source,
-              (scope) => {
-                borrowedGeneration = generation;
-                return operation(scope);
-              },
+              operation,
               (nativeIdentity) => {
                 assertReferenceCurrent(nativeIdentity);
                 assertCreationReference(false);
@@ -586,7 +559,8 @@ function createAgentDatabaseExecution(
               return;
             }
             const drainSignal = getGatewayRestartDrainSignal();
-            const canRetain = () => generation && !nativeClosing && !drainSignal.aborted;
+            const canRetain = () =>
+              retainIdle && generation && !nativeClosing && !drainSignal.aborted;
             try {
               for (const idle of executionState.idle) {
                 if (!canRetain() || executionState.idle.size < MAX_IDLE_EXECUTORS) {
@@ -691,6 +665,14 @@ function createAgentDatabaseExecution(
   try {
     retainAlias(pathname);
     retainAlias(identity.canonicalPath);
+    unregisterConfig = watchAgentDatabaseExecutionConfig(agentId, context.environment, () => {
+      // Routing changes retire warm retention, not borrowers of the captured physical store.
+      // Keep the owner registered until native cleanup settles so pinned reborrows can join it.
+      retainIdle = false;
+      if (borrowers === 0) {
+        void owner.closeIdle().catch(reportCleanupFailure);
+      }
+    });
     unregisterShared = registerOpenClawStateDatabaseAsyncResource({
       close: async (sharedIdentity) => {
         if (!sharedIdentity || sharedIdentity.key === context.admission.identity.key) {

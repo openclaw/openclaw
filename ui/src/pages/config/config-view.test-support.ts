@@ -90,6 +90,8 @@ export const baseProps = () => ({
   setLobsterPetSounds: vi.fn(),
   sessionDeleteConfirm: true,
   setSessionDeleteConfirm: vi.fn(),
+  terminalFontFamily: undefined,
+  setTerminalFontFamily: vi.fn(),
   chatMessageMaxWidth: undefined,
   setChatMessageMaxWidth: vi.fn(),
   chatShowTaskProgress: true,

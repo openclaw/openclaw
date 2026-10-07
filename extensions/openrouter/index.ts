@@ -14,7 +14,6 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   getLoadedOpenRouterModelCapabilities,
-  getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "openclaw/plugin-sdk/provider-stream-family";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -239,7 +238,7 @@ export default defineSingleProviderPluginEntry({
       ctx: ProviderResolveDynamicModelContext,
     ): ProviderRuntimeModel {
       const apiModelId = normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId;
-      const capabilities = getOpenRouterModelCapabilities(apiModelId);
+      const capabilities = getLoadedOpenRouterModelCapabilities(apiModelId);
       return {
         id: ctx.modelId,
         name: capabilities?.name ?? ctx.modelId,

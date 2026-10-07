@@ -7,7 +7,11 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import {
+  createTestSessionCapability,
+  sessionsResult,
+} from "../../lib/sessions/session-capability.test-support.ts";
+import type { SessionDeleteTarget } from "../../lib/sessions/session-capability.ts";
 import {
   answerConfirmDialog,
   createModalDialogTestFixture,
@@ -289,6 +293,7 @@ describe("sessions page agent-scope retirement", () => {
       await oldRequest;
       expect(page.error).toBeNull();
       expect(page.sessionMutationPending).toBe(true);
+      changeScope("main");
       await page.deleteSessionFromMenu(newRow);
       expect(deleteMany).toHaveBeenCalledTimes(2);
 
@@ -303,34 +308,133 @@ describe("sessions page agent-scope retirement", () => {
       await Promise.all([oldRequest, newRequest]);
     }
   });
+});
 
-  it("preserves pending deletion when the selected scope does not change", async () => {
-    const deletion = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
-    const deleteMany = vi
-      .fn<SessionCapability["deleteMany"]>()
-      .mockReturnValueOnce(deletion.promise)
-      .mockResolvedValue({ deleted: [], errors: [], preservedWorktrees: [] });
-    const { page, changeScope } = await setupArchivedPageWithSelection(
-      "writer",
-      createSessions({ deleteMany }),
-    );
-    vi.mocked(showConfirmDialog).mockResolvedValue(true);
-    const row: GatewaySessionRow = { key: "agent:writer:old-1", kind: "direct", archived: true };
-    const request = page.deleteSessionFromMenu(row);
-    try {
-      await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledTimes(1));
-      changeScope("writer");
-      await page.deleteSessionFromMenu(row);
-      expect(deleteMany).toHaveBeenCalledTimes(1);
-      expect(page.sessionMutationPending).toBe(true);
-      deletion.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
-      await request;
-      expect(page.sessionMutationPending).toBe(false);
-      await page.deleteSessionFromMenu(row);
-      expect(deleteMany).toHaveBeenCalledTimes(2);
-    } finally {
-      deletion.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
-      await request;
-    }
-  });
+describe("session selection across roster refresh", () => {
+  it.each(["replaced", "replacement without IDs during confirmation", "removed"] as const)(
+    "deletes only still-selected session identities after a row is %s",
+    async (change) => {
+      const missingIds = change.startsWith("replacement without IDs");
+      const duringConfirmation = change === "replacement without IDs during confirmation";
+      const confirmation = createDeferred<boolean>();
+      const rows: GatewaySessionRow[] = Array.from({ length: 27 }, (_, index) => ({
+        key: `agent:main:selection-${index}`,
+        sessionId: index === 0 && missingIds ? undefined : `selected-generation-${index}`,
+        kind: "direct",
+        updatedAt: 100 - index,
+      }));
+      const original = rows[0]!;
+      const stable = rows[1]!;
+      let serverRows = rows;
+      let revision = 0;
+      const deletedStable = createDeferred();
+      const deletedTargets: SessionDeleteTarget[] = [];
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "sessions.subscribe") {
+          return { subscribed: true };
+        }
+        if (method === "sessions.list") {
+          return sessionsResult(
+            serverRows.filter((row) => !row.archived),
+            ++revision,
+          );
+        }
+        if (method === "sessions.delete") {
+          const target = params as SessionDeleteTarget;
+          deletedTargets.push(target);
+          serverRows = serverRows.filter((row) => row.key !== target.key);
+          if (target.key === stable.key) {
+            deletedStable.resolve();
+          }
+          return { deleted: true };
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
+      const sessions = createTestSessionCapability(gateway);
+      const subscribe = vi.spyOn(sessions, "subscribeList");
+      const deletion = vi.spyOn(sessions, "deleteMany");
+      const page = await createRenderedPage(
+        createContext(gateway, sessions),
+        sessionsResult(rows, revision),
+      );
+      const pageSize = page.querySelector<HTMLSelectElement>(".data-table-pagination__size");
+      expect(pageSize?.getAttribute("aria-label")).toBe("Rows per page");
+      expect(pageSize?.value).toBe("25");
+      expect(pageSize?.selectedOptions[0]?.textContent?.trim()).toBe("25 per page");
+      const button = (label: string) => {
+        const match = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+          (entry) => entry.textContent?.trim() === label,
+        );
+        if (!match) {
+          throw new Error(`Missing rendered button: ${label}`);
+        }
+        return match;
+      };
+      try {
+        for (const row of [original, stable]) {
+          const checkbox = page.querySelector<HTMLInputElement>(
+            `input[aria-label="Select session: ${row.key}"]`,
+          );
+          expect(checkbox).not.toBeNull();
+          checkbox!.click();
+          await page.updateComplete;
+        }
+        expect(page.querySelector(".data-table-bulk-bar")?.textContent).toContain("2 selected");
+        button("Next").click();
+        await page.updateComplete;
+        expect(
+          page.querySelector(`input[aria-label="Select session: ${original.key}"]`),
+        ).toBeNull();
+        expect(page.querySelector(".data-table-bulk-bar")?.textContent).toContain("2 selected");
+
+        vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
+        if (duringConfirmation) {
+          button("Delete").click();
+          expect(showConfirmDialog).toHaveBeenCalledOnce();
+        }
+        if (change === "removed") {
+          serverRows = rows.slice(1);
+        } else if (change === "replaced" || missingIds) {
+          serverRows = [
+            {
+              ...original,
+              label: "Replacement session",
+              sessionId: missingIds ? undefined : "replacement-generation",
+            },
+            ...rows.slice(1),
+          ];
+        }
+        await sessions.refreshList({ ...subscribe.mock.calls[0]![0], force: true });
+        await page.updateComplete;
+        if (!duringConfirmation) {
+          button("Delete").click();
+        }
+        confirmation.resolve(true);
+        await deletedStable.promise;
+        const outcome = await deletion.mock.results[0]!.value;
+        const expectedRows = [stable];
+        expect(outcome.errors).toEqual([]);
+        expect(outcome.deleted).toEqual(expectedRows.map((row) => row.key));
+        expect(serverRows.some((row) => row.key === stable.key)).toBe(false);
+        if (change === "replaced" || missingIds) {
+          expect(serverRows.find((row) => row.key === original.key)?.label).toBe(
+            "Replacement session",
+          );
+        }
+
+        expect(
+          deletedTargets.map(({ key, expectedSessionId }) => ({ key, expectedSessionId })),
+        ).toEqual(
+          expectedRows.map((row) => ({
+            key: row.key,
+            expectedSessionId: row.sessionId,
+          })),
+        );
+      } finally {
+        page.remove();
+        sessions.dispose();
+      }
+    },
+  );
 });

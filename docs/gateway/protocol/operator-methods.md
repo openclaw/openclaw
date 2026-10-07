@@ -190,10 +190,18 @@ The Gateway advertises `session-scoped-model-catalog` for this contract.
 `chat.metadata` remains available to legacy clients. Clients that read models
 directly can pass `includeModels: false` to skip the duplicate catalog, account
 selection, and runtime-selection projection. Commands and swarm availability
-remain available. The bundled Control UI uses this compact response and keeps
-commands in its metadata cache. Session changes invalidate its direct model
-catalog through the catalog owner instead of comparing a second catalog from
-metadata. Native clients that also support older Gateways retain the default
+remain available. Compact responses include an opaque `revision`; pass it as
+`ifRevision` on a later compact read to receive `unchanged: true` instead of
+another command list. The revision describes prepared command and swarm facts.
+The bundled Control UI reads these agent-scoped facts without a session or
+account selection and retains them across session activity. Session-scoped model
+results and full session rows can carry `sessionModelRevision`, an opaque token
+for the saved model, account, runtime, and lifecycle inputs. The UI keeps its
+catalog when that token matches; missing tokens and explicit `catalogChanged`
+notifications retain an authoritative read. Shared catalog, auth, config, and
+connection changes invalidate independently. Harness-owned, model-locked sessions
+omit this token because their native owner can replace a private model binding
+independently of the saved row. Native clients that also support older Gateways retain the default
 request shape. Opening a conversation picker
 performs a passive read, without a model-cache timer or implicit provider refresh.
 Metadata refresh publishes model-owner facts without preparing every agent's

@@ -38,6 +38,7 @@ afterEach(async () => {
 });
 function createRecoveryGatewayContext() {
   const recoveryRuntime: GatewayRecoveryRuntime = {
+    prepareRestartRecovery: () => undefined,
     dispatchSessionMethod: vi.fn(),
     dispatchAgent: vi.fn(),
     waitForAgent: vi.fn(),

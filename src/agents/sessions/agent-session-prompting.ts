@@ -14,6 +14,7 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
+import { notifyListeners } from "../../shared/listeners.js";
 import { attachSteeringRuntimeContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import {
   isOpenClawSystemUpdateMessage,
@@ -506,68 +507,47 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     }
 
     const expandedText = this.expandPrompt(text);
-    return enqueueMessageInjection(this, () =>
-      this.prepareSteer(
+    return enqueueMessageInjection(this, async () => {
+      const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
+      const message = this.createSteeringMessage(
         expandedText,
         images,
-        userTurnTranscriptRecorder,
+        preparedMessage && userTurnTranscriptRecorder
+          ? { message: preparedMessage, recorder: userTurnTranscriptRecorder }
+          : undefined,
         media,
         imageOrder,
         queueIdentity,
-        canInject,
         currentInboundContext,
-        prepareInjection,
-      ),
-    );
-  }
-
-  private async prepareSteer(
-    text: string,
-    images?: ImageContent[],
-    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
-    media?: MediaFact[],
-    imageOrder?: PromptImageOrderEntry[],
-    queueIdentity?: string,
-    canInject?: () => boolean,
-    currentInboundContext?: CurrentInboundPromptContext,
-    prepareInjection?: () => Promise<void>,
-  ): Promise<void> {
-    const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
-    const message = this.createSteeringMessage(
-      text,
-      images,
-      preparedMessage && userTurnTranscriptRecorder
-        ? { message: preparedMessage, recorder: userTurnTranscriptRecorder }
-        : undefined,
-      media,
-      imageOrder,
-      queueIdentity,
-      currentInboundContext,
-    );
-    let notify: (() => void) | undefined;
-    let failure: { error: unknown } | undefined;
-    try {
-      await withMessageInjectionAdmission(prepareInjection, () => {
-        if (canInject && !canInject()) {
-          throw new Error("active session is finalizing");
-        }
-        notify = this.queueSteer(message, text);
-      });
-    } catch (error) {
-      failure = { error };
-    }
-    try {
-      notify?.();
-    } catch (cause) {
-      throw new MessageInjectionAcceptedUnconfirmedError({
-        cause: failure
-          ? new AggregateError([failure.error, cause], "Steering admission and notification failed")
-          : cause,
-      });
-    }
-    if (failure) {
-      throw failure.error;
-    }
+      );
+      let notify: (() => void) | undefined;
+      let failure: { error: unknown } | undefined;
+      try {
+        await withMessageInjectionAdmission(prepareInjection, () => {
+          if (canInject && !canInject()) {
+            throw new Error("active session is finalizing");
+          }
+          notify = this.queueSteer(message, expandedText);
+        });
+      } catch (error) {
+        failure = { error };
+      }
+      try {
+        notify?.();
+      } catch (cause) {
+        throw new MessageInjectionAcceptedUnconfirmedError({
+          cause: failure
+            ? new AggregateError(
+                [failure.error, cause],
+                "Steering admission and notification failed",
+              )
+            : cause,
+        });
+      }
+      if (failure) {
+        throw failure.error;
+      }
+    });
   }
 
   /**
@@ -613,16 +593,9 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     const notifyAgent = this.agent.admitSteeringMessage(message);
     return () => {
       const errors: unknown[] = [];
-      try {
-        this.emitQueueUpdate();
-      } catch (error) {
-        errors.push(error);
-      }
-      try {
-        notifyAgent();
-      } catch (error) {
-        errors.push(error);
-      }
+      notifyListeners([() => this.emitQueueUpdate(), () => notifyAgent()], undefined, (error) =>
+        errors.push(error),
+      );
       if (errors.length === 1) {
         throw errors[0];
       }

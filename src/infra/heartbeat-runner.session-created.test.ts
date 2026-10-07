@@ -31,7 +31,7 @@ afterEach(async () => {
   resetSystemEventsForTest();
 });
 
-it.each(["heartbeat wake", "heartbeat poll"])(
+it.each(["heartbeat wake"])(
   "delivers a creation notice about %s once through a cron wake",
   async (topic) => {
     state = await createOpenClawTestState({

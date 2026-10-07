@@ -76,9 +76,18 @@ do not pass an empty shell variable to request that scope.
 `channels/<name>`, or `gateway/channels/<name>`, including slash-separated descendants. Similar names
 such as `discord-archive` do not match `discord`.
 
+`channels status` reads the Gateway's recorded channel lifecycle and health facts,
+plus secret-free account metadata. It does not resolve operational credentials or
+run live status hooks. Unknown configuration and stale connections remain visible;
+provider details not recorded by the channel may require an explicit probe.
+WhatsApp's recorded authentication age refreshes with the channel heartbeat.
+
 `channels status --probe` is the live path: on a reachable gateway it runs per-account
 `probeAccount` and optional `auditAccount` checks, so output can include transport
-state plus successful or failed account checks and audits.
+state plus successful or failed account checks and audits. Channels are checked
+concurrently with a bounded deadline per channel, including account resolution and
+status hooks. A timed-out channel returns its recorded state with a warning instead
+of preventing healthy channels from returning their results.
 If the gateway is unreachable, `channels status` falls back to config-only summaries
 instead of live check output.
 

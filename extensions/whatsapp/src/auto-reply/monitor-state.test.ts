@@ -40,15 +40,15 @@ describe("createWebChannelStatusController", () => {
     expect(last.lastTransportActivityAt).toBe(2000);
   });
 
-  it("updates lastTransportActivityAt from explicit transport activity", () => {
+  it("publishes heartbeat auth age even when transport activity stays unchanged", () => {
     const patches: Record<string, unknown>[] = [];
     const controller = createWebChannelStatusController((s) => patches.push({ ...s }));
 
     controller.noteConnected(1000);
-    controller.noteTransportActivity(3000);
-
-    const last = patches.at(-1)!;
-    expect(last.lastTransportActivityAt).toBe(3000);
+    for (const authAgeMs of [5000, 1000, null]) {
+      controller.noteTransportActivity(3000, authAgeMs);
+      expect(patches.at(-1)).toMatchObject({ lastTransportActivityAt: 3000, authAgeMs });
+    }
   });
 
   it("publishes busy state for pending inbound work", () => {

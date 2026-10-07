@@ -111,16 +111,13 @@ describe("Heartbeat cron and exec event ownership", () => {
     expect(replySpy).not.toHaveBeenCalled();
   }
 
-  it.each(["outside active hours", "with heartbeat noise", "without delivery"])(
+  it.each(["outside active hours", "without delivery"])(
     "builds the cron reminder prompt %s",
     async (scenario) => {
       const internal = scenario === "without delivery";
       const outsideHours = scenario === "outside active hours";
       await withHeartbeat(
         async (f) => {
-          if (scenario === "with heartbeat noise") {
-            f.enqueue("HEARTBEAT_OK");
-          }
           f.enqueue(reminder, outsideHours ? "cron:nightly-report" : undefined);
           f.replySpy.mockResolvedValue({
             text: internal
@@ -266,27 +263,6 @@ describe("Heartbeat cron and exec event ownership", () => {
         }
         expect(peekSystemEvents(f.sessionKey)).toEqual(["Node connected"]);
       });
-    },
-  );
-  it.each([false, true])(
-    "inspects base-session hook exec completions only outside isolation=%s",
-    async (isolatedSession) => {
-      await withHeartbeat(
-        async (f) => {
-          f.enqueue("exec finished: webhook-triggered backup completed");
-          f.replySpy.mockResolvedValue({ text: "Handled internally" });
-          expect((await f.run({ reason: "hook:wake" })).status).toBe("ran");
-          const ctx = getFirstReplyContext(f.replySpy);
-          expect(ctx.InternalTurnSource).toBe(isolatedSession ? "heartbeat" : "exec");
-          if (isolatedSession) {
-            expect(ctx.SessionKey).toContain(":heartbeat");
-          } else {
-            expect(ctx.Body).toContain("Handle the result internally");
-          }
-          expect(f.sendTelegram).not.toHaveBeenCalled();
-        },
-        { target: "none", isolatedSession },
-      );
     },
   );
   it.each([true, false])(

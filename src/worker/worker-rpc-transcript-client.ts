@@ -148,7 +148,12 @@ export class WorkerTranscriptCommitClient {
           throw this.terminalFailure;
         }
         fenceForOwnershipError(this.connection, response.error);
-        throw new WorkerTranscriptCommitError(response.error);
+        const failure = new WorkerTranscriptCommitError(response.error);
+        if (response.error.code === "UNAVAILABLE" && response.error.retryable === false) {
+          // Turn cleanup must retain the rejection instead of submitting the failed batch again.
+          this.terminalFailure = failure;
+        }
+        throw failure;
       } catch (error) {
         if (
           error instanceof WorkerConnectionInterruptedError &&

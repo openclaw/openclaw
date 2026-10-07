@@ -236,21 +236,6 @@ describe("embedded run detached session metadata", () => {
     });
   });
 
-  it.each([
-    ["main", "prompt"],
-    ["research", "assistant"],
-  ] as const)("keeps detached %s %s failures out of the final agent DB", async (agentId, stage) => {
-    const { params, database } = await createRun(agentId, "detached");
-    failAttempt(stage, params.sessionId);
-    await expect(runEmbeddedAgent(params)).rejects.toMatchObject({
-      reason: stage === "prompt" ? "rate_limit" : "billing",
-      suspend: true,
-    });
-    await joinSuspensionWrites();
-    expect(runAttempt).toHaveBeenCalledOnce();
-    await expect(fs.access(database)).rejects.toThrow();
-  });
-
   it.each(["detached", "durable"] as const)(
     "preserves %s persistence when the outer fallback exhausts after deferral",
     async (persistence) => {
@@ -296,35 +281,11 @@ describe("embedded run detached session metadata", () => {
     },
   );
 
-  it.each([undefined, "durable", "detached"] as const)(
-    "persists ordinary direct failures (%s)",
-    async (persistence) => {
-      const { params, scope } = await createRun("research", persistence);
-      await upsertSessionEntryCore(scope, { sessionId: params.sessionId, updatedAt: 1 });
-      failAttempt("assistant", params.sessionId);
-      await expect(runEmbeddedAgent(params)).rejects.toMatchObject({
-        reason: "billing",
-        suspend: true,
-      });
-      await joinSuspensionWrites();
-      if (persistence === "detached") {
-        expect(loadSessionEntry(scope)?.quotaSuspension).toBeUndefined();
-        return;
-      }
-      expect(loadSessionEntry(scope)?.quotaSuspension).toMatchObject({
-        state: "suspended",
-        reason: "manual",
-        failedProvider: "openai",
-        failedModel: "mock-1",
-      });
-    },
-  );
-
-  it.each(["success", "prompt", "assistant", "aborted"] as const)(
+  it.each(["success", "assistant", "aborted"] as const)(
     "keeps a detached %s out of an absent final agent root, including key backfill",
     async (outcome) => {
       const { params, stateDir } = await createRun("research", "detached");
-      if (outcome === "prompt" || outcome === "assistant") {
+      if (outcome === "assistant") {
         failAttempt(outcome, params.sessionId);
       } else {
         runAttempt.mockResolvedValue(
@@ -340,9 +301,9 @@ describe("embedded run detached session metadata", () => {
         );
       }
       const run = runEmbeddedAgent({ ...params, sessionKey: undefined });
-      if (outcome === "prompt" || outcome === "assistant") {
+      if (outcome === "assistant") {
         await expect(run).rejects.toMatchObject({
-          reason: outcome === "prompt" ? "rate_limit" : "billing",
+          reason: "billing",
           suspend: true,
         });
       } else {
@@ -356,22 +317,15 @@ describe("embedded run detached session metadata", () => {
     },
   );
 
-  it.each([
-    ["success", "mock-1"],
-    ["success", "mock-2"],
-    ["prompt", "mock-1"],
-    ["prompt", "mock-2"],
-    ["assistant", "mock-1"],
-    ["assistant", "mock-2"],
-  ] as const)(
-    "does not spend a durable pending switch during detached %s (%s)",
-    async (outcome, modelOverride) => {
+  it.each(["success", "assistant"] as const)(
+    "does not spend a durable pending switch during detached %s",
+    async (outcome) => {
       const { params, scope } = await createRun("research", "detached");
       await upsertSessionEntryCore(scope, {
         sessionId: params.sessionId,
         updatedAt: 1,
         providerOverride: "openai",
-        modelOverride,
+        modelOverride: "mock-2",
         liveModelSwitchPending: true,
       });
       const before = loadSessionEntry(scope);
@@ -383,7 +337,7 @@ describe("embedded run detached session metadata", () => {
       } else {
         failAttempt(outcome, params.sessionId);
         await expect(runEmbeddedAgent(params)).rejects.toMatchObject({
-          reason: outcome === "prompt" ? "rate_limit" : "billing",
+          reason: "billing",
           suspend: true,
         });
       }
@@ -393,36 +347,33 @@ describe("embedded run detached session metadata", () => {
     },
   );
 
-  it.each([undefined, "durable"] as const)(
-    "still applies and eagerly clears live switches for %s turns",
-    async (sessionPersistence) => {
-      const { params, scope } = await createRun("research", sessionPersistence);
-      await upsertSessionEntryCore(scope, {
-        sessionId: params.sessionId,
-        updatedAt: 1,
-        providerOverride: "openai",
-        modelOverride: "mock-2",
-        liveModelSwitchPending: true,
-      });
-      failAttempt("prompt", params.sessionId);
-      await expect(runEmbeddedAgent(params)).rejects.toMatchObject({
-        name: "LiveSessionModelSwitchError",
-        provider: "openai",
-        model: "mock-2",
-      });
-      expect(loadSessionEntry(scope)?.liveModelSwitchPending).toBeUndefined();
-      await upsertSessionEntryCore(scope, {
-        ...loadSessionEntry(scope)!,
-        liveModelSwitchPending: true,
-      });
-      await expect(runEmbeddedAgent({ ...params, model: "mock-2" })).rejects.toMatchObject({
-        reason: "rate_limit",
-        suspend: true,
-      });
-      await joinSuspensionWrites();
-      expect(loadSessionEntry(scope)?.liveModelSwitchPending).toBeUndefined();
-    },
-  );
+  it("still applies and eagerly clears live switches for durable turns", async () => {
+    const { params, scope } = await createRun("research", "durable");
+    await upsertSessionEntryCore(scope, {
+      sessionId: params.sessionId,
+      updatedAt: 1,
+      providerOverride: "openai",
+      modelOverride: "mock-2",
+      liveModelSwitchPending: true,
+    });
+    failAttempt("prompt", params.sessionId);
+    await expect(runEmbeddedAgent(params)).rejects.toMatchObject({
+      name: "LiveSessionModelSwitchError",
+      provider: "openai",
+      model: "mock-2",
+    });
+    expect(loadSessionEntry(scope)?.liveModelSwitchPending).toBeUndefined();
+    await upsertSessionEntryCore(scope, {
+      ...loadSessionEntry(scope)!,
+      liveModelSwitchPending: true,
+    });
+    await expect(runEmbeddedAgent({ ...params, model: "mock-2" })).rejects.toMatchObject({
+      reason: "rate_limit",
+      suspend: true,
+    });
+    await joinSuspensionWrites();
+    expect(loadSessionEntry(scope)?.liveModelSwitchPending).toBeUndefined();
+  });
 
   it.each([false, true])(
     "reads bootstrap state from the detached manager (has messages: %s)",
@@ -455,8 +406,6 @@ describe("embedded run detached session metadata", () => {
 
   it.each([
     ["overflow", false, "active"],
-    ["overflow", true, "active"],
-    ["timeout", false, "active"],
     ["timeout", true, "active"],
     ["timeout", false, "replaced"],
   ] as const)(

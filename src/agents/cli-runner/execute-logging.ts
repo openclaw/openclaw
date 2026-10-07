@@ -75,8 +75,7 @@ function formatCliSessionReuseLogState(reusableSession: CliReusableSession): str
     case "none":
       return "none";
   }
-  const exhaustive: never = reusableSession;
-  return exhaustive;
+  return reusableSession;
 }
 
 export function buildCliExecLogLine(params: {

@@ -171,8 +171,8 @@ function commitAcpSessionMutationInWorker(
       }
       consumeSources(current, input);
       const db = current.db;
-      applyAcpSessionMutation(db, input);
-      const receipt = { nonce: input.nonce };
+      const facts = applyAcpSessionMutation(db, input);
+      const receipt = { nonce: input.nonce, facts };
       deferSqliteWorkerCommitReceipt(db, receipt);
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: receipt });
       return receipt;

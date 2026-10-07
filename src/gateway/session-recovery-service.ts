@@ -142,6 +142,7 @@ async function prepareRecoverySource(params: {
   const unsubscribe = sessionChanges.subscribeFacts((change) => {
     if (
       !("all" in change) &&
+      change.scope !== "acp" &&
       change.storePath &&
       sourcePaths.has(path.resolve(change.storePath)) &&
       target.storeKeys.includes(change.sessionKey)

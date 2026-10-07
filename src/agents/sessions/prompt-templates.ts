@@ -104,19 +104,13 @@ export function loadPromptTemplates({
   const projectPromptsDir = resolve(cwd, CONFIG_DIR_NAME, "prompts");
 
   const getSourceInfo = (resolvedPath: string): SourceInfo => {
-    if (isPathInside(globalPromptsDir, resolvedPath)) {
-      return createSyntheticSourceInfo(resolvedPath, {
-        source: "local",
-        scope: "user",
-        baseDir: globalPromptsDir,
-      });
-    }
-    if (isPathInside(projectPromptsDir, resolvedPath)) {
-      return createSyntheticSourceInfo(resolvedPath, {
-        source: "local",
-        scope: "project",
-        baseDir: projectPromptsDir,
-      });
+    for (const [baseDir, scope] of [
+      [globalPromptsDir, "user"],
+      [projectPromptsDir, "project"],
+    ] as const) {
+      if (isPathInside(baseDir, resolvedPath)) {
+        return createSyntheticSourceInfo(resolvedPath, { source: "local", scope, baseDir });
+      }
     }
     return createSyntheticSourceInfo(resolvedPath, {
       source: "local",
