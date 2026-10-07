@@ -39,35 +39,35 @@ const ScreenshotToolSchema = Type.Object(
 );
 
 export function isScreenshotPlatformSupported(platform: NodeJS.Platform = process.platform) {
-  return platform === "win32" || platform === "darwin";
+  return platform === "win32";
 }
 
-function resolveCaptureCommand(platform: NodeJS.Platform, outputPath: string): string[] {
-  if (platform === "win32") {
-    return [
-      "powershell.exe",
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-EncodedCommand",
-      Buffer.from(WINDOWS_CAPTURE_SCRIPT, "utf16le").toString("base64"),
-    ];
-  }
-  if (platform === "darwin") {
-    return ["screencapture", "-x", "-t", "png", outputPath];
-  }
-  throw new Error(`screenshot is not supported on ${platform}.`);
-}
+const WINDOWS_CAPTURE_COMMAND = [
+  "powershell.exe",
+  "-NoProfile",
+  "-NonInteractive",
+  "-ExecutionPolicy",
+  "Bypass",
+  "-EncodedCommand",
+  Buffer.from(WINDOWS_CAPTURE_SCRIPT, "utf16le").toString("base64"),
+];
 
 function buildOutputPath(workspaceDir: string): string {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   return path.join(workspaceDir, SCREENSHOT_DIR, `screenshot-${stamp}.png`);
 }
 
-async function captureScreen(outputPath: string): Promise<void> {
+async function captureScreen(
+  outputPath: string,
+  assertCurrent: () => void,
+  signal?: AbortSignal,
+): Promise<void> {
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
-  const result = await runCommandWithTimeout(resolveCaptureCommand(process.platform, outputPath), {
+  // The capture is the privileged effect and cannot be undone, so authority is
+  // revalidated after the awaited preparation, immediately before launching it.
+  signal?.throwIfAborted();
+  assertCurrent();
+  const result = await runCommandWithTimeout(WINDOWS_CAPTURE_COMMAND, {
     timeoutMs: CAPTURE_TIMEOUT_MS,
     env: { ...process.env, [OUTPUT_ENV]: outputPath },
   });
@@ -97,7 +97,7 @@ export function createScreenshotTool(context: OpenClawPluginToolContext<2>): Any
       signal?.throwIfAborted();
       context.assertInvocationCurrent();
       const outputPath = buildOutputPath(workspaceDir);
-      await captureScreen(outputPath);
+      await captureScreen(outputPath, context.assertInvocationCurrent, signal);
 
       let delivered = false;
       let deliveryNote = "Not sent (send=false).";

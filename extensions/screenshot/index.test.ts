@@ -59,22 +59,33 @@ describe("screenshot plugin", () => {
     expect(registerTool().options).toEqual({ name: "screenshot", optional: true });
   });
 
+  type Executable = {
+    execute: (id: string, params: Record<string, unknown>) => Promise<{ details: unknown }>;
+  };
+
+  // Simulates authority revoked after `allowedCalls` successful guard checks.
+  function revokedAfter(allowedCalls: number) {
+    let calls = 0;
+    return vi.fn(() => {
+      calls += 1;
+      if (calls > allowedCalls) {
+        throw new Error("invocation authority revoked");
+      }
+    });
+  }
+
   it("is unavailable to non-owners and sandboxed sessions", () => {
     const { descriptor } = registerTool();
     expect(descriptor.create(context({ senderIsOwner: false }))).toBeNull();
     expect(descriptor.create(context({ senderIsOwner: undefined }))).toBeNull();
     expect(descriptor.create(context({ sandboxed: true }))).toBeNull();
+    expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
   it("saves the capture in the workspace and sends it to the current conversation", async () => {
-    if (process.platform !== "win32" && process.platform !== "darwin") {
-      return;
-    }
     const send = vi.fn(async () => {});
     const ctx = context({ delivery: { send } });
-    const tool = registerTool().descriptor.create(ctx) as {
-      execute: (id: string, params: Record<string, unknown>) => Promise<{ details: unknown }>;
-    };
+    const tool = registerTool().descriptor.create(ctx) as Executable;
 
     const result = await tool.execute("call-1", {});
 
@@ -83,21 +94,53 @@ describe("screenshot plugin", () => {
     expect((await fs.stat(details.path)).size).toBeGreaterThan(0);
     expect(details.delivered).toBe(true);
     expect(send).toHaveBeenCalledWith({ mediaUrl: details.path });
-    expect(ctx.assertInvocationCurrent).toHaveBeenCalledTimes(2);
+    // Start of the invocation, right before the capture launch, right before the send.
+    expect(ctx.assertInvocationCurrent).toHaveBeenCalledTimes(3);
   });
 
   it("only saves the file when send is false", async () => {
-    if (process.platform !== "win32" && process.platform !== "darwin") {
-      return;
-    }
     const send = vi.fn(async () => {});
-    const tool = registerTool().descriptor.create(context({ delivery: { send } })) as {
-      execute: (id: string, params: Record<string, unknown>) => Promise<{ details: unknown }>;
-    };
+    const tool = registerTool().descriptor.create(context({ delivery: { send } })) as Executable;
 
     const result = await tool.execute("call-2", { send: false });
 
     expect((result.details as { delivered: boolean }).delivered).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("does not capture or send when authority is revoked at the start", async () => {
+    const send = vi.fn(async () => {});
+    const tool = registerTool().descriptor.create(
+      context({ delivery: { send }, assertInvocationCurrent: revokedAfter(0) }),
+    ) as Executable;
+
+    await expect(tool.execute("call-3", {})).rejects.toThrow("revoked");
+
+    expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("does not launch the capture when authority is revoked while the directory is prepared", async () => {
+    const send = vi.fn(async () => {});
+    const tool = registerTool().descriptor.create(
+      context({ delivery: { send }, assertInvocationCurrent: revokedAfter(1) }),
+    ) as Executable;
+
+    await expect(tool.execute("call-4", { send: false })).rejects.toThrow("revoked");
+
+    expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("does not send the image when authority is revoked after the capture", async () => {
+    const send = vi.fn(async () => {});
+    const tool = registerTool().descriptor.create(
+      context({ delivery: { send }, assertInvocationCurrent: revokedAfter(2) }),
+    ) as Executable;
+
+    await expect(tool.execute("call-5", {})).rejects.toThrow("revoked");
+
+    expect(processMocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
     expect(send).not.toHaveBeenCalled();
   });
 });

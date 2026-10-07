@@ -16,12 +16,13 @@ workspace, and sends the image to the conversation that asked for it.
 | --------- | --------------------------------------------------------------- |
 | Plugin id | `screenshot`                                                    |
 | Tool      | `screenshot` (optional, owner-only)                             |
-| Platforms | Windows (PowerShell) and macOS (`screencapture`)                |
+| Platforms | Windows (PowerShell)                                            |
 | Output    | `<workspace>/screenshots/screenshot-<timestamp>.png`            |
 | Parameter | `send` (boolean, default `true`); `false` saves without sending |
 
 The image is delivered to the chat but is not returned to the model, so a cloud
-model never sees your screen through this tool. Linux hosts are not supported.
+model never sees your screen through this tool. macOS and Linux hosts are not
+supported.
 
 ## Enable it
 

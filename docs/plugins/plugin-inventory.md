@@ -158,7 +158,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[runway](/plugins/reference/runway)** (`@openclaw/runway-provider`) - included in OpenClaw. Adds video generation provider support.
 
-- **[screenshot](/plugins/reference/screenshot)** (`openclaw`) - included in OpenClaw. Owner-only agent tool that captures the Gateway host screen into the workspace and sends it to the current chat.
+- **[screenshot](/plugins/reference/screenshot)** (`openclaw`) - included in OpenClaw. Owner-only agent tool that captures the Windows Gateway host screen into the workspace and sends it to the current chat.
 
 - **[senseaudio](/plugins/reference/senseaudio)** (`@openclaw/senseaudio-provider`) - included in OpenClaw. Adds media understanding provider support.
 
