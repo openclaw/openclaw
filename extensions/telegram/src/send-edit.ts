@@ -21,9 +21,9 @@ import {
 } from "./rich-message.js";
 import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
 import { withTelegramPlainFallback } from "./rich-plain-fallback.js";
-import { sendLogger, withTelegramApiContext, type TelegramApiContext } from "./send-context.js";
+import { sendLogger, type TelegramApiContext } from "./send-context.js";
 import type { TelegramApiCallOpts, TelegramSendOpts } from "./send-message-types.js";
-import { prepareTelegramOutbound } from "./send-outbound.js";
+import { withTelegramMessageAction } from "./send-outbound.js";
 import {
   deliverTelegramTextPage,
   planTelegramTextDeliveryPages,
@@ -51,17 +51,11 @@ export async function editMessageReplyMarkupTelegram(
   buttons: TelegramInlineButtons,
   opts: TelegramEditReplyMarkupOpts,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
-  return withTelegramApiContext(
+  return withTelegramMessageAction(
+    chatIdInput,
+    messageIdInput,
     opts,
-    async (context): Promise<{ ok: true; messageId: string; chatId: string }> => {
-      const { api } = context;
-      const { chatId, messageId, request } = await prepareTelegramOutbound({
-        to: chatIdInput,
-        context,
-        opts,
-        messageIdInput,
-        request: { kind: "standard" },
-      });
+    async ({ api, chatId, messageId, request }) => {
       const replyMarkup = buildInlineKeyboard(buttons) ?? { inline_keyboard: [] };
       try {
         await request(
@@ -88,22 +82,11 @@ export async function editMessageTelegram(
   text: string,
   opts: TelegramEditOpts,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
-  return withTelegramApiContext(
+  return withTelegramMessageAction(
+    chatIdInput,
+    messageIdInput,
     opts,
-    async (context): Promise<{ ok: true; messageId: string; chatId: string }> => {
-      const { cfg, account, api } = context;
-      const { chatId, messageId, request } = await prepareTelegramOutbound({
-        to: chatIdInput,
-        context,
-        opts,
-        messageIdInput,
-        request: {
-          kind: "standard",
-          shouldRetry: (err) =>
-            isRecoverableTelegramNetworkError(err, { context: "edit" }) ||
-            isTelegramServerError(err),
-        },
-      });
+    async ({ cfg, account, api, chatId, messageId, request }) => {
       const edit = <T>(fn: () => Promise<T>, label = "editMessage") =>
         request(fn, label, { shouldLog: (err) => !isTelegramMessageNotModifiedError(err) });
 
@@ -266,5 +249,7 @@ export async function editMessageTelegram(
       logVerbose(`[telegram] Edited message ${messageId} in chat ${chatId}`);
       return { ok: true, messageId: String(messageId), chatId };
     },
+    (err) =>
+      isRecoverableTelegramNetworkError(err, { context: "edit" }) || isTelegramServerError(err),
   );
 }

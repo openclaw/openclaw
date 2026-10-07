@@ -13,10 +13,7 @@ export function resolveTelegramReactionLevel(params: {
   cfg: OpenClawConfig;
   accountId?: string;
 }): ResolvedReactionLevel {
-  const account = inspectTelegramAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
+  const account = inspectTelegramAccount(params);
   return resolveReactionLevel({
     value: account.config.reactionLevel,
     defaultLevel: "minimal",

@@ -24,7 +24,7 @@ export async function collectTelegramSecurityAuditFindings(params: {
   const invalidTelegramAllowFromEntries = new Set<string>();
   const collectInvalidAllowFrom = (entries: unknown) => {
     if (!Array.isArray(entries)) {
-      return;
+      return false;
     }
     for (const entry of entries) {
       const normalized = normalizeTelegramAllowFromEntry(entry);
@@ -32,6 +32,7 @@ export async function collectTelegramSecurityAuditFindings(params: {
         invalidTelegramAllowFromEntries.add(normalized);
       }
     }
+    return entries.length > 0;
   };
   const appendInvalidAllowFromFinding = () => {
     if (invalidTelegramAllowFromEntries.size === 0) {
@@ -92,11 +93,7 @@ export async function collectTelegramSecurityAuditFindings(params: {
         continue;
       }
       const group = value as Record<string, unknown>;
-      const allowFrom = Array.isArray(group.allowFrom) ? group.allowFrom : [];
-      if (allowFrom.length > 0) {
-        anyGroupOverride = true;
-        collectInvalidAllowFrom(allowFrom);
-      }
+      anyGroupOverride = collectInvalidAllowFrom(group.allowFrom) || anyGroupOverride;
       const topics = group.topics;
       if (!topics || typeof topics !== "object") {
         continue;
@@ -106,11 +103,7 @@ export async function collectTelegramSecurityAuditFindings(params: {
           continue;
         }
         const topic = topicValue as Record<string, unknown>;
-        const topicAllow = Array.isArray(topic.allowFrom) ? topic.allowFrom : [];
-        if (topicAllow.length > 0) {
-          anyGroupOverride = true;
-        }
-        collectInvalidAllowFrom(topicAllow);
+        anyGroupOverride = collectInvalidAllowFrom(topic.allowFrom) || anyGroupOverride;
       }
     }
   }

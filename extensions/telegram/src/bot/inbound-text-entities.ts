@@ -23,12 +23,12 @@ const TELEGRAM_ENTITY_MARKDOWN_PRIORITY: Partial<Record<MessageEntity["type"], n
   pre: 80,
 };
 
-const SPLITTABLE_FORMATTING_ENTITY_TYPES = new Set<MessageEntity["type"]>([
-  "bold",
-  "italic",
-  "underline",
-  "strikethrough",
-  "spoiler",
+const TELEGRAM_FORMATTING_MARKERS = new Map<MessageEntity["type"], string>([
+  ["bold", "**"],
+  ["italic", "_"],
+  ["underline", "__"],
+  ["strikethrough", "~~"],
+  ["spoiler", "||"],
 ]);
 
 function isTelegramBlockquoteEntity(entity: MessageEntity): boolean {
@@ -47,14 +47,8 @@ function hasValidTelegramEntityRange(text: string, entity: MessageEntity): boole
 
 function longestBacktickRun(text: string): number {
   let longest = 0;
-  let current = 0;
-  for (const char of text) {
-    if (char === "`") {
-      current += 1;
-      longest = Math.max(longest, current);
-    } else {
-      current = 0;
-    }
+  for (const match of text.matchAll(/`+/g)) {
+    longest = Math.max(longest, match[0].length);
   }
   return longest;
 }
@@ -81,20 +75,14 @@ function markdownAffixesForTelegramEntity(
   entity: MessageEntity,
   content: string,
 ): [string, string] | null {
+  const marker = TELEGRAM_FORMATTING_MARKERS.get(entity.type);
+  if (marker) {
+    return [marker, marker];
+  }
   switch (entity.type) {
     case "blockquote":
     case "expandable_blockquote":
       return ["> ", ""];
-    case "bold":
-      return ["**", "**"];
-    case "italic":
-      return ["_", "_"];
-    case "underline":
-      return ["__", "__"];
-    case "strikethrough":
-      return ["~~", "~~"];
-    case "spoiler":
-      return ["||", "||"];
     case "code":
       return markdownInlineCodeDelimiters(content);
     case "pre":
@@ -116,7 +104,7 @@ function splitTelegramFormattingAtQuoteEdges(
   entity: MessageEntity,
   quoteEdges: readonly number[],
 ): MessageEntity[] {
-  if (!SPLITTABLE_FORMATTING_ENTITY_TYPES.has(entity.type)) {
+  if (!TELEGRAM_FORMATTING_MARKERS.has(entity.type)) {
     return [entity];
   }
   const entityEnd = entity.offset + entity.length;

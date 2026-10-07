@@ -182,61 +182,46 @@ export async function sendTelegramCaptionedMediaWithFallback<T>(params: {
 }): Promise<{ result: T; deliveredCaption?: string; captionRemoved?: true }> {
   const requestCaption =
     typeof params.requestParams.caption === "string" ? params.requestParams.caption : undefined;
-  const sendCaptionless = async () => {
-    const captionlessParams = { ...params.requestParams };
-    delete captionlessParams.caption;
-    delete captionlessParams.parse_mode;
-    return {
-      result: await params.send(captionlessParams, params.shouldLog),
-      ...(requestCaption !== undefined ? { captionRemoved: true as const } : {}),
-    };
-  };
-  try {
-    return {
-      result: await params.send(
-        params.requestParams,
-        (err) =>
-          !isTelegramHtmlParseError(err) &&
-          !isTelegramEmptyContentError(err) &&
-          (params.shouldLog?.(err) ?? true),
-      ),
-      ...(requestCaption !== undefined
-        ? { deliveredCaption: params.plainCaption ?? requestCaption }
-        : {}),
-    };
-  } catch (err) {
-    if (isTelegramEmptyContentError(err) && requestCaption !== undefined) {
-      return await sendCaptionless();
-    }
-    if (!isTelegramHtmlParseError(err) || !params.plainCaption) {
-      throw err;
-    }
-    // Captions share the text-send contract: retain visible content after an
-    // HTML parse failure without disturbing the topic, quote, or keyboard.
-    logVerbose(
-      `telegram ${params.operation} caption HTML rejected; retrying as plain caption: ${formatErrorMessage(
-        err,
-      )}`,
-    );
-    const plainParams: Record<string, unknown> = {
-      ...params.requestParams,
-      caption: params.plainCaption,
-    };
-    delete plainParams.parse_mode;
+  let requestParams = params.requestParams;
+  let usingPlainCaption = false;
+  let deliveredCaption =
+    requestCaption !== undefined ? (params.plainCaption ?? requestCaption) : undefined;
+  for (;;) {
     try {
       return {
         result: await params.send(
-          plainParams,
-          (plainError) =>
-            !isTelegramEmptyContentError(plainError) && (params.shouldLog?.(plainError) ?? true),
+          requestParams,
+          (err) =>
+            (usingPlainCaption || !isTelegramHtmlParseError(err)) &&
+            !isTelegramEmptyContentError(err) &&
+            (params.shouldLog?.(err) ?? true),
         ),
-        deliveredCaption: params.plainCaption,
+        ...(deliveredCaption !== undefined ? { deliveredCaption } : {}),
       };
-    } catch (plainError) {
-      if (!isTelegramEmptyContentError(plainError)) {
-        throw plainError;
+    } catch (err) {
+      if (isTelegramEmptyContentError(err) && (usingPlainCaption || requestCaption !== undefined)) {
+        const captionlessParams = { ...params.requestParams };
+        delete captionlessParams.caption;
+        delete captionlessParams.parse_mode;
+        return {
+          result: await params.send(captionlessParams, params.shouldLog),
+          ...(requestCaption !== undefined ? { captionRemoved: true as const } : {}),
+        };
       }
-      return await sendCaptionless();
+      if (usingPlainCaption || !isTelegramHtmlParseError(err) || !params.plainCaption) {
+        throw err;
+      }
+      // Captions share the text-send contract: retain visible content after an
+      // HTML parse failure without disturbing the topic, quote, or keyboard.
+      logVerbose(
+        `telegram ${params.operation} caption HTML rejected; retrying as plain caption: ${formatErrorMessage(
+          err,
+        )}`,
+      );
+      requestParams = { ...params.requestParams, caption: params.plainCaption };
+      delete requestParams.parse_mode;
+      deliveredCaption = params.plainCaption;
+      usingPlainCaption = true;
     }
   }
 }

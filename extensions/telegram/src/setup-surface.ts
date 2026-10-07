@@ -41,10 +41,10 @@ export const telegramSetupWizard: ChannelSetupWizard = {
     configuredScore: 1,
     unconfiguredScore: 10,
     resolveConfigured: ({ cfg, accountId }) =>
-      (accountId ? [accountId] : listTelegramAccountIds(cfg)).some((resolvedAccountId) => {
-        const account = inspectTelegramAccount({ cfg, accountId: resolvedAccountId });
-        return account.configured;
-      }),
+      (accountId ? [accountId] : listTelegramAccountIds(cfg)).some(
+        (resolvedAccountId) =>
+          inspectTelegramAccount({ cfg, accountId: resolvedAccountId }).configured,
+      ),
   }),
   prepare: async ({ cfg, accountId, credentialValues }) => ({
     cfg: ensureTelegramDefaultGroupMentionGate(cfg, accountId),
