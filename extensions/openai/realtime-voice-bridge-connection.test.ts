@@ -681,7 +681,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     const bridge = createNativeBridge({
       providerConfig: {
         apiKey: "test-api-key-test",
-        azureEndpoint: "https://example.openai.azure.com/",
+        azureEndpoint: "https://example.openai.azure.com/openai/",
         azureDeployment: "realtime-prod",
         azureApiVersion: "2024-10-01-preview",
         voice: "verse",
@@ -697,7 +697,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     const { connecting, socket } = beginBridgeConnection(bridge);
 
     expect(socket.args[0]).toBe(
-      "wss://example.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=realtime-prod",
+      "wss://example.openai.azure.com/openai/v1/realtime?model=realtime-prod",
     );
 
     openSocket(socket);

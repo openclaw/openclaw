@@ -415,11 +415,10 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
       const apiKey = requireOpenAIRealtimeApiKey(cfg.apiKey);
       const base = cfg.azureEndpoint
         .replace(/\/$/, "")
-        .replace(/^http(s?):/, (_, secure: string) => `ws${secure}:`);
-      const apiVersion = cfg.azureApiVersion ?? "2024-10-01-preview";
-      const url = `${base}/openai/realtime?api-version=${apiVersion}&deployment=${encodeURIComponent(
-        cfg.azureDeployment,
-      )}`;
+        .replace(/^http(s?):/, (_, secure: string) => `ws${secure}:`)
+        // Callers may provide the resource root or a legacy endpoint ending in /openai.
+        .replace(/\/openai(?:\/v1)?$/i, "");
+      const url = `${base}/openai/v1/realtime?model=${encodeURIComponent(cfg.azureDeployment)}`;
       return {
         url,
         headers: this.runtime.resolveProviderRequestHeaders({
@@ -486,8 +485,9 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     } else if (cfg.azureEndpoint) {
       const base = cfg.azureEndpoint
         .replace(/\/$/, "")
-        .replace(/^http(s?):/, (_, secure: string) => `ws${secure}:`);
-      url = `${base}/v1/realtime?model=${encodeURIComponent(model)}`;
+        .replace(/^http(s?):/, (_, secure: string) => `ws${secure}:`)
+        .replace(/\/openai(?:\/v1)?$/i, "");
+      url = `${base}/openai/v1/realtime?model=${encodeURIComponent(model)}`;
     } else {
       url = cfg.callId
         ? buildOpenAIRealtimeSidebandUrl(cfg.callId)
