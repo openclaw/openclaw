@@ -608,7 +608,9 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       () => this.cancelScroll(),
       () => this.presentation.queueRowMeasure(),
     );
-    if (behavior !== "smooth") {
+    // A smooth journey captures on native arrival. A smooth no-op already at the
+    // end retires itself without a native event, so capture its edge here.
+    if (behavior !== "smooth" || this.offsetState.scrollCommand === null) {
       this.endAnchor.capture(this.scrollElement);
     }
     return true;
