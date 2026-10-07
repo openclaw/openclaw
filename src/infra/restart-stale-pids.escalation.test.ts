@@ -15,7 +15,8 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawnSync: (...args: unknown[]) => mocks.spawnSync(...args),
 }));
 vi.mock("./gateway-owner-lease.js", () => ({ readGatewayOwnerLease: mocks.readOwner }));
-vi.mock("../shared/pid-alive.js", () => ({
+vi.mock("../shared/pid-alive.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../shared/pid-alive.js")>()),
   getFileLockProcessStartTime: (pid: number) => mocks.starts.get(pid) ?? null,
   isPidDefinitelyDead: (pid: number) => mocks.dead.has(pid) || !mocks.starts.has(pid),
 }));

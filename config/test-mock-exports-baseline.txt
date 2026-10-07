@@ -8912,7 +8912,6 @@
 ["src/infra/restart-stale-pids.cwd.test.ts","./ports-lsof.js","bdf6d159b73de0bf2c063a291a4d220978eba88a10cfdb531c0af580f91b1599",1]
 ["src/infra/restart-stale-pids.cwd.test.ts","./windows-port-pids.js","36b3ba298a394846ce94e0948497cca83a546359a566181cd9013de536bba126",1]
 ["src/infra/restart-stale-pids.cwd.test.ts","./windows-process-start.js","2678530ec25c38377d1d813cc36d7a4d7763e5765455e7931b0126b86c7a5744",1]
-["src/infra/restart-stale-pids.escalation.test.ts","../shared/pid-alive.js","bca13b51f0e31659a32935283ad6c72b283d43005cb2ab10756bd11a975aacc4",1]
 ["src/infra/restart-stale-pids.escalation.test.ts","../utils/sleep.js","fe5511515fb7118ab09d5ca626173670f4f3f91fb876c0b70f1b71889ea0a2c1",1]
 ["src/infra/restart-stale-pids.escalation.test.ts","./gateway-owner-lease.js","2f8fad66667af9a5acbdda645a228df866eed8de8c3ef7a3c4556ffeb099e01a",1]
 ["src/infra/restart-stale-pids.test.ts","../config/paths.js","2550f44fe04e9097e205c3d893548a36d90b6203a1a6b5e23764cf4f45375c7d",1]
