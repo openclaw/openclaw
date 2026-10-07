@@ -49,13 +49,7 @@ import {
   prepareModelCatalogPublication,
   retainPreparedModelCatalogPublication,
 } from "./prepared-model-runtime.full-catalog.js";
-import {
-  applyPreparedNativeCatalogResult,
-  createPreparedNativeCatalogDiscoveryTracker,
-  isPreparedNativeSelectionDiscoveryReady,
-  reportPreparedNativeCatalogFailure,
-  setPreparedNativeCatalogPending,
-} from "./prepared-model-runtime.native-discovery.js";
+import * as nativeDiscovery from "./prepared-model-runtime.native-discovery.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import {
   createCatalogAttemptReporter,
@@ -460,13 +454,16 @@ export async function createFullModelCatalogAccess(
       await using _ = {
         [Symbol.asyncDispose]: retainPreparedPluginGeneration(params.pluginGeneration),
       };
-      const discovery = createPreparedNativeCatalogDiscoveryTracker({
+      const discovery = nativeDiscovery.createPreparedNativeCatalogDiscoveryTracker({
         startupProviders: new Set(params.agentFacts.providerIds.map(normalizeProvider)),
         normalizeProvider,
       });
-      let selectedRowReady = false;
       const failures: Array<{ error: unknown; providers?: readonly string[] }> = [];
-      setPreparedNativeCatalogPending({ profileScopedSelection, attempt, providers: [] });
+      nativeDiscovery.setPreparedNativeCatalogPending({
+        profileScopedSelection,
+        attempt,
+        providers: [],
+      });
       const rawCatalog = await augmentPreparedModelCatalogWithAgentHarness({
         input: params.agentFacts.input,
         nativeSelection: selection,
@@ -481,30 +478,28 @@ export async function createFullModelCatalogAccess(
         onError: (error, failedProviderIds) => {
           failures.push({ error, providers: failedProviderIds?.map(normalizeProvider) });
         },
-        onDiscoveryStarted: (provider) =>
-          setPreparedNativeCatalogPending({
-            profileScopedSelection,
-            attempt,
-            providers: [normalizeProvider(provider)],
-          }),
+        onDiscoveryStarted: nativeDiscovery.createPreparedNativeCatalogDiscoveryPendingHandler({
+          profileScopedSelection,
+          attempt,
+          normalizeProvider,
+        }),
         onDiscoveryCompleted: discovery.onCompleted,
       });
       assertCurrent();
-      if (selection && discovery.completed && discovery.rows) {
-        selectedRowReady = isPreparedNativeSelectionDiscoveryReady({
+      const selectedRowReady =
+        discovery.completed &&
+        nativeDiscovery.isCompletedPreparedNativeSelectionDiscoveryReady({
           rows: discovery.rows,
           selection,
           catalog: rawCatalog,
           failures,
           normalizeProvider,
         });
-      }
       if (!discovery.completed && failures.length) {
         failedProviders = failures.flatMap((failure) => failure.providers ?? []);
         throw failures[0]!.error;
       }
-      // Selected native membership is a foreground harness fact, not a provider-auth refresh.
-      // Full inventory acquisition alone discovers additional paired provider credentials.
+      // Selected-row readiness is foreground-only; full inventory discovery may acquire paired credentials.
       const nativeAuth =
         !selection && discovery.completed && discovery.providers.length
           ? await worker.loadAuth({ providerIds: discovery.providers })
@@ -517,7 +512,7 @@ export async function createFullModelCatalogAccess(
         getPreparedModelFullCatalogAuth(latest.inventory?.catalog ?? staticCatalog) ?? currentAuth;
       const acquiredNative =
         latest.nativeCatalogAcquired || (!selection && (!providerIds || discovery.completed));
-      applyPreparedNativeCatalogResult({
+      nativeDiscovery.applyPreparedNativeCatalogResult({
         profileScopedSelection,
         completed: discovery.completed,
         rawCatalog,
@@ -549,7 +544,7 @@ export async function createFullModelCatalogAccess(
       return profileScopedSelection ? rawCatalog : (published.catalog ?? staticCatalog);
     })()
       .catch((error: unknown) => {
-        reportPreparedNativeCatalogFailure({
+        nativeDiscovery.reportPreparedNativeCatalogFailure({
           profileScopedSelection,
           attempt,
           error,

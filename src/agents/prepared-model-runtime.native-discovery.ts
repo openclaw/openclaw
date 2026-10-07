@@ -92,7 +92,7 @@ function createPreparedNativeSelectionDiscoveryStatus(params: {
   };
 }
 
-export function isPreparedNativeSelectionDiscoveryReady(params: {
+function isPreparedNativeSelectionDiscoveryReady(params: {
   rows: readonly ModelCatalogEntry[];
   selection: PreparedNativeModelSelection;
   catalog: ModelCatalogSnapshot;
@@ -120,6 +120,26 @@ export function isPreparedNativeSelectionDiscoveryReady(params: {
         params.normalizeProvider(outcome.provider) === selectedProvider &&
         outcome.status !== "ready",
     )
+  );
+}
+
+export function isCompletedPreparedNativeSelectionDiscoveryReady(params: {
+  rows: readonly ModelCatalogEntry[] | undefined;
+  selection: PreparedNativeModelSelection | undefined;
+  catalog: ModelCatalogSnapshot;
+  failures: readonly { error: unknown; providers?: readonly string[] }[];
+  normalizeProvider: (provider: string) => string;
+}): boolean {
+  return Boolean(
+    params.selection &&
+    params.rows &&
+    isPreparedNativeSelectionDiscoveryReady({
+      rows: params.rows,
+      selection: params.selection,
+      catalog: params.catalog,
+      failures: params.failures,
+      normalizeProvider: params.normalizeProvider,
+    }),
   );
 }
 
@@ -161,6 +181,19 @@ export function setPreparedNativeCatalogPending(params: {
   if (!params.profileScopedSelection) {
     params.attempt.setPending(params.providers, "native");
   }
+}
+
+export function createPreparedNativeCatalogDiscoveryPendingHandler(params: {
+  profileScopedSelection: boolean;
+  attempt: PreparedNativeCatalogAttemptReporter;
+  normalizeProvider: (provider: string) => string;
+}): (provider: string) => void {
+  return (provider) =>
+    setPreparedNativeCatalogPending({
+      profileScopedSelection: params.profileScopedSelection,
+      attempt: params.attempt,
+      providers: [params.normalizeProvider(provider)],
+    });
 }
 
 export function reportPreparedNativeCatalogFailure(params: {
