@@ -13,18 +13,16 @@ export async function withMemoryPublicationExecution(
 ): Promise<void> {
   // This store only borrows the canonical executor; it never dispatches a
   // command. Concrete publication stores still own their policy and cleanup.
-  const releaseExecution = params.options
-    ? (
-        await openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(
-          params.options,
-          params.database,
-          {
-            moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication),
-            input: undefined,
-            retainExecutionUntilClose: true,
-          },
-        )
-      ).close
+  const execution = params.options
+    ? await openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(
+        params.options,
+        params.database,
+        {
+          moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication),
+          input: undefined,
+          retainExecutionUntilClose: true,
+        },
+      )
     : undefined;
   const failures: unknown[] = [];
   try {
@@ -33,7 +31,7 @@ export async function withMemoryPublicationExecution(
     failures.push(error);
   }
   try {
-    await releaseExecution?.();
+    await execution?.close();
   } catch (error) {
     failures.push(error);
   }
