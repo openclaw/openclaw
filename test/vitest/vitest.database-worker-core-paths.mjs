@@ -5,6 +5,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/conversation-list.admission.test.ts",
   "src/gateway/conversation-list.account-removal.test.ts",
   "src/gateway/server-methods/sessions-reactions.test.ts",
+  "src/infra/heartbeat-runner.wake-owner-resolution.test.ts",
   "src/plugin-sdk/session-transcript-lock.native.test.ts",
   "src/plugin-sdk/session-transcript-lock.worker.test.ts",
   "src/gateway/worker-environments/worker-turn-transcript-target.test.ts",
