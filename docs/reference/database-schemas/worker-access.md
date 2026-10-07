@@ -55,6 +55,14 @@ files still require their own validation; canonical receipts never grant integri
 proof. Writer FIFO ordering, current-authority checks, schemas, and update behavior
 remain unchanged.
 
+When a fully checked opener registers the same live database, it promotes existing
+canonical proof without revoking a pending native admission. Ordinary registration,
+replacement, and explicit invalidation still retire captured proof. Rejected stale
+schema receipts cannot overwrite a newer live schema. These are process-local
+admission changes; stored data and update migrations are unchanged.
+Concurrent receipts for the same live schema retain the existing shared revocation
+cell. An accepted schema change first revokes its previous borrowers.
+
 Reply initialization, agent-turn preparation, and status rendering recover missing
 lifecycle timestamps through the transcript reader. Header reads retain their
 physical database owner and accept results under the existing writer FIFO with a
