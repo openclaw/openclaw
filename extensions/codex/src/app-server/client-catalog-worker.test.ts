@@ -458,4 +458,55 @@ describe("Codex catalog worker transport", () => {
     expect(JSON.stringify(warn.mock.calls)).toContain("<redacted>");
     expect(parse).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    "retains the incomplete recovery byte bound in the worker (complete: %s)",
+    async (complete) => {
+      const harness = createHarness();
+      const parse = vi.spyOn(CodexAppServerMessageDecoder.prototype, "parse");
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const request = harness.client.request("thread/list", {}, { catalogPreview: true });
+      harness.process.stdout.write(
+        `{"id":${JSON.stringify(requestId(harness))},"result":{"unused":"${"x".repeat(8 * 1024 * 1024)}\n`,
+      );
+      harness.process.stdout.write(complete ? 'last","data":[]}}\n' : "incomplete\n");
+      if (!complete) {
+        harness.send({ id: requestId(harness), result: { data: [] } });
+      }
+      await expect(request).resolves.toEqual({ data: [] });
+      expect(warn).toHaveBeenCalledTimes(complete ? 0 : 1);
+      expect(parse).not.toHaveBeenCalled();
+    },
+  );
+
+  it("recovers a thread/list page whose preview exceeds the incomplete-message bound", async () => {
+    const harness = createHarness();
+    const parse = vi.spyOn(CodexAppServerMessageDecoder.prototype, "parse");
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const request = harness.client.request("thread/list", {}, { catalogPreview: true });
+    harness.process.stdout.write(
+      `{"id":${JSON.stringify(requestId(harness))},"result":{"data":[{"id":"large","preview":"${"x".repeat(9 * 1024 * 1024)}\n`,
+    );
+    harness.process.stdout.write(`${"y".repeat(1_000)}\n`);
+    harness.process.stdout.write('end"}]}}\n');
+    await expect(request).resolves.toEqual({
+      data: [{ id: "large", projectId: null, preview: "x".repeat(500) }],
+    });
+    expect(warn).not.toHaveBeenCalled();
+    expect(parse).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a whitespace-heavy prefix", `${" ".repeat(4_096)}meaningful ${"text ".repeat(20_000)}`],
+    ["a terminal control in the prefix", `\u001b[1mbold\u001b[0m ${"z".repeat(100_000)}`],
+    ["text beyond the fallback cap", `${" ".repeat(65_536)}meaningful text`],
+    ["text after removable controls", `${"\u0007".repeat(15_000)}meaningful text`],
+  ])("projects worker previews like the inline projection for %s", async (_name, preview) => {
+    const harness = createHarness();
+    const thread = { id: "large", preview };
+    const inline = projectCodexCatalogNativeResponse({ data: [thread] }, sanitizeTerminalText);
+    const request = harness.client.request("thread/list", {}, { catalogPreview: true });
+    harness.send({ id: requestId(harness), result: { data: [thread] } });
+    await expect(request).resolves.toEqual(inline);
+  });
 });

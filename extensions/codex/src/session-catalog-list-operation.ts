@@ -9,12 +9,14 @@ import type {
 import { publishSessionCatalogHost } from "openclaw/plugin-sdk/session-catalog-paging";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
+import { withTimeout } from "./app-server/timeout.js";
 import { CodexCatalogLoadingError } from "./session-catalog-availability.js";
 import {
   currentCodexCatalogListDiagnostics,
   startCodexCatalogListTiming,
 } from "./session-catalog-diagnostics.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
+import { CODEX_CATALOG_LOCAL_HOST_RESPONSE_TIMEOUT_MS } from "./session-catalog-limits.js";
 import type { CatalogNode } from "./session-catalog-node-continue.js";
 import {
   CodexCatalogNodeSnapshots,
@@ -182,7 +184,9 @@ async function finishLocalHost(
   agentId: string,
   host: LocalHost,
 ): Promise<CodexSessionCatalogHost> {
-  try {
+  // One host budget covers progressive page.next + projection; stalled pages must not
+  // keep publication pending past CODEX_CATALOG_LOCAL_HOST_RESPONSE_TIMEOUT_MS.
+  const pending = (async (): Promise<CodexSessionCatalogHost> => {
     for (;;) {
       const step = await host.page.next();
       params.signal?.throwIfAborted();
@@ -190,8 +194,18 @@ async function finishLocalHost(
         return await projectLocalHost(params, agentId, host.source, step.page);
       }
     }
-  } catch (error) {
-    return hostFailure(host.source, error);
+  })();
+  try {
+    try {
+      return await withTimeout(
+        pending,
+        CODEX_CATALOG_LOCAL_HOST_RESPONSE_TIMEOUT_MS,
+        "Codex session catalog host timed out",
+      );
+    } catch (error) {
+      void pending.catch(() => undefined);
+      return hostFailure(host.source, error);
+    }
   } finally {
     host.page.close();
   }
@@ -343,15 +357,27 @@ class CodexCatalogListDriver {
       return;
     }
     try {
-      const page = await host.page.next();
-      params.signal?.throwIfAborted();
-      if (page.done) {
-        host.value = await projectLocalHost(
-          params,
-          this.selection().agentId,
-          host.source,
-          page.page,
+      // One deadline covers the page read and adoption projection, so a stalled binding
+      // read cannot keep this host active after paging finishes.
+      const pending = (async (): Promise<CodexSessionCatalogHost | undefined> => {
+        const page = await host.page.next();
+        params.signal?.throwIfAborted();
+        return page.done
+          ? await projectLocalHost(params, this.selection().agentId, host.source, page.page)
+          : undefined;
+      })();
+      try {
+        const value = await withTimeout(
+          pending,
+          CODEX_CATALOG_LOCAL_HOST_RESPONSE_TIMEOUT_MS,
+          "Codex session catalog host timed out",
         );
+        if (value) {
+          host.value = value;
+        }
+      } catch (error) {
+        void pending.catch(() => undefined);
+        throw error;
       }
     } catch (error) {
       this.localFailed = true;
