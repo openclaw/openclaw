@@ -56,7 +56,6 @@ export type SlackMessageSummary = {
     count?: number;
     users?: string[];
   }>;
-  /** File attachments on this message. Present when the message has files. */
   files?: Array<{
     id?: string;
     name?: string;

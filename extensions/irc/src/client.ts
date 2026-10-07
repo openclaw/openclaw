@@ -91,8 +91,7 @@ function toIrcError(err: unknown): Error {
 let nickCollisionFallbackSeq = 0;
 
 function buildFallbackNick(nick: string): string {
-  const normalized = nick.replace(/\s+/g, "");
-  const safe = normalized.replace(/[^A-Za-z0-9_\-[\]\\`^{}|]/g, "");
+  const safe = nick.replace(/[^A-Za-z0-9_\-[\]\\`^{}|]/g, "");
   const base = safe || "openclaw";
   const seq = ++nickCollisionFallbackSeq;
   const suffix = seq === 1 ? "_" : `_${seq}`;

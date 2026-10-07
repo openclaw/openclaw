@@ -1,4 +1,3 @@
-// Matrix API module exposes the plugin public contract.
 import { chunkTextForOutbound as chunkTextForOutboundSdk } from "openclaw/plugin-sdk/text-chunking";
 
 export {

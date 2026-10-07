@@ -79,7 +79,7 @@ function buildListMarkerFreeMatchSnippet(
   if (!listMarkerFreeSnippet) {
     return listMarkerFreeSnippet;
   }
-  return heading ? normalizeSnippet(`${heading}: ${listMarkerFreeSnippet}`) : listMarkerFreeSnippet;
+  return heading ? `${heading}: ${listMarkerFreeSnippet}` : listMarkerFreeSnippet;
 }
 
 function targetSnippetHasHeadingContext(targetSnippet: string, bodySnippet: string): boolean {
@@ -103,10 +103,9 @@ function extractTargetHeadingBodySnippet(
   if (bodySnippet.startsWith(targetSnippet)) {
     return null;
   }
-  const normalizedBody = normalizeSnippet(bodySnippet);
   for (let separatorIndex = targetSnippet.indexOf(": "); separatorIndex > 0;) {
-    const targetBody = normalizeSnippet(targetSnippet.slice(separatorIndex + 2));
-    if (targetBody && normalizedBody.startsWith(targetBody)) {
+    const targetBody = targetSnippet.slice(separatorIndex + 2);
+    if (targetBody && bodySnippet.startsWith(targetBody)) {
       return targetBody;
     }
     separatorIndex = targetSnippet.indexOf(": ", separatorIndex + 2);

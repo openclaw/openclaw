@@ -181,7 +181,6 @@ export function renderTelegramProgressDraftPreview(
     : { text: html.join("<br>"), parseMode: "HTML", complete: true, linkPreview: false };
 }
 
-/** Renders a progress snapshot with one account's progress-draft settings. */
 export function renderTelegramAccountProgressDraftPreview(
   snapshot: ChannelProgressDraftCompositorSnapshot,
   params: { cfg: OpenClawConfig; accountId?: string | null },

@@ -141,6 +141,13 @@ export type ManagedWorktreeCreationOutcome = {
   materialized: boolean;
 };
 
+export type WorktreeCreationPublication = {
+  id: string;
+  pending?: ManagedWorktreeRecord;
+  record?: ManagedWorktreeRecord;
+  cleanup?: (assertCurrent: () => void) => Promise<void>;
+};
+
 /** Exact retirement retains the original checkout, not merely its captured bytes. */
 export type RemoveManagedWorktreeResult = Omit<SchemaContract<WorktreesRemoveResult>, "cleanup">;
 

@@ -24,7 +24,9 @@
   gap: 6px;
   min-width: 0;
 }
-.agent-chat__composer-notices:not(:has(> *)) {
+.agent-chat__composer-notices:not(
+  :has(> :not(openclaw-chat-child-attention), > openclaw-chat-child-attention > *)
+) {
   display: none;
 }
 
@@ -59,7 +61,8 @@
       openclaw-plugin-contributions,
       openclaw-chat-outbox-recovery
     ),
-    > .agent-chat__composer-notices > *,
+    > .agent-chat__composer-notices > :not(openclaw-chat-child-attention),
+    > .agent-chat__composer-notices > openclaw-chat-child-attention > *,
     > openclaw-plugin-contributions > *,
     > openclaw-chat-outbox-recovery > *
   )

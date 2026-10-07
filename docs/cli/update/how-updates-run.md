@@ -216,9 +216,18 @@ with a verified backup and the managed Gateway stopped during replacement.
 
 Interrupting a fresh local update before activation records a failed,
 `interrupted` history entry while its installation owner is still held.
-An interrupted update is not a successful update or a verified rollback.
+A pre-activation interruption is not a successful update or a verified rollback.
 Unresolved effects remain visible in the update report. Unsupported pending
 checkpoint records block further mutable update work and remain unchanged.
+
+During activation or verification, SIGINT, SIGTERM, and SIGHUP stop forward work
+and retain the updater until its existing recovery owner has attempted to restore
+the Gateway and write the failure report. Recovery uses the update's existing
+budget and package/state safety checks. The report names the interrupted phase
+and signal; use `openclaw update status` and, if recovery remains pending,
+`openclaw update repair`. This requires the fix in the installed updater; a new
+candidate cannot change an older driver's signal handling. SIGKILL cannot run
+this cleanup and still requires explicit recovery.
 
 After the target Doctor migrates shared state, the installed target runtime owns
 database validation, service finalization, and update-history writes, including

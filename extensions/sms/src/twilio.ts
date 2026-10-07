@@ -88,24 +88,22 @@ function parseTwilioSuccessPayload(text: string): TwilioMessagePayload {
   if (!text.trim()) {
     return {};
   }
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(text);
-    if (!parsed || typeof parsed !== "object") {
-      throw new Error("Twilio SMS send returned malformed JSON.");
-    }
-    const record = parsed as Record<string, unknown>;
-    return {
-      sid: typeof record.sid === "string" ? record.sid : undefined,
-      to: typeof record.to === "string" ? record.to : undefined,
-      from: typeof record.from === "string" ? record.from : undefined,
-      status: typeof record.status === "string" ? record.status : undefined,
-    };
+    parsed = JSON.parse(text);
   } catch (cause) {
-    if (cause instanceof Error && cause.message === "Twilio SMS send returned malformed JSON.") {
-      throw cause;
-    }
     throw new Error("Twilio SMS send returned malformed JSON.", { cause });
   }
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Twilio SMS send returned malformed JSON.");
+  }
+  const record = parsed as Record<string, unknown>;
+  return {
+    sid: typeof record.sid === "string" ? record.sid : undefined,
+    to: typeof record.to === "string" ? record.to : undefined,
+    from: typeof record.from === "string" ? record.from : undefined,
+    status: typeof record.status === "string" ? record.status : undefined,
+  };
 }
 
 function requestSearch(req: IncomingMessage): string {

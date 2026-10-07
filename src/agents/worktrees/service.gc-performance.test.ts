@@ -17,7 +17,7 @@ import {
   useManagedWorktreeTestRepository,
   materializeManagedWorktreeFixtures,
 } from "./service.test-support.js";
-import { hasTemplates } from "./template-registry.js";
+import { hasTemplatesAsync } from "./template-registry-async.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -232,7 +232,7 @@ it("protects a sweep of live leases without writer admission or checkout inspect
     const id = `leased-${index}`;
     await addLeasedWorktree(env, root, id);
   }
-  hasTemplates(env);
+  await hasTemplatesAsync(env);
   const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
   const lists = vi.spyOn(registry, "listRegistryWorktrees");
   const reads = vi.spyOn(stateWorker, "executeOpenClawStateWorker");

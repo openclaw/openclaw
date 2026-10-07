@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeTelegramLookupTarget, parseTelegramTarget } from "./targets.js";
 
 const TELEGRAM_PREFIX_RE = /^(telegram|tg):/i;
@@ -6,10 +5,6 @@ const TELEGRAM_PREFIX_RE = /^(telegram|tg):/i;
 function normalizeTelegramTargetBody(raw: string): string | undefined {
   const trimmed = raw.trim();
   const prefixStripped = trimmed.replace(TELEGRAM_PREFIX_RE, "").trim();
-  if (!prefixStripped) {
-    return undefined;
-  }
-
   const identity = resolveTelegramTargetIdentity(trimmed);
   if (!identity) {
     return undefined;
@@ -37,7 +32,7 @@ function resolveTelegramTargetIdentity(raw: string) {
     return undefined;
   }
   return {
-    chatId: normalizeLowercaseStringOrEmpty(chatId),
+    chatId: chatId.toLowerCase(),
     messageThreadId: parsed.messageThreadId,
     directMessagesTopicId: parsed.directMessagesTopicId,
   };

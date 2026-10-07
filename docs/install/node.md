@@ -160,6 +160,13 @@ fnm use 26
 
 ## Troubleshooting
 
+### Homebrew upgrades while the Gateway is running
+
+If Homebrew removes the running Gateway's Node executable, command relays and
+the spawn broker use the formula's available stable Homebrew path for new launches.
+They keep using the original executable while it exists. Restart the Gateway
+after upgrading Node to move the Gateway itself onto the new runtime.
+
 ### `openclaw: command not found`
 
 This almost always means npm's global bin directory isn't on your PATH.

@@ -51,7 +51,6 @@ const APPROX_RENDERED_CHARS_PER_TOKEN = 4;
 // Codex app-server validates the summed v2 turn/start text input against
 // codex-rs/protocol/src/user_input.rs::MAX_USER_INPUT_TEXT_CHARS.
 export const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
-/** Default token reserve kept out of rendered context-engine prompt text. */
 const DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS = 20_000;
 const MIN_PROMPT_BUDGET_RATIO = 0.5;
 const MIN_PROMPT_BUDGET_TOKENS = 8_000;
@@ -111,7 +110,6 @@ export function isCodexDurableCustomMessage(message: AgentMessage): boolean {
   );
 }
 
-/** Projects assembled OpenClaw context-engine messages into Codex prompt inputs. */
 export async function projectContextEngineAssemblyForCodex(params: {
   assembledMessages: AgentMessage[];
   prompt: string;
@@ -164,7 +162,6 @@ export async function projectContextEngineAssemblyForCodex(params: {
   };
 }
 
-/** Resolves rendered context size from a token budget and reserve. */
 export function resolveCodexContextEngineProjectionMaxChars(params: {
   contextTokenBudget?: number;
   reserveTokens?: number;
@@ -194,13 +191,11 @@ const CONTINUITY_MAX_CHARS_PER_TOKEN = CONTINUITY_EMPIRICAL_CHARS_PER_TOKEN;
 // dominated by developer-instruction and tool overhead in the token count.
 const CONTINUITY_CALIBRATION_MIN_PROMPT_CHARS = 50_000;
 
-/** Observed chars-vs-tokens sample from a completed Codex turn. */
 type CodexContinuityCalibration = {
   promptChars: number;
   inputTokens: number;
 };
 
-/** Builds a calibration sample from a completed turn, or undefined if unusable. */
 export function buildCodexContinuityCalibration(params: {
   promptChars: number;
   inputTokens: number;
@@ -237,7 +232,6 @@ function resolveContinuityCharsPerToken(
   );
 }
 
-/** Resolves rendered context size for no-engine continuity projections. */
 export function resolveCodexContinuityProjectionMaxChars(params: {
   contextTokenBudget?: number;
   calibration?: CodexContinuityCalibration;
@@ -258,7 +252,6 @@ export function resolveCodexContinuityProjectionMaxChars(params: {
   );
 }
 
-/** Fits projected context prompts under Codex app-server turn/start text limits. */
 export function fitCodexProjectedContextForTurnStart(params: {
   promptText: string;
   contextRange?: CodexProjectedContextRange;

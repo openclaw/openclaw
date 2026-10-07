@@ -67,11 +67,9 @@ function beginFeishuCardActionToken(params: {
     return false;
   }
   const key = `${params.accountId}:${normalizedToken}`;
-  const existing = processedCardActions.get(key);
-  if (existing && isFutureDateTimestampMs(existing.expiresAt, { nowMs: now })) {
+  if (processedCardActions.has(key)) {
     return false;
   }
-  processedCardActions.delete(key);
   const expiresAt = resolveExpiresAtMsFromDurationMs(FEISHU_CARD_ACTION_TOKEN_TTL_MS, {
     nowMs: now,
   });

@@ -150,3 +150,211 @@ describe("Fireworks manifest provider alias", () => {
     },
   );
 });
+
+describe("StepFun manifest provider aliases", () => {
+  const modelId = "step-3.7-flash";
+  const providerBaseUrl = "https://stepfun-proxy.example/v1";
+  const modelBaseUrl = "https://stepfun-proxy.example/model";
+
+  beforeEach(() => {
+    const rootDir = path.dirname(
+      resolveBundledPluginPublicModulePath({
+        pluginId: "stepfun",
+        artifactBasename: "openclaw.plugin.json",
+      }),
+    );
+    const loaded = loadPluginManifest(rootDir);
+    if (!loaded.ok) {
+      throw new Error(loaded.error);
+    }
+    const snapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ ...loaded.manifest, origin: "bundled", rootDir }],
+    });
+    manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
+    manifestMocks.loadPluginManifestRegistryCore.mockReturnValue(snapshot.manifestRegistry);
+  });
+
+  function resolveStepfunModel(params: {
+    catalogProvider: "stepfun" | "stepfun-plan";
+    provider: string;
+    cfg?: OpenClawConfig;
+  }) {
+    const catalogModel = resolveBundledStaticCatalogModel({
+      provider: params.catalogProvider,
+      modelId,
+      includeRuntimeDiscovery: true,
+    });
+    if (!catalogModel) {
+      throw new Error(`Missing StepFun catalog model for ${params.catalogProvider}`);
+    }
+    return resolveModelWithRegistry({
+      provider: params.provider,
+      modelId,
+      cfg: params.cfg,
+      modelRegistry: {
+        getAll: () => [catalogModel],
+        getAvailable: () => [],
+        hasConfiguredAuth: () => false,
+        find: (candidateProvider, candidateId) =>
+          candidateProvider === catalogModel.provider && candidateId === catalogModel.id
+            ? catalogModel
+            : undefined,
+      },
+      runtimeHooks: resolveRuntimeHooks({ skipProviderRuntimeHooks: true }),
+      authProfileMode: "api_key",
+    });
+  }
+
+  it("finds models.dev alias owners before runtime loading and resolves canonical catalog models", async () => {
+    expect(resolveOwningPluginIdsForProviderRef({ provider: "stepfun-ai" })).toEqual(["stepfun"]);
+    expect(resolveOwningPluginIdsForProviderRef({ provider: "stepfun-ai-step-plan" })).toEqual([
+      "stepfun",
+    ]);
+
+    const standard = await resolveStepfunModel({
+      catalogProvider: "stepfun",
+      provider: "stepfun",
+    });
+    expect(standard).toMatchObject({
+      provider: "stepfun",
+      id: modelId,
+      api: "openai-completions",
+      baseUrl: "https://api.stepfun.ai/v1",
+    });
+    expect(
+      await resolveStepfunModel({
+        catalogProvider: "stepfun",
+        provider: "stepfun-ai",
+      }),
+    ).toEqual(standard);
+
+    const plan = await resolveStepfunModel({
+      catalogProvider: "stepfun-plan",
+      provider: "stepfun-plan",
+    });
+    expect(plan).toMatchObject({
+      provider: "stepfun-plan",
+      id: modelId,
+      api: "openai-completions",
+      baseUrl: "https://api.stepfun.ai/step_plan/v1",
+    });
+    expect(
+      await resolveStepfunModel({
+        catalogProvider: "stepfun-plan",
+        provider: "stepfun-ai-step-plan",
+      }),
+    ).toEqual(plan);
+  });
+
+  it.each([
+    ["omitted API", undefined, undefined, undefined, "openai-completions"],
+    ["provider API", "openai-responses", undefined, undefined, "openai-responses"],
+    [
+      "model API and URL",
+      "openai-responses",
+      "anthropic-messages",
+      modelBaseUrl,
+      "anthropic-messages",
+    ],
+  ] as const)(
+    "preserves explicit stepfun-ai alias configuration with %s",
+    async (_name, providerApi, modelApi, configuredModelBaseUrl, expectedApi) => {
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            "stepfun-ai": {
+              baseUrl: providerBaseUrl,
+              api: providerApi,
+              headers: { "X-StepFun-Route": "custom" },
+              models: [
+                {
+                  id: modelId,
+                  name: "Configured Step",
+                  api: modelApi,
+                  baseUrl: configuredModelBaseUrl,
+                  reasoning: false,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 4096,
+                  maxTokens: 512,
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      expect(
+        await resolveStepfunModel({
+          catalogProvider: "stepfun",
+          provider: "stepfun-ai",
+          cfg,
+        }),
+      ).toMatchObject({
+        provider: "stepfun-ai",
+        id: modelId,
+        api: expectedApi,
+        baseUrl: configuredModelBaseUrl ?? providerBaseUrl,
+        headers: { "X-StepFun-Route": "custom" },
+        reasoning: false,
+        input: ["text", "image"],
+        contextWindow: 4096,
+        maxTokens: 512,
+      });
+    },
+  );
+});
+
+describe("Together manifest provider alias", () => {
+  const modelId = "moonshotai/Kimi-K2.6";
+
+  beforeEach(() => {
+    const rootDir = path.dirname(
+      resolveBundledPluginPublicModulePath({
+        pluginId: "together",
+        artifactBasename: "openclaw.plugin.json",
+      }),
+    );
+    const loaded = loadPluginManifest(rootDir);
+    if (!loaded.ok) {
+      throw new Error(loaded.error);
+    }
+    const snapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ ...loaded.manifest, origin: "bundled", rootDir }],
+    });
+    manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
+    manifestMocks.loadPluginManifestRegistryCore.mockReturnValue(snapshot.manifestRegistry);
+  });
+
+  it("owns togetherai before runtime load and resolves the canonical catalog model", async () => {
+    expect(resolveOwningPluginIdsForProviderRef({ provider: "togetherai" })).toEqual(["together"]);
+    const catalogModel = resolveBundledStaticCatalogModel({
+      provider: "together",
+      modelId,
+      includeRuntimeDiscovery: true,
+    });
+    expect(catalogModel).toMatchObject({
+      provider: "together",
+      id: modelId,
+      api: "openai-completions",
+      baseUrl: "https://api.together.xyz/v1",
+    });
+    const resolve = (provider: string) =>
+      resolveModelWithRegistry({
+        provider,
+        modelId,
+        modelRegistry: {
+          getAll: () => [catalogModel!],
+          getAvailable: () => [],
+          hasConfiguredAuth: () => false,
+          find: (candidateProvider, candidateId) =>
+            candidateProvider === catalogModel!.provider && candidateId === catalogModel!.id
+              ? catalogModel
+              : undefined,
+        },
+        runtimeHooks: resolveRuntimeHooks({ skipProviderRuntimeHooks: true }),
+        authProfileMode: "api_key",
+      });
+    expect(await resolve("togetherai")).toEqual(await resolve("together"));
+  });
+});

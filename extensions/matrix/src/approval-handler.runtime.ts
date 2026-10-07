@@ -166,13 +166,12 @@ async function prepareTarget(
       accountId: resolved.accountId,
     });
     const repairDirectRooms = resolved.context.deps?.repairDirectRooms ?? repairMatrixDirectRooms;
-    const repaired = await retryMatrixApprovalDelivery(
-      async () =>
-        await repairDirectRooms({
-          client: resolved.context.client,
-          remoteUserId: target.id,
-          encrypted: accountConfig.encryption === true,
-        }),
+    const repaired = await retryMatrixApprovalDelivery(() =>
+      repairDirectRooms({
+        client: resolved.context.client,
+        remoteUserId: target.id,
+        encrypted: accountConfig.encryption === true,
+      }),
     );
     if (!repaired.activeRoomId) {
       return null;
@@ -424,8 +423,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       let result;
       try {
         result = await retryMatrixApprovalDelivery(
-          async () =>
-            await sendSingleTextMessage(preparedTarget.to, pendingPayload.text, sendOptions),
+          () => sendSingleTextMessage(preparedTarget.to, pendingPayload.text, sendOptions),
           { shouldRetry: (error) => !isSingleMatrixMessageLimitError(error) },
         );
       } catch (error) {
@@ -433,8 +431,8 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
           throw error;
         }
         const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageMatrix;
-        result = await retryMatrixApprovalDelivery(
-          async () => await sendMessage(preparedTarget.to, pendingPayload.text, sendOptions),
+        result = await retryMatrixApprovalDelivery(() =>
+          sendMessage(preparedTarget.to, pendingPayload.text, sendOptions),
         );
       }
       const receiptMessageIds = listMessageReceiptPlatformIds(result.receipt);

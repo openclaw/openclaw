@@ -276,10 +276,8 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
       i = readRawTextBounds(html, token.name, i).end;
       continue;
     }
-    if (BLOCK_BREAK_TAGS.has(token.name)) {
-      if (closeOpenAnchorWithText(stack, state)) {
-        appendText(stack, " ");
-      }
+    if (BLOCK_BREAK_TAGS.has(token.name) && closeOpenAnchorWithText(stack, state)) {
+      appendText(stack, " ");
     }
     if (token.name === "br" || token.name === "hr") {
       appendText(stack, "\n");

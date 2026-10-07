@@ -26,10 +26,10 @@ function requireEvidence(condition, message) {
   }
 }
 
-function requireRestSupport(condition, message) {
+function requireRestSupport(condition, message, code = "OPENCLAW_REST_UNSUPPORTED") {
   if (!condition) {
     const error = new Error(`REST merge: ${message}.`);
-    error.code = "OPENCLAW_REST_UNSUPPORTED";
+    error.code = code;
     throw error;
   }
 }
@@ -194,6 +194,13 @@ function readPullRequest(repo, authority, pr) {
   requireRestSupport(
     record.state !== "open" || (!record.merged && record.auto_merge === null),
     "open PR already has an auto-merge request or inconsistent lifecycle",
+  );
+  // API 2026-03-10 omits the landed commit from PR resources. Use the complete
+  // GraphQL observation; the async result alone cannot replace the PR receipt.
+  requireRestSupport(
+    !record.merged || record.state !== "closed" || Object.hasOwn(record, "merge_commit_sha"),
+    "merged PR commit requires GraphQL observation",
+    "OPENCLAW_REST_MERGED_RECEIPT_UNAVAILABLE",
   );
   requireEvidence(
     !record.merged || (record.state === "closed" && OID.test(record.merge_commit_sha ?? "")),
@@ -806,8 +813,12 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
         : String(error.stderr || error.message).trim(),
     );
     if (
-      ["observe", "observe-admission", "checks", "preview"].includes(process.argv[2]) &&
-      (error.coreQuotaExhausted || error.code === "OPENCLAW_REST_UNSUPPORTED")
+      ["observe", "observe-admission", "observe-prior-ci", "checks", "preview"].includes(
+        process.argv[2],
+      ) &&
+      (error.code === "OPENCLAW_REST_MERGED_RECEIPT_UNAVAILABLE" ||
+        (process.argv[2] !== "observe-prior-ci" &&
+          (error.coreQuotaExhausted || error.code === "OPENCLAW_REST_UNSUPPORTED")))
     ) {
       process.stdout.write('{"restUnavailable":true}\n');
     } else {

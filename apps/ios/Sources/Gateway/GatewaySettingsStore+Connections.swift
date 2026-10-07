@@ -15,13 +15,6 @@ extension GatewaySettingsStore {
             guard let activeStableID else { return nil }
             return self.entries.first { GatewayStableIdentifier.matches($0.stableID, activeStableID) }
         }
-
-        private enum CodingKeys: String, CodingKey {
-            case version
-            case activeStableID
-            case connectedStableIDs
-            case entries
-        }
     }
 
     @discardableResult

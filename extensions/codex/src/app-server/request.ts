@@ -138,7 +138,6 @@ type CodexAppServerJsonClientOptions = Pick<
   controlObservation?: CodexControlRequestObservation;
 };
 
-/** Sends a typed Codex app-server request and returns the method-specific response shape. */
 export async function requestCodexAppServerJson<M extends CodexAppServerRequestMethod>(
   params: CodexAppServerJsonClientOptions & {
     method: M;
