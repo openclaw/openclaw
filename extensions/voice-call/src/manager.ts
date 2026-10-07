@@ -255,6 +255,7 @@ export class CallManager {
           status.status === "pending"
         ) {
           metadata[key] = {
+            ...status,
             status: "failed",
             error: "interrupted by restart",
             at: Date.now(),
