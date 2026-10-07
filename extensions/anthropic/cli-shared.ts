@@ -6,7 +6,9 @@ import type {
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
 import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
+  asOptionalRecord,
   normalizeOptionalLowercaseString,
   normalizeSortedUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -21,6 +23,9 @@ const CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS_ARG =
 // installations on their established argv when the startup probe cannot prove it.
 const CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS_MINIMUM_VERSION = "2.1.98";
 const CLAUDE_SETTINGS_ARG = "--settings";
+// Replaces Claude Code's native system prompt with the prompt file's contents
+// (print mode). The backend default appends via --append-system-prompt-file.
+const CLAUDE_SYSTEM_PROMPT_FILE_ARG = "--system-prompt-file";
 const CLAUDE_EFFORT_ARG = "--effort";
 const CLAUDE_BARE_ARG = "--bare";
 const CLAUDE_SAFE_MODE_ARG = "--safe-mode";
@@ -40,6 +45,21 @@ const CLAUDE_RESTRICTED_SETTINGS =
 
 export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === CLAUDE_CLI_BACKEND_ID;
+}
+
+/**
+ * Opt-in prompt ownership for ordinary claude-cli runs. When
+ * `plugins.entries.anthropic.config.claudeCli.replaceNativePrompt` is true,
+ * the backend passes OpenClaw's system prompt via `--system-prompt-file` so it
+ * replaces Claude Code's native prompt instead of appending to it. Off by
+ * default: existing runs keep the native prompt with OpenClaw's instructions
+ * appended.
+ */
+export function replacesClaudeNativePrompt(
+  config: CliBackendNormalizeConfigContext["config"],
+): boolean {
+  const claudeCli = asOptionalRecord(resolvePluginConfigObject(config, "anthropic")?.claudeCli);
+  return claudeCli?.replaceNativePrompt === true;
 }
 
 /** Map OpenClaw's effective context budget to Claude Code's native compactor. */
@@ -453,7 +473,13 @@ export function resolveClaudeCliExecutionArgs(
   const resolvedArgs = context.toolAvailability
     ? resolveClaudeCliRestrictedExecutionArgs(executionArgs, context.toolAvailability)
     : executionArgs;
-  return options.excludeDynamicSystemPromptSections && context.executionMode !== "side-question"
+  // The flag trims the native preset's dynamic sections; a replaced prompt has
+  // no native sections to trim, so it is deliberately skipped there.
+  const trimDynamicSections =
+    options.excludeDynamicSystemPromptSections &&
+    context.executionMode !== "side-question" &&
+    !replacesClaudeNativePrompt(context.config);
+  return trimDynamicSections
     ? [...resolvedArgs, CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS_ARG]
     : resolvedArgs;
 }
@@ -465,7 +491,7 @@ export function normalizeClaudeBackendConfig(
   const output = config.output ?? "jsonl";
   const input = config.input ?? "stdin";
   const permissionMode = isOpenClawRequestedYolo(context) ? "bypassPermissions" : undefined;
-  return {
+  const normalized: CliBackendConfig = {
     ...config,
     args: normalizeClaudeBackendArgs(config.args, permissionMode),
     resumeArgs: normalizeClaudeBackendArgs(config.resumeArgs, permissionMode),
@@ -474,4 +500,15 @@ export function normalizeClaudeBackendConfig(
       config.liveSession ?? (output === "jsonl" && input === "stdin" ? "claude-stdio" : undefined),
     input,
   };
+  // Opt-in prompt ownership: pass OpenClaw's system prompt via
+  // --system-prompt-file so it replaces Claude Code's native prompt instead of
+  // appending to it. Defaults keep the established append behavior.
+  if (replacesClaudeNativePrompt(context?.config)) {
+    return {
+      ...normalized,
+      systemPromptFileArg: CLAUDE_SYSTEM_PROMPT_FILE_ARG,
+      systemPromptMode: "replace",
+    };
+  }
+  return normalized;
 }
