@@ -9,7 +9,6 @@ import type {
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
-  resolveCodexPluginsPolicy,
   type CodexPluginMarketplaceName,
   type ResolvedCodexPluginPolicy,
   type ResolvedCodexPluginsPolicy,
@@ -38,7 +37,6 @@ export type CodexPluginMarketplaceRef = {
 };
 
 type CodexPluginInventoryDiagnosticCode =
-  | "disabled"
   | "marketplace_missing"
   | "plugin_missing"
   | "plugin_disabled"
@@ -79,8 +77,7 @@ export type CodexPluginInventory = {
 };
 
 type ReadCodexPluginInventoryParams = {
-  pluginConfig?: unknown;
-  policy?: ResolvedCodexPluginsPolicy;
+  policy: ResolvedCodexPluginsPolicy;
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
@@ -94,22 +91,9 @@ type ReadCodexPluginInventoryParams = {
 export async function readCodexPluginInventory(
   params: ReadCodexPluginInventoryParams,
 ): Promise<CodexPluginInventory> {
-  const policy = params.policy ?? resolveCodexPluginsPolicy(params.pluginConfig);
-  if (!policy.enabled) {
-    return {
-      policy,
-      records: [],
-      diagnostics: [
-        {
-          code: "disabled",
-          message: "Native Codex plugin support is disabled.",
-        },
-      ],
-    };
-  }
-
+  const { policy } = params;
   const appInventory = readCachedAppInventory(params);
-  const installedPlugins = await readInstalledCodexPluginMetadata({ ...params, policy });
+  const installedPlugins = await readInstalledCodexPluginMetadata(params);
   const pluginCatalogs = new Map<string | undefined, v2.PluginListResponse>();
 
   const diagnostics: CodexPluginInventoryDiagnostic[] = [];
@@ -329,7 +313,7 @@ export async function listCodexPluginMetadata(
 }
 
 async function readInstalledCodexPluginMetadata(
-  params: ReadCodexPluginInventoryParams & { policy: ResolvedCodexPluginsPolicy },
+  params: ReadCodexPluginInventoryParams,
 ): Promise<v2.PluginInstalledResponse> {
   const requestParams = (
     params.configCwd ? { cwds: [params.configCwd] } : {}

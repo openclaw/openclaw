@@ -104,52 +104,31 @@ export function resolveCodexDynamicToolsLoadingForRuntime(
 export function filterCodexDynamicTools<T extends { name: string }>(
   tools: T[],
   config: Pick<CodexPluginConfig, "codexDynamicToolsExclude">,
-  env: CodexDynamicToolProfileEnv = process.env,
+  options: {
+    env?: CodexDynamicToolProfileEnv;
+    disabledNativeSurface?: { preserveShell: boolean };
+  } = {},
 ): T[] {
-  return filterCodexDynamicToolsWithOptions(tools, config, env, {
-    preserveOpenClawReplacements: false,
-    preserveOpenClawShell: false,
-  });
-}
-
-/** Keeps OpenClaw coding tools that replace a disabled Codex native surface. */
-export function filterCodexDynamicToolsForDisabledNativeSurface<T extends { name: string }>(
-  tools: T[],
-  config: Pick<CodexPluginConfig, "codexDynamicToolsExclude">,
-  options: { preserveShell: boolean },
-  env: CodexDynamicToolProfileEnv = process.env,
-): T[] {
-  return filterCodexDynamicToolsWithOptions(tools, config, env, {
-    preserveOpenClawReplacements: true,
-    preserveOpenClawShell: options.preserveShell,
-  });
-}
-
-function filterCodexDynamicToolsWithOptions<T extends { name: string }>(
-  tools: T[],
-  config: Pick<CodexPluginConfig, "codexDynamicToolsExclude">,
-  env: CodexDynamicToolProfileEnv,
-  options: { preserveOpenClawReplacements: boolean; preserveOpenClawShell: boolean },
-): T[] {
+  const { disabledNativeSurface } = options;
   const excludes = new Set<string>();
-  if (!options.preserveOpenClawReplacements) {
+  if (!disabledNativeSurface) {
     for (const name of CODEX_NATIVE_GOAL_TOOL_EXCLUDES) {
       excludes.add(name);
     }
   }
-  if (isForcedPrivateQaCodexRuntime(env)) {
+  if (isForcedPrivateQaCodexRuntime(options.env ?? process.env)) {
     // Native apply_patch is registered first; advertising a second handler
     // makes Codex reject the duplicate before either QA patch can execute.
     excludes.add("apply_patch");
   } else {
     for (const name of CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES) {
-      if (
-        options.preserveOpenClawReplacements &&
-        CODEX_APP_SERVER_OWNED_REPLACEABLE_TOOL_EXCLUDES.has(name)
-      ) {
+      if (disabledNativeSurface && CODEX_APP_SERVER_OWNED_REPLACEABLE_TOOL_EXCLUDES.has(name)) {
         continue;
       }
-      if (options.preserveOpenClawShell && CODEX_APP_SERVER_OWNED_SHELL_TOOL_EXCLUDES.has(name)) {
+      if (
+        disabledNativeSurface?.preserveShell &&
+        CODEX_APP_SERVER_OWNED_SHELL_TOOL_EXCLUDES.has(name)
+      ) {
         continue;
       }
       excludes.add(name);

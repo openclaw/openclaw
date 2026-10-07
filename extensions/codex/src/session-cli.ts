@@ -226,68 +226,51 @@ function readThreadId(value: string): string {
   return threadId;
 }
 
-async function continueCodexSession(
-  threadIdValue: string,
-  options: CodexActionCliOptions,
-): Promise<void> {
-  const threadId = readThreadId(threadIdValue);
-  const agentId = requestedAgentId(options);
-  const hostId = options.host?.trim() || CODEX_LOCAL_SESSION_HOST_ID;
-  const raw = await callGatewayFromCli(
-    "sessions.catalog.continue",
-    gatewayOptions(options),
-    {
-      catalogId: "codex",
-      hostId,
-      threadId,
-      ...(agentId ? { agentId } : {}),
-    },
-    { mode: "cli", scopes: ["operator.write"] },
-  );
-  if (!isRecord(raw) || typeof raw.sessionKey !== "string" || !raw.sessionKey.trim()) {
-    throw new Error("Codex session continue returned an invalid session key");
-  }
-  const result = { sessionKey: raw.sessionKey };
-  if (options.json) {
-    writeJson(result);
-    return;
-  }
-  writeLine(`OpenClaw session: ${singleLineTerminalText(result.sessionKey)}`);
-}
-
-async function archiveCodexSession(
+async function runCodexSessionAction(
+  action: "continue" | "archive",
   threadIdValue: string,
   options: CodexArchiveCliOptions,
 ): Promise<void> {
   const threadId = readThreadId(threadIdValue);
   const agentId = requestedAgentId(options);
   const hostId = options.host?.trim() || CODEX_LOCAL_SESSION_HOST_ID;
-  if (options.confirmNoOtherRunner !== true) {
+  if (action === "archive" && options.confirmNoOtherRunner !== true) {
     throw new Error(
       "--confirm-no-other-runner is required because Codex client and runner activity is process-local",
     );
   }
   const raw = await callGatewayFromCli(
-    "sessions.catalog.archive",
+    `sessions.catalog.${action}`,
     gatewayOptions(options),
     {
       catalogId: "codex",
       hostId,
       threadId,
       ...(agentId ? { agentId } : {}),
-      confirmNoOtherRunner: true,
+      ...(action === "archive" ? { confirmNoOtherRunner: true } : {}),
     },
     { mode: "cli", scopes: ["operator.write"] },
   );
-  if (!isRecord(raw) || raw.ok !== true) {
+  let result: { sessionKey: string } | { ok: true };
+  if (action === "continue") {
+    if (!isRecord(raw) || typeof raw.sessionKey !== "string" || !raw.sessionKey.trim()) {
+      throw new Error("Codex session continue returned an invalid session key");
+    }
+    result = { sessionKey: raw.sessionKey };
+  } else if (!isRecord(raw) || raw.ok !== true) {
     throw new Error("Codex session archive returned an invalid result");
+  } else {
+    result = { ok: true };
   }
-  const result = { ok: true as const };
   if (options.json) {
     writeJson(result);
     return;
   }
-  writeLine(`Archived Codex thread ${singleLineTerminalText(threadId)}.`);
+  writeLine(
+    "sessionKey" in result
+      ? `OpenClaw session: ${singleLineTerminalText(result.sessionKey)}`
+      : `Archived Codex thread ${singleLineTerminalText(threadId)}.`,
+  );
 }
 
 /** Registers the plugin-owned Codex session supervision CLI. */
@@ -316,7 +299,9 @@ export function registerCodexSessionCli(program: Command): void {
       .option("--agent <id>", "Agent id that owns the Codex session")
       .option("--host <id>", "Stable local host id from codex sessions")
       .option("--json", "Print the structured response", false),
-  ).action(continueCodexSession);
+  ).action((threadId: string, options: CodexActionCliOptions) =>
+    runCodexSessionAction("continue", threadId, options),
+  );
 
   addGatewayClientOptions(
     codex
@@ -330,5 +315,7 @@ export function registerCodexSessionCli(program: Command): void {
         false,
       )
       .option("--json", "Print the structured response", false),
-  ).action(archiveCodexSession);
+  ).action((threadId: string, options: CodexArchiveCliOptions) =>
+    runCodexSessionAction("archive", threadId, options),
+  );
 }

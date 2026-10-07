@@ -256,11 +256,8 @@ export function codexConfigEnablesNativeComputerUse(
   > & { codexHome?: string; pluginNames: readonly string[] },
 ): boolean {
   const configToml = readCodexAppServerConfigToml(params);
-  if (configToml === false) {
-    return true;
-  }
-  if (configToml === undefined) {
-    return false;
+  if (typeof configToml !== "string") {
+    return configToml === false;
   }
   let parsedConfig: TomlTable;
   try {
@@ -276,24 +273,13 @@ export function codexConfigEnablesNativeComputerUse(
   if (!plugins) {
     return true;
   }
-  for (const [pluginId, rawPluginConfig] of Object.entries(plugins)) {
-    const matchesManagedIdentity = params.pluginNames.some(
-      (pluginName) => pluginId === pluginName || pluginId.startsWith(`${pluginName}@`),
-    );
-    if (!matchesManagedIdentity) {
-      continue;
-    }
-    const pluginConfig = readRecord(rawPluginConfig);
-    if (!pluginConfig) {
-      return true;
-    }
-    if (pluginConfig.enabled === false) {
-      continue;
-    }
-    // Codex defaults omitted enablement to true; malformed state stays conservative.
-    return true;
-  }
-  return false;
+  // Codex defaults omitted enablement to true; malformed state stays conservative.
+  return Object.entries(plugins).some(
+    ([pluginId, pluginConfig]) =>
+      params.pluginNames.some(
+        (pluginName) => pluginId === pluginName || pluginId.startsWith(`${pluginName}@`),
+      ) && readRecord(pluginConfig)?.enabled !== false,
+  );
 }
 
 function resolveCodexAppServerConfigPath(
@@ -322,20 +308,13 @@ function readConfiguredOpenAIProvidersForModelBackedReview(
   resolveAuthProviderId: typeof resolveProviderIdForAuth,
 ): Array<Record<string, unknown>> {
   const providerRecords = readRecord(readRecord(readRecord(config)?.models)?.providers);
-  if (!providerRecords) {
-    return [];
-  }
-  const openAIProviders: Array<Record<string, unknown>> = [];
-  for (const [providerId, providerConfig] of Object.entries(providerRecords)) {
+  return Object.entries(providerRecords ?? {}).flatMap(([providerId, providerConfig]) => {
     if (resolveAuthProviderId(providerId, { config }) !== "openai") {
-      continue;
+      return [];
     }
     const record = readRecord(providerConfig);
-    if (record) {
-      openAIProviders.push(record);
-    }
-  }
-  return openAIProviders;
+    return record ? [record] : [];
+  });
 }
 
 function configuredOpenAIProviderIsTrustedForModelBackedReview(

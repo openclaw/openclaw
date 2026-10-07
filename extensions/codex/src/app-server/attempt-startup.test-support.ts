@@ -86,13 +86,25 @@ export function createAttemptThreadStarter(
         resolveCodexAppServerRuntimeOptions({ pluginConfig: effectivePluginConfig }),
       pluginConfig: effectivePluginConfig,
       computerUseConfig: resolveCodexComputerUseConfig({ pluginConfig: effectivePluginConfig }),
-      startupAuthProfileId: undefined,
-      startupAuthBindingFingerprint: overrides?.startupAuthBindingFingerprint,
+      clientOptions: {
+        ...(overrides?.startupPreparedAuth
+          ? { preparedAuth: overrides.startupPreparedAuth }
+          : { authProfileId: undefined }),
+        authBindingFingerprint: overrides?.startupAuthBindingFingerprint,
+        authRequirement: undefined,
+        ...(overrides?.runtimeArtifactRequest
+          ? {
+              runtimeArtifactMode: "capture",
+              ...(overrides.runtimeArtifactRequest.expected
+                ? { expectedRuntimeArtifact: overrides.runtimeArtifactRequest.expected }
+                : {}),
+            }
+          : {}),
+      },
       assertNativeModelSelectionCurrent: overrides?.assertNativeModelSelectionCurrent,
       ...(overrides?.runtimeArtifactRequest
         ? { runtimeArtifactRequest: overrides.runtimeArtifactRequest }
         : {}),
-      startupPreparedAuth: overrides?.startupPreparedAuth,
       startupAuthAccountCacheKey: undefined,
       startupEnvApiKeyCacheKey: undefined,
       agentDir: paths.agentDir,

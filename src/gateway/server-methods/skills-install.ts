@@ -109,26 +109,21 @@ export const handleSkillsInstall: GatewayRequestHandler = async ({
         log: context.logGateway,
         beforePersistentApply: assertCommitAllowed,
       });
-      if (!result.ok) {
-        // Install owners return failure envelopes after rollback/lease cleanup. Retain
-        // their original policy refusal instead of flattening it to UNAVAILABLE.
-        assertCommitAllowed?.();
+      if (result.ok) {
+        respond(true, result, undefined);
+        return;
       }
+      // Install owners return failure envelopes after rollback/lease cleanup. Retain
+      // their original policy refusal instead of flattening it to UNAVAILABLE.
+      assertCommitAllowed?.();
       const errorCode =
-        !result.ok && result.errorKind === "invalid-request"
+        result.errorKind === "invalid-request"
           ? ErrorCodes.INVALID_REQUEST
           : ErrorCodes.UNAVAILABLE;
-      const responseResult = result.ok
-        ? result
-        : {
-            ok: false,
-            error: result.error,
-            errorCode,
-          };
       respond(
-        result.ok,
-        responseResult,
-        result.ok ? undefined : errorShape(errorCode, result.error),
+        false,
+        { ok: false, error: result.error, errorCode },
+        errorShape(errorCode, result.error),
       );
     } catch (error) {
       if (!(error instanceof SessionMutationAuthorizationChangedError)) {

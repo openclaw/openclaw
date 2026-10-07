@@ -145,7 +145,6 @@ extensions/codex/src/app-server/run-attempt-tools.ts	1
 extensions/codex/src/app-server/runtime-artifact.ts	1
 extensions/codex/src/app-server/sandbox-exec-server/http.ts	2
 extensions/codex/src/app-server/sandbox-exec-server/json-rpc.ts	3
-extensions/codex/src/app-server/sandbox-exec-server/processes.ts	1
 extensions/codex/src/app-server/scheduled-app-authority.ts	5
 extensions/codex/src/app-server/shared-client.ts	2
 extensions/codex/src/app-server/side-question.ts	2
@@ -170,7 +169,6 @@ extensions/codex/src/session-cli.ts	1
 extensions/codex/src/session-upstream-activity.ts	1
 extensions/codex/src/supervision-tools.ts	1
 extensions/codex/src/web-search-provider.runtime.ts	1
-extensions/codex/src/web-search-provider.ts	1
 extensions/cohere/stream.ts	2
 extensions/comfy/workflow-runtime.ts	2
 extensions/copilot-proxy/index.ts	1
@@ -901,10 +899,9 @@ extensions/telegram/src/bot-handlers.inbound-pipeline.ts	2
 extensions/telegram/src/bot-info-cache.ts	1
 extensions/telegram/src/bot-info.ts	1
 extensions/telegram/src/bot-message-context.body.ts	1
-extensions/telegram/src/bot-message-context.session.ts	2
+extensions/telegram/src/bot-message-context.session.ts	1
 extensions/telegram/src/bot-message-context.ts	2
 extensions/telegram/src/bot-message-dispatch-reply.ts	1
-extensions/telegram/src/bot-message-dispatch-session.ts	1
 extensions/telegram/src/bot-native-command-plugins.ts	1
 extensions/telegram/src/bot/body-helpers.ts	1
 extensions/telegram/src/bot/delivery.replies.ts	1
@@ -915,7 +912,7 @@ extensions/telegram/src/channel-actions.ts	1
 extensions/telegram/src/client-fetch.ts	5
 extensions/telegram/src/doctor-contract.ts	3
 extensions/telegram/src/doctor.ts	10
-extensions/telegram/src/fetch.ts	7
+extensions/telegram/src/fetch.ts	6
 extensions/telegram/src/forum-service-message.ts	1
 extensions/telegram/src/interactive-fallback.ts	1
 extensions/telegram/src/miniapp/command.ts	1
@@ -926,7 +923,6 @@ extensions/telegram/src/outbound-adapter.ts	5
 extensions/telegram/src/outbound-message-context.ts	1
 extensions/telegram/src/poll-answer-context.ts	1
 extensions/telegram/src/polling-lease.ts	1
-extensions/telegram/src/polling-liveness.ts	1
 extensions/telegram/src/probe.ts	3
 extensions/telegram/src/raw-update-log.ts	1
 extensions/telegram/src/reply-parameters.ts	2
@@ -943,7 +939,6 @@ extensions/telegram/src/telegram-ingress-drain-factory.ts	1
 extensions/telegram/src/telegram-ingress-drain.ts	5
 extensions/telegram/src/telegram-ingress-spool.ts	1
 extensions/telegram/src/telegram-ingress-supersede-auth.ts	6
-extensions/telegram/src/telegram-ingress-supersede.ts	7
 extensions/telegram/src/telegram-ingress-worker.runtime.ts	3
 extensions/telegram/src/thread-bindings-store.ts	1
 extensions/telegram/src/topic-name-cache.ts	1
@@ -2089,14 +2084,13 @@ src/gateway/server-methods/migrations.ts	1
 src/gateway/server-methods/models-auth-status.ts	1
 src/gateway/server-methods/nodes.handlers.invoke-result.ts	1
 src/gateway/server-methods/nodes.helpers.ts	1
-src/gateway/server-methods/nodes.invoke-foreground.ts	1
 src/gateway/server-methods/nodes.invoke-talk-events.ts	1
 src/gateway/server-methods/nodes.pending-work.ts	1
 src/gateway/server-methods/nodes.read.ts	2
 src/gateway/server-methods/open-path.ts	1
 src/gateway/server-methods/plugin-approval.ts	1
 src/gateway/server-methods/plugin-host-hooks.ts	1
-src/gateway/server-methods/restart-request.ts	8
+src/gateway/server-methods/restart-request.ts	1
 src/gateway/server-methods/send.ts	1
 src/gateway/server-methods/session-create-initial-turn.ts	2
 src/gateway/server-methods/session-recovery-continuation.ts	1

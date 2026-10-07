@@ -19,10 +19,8 @@ function normalizeTelegramTargetBody(raw: string): string | undefined {
   if (identity.messageThreadId == null) {
     return chatSegment;
   }
-  const threadSuffix = hasTopicSuffix
-    ? `:topic:${identity.messageThreadId}`
-    : `:${identity.messageThreadId}`;
-  return `${chatSegment}${threadSuffix}`;
+  const threadMarker = hasTopicSuffix ? ":topic:" : ":";
+  return `${chatSegment}${threadMarker}${identity.messageThreadId}`;
 }
 
 function resolveTelegramTargetIdentity(raw: string) {

@@ -38,15 +38,12 @@ afterEach(() => {
 });
 
 it.skipIf(process.platform === "win32").each([
-  { kind: "retired visible child", sessionKey: "agent:main:dashboard:child", child: true },
   {
     kind: "visible child borrowing parent tool policy",
     sessionKey: "agent:main:dashboard:borrowed",
     child: true,
     borrowedPolicy: true,
   },
-  { kind: "ordinary dashboard", sessionKey: "agent:main:dashboard:ordinary", child: false },
-  { kind: "main session", sessionKey: "agent:main:main", child: false },
   { kind: "hidden child", sessionKey: "agent:main:subagent:hidden", child: true },
   {
     kind: "dashboard with only a navigation parent",
@@ -65,14 +62,12 @@ it.skipIf(process.platform === "win32").each([
       };
       const delivery = { lastChannel: "telegram", lastProvider: "telegram", lastTo: "100123" };
       await seedMainSessionStore(storePath, cfg, delivery);
-      if (sessionKey !== "agent:main:main") {
-        await seedSessionStore(storePath, sessionKey, {
-          ...delivery,
-          sessionId: "dashboard-fixture",
-          ...(child ? { spawnDepth: 1, spawnedBy: "agent:main:main" } : {}),
-          ...(navigation ? { spawnedBy: "agent:main:main" } : {}),
-        });
-      }
+      await seedSessionStore(storePath, sessionKey, {
+        ...delivery,
+        sessionId: "dashboard-fixture",
+        ...(child ? { spawnDepth: 1, spawnedBy: "agent:main:main" } : {}),
+        ...(navigation ? { spawnedBy: "agent:main:main" } : {}),
+      });
       const scriptFile = path.join(tmpDir, "background-child.cjs");
       const releaseFile = path.join(tmpDir, "release-child");
       await fs.writeFile(

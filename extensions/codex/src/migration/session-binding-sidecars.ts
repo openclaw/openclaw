@@ -146,23 +146,19 @@ async function collectLegacyBindingSources(
 ): Promise<{ sources: LegacyBindingSource[]; surfaces: SessionSurface[] }> {
   const surfaces = await collectSessionSurfaces(params);
   const sources = new Map<string, LegacyBindingSource>();
-  const addSource = async (sidecarPath: string, surface: SessionSurface) => {
-    const canonicalSidecar = await canonicalPathFromExistingAncestor(sidecarPath);
-    const source = sources.get(canonicalSidecar) ?? {
-      sidecarPath: canonicalSidecar,
-      transcriptPath: sidecarPath.slice(0, -LEGACY_BINDING_SUFFIX.length),
-      agentIds: new Set<string>(),
-    };
-    for (const agentId of surface.agentIds) {
-      source.agentIds.add(agentId);
-    }
-    sources.set(canonicalSidecar, source);
-    return source;
-  };
   for (const surface of surfaces) {
     const sidecars = surface.scan ? walkSidecars(surface.root) : iterateIndexedSidecars(surface);
     for await (const sidecarPath of sidecars) {
-      const source = await addSource(sidecarPath, surface);
+      const canonicalSidecar = await canonicalPathFromExistingAncestor(sidecarPath);
+      const source = sources.get(canonicalSidecar) ?? {
+        sidecarPath: canonicalSidecar,
+        transcriptPath: sidecarPath.slice(0, -LEGACY_BINDING_SUFFIX.length),
+        agentIds: new Set<string>(),
+      };
+      for (const agentId of surface.agentIds) {
+        source.agentIds.add(agentId);
+      }
+      sources.set(canonicalSidecar, source);
       if (options.firstOnly) {
         return { sources: [source], surfaces };
       }
@@ -236,7 +232,6 @@ async function collectBindingOwners(
     ),
   );
   const owners = new Map<string, Map<string, LegacyBindingOwner>>();
-  const storePaths = new Set(surfaces.flatMap((surface) => [...surface.storePaths]));
   const storeAgentIds = new Map<string, Set<string>>();
   for (const surface of surfaces) {
     for (const storePath of surface.storePaths) {
@@ -248,7 +243,7 @@ async function collectBindingOwners(
     }
   }
   const failures: string[] = [];
-  for (const storePath of storePaths) {
+  for (const [storePath, agentIds] of storeAgentIds) {
     const canonicalStorePath = await canonicalPathFromExistingAncestor(storePath);
     const index = await readLegacySessionIndex(storePath);
     if ("failure" in index) {
@@ -261,7 +256,7 @@ async function collectBindingOwners(
       const agentId = tryResolveLegacyBindingOwnerAgentId({
         sessionKey,
         config: params.config,
-        storeAgentIds: storeAgentIds.get(storePath),
+        storeAgentIds: agentIds,
       });
       if (!agentId) {
         failures.push(`session index ${storePath} has an ambiguous owner for ${sessionKey}`);
@@ -458,27 +453,30 @@ async function migrateSource(
           bindingId: legacyCodexConversationBindingId(sessionFile),
         }),
       );
-      const normalizeStoredRow = async (
+      const readNormalizedRow = async (
         key: string,
-        current: MigratedBindingRow,
-      ): Promise<{ value?: MigratedBindingRow; warning?: string }> => {
+      ): Promise<MigratedBindingRow | string | undefined> => {
+        const current = await store.lookup(key);
+        if (current === undefined) {
+          return undefined;
+        }
         const parsed = readStoredCodexAppServerBinding(current);
         if (!parsed) {
-          return { warning: `canonical plugin state is invalid at ${key}` };
+          return `canonical plugin state is invalid at ${key}`;
         }
         const normalized = normalizeStoredCodexAppServerBindingFingerprints(parsed);
         if (!normalized) {
-          return { warning: `canonical plugin state is invalid at ${key}` };
+          return `canonical plugin state is invalid at ${key}`;
         }
         if (isDeepStrictEqual(parsed, normalized)) {
-          return { value: parsed };
+          return parsed;
         }
         if (parsed.lease && parsed.lease.expiresAt > Date.now()) {
-          return { warning: `canonical plugin state is leased at ${key}` };
+          return `canonical plugin state is leased at ${key}`;
         }
         const update = store.update;
         if (!update) {
-          return { warning: `canonical plugin state could not be normalized at ${key}` };
+          return `canonical plugin state could not be normalized at ${key}`;
         }
         await update(key, (candidate) => {
           const candidateParsed = readStoredCodexAppServerBinding(candidate);
@@ -489,22 +487,18 @@ async function migrateSource(
         });
         const persisted = readStoredCodexAppServerBinding(await store.lookup(key));
         if (!persisted || !isDeepStrictEqual(persisted, normalized)) {
-          return { warning: `canonical plugin state changed at ${key}` };
+          return `canonical plugin state changed at ${key}`;
         }
         importedKeys++;
-        return { value: normalized };
+        return normalized;
       };
       let currentConversation: MigratedBindingRow | undefined;
       for (const key of conversationKeys) {
-        const current = await store.lookup(key);
-        if (current === undefined) {
-          continue;
+        const current = await readNormalizedRow(key);
+        if (typeof current === "string") {
+          return retain(current);
         }
-        const result = await normalizeStoredRow(key, current);
-        if (result.warning || !result.value) {
-          return retain(result.warning ?? `canonical plugin state is invalid at ${key}`);
-        }
-        currentConversation ??= result.value;
+        currentConversation ??= current;
       }
       const stored = currentConversation ?? baseStored;
       const sessionKey = owner
@@ -535,15 +529,11 @@ async function migrateSource(
               isDeepStrictEqual(parsed.binding, target.binding);
       };
       for (const entry of entries) {
-        const current = await store.lookup(entry.key);
-        if (current === undefined) {
-          continue;
+        const current = await readNormalizedRow(entry.key);
+        if (typeof current === "string") {
+          return retain(current);
         }
-        const result = await normalizeStoredRow(entry.key, current);
-        if (result.warning || !result.value) {
-          return retain(result.warning ?? `canonical plugin state is invalid at ${entry.key}`);
-        }
-        if (!hasExpected(result.value, entry.value)) {
+        if (current && !hasExpected(current, entry.value)) {
           return retain(`canonical plugin state changed at ${entry.key}`);
         }
       }

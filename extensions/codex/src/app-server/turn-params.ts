@@ -42,18 +42,11 @@ function readCodexCurrentSender(params: EmbeddedRunAttemptParams): CodexCurrentS
   const metadata = asOptionalRecord(
     asOptionalRecord(params.userTurnTranscriptRecorder?.message)?.["__openclaw"],
   );
-  const recorded = [
-    normalizeOptionalString(metadata?.["senderId"]),
-    normalizeOptionalString(metadata?.["senderName"]),
-    normalizeOptionalString(metadata?.["senderUsername"]),
-  ] as const;
+  const fields = ["senderId", "senderName", "senderUsername"] as const;
+  const recorded = fields.map((key) => normalizeOptionalString(metadata?.[key]));
   const [id, name, username] = recorded.some(Boolean)
     ? recorded
-    : [
-        normalizeOptionalString(params.senderId),
-        normalizeOptionalString(params.senderName),
-        normalizeOptionalString(params.senderUsername),
-      ];
+    : fields.map((key) => normalizeOptionalString(params[key]));
   if (!id && !name && !username) {
     return undefined;
   }

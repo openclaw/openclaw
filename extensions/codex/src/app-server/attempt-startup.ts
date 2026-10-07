@@ -96,14 +96,11 @@ export async function startCodexAttemptThread(params: {
   appServer: CodexAppServerRuntimeOptions;
   pluginConfig: CodexPluginConfig;
   computerUseConfig: ResolvedCodexComputerUseConfig;
-  startupAuthProfileId: string | null | undefined;
-  startupAuthRequirement?: CodexAppServerClientOptions["authRequirement"];
-  startupAuthBindingFingerprint: string | undefined;
+  clientOptions: CodexAppServerClientOptions;
   assertNativeModelSelectionCurrent?: EmbeddedRunAttemptParams["assertNativeModelSelectionCurrent"];
   runtimeArtifactRequest?: Readonly<{
     expected?: AgentHarnessRuntimeArtifactBinding;
   }>;
-  startupPreparedAuth?: CodexAppServerClientOptions["preparedAuth"];
   startupAuthAccountCacheKey: string | undefined;
   startupEnvApiKeyCacheKey: string | undefined;
   agentDir: string;
@@ -145,11 +142,13 @@ export async function startCodexAttemptThread(params: {
 }) {
   let pluginAppServer = params.appServer;
   const startupRuntimeAuthProfileId =
-    params.startupPreparedAuth?.kind === "profile"
-      ? params.startupPreparedAuth.profileId
-      : (params.startupAuthProfileId ?? undefined);
+    params.clientOptions.preparedAuth?.kind === "profile"
+      ? params.clientOptions.preparedAuth.profileId
+      : (params.clientOptions.authProfileId ?? undefined);
   const startupRuntimeAuthProfileStore =
-    params.startupPreparedAuth?.kind === "profile" ? params.startupPreparedAuth.store : undefined;
+    params.clientOptions.preparedAuth?.kind === "profile"
+      ? params.clientOptions.preparedAuth.store
+      : undefined;
   let releaseSharedClientLease: (() => void) | undefined;
   let startupClientForAbandonedRequestCleanup: CodexAppServerClient | undefined;
   let releaseStartupResourcesOnTimeout: (() => Promise<void>) | undefined;
@@ -178,7 +177,7 @@ export async function startCodexAttemptThread(params: {
         const pluginStartupPolicy = resolveCodexPluginThreadConfigStartupPolicy({
           pluginConfig: params.pluginConfig,
           nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
-          hostedAppsSupported: !isCodexResponsesOAuth(params.startupPreparedAuth),
+          hostedAppsSupported: !isCodexResponsesOAuth(params.clientOptions.preparedAuth),
           scheduledRuntimeAuthority: params.buildAttemptParams().scheduledRuntimeAuthority,
         });
         const {
@@ -217,6 +216,7 @@ export async function startCodexAttemptThread(params: {
               throw new CodexAppServerStartupError("aborted");
             }
             startupClient = await params.attemptClientFactory({
+              ...params.clientOptions,
               // Process startup retains its synchronous admission contract. Ordinary
               // native requests use the retained worker authority at wire admission.
               assertCurrent: () => {
@@ -225,20 +225,7 @@ export async function startCodexAttemptThread(params: {
               },
               startOptions: params.appServer.start,
               pluginConfig: params.pluginConfig,
-              ...(params.startupPreparedAuth
-                ? { preparedAuth: params.startupPreparedAuth }
-                : { authProfileId: params.startupAuthProfileId }),
-              authRequirement: params.startupAuthRequirement,
               authProfileStore: attemptParams.authProfileStore,
-              authBindingFingerprint: params.startupAuthBindingFingerprint,
-              ...(params.runtimeArtifactRequest
-                ? {
-                    runtimeArtifactMode: "capture" as const,
-                    ...(params.runtimeArtifactRequest.expected
-                      ? { expectedRuntimeArtifact: params.runtimeArtifactRequest.expected }
-                      : {}),
-                  }
-                : {}),
               agentId: params.sessionAgentId,
               agentDir: params.agentDir,
               config: params.config,
@@ -283,8 +270,8 @@ export async function startCodexAttemptThread(params: {
               agentDir: params.agentDir,
               authProfileId: startupRuntimeAuthProfileId,
               authMode:
-                params.startupPreparedAuth?.kind === "api-key" ||
-                isCodexResponsesOAuth(params.startupPreparedAuth)
+                params.clientOptions.preparedAuth?.kind === "api-key" ||
+                isCodexResponsesOAuth(params.clientOptions.preparedAuth)
                   ? "prepared-api-key"
                   : "profile",
               authProfileStore: startupRuntimeAuthProfileStore ?? attemptParams.authProfileStore,
@@ -540,7 +527,12 @@ export async function startCodexAttemptThread(params: {
               }
               await bindCodexModelCatalogAttemptAuthority(
                 activeStartupClient,
-                params,
+                {
+                  appServer: params.appServer,
+                  assertCurrent: params.assertCurrent,
+                  startupAuthBindingFingerprint: params.clientOptions.authBindingFingerprint,
+                  assertNativeModelSelectionCurrent: params.assertNativeModelSelectionCurrent,
+                },
                 startupAbandonController.signal,
               );
               startupSandboxEnvironmentAcquired = false;

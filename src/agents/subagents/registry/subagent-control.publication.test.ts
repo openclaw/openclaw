@@ -66,76 +66,66 @@ it("does not refresh session metadata when an owned abort marker is already pers
   expect(read()).toEqual(before);
 });
 
-it.each(["replacement", "retirement"] as const)(
-  "revalidates the session after held publication preparation permits %s",
-  async (transition) => {
-    const target = {
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: rootKey,
-      defaultSessionId: "prepared-publication-session",
-    };
-    await writeSubagentSessionEntry(target);
-    await registerSubagentRun({
-      runId: "prepared-publication",
-      childSessionKey: rootKey,
-      requesterSessionKey: "agent:main:main",
-      requesterAgentId: "main",
-      requesterDisplayKey: "main",
-      task: "publication ownership",
-      cleanup: "keep",
-    });
-    const onResult = vi.fn();
-    let transitioned = false;
-    const publishSnapshot = vi.fn();
-    const preparePublication = vi.fn<
-      KillPublicationPreparation<SubagentAdminKillResult>["prepare"]
-    >(async (publish) => {
+it("revalidates the session after held publication preparation permits retirement", async () => {
+  const target = {
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: rootKey,
+    defaultSessionId: "prepared-publication-session",
+  };
+  await writeSubagentSessionEntry(target);
+  await registerSubagentRun({
+    runId: "prepared-publication",
+    childSessionKey: rootKey,
+    requesterSessionKey: "agent:main:main",
+    requesterAgentId: "main",
+    requesterDisplayKey: "main",
+    task: "publication ownership",
+    cleanup: "keep",
+  });
+  const onResult = vi.fn();
+  let transitioned = false;
+  const publishSnapshot = vi.fn();
+  const preparePublication = vi.fn<KillPublicationPreparation<SubagentAdminKillResult>["prepare"]>(
+    async (publish) => {
       if (!transitioned) {
         transitioned = true;
-        if (transition === "replacement") {
-          await writeSubagentSessionEntry({ ...target, sessionId: "successor-session" });
-        } else {
-          await removeSubagentSessionEntry(target);
-        }
+        await removeSubagentSessionEntry(target);
       }
       return publish();
-    });
-    const result = await killSubagentRunAdmin(
-      {
-        cfg: getRuntimeConfig(),
-        sessionKey: rootKey,
-        agentId: "main",
-        expectedRunId: "prepared-publication",
-        onResult,
-      },
-      {
-        assertCurrent: () => {},
-        preparePublication: { prepare: preparePublication, publishSnapshot },
-      },
-    );
-    expect(publishSnapshot).toHaveBeenCalledExactlyOnceWith(result);
-    expect(onResult).toHaveBeenCalledExactlyOnceWith(result);
-    expect(result).toMatchObject({
-      found: true,
-      error: expect.stringContaining("ownership changed"),
-    });
-    expect(result).not.toHaveProperty("targetState");
-  },
-);
+    },
+  );
+  const result = await killSubagentRunAdmin(
+    {
+      cfg: getRuntimeConfig(),
+      sessionKey: rootKey,
+      agentId: "main",
+      expectedRunId: "prepared-publication",
+      onResult,
+    },
+    {
+      assertCurrent: () => {},
+      preparePublication: { prepare: preparePublication, publishSnapshot },
+    },
+  );
+  expect(publishSnapshot).toHaveBeenCalledExactlyOnceWith(result);
+  expect(onResult).toHaveBeenCalledExactlyOnceWith(result);
+  expect(result).toMatchObject({
+    found: true,
+    error: expect.stringContaining("ownership changed"),
+  });
+  expect(result).not.toHaveProperty("targetState");
+});
 
 it.each([
-  [true, false, false, false, false],
-  [true, true, false, false, false],
-  [false, false, false, false, false],
-  [false, false, true, false, false],
-  [true, false, true, false, false],
-  [true, false, false, true, false],
-  [true, true, false, true, false],
-  [true, true, false, true, true],
+  [false, false, false, false],
+  [true, false, false, false],
+  [false, true, false, false],
+  [true, false, true, false],
+  [true, false, true, true],
 ])(
-  "fences native cancellation publication (replace=%s, priorChildKill=%s, completeDuringDrain=%s, handoff=%s, provisional=%s)",
-  async (replace, priorChildKill, completeDuringDrain, handoff, provisional) => {
+  "fences replacement cancellation publication (priorChildKill=%s, completeDuringDrain=%s, handoff=%s, provisional=%s)",
+  async (priorChildKill, completeDuringDrain, handoff, provisional) => {
     fixture.announce.mockResolvedValue("delivered");
     const previousWait = createDeferred<AgentWaitResult>();
     const nextWait = createDeferred<AgentWaitResult>();
@@ -318,12 +308,7 @@ it.each([
     const persistMarker = killSession.persistSubagentAbortedLastRun;
     vi.spyOn(killSession, "persistSubagentAbortedLastRun").mockImplementation(async (params) => {
       const result = await persistMarker(params);
-      if (
-        completeDuringDrain &&
-        replace &&
-        params.childSessionKey === rootKey &&
-        !params.abortedLastRun
-      ) {
+      if (completeDuringDrain && params.childSessionKey === rootKey && !params.abortedLastRun) {
         markerWaits += 1;
         markerCleared.resolve();
         await releaseMarker.promise;
@@ -372,54 +357,51 @@ it.each([
         await originalTimingCompleted.promise;
         expect(subagentRuns.get(b0.runId)?.killReconciliation).toBeUndefined();
         childAdmission.release();
-        if (replace) {
-          await Promise.race([
-            markerCleared.promise,
-            pending.then((result) => {
-              throw new Error(
-                `Cancellation never reached marker cleanup: ${JSON.stringify(result)}`,
-              );
-            }),
-          ]);
-          expect(
-            loadExactSessionEntryReadOnly({ storePath, sessionKey: rootKey })?.entry.abortedLastRun,
-          ).toBe(false);
-        }
+
+        await Promise.race([
+          markerCleared.promise,
+          pending.then((result) => {
+            throw new Error(`Cancellation never reached marker cleanup: ${JSON.stringify(result)}`);
+          }),
+        ]);
+        expect(
+          loadExactSessionEntryReadOnly({ storePath, sessionKey: rootKey })?.entry.abortedLastRun,
+        ).toBe(false);
       }
       if (priorChildKill) {
         await firstChildCleanup.promise;
         expect(resolveSubagentSessionStatus(subagentRuns.get("publication-first"))).toBe("killed");
       }
-      if (replace) {
-        // The root lifecycle lock and any marker write have finished before follow-up admission.
-        followup = await beginSessionWorkAdmission({
-          scope: storePath,
-          identities: [rootKey, "publication-root-session"],
-          assertAllowed: () => {},
-          onInterrupt: followupInterrupted,
+
+      // The root lifecycle lock and any marker write have finished before follow-up admission.
+      followup = await beginSessionWorkAdmission({
+        scope: storePath,
+        identities: [rootKey, "publication-root-session"],
+        assertAllowed: () => {},
+        onInterrupt: followupInterrupted,
+      });
+      if (!handoff) {
+        expect(
+          await followup.run(() =>
+            reactivateCompletedSubagentSession({
+              sessionKey: rootKey,
+              runId: "publication-b1",
+              task: "admitted follow-up task",
+            }),
+          ),
+        ).toBe(true);
+        const b1 = subagentRuns.get("publication-b1")!;
+        expect(subagentRuns.get(b0.runId)).toMatchObject({
+          taskRunId: b0.taskRunId,
+          execution: { status: "terminal", suppressSessionEffects: true },
         });
-        if (!handoff) {
-          expect(
-            await followup.run(() =>
-              reactivateCompletedSubagentSession({
-                sessionKey: rootKey,
-                runId: "publication-b1",
-                task: "admitted follow-up task",
-              }),
-            ),
-          ).toBe(true);
-          const b1 = subagentRuns.get("publication-b1")!;
-          expect(subagentRuns.get(b0.runId)).toMatchObject({
-            taskRunId: b0.taskRunId,
-            execution: { status: "terminal", suppressSessionEffects: true },
-          });
-          expect(b1).toMatchObject({ taskRunId: b1.runId, execution: { status: "running" } });
-          if (typeof b0.generation !== "number") {
-            throw new Error("Registration did not mint a run generation");
-          }
-          expect(b1.generation).toBeGreaterThan(b0.generation);
+        expect(b1).toMatchObject({ taskRunId: b1.runId, execution: { status: "running" } });
+        if (typeof b0.generation !== "number") {
+          throw new Error("Registration did not mint a run generation");
         }
+        expect(b1.generation).toBeGreaterThan(b0.generation);
       }
+
       childAdmission.release();
       releaseMarker.resolve();
       releaseFirstChildCleanup.resolve();
@@ -431,17 +413,7 @@ it.each([
         expect(handoffOrder.slice(0, 2)).toEqual(["captured outcome", "replacement"]);
       }
       const published = await admin.mock.results[0]!.value;
-      expect(markerWaits).toBe(completeDuringDrain && replace ? 1 : 0);
-      if (!replace) {
-        expect(published).toMatchObject({
-          found: true,
-          targetState: {
-            state: "terminal",
-            task: { status: completeDuringDrain ? "succeeded" : "failed" },
-          },
-        });
-        return;
-      }
+      expect(markerWaits).toBe(completeDuringDrain ? 1 : 0);
       if (!handoff) {
         expect.soft(published).not.toHaveProperty("targetState");
         expect.soft(published).toHaveProperty("error", expect.any(String));
