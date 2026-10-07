@@ -51,7 +51,7 @@ describe("Codex submitted prompt provenance", () => {
     params.userTurnTranscriptRecorder = recorder;
     // The admission owner canonicalizes its locator; the harness may retain an alias.
     const alias = path.join(tempDir, "database-alias");
-    await symlink(tempDir, alias, "dir");
+    await symlink(tempDir, alias, process.platform === "win32" ? "junction" : "dir");
     params.sessionTarget = { ...target, storePath: path.join(alias, "agent.sqlite") };
     const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
     const run = runCodexAppServerAttempt(params);
