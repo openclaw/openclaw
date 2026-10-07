@@ -59,12 +59,6 @@ async function runMaintenanceScope<T>(
       throw error;
     }
   };
-  const assertAdmission = () => {
-    assertCurrent();
-    if (!scope.accepting) {
-      throw new Error("Agent database maintenance admission is closed");
-    }
-  };
   const lease: OpenClawStateLeaseContext = {
     signal: owner.signal,
     assertOwned: assertCurrent,
@@ -72,7 +66,10 @@ async function runMaintenanceScope<T>(
     ...(owner.renew
       ? {
           renew() {
-            assertAdmission();
+            assertCurrent();
+            if (!scope.accepting) {
+              throw new Error("Agent database maintenance admission is closed");
+            }
             owner.renew!();
           },
         }
