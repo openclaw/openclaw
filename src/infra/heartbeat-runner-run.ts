@@ -77,7 +77,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     const heartbeatContext = {
       Body: appendCronStyleCurrentTimeLine(prepared.prompt, cfg, startedAt),
       From: sender,
-      To: sender,
+      To: !suppressOriginatingContext ? delivery.to : undefined,
       OriginatingChannel: !suppressOriginatingContext ? channel : undefined,
       OriginatingTo: !suppressOriginatingContext ? delivery.to : undefined,
       AccountId: delivery.accountId,
