@@ -799,6 +799,17 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
 
   it.each([
     {
+      label: "burst contention without an active cooldown",
+      fresh: true,
+      response: {
+        rate_limit: {
+          limit_reached: false,
+          primary_window: { used_percent: 45, reset_after_seconds: 9_000 },
+        },
+      },
+      expectedMs: 15_000,
+    },
+    {
       label: "burst contention with an active cooldown",
       response: {
         rate_limit: {
@@ -832,40 +843,47 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
       expectedMs: 28_800_000,
       exactBlocked: true,
     },
-  ])("maps $label to the expected cooldown", async ({ response, expectedMs, exactBlocked }) => {
-    const now = 1_700_000_000_000;
-    const store = makeStore({
-      "openai:default": {
-        cooldownUntil: now + 6 * 60 * 60 * 1000,
-        cooldownReason: "rate_limit",
-        errorCount: 12,
-        failureCounts: { rate_limit: 12 },
-        lastFailureAt: now - 1_000,
-      },
-    });
-    mockWhamResponse(200, response);
+  ])(
+    "maps $label to the expected cooldown",
+    async ({ response, expectedMs, exactBlocked, fresh }) => {
+      const now = 1_700_000_000_000;
+      const store = makeStore(
+        fresh
+          ? undefined
+          : {
+              "openai:default": {
+                cooldownUntil: now + 6 * 60 * 60 * 1000,
+                cooldownReason: "rate_limit",
+                errorCount: 12,
+                failureCounts: { rate_limit: 12 },
+                lastFailureAt: now - 1_000,
+              },
+            },
+      );
+      mockWhamResponse(200, response);
 
-    await markCodexFailureAt({ store, now });
+      await markCodexFailureAt({ store, now });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls.at(0) as [string, RequestInit];
-    expect(url).toBe("https://chatgpt.com/backend-api/wham/usage");
-    expect(init.method).toBe("GET");
-    const headers = init.headers as Record<string, string>;
-    expect(headers.Authorization).toBe("Bearer codex-access-token");
-    expect(headers["ChatGPT-Account-Id"]).toBe("acct_test_123");
-    expect(headers.originator).toBe("openclaw");
-    expect(headers["User-Agent"]).toMatch(/^openclaw\//);
-    const stats = store.usageStats?.["openai:default"];
-    expect(stats?.lastProbeAt).toBe(now);
-    if (exactBlocked) {
-      expect(stats?.blockedUntil).toBe(now + expectedMs);
-      expect(stats?.blockedReason).toBe("subscription_limit");
-      expect(stats?.cooldownUntil).toBeUndefined();
-    } else {
-      expect(stats?.cooldownUntil).toBe(now + expectedMs);
-    }
-  });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls.at(0) as [string, RequestInit];
+      expect(url).toBe("https://chatgpt.com/backend-api/wham/usage");
+      expect(init.method).toBe("GET");
+      const headers = init.headers as Record<string, string>;
+      expect(headers.Authorization).toBe("Bearer codex-access-token");
+      expect(headers["ChatGPT-Account-Id"]).toBe("acct_test_123");
+      expect(headers.originator).toBe("openclaw");
+      expect(headers["User-Agent"]).toMatch(/^openclaw\//);
+      const stats = store.usageStats?.["openai:default"];
+      expect(stats?.lastProbeAt).toBe(now);
+      if (exactBlocked) {
+        expect(stats?.blockedUntil).toBe(now + expectedMs);
+        expect(stats?.blockedReason).toBe("subscription_limit");
+        expect(stats?.cooldownUntil).toBeUndefined();
+      } else {
+        expect(stats?.cooldownUntil).toBe(now + expectedMs);
+      }
+    },
+  );
 
   it("does not apply a stale WHAM result after the profile changes", async () => {
     const now = 1_700_000_000_000;

@@ -37,6 +37,8 @@ const memory = process.memoryUsage();
 
 function request(
   options: {
+    role?: string;
+    scopes?: string[];
     params?: unknown;
     hasAuthority?: () => boolean;
   } = {},
@@ -53,8 +55,8 @@ function request(
     client: {
       connId: "snapshot-client",
       connect: {
-        role: "operator",
-        scopes: ["operator.admin"],
+        role: options.role ?? "operator",
+        scopes: options.scopes ?? ["operator.admin"],
         minProtocol: 1,
         maxProtocol: 1,
         client: { id: "test", version: "1", platform: "test", mode: "test" },
@@ -91,6 +93,20 @@ afterEach(() => {
 });
 
 describe("diagnostics.heapSnapshot", () => {
+  it.each([
+    { role: "operator", scopes: ["operator.write"] },
+    { role: "node", scopes: ["operator.admin"] },
+  ])("rejects $role/$scopes before native work", async (options) => {
+    const call = request(options);
+    await call.pending;
+    expect(native.write).not.toHaveBeenCalled();
+    expect(call.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: options.role === "node" ? "INVALID_REQUEST" : "FORBIDDEN" }),
+    );
+  });
+
   it("rejects path-controlling params", async () => {
     const call = request({ params: { path: "/tmp/override" } });
     await call.pending;

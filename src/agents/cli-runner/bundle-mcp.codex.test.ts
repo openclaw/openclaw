@@ -216,6 +216,17 @@ function prepareLoopbackConfig(url: string) {
 }
 
 describe("prepareCliBundleMcpConfig resume hash", () => {
+  it("stabilizes the resume hash when only the OpenClaw loopback port changes", async () => {
+    const first = await prepareLoopbackConfig("http://127.0.0.1:23119/mcp");
+    const second = await prepareLoopbackConfig("http://127.0.0.1:24567/mcp");
+
+    expect(first.mcpConfigHash).not.toBe(second.mcpConfigHash);
+    expect(first.mcpResumeHash).toBe(second.mcpResumeHash);
+
+    await first.cleanup?.();
+    await second.cleanup?.();
+  });
+
   it("changes the resume hash when stable MCP semantics change", async () => {
     const first = await prepareLoopbackConfig("http://127.0.0.1:23119/mcp");
     const second = await prepareLoopbackConfig("http://127.0.0.1:23119/other");

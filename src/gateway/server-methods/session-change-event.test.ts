@@ -244,8 +244,10 @@ describe("sessions.changed coalescing", () => {
     const client = createTestGatewayClient(request);
     const { sessions, emitEvent } = createSessionCapabilityHarness(client.request.bind(client));
     const row = () => sessions.state.result?.sessions.find((session) => session.key === sessionKey);
+    const frames: string[] = [];
     vi.mocked(context.broadcastToConnIds).mockImplementation((event, payload) => {
       const frame = JSON.stringify({ type: "event", event, payload });
+      frames.push(frame);
       emitEvent(JSON.parse(frame));
     });
     try {
@@ -299,6 +301,8 @@ describe("sessions.changed coalescing", () => {
       await flushPendingSessionsChangedEvents(context);
       expect(row()).not.toHaveProperty("placement");
       expect(row()).not.toHaveProperty("placementMove");
+      expect(frames.join("\n")).not.toContain('"turnClaim"');
+      expect(frames.join("\n")).not.toContain("private-turn-claim");
     } finally {
       sessions.dispose();
     }

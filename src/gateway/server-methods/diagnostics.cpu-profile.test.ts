@@ -118,17 +118,21 @@ beforeEach(() => {
     .mockResolvedValue({ status: "complete", result } satisfies Awaited<
       ReturnType<typeof captureDiagnosticCpuProfile>
     >);
+  captureHeap.mockReset().mockResolvedValue({ status: "complete", result: heapResult });
 });
 afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
 describe("diagnostics.cpuProfile dispatch", () => {
   it.each([
-    { role: "operator", scopes: ["operator.write"] },
-    { role: "node", scopes: ["operator.admin"] },
-  ])("rejects $role/$scopes before native work", async (options) => {
-    const call = request(options);
+    { method: "diagnostics.cpuProfile", role: "operator", scopes: ["operator.write"] },
+    { method: "diagnostics.cpuProfile", role: "node", scopes: ["operator.admin"] },
+    { method: "diagnostics.heapProfile", role: "operator", scopes: ["operator.write"] },
+    { method: "diagnostics.heapProfile", role: "node", scopes: ["operator.admin"] },
+  ] as const)("rejects $role/$scopes for $method before native work", async (options) => {
+    const call = request({ ...options, scopes: [...options.scopes] });
     await call.pending;
     expect(capture).not.toHaveBeenCalled();
+    expect(captureHeap).not.toHaveBeenCalled();
     expect(call.respond).toHaveBeenCalledWith(
       false,
       undefined,
@@ -231,10 +235,6 @@ describe("diagnostics.cpuProfile dispatch", () => {
 });
 
 describe("diagnostics.heapProfile dispatch", () => {
-  beforeEach(() => {
-    captureHeap.mockReset().mockResolvedValue({ status: "complete", result: heapResult });
-  });
-
   it.each([
     undefined,
     {

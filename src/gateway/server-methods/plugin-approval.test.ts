@@ -323,6 +323,27 @@ describe("createPluginApprovalHandlers", () => {
       await pending;
     });
 
+    it.each([
+      { kind: "untyped", target: "email" },
+      { kind: "external-post", target: "github", visibility: "public", extra: true },
+    ])("rejects malformed or non-closed owner-declared scope %j", async (scope) => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const opts = createMockOptions("plugin.approval.request", {
+        title: "Sensitive action",
+        description: "Review the action",
+        scope,
+        twoPhase: true,
+      });
+      await invokeHandler(handlers, opts);
+
+      expect(opts.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: expect.any(String) }),
+      );
+      expect(await manager.listPendingRecords()).toHaveLength(0);
+    });
+
     it("rejects a title whose sanitized form exceeds the display limit", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const respond = vi.fn();

@@ -36,6 +36,7 @@ import {
 import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatDeliveryTargetWithSessionRoute,
+  resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
 import { telegramMessagingForTest } from "./outbound/targets.test-helpers.js";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
@@ -432,6 +433,39 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       expect(result.threadId).toBe(expectedThreadId);
     },
   );
+});
+
+describe("resolveHeartbeatSenderContext", () => {
+  it("prefers delivery accountId for allowFrom resolution", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          allowFrom: ["111"],
+          accounts: {
+            work: { allowFrom: ["222"], botToken: "token" },
+          },
+        },
+      },
+    };
+    const entry = {
+      sessionId: "sid",
+      updatedAt: Date.now(),
+      lastChannel: "telegram" as const,
+      lastTo: "111",
+      lastAccountId: "default",
+    };
+    const delivery = {
+      channel: "telegram" as const,
+      to: "999",
+      accountId: "work",
+      lastChannel: "telegram" as const,
+      lastAccountId: "default",
+    };
+
+    const ctx = resolveHeartbeatSenderContext({ cfg, entry, delivery });
+
+    expect(ctx.allowFrom).toEqual(["222"]);
+  });
 });
 
 describe("runHeartbeatOnce", () => {
