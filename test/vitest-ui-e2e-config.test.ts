@@ -400,11 +400,7 @@ describe("Control UI E2E resource ownership", () => {
     },
     {
       include: ["ui/src/e2e/**/*.test.ts"],
-      files: fs
-        .globSync("ui/src/e2e/**/*.test.ts", { cwd: repoRoot })
-        .filter(
-          (file) => file !== "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
-        ),
+      files: fs.globSync("ui/src/e2e/**/*.test.ts", { cwd: repoRoot }),
       leases: 1,
     },
     { include: [], files: [], leases: 0 },
@@ -541,7 +537,6 @@ describe("Control UI E2E resource ownership", () => {
     const result = probeOwnership();
     const inventory = fs
       .globSync(["ui/src/**/*.e2e.test.ts", ...qaLabFiles], { cwd: repoRoot })
-      .filter((file) => file !== "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts")
       .toSorted();
     expect(result.files.map((entry) => entry.file).toSorted()).toEqual(inventory);
     expect(result.setupError).toBeUndefined();

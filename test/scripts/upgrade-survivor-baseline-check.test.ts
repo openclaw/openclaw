@@ -66,7 +66,8 @@ describe("published baseline startup admission", () => {
         expect(fixture.result.status, fixture.result.stderr).toBe(0);
         const groups = JSON.parse(fixture.result.stdout);
         expect(groups.map((group: { label: string }) => group.label)).toEqual([
-          "published-upgrade-survivor-2026.8.2",
+          "published-upgrade-survivor-2026.8.2-scenarios-1",
+          "published-upgrade-survivor-2026.8.2-scenarios-2",
           "onboard",
         ]);
         const report = JSON.parse(
