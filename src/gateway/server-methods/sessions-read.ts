@@ -233,6 +233,10 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           (count, result) => count + (result.archivedTranscriptsExcluded ?? 0),
           0,
         );
+        const deletedTranscriptsExcluded = targetResults.reduce(
+          (count, result) => count + (result.deletedTranscriptsExcluded ?? 0),
+          0,
+        );
         const limit = params.limit ?? 10;
         const sortedHits = targetResults
           .flatMap((result) => result.hits)
@@ -254,6 +258,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         respond(true, {
           results: hits.slice(0, limit),
           ...(archivedTranscriptsExcluded ? { archivedTranscriptsExcluded } : {}),
+          ...(deletedTranscriptsExcluded ? { deletedTranscriptsExcluded } : {}),
           ...(targetResults.some((result) => result.indexing) ? { indexing: true } : {}),
           ...(targetResults.some((result) => result.truncated) || hits.length > limit
             ? { truncated: true }

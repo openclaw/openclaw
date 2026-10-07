@@ -79,6 +79,9 @@ Transcripts that predate the index (for example, sessions imported by `openclaw 
 sessions whose active branch was rewound are reindexed by a background reconciliation that starts
 with the next search. A response with `indexing: true` can therefore be incomplete; retry after
 indexing finishes. Deleting a session removes its index entries in the same transaction.
+The retained recovery copy of a deleted transcript is not searchable. When such copies exist
+in the searched scope, `sessions_search` reports `deletedTranscriptsExcluded` with a warning,
+so an empty result is not read as proof that the conversation never happened.
 
 Search uses SQLite's Unicode word tokenizer with diacritic removal.
 

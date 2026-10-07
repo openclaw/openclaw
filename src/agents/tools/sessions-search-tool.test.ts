@@ -39,6 +39,7 @@ function createTool(params: {
   sessionLinkBase?: string;
   indexing?: boolean;
   archivedTranscriptsExcluded?: number;
+  deletedTranscriptsExcluded?: number;
   truncated?: boolean;
 }) {
   const config = params.config ?? { tools: { sessions: { visibility: "self" } } };
@@ -96,6 +97,9 @@ function createTool(params: {
         ...(params.archivedTranscriptsExcluded
           ? { archivedTranscriptsExcluded: params.archivedTranscriptsExcluded }
           : {}),
+        ...(params.deletedTranscriptsExcluded
+          ? { deletedTranscriptsExcluded: params.deletedTranscriptsExcluded }
+          : {}),
         ...(params.truncated ? { truncated: true } : {}),
       } as T;
     },
@@ -151,7 +155,7 @@ describe("sessions_search tool", () => {
     expect(error.details).toMatchObject({ status: "error", error: expect.any(String) });
     expect(Value.Check(tool.outputSchema!, error.details)).toBe(true);
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ results: Array<{ role: "assistant" | "user"; score: number; sessionKey: string; snippet: string; timestamp: number; messageId?: string; sessionId?: string }>; archivedTranscriptsExcluded?: number; indexing?: true; sessionLinkRule?: string; truncated?: true; warning?: string } | { error: string; status: "error" | "forbidden" }',
+      '{ results: Array<{ role: "assistant" | "user"; score: number; sessionKey: string; snippet: string; timestamp: number; messageId?: string; sessionId?: string }>; archivedTranscriptsExcluded?: number; deletedTranscriptsExcluded?: number; indexing?: true; sessionLinkRule?: string; truncated?: true; warning?: string } | { error: string; status: "error" | "forbidden" }',
     );
   });
 
@@ -186,6 +190,20 @@ describe("sessions_search tool", () => {
       expect(Value.Check(createTool({}).outputSchema!, result.details)).toBe(true);
     },
   );
+
+  it("warns that retained deleted transcripts are outside search", async () => {
+    const result = await createTool({ deletedTranscriptsExcluded: 1 }).execute("deleted-warning", {
+      query: "text",
+    });
+
+    expect(result.details).toEqual({
+      results: [],
+      deletedTranscriptsExcluded: 1,
+      warning:
+        "Search excludes 1 transcripts retained from deleted or reset sessions. Session tools cannot read them, so a missing match does not mean the conversation never happened.",
+    });
+    expect(Value.Check(createTool({}).outputSchema!, result.details)).toBe(true);
+  });
 
   it("rejects empty queries and invalid limits", async () => {
     const tool = createTool({});
