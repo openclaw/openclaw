@@ -6,10 +6,23 @@ export class PreparedModelCatalogConfigReplacedError extends Error {
 }
 
 export class PreparedModelCatalogAdmissionStalledError extends Error {
-  constructor(pluginId: string | undefined, stage: string, idleMs: number) {
+  constructor(pluginId: string | undefined, idleMs: number) {
     super(
-      `${pluginId ? `native admission for plugin ${pluginId}` : "catalog preparation"} stalled during ${stage} after ${idleMs} ms without progress; reload the plugin or restart the Gateway to retry`,
+      `${pluginId ? `Plugin ${pluginId} native reference verification` : "Catalog preparation"} stalled after ${idleMs} ms without progress; reload the plugin or restart the Gateway to retry`,
     );
     this.name = "PreparedModelCatalogAdmissionStalledError";
+  }
+}
+
+export class PreparedModelCatalogGenerationMismatchError extends Error {
+  constructor(
+    readonly agentDir: string,
+    readonly generationFingerprint: string,
+    readonly reconstructedFingerprint: string,
+  ) {
+    super(
+      `prepared model catalog worker reconstructed a different runtime generation for ${agentDir} (owner=${generationFingerprint} worker=${reconstructedFingerprint})`,
+    );
+    this.name = "PreparedModelCatalogGenerationMismatchError";
   }
 }

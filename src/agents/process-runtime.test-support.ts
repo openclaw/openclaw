@@ -1,11 +1,4 @@
 // Prepare native process probes before their liveness, readiness, and retention deadlines.
-export const catalogInspectionEntrypoint = {
-  currentModuleUrl: import.meta.url,
-  sourceWorkerName: "test-helpers/prepared-model-catalog-inspection.worker",
-  distWorkerPath:
-    "legacy-finalizer/src/agents/test-helpers/prepared-model-catalog-inspection.worker.js",
-} as const;
-
 export const agentProcessTestEntrypoints = {
   blockChunker: {
     currentModuleUrl: import.meta.url,

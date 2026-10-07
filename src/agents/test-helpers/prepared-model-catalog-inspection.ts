@@ -1,9 +1,6 @@
 import type { getAuthoredConfigSecretRef } from "../../config/resolution-facts.js";
 import { resolveStateDir } from "../../config/state-dir.js";
-import {
-  resolveRuntimeWorkerThreadExecArgv,
-  resolveRuntimeWorkerUrl,
-} from "../../infra/runtime-worker-url.js";
+import { resolveRuntimeWorkerThreadExecArgv } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createPluginSourceCaptureRoot } from "../../plugins/plugin-source-capture-directory.js";
 import type { planOpenClawModelsJsonSource } from "../models-config.js";
@@ -11,7 +8,6 @@ import type {
   PreparedModelCatalogWorkerTask,
   PreparedModelWorkerResult,
 } from "../prepared-model-catalog-worker.js";
-import { catalogInspectionEntrypoint } from "../process-runtime.test-support.js";
 
 export type CatalogInspectionTask = PreparedModelCatalogWorkerTask & {
   inspection?: {
@@ -39,7 +35,7 @@ export type CatalogInspection = {
 
 export function createCatalogInspectionPool(env: NodeJS.ProcessEnv) {
   const capture = createPluginSourceCaptureRoot(resolveStateDir(env), "catalog-inspection-");
-  const workerUrl = resolveRuntimeWorkerUrl(catalogInspectionEntrypoint);
+  const workerUrl = new URL("./prepared-model-catalog-inspection.worker.ts", import.meta.url);
   const pool = new WorkerTaskPool<
     CatalogInspectionTask,
     PreparedModelWorkerResult & { inspection: CatalogInspection }

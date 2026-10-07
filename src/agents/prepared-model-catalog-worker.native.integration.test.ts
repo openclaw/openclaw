@@ -70,21 +70,41 @@ async function createGatewayNativeAdmissionFixture(gateCount: number) {
   fs.writeFileSync(
     path.join(pluginRoot, "index.cjs"),
     `const fs = require("node:fs");
+const path = require("node:path");
 const { BroadcastChannel, threadId } = require("node:worker_threads");
 const receipts = new BroadcastChannel(${JSON.stringify(broadcastName)});
 receipts.unref();
 let native;
 if (threadId !== ${threadId}) {
   const realpath = fs.realpathSync;
+  const link = fs.linkSync;
+  const symlink = fs.symlinkSync;
+  const referenceDirectories = new Map();
+  let elapsed = 0;
+  const now = performance.now.bind(performance);
+  Object.defineProperty(performance, "now", { configurable: true, value: () => now() + elapsed });
+  fs.symlinkSync = (source, target, ...options) => {
+    if (String(source).includes("admission-") && String(target).endsWith(".exe")) {
+      throw Object.assign(new Error("fixture Windows file-symlink restriction"), { code: "EPERM" });
+    }
+    return symlink(source, target, ...options);
+  };
+  fs.linkSync = (source, target) => {
+    link(source, target);
+    if (String(source).includes("admission-") && !String(target).includes("admission-")) {
+      referenceDirectories.set(path.dirname(String(target)), path.dirname(String(source)));
+    }
+  };
   const held = new Set();
   fs.realpathSync = Object.assign(function(filename, ...options) {
     const resolved = realpath(filename, ...options);
-    if (held.size < ${gateCount} && !held.has(resolved) && String(filename).includes("admission-") && String(filename).endsWith(".exe")) {
+    if (held.size < ${gateCount} && !held.has(resolved) && referenceDirectories.has(path.dirname(String(filename))) && String(filename).endsWith(".exe")) {
       held.add(resolved);
-      fs.appendFileSync(${JSON.stringify(admissionMarker)}, JSON.stringify({ event: held.size === 1 ? "started" : "member", filename: __filename, native: resolved }) + "\\n");
-      const gate = new Int32Array(new SharedArrayBuffer(4));
+      fs.appendFileSync(${JSON.stringify(admissionMarker)}, JSON.stringify({ event: held.size === 1 ? "started" : "member", filename: __filename, native: resolved, admission: referenceDirectories.get(path.dirname(String(filename))) }) + "\\n");
+      const gate = new Int32Array(new SharedArrayBuffer(8));
       receipts.postMessage(gate.buffer);
       Atomics.wait(gate, 0, 0);
+      elapsed += Atomics.load(gate, 1);
     }
     return resolved;
   }, realpath);
@@ -93,6 +113,8 @@ if (threadId !== ${threadId}) {
     fs.appendFileSync(${JSON.stringify(admissionMarker)}, JSON.stringify({ event: "admitted", filename: __filename, native }) + "\\n");
   } finally {
     fs.realpathSync = realpath;
+    fs.linkSync = link;
+    fs.symlinkSync = symlink;
   }
 }
 module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
@@ -147,7 +169,8 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
       authEntered.resolve();
     }
   });
-  const release = (gate: Int32Array<SharedArrayBuffer>) => {
+  const release = (gate: Int32Array<SharedArrayBuffer>, elapsed = 0) => {
+    Atomics.store(gate, 1, elapsed);
     Atomics.store(gate, 0, 1);
     Atomics.notify(gate, 0);
   };
@@ -248,7 +271,7 @@ it("finishes progressing native admission once across Gateway catalog refreshes"
       expect(fixture.failures).toEqual([]);
       expect(readCatalogWorkers()).toHaveLength(1);
       expect(readCatalogWorkers()[0]!.threadId).not.toBe(-1);
-      fixture.release(gate);
+      fixture.release(gate, 120_000);
     }
     const catalog = await withinTest(first.completed, signal);
     expect(catalog.entries).toContainEqual(
@@ -267,7 +290,8 @@ it("finishes progressing native admission once across Gateway catalog refreshes"
     expect(new Set(members.map(({ native }) => native)).size).toBe(3);
     expect(admitted).toHaveLength(1);
     expect(executions).toHaveLength(2);
-    expect(starts[0].native).toContain(`${path.sep}native${path.sep}admission-`);
+    expect(starts[0].admission).toContain(`${path.sep}native${path.sep}admission-`);
+    expect(new Set(members.map(({ admission }) => admission)).size).toBe(1);
     expect(executions.map(({ native }) => native)).toEqual([
       admitted[0].native,
       admitted[0].native,
@@ -329,7 +353,7 @@ it("records a stalled native admission without restarting its Gateway capture", 
     const failure = fixture.failures[0]!;
     expect(failure).toMatchObject({ name: "PreparedModelCatalogAdmissionStalledError" });
     expect(failure.message).toContain(PROVIDER_ID);
-    expect(failure.message).toContain("native namespace capture");
+    expect(failure.message).toContain("native reference verification");
     await expect(first.completed).rejects.toBe(failure);
     const retained = await withinTest(first.foreground, signal);
     expect(retained.refreshFailed).toBe(true);

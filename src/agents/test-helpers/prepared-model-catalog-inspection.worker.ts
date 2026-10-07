@@ -6,28 +6,24 @@ import type {
 } from "./prepared-model-catalog-inspection.js";
 
 const port = parentPort!;
-const extension = import.meta.url.endsWith(".ts") ? "ts" : "js";
 let task: CatalogInspectionTask;
 let sqliteCopies = 0;
 let plans: CatalogInspection["plans"] = [];
 const sqlite = await import("../../infra/sqlite-snapshot-source.js");
 // Bun updates existing namespace bindings when a module is mocked.
 const prepareSqliteReadOnlyLocationSync = sqlite.prepareSqliteReadOnlyLocationSync;
-mockNativeModuleExports(
-  new URL(`../../infra/sqlite-snapshot-source.${extension}`, import.meta.url),
-  {
-    ...sqlite,
-    prepareSqliteReadOnlyLocationSync: (
-      ...args: Parameters<typeof prepareSqliteReadOnlyLocationSync>
-    ) => {
-      sqliteCopies += 1;
-      return prepareSqliteReadOnlyLocationSync(...args);
-    },
+mockNativeModuleExports(new URL("../../infra/sqlite-snapshot-source.ts", import.meta.url), {
+  ...sqlite,
+  prepareSqliteReadOnlyLocationSync: (
+    ...args: Parameters<typeof prepareSqliteReadOnlyLocationSync>
+  ) => {
+    sqliteCopies += 1;
+    return prepareSqliteReadOnlyLocationSync(...args);
   },
-);
+});
 const models = await import("../models-config.js");
 const planOpenClawModelsJsonSource = models.planOpenClawModelsJsonSource;
-mockNativeModuleExports(new URL(`../models-config.${extension}`, import.meta.url), {
+mockNativeModuleExports(new URL("../models-config.ts", import.meta.url), {
   ...models,
   planOpenClawModelsJsonSource: async (
     ...args: Parameters<typeof planOpenClawModelsJsonSource>
@@ -39,18 +35,15 @@ mockNativeModuleExports(new URL(`../models-config.${extension}`, import.meta.url
 });
 const catalog = await import("../prepared-model-runtime.full-catalog.js");
 const prepareFullCatalogFacts = catalog.prepareFullCatalogFacts;
-mockNativeModuleExports(
-  new URL(`../prepared-model-runtime.full-catalog.${extension}`, import.meta.url),
-  {
-    ...catalog,
-    prepareFullCatalogFacts: (...args: Parameters<typeof prepareFullCatalogFacts>) => {
-      if (task.inspection?.failCatalog) {
-        throw new Error("synthetic catalog construction failure");
-      }
-      return prepareFullCatalogFacts(...args);
-    },
+mockNativeModuleExports(new URL("../prepared-model-runtime.full-catalog.ts", import.meta.url), {
+  ...catalog,
+  prepareFullCatalogFacts: (...args: Parameters<typeof prepareFullCatalogFacts>) => {
+    if (task.inspection?.failCatalog) {
+      throw new Error("synthetic catalog construction failure");
+    }
+    return prepareFullCatalogFacts(...args);
   },
-);
+});
 const { getAuthoredConfigSecretRef, getConfigResolutionFacts, getResolvedConfigEnvSecretRef } =
   await import("../../config/resolution-facts.js");
 const { registerResolvedAgentDir, resolveRegisteredAgentIdForDir, unregisterResolvedAgentDir } =

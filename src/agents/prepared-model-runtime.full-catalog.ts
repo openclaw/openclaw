@@ -55,22 +55,6 @@ import { AuthStorage } from "./sessions/auth-storage.js";
 
 const fullModelCatalogSnapshots = new WeakSet<ModelCatalogSnapshot>();
 
-/** Failed renewal retains rows without retaining a successful discovery deadline. */
-export function clearPreparedProviderCatalogExpiries(
-  inventory: PreparedModelCatalogInventory,
-  providerIds?: readonly string[],
-): PreparedModelCatalogInventory {
-  const providers = new Map(inventory.providers);
-  for (const provider of providerIds ?? providers.keys()) {
-    const facts = providers.get(provider);
-    if (facts) {
-      const { expiresAt: _expiresAt, ...retained } = facts;
-      providers.set(provider, retained);
-    }
-  }
-  return { ...inventory, providers };
-}
-
 function catalogPublicationContent(catalog: ModelCatalogSnapshot) {
   const { pendingProviders: _pending, refreshFailed: _failed, ...inventory } = catalog;
   // Scoped merges move providers, not their model preference order. Compare a grouped view

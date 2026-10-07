@@ -1,9 +1,9 @@
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { advancePluginNativeAdmission } from "./plugin-native-admission-progress.js";
 import {
   pluginNativeNamespaceBoundary,
   pluginNativeNamespaceMemberPath,
@@ -19,6 +19,10 @@ import {
   pluginSourceIdentityChangedOnlyByCtime,
   pluginSourceStatIdentity,
 } from "./plugin-source-file.js";
+
+export type NativeReferenceProgress = { pluginId: string; completed: number };
+export const nativeReferenceProgress = channel("openclaw.plugin-native-reference");
+let verifiedMembers = 0;
 
 /** A hardlink needs the owner's complete-directory check before the generation is exposed. */
 export function linkPluginNativeReference(
@@ -70,7 +74,7 @@ function resolveNativeHost(filename: string): string | undefined {
 }
 
 /** Verdicts belong to one capture; replacement namespaces and placements must be admitted again. */
-export function createPluginNativeReferenceValidator(boundary: string) {
+export function createPluginNativeReferenceValidator(boundary: string, pluginId: string) {
   const admitted = new WeakMap<
     PluginNativeNamespaceFact,
     { placements: Set<string>; members: Set<string> }
@@ -98,6 +102,7 @@ export function createPluginNativeReferenceValidator(boundary: string) {
           boundary,
           directory,
           verdict.members,
+          pluginId,
         );
         verdict.placements.add(placement);
       }
@@ -120,7 +125,12 @@ function assertPluginNativeReferenceDirectory(
   boundary: string,
   directory: string,
   admittedMembers: Set<string>,
+  pluginId: string,
 ): void {
+  nativeReferenceProgress.publish({
+    pluginId,
+    completed: verifiedMembers,
+  } satisfies NativeReferenceProgress);
   for (const [name, member] of Object.entries(namespace.members)) {
     if (!isPathInside(directory, name || ".")) {
       continue;
@@ -155,7 +165,10 @@ function assertPluginNativeReferenceDirectory(
       }
     }
     admittedMembers.add(memberKey);
-    advancePluginNativeAdmission();
+    nativeReferenceProgress.publish({
+      pluginId,
+      completed: ++verifiedMembers,
+    } satisfies NativeReferenceProgress);
   }
 }
 

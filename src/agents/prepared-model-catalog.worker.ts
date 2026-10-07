@@ -14,6 +14,10 @@ import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  nativeReferenceProgress,
+  type NativeReferenceProgress,
+} from "../plugins/plugin-native-reference.js";
 import { withPluginSourceCaptureDirectory } from "../plugins/plugin-package-metadata-capture.js";
 import { captureProviderCatalogExpiries } from "../plugins/provider-catalog-expiry.js";
 import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
@@ -48,7 +52,6 @@ import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-pr
 import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers.discovery-scope.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
-import { observePreparedModelCatalogAdmission } from "./prepared-model-catalog-admission-watchdog.js";
 import {
   PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
   fingerprintPreparedModelCatalogGeneration,
@@ -576,68 +579,78 @@ if (parentPort) {
   >();
   serveWorkerTasks(async (input, channel) => {
     // SAFETY: The typed catalog host is the sole producer of this private task envelope.
-    const { value, request, admissionProgress } = input as PreparedModelCatalogWorkerTask;
+    const { value, request } = input as PreparedModelCatalogWorkerTask;
     if (!isRecord(value) || !isWorkerRequest(request)) {
       throw new Error("invalid prepared model catalog worker request");
     }
-    return observePreparedModelCatalogAdmission(admissionProgress, (stopAdmission) =>
-      withRemoteModelCatalogSnapshot(freezeJsonSnapshot(value.remoteCatalog), () =>
-        withPluginSourceCaptureDirectory(
-          data.sourceCaptureDirectory,
-          async () => {
-            const workspaceDir =
-              value.pluginMetadataSnapshot.workspaceDir ?? value.input.workspaceDir;
-            let previous = contexts.get(workspaceDir);
-            const fingerprint = fingerprintPreparedModelCatalogPluginContext(value);
-            let attempted: WorkerGeneration | undefined;
-            try {
-              const work = new AsyncWorkScope();
-              const result = await withWorkerAuthProfileWrites(value.input.env, work, () =>
-                withClawInstallSchemaVersionFacts(request.clawInstallSchemaVersions, () =>
-                  work.run(() =>
-                    runCatalogRequest(
-                      value,
-                      request,
-                      work,
-                      async () => {
-                        if (previous?.fingerprint === fingerprint) {
-                          return previous.prepared;
-                        }
-                        return (attempted = await prepareWorkerGeneration(value));
-                      },
-                      async () => {
-                        // Admission can outlast a refresh on slow filesystems; only completed
-                        // generation preparation starts the provider-discovery deadline.
-                        const response = await channel?.request(null);
-                        response?.consumed();
-                        stopAdmission();
-                        if (response && response.input !== true) {
-                          throw new Error(
-                            "prepared model catalog request retired before discovery",
-                          );
-                        }
-                      },
-                    ),
+    let reportAfter = 0;
+    let reportedPlugin: string | undefined;
+    const reportProgress = (notification: unknown) => {
+      // SAFETY: The native-reference owner publishes this internal diagnostic payload.
+      const progress = notification as NativeReferenceProgress;
+      const now = performance.now();
+      if (now >= reportAfter || progress.pluginId !== reportedPlugin) {
+        reportAfter = now + 1_000;
+        reportedPlugin = progress.pluginId;
+        channel?.notify(progress);
+      }
+    };
+    nativeReferenceProgress.subscribe(reportProgress);
+    const stopProgress = () => nativeReferenceProgress.unsubscribe(reportProgress);
+    return withRemoteModelCatalogSnapshot(freezeJsonSnapshot(value.remoteCatalog), () =>
+      withPluginSourceCaptureDirectory(
+        data.sourceCaptureDirectory,
+        async () => {
+          const workspaceDir =
+            value.pluginMetadataSnapshot.workspaceDir ?? value.input.workspaceDir;
+          let previous = contexts.get(workspaceDir);
+          const fingerprint = fingerprintPreparedModelCatalogPluginContext(value);
+          let attempted: WorkerGeneration | undefined;
+          try {
+            const work = new AsyncWorkScope();
+            const result = await withWorkerAuthProfileWrites(value.input.env, work, () =>
+              withClawInstallSchemaVersionFacts(request.clawInstallSchemaVersions, () =>
+                work.run(() =>
+                  runCatalogRequest(
+                    value,
+                    request,
+                    work,
+                    async () => {
+                      if (previous?.fingerprint === fingerprint) {
+                        return previous.prepared;
+                      }
+                      return (attempted = await prepareWorkerGeneration(value));
+                    },
+                    async () => {
+                      // Admission can outlast a refresh on slow filesystems; only completed
+                      // generation preparation starts the provider-discovery deadline.
+                      stopProgress();
+                      const response = await channel?.request(null);
+                      response?.consumed();
+                      if (response && response.input !== true) {
+                        throw new Error("prepared model catalog request retired before discovery");
+                      }
+                    },
                   ),
                 ),
-              );
-              if (attempted && result.status === "ok") {
-                contexts.set(workspaceDir, { fingerprint, prepared: attempted });
-                attempted = undefined;
-                // Acquire the replacement before releasing shared source registrations.
-                await previous?.prepared.release();
-                // Registry custody can retain this request's async context until retirement.
-                // Drop the settled predecessor instead of retaining its callbacks through that scope.
-                previous = undefined;
-              }
-              return result;
-            } finally {
-              await attempted?.release();
+              ),
+            );
+            if (attempted && result.status === "ok") {
+              contexts.set(workspaceDir, { fingerprint, prepared: attempted });
+              attempted = undefined;
+              // Acquire the replacement before releasing shared source registrations.
+              await previous?.prepared.release();
+              // Registry custody can retain this request's async context until retirement.
+              // Drop the settled predecessor instead of retaining its callbacks through that scope.
+              previous = undefined;
             }
-          },
-          data.sourceCaptureManagedRoot,
-        ),
+            return result;
+          } finally {
+            await attempted?.release();
+          }
+        },
+        data.sourceCaptureManagedRoot,
       ),
-    );
+    ).finally(stopProgress);
   });
 }

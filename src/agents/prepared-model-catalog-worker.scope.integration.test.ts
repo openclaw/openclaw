@@ -2,11 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { modelsHandlers } from "../gateway/server-methods/models.js";
 import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods/types.js";
@@ -34,17 +30,11 @@ import {
 } from "./prepared-model-catalog-worker.test-support.js";
 import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
 import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
-import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import {
   getPreparedModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeCatalog,
 } from "./prepared-model-runtime.js";
-import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
-import type {
-  PreparedModelCatalogRefreshOptions,
-  PreparedModelRuntimeSnapshot,
-} from "./prepared-model-runtime.types.js";
 import { CREDENTIAL_ONLY_PROVIDER_ID } from "./test-helpers/prepared-model-catalog-credential-only.test-support.js";
 import { createStaticCatalogSnapshotFixture } from "./test-helpers/prepared-model-catalog-static-fixture.js";
 import {
@@ -56,44 +46,8 @@ const { makeTempDir, retireAfterTest, waitForWorkers } = usePreparedCatalogWorke
 
 const createStaticSnapshot = createStaticCatalogSnapshotFixture({ makeTempDir, retireAfterTest });
 
-function observeRefreshedCatalog(
-  snapshot: PreparedModelRuntimeSnapshot,
-  options: PreparedModelCatalogRefreshOptions,
-  signal: AbortSignal,
-  ready: (catalog: ModelCatalogSnapshot) => boolean = isPreparedModelCatalogFull,
-) {
-  const completion = createDeferred<ModelCatalogSnapshot>();
-  let observing = true;
-  const read = () => {
-    if (!observing) {
-      return;
-    }
-    const catalog = snapshot.readFullModelCatalog!();
-    if (catalog && ready(catalog)) {
-      completion.resolve(catalog);
-    }
-  };
-  const unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
-    if (event.phase === "catalog-failed") {
-      completion.reject(event.error);
-    } else if (event.phase === "catalog-published") {
-      read();
-    }
-  });
-  const completed = withinTest(completion.promise, signal).finally(() => {
-    observing = false;
-    unsubscribe();
-  });
-  void completed.catch(() => {});
-  const foreground = snapshot.loadFullModelCatalog!(options);
-  void foreground.then(read, completion.reject).catch(completion.reject);
-  return { foreground, completed };
-}
-
 describe("prepared model catalog worker plugin scope", () => {
-  it("retains refreshed CLI auth while acquiring an unrelated provider catalog", async ({
-    signal,
-  }) => {
+  it("retains refreshed CLI auth while acquiring an unrelated provider catalog", async () => {
     vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-worker-empty-codex-"));
     const cliHome = makeTempDir("openclaw-catalog-cli-auth-home-");
     const fixture = await createStaticSnapshot(0, { HOME: cliHome });
@@ -125,37 +79,10 @@ describe("prepared model catalog worker plugin scope", () => {
       }),
     );
 
-    const foregroundDeadlines: Array<() => void> = [];
-    const schedule = globalThis.setTimeout;
-    const deadlineSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation((callback, ms, ...args) => {
-        if (ms !== 5_000) {
-          return schedule(callback, ms, ...args);
-        }
-        const timer = schedule(callback, ms, ...args);
-        foregroundDeadlines.push(() => {
-          clearTimeout(timer);
-          callback(...args);
-        });
-        return timer;
-      });
-    let first: ReturnType<typeof observeRefreshedCatalog>;
-    try {
-      first = observeRefreshedCatalog(
-        fixture.snapshot,
-        { refresh: true, providerIds: [provider] },
-        signal,
-        (catalog) => Boolean(getPreparedModelFullCatalogAuth(catalog)?.credentials?.[provider]),
-      );
-    } finally {
-      deadlineSpy.mockRestore();
-    }
-    expect(foregroundDeadlines).toHaveLength(1);
-    foregroundDeadlines[0]!();
-    const fallback = await first.foreground;
-    expect(getPreparedModelFullCatalogAuth(fallback)?.credentials?.[provider]).toBeUndefined();
-    const refreshed = await first.completed;
+    const refreshed = await fixture.snapshot.loadFullModelCatalog!({
+      refresh: true,
+      providerIds: [provider],
+    });
     const expected = getPreparedModelFullCatalogAuth(refreshed)!;
     expect(expected.credentials?.[provider]).toMatchObject({
       access: "refreshed-cli-access-not-real",
@@ -167,15 +94,10 @@ describe("prepared model catalog worker plugin scope", () => {
     expect(expectedStore.runtimeLocalProfileIds).toContain(MINIMAX_CLI_PROFILE_ID);
     expect(expectedStore.runtimeLocalOrderProviderIds).toContain(provider);
 
-    const unrelated = await observeRefreshedCatalog(
-      fixture.snapshot,
-      { refresh: true, providerIds: [PROVIDER_ID] },
-      signal,
-      (catalog) =>
-        catalog.entries.some(
-          (entry) => entry.provider === PROVIDER_ID && entry.id === "plugin-generation-v1",
-        ),
-    ).completed;
+    const unrelated = await fixture.snapshot.loadFullModelCatalog!({
+      refresh: true,
+      providerIds: [PROVIDER_ID],
+    });
     expect(unrelated.entries).toContainEqual(
       expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
     );
@@ -192,13 +114,10 @@ describe("prepared model catalog worker plugin scope", () => {
     expect(fixture.snapshot.isCurrent()).toBe(true);
   });
 
-  it("captures runtime synthetic auth for credential-only providers before full refresh", async ({
-    signal,
-  }) => {
+  it("captures runtime synthetic auth for credential-only providers before full refresh", async () => {
     const fixture = await createStaticSnapshot(0, {}, { credentialOnlySyntheticAuth: true });
 
-    const catalog = await observeRefreshedCatalog(fixture.snapshot, { refresh: true }, signal)
-      .completed;
+    const catalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
 
     // The provider's catalog emits this row only when its stored token resolves.
     expect(catalog?.entries).toContainEqual(

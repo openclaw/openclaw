@@ -3,7 +3,6 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { advancePluginNativeAdmission } from "./plugin-native-admission-progress.js";
 import {
   capturePluginDependencies,
   createPluginDependencyResolver,
@@ -135,7 +134,6 @@ function inspectDirectory(
       boundary: packageBoundary,
       ...(linkTo === undefined ? {} : { linkTo }),
     });
-    advancePluginNativeAdmission();
     if (stat.isDirectory()) {
       if (linkTo !== undefined) {
         return;
@@ -298,7 +296,6 @@ export function capturePluginNativeNamespace(params: {
         copyPluginSourceFile(member.source, member.boundary, target);
         fs.chmodSync(target, 0o600 | Number(member.stat.mode & 0o100n));
       }
-      advancePluginNativeAdmission();
     }
   } catch (error) {
     if (

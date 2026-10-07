@@ -43,10 +43,7 @@ import {
   resolvePluginPackageMapTarget,
   visitPluginSourceReferences,
 } from "./plugin-source-references.js";
-import {
-  assertPluginSourceRootsCurrent,
-  verifyPluginSourceInputs,
-} from "./plugin-source-verification.js";
+import { verifyPluginSourceInputs } from "./plugin-source-verification.js";
 
 /** Capture selective entries and whole dependencies without replacing earlier file bytes. */
 export function capturePluginGenerationArtifact(
@@ -86,7 +83,6 @@ export function capturePluginGenerationArtifact(
     assertModuleAvailable,
   } = sourceCapture;
   const captureAdmitted = <T>(run: () => T) => {
-    using _ = nativeAdmission.trackProgress("source capture");
     const acquired = acquireSources(run);
     nativeAdmission.finish(receipt.finish());
     return acquired;
@@ -599,7 +595,6 @@ export function capturePluginGenerationArtifact(
   const packageForFile = (filename: string) =>
     findPluginCapturedPackage(packages, filename, directory)?.owner;
 
-  const progress = nativeAdmission.trackProgress("source capture");
   try {
     const sourceRoot = fs.realpathSync(rootDir);
     const entry = entryFile ? fs.realpathSync(entryFile) : undefined;
@@ -613,8 +608,12 @@ export function capturePluginGenerationArtifact(
       capturedPaths.set(alias, capturedPaths.get(entry)!);
     }
     const assertSourceCurrent = () => {
-      using _ = nativeAdmission.trackProgress("source verification");
-      assertPluginSourceRootsCurrent(rootDir, sourceRoot, entryFile, entry);
+      if (
+        fs.realpathSync(rootDir) !== sourceRoot ||
+        (entryFile && fs.realpathSync(entryFile) !== entry)
+      ) {
+        throw new Error("Plugin source root changed after capture");
+      }
       nativeAdmission.reconcileSourceInputs(inputs);
       verifyPluginSourceInputs(inputs, inputs.keys());
     };
@@ -713,7 +712,5 @@ export function capturePluginGenerationArtifact(
   } catch (error) {
     sourceCapture.dispose();
     throw error;
-  } finally {
-    progress[Symbol.dispose]();
   }
 }

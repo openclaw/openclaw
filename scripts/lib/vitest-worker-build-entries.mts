@@ -108,10 +108,6 @@ import { nativeSchtasksIntegrationEnabled } from "./vitest-worker-declarations.m
 
 // These fixture hooks require physical module boundaries and complete namespaces.
 export const preservedModuleBuildSources = [
-  "src/agents/test-helpers/prepared-model-catalog-inspection.worker.ts",
-  "src/agents/models-config.ts",
-  "src/agents/prepared-model-runtime.full-catalog.ts",
-  "src/infra/sqlite-snapshot-source.ts",
   "extensions/acpx/src/runtime.admission-retention.test-support.ts",
   "scripts/lib/tsdown-declaration-boundary.mts",
   "scripts/lib/sqlite-reliability-writer.ts",
