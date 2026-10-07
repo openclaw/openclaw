@@ -3,10 +3,12 @@ import {
   errorShape,
   type PortalSummary,
   validatePortalCloseParams,
+  validatePortalInspectParams,
   validatePortalListParams,
   validatePortalOpenParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
+import { probePortalAccess } from "../portals/portal-access-probe.js";
 import {
   createPortalOperations,
   redactPortalSummary,
@@ -99,6 +101,31 @@ async function mutatePortal(
 
 export const portalHandlers: GatewayRequestHandlers = {
   ...sessionPortalHandlers,
+  "portal.inspect": defineValidatedGatewayMethod(
+    "portal.inspect",
+    validatePortalInspectParams,
+    async (options) => {
+      const { params, respond, context } = options;
+      const service = requirePortalService(context, respond);
+      if (!service) {
+        return;
+      }
+      let portal: PortalSummary | undefined;
+      try {
+        portal = portalOperations(options, service, params.environmentId)
+          .list()
+          .portals.find((candidate) => candidate.id === params.id);
+      } catch (error) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(error)));
+        return;
+      }
+      if (!portal) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "portal not found"));
+        return;
+      }
+      respond(true, await probePortalAccess(portal.publicUrl), undefined);
+    },
+  ),
   "portal.list": defineValidatedGatewayMethod(
     "portal.list",
     validatePortalListParams,

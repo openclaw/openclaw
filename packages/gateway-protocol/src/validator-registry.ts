@@ -202,6 +202,7 @@ export const validateEnvironmentsDestroyParams = compile(S.EnvironmentsDestroyPa
 export const validateEnvironmentsListParams = compile(S.EnvironmentsListParamsSchema);
 export const validateEnvironmentsStatusParams = compile(S.EnvironmentsStatusParamsSchema);
 export const validatePortalListParams = compile(S.PortalListParamsSchema);
+export const validatePortalInspectParams = compile(S.PortalInspectParamsSchema);
 export const validatePortalOpenParams = compile(S.PortalOpenParamsSchema);
 export const validatePortalCloseParams = compile(S.PortalCloseParamsSchema);
 export const validateSessionPortalListParams = compile(S.SessionPortalListParamsSchema);

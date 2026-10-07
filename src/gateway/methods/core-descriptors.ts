@@ -549,6 +549,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["desktop.launch", "environments", "operator.admin", "2026.8", { startup: true }],
   ["device.scopes.requestUpgrade", "devices", "operator.read", "2026.8"],
   ["device.scopes.waitUpgrade", "devices", "operator.read", "2026.8", OBSERVATION],
+  ["portal.inspect", "portals", "operator.read", "2026.10", OBSERVATION],
   ["portal.list", "portals", "operator.read", "2026.8"],
   ["portal.open", "portals", "operator.write", "2026.8", CONTROL_PLANE_WRITE],
   ["portal.close", "portals", "operator.write", "2026.8", CONTROL_PLANE_WRITE],

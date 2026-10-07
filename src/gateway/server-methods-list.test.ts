@@ -611,7 +611,10 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("device.scopes.waitUpgrade")).toBe(
       methods.indexOf("device.scopes.requestUpgrade") + 1,
     );
-    expect(methods.indexOf("portal.list")).toBe(methods.indexOf("device.scopes.waitUpgrade") + 1);
+    expect(methods.indexOf("portal.inspect")).toBe(
+      methods.indexOf("device.scopes.waitUpgrade") + 1,
+    );
+    expect(methods.indexOf("portal.list")).toBe(methods.indexOf("portal.inspect") + 1);
     expect(methods.indexOf("portal.open")).toBe(methods.indexOf("portal.list") + 1);
     expect(methods.indexOf("portal.close")).toBe(methods.indexOf("portal.open") + 1);
     expect(methods.indexOf("sessions.move")).toBe(methods.indexOf("portal.close") + 1);

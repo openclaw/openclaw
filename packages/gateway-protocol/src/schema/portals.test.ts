@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   PortalChangedEventSchema,
   PortalCloseResultSchema,
+  PortalInspectResultSchema,
   PortalListResultSchema,
   PortalOpenResultSchema,
   PortalSummarySchema,
   validatePortalCloseParams,
+  validatePortalInspectParams,
   validatePortalListParams,
   validatePortalOpenParams,
   validateSessionPortalOpenParams,
@@ -43,8 +45,9 @@ describe("portal protocol schemas", () => {
     expect(validateSessionPortalListParams({ sessionKey: target.sessionKey })).toBe(false);
   });
 
-  it("accepts closed list, open, and close requests", () => {
+  it("accepts closed list, inspect, open, and close requests", () => {
     expect(validatePortalListParams({})).toBe(true);
+    expect(validatePortalInspectParams({ id: "p3000" })).toBe(true);
     expect(validatePortalOpenParams({ port: 3000, title: "Development app", path: "/app" })).toBe(
       true,
     );
@@ -55,6 +58,7 @@ describe("portal protocol schemas", () => {
     expect(validatePortalOpenParams({ port: 3000, path: "app" })).toBe(false);
     expect(validatePortalOpenParams({ port: 3000, host: "example.test" })).toBe(false);
     expect(validatePortalCloseParams({ id: "" })).toBe(false);
+    expect(validatePortalInspectParams({ id: "p3000", url: portal.url })).toBe(false);
   });
 
   it("validates summaries, results, and full replace-set events", () => {
@@ -65,6 +69,8 @@ describe("portal protocol schemas", () => {
     expect(Value.Check(PortalSummarySchema, redactedPortal)).toBe(true);
     expect(Value.Check(PortalOpenResultSchema, redactedPortal)).toBe(false);
     expect(Value.Check(PortalCloseResultSchema, { closed: true })).toBe(true);
+    expect(Value.Check(PortalInspectResultSchema, { access: "cloudflare" })).toBe(true);
+    expect(Value.Check(PortalInspectResultSchema, { access: "other" })).toBe(false);
     expect(Value.Check(PortalChangedEventSchema, { portals: [portal] })).toBe(true);
     const { publicUrl: _publicUrl, ...missingPublicUrl } = portal;
     expect(Value.Check(PortalSummarySchema, missingPublicUrl)).toBe(false);

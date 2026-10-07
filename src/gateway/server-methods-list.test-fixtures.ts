@@ -81,7 +81,7 @@ audit.run.inspect sessions.patchMany update.hold sessions.catalog.startTerminal
 worker.desktop.observe projects.list projects.register projects.remove worker.desktop.launch
 secrets.store.list secrets.store.set secrets.store.delete users.prefs.get users.prefs.set
 projects.add projects.searchRemote desktop.observe desktop.launch device.scopes.requestUpgrade
-device.scopes.waitUpgrade portal.list portal.open portal.close sessions.move
+device.scopes.waitUpgrade portal.inspect portal.list portal.open portal.close sessions.move
 sessions.assignOwner progressCard.get progressCard.put tools.github.status
 tools.github.configure tools.github.authorize.start tools.github.authorize.poll
 tools.github.authorize.cancel sessions.github.publish diagnostics.lanes

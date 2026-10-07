@@ -59,10 +59,35 @@ function harness(service?: GatewayPortalService, scopes = ["operator.write"]) {
 }
 
 describe("portal gateway methods", () => {
-  it("registers list and mutations with least-privilege scopes", () => {
+  it("registers inspection, list, and mutations with least-privilege scopes", () => {
+    expect(resolveCoreOperatorGatewayMethodScope("portal.inspect")).toBe("operator.read");
     expect(resolveCoreOperatorGatewayMethodScope("portal.list")).toBe("operator.read");
     expect(resolveCoreOperatorGatewayMethodScope("portal.open")).toBe("operator.write");
     expect(resolveCoreOperatorGatewayMethodScope("portal.close")).toBe("operator.write");
+  });
+
+  it("inspects only the service-owned token-free portal URL", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 302,
+        headers: {
+          Location: "https://team.cloudflareaccess.com/cdn-cgi/access/login/app",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const response = await harness(createService({ list: () => [portal] })).invoke(
+        "portal.inspect",
+        { id: portal.id },
+      );
+
+      expect(response).toHaveBeenCalledWith(true, { access: "cloudflare" }, undefined);
+      expect(fetchMock).toHaveBeenCalledWith(portal.publicUrl, expect.any(Object));
+      expect(fetchMock).not.toHaveBeenCalledWith(portal.url, expect.any(Object));
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("round-trips list, open, and idempotent close with replace-set broadcasts", async () => {

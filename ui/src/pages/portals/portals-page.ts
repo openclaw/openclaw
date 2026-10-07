@@ -2,6 +2,7 @@ import { consume } from "@lit/context";
 import type {
   EnvironmentSummary,
   PortalCloseResult,
+  PortalInspectResult,
   PortalListResult,
   PortalSummary,
 } from "@openclaw/gateway-protocol";
@@ -33,8 +34,15 @@ const PORTAL_FRAME_SANDBOX =
 
 type PortalProbeState = {
   key: string;
-  status: "probing" | "ingress-required" | "new-tab-required" | PortalReachability;
+  status:
+    | "probing"
+    | "access-login-required"
+    | "ingress-required"
+    | "new-tab-required"
+    | PortalReachability;
 };
+
+type PortalProbeResult = "access-login-required" | PortalReachability;
 
 class PortalsPage extends OpenClawLightDomElement {
   @property({ type: Boolean, reflect: true }) embedded = false;
@@ -65,7 +73,8 @@ class PortalsPage extends OpenClawLightDomElement {
   private requestGeneration = 0;
   private portalSetRevision = 0;
   private portalProbeGeneration = 0;
-  private readonly portalProbeCache = new Map<string, PortalReachability>();
+  private readonly portalProbeCache = new Map<string, PortalProbeResult>();
+  private pendingPortalLoginKey: string | null = null;
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     invalidateRequests: () => this.resetGatewayState(),
@@ -87,10 +96,32 @@ class PortalsPage extends OpenClawLightDomElement {
       }),
   );
 
+  private readonly handlePortalLoginReturn = () => {
+    const key = this.pendingPortalLoginKey;
+    if (!key || document.visibilityState === "hidden") {
+      return;
+    }
+    this.pendingPortalLoginKey = null;
+    if (this.portalProbeState?.key !== key) {
+      return;
+    }
+    this.portalProbeGeneration += 1;
+    this.portalProbeCache.set(key, "reachable");
+    this.portalProbeState = { key, status: "reachable" };
+  };
+
+  override connectedCallback() {
+    super.connectedCallback();
+    window.addEventListener("focus", this.handlePortalLoginReturn);
+    document.addEventListener("visibilitychange", this.handlePortalLoginReturn);
+  }
+
   override disconnectedCallback() {
     this.environmentRequestGeneration += 1;
     this.portalProbeGeneration += 1;
     this.subscriptions.clear();
+    window.removeEventListener("focus", this.handlePortalLoginReturn);
+    document.removeEventListener("visibilitychange", this.handlePortalLoginReturn);
     super.disconnectedCallback();
   }
 
@@ -238,6 +269,7 @@ class PortalsPage extends OpenClawLightDomElement {
     this.portalProbeGeneration += 1;
     this.portalProbeCache.clear();
     this.portalProbeState = null;
+    this.pendingPortalLoginKey = null;
   }
 
   private applyPortalSet(portals: readonly PortalSummary[]) {
@@ -291,12 +323,29 @@ class PortalsPage extends OpenClawLightDomElement {
 
     const generation = ++this.portalProbeGeneration;
     this.portalProbeState = { key, status: "probing" };
-    void probePortalReachable(url).then((reachability) => {
-      if (generation === this.portalProbeGeneration && this.portalProbeState?.key === key) {
-        this.portalProbeCache.set(key, reachability);
-        this.portalProbeState = { key, status: reachability };
-      }
-    });
+    const scope = this.gateway.capture();
+    if (!scope) {
+      return;
+    }
+    void scope.client
+      .request<PortalInspectResult>("portal.inspect", { id: portal.id })
+      .catch(() => ({ access: "unknown" }) satisfies PortalInspectResult)
+      .then(async ({ access }) => {
+        if (access === "cloudflare") {
+          return "access-login-required" as const;
+        }
+        return await probePortalReachable(url);
+      })
+      .then((reachability) => {
+        if (generation === this.portalProbeGeneration && this.portalProbeState?.key === key) {
+          this.portalProbeCache.set(key, reachability);
+          this.portalProbeState = { key, status: reachability };
+        }
+      });
+  }
+
+  private markPortalLogin(frameKey: string) {
+    this.pendingPortalLoginKey = frameKey;
   }
 
   private selectPortal(portal: PortalSummary) {
@@ -435,11 +484,13 @@ class PortalsPage extends OpenClawLightDomElement {
     const probeStatus =
       this.portalProbeState?.key === frameKey ? this.portalProbeState.status : "probing";
     const noticeKey =
-      probeStatus === "new-tab-required"
-        ? "newTabRequired"
-        : probeStatus === "ingress-required"
-          ? "ingressRequired"
-          : "unreachable";
+      probeStatus === "access-login-required"
+        ? "accessLoginRequired"
+        : probeStatus === "new-tab-required"
+          ? "newTabRequired"
+          : probeStatus === "ingress-required"
+            ? "ingressRequired"
+            : "unreachable";
     return html`
       <section class="portals-preview">
         <header class="portals-preview__header">
@@ -479,7 +530,8 @@ class PortalsPage extends OpenClawLightDomElement {
                   <div class="portals-empty__title">${t("portalsPage.loading")}</div>
                 </div>
               `
-            : probeStatus === "unreachable" ||
+            : probeStatus === "access-login-required" ||
+                probeStatus === "unreachable" ||
                 probeStatus === "ingress-required" ||
                 probeStatus === "new-tab-required"
               ? html`
@@ -488,20 +540,33 @@ class PortalsPage extends OpenClawLightDomElement {
                       ${t(`portalsPage.${noticeKey}Title`)}
                     </div>
                     <p>${t(`portalsPage.${noticeKey}Body`)}</p>
-                    <a
-                      class="portals-preview__notice-url"
-                      href=${portalUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      >${displayUrl.href}</a
-                    >
-                    <button
-                      class="btn"
-                      type="button"
-                      @click=${() => this.ensurePortalProbe(portal, true)}
-                    >
-                      ${t("portalsPage.retry")}
-                    </button>
+                    ${
+                      probeStatus === "access-login-required"
+                        ? html`<a
+                            class="btn"
+                            href=${portalUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            @click=${() => this.markPortalLogin(frameKey)}
+                            >${t("portalsPage.accessLoginAction")}</a
+                          >`
+                        : html`
+                            <a
+                              class="portals-preview__notice-url"
+                              href=${portalUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              >${displayUrl.href}</a
+                            >
+                            <button
+                              class="btn"
+                              type="button"
+                              @click=${() => this.ensurePortalProbe(portal, true)}
+                            >
+                              ${t("portalsPage.retry")}
+                            </button>
+                          `
+                    }
                   </div>
                 `
               : keyed(
