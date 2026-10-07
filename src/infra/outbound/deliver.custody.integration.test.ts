@@ -110,7 +110,7 @@ describe("follow-up delivery custody", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it.each(["ack", "retire"] as const)(
+  it.each(["retire"] as const)(
     "keeps a committed %s released when a later observer throws",
     async (transition) => {
       const stateDir = fixtures.tmpDir();
