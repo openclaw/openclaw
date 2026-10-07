@@ -57,13 +57,13 @@ import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
 } from "../prepared-model-runtime.js";
+import { prepareAgentPromptProjects } from "../prompt-projects.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
 import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
-import { prepareAgentPromptProjects } from "../runtime-prompt.js";
 import { resolveSessionPlacementTurnSettlementAssertion } from "../session-placement-forced-terminal-settlement.js";
 import {
   resolveSessionSuspensionTarget,
@@ -80,7 +80,6 @@ import { createEmbeddedAgentPluginRuntimeRefresh } from "./plugin-runtime-refres
 import { runPreparedEmbeddedLoop } from "./run-loop.js";
 import { createEmbeddedRunStageSummaryEmitter } from "./run/attempt-stage-timing.js";
 import { withExecutionPhaseDiagnostics } from "./run/execution-phase-diagnostics.js";
-import { buildEmbeddedFailureSuspension } from "./run/failure-suspension.js";
 import type {
   RunEmbeddedAgentInternalParams,
   RunEmbeddedAgentParamsWithSessionFile,
@@ -187,10 +186,11 @@ async function runEmbeddedAgentInternal(
     if (!failureSuspension) {
       return;
     }
-    const suspension = buildEmbeddedFailureSuspension({
-      suspension: suspensionParams,
-      runAgentId: params.agentId,
-    });
+    const suspension = {
+      ...suspensionParams,
+      // A caller-supplied id wins; the run owns unregistered agent directories.
+      agentId: suspensionParams.agentId ?? params.agentId,
+    };
     if (failureSuspension.mode === "defer") {
       failureSuspension.defer(suspension);
       return;
@@ -318,18 +318,16 @@ async function runEmbeddedAgentInternal(
           model: requestedRuntimeSelection.modelId,
           requestedRouteResolution: params.requestedRouteResolution,
           fallbacksOverride: runtimePluginFallbacksOverride,
-        }).map((candidate, index) => {
-          const selection: AgentHarnessPluginSelection = {
-            provider: candidate.provider,
-            modelId: candidate.model,
-          };
-          // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
-          if (requestedHarnessRuntime && (index === 0 || explicitHarnessRuntime)) {
-            selection.runtime = requestedHarnessRuntime;
-          }
-          selection.agentId = requestedWorkspaceResolution.agentId;
-          return selection;
-        });
+        }).map((candidate, index): AgentHarnessPluginSelection =>
+          Object.assign(
+            { provider: candidate.provider, modelId: candidate.model },
+            // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
+            requestedHarnessRuntime && (index === 0 || explicitHarnessRuntime)
+              ? { runtime: requestedHarnessRuntime }
+              : {},
+            { agentId: requestedWorkspaceResolution.agentId },
+          ),
+        );
         const preparedInput = {
           config,
           agentId: requestedWorkspaceResolution.agentId,
@@ -360,22 +358,22 @@ async function runEmbeddedAgentInternal(
           // Runtime acquisition owns its build bound before the attempt budget starts.
           // Suspend lane-idle inference without inventing progress; Stop still cancels admission.
           laneController.setLaneTaskDeadline({ kind: "unlimited" });
-          const preparedModelRuntimeLease = await (
-            params.preparedModelRuntimeMode === "isolated-read-only"
-              ? // Probe homes outlive only the attempt client, not independent live catalog clients.
-                acquireReadOnlyPreparedModelRuntime(preparedInput, {
-                  abortSignal: laneController.abortSignal,
-                  catalogMode: "static",
-                })
-              : acquireAgentRunPreparedModelRuntime(preparedInput, {
+          // Probe homes outlive only the attempt client, not independent live catalog clients.
+          const isolatedReadOnly = params.preparedModelRuntimeMode === "isolated-read-only";
+          const acquireRuntime = isolatedReadOnly
+            ? acquireReadOnlyPreparedModelRuntime
+            : acquireAgentRunPreparedModelRuntime;
+          const preparedModelRuntimeLease = await acquireRuntime(preparedInput, {
+            abortSignal: laneController.abortSignal,
+            // Turns need only configured admission facts; inventory remains a lazy snapshot load.
+            catalogMode: "static",
+            ...(!isolatedReadOnly
+              ? {
                   retainIdleRunOwner,
-                  // Turns need only configured admission facts. Full live model inventory remains
-                  // available through the snapshot's lazy control-plane loader.
-                  catalogMode: "static",
                   ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
-                  abortSignal: laneController.abortSignal,
-                })
-          ).finally(() => {
+                }
+              : {}),
+          }).finally(() => {
             noteLaneTaskProgress();
             laneController.setLaneTaskDeadline(undefined);
           });

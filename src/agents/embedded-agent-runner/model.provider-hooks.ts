@@ -113,19 +113,17 @@ export function normalizeResolvedModel(params: {
       return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     }
     const record = cost as Partial<Model["cost"]>;
-    const input = asFiniteNumber(record.input) ?? 0;
-    const output = asFiniteNumber(record.output) ?? 0;
-    const cacheRead = asFiniteNumber(record.cacheRead) ?? 0;
-    const cacheWrite = asFiniteNumber(record.cacheWrite) ?? 0;
-    if (
-      input === record.input &&
-      output === record.output &&
-      cacheRead === record.cacheRead &&
-      cacheWrite === record.cacheWrite
-    ) {
-      return record as Model["cost"];
-    }
-    return { ...cost, input, output, cacheRead, cacheWrite };
+    const normalized = {
+      input: asFiniteNumber(record.input) ?? 0,
+      output: asFiniteNumber(record.output) ?? 0,
+      cacheRead: asFiniteNumber(record.cacheRead) ?? 0,
+      cacheWrite: asFiniteNumber(record.cacheWrite) ?? 0,
+    };
+    return (["input", "output", "cacheRead", "cacheWrite"] as const).every(
+      (key) => normalized[key] === record[key],
+    )
+      ? (record as Model["cost"])
+      : { ...cost, ...normalized };
   };
 
   const normalizedInputModel = {

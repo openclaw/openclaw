@@ -47,6 +47,36 @@ import { resolveAgentHarnessRunAdmissionError } from "./setup.js";
 
 const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
 
+function resolveSessionTargetAgentId(
+  params: Pick<RunEmbeddedAgentParams, "agentId" | "config" | "sessionTarget">,
+  sessionKey: string | undefined,
+  markerAgentId?: string,
+): string {
+  const targetAgentId = normalizeOptionalString(params.sessionTarget?.agentId);
+  const targetStorePath = normalizeOptionalString(params.sessionTarget?.storePath);
+  const targetStoreOwner = resolvePersistedSessionStoreOwnerForTarget({
+    config: params.config ?? {},
+    sessionKey,
+    storePath: targetStorePath,
+  });
+  if (
+    targetAgentId &&
+    targetStorePath &&
+    !parseAgentSessionKey(sessionKey)?.agentId &&
+    targetStoreOwner.kind === "none"
+  ) {
+    return targetAgentId;
+  }
+  return (
+    markerAgentId ??
+    resolveSessionAgentId({
+      agentId: targetAgentId ?? params.agentId,
+      config: params.config,
+      sessionKey,
+    })
+  );
+}
+
 export function buildContextEngineCompactionSessionTarget(params: {
   agentId?: string;
   config?: RunEmbeddedAgentParams["config"];
@@ -111,25 +141,7 @@ export function buildContextEngineCompactionSessionTarget(params: {
     : marker
       ? markerSessionKey
       : (targetSessionKey ?? suppliedSessionKey);
-  const targetStoreOwner = resolvePersistedSessionStoreOwnerForTarget({
-    config: params.config ?? {},
-    sessionKey,
-    storePath: targetStorePath,
-  });
-  const trustExplicitAlternateStoreAgent = Boolean(
-    targetAgentId &&
-    targetStorePath &&
-    !parseAgentSessionKey(sessionKey)?.agentId &&
-    targetStoreOwner.kind === "none",
-  );
-  const agentId =
-    (trustExplicitAlternateStoreAgent ? targetAgentId : undefined) ??
-    marker?.agentId ??
-    resolveSessionAgentId({
-      agentId: targetAgentId ?? params.agentId,
-      config: params.config,
-      sessionKey,
-    });
+  const agentId = resolveSessionTargetAgentId(params, sessionKey, marker?.agentId);
   const storePath =
     targetStorePath ??
     marker?.storePath ??
@@ -356,26 +368,8 @@ export async function assertAgentHarnessRunAdmission(
   if (!sessionKey) {
     return undefined;
   }
-  const targetAgentId = normalizeOptionalString(params.sessionTarget?.agentId);
   const targetStorePath = normalizeOptionalString(params.sessionTarget?.storePath);
-  const targetStoreOwner = resolvePersistedSessionStoreOwnerForTarget({
-    config: params.config ?? {},
-    sessionKey,
-    storePath: targetStorePath,
-  });
-  const trustExplicitAlternateStoreAgent = Boolean(
-    targetAgentId &&
-    targetStorePath &&
-    !parseAgentSessionKey(sessionKey)?.agentId &&
-    targetStoreOwner.kind === "none",
-  );
-  const admissionAgentId = trustExplicitAlternateStoreAgent
-    ? targetAgentId
-    : resolveSessionAgentId({
-        agentId: targetAgentId ?? params.agentId,
-        config: params.config,
-        sessionKey,
-      });
+  const admissionAgentId = resolveSessionTargetAgentId(params, sessionKey);
   const storePath =
     targetStorePath ??
     resolveSessionStorePathCore(params.config?.session?.store, { agentId: admissionAgentId });

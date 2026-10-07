@@ -12,13 +12,6 @@ import type {
 import { normalizeDiscordDisplaySlug, normalizeDiscordSlug } from "./allow-list.js";
 import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
 
-function formatUsername(user: { username: string; discriminator?: string | null }): string {
-  if (user.discriminator && user.discriminator !== "0") {
-    return `${user.username}#${user.discriminator}`;
-  }
-  return user.username;
-}
-
 export function resolveAgentComponentRoute(params: {
   ctx: AgentComponentContext;
   rawGuildId: string | undefined;
@@ -47,14 +40,9 @@ export async function ackComponentInteraction(params: {
   interaction: AgentComponentInteraction;
   label: string;
 }) {
-  try {
-    await params.interaction.reply({
-      content: "✓",
-      ephemeral: true,
-    });
-  } catch (err) {
+  await replySilently(params.interaction, { content: "✓", ephemeral: true }, (err) => {
     logError(`${params.label}: failed to acknowledge interaction: ${String(err)}`);
-  }
+  });
 }
 
 export async function replyUnavailableComponentInteraction(
@@ -75,16 +63,9 @@ export function resolveDiscordChannelContext(
   const channelType = channelInfo.type;
   const isThread = isDiscordThreadChannelType(channelType);
 
-  let parentId: string | undefined;
-  let parentName: string | undefined;
-  let parentSlug = "";
-  if (isThread) {
-    parentId = channelInfo.parentId;
-    parentName = channelInfo.parentName;
-    if (parentName) {
-      parentSlug = normalizeDiscordSlug(parentName);
-    }
-  }
+  const parentId = isThread ? channelInfo.parentId : undefined;
+  const parentName = isThread ? channelInfo.parentName : undefined;
+  const parentSlug = parentName ? normalizeDiscordSlug(parentName) : "";
 
   return {
     channelName,
@@ -115,7 +96,10 @@ export async function resolveComponentInteractionContext(params: {
     return null;
   }
 
-  const username = formatUsername(user);
+  const username =
+    user.discriminator && user.discriminator !== "0"
+      ? `${user.username}#${user.discriminator}`
+      : user.username;
   const userId = user.id;
   const rawGuildId = interaction.rawData.guild_id;
   const channelType = resolveDiscordChannelContext(interaction).channelType;

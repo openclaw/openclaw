@@ -21,7 +21,7 @@ import type { normalizeUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
-import type { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
+import type { NormalizedEmbeddedRunAttempt } from "./attempt-normalization.js";
 import { hasAsyncActivity, isCurrentAttemptReplaySafe } from "./attempt-terminal-evidence.js";
 import { buildEmbeddedRunBlockedResult } from "./blocked-run-result.js";
 import { resolveCodexAppServerRecoveryRetry } from "./codex-app-server-recovery.js";
@@ -41,10 +41,6 @@ import { isEmbeddedRunTerminalInterrupted, isEmbeddedRunTimeoutFinal } from "./t
 import { recoverEmbeddedRunTimeout } from "./timeout-context-recovery.js";
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
-type NormalizedAttempt = Extract<
-  Awaited<ReturnType<typeof normalizeEmbeddedRunAttempt>>,
-  { action: "proceed" }
->;
 type Dispatch = Awaited<ReturnType<typeof prepareAndDispatchEmbeddedRunAttempt>>;
 type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 type FailoverRetryController = ReturnType<typeof createEmbeddedRunFailoverRetryController>;
@@ -53,7 +49,7 @@ type CompactionRuntime = ReturnType<typeof createEmbeddedRunCompactionRuntime>;
 export async function recoverEmbeddedRunAttempt(input: {
   runInput: PreparedEmbeddedRunInput;
   preparedRuntime: PreparedRuntime;
-  normalizedAttempt: NormalizedAttempt;
+  normalizedAttempt: NormalizedEmbeddedRunAttempt;
   runtimePlan: Dispatch["runtimePlan"];
   sessionPromptState: SessionPromptState;
   failoverRetryController: FailoverRetryController;
@@ -104,11 +100,11 @@ export async function recoverEmbeddedRunAttempt(input: {
     terminalState,
     setTerminalLifecycleMeta,
     attemptCompactionCount,
-    activeErrorContext,
     resolveReplayInvalidForAttempt,
     assistantErrorText,
     canRestartForLiveSwitch,
   } = normalizedAttempt;
+  const terminal = projectAgentRunAttemptTerminal(attempt.terminal);
   const {
     aborted,
     externalAbort,
@@ -119,7 +115,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     timedOutDuringToolExecution,
     timedOutByRunBudget,
     idleTimedOut,
-  } = projectAgentRunAttemptTerminal(attempt.terminal);
+  } = terminal;
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalState.outcome);
   const currentAttemptReplaySafe = isCurrentAttemptReplaySafe(attempt);
   const settledEvidence = resolveSettledToolBatchEvidence(attempt);
@@ -541,34 +537,15 @@ export async function recoverEmbeddedRunAttempt(input: {
     !hasCodexAppServerTimeoutOutcome
   ) {
     const promptFailureOutcome = await handleEmbeddedPromptFailure({
-      runParams: params,
-      attempt,
-      promptError,
-      promptErrorSource,
-      activeErrorContext,
-      provider: preparedRuntime.provider,
-      modelId: preparedRuntime.modelId,
-      authProfileId: runtime.lastProfileId,
-      authProfileStore: preparedRuntime.attemptAuthProfileStore,
-      sessionIdUsed,
-      lane: runInput.globalLane,
-      agentDir: runInput.agentDir,
+      runInput,
+      preparedRuntime,
+      normalizedAttempt,
+      runtime,
+      terminal,
       suspensionSessionId: sessionPromptState.sessionId ?? params.sessionId,
       runtimeAuthRetry: input.runtimeAuthRetry,
-      maybeRefreshRuntimeAuthForAuthError: preparedRuntime.maybeRefreshRuntimeAuthForAuthError,
-      suspendForFailure: runInput.suspendForFailure,
-      resolveReplayInvalid: resolveReplayInvalidForAttempt,
-      setTerminalLifecycleMeta,
       buildErrorAgentMeta: buildAttemptErrorMeta,
-      startedAtMs: runInput.startedAtMs,
-      fallbackConfigured: runInput.fallbackConfigured,
-      aborted,
-      externalAbort,
-      pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
-      timedOutByRunBudget,
       failover: failoverRetryController,
-      attemptedThinking: preparedRuntime.attemptedThinking,
-      thinkLevel: runtime.thinkLevel,
       getThinkLevel: () => preparedRuntime.snapshot().thinkLevel,
       traceAttempts: input.traceAttempts,
       previousRetryFailoverReason: input.lastRetryFailoverReason,

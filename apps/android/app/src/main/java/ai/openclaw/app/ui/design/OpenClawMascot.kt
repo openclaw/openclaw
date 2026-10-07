@@ -35,19 +35,17 @@ import kotlin.math.sin
 // Canonical 120x120 mascot geometry from ui/public/favicon.svg; parts stay
 // separate paths so claws, antennae, and eyes can animate independently.
 private val BodyPath =
-  PathParser()
-    .parsePathString(
-      "M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 " +
-        "C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z",
-    ).toPath()
-private val LeftClawPath =
-  PathParser().parsePathString("M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z").toPath()
-private val RightClawPath =
-  PathParser().parsePathString("M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z").toPath()
-private val LeftAntennaPath = PathParser().parsePathString("M45 15 Q35 5 30 8").toPath()
-private val RightAntennaPath = PathParser().parsePathString("M75 15 Q85 5 90 8").toPath()
-private val HardHatDomePath =
-  PathParser().parsePathString("M45 15 C47 7 54 3 60 3 C66 3 73 7 75 15 L45 15 Z").toPath()
+  mascotPath(
+    "M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 " +
+      "C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z",
+  )
+private val LeftClawPath = mascotPath("M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z")
+private val RightClawPath = mascotPath("M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z")
+private val LeftAntennaPath = mascotPath("M45 15 Q35 5 30 8")
+private val RightAntennaPath = mascotPath("M75 15 Q85 5 90 8")
+private val HardHatDomePath = mascotPath("M45 15 C47 7 54 3 60 3 C66 3 73 7 75 15 L45 15 Z")
+
+private fun mascotPath(data: String): Path = PathParser().parsePathString(data).toPath()
 
 private val CoralBright = Color(0xFFFF4D4D)
 private val CoralDark = Color(0xFF991B1B)

@@ -44,31 +44,6 @@ function extractComponentAttachmentNames(spec: DiscordComponentMessageSpec): str
   return names;
 }
 
-function hasComponentAttachmentBlock(spec: DiscordComponentMessageSpec): boolean {
-  return (spec.blocks ?? []).some((block) => block.type === "file");
-}
-
-function withImplicitComponentAttachmentBlock(
-  spec: DiscordComponentMessageSpec,
-  attachmentName: string | undefined,
-): DiscordComponentMessageSpec {
-  if (!attachmentName || hasComponentAttachmentBlock(spec)) {
-    return spec;
-  }
-  // Discord File components must point at the uploaded attachment name. Add the
-  // matching file block automatically so callers do not have to duplicate it.
-  return {
-    ...spec,
-    blocks: [
-      ...(spec.blocks ?? []),
-      {
-        type: "file",
-        file: `attachment://${attachmentName}`,
-      },
-    ],
-  };
-}
-
 function resolveClassicDiscordMessage(
   spec: DiscordComponentMessageSpec,
 ): { text: string; filename?: string } | undefined {
@@ -140,6 +115,7 @@ async function buildDiscordComponentPayload(params: {
   let spec = params.spec;
   let resolvedFileName: string | undefined;
   let files: MessagePayloadFile[] | undefined;
+  let attachmentNames: string[] | undefined;
   if (params.opts.mediaUrl) {
     const media = await loadOutboundMediaFromUrl(params.opts.mediaUrl, {
       mediaAccess: params.opts.mediaAccess,
@@ -147,18 +123,25 @@ async function buildDiscordComponentPayload(params: {
       mediaReadFile: params.opts.mediaReadFile,
     });
     const filenameOverride = params.opts.filename?.trim();
-    const explicitAttachmentName = extractComponentAttachmentNames(spec)[0];
+    attachmentNames = extractComponentAttachmentNames(spec);
+    const explicitAttachmentName = attachmentNames[0];
     resolvedFileName =
       filenameOverride ||
       explicitAttachmentName ||
       media.fileName ||
       `upload${extensionForMime(media.contentType) ?? ""}`;
-    spec = withImplicitComponentAttachmentBlock(spec, resolvedFileName);
+    if (attachmentNames.length === 0) {
+      // An implicit File component must reference the uploaded filename.
+      const file: `attachment://${string}` = `attachment://${resolvedFileName}`;
+      spec = { ...spec, blocks: [...(spec.blocks ?? []), { type: "file", file }] };
+      attachmentNames = [resolveDiscordComponentAttachmentName(file)];
+    }
     files = [{ data: media.buffer, name: resolvedFileName, contentType: media.contentType }];
   }
 
-  const attachmentNames = extractComponentAttachmentNames(spec);
-  const uniqueAttachmentNames = uniqueStrings(attachmentNames);
+  const uniqueAttachmentNames = uniqueStrings(
+    attachmentNames ?? extractComponentAttachmentNames(spec),
+  );
   if (uniqueAttachmentNames.length > 1) {
     throw new Error(
       "Discord component attachments currently support a single file. Use media-gallery for multiple files.",

@@ -10,7 +10,7 @@ import {
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
-import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
+import { isExecCompletionSystemEvent } from "../../infra/heartbeat-events-filter.js";
 import {
   isSystemEventStoreCurrent,
   resolveSystemEventQueueKey,
@@ -105,7 +105,7 @@ export async function drainFormattedSystemEvents(params: {
   const queued = consumeSelectedSystemEventEntries(
     queueKey,
     (params.events ?? peekSystemEventEntries(queueKey)).filter(
-      (event) => !isExecCompletionEvent(event.text),
+      (event) => !isExecCompletionSystemEvent(event),
     ),
     { deferredEventIds: params.deferredEventIds },
   );

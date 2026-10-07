@@ -380,20 +380,20 @@ function renderDaySessions(
   props: SessionActivityViewProps,
   day: ReturnType<typeof projectSessionActivity>["days"][number],
 ) {
-  if (props.filters.query || props.filters.personId) {
-    return day.sessions.map((row) => renderSessionLink(props.context, row, props.onSummaryRetry));
-  }
+  const renderRow = (row: GatewaySessionRow) =>
+    renderSessionLink(props.context, row, props.onSummaryRetry);
   // GatewaySessionRow.hasAutomation records that an enabled cron job is bound to the session;
   // grouping must consume that fact directly rather than infer automation from titles or keys.
-  const automation = day.sessions.filter((row) => row.hasAutomation === true);
+  const automation =
+    props.filters.query || props.filters.personId
+      ? []
+      : day.sessions.filter((row) => row.hasAutomation === true);
   if (automation.length < 2) {
-    return day.sessions.map((row) => renderSessionLink(props.context, row, props.onSummaryRetry));
+    return day.sessions.map(renderRow);
   }
   const expanded = props.expandedAutomationDays.has(day.key);
   return html`
-    ${day.sessions
-      .filter((row) => row.hasAutomation !== true)
-      .map((row) => renderSessionLink(props.context, row, props.onSummaryRetry))}
+    ${day.sessions.filter((row) => row.hasAutomation !== true).map(renderRow)}
     <button
       type="button"
       class="activity-feed__session activity-feed__automation-group"
@@ -407,11 +407,7 @@ function renderDaySessions(
         >${icons.chevronRight}</span
       >
     </button>
-    ${
-      expanded
-        ? automation.map((row) => renderSessionLink(props.context, row, props.onSummaryRetry))
-        : nothing
-    }
+    ${expanded ? automation.map(renderRow) : nothing}
   `;
 }
 

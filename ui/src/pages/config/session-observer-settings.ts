@@ -1,5 +1,6 @@
 import { html } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import { providerIdFromModelRef } from "../../components/provider-icon.ts";
@@ -56,22 +57,18 @@ function resolvedModelLabel(status: SystemInfoResult["defaultAgentUtilityModel"]
 }
 
 function modelOptions(models: readonly ModelCatalogEntry[]) {
-  const seen = new Set<string>();
-  return models
-    .filter((model) => model.available !== false)
-    .map((model) => ({
-      value: model.id.startsWith(`${model.provider}/`) ? model.id : `${model.provider}/${model.id}`,
-      label: model.name || model.id,
-      provider: model.provider,
-    }))
-    .filter((model) => {
-      if (seen.has(model.value)) {
-        return false;
-      }
-      seen.add(model.value);
-      return true;
-    })
-    .toSorted((a, b) => a.label.localeCompare(b.label));
+  return dedupeByKey(
+    models
+      .filter((model) => model.available !== false)
+      .map((model) => ({
+        value: model.id.startsWith(`${model.provider}/`)
+          ? model.id
+          : `${model.provider}/${model.id}`,
+        label: model.name || model.id,
+        provider: model.provider,
+      })),
+    (model) => model.value,
+  ).toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
 export function renderSessionObserverSettings(props: {

@@ -9,11 +9,10 @@ function resolveDiscordProxyUrl(
   account: Pick<ResolvedDiscordAccount, "config">,
   cfg: OpenClawConfig,
 ): string | undefined {
-  const accountProxy = normalizeOptionalString(account.config.proxy);
-  if (accountProxy) {
-    return accountProxy;
-  }
-  return normalizeOptionalString(cfg?.channels?.discord?.proxy);
+  return (
+    normalizeOptionalString(account.config.proxy) ??
+    normalizeOptionalString(cfg?.channels?.discord?.proxy)
+  );
 }
 
 export function resolveDiscordProxyFetchForAccount(

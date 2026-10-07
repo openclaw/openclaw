@@ -80,21 +80,13 @@ function hasCandidateMetadataPaths(params: {
   providerId: string;
   modelIndex: number;
 }): boolean {
-  if (!params.record.changedPaths) {
-    return false;
-  }
-  const fields = new Set<string>();
   const prefix = `models.providers.${params.providerId}.models[${params.modelIndex}].`;
-  for (const changedPath of params.record.changedPaths) {
-    if (!changedPath.startsWith(prefix)) {
-      continue;
-    }
-    const field = changedPath.slice(prefix.length).split(".", 1)[0];
-    if (field && GENERATED_MODEL_FIELDS.some((candidate) => candidate === field)) {
-      fields.add(field);
-    }
-  }
-  return fields.size === GENERATED_MODEL_FIELDS.length;
+  return GENERATED_MODEL_FIELDS.every((field) =>
+    params.record.changedPaths?.some(
+      (changedPath) =>
+        changedPath === `${prefix}${field}` || changedPath.startsWith(`${prefix}${field}.`),
+    ),
+  );
 }
 
 function hasAuditProvenance(params: {

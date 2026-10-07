@@ -137,12 +137,8 @@ fun parseShareLaunchIntent(
     normalizeSharedAttachmentMimeType(intent.type)
       ?.takeIf { sharedAttachmentKindForMimeType(it) != null }
   val resolved = mutableListOf<SharedAttachment>()
-  var droppedCount = 0
-  for ((index, uri) in validUris.withIndex()) {
-    if (resolved.size >= MAX_SHARED_ATTACHMENT_COUNT) {
-      droppedCount += validUris.size - index
-      break
-    }
+  for (uri in validUris) {
+    if (resolved.size >= MAX_SHARED_ATTACHMENT_COUNT) break
     val providerMimeType =
       try {
         normalizeSharedAttachmentMimeType(resolveMimeType(uri))
@@ -150,18 +146,14 @@ fun parseShareLaunchIntent(
         null
       }
     val mimeType = providerMimeType ?: fallbackMimeType
-    val kind = sharedAttachmentKindForMimeType(mimeType)
-    if (kind == null) {
-      droppedCount += 1
-      continue
-    }
+    val kind = sharedAttachmentKindForMimeType(mimeType) ?: continue
     resolved += SharedAttachment(uri = uri, kind = kind, mimeType = requireNotNull(mimeType))
   }
-  if (text == null && resolved.isEmpty() && droppedCount == 0) return null
+  if (text == null && validUris.isEmpty()) return null
   return ShareLaunchRequest(
     text = text,
     attachments = resolved,
-    droppedAttachmentCount = droppedCount,
+    droppedAttachmentCount = validUris.size - resolved.size,
   )
 }
 

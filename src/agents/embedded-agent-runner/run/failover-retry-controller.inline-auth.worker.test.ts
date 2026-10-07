@@ -215,31 +215,37 @@ async function fixture(state: OpenClawTestState, owner: Owner, empty = false) {
     derived = { agentDir: childDir, durable: child, profiles: structuredClone(runtime.profiles) };
   }
   const controller = createEmbeddedRunFailoverRetryController({
-    runParams: {
-      runId: "inline-auth-failure-run",
-      sessionId: "inline-auth-failure-session",
-      sessionFile: state.path("synthetic-session.jsonl"),
-      workspaceDir: state.workspaceDir,
-      prompt: "synthetic inline-key failure",
-      timeoutMs: 60_000,
-      config,
+    runInput: {
+      runParams: {
+        runId: "inline-auth-failure-run",
+        sessionId: "inline-auth-failure-session",
+        sessionFile: state.path("synthetic-session.jsonl"),
+        workspaceDir: state.workspaceDir,
+        prompt: "synthetic inline-key failure",
+        timeoutMs: 60_000,
+        config,
+      },
+      globalLane: "inline-auth-failure-test",
+      agentDir,
+      fallbackConfigured: false,
     },
-    provider,
-    modelId: "synthetic-model",
-    globalLane: "inline-auth-failure-test",
-    agentDir,
-    fallbackConfigured: false,
-    profileFailureStore: store,
-    getLastProfileId: () => undefined,
+    preparedRuntime: {
+      provider,
+      modelId: "synthetic-model",
+      profileFailureStore: store,
+      snapshot: () => ({
+        lastProfileId: undefined,
+        pluginHarnessOwnsTransport: false,
+        agentHarness: { id: "embedded" },
+      }),
+      getApiKeyInfo: () => ({
+        apiKey: "synthetic-inline-key",
+        mode: "api-key",
+        source: "models.json",
+      }),
+      advanceAttemptAuthProfile: async () => false,
+    },
     getSessionId: () => "inline-auth-failure-session",
-    harnessOwnsTransport: () => false,
-    getRuntimeAuthOwnerId: () => "embedded",
-    getApiKeyInfo: () => ({
-      apiKey: "synthetic-inline-key",
-      mode: "api-key",
-      source: "models.json",
-    }),
-    advanceAuthProfile: async () => false,
   });
   return { agentDir, initial, store, database, controller, sharedBefore, derived };
 }

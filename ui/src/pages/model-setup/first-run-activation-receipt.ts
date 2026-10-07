@@ -216,32 +216,3 @@ export function clearFirstRunActivationReceipt(expected?: FirstRunActivationRece
     clearReceipt(storage, expected);
   }
 }
-
-export function resumeFirstRunActivation(
-  navigation: {
-    context: ActivationContext;
-    isStillDefaultLanding: () => boolean;
-    redirect: () => void;
-  },
-  ownerSnapshot: ActivationContext["gateway"]["snapshot"],
-  ownerRevision: number,
-  ownerAgentId: string | null,
-  isSettled: () => boolean,
-  settle: () => void,
-): void {
-  const { context } = navigation;
-  const snapshot = context.gateway.snapshot;
-  if (
-    !isSettled() &&
-    snapshot.phase === "connected" &&
-    snapshot.client === ownerSnapshot.client &&
-    snapshot.hello === ownerSnapshot.hello &&
-    context.gateway.connectionRevision === ownerRevision &&
-    (context.agentSelection.state.selectedId?.trim() || null) === ownerAgentId &&
-    navigation.isStillDefaultLanding() &&
-    readFirstRunActivationReceipt(context) !== null
-  ) {
-    navigation.redirect();
-  }
-  settle();
-}

@@ -1,5 +1,7 @@
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import { assertConversationAuthority } from "./conversation-authority.js";
 import type { SessionEntryPatchOptions } from "./session-accessor.sqlite-contract.js";
+import { resolveConversationInDatabase } from "./session-accessor.sqlite-conversation-read.js";
 import {
   assertLifecycleTargetSnapshotUnchanged,
   type SqliteLifecycleTargetSnapshot,
@@ -47,7 +49,7 @@ export function applySessionEntryPatchInDatabase(
     options: Pick<
       SessionEntryPatchOptions,
       "consumePendingReset" | "assertCommitAllowed" | "providerReviewMutation"
-    > & { workerGuard?: Pick<SessionEntryPatchGuard, "cliHistory"> };
+    > & { workerGuard?: Pick<SessionEntryPatchGuard, "cliHistory" | "conversation"> };
   },
 ): { entry: SessionEntry; identity?: SessionEntryIdentityChange } {
   // Canonical validation belongs to the current connection, not the captured rows.
@@ -62,6 +64,13 @@ export function applySessionEntryPatchInDatabase(
     assertLifecycleTargetSnapshotUnchanged(params.prepared, fresh, params.operationLabel);
   }
   params.options.assertCommitAllowed?.();
+  const conversation = params.options.workerGuard?.conversation;
+  if (conversation) {
+    assertConversationAuthority(
+      resolveConversationInDatabase(database, conversation.conversationRef),
+      conversation,
+    );
+  }
   assertSessionEntryPatchCliHistory(
     database,
     params.sessionKey,

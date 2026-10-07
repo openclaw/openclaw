@@ -540,6 +540,24 @@ internal fun isSessionRunActive(
     else -> false
   }
 
+internal data class ChatSessionPatch(
+  val key: String,
+  val ownerAgentId: String? = null,
+  val expectedSessionId: String? = null,
+  val label: String? = null,
+  val clearLabel: Boolean = false,
+  val category: String? = null,
+  val clearCategory: Boolean = false,
+  val snoozedUntil: Long? = null,
+  val clearSnooze: Boolean = false,
+  val color: String? = null,
+  val clearColor: Boolean = false,
+  val pinned: Boolean? = null,
+  val archived: Boolean? = null,
+  val unread: Boolean? = null,
+  val unreadExpectation: ChatSessionUnreadExpectation? = null,
+)
+
 data class ChatSessionUnreadExpectation(
   val markedUnreadAt: Long?,
 )

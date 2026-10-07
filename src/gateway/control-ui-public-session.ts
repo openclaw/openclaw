@@ -89,7 +89,7 @@ async function serveControlUiPublicSession(
   }
   try {
     const { resolvePublicSessionShareToken } = await import("./control-ui-public-session-token.js");
-    const locator = resolvePublicSessionShareToken(publicShare.token);
+    const locator = await resolvePublicSessionShareToken(publicShare.token);
     if (!locator) {
       unavailable(404);
       return;

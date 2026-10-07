@@ -121,12 +121,7 @@ internal class SystemAgentChatController(
           access = nextAccess,
           input = "",
           sending = false,
-          expectsSensitiveReply =
-            if (nextAccess == SystemAgentChatAccess.CheckingGateway) {
-              it.expectsSensitiveReply
-            } else {
-              false
-            },
+          expectsSensitiveReply = nextAccess == SystemAgentChatAccess.CheckingGateway && it.expectsSensitiveReply,
           errorText =
             when {
               nextAccess == SystemAgentChatAccess.CheckingGateway -> it.errorText
@@ -360,8 +355,7 @@ internal class SystemAgentChatController(
     val parsed =
       options.map { element ->
         val option = element as? JsonObject ?: return null
-        val label = option.trimmedString("label").orEmpty()
-        if (label.isEmpty()) return null
+        val label = option.trimmedString("label") ?: return null
         SystemAgentChatQuestionOption(
           label = label,
           description = option.trimmedString("description"),

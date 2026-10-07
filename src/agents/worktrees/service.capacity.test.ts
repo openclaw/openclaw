@@ -663,9 +663,9 @@ describe("ManagedWorktreeService capacity", () => {
     expect(await git(rejectedRepo, "branch", "--list", "openclaw/*")).toBe("");
   });
 
-  it.each(["release", "abort"] as const)(
+  it.for(["release", "abort"] as const)(
     "waits beyond five minutes for allocation until %s",
-    async (ending) => {
+    async (ending, { signal }) => {
       const held = createDeferred();
       const release = createDeferred();
       const holder = withOpenClawStateLease(
@@ -686,7 +686,13 @@ describe("ManagedWorktreeService capacity", () => {
       const realNow = performance.now.bind(performance);
       let elapsedMs = 0;
       const clock = vi.spyOn(performance, "now").mockImplementation(() => realNow() + elapsedMs);
-      const waits = vi.spyOn(backoff, "sleepWithAbort");
+      const waiting = createDeferred();
+      const waitingAfterAdvance = createDeferred();
+      const sleepWithAbort = backoff.sleepWithAbort;
+      const waits = vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async (...args) => {
+        (elapsedMs === 0 ? waiting : waitingAfterAdvance).resolve();
+        await sleepWithAbort(...args);
+      });
       let settled = false;
       const pending = service
         .create({ repoRoot: repo, name: "waiting", baseRef: "HEAD", signal: controller.signal })
@@ -695,13 +701,24 @@ describe("ManagedWorktreeService capacity", () => {
         });
       const result = pending.catch((error: unknown) => error);
       try {
-        await vi.waitFor(() => expect(waits.mock.calls.length > 0 || settled).toBe(true));
+        await withinTest(
+          awaitGateBeforeSettlement(
+            waiting.promise,
+            pending,
+            "allocation settled before waiting for its holder",
+          ),
+          signal,
+        );
         expect(settled).toBe(false);
-        const previousWaits = waits.mock.calls.length;
         // Advance only elapsed acquisition time; keep the real holder's expiry and timers live.
         elapsedMs = 6 * 60_000;
-        await vi.waitFor(() =>
-          expect(waits.mock.calls.length > previousWaits || settled).toBe(true),
+        await withinTest(
+          awaitGateBeforeSettlement(
+            waitingAfterAdvance.promise,
+            pending,
+            "allocation settled before waiting beyond five minutes",
+          ),
+          signal,
         );
         expect(settled, "allocation must remain pending while another owner holds the lease").toBe(
           false,
@@ -709,7 +726,8 @@ describe("ManagedWorktreeService capacity", () => {
         expect(await service.listRegistryRecords()).toEqual([]);
         if (ending === "abort") {
           controller.abort(new Error("cancel queued worktree"));
-          await vi.waitFor(() => expect(settled).toBe(true));
+          await withinTest(result, signal);
+          expect(settled).toBe(true);
           await expect(result).resolves.toMatchObject({
             code: "OPENCLAW_STATE_LEASE_ABORTED",
           });

@@ -172,12 +172,8 @@ export async function respondToDiscordVoiceTranscript(
   } else {
     const prompt = formatVoiceIngressPrompt(transcript, ingress.speakerLabel);
     const text = await runDiscordVoiceAgentTurn({
-      entry,
-      accountId: params.accountId,
-      userId,
+      ...params,
       message: prompt,
-      discordConfig: params.discordConfig,
-      runtime: params.runtime,
       context: ingress,
     });
     if (text === null) {

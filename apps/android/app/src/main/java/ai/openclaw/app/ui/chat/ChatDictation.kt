@@ -325,7 +325,7 @@ internal class ChatDictationController(
       }
 
       is ChatDictationRecognitionEvent.Transcript -> {
-        complete(operation, event.text)
+        settle(operation, ChatDictationState.Idle, event.text, requireCompletion = true)
       }
 
       is ChatDictationRecognitionEvent.Error -> {
@@ -333,11 +333,6 @@ internal class ChatDictationController(
       }
     }
   }
-
-  private fun complete(
-    operation: Long,
-    transcript: String,
-  ) = settle(operation, ChatDictationState.Idle, transcript, requireCompletion = true)
 
   private fun fail(
     operation: Long,
@@ -355,20 +350,12 @@ internal class ChatDictationController(
         if (operation != null && operation != generation) return
         generation += 1
         if (requireCompletion && completion == null) return
-        resetLocked(nextState)
+        completion.also {
+          completion = null
+          _partialTranscript.value = ""
+          _state.value = nextState
+        }
       }
-    retireRecognizerAndReleaseMic()
-    pending?.complete(transcript?.trim()?.takeIf(String::isNotEmpty))
-  }
-
-  private fun resetLocked(nextState: ChatDictationState): CompletableDeferred<String?>? =
-    completion.also {
-      completion = null
-      _partialTranscript.value = ""
-      _state.value = nextState
-    }
-
-  private fun retireRecognizerAndReleaseMic() {
     // Keep shared microphone ownership until the platform recognizer is retired;
     // otherwise another capture path can start while SpeechRecognizer still owns it.
     recognizer.cancel()
@@ -379,6 +366,7 @@ internal class ChatDictationController(
         true
       }
     if (shouldRelease) releaseMic()
+    pending?.complete(transcript?.trim()?.takeIf(String::isNotEmpty))
   }
 }
 

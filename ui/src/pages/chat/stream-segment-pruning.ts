@@ -286,16 +286,17 @@ export function retireCommentaryStream(
   // The preamble producer flattens whitespace. Keep the cumulative formatting
   // when that exact projection identifies the same complete occurrence.
   const projectedText = text.replace(/\s+/gu, " ").trim();
-  if (!text || (text !== commentary.text && projectedText !== commentary.text)) {
-    if (!projectedText || !commentary.text.startsWith(projectedText)) {
-      return null;
-    }
+  const pending = !text || (text !== commentary.text && projectedText !== commentary.text);
+  if (pending && (!projectedText || !commentary.text.startsWith(projectedText))) {
+    return null;
+  }
+  retireCumulativePrefix(state, commentary.runId, part.replacementText, commentary.timestamp, {
+    itemId: commentary.itemId,
+    segmentIndex: part.segmentIndex,
+  });
+  if (pending) {
     // Retire observed bytes immediately. Keep completion with the cumulative
     // owner so replacing the keyed display with history cannot lose the handoff.
-    retireCumulativePrefix(state, commentary.runId, part.replacementText, commentary.timestamp, {
-      itemId: commentary.itemId,
-      segmentIndex: part.segmentIndex,
-    });
     state.chatStreamSegments = state.chatStreamSegments?.map((segment) =>
       segment.runId === commentary.runId && segment.retiredItemId === commentary.itemId
         ? {
@@ -304,13 +305,8 @@ export function retireCommentaryStream(
           }
         : segment,
     );
-    return { text: commentary.text };
   }
-  retireCumulativePrefix(state, commentary.runId, part.replacementText, commentary.timestamp, {
-    itemId: commentary.itemId,
-    segmentIndex: part.segmentIndex,
-  });
-  return { text };
+  return { text: pending ? commentary.text : text };
 }
 
 /** A durable commentary row immediately replaces its keyed live projection.

@@ -3,8 +3,10 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.GatewayModelProviderSummary
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.providerDisplayName
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawPanel
@@ -119,7 +121,7 @@ internal fun ProvidersModelsScreen(
       }
 
       item {
-        ProviderSectionLabel(title = nativeString("Providers and configured models"))
+        UppercaseSectionLabel(title = nativeString("Providers and configured models"))
       }
 
       if (!isConnected && providerRows.isEmpty()) {
@@ -152,10 +154,13 @@ internal data class ProviderRow(
     get() = availability == ProviderAvailability.Available
 }
 
-internal enum class ProviderAvailability {
-  Available,
-  Unavailable,
-  Unknown,
+internal enum class ProviderAvailability(
+  val label: NativeText,
+  val modelLabel: NativeText,
+) {
+  Available(nativeText("Ready"), nativeText("Available")),
+  Unavailable(nativeText("Needs attention"), nativeText("Unavailable")),
+  Unknown(nativeText("Unknown"), nativeText("Unknown")),
 }
 
 /** Combines gateway auth-provider readiness with configured model providers. */
@@ -178,20 +183,12 @@ internal fun providerRows(
       ProviderRow(
         id = displayId,
         name = authProvider?.displayName ?: providerDisplayName(displayId),
-        status = availability.label,
+        status = availability.label.resolveNativeText(),
         availability = availability,
         models = providerModels,
       )
     }.sortedWith(compareBy({ providerPriority(it.id) }, { it.name.lowercase() }))
 }
-
-private val ProviderAvailability.label: String
-  get() =
-    when (this) {
-      ProviderAvailability.Available -> nativeString("Ready")
-      ProviderAvailability.Unavailable -> nativeString("Needs attention")
-      ProviderAvailability.Unknown -> nativeString("Unknown")
-    }
 
 private fun providerAvailability(
   authProvider: GatewayModelProviderSummary?,
@@ -349,7 +346,7 @@ private fun ProviderModelRow(model: GatewayModelSummary) {
           Text(text = model.id, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         val availability = model.available.toProviderAvailability()
-        AvailabilityPill(availability = availability, label = availability.modelLabel)
+        AvailabilityPill(availability = availability, label = availability.modelLabel.resolveNativeText())
       }
       modelCapabilities(model).takeIf { it.isNotEmpty() }?.let { capabilities ->
         Text(text = capabilities, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -377,14 +374,6 @@ private fun ProviderAvailability.color(): Color =
     ProviderAvailability.Unknown -> ClawTheme.colors.textSubtle
   }
 
-private val ProviderAvailability.modelLabel: String
-  get() =
-    when (this) {
-      ProviderAvailability.Available -> nativeString("Available")
-      ProviderAvailability.Unavailable -> nativeString("Unavailable")
-      ProviderAvailability.Unknown -> nativeString("Unknown")
-    }
-
 private fun Boolean?.toProviderAvailability(): ProviderAvailability =
   when (this) {
     true -> ProviderAvailability.Available
@@ -410,16 +399,5 @@ private fun ProviderBadge(text: String) {
     Box(contentAlignment = Alignment.Center) {
       Text(text = badgeInitials(text, fallback = "AI"), style = ClawTheme.type.label, color = ClawTheme.colors.text, textAlign = TextAlign.Center)
     }
-  }
-}
-
-@Composable
-private fun ProviderSectionLabel(title: String) {
-  Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-    Text(
-      text = localizedUppercase(title, currentAppLanguage().languageTag),
-      style = ClawTheme.type.caption,
-      color = ClawTheme.colors.textMuted,
-    )
   }
 }

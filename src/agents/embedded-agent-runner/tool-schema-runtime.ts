@@ -26,19 +26,18 @@ type ProviderToolSchemaParams<TSchemaType extends TSchema = TSchema, TResult = u
 function buildProviderToolSchemaParams<TSchemaType extends TSchema = TSchema, TResult = unknown>(
   params: ProviderToolSchemaParams<TSchemaType, TResult>,
 ) {
-  const provider = params.provider.trim();
-  return {
+  const context = {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    provider,
+    provider: params.provider.trim(),
+  };
+  return {
+    ...context,
     runtimeHandle: params.runtimeHandle,
     allowRuntimePluginLoad: params.allowRuntimePluginLoad,
     context: {
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      provider,
+      ...context,
       modelId: params.modelId,
       modelApi: params.modelApi,
       model: params.model,

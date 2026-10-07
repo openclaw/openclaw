@@ -1,6 +1,7 @@
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-control-plane-sentinel.js";
 import {
   collectUpdateDoctorFailureFacts,
   DoctorMaintenanceRefusalError,
@@ -100,36 +101,33 @@ export async function withUpdateProgressSettlement(
   }
 }
 
-function updateFinalizationFailureOptions(
-  options: ErrorOptions | undefined,
-  progressFailure: { cause: unknown } | undefined,
-): ErrorOptions | undefined {
-  if (
-    !progressFailure ||
-    collectNestedErrorCandidates(options?.cause).includes(progressFailure.cause)
-  ) {
-    return options;
-  }
-  return {
-    cause:
-      options && "cause" in options
-        ? new AggregateError(
-            [options.cause, progressFailure.cause],
-            "Update and progress reporting failed",
-          )
-        : progressFailure.cause,
-  };
-}
-
 export function bindUpdateFinalizationFailure(
   params: FinishUpdateParams,
   progressFailure: { cause: unknown } | undefined,
   readTriage: () => { triageAllowed: boolean; gateway: TriageFailureContext["gateway"] },
 ) {
-  return (result: UpdateRunResult, exitCode = 1, detail?: string, options?: ErrorOptions) => {
+  return (
+    result: UpdateRunResult,
+    detail?: string,
+    options?: ErrorOptions,
+    exitCode = resolveManagedServiceUpdateFailureExitCode(result),
+  ) => {
     const { triageAllowed, gateway } = readTriage();
+    const failureOptions =
+      progressFailure &&
+      !collectNestedErrorCandidates(options?.cause).includes(progressFailure.cause)
+        ? {
+            cause:
+              options && "cause" in options
+                ? new AggregateError(
+                    [options.cause, progressFailure.cause],
+                    "Update and progress reporting failed",
+                  )
+                : progressFailure.cause,
+          }
+        : options;
     return new UpdateCommandFailure(result, exitCode, detail, {
-      ...updateFinalizationFailureOptions(options, progressFailure),
+      ...failureOptions,
       automaticTriage: triageAllowed
         ? resolveAutomaticUpdateTriage(result, detail, { ...params, gateway })
         : undefined,

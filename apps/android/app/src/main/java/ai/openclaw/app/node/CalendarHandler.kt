@@ -78,16 +78,7 @@ private object SystemCalendarDataSource : CalendarDataSource {
     // Instances expands recurring events inside the requested time window.
     ContentUris.appendId(builder, request.startMs)
     ContentUris.appendId(builder, request.endMs)
-    val projection =
-      arrayOf(
-        CalendarContract.Instances.EVENT_ID,
-        CalendarContract.Instances.TITLE,
-        CalendarContract.Instances.BEGIN,
-        CalendarContract.Instances.END,
-        CalendarContract.Instances.ALL_DAY,
-        CalendarContract.Instances.EVENT_LOCATION,
-        CalendarContract.Instances.CALENDAR_DISPLAY_NAME,
-      )
+    val projection = eventProjection(instances = true)
     val sortOrder = "${CalendarContract.Instances.BEGIN} ASC LIMIT ${request.limit}"
     resolver.query(builder.build(), projection, null, null, sortOrder).use { cursor ->
       if (cursor == null) return emptyList()
@@ -116,11 +107,8 @@ private object SystemCalendarDataSource : CalendarDataSource {
         request.location?.let { put(CalendarContract.Events.EVENT_LOCATION, it) }
         request.notes?.let { put(CalendarContract.Events.DESCRIPTION, it) }
       }
-    val uri =
-      resolver.insert(CalendarContract.Events.CONTENT_URI, values)
-        ?: throw IllegalStateException("calendar insert failed")
     val eventId =
-      uri.lastPathSegment?.toLongOrNull()
+      resolver.insert(CalendarContract.Events.CONTENT_URI, values)?.lastPathSegment?.toLongOrNull()
         ?: throw IllegalStateException("calendar insert failed")
     return loadEventById(resolver, eventId)
       ?: throw IllegalStateException("calendar insert failed")
@@ -179,16 +167,7 @@ private object SystemCalendarDataSource : CalendarDataSource {
     resolver: ContentResolver,
     eventId: Long,
   ): CalendarEventRecord? {
-    val projection =
-      arrayOf(
-        CalendarContract.Events._ID,
-        CalendarContract.Events.TITLE,
-        CalendarContract.Events.DTSTART,
-        CalendarContract.Events.DTEND,
-        CalendarContract.Events.ALL_DAY,
-        CalendarContract.Events.EVENT_LOCATION,
-        CalendarContract.Events.CALENDAR_DISPLAY_NAME,
-      )
+    val projection = eventProjection(instances = false)
     resolver
       .query(
         CalendarContract.Events.CONTENT_URI,
@@ -203,6 +182,17 @@ private object SystemCalendarDataSource : CalendarDataSource {
   }
 
   // Instances and Events queries project the same seven fields in this order.
+  private fun eventProjection(instances: Boolean): Array<String> =
+    arrayOf(
+      if (instances) CalendarContract.Instances.EVENT_ID else CalendarContract.Events._ID,
+      CalendarContract.Events.TITLE,
+      if (instances) CalendarContract.Instances.BEGIN else CalendarContract.Events.DTSTART,
+      if (instances) CalendarContract.Instances.END else CalendarContract.Events.DTEND,
+      CalendarContract.Events.ALL_DAY,
+      CalendarContract.Events.EVENT_LOCATION,
+      CalendarContract.Events.CALENDAR_DISPLAY_NAME,
+    )
+
   private fun Cursor.toCalendarEventRecord(): CalendarEventRecord =
     CalendarEventRecord(
       identifier = getLong(0).toString(),

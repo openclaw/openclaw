@@ -13,6 +13,7 @@ import type { SessionBindingRecord } from "../../infra/outbound/session-binding-
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { setMinimalAcpCommandRegistryForTests } from "./commands-acp.channels.test-support.js";
 import {
+  createAcpCommandSessionBindingService,
   createAcpTestSessionBinding as createSessionBinding,
   type AcpTestSessionBinding as FakeBinding,
 } from "./test-fixtures/acp-runtime.js";
@@ -78,27 +79,6 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-function createAcpCommandSessionBindingService() {
-  return {
-    bind: (input: unknown) => hoisted.sessionBindingBindMock(input),
-    getCapabilities: (params: unknown) => hoisted.sessionBindingCapabilitiesMock(params),
-    inspectByConversationAsync: async (
-      ref: unknown,
-    ): Promise<{ status: "available"; binding: SessionBindingRecord | null }> => ({
-      status: "available",
-      binding: hoisted.sessionBindingResolveByConversationMock(ref),
-    }),
-    listBySession: (targetSessionKey: string) =>
-      hoisted.sessionBindingListBySessionMock(targetSessionKey),
-    resolveByConversation: (ref: unknown) => hoisted.sessionBindingResolveByConversationMock(ref),
-    resolveByConversationAsync: async (ref: unknown) =>
-      hoisted.sessionBindingResolveByConversationMock(ref),
-    touch: vi.fn(),
-    touchAsync: vi.fn(async () => {}),
-    unbind: (input: unknown) => hoisted.sessionBindingUnbindMock(input),
-  };
-}
-
 vi.mock("../../acp/control-plane/spawn.js", () => ({
   cleanupFailedAcpSpawn: (args: unknown) => hoisted.cleanupFailedAcpSpawnMock(args),
 }));
@@ -147,7 +127,16 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
   >("../../infra/outbound/session-binding-service.js");
   return {
     ...actual,
-    getSessionBindingService: createAcpCommandSessionBindingService,
+    getSessionBindingService: () =>
+      createAcpCommandSessionBindingService({
+        bind: hoisted.sessionBindingBindMock,
+        getCapabilities: hoisted.sessionBindingCapabilitiesMock,
+        listBySession: hoisted.sessionBindingListBySessionMock,
+        resolveByConversation: hoisted.sessionBindingResolveByConversationMock,
+        unbind: hoisted.sessionBindingUnbindMock,
+      }),
+    listSessionBindingsBySessionsAsync: async (keys: readonly string[]) =>
+      new Map(keys.map((key) => [key, hoisted.sessionBindingListBySessionMock(key)])),
   } satisfies typeof actual;
 });
 

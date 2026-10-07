@@ -195,7 +195,11 @@ async function requestAgentFile(
   } catch (err) {
     if (isCurrent()) {
       state.agentFilesError = formatUiError(err);
-      if (isAgentFileConflict(err)) {
+      if (
+        err instanceof GatewayRequestError &&
+        isRecord(err.details) &&
+        err.details.type === "agent_file_conflict"
+      ) {
         state.agentFileConflict = name;
       }
     }
@@ -209,14 +213,6 @@ async function requestAgentFile(
     }
   }
   return false;
-}
-
-function isAgentFileConflict(err: unknown): boolean {
-  return (
-    err instanceof GatewayRequestError &&
-    isRecord(err.details) &&
-    err.details.type === "agent_file_conflict"
-  );
 }
 
 export function loadAgentFileContent(

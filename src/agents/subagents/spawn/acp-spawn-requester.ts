@@ -5,7 +5,7 @@ import {
 import { readAcpResumeSessionOwner } from "../../../acp/runtime/session-meta-resume.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { listSessionBindingsBySessionAsync } from "../../../infra/outbound/session-binding-service.js";
 import {
   isSubagentSessionKey,
   parseAgentSessionKey,
@@ -73,22 +73,21 @@ export function resolveRequesterInternalSessionKey(params: {
     : alias;
 }
 
-export function resolveAcpSpawnRequesterState(params: {
+export async function resolveAcpSpawnRequesterState(params: {
   cfg: OpenClawConfig;
   parentSessionKey?: string;
   requesterAgentId: string;
   targetAgentId: string;
   ctx: AcpSpawnRequesterContext;
-}): AcpSpawnRequesterState {
-  const bindingService = getSessionBindingService();
+}): Promise<AcpSpawnRequesterState> {
   const requesterParsedSession = parseAgentSessionKey(params.parentSessionKey);
   const isSubagentSession =
     Boolean(requesterParsedSession) && isSubagentSessionKey(params.parentSessionKey);
   const hasActiveSubagentBinding =
     isSubagentSession && params.parentSessionKey
-      ? bindingService
-          .listBySession(params.parentSessionKey)
-          .some((record) => record.targetKind === "subagent" && record.status !== "ended")
+      ? (await listSessionBindingsBySessionAsync(params.parentSessionKey)).some(
+          (record) => record.targetKind === "subagent" && record.status !== "ended",
+        )
       : false;
   const hasThreadContext =
     typeof params.ctx.agentThreadId === "string"

@@ -244,6 +244,12 @@ describe("Heartbeat cron and exec event ownership", () => {
             throw new Error("expected exec completion event");
           }
           expect(consumeSelectedSystemEventEntries(f.sessionKey, [completion])).toHaveLength(1);
+          f.replySpy.mockImplementation(async (ctx, options) => {
+            expect(ctx.InternalTurnSource).toBe("heartbeat");
+            expect(ctx.Body).not.toContain("deploy succeeded");
+            expect(await formatQueuedEvents(f.cfg, ctx, options)).toContain("Node connected");
+            return { text: "HEARTBEAT_OK" };
+          });
         } else {
           f.enqueue("Exec finished (gateway id=abc12345, code 0)\ndeploy succeeded");
           f.replySpy.mockResolvedValue({ text: "Deploy succeeded" });
@@ -251,8 +257,8 @@ describe("Heartbeat cron and exec event ownership", () => {
         f.enqueue("Node connected");
         const result = await f.run({ reason: "exec-event" });
         if (acknowledged) {
-          expect(result).toEqual({ status: "skipped", reason: "no-pending-event" });
-          expect(f.replySpy).not.toHaveBeenCalled();
+          expect(result.status).toBe("ran");
+          expect(f.replySpy).toHaveBeenCalledOnce();
           expect(f.sendTelegram).not.toHaveBeenCalled();
         } else {
           expect(result.status).toBe("ran");
@@ -261,7 +267,7 @@ describe("Heartbeat cron and exec event ownership", () => {
           expect(ctx.Body).toContain("deploy succeeded");
           expect(ctx.Body).not.toContain("Node connected");
         }
-        expect(peekSystemEvents(f.sessionKey)).toEqual(["Node connected"]);
+        expect(peekSystemEvents(f.sessionKey)).toEqual(acknowledged ? [] : ["Node connected"]);
       });
     },
   );

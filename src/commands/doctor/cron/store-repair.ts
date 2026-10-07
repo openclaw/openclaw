@@ -160,15 +160,14 @@ export async function repairCronJobsForDoctor(
     seen.add(key);
   }
   const expected = definitionEvidence(inventory.jobs);
-  const assertRowsUnchanged = (db: DatabaseSync) => {
-    if (!isDeepStrictEqual(definitionEvidence(inspectCronRowsForDoctor(db)), expected)) {
-      throw new Error(
-        "Cron definitions changed during Doctor repair; inspect again before retrying.",
-      );
-    }
-  };
   const backupPath = await commitCronDoctorRepair(scope, authority, {
-    assertRowsUnchanged,
+    assertRowsUnchanged(db) {
+      if (!isDeepStrictEqual(definitionEvidence(inspectCronRowsForDoctor(db)), expected)) {
+        throw new Error(
+          "Cron definitions changed during Doctor repair; inspect again before retrying.",
+        );
+      }
+    },
     write(db) {
       for (const { job, definition } of changes) {
         if (!definition) {

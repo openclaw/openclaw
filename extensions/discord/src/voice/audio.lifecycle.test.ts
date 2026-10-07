@@ -16,7 +16,7 @@ vi.mock("libopus-wasm", async (importOriginal) => ({
 }));
 
 import { startDiscordPacingReceiver } from "./audio-starvation.test-support.js";
-import { createDiscordOpusEncodeStream, decodeOpusStreamChunks } from "./audio.js";
+import { DiscordOpusEncodeStream, decodeOpusStreamChunks } from "./audio.js";
 
 beforeEach(() => {
   createEncoderMock.mockReset();
@@ -89,7 +89,7 @@ it.each([false, true])(
       return encode(input, options);
     });
     createEncoderMock.mockResolvedValueOnce(encoder);
-    const stream = createDiscordOpusEncodeStream();
+    const stream = new DiscordOpusEncodeStream();
     const consumedBytes: number[] = [];
     const consume = async () => {
       for await (const packet of stream) {
@@ -155,7 +155,7 @@ it("releases an encoder acquired after playback was destroyed without encoding q
       resolveEncoder = resolve;
     }),
   );
-  const stream = createDiscordOpusEncodeStream();
+  const stream = new DiscordOpusEncodeStream();
   try {
     stream.write(Buffer.alloc(960 * 2 * 2));
     await vi.waitFor(() => expect(createEncoderMock).toHaveBeenCalledOnce());
@@ -176,7 +176,7 @@ it("releases an encoder acquired after playback was destroyed without encoding q
 it("reports encoder initialization failures without producing queued audio", async () => {
   const error = new Error("encoder initialization failed");
   createEncoderMock.mockRejectedValueOnce(error);
-  const stream = createDiscordOpusEncodeStream();
+  const stream = new DiscordOpusEncodeStream();
   const errors: Error[] = [];
   stream.on("error", (err) => errors.push(err));
   const closed = new Promise<void>((resolve) => {
@@ -206,7 +206,7 @@ it("yields between encoding batches and pauses until the player consumes packets
     return encode(input, options);
   });
   createEncoderMock.mockResolvedValueOnce(encoder);
-  const stream = createDiscordOpusEncodeStream();
+  const stream = new DiscordOpusEncodeStream();
   const packetCount = 128;
   const pcmBytes = packetCount * 960 * 2 * 2;
   try {
@@ -239,7 +239,7 @@ it("cancels yielded encoding and settles the pending write without emitting rema
   const encode = vi.spyOn(encoder, "encode");
   const free = vi.spyOn(encoder, "free");
   createEncoderMock.mockResolvedValueOnce(encoder);
-  const stream = createDiscordOpusEncodeStream();
+  const stream = new DiscordOpusEncodeStream();
   const readable = once(stream, "readable");
   const writeDone = new Promise<Error | null | undefined>((resolve) => {
     stream.write(Buffer.alloc(128 * 960 * 2 * 2), resolve);

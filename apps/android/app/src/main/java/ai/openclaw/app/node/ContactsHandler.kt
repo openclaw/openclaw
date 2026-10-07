@@ -71,16 +71,9 @@ private object SystemContactsDataSource : ContactsDataSource {
         ContactsContract.Contacts._ID,
         ContactsContract.Contacts.DISPLAY_NAME_PRIMARY,
       )
-    val selection: String?
-    val selectionArgs: Array<String>?
-    if (request.query.isNullOrBlank()) {
-      selection = null
-      selectionArgs = null
-    } else {
-      // Escape wildcard characters so user text remains a substring search, not a LIKE pattern.
-      selection = "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} LIKE ? ESCAPE '\\'"
-      selectionArgs = arrayOf("%${escapeSqlLikeLiteral(request.query)}%")
-    }
+    // Escape wildcard characters so user text remains a substring search, not a LIKE pattern.
+    val selectionArgs = request.query?.takeUnless(String::isBlank)?.let { arrayOf("%${escapeSqlLikeLiteral(it)}%") }
+    val selection = selectionArgs?.let { "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} LIKE ? ESCAPE '\\'" }
     val sortOrder = "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} COLLATE NOCASE ASC LIMIT ${request.limit}"
     resolver
       .query(
@@ -146,11 +139,12 @@ private object SystemContactsDataSource : ContactsDataSource {
     }
 
     val results = resolver.applyBatch(ContactsContract.AUTHORITY, operations)
-    val rawContactUri =
-      results.firstOrNull()?.uri
-        ?: throw IllegalStateException("contact insert failed")
     val rawContactId =
-      rawContactUri.lastPathSegment?.toLongOrNull()
+      results
+        .firstOrNull()
+        ?.uri
+        ?.lastPathSegment
+        ?.toLongOrNull()
         ?: throw IllegalStateException("contact insert failed")
     val contactId =
       // Android returns the RawContact id; resolve the aggregate Contact id used by search APIs.

@@ -29,6 +29,7 @@ import {
   type DraftCloudProfile,
   type DraftEnvironment,
 } from "./discovery.ts";
+import { onOwnPopoverEvent } from "./new-session-runtime.ts";
 import { renderPickerLabel } from "./picker-label.ts";
 import { environmentCapabilityLabels } from "./place-facts.ts";
 
@@ -318,16 +319,8 @@ export function renderWhereChip(params: {
         }
         params.onPopoverShow();
       }}
-      @wa-hide=${(event: Event) => {
-        if (event.target === event.currentTarget) {
-          params.onPopoverHide();
-        }
-      }}
-      @wa-after-hide=${(event: Event) => {
-        if (event.target === event.currentTarget) {
-          params.onPopoverAfterHide();
-        }
-      }}
+      @wa-hide=${onOwnPopoverEvent(() => params.onPopoverHide())}
+      @wa-after-hide=${onOwnPopoverEvent(() => params.onPopoverAfterHide())}
     >
       <div class="new-session-page__environment-layout">
         <div class="new-session-page__picker-root new-session-page__environment-picker">

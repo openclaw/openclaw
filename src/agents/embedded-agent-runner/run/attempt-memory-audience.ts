@@ -59,12 +59,12 @@ export async function resolveEmbeddedAttemptMemoryAudience(params: {
   // retried by the next turn, and ineligible lineage is the intended outcome.
   const message = `memory audience unavailable: ${resolution.reason}`;
   const meta = { event: "memory_audience_denied", kind: resolution.kind };
-  if (resolution.kind === "stale-lineage") {
-    log.warn(message, meta);
-  } else if (resolution.kind === "unverified") {
-    log.info(message, meta);
-  } else {
-    log.debug(message, meta);
-  }
+  const level =
+    resolution.kind === "stale-lineage"
+      ? "warn"
+      : resolution.kind === "unverified"
+        ? "info"
+        : "debug";
+  log[level](message, meta);
   return { release: retainedAudience };
 }
