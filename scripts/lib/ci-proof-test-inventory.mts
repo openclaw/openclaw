@@ -1957,8 +1957,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/commands/doctor-config-flow.automatic-migrations.test.ts",
   "src/commands/doctor-config-flow.billing-route.test.ts",
   "src/commands/doctor-config-flow.canvas-migration.test.ts",
-  "src/commands/doctor-config-flow.codex-activation-warning.test.ts",
-  "src/commands/doctor-config-flow.conflict.test.ts",
   "src/commands/doctor-config-flow.gateway-bind-persistence.test.ts",
   "src/commands/doctor-config-flow.include-refusal.test.ts",
   "src/commands/doctor-config-flow.legacy-composition.test.ts",

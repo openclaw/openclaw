@@ -5834,8 +5834,6 @@
 ["src/commands/doctor-command-owner.test.ts","../../packages/terminal-core/src/note.js","76670fde754352037ee3f1cff2949e0c48732334c728d7f48a5d9d44cdbed947",1]
 ["src/commands/doctor-config-analysis.test.ts","../../packages/terminal-core/src/note.js","f7728f47733c668d94d0312020d268eabdce30b0460d3672b9c074c38a5deb15",1]
 ["src/commands/doctor-config-flow.canvas-migration.test.ts","../../packages/terminal-core/src/note.js","37412184cc3282e016b1748bb2a1a99e58e75ce323b4d18573c39a596044afb9",1]
-["src/commands/doctor-config-flow.codex-activation-warning.test.ts","../../packages/terminal-core/src/note.js","37412184cc3282e016b1748bb2a1a99e58e75ce323b4d18573c39a596044afb9",1]
-["src/commands/doctor-config-flow.conflict.test.ts","../../packages/terminal-core/src/note.js","22d9e39caca4c4cf5e7a365869e39a8b5404fae08eb436255c34b8a2c0b74848",1]
 ["src/commands/doctor-config-flow.include-refusal.test.ts","../../packages/terminal-core/src/note.js","f7728f47733c668d94d0312020d268eabdce30b0460d3672b9c074c38a5deb15",1]
 ["src/commands/doctor-config-flow.missing-default-account-bindings.integration.test.ts","../channels/plugins/read-only.js","ffd8167f128bcec75ad5d53f9150f7a94037dfe9b0e72a3149907c7e90beabca",1]
 ["src/commands/doctor-config-flow.session-store-owner.test.ts","../../packages/terminal-core/src/note.js","37412184cc3282e016b1748bb2a1a99e58e75ce323b4d18573c39a596044afb9",1]
