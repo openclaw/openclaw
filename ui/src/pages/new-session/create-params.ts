@@ -40,7 +40,6 @@ export function isWorktreeNameValid(value: string): boolean {
   return !name || WORKTREE_NAME_PATTERN.test(name);
 }
 
-/** Maps the new-session draft selections onto additive sessions.create params. */
 export function buildDraftSessionCreateParams(draft: {
   agentId: string;
   message: string;

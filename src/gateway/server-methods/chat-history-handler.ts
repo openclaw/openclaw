@@ -1,8 +1,10 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
   validateChatHistoryParams,
+  validateChatStartupParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
@@ -33,9 +35,11 @@ import { resolveSessionHistoryUnavailableMessage } from "../session-history-erro
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { buildGatewaySessionRow } from "../session-utils-row.js";
 import { getSessionDefaults, resolveSessionModelRef } from "../session-utils.js";
+import { withPreparedSessionResolve } from "../sessions-resolve.js";
 import {
   boundInFlightRunSnapshotForChatHistory,
   reportOmittedChatHistory,
@@ -51,7 +55,6 @@ import { prepareChatHistoryResponsePage } from "./chat-history-response-page.js"
 import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
-import { handleChatStartupRequest } from "./chat-startup-handler.js";
 import { prepareChatStartupRequester } from "./chat-startup-requester.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
@@ -618,6 +621,73 @@ export async function handleChatHistoryRequest({
 
 export const chatHistoryHandlers: GatewayRequestHandlers = {
   "chat.history": (opts) => handleChatHistoryRequest({ ...opts, method: "chat.history" }),
-  "chat.startup": (opts) => handleChatStartupRequest(opts, handleChatHistoryRequest),
+  "chat.startup": async (opts) => {
+    if (!assertValidParams(opts.params, validateChatStartupParams, "chat.startup", opts.respond)) {
+      return;
+    }
+    if ("sessionKey" in opts.params) {
+      await handleChatHistoryRequest({ ...opts, method: "chat.startup" });
+      return;
+    }
+    const connId = opts.client?.connId?.trim();
+    if (connId) {
+      // This snapshot precedes pane mount. Enroll the connection before any read
+      // so a concurrent sessions.subscribe cannot leave a gap in live delivery.
+      opts.context.subscribeSessionEvents(connId);
+      if (!opts.context.getSessionEventSubscriberConnIds().has(connId)) {
+        opts.respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "connection closed before chat startup"),
+        );
+        return;
+      }
+    }
+    const { shortId, slugHint, agentId, limit, maxBytes } = opts.params;
+    const projection = getSessionRowProjection(opts.context);
+    if (!projection) {
+      respondChatHistoryUnavailable(
+        "chat.startup",
+        opts.respond,
+        "session rows are initializing; reload the conversation",
+      );
+      return;
+    }
+    const resolution = await withPreparedSessionResolve(
+      {
+        projection,
+        client: opts.client,
+        p: { shortId, slugHint, agentId, allowMissing: true },
+        isCurrent: () => getSessionRowProjection(opts.context) === projection,
+      },
+      (resolved) => {
+        opts.sessionMutationAuthorization?.assertCurrent();
+        if (!resolved.ok) {
+          opts.respond(false, undefined, resolved.error);
+          return undefined;
+        }
+        if ("missing" in resolved || "ambiguous" in resolved) {
+          opts.respond(true, {
+            resolution: {
+              ok: false,
+              ...("ambiguous" in resolved ? { candidates: resolved.candidates } : {}),
+            },
+          });
+          return undefined;
+        }
+        return resolved;
+      },
+    );
+    if (!resolution) {
+      return;
+    }
+    await handleChatHistoryRequest({
+      ...opts,
+      params: { sessionKey: resolution.key, agentId: resolution.agentId, limit, maxBytes },
+      method: "chat.startup",
+      respond: (ok, payload, error, meta) =>
+        opts.respond(ok, ok ? { ...asOptionalRecord(payload), resolution } : payload, error, meta),
+    });
+  },
   "chat.metadata": handleChatMetadataRequest,
 };

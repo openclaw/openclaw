@@ -154,6 +154,16 @@ Auto-compaction emits `compaction` stream events and can trigger a retry. On ret
 - `assistant`: streamed deltas from the agent runtime.
 - `tool`: streamed tool events from the agent runtime.
 
+After a definitive lifecycle `end` or `error` is published, the event owner
+suppresses later client lifecycle events for that execution, including model updates
+and duplicate terminals during abort cleanup. Retryable attempt errors leave
+the lifecycle open. Chat abort keeps its immediate terminal with `aborted: true`
+and the caller's stop reason (for example `rpc`, `restart`, or `timeout`).
+The abort owner reserves that terminal before invoking cancellation listeners.
+The same publication decision covers agent frames, chat finals, progress snapshots,
+and session lifecycle notifications. Execution settlement and cleanup continue
+independently of event publication.
+
 The Gateway projects lifecycle and tool start/terminal events into the bounded,
 metadata-only [audit ledger](/cli/audit). This projection records provenance and
 result codes without copying prompts, messages, tool arguments, tool results,

@@ -419,9 +419,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     await this.runAgentPrompt(orderSystemUpdateMessages(messages));
   }
 
-  /**
-   * Try to execute an extension command. Returns true if command was found and executed.
-   */
   private async tryExecuteExtensionCommand(text: string): Promise<boolean> {
     const spaceIndex = text.indexOf(" ");
     const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
@@ -463,7 +460,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     const skill = this.sessionResourceLoader.getSkills().skills.find((s) => s.name === skillName);
     if (!skill) {
       return text;
-    } // Unknown skill, pass through
+    }
 
     try {
       const content = readFileSync(skill.filePath, "utf-8");
@@ -489,7 +486,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * Delivered before the next unstarted tool launch or model call. Running tools
    * continue; suppressed calls receive paired synthetic results.
    * Expands skill commands and prompt templates. Errors on extension commands.
-   * @param images Optional image attachments to include with the message
    * @param userTurnTranscriptRecorder Prepared channel fields for transcript-only persistence
    * @param currentInboundContext This turn's runtime facts, separate from its command and transcript
    * @throws Error if text is an extension command
@@ -578,7 +574,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * Queue a follow-up message to be processed after the agent finishes.
    * Delivered only when agent has no more tool calls or steering messages.
    * Expands skill commands and prompt templates. Errors on extension commands.
-   * @param images Optional image attachments to include with the message
    * @throws Error if text is an extension command
    */
   async followUp(text: string, images?: ImageContent[]): Promise<void> {
@@ -665,9 +660,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * - Not streaming + triggerTurn: appends to state/session, starts new turn
    * - Not streaming + no trigger: appends to state/session, no turn
    *
-   * @param message Custom message with customType, content, display, details
    * @param options.triggerTurn If true and not streaming, triggers a new LLM turn
-   * @param options.deliverAs Delivery mode: "steer", "followUp", or "nextTurn"
    */
   async sendCustomMessage<T = unknown>(
     message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
@@ -713,9 +706,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
   /**
    * Send a user message to the agent. Always triggers a turn.
    * When the agent is streaming, use deliverAs to specify how to queue the message.
-   *
-   * @param content User message content (string or content array)
-   * @param options.deliverAs Delivery mode when streaming: "steer" or "followUp"
    */
   async sendUserMessage(
     content: string | (TextContent | ImageContent)[],
@@ -753,7 +743,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
   /**
    * Clear all queued messages and return them.
    * Useful for restoring to editor when user aborts.
-   * @returns Object with steering and followUp arrays
    */
   clearQueue(): { steering: string[]; followUp: string[] } {
     const steering = this.steeringMessages.map((entry) => entry.text);
@@ -770,12 +759,10 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     return this.steeringMessages.length + this.followUpMessages.length;
   }
 
-  /** Get pending steering messages (read-only) */
   getSteeringMessages(): readonly string[] {
     return this.steeringMessages.map((entry) => entry.text);
   }
 
-  /** Get pending follow-up messages (read-only) */
   getFollowUpMessages(): readonly string[] {
     return this.followUpMessages.map((entry) => entry.text);
   }

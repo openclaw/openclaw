@@ -142,7 +142,6 @@ export function hasRegisteredChatRunForSessionKey(params: {
   );
 }
 
-/** Returns true when either requested or canonical session key has a visible active run. */
 export function hasTrackedActiveSessionRun(params: {
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
   requestedKey: string;

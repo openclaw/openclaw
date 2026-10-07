@@ -34,7 +34,10 @@ import {
   writeSessionCostUsageRollupInDatabase,
   type SessionCostUsageRollupSnapshot,
 } from "./session-cost-usage-cache.kernel.js";
-import type { UsageCostIncognitoBinding } from "./session-cost-usage-incognito.js";
+import {
+  captureUsageCostIncognitoBinding,
+  type UsageCostIncognitoBinding,
+} from "./session-cost-usage-incognito.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 // Per-agent SQLite storage for rebuildable per-session usage rollups.
@@ -233,12 +236,18 @@ function parseRefreshLock(raw: string | null): SessionCostUsageRefreshLock | nul
 export async function isSessionCostUsageRefreshRunning(
   agentId?: string,
   databasePath?: string,
-  incognito?: UsageCostIncognitoBinding,
+  suppliedIncognito?: UsageCostIncognitoBinding,
 ): Promise<boolean> {
   const options = captureCacheDatabaseOptions({
     agentId: normalizeAgentId(agentId),
     path: databasePath,
   });
+  const incognito =
+    suppliedIncognito ??
+    captureUsageCostIncognitoBinding({
+      agentId: options.agentId,
+      databasePath: options.path,
+    });
   if (
     incognito &&
     (options.agentId !== incognito.actor.agentId || options.path !== incognito.actor.path)
@@ -258,9 +267,15 @@ export async function isSessionCostUsageRefreshRunning(
                 }
               : { type: "session.compute.store.refreshLock", input: { request: {} } },
           ),
-        getAsyncWorkSignal(),
+        incognito.admissionSignal ?? getAsyncWorkSignal(),
       )
     : await readRefreshLock(options);
+  if (incognito) {
+    incognito.actor.assertReadable();
+    incognito.authority.assertCurrent();
+    incognito.admissionSignal?.throwIfAborted();
+    getAsyncWorkSignal()?.throwIfAborted();
+  }
   const lock = parseRefreshLock(raw);
   // Status never waits for a writer; acquisition replaces stale locks with its existing CAS.
   return lock !== null && isPidAlive(lock.pid);

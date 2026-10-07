@@ -50,7 +50,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveProviderModelCatalogId } from "../../plugins/provider-model-routes.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
-  settleCurrentReadPreparations,
   withCurrentReadAuthority,
   type CurrentReadAuthority,
 } from "../../shared/current-read-authority.js";
@@ -121,7 +120,7 @@ export async function prepareModelsListResult({
   const scope = params.readScope;
   const publicationScope = params.publicationScope ?? scope;
   const draft = scope?.draftAccountSelection;
-  let authority =
+  const authority =
     preparationAuthority ??
     (draft
       ? {
@@ -507,10 +506,26 @@ export async function prepareModelsListResult({
         entry,
         evaluation,
         runtimeId: preparedEntry.agentRuntime?.id ?? "openclaw",
-        accountCatalog,
         modelServiceTiers: speedPolicy.serviceTiers,
         isCurrent: projectionIsCurrent,
       });
+      const credential = evaluation.selectedCredential;
+      const route = evaluation.selectedRoute;
+      const serviceTierObservation =
+        projectionIsCurrent() &&
+        evaluation.availability === true &&
+        speedPolicy.supportsServiceTierRecovery &&
+        credential &&
+        credential.source !== "harness" &&
+        route
+          ? accountCatalog?.readServiceTierObservation({
+              identityKey: credential.identityKey,
+              modelId: entry.id,
+              runtimeId: preparedEntry.agentRuntime?.id ?? "openclaw",
+              api: route.api,
+              baseUrl: route.baseUrl,
+            })
+          : undefined;
       return Object.assign(
         {},
         preparedEntry,
@@ -527,6 +542,7 @@ export async function prepareModelsListResult({
           ? { supportsServiceTierRecovery: true }
           : {},
         serviceTiers === undefined ? {} : { serviceTiers },
+        serviceTierObservation ? { serviceTierObservation } : {},
         projectedAvailability === undefined ? {} : { available: projectedAvailability },
         projectedAvailability === false && evaluation.unavailableReason
           ? {
@@ -562,13 +578,13 @@ export async function prepareModelsListResult({
       ...(params.routeResolverFactory ? { routeResolverFactory: params.routeResolverFactory } : {}),
     });
     const inventory = await inventoryProjector.projectCatalog(authority);
-    const work = inventory.map(async (entry) => ({
-      entry,
-      host: await inventoryProjector.evaluateEntry(entry, undefined, undefined, authority),
-    }));
-    const entries = await settleCurrentReadPreparations(work);
+    const entries = await withCurrentReadAuthority(authority, () =>
+      inventory.map((entry) => ({
+        entry,
+        host: inventoryProjector.evaluateEntry(entry),
+      })),
+    );
     const projectPublic = createPublicProjector(inventoryProjector, inventory);
-    authority = undefined;
     return {
       isCurrent: () => isCurrent() && inventoryProjector.isCurrent(),
       read: () => ({
@@ -584,43 +600,45 @@ export async function prepareModelsListResult({
   const evaluations = new Map<string, ModelAuthAvailabilityEvaluation>();
   const runtimeChoiceReaders = new Map<string, () => ModelRuntimeChoice[]>();
   const projectPublic = createPublicProjector(projector, catalog);
-  const readCatalog = await prepareLogicalVisibleModelCatalog({
-    cfg,
-    isCurrent: () => isCurrent() && projector.isCurrent(),
-    metadataSnapshot,
-    catalog,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel,
-    agentId,
-    workspaceDir,
-    view,
-    policy: visibilityPolicy,
-    retainedModel,
-    selectedModel,
-    routePolicy: openAIModelCatalogRoutePolicy,
-    routeVariants,
-    prepareEntry: async (entry, variants) => {
-      const key = resolveModelCatalogIdentityKey(entry);
-      const requestedRuntimes = configuredEntriesByKey.get(
-        modelKey(entry.provider, entry.id),
-      )?.pickerRuntimes;
-      const baseRuntime = requestedRuntimes?.length
-        ? resolveAgentHarnessPolicy({
-            config: cfg,
-            agentId,
-            provider: entry.provider,
-            modelId: entry.id,
-            modelApi: entry.api,
-            modelBaseUrl: entry.baseUrl,
-          }).runtime
-        : undefined;
-      const preparedHost = await evaluateEntry(entry, variants, baseRuntime, authority);
-      // Picker alternatives never change the configured row when a session selects a sibling.
-      const host = baseRuntime ? { ...preparedHost, requestedRuntimeId: undefined } : preparedHost;
-      if (requestedRuntimes?.length) {
-        runtimeChoiceReaders.set(
-          key,
-          await withCurrentReadAuthority(authority, () =>
+  const readCatalog = await withCurrentReadAuthority(authority, () =>
+    prepareLogicalVisibleModelCatalog({
+      cfg,
+      isCurrent: () => isCurrent() && projector.isCurrent(),
+      metadataSnapshot,
+      catalog,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel,
+      agentId,
+      workspaceDir,
+      view,
+      policy: visibilityPolicy,
+      retainedModel,
+      selectedModel,
+      routePolicy: openAIModelCatalogRoutePolicy,
+      routeVariants,
+      prepareEntry: (entry, variants) => {
+        const key = resolveModelCatalogIdentityKey(entry);
+        const requestedRuntimes = configuredEntriesByKey.get(
+          modelKey(entry.provider, entry.id),
+        )?.pickerRuntimes;
+        const baseRuntime = requestedRuntimes?.length
+          ? resolveAgentHarnessPolicy({
+              config: cfg,
+              agentId,
+              provider: entry.provider,
+              modelId: entry.id,
+              modelApi: entry.api,
+              modelBaseUrl: entry.baseUrl,
+            }).runtime
+          : undefined;
+        const preparedHost = evaluateEntry(entry, variants, baseRuntime);
+        // Picker alternatives never change the configured row when a session selects a sibling.
+        const host = baseRuntime
+          ? { ...preparedHost, requestedRuntimeId: undefined }
+          : preparedHost;
+        if (requestedRuntimes?.length) {
+          runtimeChoiceReaders.set(
+            key,
             prepareModelPickerRuntimeChoices({
               cfg,
               agentId,
@@ -628,39 +646,31 @@ export async function prepareModelsListResult({
               variants,
               requestedRuntimes,
               baseEvaluation: evaluateNative(entry, host),
-              decisions: {
-                pluginRegistry: projector.pluginRegistry,
-                evaluateEntry: (model, routes, runtime) =>
-                  projector.evaluateEntry(model, routes, runtime, authority),
-                runtimeChoices: (model, routes) =>
-                  projector.runtimeChoices(model, routes, authority),
-              },
+              decisions: projector,
               evaluateNative,
               projectPublic,
             }),
-          ),
-        );
-      }
-      return () => {
-        const evaluation = evaluateNative(entry, host);
-        evaluations.set(key, evaluation);
-        const routeManaged = evaluation.routeResolution !== null;
-        const syntheticLocal =
-          !routeManaged &&
-          normalizeProviderId(entry.provider) !== "openai" &&
-          evaluation.availability === undefined &&
-          evaluation.evidence === "synthetic";
-        return resolveLogicalModelCatalogEntryState({
-          evaluation,
-          authBacked: evaluation.availability === true || syntheticLocal,
-          routePolicy: openAIModelCatalogRoutePolicy,
-        });
-      };
-    },
-  });
+          );
+        }
+        return () => {
+          const evaluation = evaluateNative(entry, host);
+          evaluations.set(key, evaluation);
+          const routeManaged = evaluation.routeResolution !== null;
+          const syntheticLocal =
+            !routeManaged &&
+            normalizeProviderId(entry.provider) !== "openai" &&
+            evaluation.availability === undefined &&
+            evaluation.evidence === "synthetic";
+          return resolveLogicalModelCatalogEntryState({
+            evaluation,
+            authBacked: evaluation.availability === true || syntheticLocal,
+            routePolicy: openAIModelCatalogRoutePolicy,
+          });
+        };
+      },
+    }),
+  );
 
-  // Settled shared projections must not retain a request's session-read custody.
-  authority = undefined;
   return {
     isCurrent: () => isCurrent() && projector.isCurrent(),
     read: () => {

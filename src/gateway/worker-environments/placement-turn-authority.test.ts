@@ -39,6 +39,7 @@ import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-a
 import { createAgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
+import { updateTransition } from "./placement-row-codec.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
@@ -96,6 +97,71 @@ function workerClaimInput(name: string, active: Awaited<ReturnType<typeof advanc
     owner: placementTurnOwner(active),
   };
 }
+
+it.each(["native", "worker"] as const)(
+  "revokes the maintenance inventory when a %s writer returns a failed placement to local",
+  async (writer) => {
+    await store.startDispatch(SESSION);
+    const failed = await store.fail({
+      sessionId: SESSION.sessionId,
+      recoveryError: "dispatch failed",
+    });
+    const inventory = await store.prepareMaintenancePlacements();
+    try {
+      expect(inventory.placements).toEqual([failed]);
+      if (writer === "native") {
+        runOpenClawStateWriteTransaction(({ db }) => updateTransition(db, failed, "local", {}, 1), {
+          database,
+        });
+      } else {
+        await store.transition({
+          sessionId: SESSION.sessionId,
+          from: "failed",
+          to: "local",
+          expectedGeneration: failed.generation,
+        });
+      }
+      expect(() => inventory.assertCurrent()).toThrow("placement inventory changed");
+    } finally {
+      inventory.release();
+    }
+  },
+);
+
+it.each(["requested", "worker-turn", "remote-exec", "unknown"] as const)(
+  "fences maintenance across committed and uncertain %s to local publications",
+  async (prior) => {
+    const previous =
+      prior === "worker-turn" || prior === "remote-exec"
+        ? await advanceToActive(prior)
+        : await store.startDispatch(SESSION);
+    const identity = requireOpenClawStateDatabaseIdentity({ db: database.db });
+    for (const settlement of ["commit", "invalidate"] as const) {
+      const inventory = await store.prepareMaintenancePlacements();
+      const publication = stagePlacementTurnClaimWorkerPublication(
+        identity,
+        {
+          ...SESSION,
+          state: "local",
+          executionMode: "worker-turn",
+          environmentId: null,
+          activeOwnerEpoch: null,
+          turnClaim: null,
+        },
+        undefined,
+        prior === "unknown" ? undefined : previous.state,
+      );
+      try {
+        expect.soft(() => inventory.assertCurrent()).toThrow("placement inventory changed");
+        publication[settlement]();
+        expect.soft(() => inventory.assertCurrent()).toThrow("placement inventory changed");
+      } finally {
+        publication.rollback();
+        inventory.release();
+      }
+    }
+  },
+);
 
 it("retains worker-parent source predicates through tool execution and rejects a reset before child commit", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -766,15 +832,25 @@ it("shares claim revocation across facades while restart clearing leaves worker 
   const facade = createWorkerSessionPlacementStore({
     database: openOpenClawStateDatabase({ path: alias }),
   });
+  const inventory = await store.prepareMaintenancePlacements();
   try {
     expect(facade.clearLocalTurnClaimsAfterRestart()).toBe(1);
     expect(localAuthority.isCurrent()).toBe(false);
     expect(workerAuthority.isCurrent()).toBe(true);
+    inventory.assertCurrent();
+    facade.retireSessionPlacement({
+      sessionId: local.sessionId,
+      expectedState: "local",
+      expectedGeneration: local.placementGeneration,
+    });
+    inventory.assertCurrent();
     await facade.authorizeWorkerTurnTools(worker, ["sessions_send"]);
     expect(workerAuthority.isCurrent()).toBe(true);
     await facade.releaseTurn(worker);
     expect(workerAuthority.isCurrent()).toBe(false);
+    expect(() => inventory.assertCurrent()).toThrow("placement inventory changed");
   } finally {
+    inventory.release();
     workerAuthority.release();
     localAuthority.release();
   }

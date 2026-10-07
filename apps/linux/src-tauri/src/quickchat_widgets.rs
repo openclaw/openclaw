@@ -697,17 +697,11 @@ fn validate_widget_url(raw: &str) -> Result<Url, String> {
     if !has_secure_widget_transport(&url) || has_url_userinfo(&url) || url.host_str().is_none() {
         return Err("Quick Chat widget URL is not a secure HTTP capability URL.".to_string());
     }
-    let encoded_segments = url
-        .path()
-        .split('/')
-        .skip(1)
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    if encoded_segments.iter().any(|segment| segment.is_empty()) {
+    let encoded_segments = url.path().split('/').skip(1);
+    if encoded_segments.clone().any(str::is_empty) {
         return Err("Quick Chat widget URL has an invalid path.".to_string());
     }
     let segments = encoded_segments
-        .iter()
         .map(|segment| {
             let decoded = percent_decode_repeatedly(segment)
                 .ok_or_else(|| "Quick Chat widget URL has invalid encoding.".to_string())?;

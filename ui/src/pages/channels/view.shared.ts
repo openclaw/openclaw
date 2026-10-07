@@ -1,4 +1,3 @@
-// Channels page shared view helpers.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import type { ChannelAccountSnapshot, ChannelStatus } from "../../api/types.ts";
@@ -8,7 +7,7 @@ import { t } from "../../i18n/index.ts";
 import { resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import type { ChannelKey, ChannelsProps } from "./view.types.ts";
+import type { ChannelsProps } from "./view.types.ts";
 
 type ChannelStatusKind = "ok" | "warn" | "danger" | "accent" | "muted";
 
@@ -20,7 +19,7 @@ type ChannelStatusRow = {
 };
 
 function resolveChannelStatus(
-  key: ChannelKey,
+  key: string,
   props: ChannelsProps,
 ): Record<string, unknown> | undefined {
   const channels = props.channels.channelsSnapshot?.channels;
@@ -30,7 +29,7 @@ function resolveChannelStatus(
 }
 
 function resolveDefaultChannelAccount(
-  key: ChannelKey,
+  key: string,
   props: ChannelsProps,
 ): ChannelAccountSnapshot | null {
   const accounts = resolveChannelAccounts(props.channels.channelsSnapshot?.channelAccounts, key);
@@ -46,7 +45,7 @@ function resolveDefaultChannelAccount(
   );
 }
 
-export function resolveChannelDisplayState(key: ChannelKey, props: ChannelsProps) {
+export function resolveChannelDisplayState(key: string, props: ChannelsProps) {
   const status = resolveChannelStatus(key, props);
   const defaultAccount = resolveDefaultChannelAccount(key, props);
   const configured =
@@ -79,7 +78,6 @@ export function boolStatusKind(value: boolean | null | undefined): ChannelStatus
   return value === true ? "ok" : "muted";
 }
 
-/** Key/value facts grid used for channel status snapshots. */
 export function renderChannelFacts(rows: readonly ChannelStatusRow[]) {
   return html`
     <dl class="settings-kv">
@@ -119,7 +117,6 @@ export function renderChannelProbeRow(probe: NonNullable<ChannelStatus["probe"]>
   });
 }
 
-/** Trailing action row carrying a button cluster in the control slot. */
 export function renderChannelActionRow(actions: unknown) {
   return html`
     <div class="settings-row settings-row--actions">
@@ -149,7 +146,6 @@ export function renderChannelRefreshAction(params: {
   </openclaw-tooltip>`;
 }
 
-/** One account inside a multi-account channel group. */
 export function renderChannelAccountRow(params: {
   title: unknown;
   accountId: string;
@@ -186,7 +182,7 @@ export function renderChannelAccountRow(params: {
 
 /** Multi-account channels surface the account count next to the heading. */
 export function resolveChannelAccountCount(
-  key: ChannelKey,
+  key: string,
   channelAccounts?: Record<string, ChannelAccountSnapshot[]> | null,
 ): number | undefined {
   const count = resolveChannelAccounts(channelAccounts, key).length;

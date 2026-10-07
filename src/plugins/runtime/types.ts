@@ -135,6 +135,12 @@ export type RuntimeGatewayRequestOptions = {
   timeoutMs?: number;
   /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
   scopes?: OperatorScope[];
+  /** Fence an in-process channel send to the exact current requester session incarnation. */
+  sessionDeliveryGeneration?: {
+    sessionKey: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+  };
 };
 
 /** Trusted in-process runtime surface injected into native plugins. */

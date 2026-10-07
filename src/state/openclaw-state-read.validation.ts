@@ -299,8 +299,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       (input.command.type === "userProfiles.authority.resolve" &&
         typeof input.command.profileId === "string") ||
       (input.command.type === "userProfiles.githubIdentity.cached" &&
-        typeof input.command.accountId === "number" &&
-        typeof input.command.email === "string") ||
+        ((typeof input.command.accountId === "number" && typeof input.command.email === "string") ||
+          typeof input.command.login === "string")) ||
       (input.command.type === "userProfiles.githubAttribution.resolve" &&
         isStringArray(input.command.profileIds)) ||
       (input.command.type === "userProfiles.channelIdentity.resolve" &&

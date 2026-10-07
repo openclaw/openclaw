@@ -1,4 +1,3 @@
-// Control UI adapter for Web Awesome's accessible modal dialog.
 import "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import { css, html, type PropertyValues } from "lit";
@@ -309,7 +308,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
       }
     }
     if (this.open) {
-      if (!dialog?.open) {
+      if (!dialog.open) {
         this.#returnFocus =
           document.activeElement instanceof HTMLElement ? document.activeElement : null;
         this.#initialFocusPending = true;
@@ -323,7 +322,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
         generation === this.#syncGeneration &&
         this.isConnected &&
         this.open &&
-        dialog?.open &&
+        dialog.open &&
         this.#initialFocusPending
       ) {
         this.#initialFocusPending = false;
@@ -332,7 +331,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
       return;
     }
     this.#initialFocusPending = false;
-    if (webAwesomeDialog.open || dialog?.open) {
+    if (webAwesomeDialog.open || dialog.open) {
       this.#suppressNextCancel = true;
       webAwesomeDialog.open = false;
     } else {

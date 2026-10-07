@@ -81,8 +81,10 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       : !inOwnerContext(subagents.snapshotIdentity)
         ? inOwnerContext(subagents.prepare)
         : registryRead.prepare();
-  const placementFacts = createSessionRowPlacementProjection(params.placementFactsReader, () =>
-    !disposed && topologyDirty ? topology() : prepareRegistryFacts(),
+  const placementFacts = createSessionRowPlacementProjection(
+    params.placementFactsReader,
+    () => (!disposed && topologyDirty ? topology() : prepareRegistryFacts()),
+    env,
   );
   let epoch = 0;
   let topologyEpoch = 0;
@@ -324,11 +326,11 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     if (!presentationOnly) {
       revisions.invalidate(!catalogOnly);
     }
+    placementFacts.invalidateChange(change);
     if ("all" in change) {
       if (!presentationOnly && !catalogOnly) {
         databaseRevision++;
       }
-      placementFacts.invalidateChange(change);
       if (isSessionStoreTopologyChange(change) || change.scope === "config") {
         topologyDirty = true;
         topologyEpoch = epoch;
@@ -698,7 +700,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     isCurrent,
     selectEntries,
     listCreatedActors: (): ReturnType<typeof creators.list> =>
-      inOwnerContext(() => creators.list(projection.state.scope({}).paths, matching)),
+      creators.list(() => projection.state.scope({}).paths, matching),
     snapshot: (query: records.Lookup, options: records.SnapshotOptions = {}) =>
       records.snapshot(describe(query), metadata.current, options),
     dispose,

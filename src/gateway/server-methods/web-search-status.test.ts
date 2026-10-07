@@ -94,7 +94,7 @@ beforeEach(() => {
   mocks.native.mockReturnValue({ kind: "managed" });
   mocks.runtime.mockReturnValue({ id: "openclaw" });
   mocks.decisions.mockReturnValue({
-    evaluateEntry: async () => ({}),
+    evaluateEntry: () => ({}),
     evaluateNative: (_entry: unknown, host: unknown) => host,
   });
   mocks.catalog.mockResolvedValue({
@@ -162,7 +162,7 @@ describe("Search settings status projection", () => {
   it("uses the authenticated requester's existing model account decision", async () => {
     mocks.decisions.mockImplementation(
       ({ requesterProfileId }: { requesterProfileId?: string }) => ({
-        evaluateEntry: async () => ({
+        evaluateEntry: () => ({
           runtimeAuth: { id: requesterProfileId === "personal" ? "custom-harness" : "openclaw" },
         }),
         evaluateNative: (_entry: unknown, host: unknown) => host,

@@ -1,4 +1,3 @@
-/** Builds deterministic plugin load plans for selected harness, memory, and context-engine owners. */
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
@@ -295,7 +294,6 @@ export function resolveSelectedAgentHarnessRuntime(
       }).runtime;
 }
 
-// Returns whether a selection needs a plugin-owned harness in its prepared generation.
 export function requiresAgentHarnessPluginSelection(
   selection: AgentHarnessPluginSelection,
   config?: OpenClawConfig,

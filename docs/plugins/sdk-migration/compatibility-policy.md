@@ -165,6 +165,21 @@ approval. This includes the callback-based `inbound-envelope` helpers and
 and `dispatchInboundDirectDm`. Existing synchronous signatures and callback timing
 remain unchanged. No schema, stored data, retention, or update migration is required.
 
+### Progress card handoff
+
+`ReplyDispatchRuntimeInfo.adoptProgressContinuation(receipt)` from
+`openclaw/plugin-sdk/reply-runtime` is deprecated as of October 6, 2026. Editable
+progress adapters use `adoptProgressDraft(draft)` instead: they keep the card and
+its rendering, and the host pushes prepared items and retires the card once. See
+[progress card handoff](/plugins/sdk-channel-plugins/status-and-media#progress-card-handoff).
+
+The receipt type shipped in OpenClaw 2026.9.8 stays source-compatible until the
+next Plugin SDK major and explicit breaking-release approval. The host never
+offers it, so a published adapter that checks for it keeps ordinary waiting-reply
+delivery and the host never receives a receipt. Telegram, the only bundled
+adopter, uses the draft handoff. No schema, stored data, retention, or update
+migration is required.
+
 ### Watched-session harness context
 
 `buildWatchedSessionsHarnessContext` from
@@ -207,11 +222,17 @@ Legacy ordinary queue preparation stays inside its FIFO reservation, with
 synchronous final checks outside worker grants. Complete worker preparations
 bind their final policy and target reads to enqueue; cleanup or notification
 failure after enqueue preserves input custody and cannot authorize replay.
-Question claims and cancellation retain their existing synchronous contracts.
+Question claims and cancellation retain their existing synchronous assertions,
+with optional awaited companions for prepared backends.
 Native session binding authorities retain their original `withCurrent` contract.
 The optional `withPreparedCurrent` companion composes fresh tool policy with native
 lineage admission; older authority implementations remain valid and use the full
 synchronous compatibility check.
+
+Custom question dispatchers retain their original `authority.assertCurrent`
+callback and can add the optional awaited companion. Legacy external V2
+dispatchers retain fresh native policy checks. Retained commit guards for
+store-bound secret answers still recheck their original session owner.
 
 Removal requires the next Plugin SDK major and explicit breaking-release
 approval. TypeScript annotations and migration documentation provide diagnostics;

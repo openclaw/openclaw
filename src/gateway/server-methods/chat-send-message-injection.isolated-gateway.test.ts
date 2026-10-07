@@ -133,7 +133,6 @@ async function seedActiveTurn(params: {
         ...(params.deliverySourceRunId
           ? { restartRecoveryDeliverySourceRunId: params.deliverySourceRunId }
           : {}),
-        status: "running",
       },
     },
   });

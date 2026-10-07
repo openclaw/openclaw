@@ -16,6 +16,12 @@ import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
 import { normalizePhoneNumber } from "./allowlist.js";
+import {
+  CallCallbacksConfigSchema,
+  CallLiveConfigSchema,
+  CallReportsConfigSchema,
+  CallVoicemailConfigSchema,
+} from "./errand-config.js";
 import { TWILIO_REGIONS } from "./providers/twilio-region.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 import { isTailscalePortAllowed, VoiceCallTailscaleConfigSchema } from "./tailscale-config.js";
@@ -282,6 +288,12 @@ export const VoiceCallConfigSchema = z
 
     outbound: OutboundConfigSchema.default(OutboundConfigSchema.parse({})),
 
+    reports: CallReportsConfigSchema,
+    live: CallLiveConfigSchema,
+    callbacks: CallCallbacksConfigSchema,
+    voicemail: CallVoicemailConfigSchema,
+
+    /** Maximum call duration in seconds */
     maxDurationSeconds: z.number().int().positive().default(300),
 
     /**
@@ -537,6 +549,10 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
     allowFrom: config.allowFrom ?? defaults.allowFrom,
     numbers: sanitizeVoiceCallNumberRoutes(config.numbers ?? defaults.numbers),
     outbound: { ...defaults.outbound, ...config.outbound },
+    reports: CallReportsConfigSchema.parse(config.reports),
+    live: CallLiveConfigSchema.parse(config.live),
+    callbacks: CallCallbacksConfigSchema.parse(config.callbacks),
+    voicemail: CallVoicemailConfigSchema.parse(config.voicemail),
     serve,
     tailscale: { ...defaults.tailscale, ...config.tailscale },
     tunnel: { ...defaults.tunnel, ...config.tunnel },

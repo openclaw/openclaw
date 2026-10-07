@@ -91,8 +91,6 @@ const loadDispatchAcpTranscriptRuntime = createLazyPromise(
   () => import("./dispatch-acp-transcript.runtime.js"),
 );
 
-type DispatchProcessedRecorder = InboundMessageAuditTerminalRecorder["note"];
-
 function resolveAcpRequestId(ctx: FinalizedRuntimeMsgContext): string {
   const id = ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   return (
@@ -159,7 +157,7 @@ export async function tryDispatchAcpReplyCore(
     onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
     userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
     prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
-    recordProcessed: DispatchProcessedRecorder;
+    recordProcessed: InboundMessageAuditTerminalRecorder["note"];
     markIdle: (reason: string) => void;
   },
 ): Promise<AcpDispatchAttemptResult | null> {

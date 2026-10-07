@@ -8,7 +8,15 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveSkillWorkshopToolConstructionBlock } from "../skills/workshop/tool-availability.js";
-import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
+import {
+  hasConfiguredWebSearchProvider,
+  prepareWebSearchConfiguration,
+} from "../web-search/runtime.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveSessionAgentIds,
+} from "./agent-scope.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { bindAssembledAgentToolActionDescriptor } from "./agent-tool-metadata.js";
 import {
@@ -129,13 +137,28 @@ export async function createOpenClawToolsWithPreparation(
     : await createOpenClawDelegateToolsForRunAsync({ ...captured, sessionAgentId }, shared);
   shared.assertCurrent();
   captured.assertInvocationCurrent?.();
-  return createOpenClawTools(captured, delegated);
+  const webSearchConfigured =
+    captured.webSearchEnabled === false || captured.config?.tools?.web?.search?.enabled === false
+      ? undefined
+      : await prepareWebSearchConfiguration({
+          config: captured.config,
+          agentDir: captured.agentDir ?? resolveAgentDir(captured.config ?? {}, sessionAgentId),
+          authStore: captured.authProfileStore,
+          ...(captured.authProfileStoreSource !== undefined
+            ? { resolveAuthProfileStoreSource: () => captured.authProfileStoreSource === true }
+            : {}),
+          runtimeWebSearch: getActiveRuntimeWebToolsMetadataFromState()?.search,
+        });
+  shared.assertCurrent();
+  captured.assertInvocationCurrent?.();
+  return createOpenClawTools(captured, delegated, webSearchConfigured);
 }
 
 /** @deprecated Use createOpenClawToolsAsync for runtime construction. */
 export function createOpenClawTools(
   options?: OpenClawToolsOptions,
   preparedDelegateTools?: AnyAgentTool[],
+  preparedWebSearchConfigured?: boolean,
 ): AnyAgentTool[] {
   const resolvedConfig = options?.config;
   const sessionConfig = options?.sessionConfigSource === "runtime" ? undefined : resolvedConfig;
@@ -255,12 +278,32 @@ export function createOpenClawTools(
         })
       : null;
   options?.recordToolPrepStage?.("openclaw-tools:pdf-tool");
-  const webSearchTool = createWebSearchTool({
+  const webSearchAgentDir =
+    options?.agentDir ?? resolveAgentDir(resolvedConfig ?? {}, sessionAgentId);
+  let webSearchTool = createWebSearchTool({
     ...options,
+    agentDir: webSearchAgentDir,
     enabled: options?.webSearchEnabled,
     runtimeWebSearch: runtimeWebTools?.search,
     lateBindRuntimeConfig: true,
   });
+  if (webSearchTool) {
+    const configured =
+      preparedWebSearchConfigured ??
+      hasConfiguredWebSearchProvider({
+        config: availabilityConfig ?? resolvedConfig,
+        agentDir: webSearchAgentDir,
+        authStore: options?.authProfileStore,
+        runtimeWebSearch: runtimeWebTools?.search,
+        ...(options?.authProfileStoreSource !== undefined
+          ? { resolveAuthProfileStoreSource: () => options.authProfileStoreSource === true }
+          : {}),
+      });
+    options?.onWebSearchConfiguration?.(configured);
+    if (!configured) {
+      webSearchTool = null;
+    }
+  }
   options?.recordToolPrepStage?.("openclaw-tools:web-search-tool");
   const webFetchTool = createWebFetchTool({
     ...options,

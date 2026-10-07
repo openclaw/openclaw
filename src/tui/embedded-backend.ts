@@ -807,7 +807,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     return { ok: this.pluginApprovalBroker.resolve(id, decision) };
   }
 
-  async listModels(opts?: { agentId?: string }): Promise<TuiModelChoice[]> {
+  async listModels(opts?: { agentId?: string; sessionKey?: string }): Promise<TuiModelChoice[]> {
     await this.ready;
     await this.preparedModelRuntime.waitUntilReady();
     const cfg = getRuntimeConfig();

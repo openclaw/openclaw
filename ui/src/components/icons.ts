@@ -13,7 +13,6 @@ export const icons = {
   layers: strokeIcon(
     svg`<path d="m12 3 10 5-10 5L2 8Z"/><path d="m2 12 10 5 10-5M2 16l10 5 10-5"/>`,
   ),
-  // Navigation icons
   messageCircle: strokeIcon(svg`<path
     d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"
   />`),
@@ -236,7 +235,6 @@ export const icons = {
     <path d="M12 8v4" />
     <path d="M12 16h.01" />`),
 
-  // UI icons
   menu: strokeIcon(svg` <line x1="4" x2="20" y1="12" y2="12" />
     <line x1="4" x2="20" y1="6" y2="6" />
     <line x1="4" x2="20" y1="18" y2="18" />`),

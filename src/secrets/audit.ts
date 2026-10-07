@@ -72,24 +72,7 @@ type SecretsAuditFinding = {
 type SecretsAuditStatus = "clean" | "findings" | "unresolved"; // pragma: allowlist secret
 
 /** Structured report returned by the secrets audit command. */
-type SecretsAuditReport = {
-  version: 1;
-  status: SecretsAuditStatus;
-  resolution: {
-    refsChecked: number;
-    skippedExecRefs: number;
-    resolvabilityComplete: boolean;
-  };
-  filesScanned: string[];
-  summary: {
-    plaintextCount: number;
-    unresolvedRefCount: number;
-    shadowedRefCount: number;
-    storeResidueCount: number;
-    legacyResidueCount: number;
-  };
-  findings: SecretsAuditFinding[];
-};
+type SecretsAuditReport = Awaited<ReturnType<typeof runSecretsAudit>>;
 
 type RefAssignment = {
   file: string;
@@ -99,7 +82,7 @@ type RefAssignment = {
   provider?: string;
 };
 
-type SecretDefaults = { env?: string; file?: string; exec?: string };
+type SecretDefaults = Parameters<typeof coerceSecretRef>[1];
 
 type AuditCollector = {
   findings: SecretsAuditFinding[];
@@ -551,7 +534,7 @@ function collectShadowingFindings(collector: AuditCollector): void {
   }
 }
 
-function summarizeFindings(findings: SecretsAuditFinding[]): SecretsAuditReport["summary"] {
+function summarizeFindings(findings: SecretsAuditFinding[]) {
   return {
     plaintextCount: findings.filter((entry) => entry.code === "PLAINTEXT_FOUND").length,
     unresolvedRefCount: findings.filter(
@@ -569,7 +552,7 @@ export async function runSecretsAudit(
     env?: NodeJS.ProcessEnv;
     allowExec?: boolean;
   } = {},
-): Promise<SecretsAuditReport> {
+) {
   const env = params.env ?? process.env;
   const snapshot = await createSecretsConfigIO({ env }).readConfigFileSnapshot();
   const configPath = resolveUserPath(snapshot.path);
@@ -664,7 +647,7 @@ export async function runSecretsAudit(
         : "clean";
 
   return {
-    version: 1,
+    version: 1 as const,
     status,
     resolution,
     filesScanned: [...collector.filesScanned].toSorted(),

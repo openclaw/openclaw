@@ -14,7 +14,12 @@ import {
   resolveReplyThemeProfileId,
   resolveReplyToolAuthorityContext,
 } from "../reply-tool-authority.js";
-import { FollowupRunDeferredError, isFollowupRunAborted, type FollowupRun } from "./types.js";
+import {
+  FollowupRunDeferredError,
+  isFollowupRunAborted,
+  type FollowupRun,
+  type QueuedFollowupReplyBatch,
+} from "./types.js";
 
 export function hasPreparedCurrentTurnImages(run: FollowupRun): boolean {
   return (
@@ -35,6 +40,17 @@ export function hasExclusiveTurnAdmission(
   admission: "exclusive";
 } {
   return lifecycle?.admission === "exclusive";
+}
+
+export function assertSingleAdmissionOwner(items: readonly FollowupRun[]): void {
+  const owners = new Set(
+    items.flatMap((item) =>
+      hasExclusiveTurnAdmission(item.turnAdoptionLifecycle) ? [item.turnAdoptionLifecycle] : [],
+    ),
+  );
+  if (owners.size > 1) {
+    throw new Error("followup queue cannot aggregate distinct admission lifecycles");
+  }
 }
 
 function resolveTurnAdoptionLifecycleDeliveryKey(
@@ -332,6 +348,44 @@ function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["curren
   };
 }
 
+function collectReplyDisposition(
+  items: FollowupRun[],
+): FollowupRun["queuedFollowupReplyDisposition"] {
+  const primary = items.at(-1)?.queuedFollowupReplyDisposition;
+  const terminalRecipients = items.slice(0, -1).flatMap((item) => {
+    const disposition = item.queuedFollowupReplyDisposition;
+    return disposition?.kind === "deliver" ? [disposition.deliver] : [];
+  });
+  if (terminalRecipients.length === 0) {
+    return primary;
+  }
+  const deliver = primary?.kind === "deliver" ? primary.deliver : undefined;
+  return {
+    kind: "deliver",
+    deliver: Object.assign(
+      async (batch: QueuedFollowupReplyBatch) => {
+        if (batch.completion.kind === "progress") {
+          await deliver?.(batch);
+          return;
+        }
+        // The content owner publishes once; every consumed source receives the outcome.
+        const results = await Promise.allSettled([
+          ...terminalRecipients.map(async (recipient) => recipient({ ...batch, payloads: [] })),
+          Promise.resolve().then(() => deliver?.(batch)),
+        ]);
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure) {
+          throw failure.reason;
+        }
+      },
+      {
+        ownsCompletion: deliver?.ownsCompletion,
+        createSourceRetry: deliver?.createSourceRetry,
+      },
+    ),
+  };
+}
+
 export function collectRuntimeMetadata(
   items: FollowupRun[],
   abortSignal?: AbortSignal,
@@ -372,7 +426,7 @@ export function collectRuntimeMetadata(
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
     turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
     replyOperationRunStates: items.flatMap((item) => item.replyOperationRunStates ?? []),
-    queuedFollowupReplyDisposition: items.at(-1)?.queuedFollowupReplyDisposition,
+    queuedFollowupReplyDisposition: collectReplyDisposition(items),
     runObservers: items.at(-1)?.runObservers,
   };
 }

@@ -16,6 +16,7 @@ import {
 } from "./session-accessor.sqlite-active-events.js";
 import { readSessionTranscriptCurrentTurnEntry } from "./session-accessor.sqlite-current-turn.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import { listTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
 import { readCurrentProjectionSnapshot } from "./session-accessor.sqlite-projection-read.js";
 import {
   loadTranscriptReadSnapshotSync,
@@ -76,6 +77,32 @@ export function createIncognitoHistoryWorker(
 ) {
   let prepared: PreparedHistoryRead<Command["type"]> | undefined;
   const prepare = async (command: Command) => {
+    if (command.type === "session.history.search") {
+      const { sessions, ...selection } = command.input;
+      const { searchSessionTranscriptsReadOnlySync } =
+        await import("./session-transcript-search.js");
+      prepared = prepareHistoryRead(command.type, () => {
+        const {
+          found: _found,
+          revision: _revision,
+          ...result
+        } = sessions.length
+          ? searchSessionTranscriptsReadOnlySync(
+              {
+                ...selection,
+                agentId: database.agentId,
+                sessionKeys: sessions.map((session) => session.sessionKey),
+              },
+              { agentId: database.agentId, path: database.path, env },
+            )
+          : { found: true, revision: undefined, hits: [], truncated: false };
+        return {
+          kind: "transcript-search",
+          result: { ...result, indexing: !isSessionTranscriptIndexStatusClean(database.db) },
+        };
+      });
+      return;
+    }
     const { sessionKey, sessionId, admission } = command.input;
     const target = {
       agentId: database.agentId,
@@ -92,6 +119,19 @@ export function createIncognitoHistoryWorker(
       env,
     };
     const physical = { agentId: database.agentId, path: database.path };
+    const memoryTarget = (readSessionId = sessionId) => {
+      if (
+        readSessionId !== sessionId &&
+        !listTranscriptInstancesFromDatabase({
+          database,
+          currentEntries: { get: (key) => readExactSessionEntryRow(database, key, "list")?.entry },
+          options: { sessionId: readSessionId, includeAllWindows: true },
+        }).some((window) => window.sessionKey === sessionKey)
+      ) {
+        throw new Error("Incognito Memory transcript belongs to another session or is unavailable");
+      }
+      return { ...target, sessionId: readSessionId };
+    };
     const selection = historySelection(command);
     if (selection) {
       prepared = prepareHistoryRead(command.type, () =>
@@ -231,29 +271,6 @@ export function createIncognitoHistoryWorker(
           request: { target: resolvedScope, match: command.input.match },
         };
         break;
-      case "session.history.search": {
-        const { query, limit, match, role, order } = command.input;
-        const { searchSessionTranscriptsReadOnlySync } =
-          await import("./session-transcript-search.js");
-        prepared = prepareHistoryRead(command.type, () => {
-          const {
-            found: _found,
-            revision: _revision,
-            ...result
-          } = searchSessionTranscriptsReadOnlySync(
-            { ...target, sessionKeys: [sessionKey], query, limit, match, role, order },
-            { ...physical, env },
-          );
-          return {
-            kind: "transcript-search",
-            result: {
-              ...result,
-              indexing: !isSessionTranscriptIndexStatusClean(database.db),
-            },
-          };
-        });
-        return;
-      }
       case "session.history.watermark":
         request = { kind: "transcript-watermark", database: physical, scope: target };
         break;
@@ -354,9 +371,12 @@ export function createIncognitoHistoryWorker(
           await import("../../../packages/memory-host-sdk/src/host/session-entry-projection.js");
         prepared = prepareHistoryRead(command.type, () =>
           runWithSessionTranscriptReadFence(admission, () => {
-            const snapshot = readTranscriptExportSnapshotReadOnlySync(target, {
-              projectEvent: command.input.includeMessages ? undefined : projectSessionEntryRecord,
-            });
+            const snapshot = readTranscriptExportSnapshotReadOnlySync(
+              memoryTarget(command.input.readSessionId),
+              {
+                projectEvent: command.input.includeMessages ? undefined : projectSessionEntryRecord,
+              },
+            );
             if (!snapshot) {
               throw new Error("Incognito actor transcript snapshot is unavailable");
             }
@@ -392,7 +412,7 @@ export function createIncognitoHistoryWorker(
           await import("../../../packages/memory-host-sdk/src/host/session-reset-recall-read.js");
         prepared = prepareHistoryRead(command.type, () =>
           runWithSessionTranscriptReadFence(admission, () =>
-            readSessionResetRecallCutoffInProcess(target),
+            readSessionResetRecallCutoffInProcess(memoryTarget(command.input.readSessionId)),
           ),
         );
         return;
@@ -447,14 +467,17 @@ export function createIncognitoHistoryWorker(
   return {
     prepare,
     execute(command: Command, facts: IncognitoSessionFacts[]) {
-      const target = command.input;
-      const entry = readExactSessionEntryRow(database, target.sessionKey)?.entry;
-      if (
-        !entry ||
-        entry.sessionId !== target.sessionId ||
-        entry.lifecycleRevision !== target.lifecycleRevision
-      ) {
-        throw new Error("Incognito history session generation is no longer current");
+      const targets =
+        command.type === "session.history.search" ? command.input.sessions : [command.input];
+      for (const target of targets) {
+        const entry = readExactSessionEntryRow(database, target.sessionKey)?.entry;
+        if (
+          !entry ||
+          entry.sessionId !== target.sessionId ||
+          entry.lifecycleRevision !== target.lifecycleRevision
+        ) {
+          throw new Error("Incognito history session generation is no longer current");
+        }
       }
       if (!prepared || prepared.type !== command.type) {
         throw new Error("Incognito history read was not prepared");

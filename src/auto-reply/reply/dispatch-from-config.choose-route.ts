@@ -116,10 +116,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     (state.suppressDelivery &&
       !(allowsVerboseProgressDespiteSourceSuppression() && shouldSendToolSummaries()));
   const shouldDeliverForcedToolProgressDespiteSourceSuppression = () =>
-    state.suppressAutomaticSourceDelivery &&
-    state.sourceReplyDeliveryMode === "message_tool_only" &&
-    ctx.InboundEventKind !== "room_event" &&
-    !state.sendPolicyDenied &&
+    allowsVerboseProgressDespiteSourceSuppression() &&
     params.replyOptions?.forceToolResultProgress === true;
   let finalReplyDeliveryStarted = false;
   const isSessionWriterDeliveryAuthorized = (payload: ReplyPayload) =>

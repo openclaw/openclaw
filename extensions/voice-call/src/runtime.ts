@@ -13,6 +13,8 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { OpenClawPluginApi } from "../api.js";
+import { buildCallBriefInstructions } from "./call-brief.js";
+import { createCallDeliveryRuntime } from "./call-delivery-runtime.js";
 import type { VoiceCallConfig } from "./config.js";
 import {
   resolveVoiceCallEffectiveConfig,
@@ -188,7 +190,11 @@ async function createRealtimeInstructionsResolver(params: {
     }),
   );
   const instructionsByAgentId = new Map(entries);
-  return (call) => instructionsByAgentId.get(resolveCallAgentId(call)) ?? genericInstructions;
+  return (call) => {
+    const instructions = instructionsByAgentId.get(resolveCallAgentId(call)) ?? genericInstructions;
+    const brief = buildCallBriefInstructions(call);
+    return brief ? `${instructions}\n\n${brief}` : instructions;
+  };
 }
 
 export async function createVoiceCallRuntime(params: {
@@ -200,6 +206,8 @@ export async function createVoiceCallRuntime(params: {
   stateRuntime?: VoiceCallStateRuntime["state"];
   ttsRuntime?: TelephonyTtsRuntime;
   logger?: PluginLogger;
+  deliveryRuntime?: Pick<OpenClawPluginApi["runtime"], "gateway" | "subagent">;
+  runInServiceContext?: <T>(run: () => T) => T;
 }): Promise<VoiceCallRuntime> {
   params.scheduler.signal.throwIfAborted();
   const {
@@ -293,6 +301,7 @@ export async function createVoiceCallRuntime(params: {
       config.serve.path,
       webhookServer.getStreamDisconnectLifecycle(),
       cfg,
+      config.voicemail.holdOpeningMaxMs,
     );
     if (config.realtime.toolPolicy !== "none") {
       realtimeHandler.registerToolHandler(
@@ -393,13 +402,37 @@ export async function createVoiceCallRuntime(params: {
             toolBindings: {
               voice_call: { kind: "active-call", callId: call.callId },
             },
-            extraSystemPrompt: `${REALTIME_VOICE_CONSULT_SYSTEM_PROMPT} The bound call id is ${JSON.stringify(call.callId)}.`,
+            extraSystemPrompt: `${REALTIME_VOICE_CONSULT_SYSTEM_PROMPT} The bound call id is ${JSON.stringify(call.callId)}.\n\n${buildCallBriefInstructions(call)}`,
             abortSignal: handlerContext.abortSignal,
           });
         },
       );
     }
+    manager.playRealtimeVoicemail = (callId, instructions) =>
+      realtimeHandler.playVoicemail(callId, instructions);
+    manager.beforeCarrierPlayback = (callId) => realtimeHandler.prepareCarrierPlayback(callId);
+    if (config.reports.enabled || config.live.transcript || config.voicemail.detection !== "off") {
+      manager.beforeCallEnd = (call) => realtimeHandler.drainCall(call.callId);
+    }
     webhookServer.setRealtimeHandler(realtimeHandler);
+  }
+  const delivery =
+    (config.reports.enabled || config.live.transcript) &&
+    params.deliveryRuntime &&
+    params.runInServiceContext
+      ? createCallDeliveryRuntime({
+          config,
+          coreConfig: cfg,
+          runtime: params.deliveryRuntime,
+          runInServiceContext: params.runInServiceContext,
+          manager,
+          logger: log,
+        })
+      : undefined;
+  if ((config.reports.enabled || config.live.transcript) && !delivery) {
+    log.warn(
+      "[voice-call] Reports/live transcript require the plugin delivery runtime; transcripts remain in call history.",
+    );
   }
   let tunnelResult: TunnelResult | null = null;
   let stopPromise: Promise<void> | undefined;
@@ -410,6 +443,7 @@ export async function createVoiceCallRuntime(params: {
         () => tunnelResult?.stop(),
         () => cleanupTailscaleExposure(config),
         () => webhookServer.stop(),
+        () => delivery?.stop(),
         () => manager.stop(),
       ]) {
         try {

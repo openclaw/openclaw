@@ -43,6 +43,8 @@ Published OpenClaw plugin packages bundle their runtime dependency files in the 
 
 Native-heavy plugins opt out of runtime dependency bundling because their dependency trees contain platform-specific or large native artifacts. Those plugins resolve dependencies at install time from exact-pinned direct dependencies. The root `openclaw` package also resolves dependencies at install time and does not bundle its full dependency tree.
 
+When preparing a package that carries bundled dependencies, OpenClaw also declares its hoisted optional platform packages as root `optionalDependencies`, using the validated npm dependency graph. This preserves platform filtering on npm 10 global installs, including installs with lifecycle scripts disabled, without removing the patched bundled runtimes.
+
 The bundled Anthropic plugin communicates directly with the separately installed `claude` executable. It does not depend on or copy the Claude Agent SDK into OpenClaw's package. The external ACPX plugin independently declares an ACP adapter that depends on the SDK; ACPX leaves those dependencies to installation from npm instead of bundling them into its published package.
 
 Neither path publishes a lockfile:
@@ -53,7 +55,7 @@ Neither path publishes a lockfile:
 
 ## Validate npm dependency graphs
 
-The npm-lock checker generates `package-lock.json` in a temporary directory, applies workspace overrides, and rejects any generated registry version absent from `pnpm-lock.yaml`. It does not write a lockfile into the checkout.
+The npm-lock checker generates `package-lock.json` in a temporary directory, applies workspace overrides, and rejects any generated registry version absent from `pnpm-lock.yaml`. It preserves `optional` metadata and verifies that every declared `os`, `cpu`, and `libc` constraint matches the pnpm lock. It does not write a lockfile into the checkout.
 
 ```bash
 # Root and every publishable package

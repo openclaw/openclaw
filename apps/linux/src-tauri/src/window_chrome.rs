@@ -35,7 +35,7 @@ pub fn install(window: &Window) -> tauri::Result<()> {
     #[cfg(target_os = "linux")]
     return crate::window_chrome_linux::install(window);
     #[cfg(target_os = "macos")]
-    return crate::window_chrome_macos::install_window(window);
+    return crate::window_chrome_macos::set_unified(window, false);
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = window;

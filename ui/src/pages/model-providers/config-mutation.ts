@@ -226,13 +226,11 @@ export async function runModelProviderConfigMutation(
     if (!owner.isCurrentClient()) {
       return;
     }
-    if (!patched) {
-      if (owner.isCurrentAgent()) {
-        owner.setMessage({
-          kind: "error",
-          text: runtimeConfig.state.lastError ?? t("modelProviders.configUnavailable"),
-        });
-      }
+    if (!patched && owner.isCurrentAgent()) {
+      owner.setMessage({
+        kind: "error",
+        text: runtimeConfig.state.lastError ?? t("modelProviders.configUnavailable"),
+      });
     }
   } catch (error) {
     if (owner.isCurrentClient() && owner.isCurrentAgent()) {

@@ -25,11 +25,13 @@ Changing a session between **Shared**, **Read-only**, **Suggest**, and **Draft**
 controls signed-in people. None of those settings creates a public link.
 
 The session creator or a Gateway admin can explicitly enable **Public access**.
-Anyone with the resulting bearer URL can then read existing and future conversation
+Anyone with the normal thread URL can then read existing and future conversation
 text without signing in, while tools, reasoning, files, images, widgets, hidden
-messages, and internal metadata remain excluded. Assigning a different owner does
-not transfer this authority. Disable public access to revoke every URL for that
-publication, remembering that downloaded copies cannot be recalled. See
+messages, and internal metadata remain excluded. **Log in** returns to that same
+thread with the person's existing permissions. Assigning a different owner does
+not transfer publication authority. Disabling public access stops anonymous
+reads; enabling it again makes the same normal URL readable. Previously revoked
+token links remain invalid, and downloaded copies cannot be recalled. See
 [Share a session publicly](/web/control-ui/sessions-and-sidebar#share-a-session-publicly)
 for the user flow and [Public session transcripts](/web/urls#public-session-transcripts)
 for the security and deployment contract.

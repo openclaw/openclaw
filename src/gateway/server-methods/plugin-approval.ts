@@ -1,4 +1,3 @@
-// Gateway RPC handlers for plugin approval requests and decisions.
 import { randomUUID } from "node:crypto";
 import {
   normalizeNullableString,
@@ -52,7 +51,6 @@ type PluginApprovalIosPushDelivery = NonNullable<
   handleResolved?: (resolved: PluginApprovalResolved) => Promise<void>;
 };
 
-/** Create plugin approval handlers backed by the shared approval manager. */
 export function createPluginApprovalHandlers(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
   opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: PluginApprovalIosPushDelivery },

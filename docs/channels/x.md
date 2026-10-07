@@ -79,6 +79,38 @@ For multiple bots, put account-specific values under
 `channels.x.accounts.<accountId>`. Root fields are shared defaults; the default
 account ID is `default`.
 
+## Public work sessions
+
+Set `channels.x.accounts.<accountId>.autoPublishWorkSessions: true` (or the
+shared root default `channels.x.autoPublishWorkSessions`) to publish fresh,
+isolated visible work sessions spawned directly by admitted maintainer mentions.
+Guest mentions remain limited to hidden helpers and cannot publish work sessions.
+This is **off by default**. It exposes that child's conversation to anonymous readers
+at the same canonical `/chat` link; it does not change Team collaboration rights.
+Only enable it for an agent whose work is intended to be public.
+
+Publication requires a configured **app-only** `bearerToken`. Before admission,
+the plugin looks up every post included in the supplied thread context using
+application-only authentication and requires explicit `protected: false`
+author metadata. Missing, edited, protected, withheld, or unavailable posts and
+failed lookups deny automatic publication. A permalink or successful
+user-context lookup is not proof of a public audience. Verification reads share
+the account's X API budget; insufficient budget denies publication without
+bypassing the cost limits.
+
+The permission belongs only to that incoming invocation: it is not stored on
+the X conversation, inherited by grandchildren, or accepted in model-authored
+spawn arguments. Forks, private/draft sessions, incognito sessions, and existing
+sessions cannot be automatically published. Changing the account configuration
+or allowlist retires in-flight publication authority. The creation owner commits
+the public grant with the child before its first turn, and the spawn receipt
+reports `publicRead` only for the committed grant. Links without that receipt
+are labeled as requiring sign-in. This lane requires the live in-process Gateway;
+it does not downgrade to a transport that loses the invocation's authority.
+
+Manual publication remains governed by the existing creator/administrator
+sharing controls. No X identity is promoted to a Team profile or administrator.
+
 ## Manage the allowlist
 
 Open **X replies** in the Control UI as an administrator. The page shows the
@@ -303,8 +335,10 @@ per post; each URL counts as 23 characters. The last chunk receives
 empty string to disable the signature.
 
 When a maintainer turn starts a visible work session, its first session URL is appended
-to the reply unless the text already contains that URL. This is a public link
-in a public reply and uses X's URL-containing reply price.
+to the reply unless the text already contains that URL. The canonical link is
+publicly readable only when the creation receipt confirms publication; otherwise
+it is labeled "Work session (sign-in required)." Both use X's URL-containing
+reply price.
 
 For direct replies through the message tool or CLI, target the post ID with an
 `x:` prefix or its full X status URL:
@@ -401,33 +435,34 @@ configured usernames alone cannot authorize a reply.
 
 These fields work at `channels.x` and on individual account entries unless noted.
 
-| Field                               | Default                 | Purpose                                                                 |
-| ----------------------------------- | ----------------------- | ----------------------------------------------------------------------- |
-| `enabled`                           | `true`                  | Enables the channel or account.                                         |
-| `name`                              | Unset                   | Optional account display name.                                          |
-| `userId`                            | Required                | Numeric user ID of the bot account.                                     |
-| `username`                          | Required                | Bot username without `@`.                                               |
-| `clientId`                          | Required                | OAuth2 confidential application client ID.                              |
-| `clientSecret`                      | Required                | Application secret; supports SecretRef.                                 |
-| `refreshToken`                      | Required                | Bot's user-context OAuth2 refresh token; supports SecretRef.            |
-| `bearerToken`                       | Unset                   | App-only Activity API bearer token; supports SecretRef.                 |
-| `events.mode`                       | `auto`                  | `auto`, `stream`, or `poll`.                                            |
-| `events.pollSeconds`                | `60`                    | Mentions polling interval, minimum 15 seconds.                          |
-| `allowFrom`                         | `[]`                    | Numeric author IDs, optionally prefixed with `x:`.                      |
-| `groupPolicy`                       | `allowlist`             | `allowlist`, `open`, or `disabled`.                                     |
-| `dmPolicy`                          | `disabled`              | Only `disabled` is accepted.                                            |
-| `threadContext.maxPosts`            | `50`                    | Maximum posts included in agent thread context, from 2 to 100.          |
-| `guests.enabled`                    | `false`                 | Enables repository-only answers for non-allowlisted authors.            |
-| `guests.maxMentionsPerAuthorPerDay` | `5`                     | Per-author, per-account UTC-day limit, from 0 to 1000.                  |
-| `guests.threadContextMaxPosts`      | `10`                    | Guest thread context cap, from 2 to 100 posts.                          |
-| `guests.tools.allow`                | Host-supported defaults | Narrows the default guest tools; an empty array disables all tools.     |
-| `guests.tools.deny`                 | `[]`                    | Further denies guest tools; deny wins.                                  |
-| `costLimits.dailyUsd`               | `100`                   | Maximum estimated X API spend per UTC day; `0` blocks paid calls.       |
-| `costLimits.monthlyUsd`             | `1000`                  | Maximum estimated X API spend per billing cycle; `0` blocks paid calls. |
-| `costLimits.cycleStartDay`          | `1`                     | UTC billing-cycle start day of the month, from 1 to 28.                 |
-| `replySignature`                    | `🤖 automated reply`    | Added to the last reply chunk; up to 140 characters, empty disables it. |
-| `accounts`                          | Unset                   | Named account overrides; channel root only.                             |
-| `defaultAccount`                    | `default`               | Account selected when none is specified; channel root only.             |
+| Field                               | Default                 | Purpose                                                                           |
+| ----------------------------------- | ----------------------- | --------------------------------------------------------------------------------- |
+| `enabled`                           | `true`                  | Enables the channel or account.                                                   |
+| `name`                              | Unset                   | Optional account display name.                                                    |
+| `userId`                            | Required                | Numeric user ID of the bot account.                                               |
+| `username`                          | Required                | Bot username without `@`.                                                         |
+| `clientId`                          | Required                | OAuth2 confidential application client ID.                                        |
+| `clientSecret`                      | Required                | Application secret; supports SecretRef.                                           |
+| `refreshToken`                      | Required                | Bot's user-context OAuth2 refresh token; supports SecretRef.                      |
+| `bearerToken`                       | Unset                   | App-only bearer for Activity and public-context verification; supports SecretRef. |
+| `autoPublishWorkSessions`           | `false`                 | Publish fresh visible work sessions for verified-public maintainer mentions.      |
+| `events.mode`                       | `auto`                  | `auto`, `stream`, or `poll`.                                                      |
+| `events.pollSeconds`                | `60`                    | Mentions polling interval, minimum 15 seconds.                                    |
+| `allowFrom`                         | `[]`                    | Numeric author IDs, optionally prefixed with `x:`.                                |
+| `groupPolicy`                       | `allowlist`             | `allowlist`, `open`, or `disabled`.                                               |
+| `dmPolicy`                          | `disabled`              | Only `disabled` is accepted.                                                      |
+| `threadContext.maxPosts`            | `50`                    | Maximum posts included in agent thread context, from 2 to 100.                    |
+| `guests.enabled`                    | `false`                 | Enables repository-only answers for non-allowlisted authors.                      |
+| `guests.maxMentionsPerAuthorPerDay` | `5`                     | Per-author, per-account UTC-day limit, from 0 to 1000.                            |
+| `guests.threadContextMaxPosts`      | `10`                    | Guest thread context cap, from 2 to 100 posts.                                    |
+| `guests.tools.allow`                | Host-supported defaults | Narrows the default guest tools; an empty array disables all tools.               |
+| `guests.tools.deny`                 | `[]`                    | Further denies guest tools; deny wins.                                            |
+| `costLimits.dailyUsd`               | `100`                   | Maximum estimated X API spend per UTC day; `0` blocks paid calls.                 |
+| `costLimits.monthlyUsd`             | `1000`                  | Maximum estimated X API spend per billing cycle; `0` blocks paid calls.           |
+| `costLimits.cycleStartDay`          | `1`                     | UTC billing-cycle start day of the month, from 1 to 28.                           |
+| `replySignature`                    | `🤖 automated reply`    | Added to the last reply chunk; up to 140 characters, empty disables it.           |
+| `accounts`                          | Unset                   | Named account overrides; channel root only.                                       |
+| `defaultAccount`                    | `default`               | Account selected when none is specified; channel root only.                       |
 
 ## Troubleshooting
 

@@ -1,8 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { withPreparedAuthStorePathForDisplay } from "./auth-profiles/paths.js";
@@ -13,13 +13,21 @@ import { resolveProviderConfigSecretInput } from "./model-auth-provider-config.j
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
 import type {
+  ModelServiceTierObservation,
   PreparedAccountCatalogAccess,
   PreparedModelCatalogAuth,
+  PreparedModelRuntimeAuth,
+  PreparedModelRuntimeAuthScope,
 } from "./prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeCatalogAccessParams } from "./prepared-model-runtime.catalog-contract.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
+import { preparedSyntheticAuthProviderScope } from "./prepared-model-runtime.synthetic-auth.js";
 
-type ModelServiceTierObservation = NonNullable<ProviderCatalogOutcome["modelServiceTiers"]>[number];
+// Startup captures each CLI login once; ordinary reads recheck it after this window.
+const NATIVE_LOGIN_RECHECK_MS = 60_000;
+
+const SERVICE_TIER_OBSERVATION_TTL_MS = 5 * 60_000;
 function readDirectBinding(config: OpenClawConfig, provider: string) {
   const { providerConfig, ref } = resolveProviderConfigSecretInput(config, provider);
   return { apiKey: ref ?? providerConfig?.apiKey, auth: providerConfig?.auth };
@@ -30,12 +38,12 @@ type AccountCatalogCredential =
 type AccountCatalogObservation = AccountCatalogCredential & {
   result?: Promise<readonly ProviderCatalogOutcome[]>;
   outcomes?: readonly ProviderCatalogOutcome[];
-  modelServiceTiers?: readonly ModelServiceTierObservation[];
+  serviceTierObservations?: readonly (ModelServiceTierObservation & { expiresAt: number })[];
 };
 
 function matchesServiceTierRoute(
   observation: ModelServiceTierObservation,
-  route: Omit<ModelServiceTierObservation, "serviceTiers">,
+  route: Pick<ModelServiceTierObservation, "modelId" | "runtimeId" | "api" | "baseUrl">,
 ): boolean {
   return (
     observation.modelId === route.modelId &&
@@ -50,13 +58,61 @@ export function createPreparedAccountCatalogAccess(
   isCurrent: () => boolean,
   retirementSignal?: AbortSignal,
   config: OpenClawConfig = {},
+  onChanged?: () => void,
 ): PreparedAccountCatalogAccess {
   const ownerIsCurrent = () => !retirementSignal?.aborted && isCurrent();
   const accounts = new Map<string, AccountCatalogObservation>();
+  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  const scheduleExpiry = () => {
+    clearTimeout(expiryTimer);
+    expiryTimer = undefined;
+    if (!onChanged || !ownerIsCurrent()) {
+      return;
+    }
+    let nextExpiry = Infinity;
+    for (const account of accounts.values()) {
+      for (const observation of account.serviceTierObservations ?? []) {
+        nextExpiry = Math.min(nextExpiry, observation.expiresAt);
+      }
+    }
+    if (nextExpiry === Infinity) {
+      return;
+    }
+    expiryTimer = setTimeout(
+      () => {
+        expiryTimer = undefined;
+        if (!ownerIsCurrent()) {
+          return;
+        }
+        const now = Date.now();
+        let changed = false;
+        for (const account of accounts.values()) {
+          const previous = account.serviceTierObservations;
+          account.serviceTierObservations = previous?.filter(({ expiresAt }) => expiresAt > now);
+          changed ||= account.serviceTierObservations?.length !== previous?.length;
+        }
+        scheduleExpiry();
+        if (changed) {
+          onChanged();
+        }
+      },
+      Math.max(0, nextExpiry - Date.now()),
+    );
+    expiryTimer.unref();
+  };
+  const deleteAccount = (identityKey: string) => {
+    const observed = accounts.get(identityKey)?.serviceTierObservations?.length;
+    if (accounts.delete(identityKey)) {
+      scheduleExpiry();
+      if (observed) {
+        onChanged?.();
+      }
+    }
+  };
   const readAccount = (identityKey: string, credential: AccountCatalogCredential["credential"]) => {
     const account = accounts.get(identityKey);
     if (account && !isDeepStrictEqual(account.credential, credential)) {
-      accounts.delete(identityKey);
+      deleteAccount(identityKey);
       return undefined;
     }
     return account;
@@ -64,10 +120,23 @@ export function createPreparedAccountCatalogAccess(
   const createAccount = (identityKey: string, credential: AccountCatalogCredential) => {
     const account: AccountCatalogObservation = structuredClone(credential);
     accounts.set(identityKey, account);
-    pruneMapToMaxSize(accounts, 64);
+    for (const key of accounts.keys()) {
+      if (accounts.size <= 64) {
+        break;
+      }
+      deleteAccount(key);
+    }
     return account;
   };
-  retirementSignal?.addEventListener("abort", () => accounts.clear(), { once: true });
+  retirementSignal?.addEventListener(
+    "abort",
+    () => {
+      accounts.clear();
+      clearTimeout(expiryTimer);
+      expiryTimer = undefined;
+    },
+    { once: true },
+  );
   return {
     reconcileAuth(authStore, includesProvider, profileIds) {
       if (!ownerIsCurrent()) {
@@ -90,11 +159,11 @@ export function createPreparedAccountCatalogAccess(
           (includesProvider(account.credential.provider) || profileIds?.includes(profileId)) &&
           !isDeepStrictEqual(account.credential, credential)
         ) {
-          accounts.delete(identityKey);
+          deleteAccount(identityKey);
         }
       }
     },
-    readServiceTiers(params) {
+    readServiceTierObservation(params) {
       if (!ownerIsCurrent()) {
         return undefined;
       }
@@ -106,10 +175,12 @@ export function createPreparedAccountCatalogAccess(
       if (account?.source === "direct") {
         account = readAccount(params.identityKey, readDirectBinding(config, account.provider));
       }
-      const observation = account?.modelServiceTiers?.find((candidate) =>
+      const observation = account?.serviceTierObservations?.find((candidate) =>
         matchesServiceTierRoute(candidate, route),
       );
-      return observation && [...observation.serviceTiers];
+      return observation && observation.expiresAt > Date.now()
+        ? { requestedTier: observation.requestedTier, responseTier: observation.responseTier }
+        : undefined;
     },
     prepareServiceTierObserver(params) {
       const selected = params.selectedCredential;
@@ -148,19 +219,36 @@ export function createPreparedAccountCatalogAccess(
           ...observation,
           baseUrl: normalizeCatalogRouteBaseUrl(observation.baseUrl) ?? observation.baseUrl,
         };
-        const previous = captured.modelServiceTiers?.find((candidate) =>
-          matchesServiceTierRoute(candidate, route),
+        const now = Date.now();
+        const previous = captured.serviceTierObservations?.find(
+          (candidate) => candidate.expiresAt > now && matchesServiceTierRoute(candidate, route),
         );
-        if (isDeepStrictEqual(previous?.serviceTiers, observation.serviceTiers)) {
-          return false;
+        let changed = false;
+        captured.serviceTierObservations = (captured.serviceTierObservations ?? []).filter(
+          (candidate) => {
+            if (candidate.expiresAt <= now) {
+              changed = true;
+              return false;
+            }
+            return !matchesServiceTierRoute(candidate, route);
+          },
+        );
+        const matched = observation.requestedTier === observation.responseTier;
+        if (!matched) {
+          captured.serviceTierObservations = [
+            ...captured.serviceTierObservations.slice(-127),
+            { ...route, expiresAt: now + SERVICE_TIER_OBSERVATION_TTL_MS },
+          ];
         }
-        captured.modelServiceTiers = [
-          ...(captured.modelServiceTiers ?? [])
-            .filter((candidate) => !matchesServiceTierRoute(candidate, route))
-            .slice(-127),
-          { ...route, serviceTiers: [...observation.serviceTiers] },
-        ];
-        return true;
+        changed ||= matched
+          ? Boolean(previous)
+          : previous?.requestedTier !== observation.requestedTier ||
+            previous?.responseTier !== observation.responseTier;
+        scheduleExpiry();
+        if (changed) {
+          onChanged?.();
+        }
+        return changed;
       };
     },
     async acquire(params) {
@@ -170,7 +258,7 @@ export function createPreparedAccountCatalogAccess(
         );
       }
       if (params.allowDiscovery && params.refresh) {
-        accounts.delete(`profile:${params.profileId}`);
+        deleteAccount(`profile:${params.profileId}`);
       }
       const identityKey = `profile:${params.profileId}`;
       let observation = readAccount(identityKey, params.credential);
@@ -201,11 +289,11 @@ export function createPreparedAccountCatalogAccess(
       } catch (error) {
         // A revoked request cannot poison a later authorized selection of this account.
         if (current()) {
-          if (captured.modelServiceTiers?.length) {
-            // Catalog failure cannot erase a tier actually observed on the API route.
+          if (captured.serviceTierObservations?.length) {
+            // Catalog failure cannot erase a recent response observed on the API route.
             captured.result = undefined;
           } else {
-            accounts.delete(`profile:${params.profileId}`);
+            deleteAccount(`profile:${params.profileId}`);
           }
         }
         throw error;
@@ -335,5 +423,73 @@ export async function prepareInitialModelCatalogAuth(
     credentials: agentFacts.credentials,
     authModes: resolveUsableAgentCredentialModes(agentFacts.credentials),
     providerAuthLabels,
+  };
+}
+
+type PreparedModelCatalogAuthOwner = {
+  pluginGeneration: PreparedModelRuntimeCatalogAccessParams["pluginGeneration"];
+  accountCatalog: PreparedAccountCatalogAccess;
+  normalizeProvider: (provider: string) => string;
+  assertCurrent: () => void;
+  readAuth: () => PreparedModelCatalogAuth;
+  refreshAuth: (
+    scope: PreparedModelRuntimeAuthScope,
+  ) => Promise<Parameters<typeof replacePreparedModelCatalogAuth>[1]>;
+};
+
+async function refreshScopedModelCatalogAuth(
+  owner: PreparedModelCatalogAuthOwner,
+  { providerIds, profileIds }: PreparedModelRuntimeAuthScope,
+): Promise<PreparedModelCatalogAuth> {
+  owner.assertCurrent();
+  await using _ = {
+    [Symbol.asyncDispose]: retainPreparedPluginGeneration(owner.pluginGeneration),
+  };
+  const refreshed = await owner.refreshAuth({
+    providerIds,
+    ...(profileIds?.length ? { profileIds } : {}),
+  });
+  owner.assertCurrent();
+  const scope = preparedSyntheticAuthProviderScope(providerIds.map(owner.normalizeProvider));
+  const includesProvider = (provider: string) => scope.has(owner.normalizeProvider(provider));
+  owner.accountCatalog.reconcileAuth(refreshed.authStore, includesProvider, profileIds);
+  return replacePreparedModelCatalogAuth(owner.readAuth(), refreshed, includesProvider);
+}
+
+/** Refreshes scoped auth and merges it over the owner's current catalog auth. */
+export async function loadScopedModelCatalogAuth(
+  owner: PreparedModelCatalogAuthOwner,
+  scope: PreparedModelRuntimeAuthScope,
+): Promise<PreparedModelRuntimeAuth> {
+  const { authStore, authModes } = await refreshScopedModelCatalogAuth(owner, scope);
+  return { authStore, authModes: Object.freeze(authModes) };
+}
+
+/** Rechecks CLI backend logins on demand and publishes only a changed result. */
+export function createNativeLoginRecheck(
+  owner: PreparedModelCatalogAuthOwner,
+  eligibleProviders: readonly string[],
+  publish: (auth: PreparedModelCatalogAuth) => void,
+): () => void {
+  const { owners, index } = owner.pluginGeneration.pluginMetadataSnapshot;
+  const refs = new Set(listManifestSyntheticAuthProviderRefs(index).map(owner.normalizeProvider));
+  const providerIds = eligibleProviders.filter(
+    (provider) => owners.cliBackends.has(provider) && refs.has(provider),
+  );
+  let checkedAt = Date.now();
+  return () => {
+    const now = Date.now();
+    if (!providerIds.length || now - checkedAt < NATIVE_LOGIN_RECHECK_MS) {
+      return;
+    }
+    checkedAt = now;
+    void refreshScopedModelCatalogAuth(owner, { providerIds })
+      .then((auth) => {
+        const current = owner.readAuth().authModes;
+        if (providerIds.some((provider) => current[provider] !== auth.authModes[provider])) {
+          publish(auth);
+        }
+      })
+      .catch(() => undefined);
   };
 }

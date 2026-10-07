@@ -8,6 +8,7 @@ import { resolveStateDir } from "../state-dir.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import {
   hasSessionMemberInDatabase,
   listSessionMembersInDatabase,
@@ -42,8 +43,9 @@ export async function listSessionMembersInWorker(
   const resolved = resolveSqliteScope({ ...input, env });
   const options = toDatabaseOptions(resolved);
   const databasePath = resolveOpenClawAgentSqlitePath(options);
-  if (input.incognito) {
-    const { actor, authority } = input.incognito;
+  const incognito = input.incognito ?? captureIncognitoSessionOperation(input);
+  if (incognito) {
+    const { actor, authority } = incognito;
     if (actor.agentId !== resolved.agentId || actor.path !== databasePath) {
       throw new Error("Membership target differs from its captured incognito actor");
     }

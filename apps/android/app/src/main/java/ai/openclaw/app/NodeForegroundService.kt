@@ -77,9 +77,8 @@ class NodeForegroundService : Service() {
           runtime.locationMode,
         ) { connection, server, mode, _ ->
           VoiceNotificationBase(
-            status = connection.statusText,
+            connection = connection,
             server = server,
-            connected = connection.isConnected,
             mode = mode,
           )
         },
@@ -97,23 +96,22 @@ class NodeForegroundService : Service() {
           )
         },
       ) { base, capture ->
-        VoiceNotificationState(base = base, capture = capture)
+        base to capture
       }
     refreshNotificationOnLocaleChanges(
       states = notificationStates,
       localeChanges = nativeLocaleChanges,
     ).collect { update ->
       ensureChannelForLocaleRevision(update.localeRevision)
-      val state = update.state.base
-      val capture = update.state.capture
+      val (state, capture) = update.state
       voiceCaptureMode = state.mode
       val title =
         when {
-          state.connected && state.mode == VoiceCaptureMode.TalkMode -> {
+          state.connection.isConnected && state.mode == VoiceCaptureMode.TalkMode -> {
             nativeString("OpenClaw Node · Talk")
           }
 
-          state.connected -> {
+          state.connection.isConnected -> {
             nativeString("OpenClaw Node · Connected")
           }
 
@@ -121,7 +119,7 @@ class NodeForegroundService : Service() {
             nativeString("OpenClaw Node")
           }
         }
-      val displayStatus = gatewayConnectionStatusForDisplay(state.status)
+      val displayStatus = gatewayConnectionStatusForDisplay(state.connection.statusText)
       val text =
         (state.server?.let { nativeString("\$status · \$server", displayStatus, it) } ?: displayStatus) +
           voiceNotificationSuffix(
@@ -372,9 +370,8 @@ private fun String?.toVoiceCaptureMode(): VoiceCaptureMode =
   } ?: VoiceCaptureMode.Off
 
 private data class VoiceNotificationBase(
-  val status: String,
+  val connection: GatewayConnectionDisplay,
   val server: String?,
-  val connected: Boolean,
   val mode: VoiceCaptureMode,
 )
 
@@ -383,11 +380,6 @@ private data class VoiceNotificationCapture(
   val micListening: Boolean,
   val talkListening: Boolean,
   val talkSpeaking: Boolean,
-)
-
-private data class VoiceNotificationState(
-  val base: VoiceNotificationBase,
-  val capture: VoiceNotificationCapture,
 )
 
 /** Re-emits stable runtime state when app-owned notification copy changes locale. */

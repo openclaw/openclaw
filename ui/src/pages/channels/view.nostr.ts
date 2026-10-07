@@ -1,4 +1,3 @@
-// Channels page renders Nostr status.
 import { html, nothing } from "lit";
 import type { ChannelAccountSnapshot, NostrProfile, NostrStatus } from "../../api/types.ts";
 import { renderSettingsRow, renderSettingsSection } from "../../components/settings-ui.ts";

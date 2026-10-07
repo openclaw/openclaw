@@ -1,6 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Gateway sessions.resolve implementation helper.
-// Resolves key/sessionId/label/shortId selectors into one canonical session key.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ErrorShape,
@@ -14,8 +12,13 @@ import {
 } from "../../packages/session-url-contract/src/index.js";
 import { listAgentIds } from "../agents/agent-scope.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
@@ -55,7 +58,6 @@ function resolveSessionVisibilityFilterOptions(p: SessionsResolveParams) {
   };
 }
 
-/** Rejects sessions whose owning agent no longer exists in config (#65524). */
 function validateSessionAgentExists(
   cfg: OpenClawConfig,
   key: string,
@@ -139,13 +141,17 @@ export function resolveSessionKeyFromResolveParams(params: {
   client: GatewayClient | null;
   projection: SessionRowProjection;
   p: SessionsResolveParams;
+  /** Anonymous HTTP audience sees only current publication grants, never operator discovery. */
+  publicOnly?: boolean;
 }): SessionsResolveResult {
   const { client, p, projection } = params;
   const noSessionFoundResult = (message: string): SessionsResolveResult =>
     p.allowMissing ? { ok: true, missing: true } : invalidSessionRequest(message);
   const { cfg, policyConfig } = projection.state;
-  const { sharing } = prepareProjectedSessionPresentation(projection, client);
-  const { entryFilter } = sharing;
+  const entryFilter = params.publicOnly
+    ? (key: string, entry: SessionEntry) =>
+        !isIncognitoSessionKey(key) && Boolean(resolveSessionPublicShare(entry))
+    : prepareProjectedSessionPresentation(projection, client).sharing.entryFilter;
   const prepare = (
     agentId = p.agentId,
     configuredAgentsOnly = false,
@@ -306,7 +312,8 @@ export function resolveSessionKeyFromResolveParams(params: {
       const { entry } = target;
       const spawnedBy = typeof p.spawnedBy === "string" && p.spawnedBy.trim().length > 0;
       if (
-        (hasOperatorBoundary(client, policyConfig) && entryFilter?.(target.key, entry) === false) ||
+        ((hasOperatorBoundary(client, policyConfig) || params.publicOnly) &&
+          entryFilter?.(target.key, entry) === false) ||
         (spawnedBy &&
           !filterAndSortSessionEntries({ ...prepare(requestedAgent.agentId) }).some(
             ([candidate]) => candidate === target.key,

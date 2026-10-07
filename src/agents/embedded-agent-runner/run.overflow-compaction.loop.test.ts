@@ -39,6 +39,7 @@ vi.mock("../delegation-capability.js", () => ({
 
 // mock-isolation: Dispatch fixtures provide an empty auth store and no credential database.
 vi.mock("../auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSource: () => false,
   hasAnyAuthProfileStoreSourceAsync: async () => false,
 }));
 

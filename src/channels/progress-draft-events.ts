@@ -16,7 +16,7 @@ type ProgressPayload<TEvent extends ChannelProgressDraftLineInput["event"]> = Om
 >;
 
 type ToolProgressPayload = ProgressPayload<"tool"> & { detailMode?: "explain" | "raw" };
-type ItemProgressPayload = Omit<ProgressPayload<"item">, "itemKind"> & { kind?: string };
+export type ItemProgressPayload = Omit<ProgressPayload<"item">, "itemKind"> & { kind?: string };
 type ChannelProgressDraftEventLine = string | ChannelProgressDraftLine;
 export type ChannelProgressDraftEventLineBuilder = (
   input: ChannelProgressDraftLineInput,

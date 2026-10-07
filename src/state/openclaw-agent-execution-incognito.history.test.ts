@@ -536,7 +536,7 @@ it("reads committed actor writes in FIFO order and retains the hydration snapsho
       actor.sessions.history(authority, { type: "session.history.branches", input }),
       actor.sessions.history(authority, {
         type: "session.history.search",
-        input: { ...input, query: "committed" },
+        input: { sessions: [input], sessionId: input.sessionId, query: "committed" },
       }),
     ]);
     barrier.release.resolve();

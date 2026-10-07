@@ -456,9 +456,10 @@ async function readUpdateInstallReceiptPayload(
   }
 }
 
-function normalizeVerifiedGitUpdateReceipt(
-  payload: RestartSentinelPayload | null,
-): VerifiedGitUpdateReceipt | null {
+export async function readVerifiedGitUpdateReceipt(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<VerifiedGitUpdateReceipt | null> {
+  const payload = await readUpdateInstallReceiptPayload(env);
   // Receipt rows are only written after the running install verifies root and revision.
   // An error status records a post-install failure, not an untrusted install.
   if (payload?.kind !== "update" || payload.stats?.mode !== "git" || !payload.stats.after) {
@@ -479,12 +480,6 @@ function normalizeVerifiedGitUpdateReceipt(
     ...(upstreamRef ? { upstreamRef } : {}),
     installedAtMs: payload.ts,
   };
-}
-
-export async function readVerifiedGitUpdateReceipt(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<VerifiedGitUpdateReceipt | null> {
-  return normalizeVerifiedGitUpdateReceipt(await readUpdateInstallReceiptPayload(env));
 }
 
 export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
@@ -523,19 +518,15 @@ export function formatRestartSentinelMessage(payload: RestartSentinelPayload): s
   return lines.join("\n");
 }
 
-function isRestartRequiredConfigWriteSentinel(payload: RestartSentinelPayload): boolean {
-  return (
-    (payload.kind === "config-apply" || payload.kind === "config-patch") &&
-    payload.status === "ok" &&
-    payload.stats?.requiresRestart === true
-  );
-}
-
 export function summarizeRestartSentinel(payload: RestartSentinelPayload): string {
   if (payload.kind === "config-auto-recovery") {
     return "Gateway auto-recovery";
   }
-  if (isRestartRequiredConfigWriteSentinel(payload)) {
+  if (
+    (payload.kind === "config-apply" || payload.kind === "config-patch") &&
+    payload.status === "ok" &&
+    payload.stats?.requiresRestart === true
+  ) {
     const mode = payload.stats?.mode ? ` (${payload.stats.mode})` : "";
     return `Gateway restart required${mode}`.trim();
   }

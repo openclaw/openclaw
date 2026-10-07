@@ -91,7 +91,7 @@ function scheduleChatMetadataRefresh(callback: () => void) {
 }
 
 export async function refreshChatCommands(host: ChatPageHost) {
-  await refreshSlashCommands({
+  return refreshSlashCommands({
     client: host.client,
     agentId: resolveChatAgentId(host),
     sessionKey: host.sessionKey,

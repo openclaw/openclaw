@@ -308,31 +308,6 @@ function buildPolicyFromEntry(entry: {
   };
 }
 
-function resolvePluginPolicyId(
-  authority: RuntimeLlmAuthority | undefined,
-  caller: LlmCompleteCaller,
-): string | undefined {
-  const authorityPluginId = normalizeOptionalString(authority?.pluginIdForPolicy);
-  if (authorityPluginId) {
-    return authorityPluginId;
-  }
-  if (caller.kind !== "plugin") {
-    return undefined;
-  }
-  return normalizeOptionalString(caller.id);
-}
-
-function resolvePluginLlmPolicy(
-  cfg: OpenClawConfig,
-  pluginId: string | undefined,
-): RuntimeLlmPolicy | undefined {
-  if (!pluginId) {
-    return undefined;
-  }
-  const entry = normalizePluginsConfig(cfg.plugins).entries[normalizePluginPolicyId(pluginId)]?.llm;
-  return entry ? buildPolicyFromEntry(entry) : undefined;
-}
-
 function resolveAuthorityModelPolicy(
   authority?: RuntimeLlmAuthority,
 ): RuntimeLlmPolicy | undefined {
@@ -474,8 +449,13 @@ export function createRuntimeLlm(
         import("../../agents/simple-completion-runtime.js"),
         Promise.resolve(resolveRuntimeConfig(options)),
       ]);
-      const pluginPolicyId = resolvePluginPolicyId(options.authority, caller);
-      const pluginPolicy = resolvePluginLlmPolicy(cfg, pluginPolicyId);
+      const pluginPolicyId =
+        normalizeOptionalString(options.authority?.pluginIdForPolicy) ??
+        (caller.kind === "plugin" ? normalizeOptionalString(caller.id) : undefined);
+      const pluginLlmConfig = pluginPolicyId
+        ? normalizePluginsConfig(cfg.plugins).entries[normalizePluginPolicyId(pluginPolicyId)]?.llm
+        : undefined;
+      const pluginPolicy = pluginLlmConfig ? buildPolicyFromEntry(pluginLlmConfig) : undefined;
       const authorityPolicy = resolveAuthorityModelPolicy(options.authority);
       const preferredProfile = normalizeOptionalString(options.authority?.preferredProfile);
       const audit = {

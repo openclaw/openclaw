@@ -62,7 +62,7 @@ export class RealtimeAudioPacer {
       /** Fires whenever queued audio and playback state are discarded. */
       onPlaybackReset?: () => void;
       /** Fires for each audio chunk actually written to the carrier stream. */
-      onAudioSent?: (chunk: Buffer) => void;
+      onAudioSent?: (audio: Buffer) => void;
       send: (message: string) => boolean;
       serializer: Pick<StreamFrameAdapter, "serializeMedia" | "serializeClear" | "serializeMark">;
     },

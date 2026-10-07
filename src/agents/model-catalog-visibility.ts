@@ -106,7 +106,7 @@ export async function prepareLogicalVisibleModelCatalog(
     prepareEntry(
       entry: ModelCatalogEntry,
       routeVariants: readonly ModelCatalogEntry[],
-    ): Promise<() => LogicalModelCatalogEntryState>;
+    ): (() => LogicalModelCatalogEntryState) | Promise<() => LogicalModelCatalogEntryState>;
   },
 ): Promise<() => ModelCatalogEntry[]> {
   const policy =
@@ -151,7 +151,9 @@ export async function prepareLogicalVisibleModelCatalog(
     const key = resolveModelCatalogIdentityKey(entry);
     if (!readers.has(key)) {
       const variants = catalogView.variantsOf(entry, key) ?? [entry];
-      readers.set(key, await params.prepareEntry(variants[0] ?? entry, variants));
+      const prepared = params.prepareEntry(variants[0] ?? entry, variants);
+      // Prepared-fact readers stay in the caller's synchronous authority boundary.
+      readers.set(key, typeof prepared === "function" ? prepared : await prepared);
     }
   }
   const { buildManifestBuiltInModelSuppressionResolver } =

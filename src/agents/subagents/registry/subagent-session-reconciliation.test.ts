@@ -25,9 +25,13 @@ const terminalSession: SessionEntry = {
   endedAt: 2_000,
 };
 
-async function resolveCompletion(childSessionKey: string, storedSessionKey: string) {
+async function resolveCompletion(
+  childSessionKey: string,
+  storedSessionKey: string,
+  entry: SessionEntry = terminalSession,
+) {
   return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    replaceSessionEntrySync({ sessionKey: storedSessionKey, env: state.env }, terminalSession);
+    replaceSessionEntrySync({ sessionKey: storedSessionKey, env: state.env }, entry);
     return resolveSubagentSessionCompletion({
       childSessionKey,
       fallbackEndedAt: 3_000,
@@ -64,6 +68,13 @@ describe("subagent session reconciliation keys", () => {
 });
 
 describe("subagent session reconciliation ownership", () => {
+  it("does not turn an interrupted outcome with an end timestamp into registry completion", async () => {
+    const key = "agent:main:subagent:interrupted";
+    expect(
+      await resolveCompletion(key, key, { ...terminalSession, status: "interrupted" }),
+    ).toBeNull();
+  });
+
   it.each([
     { name: "default per-agent", file: undefined },
     { name: "configured fixed", file: "sessions.json" },
