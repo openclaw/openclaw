@@ -774,7 +774,6 @@
 ["extensions/google-meet/participation-registration.test.ts","./src/runtime.js","a81e01d6249a2fc6c587c24dc0423ee1827f698d2aa5588663d7a148ea40cbcb",1]
 ["extensions/google-meet/src/drive.test.ts","openclaw/plugin-sdk/ssrf-runtime","e353c0fd5c76fa60603a25d3360fb39c400582b71b8450be06db2e00b09155fb",1]
 ["extensions/google-meet/src/google-api-errors.test.ts","openclaw/plugin-sdk/ssrf-runtime","e353c0fd5c76fa60603a25d3360fb39c400582b71b8450be06db2e00b09155fb",1]
-["extensions/google-meet/src/voice-call-gateway.test.ts","openclaw/plugin-sdk/gateway-runtime","c1bd716f6754c579bfd9f95e832ad7df69f35da076d13cf71110d8223898ccf7",1]
 ["extensions/google/image-registration.test.ts","./image-generation-provider.js","6b1955fa70e2340091b341c97baf6f93515909e2c98693339e12a693afe10d40",1]
 ["extensions/google/memory-embedding-adapter.test.ts","./embedding-batch.js","1f838be6d1458b61b71ebd9e8ec35b297b1d764861cc7dd5d2f1a990cab3c7f7",1]
 ["extensions/google/music-generation-provider.test.ts","./google-genai-runtime.js","b1a7ce8a9b5ece694e3872d2036744ec5f9bf27a4e8d7365e8e029dc6c4afa86",1]
