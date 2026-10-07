@@ -76,6 +76,7 @@ export async function withRetainedUpdateServiceAuthority<T>(
               // The parent fence is suspended. bind checks the same original A/B
               // owners internally, then binds both child rows before opening stdin.
               bind(pid);
+              nativeOptions.beforeInput?.(pid, command);
             },
             killProcessTree: true,
             requireProcessTreeExtinction: true,

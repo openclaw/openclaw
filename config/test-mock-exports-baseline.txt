@@ -9001,7 +9001,6 @@
 ["src/infra/update-migrated-finalize.worker.test.ts","../cli/update-cli/update-command-service-maintenance.js","eda0a53e2a7da9403b87042c46852b45be59d9e9a189af030c9e723426800ff1",1]
 ["src/infra/update-migrated-finalize.worker.test.ts","../cli/update-cli/update-command-terminal.js","b1e539ac8c161519ba66828230b17faaa60b4a83d7e69cc542e5302ce684623e",1]
 ["src/infra/update-migrated-finalize.worker.test.ts","../cli/update-cli/update-command-windows-task.js","fc555c83993e4a9b2a88d65e193d09fcf91e94a05812cd71aab09027519d899f",1]
-["src/infra/update-migrated-finalize.worker.test.ts","../flows/doctor-health.js","905d9fa65cc52886d1f3e7f868b712467ff2fb23786d37ddbd738ee3afddb1ab",1]
 ["src/infra/update-migrated-finalize.worker.test.ts","../state/openclaw-state-db-doctor-schema.js","ccaf9cbd79506a75b7e8c88534231a0c60808256ccfb25ccbd21298d6486069d",1]
 ["src/infra/update-migrated-finalize.worker.test.ts","../state/openclaw-state-db.js","419552345a9ecccf430f8f8445347ff39699959c84344cedb067a0c927f7fc68",1]
 ["src/infra/update-migrated-finalize.worker.test.ts","./gateway-owner-lease.js","c54896627d7ecde59ade8664fa365aefce1ef73715e136c823ad498a7b9c2e13",1]

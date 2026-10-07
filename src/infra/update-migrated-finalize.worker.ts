@@ -36,6 +36,7 @@ import { resolveEnvironmentValue } from "./process-env.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
+import { resolveRemainingDoctorServiceInspectionTimeoutMs } from "./update-doctor-deadline.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   recordUpdateDoctorConfigWriteRefusal,
@@ -334,9 +335,11 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
       }
       const { runDoctorHealthFlow } = await import("../flows/doctor-health.js");
       assertCurrent();
+      resolveRemainingDoctorServiceInspectionTimeoutMs(input.serviceInspectionDeadlineAtMs);
       await stopSupervisedPredecessorGateway(input, {
         root: input.root,
         assertCurrent,
+        serviceInspectionDeadlineAtMs: input.serviceInspectionDeadlineAtMs,
         warn: (message) => process.stderr.write(`${message}\n`),
       });
       assertCurrent();
@@ -365,6 +368,9 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
             ref: input.originalRecoveryCapture,
           },
           ...(input.databaseGenerations ? { databaseGenerations: input.databaseGenerations } : {}),
+          ...(input.serviceInspectionDeadlineAtMs !== undefined
+            ? { serviceInspectionDeadlineAtMs: input.serviceInspectionDeadlineAtMs }
+            : {}),
           ...(input.postCoreSchemaRepair === true
             ? { postCoreSchemaRepair: { runId: input.runId, assertCurrent } }
             : {}),

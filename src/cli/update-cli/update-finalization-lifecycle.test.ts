@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MockInstance } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import { resolveRemainingDoctorServiceInspectionTimeoutMs } from "../../infra/update-doctor-deadline.js";
 import { UpdateDoctorError } from "../../infra/update-doctor-result.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { inspectUpdateRunAbandonment } from "../../infra/update-run-activity.js";
@@ -22,6 +23,51 @@ import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
 
 const dirs = createTempDirTracker();
+
+it("carries the parent Doctor deadline into custody and refuses expired pre-child effects", async () => {
+  const startAtMs = 1_800_000_000_000;
+  vi.setSystemTime(startAtMs);
+  const lifecycle = new UpdateFinalizationLifecycle(false, 5_000, () => {});
+  const serviceInspection = vi.fn();
+  const doctorChild = vi.fn(async () => undefined);
+  let deadlineAtMs: number | undefined;
+
+  await expect(
+    lifecycle.run("doctor", doctorChild, undefined, {
+      enter: async (deadline) => {
+        deadlineAtMs = deadline;
+        expect(deadline).toBe(startAtMs + 5_000);
+        vi.setSystemTime(deadline! + 1);
+        const remaining = resolveRemainingDoctorServiceInspectionTimeoutMs(deadline);
+        serviceInspection(remaining);
+      },
+    }),
+  ).rejects.toThrow("Doctor service-inspection deadline has expired.");
+
+  expect(deadlineAtMs).toBe(startAtMs + 5_000);
+  expect(serviceInspection).not.toHaveBeenCalled();
+  expect(doctorChild).not.toHaveBeenCalled();
+});
+
+it("does not restart the Doctor phase budget after slow custody entry", async () => {
+  const startAtMs = 1_800_000_000_000;
+  vi.setSystemTime(startAtMs);
+  const lifecycle = new UpdateFinalizationLifecycle(false, 5_000, () => {});
+  const doctorChild = vi.fn(async () => undefined);
+
+  const running = withCliProcessScope(() =>
+    lifecycle.run("doctor", doctorChild, undefined, {
+      enter: async (deadline) => {
+        expect(deadline).toBe(startAtMs + 5_000);
+        vi.setSystemTime(deadline! + 1);
+      },
+    }),
+  );
+
+  await expect(running).rejects.toMatchObject({ result: { reason: "finalization-timeout" } });
+  expect(doctorChild).not.toHaveBeenCalled();
+});
+
 let stderrWrite: MockInstance<typeof process.stderr.write>;
 
 it("writes successful finalization progress to stderr and failures as errors", async () => {

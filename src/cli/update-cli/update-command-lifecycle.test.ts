@@ -803,10 +803,23 @@ describe("update plugin lifecycle lease boundaries", () => {
         mocks.events.lastIndexOf("lease-exit:false"),
       );
       expect(mocks.events).not.toContain("persisted-index:true");
-      const timeoutMs = timeout === undefined ? undefined : 5_000;
+      const doctorDeadline = mocks.maintenance.mock.calls[0]?.[0].serviceInspectionDeadlineAtMs;
       expect(runUpdateFinalizationDoctorInFreshProcess).toHaveBeenCalledWith(
-        expect.objectContaining({ timeoutMs }),
+        expect.objectContaining({
+          timeoutMs: timeout === undefined ? undefined : expect.any(Number),
+          serviceInspectionDeadlineAtMs: doctorDeadline,
+        }),
       );
+      const timeoutMs = timeout === undefined ? undefined : 5_000;
+      if (timeout === undefined) {
+        expect(doctorDeadline).toBeUndefined();
+      } else {
+        expect(doctorDeadline).toBeGreaterThan(Date.now() - 5_000);
+        expect(doctorDeadline).toBeLessThanOrEqual(Date.now() + 5_000);
+        expect(
+          vi.mocked(runUpdateFinalizationDoctorInFreshProcess).mock.calls[0]?.[0].timeoutMs,
+        ).toBeLessThanOrEqual(5_000);
+      }
       expect(completePostCorePluginUpdate).toHaveBeenCalledWith(
         expect.objectContaining({ timeoutMs }),
       );

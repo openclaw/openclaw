@@ -29,6 +29,8 @@ export type UpdateDoctorInput = Omit<UpdatePostCoreInput, "opts"> & {
   workspaceSuggestions?: boolean;
   postCoreSchemaRepair?: true;
   databaseGenerations?: UpdateDatabaseGenerations;
+  /** Parent Doctor phase deadline for nested managed-service inspection. */
+  serviceInspectionDeadlineAtMs?: number;
 };
 
 export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {

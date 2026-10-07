@@ -18,6 +18,7 @@ import { readGatewayServiceState, type GatewayService } from "../../daemon/servi
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
+import { resolveRemainingDoctorServiceInspectionTimeoutMs } from "../../infra/update-doctor-deadline.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
@@ -45,6 +46,64 @@ const {
   mockRegisteredWindowsLauncher,
   fixtureGatewayPid,
 } = await import("./update-command-service-maintenance.test-support.js");
+
+it.each(["update", "doctor"] as const)(
+  "rechecks the parent deadline after async service preparation and before stopping: %s",
+  (entrypoint) =>
+    withServiceHome(async (home) => {
+      mockProcessPlatform("linux");
+      let wallNow = 1_000;
+      const deadlineAtMs = 1_500;
+      vi.spyOn(Date, "now").mockImplementation(() => wallNow);
+      const service = createMockGatewayService({
+        readCommand: async () => ({
+          programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
+          environment: { HOME: home },
+        }),
+        readRuntime: async () => ({
+          status: "running",
+          pid: fixtureGatewayPid,
+          systemd: { managerUid: 2001 },
+        }),
+        isLoaded: async () => true,
+        stop: vi.fn(),
+      });
+      mocks.service.mockReturnValue(service);
+      mocks.prepareStop.mockImplementationOnce(async () => {
+        wallNow = deadlineAtMs + 1;
+        return true;
+      });
+      const expectedService = await maybeStopManagedServiceBeforeMutableUpdate({
+        root: process.cwd(),
+        updateInstallKind: "package",
+        shouldRestart: true,
+        jsonMode: true,
+        phase: "inspect",
+      });
+      vi.spyOn(doctorServicePolicy, "shouldManageGatewayService").mockResolvedValue(true);
+      const stop =
+        entrypoint === "doctor"
+          ? beginDoctorMaintenance({
+              root: process.cwd(),
+              options: { repair: true },
+              runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+              serviceInspectionDeadlineAtMs: deadlineAtMs,
+            })
+          : maybeStopManagedServiceBeforeMutableUpdate({
+              root: process.cwd(),
+              updateInstallKind: "package",
+              shouldRestart: true,
+              jsonMode: true,
+              expectedService,
+              timeoutMs: deadlineAtMs - wallNow,
+              assertDeadline: () =>
+                resolveRemainingDoctorServiceInspectionTimeoutMs(deadlineAtMs, wallNow),
+            });
+
+      await expect(stop).rejects.toThrow("Doctor service-inspection deadline has expired.");
+      expect(service.stop).not.toHaveBeenCalled();
+    }),
+);
 
 it.each(["direct", "authority-lost", "ordinary"] as const)(
   "preserves Doctor stop guidance through native preparation failure: %s",

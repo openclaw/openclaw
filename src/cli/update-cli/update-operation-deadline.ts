@@ -49,16 +49,24 @@ export function createUpdateOperationDeadline<E extends Error = Error>(
     get failure() {
       return failure;
     },
-    start(error: E, timeoutMs: number) {
+    start(error: E, timeoutMs: number, absoluteDeadlineAtMs?: number) {
       assertCurrent();
       if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
         throw new Error("Update operation requires a finite positive budget.");
       }
+      if (absoluteDeadlineAtMs !== undefined && !Number.isSafeInteger(absoluteDeadlineAtMs)) {
+        throw new Error("Update operation deadline must be a safe integer.");
+      }
       if (admission) {
         return;
       }
-      admission = { error, timeoutMs, deadlineAtMs: Date.now() + timeoutMs };
-      cancelDeadline = scheduleAbsoluteDeadline(admission.deadlineAtMs, inspectDeadline);
+      const deadlineAtMs = absoluteDeadlineAtMs ?? Date.now() + timeoutMs;
+      admission = { error, timeoutMs, deadlineAtMs };
+      if (Date.now() >= deadlineAtMs) {
+        inspectDeadline();
+      } else {
+        cancelDeadline = scheduleAbsoluteDeadline(deadlineAtMs, inspectDeadline);
+      }
     },
     async run<T>(operation: () => Promise<T>): Promise<T> {
       return await withCommandProcessScope(async () => {

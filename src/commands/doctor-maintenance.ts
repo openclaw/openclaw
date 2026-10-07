@@ -17,6 +17,7 @@ import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.j
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
+import { resolveRemainingDoctorServiceInspectionTimeoutMs } from "../infra/update-doctor-deadline.js";
 import { DoctorMaintenanceRefusalError, UpdateDoctorError } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact, type UpdateFailureFact } from "../infra/update-failure-facts.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -57,6 +58,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
   if (!(params.options.repair === true || params.options.yes === true)) {
     return undefined;
   }
+  resolveRemainingDoctorServiceInspectionTimeoutMs(params.serviceInspectionDeadlineAtMs);
   const env = { ...process.env, ...(params.runId ? { [UPDATE_RUN_ID_ENV]: params.runId } : {}) };
   // Ordinary activation remains with the parent. Stale-instance recovery below
   // retains custody through offline repair and verified restoration.
@@ -315,6 +317,8 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     await acquireStoppedMaintenanceResources();
     assertUpdateAdmissionCurrent?.();
     await assertDoctorAgentLeaseAdmission(state.env);
+    // Admission can wait on ownership longer than the parent Doctor phase allows.
+    resolveRemainingDoctorServiceInspectionTimeoutMs(params.serviceInspectionDeadlineAtMs);
     repairStoresMayBeOpen = true;
   };
   let admissionFailureHandled = false;
@@ -413,6 +417,9 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
           shouldRestart: true,
           jsonMode: true,
           phase: "inspect",
+          timeoutMs: resolveRemainingDoctorServiceInspectionTimeoutMs(
+            params.serviceInspectionDeadlineAtMs,
+          ),
         });
         assertDoctorMaintenanceInspection(inspection, env);
         serviceUpdateVerdict = inspection.serviceUpdateVerdict;
@@ -504,7 +511,15 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
                           jsonMode: true,
                           expectedService: inspection,
                           retainNativeIdentity: true,
+                          timeoutMs: resolveRemainingDoctorServiceInspectionTimeoutMs(
+                            params.serviceInspectionDeadlineAtMs,
+                          ),
                           assertCurrent: () => assertServiceCurrent?.(),
+                          assertDeadline: () => {
+                            resolveRemainingDoctorServiceInspectionTimeoutMs(
+                              params.serviceInspectionDeadlineAtMs,
+                            );
+                          },
                           warn,
                           onStopped: (before) => {
                             stopped = before;

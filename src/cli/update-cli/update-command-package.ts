@@ -86,6 +86,7 @@ type PackageDoctorOptions = {
 };
 
 export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
+  const doctorTimeoutMs = resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs);
   const assertCurrent = params.assertCurrent;
   const context = params.getDoctorContext?.();
   context?.assertCurrent();
@@ -330,7 +331,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
         }),
         [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
       },
-      timeoutMs: resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs),
+      timeoutMs: doctorTimeoutMs,
       ...(runCommand ? { runCommand } : {}),
     });
   let outcome: { step: UpdateStepResult } | { error: unknown };
@@ -352,6 +353,9 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
                 repair: doctorPolicy.fix,
                 databaseGenerations: context.databaseBackup?.sourceGenerations,
                 originalRecoveryCapture: context.originalRecoveryCapture,
+                ...(doctorTimeoutMs !== undefined
+                  ? { serviceInspectionDeadlineAtMs: Date.now() + doctorTimeoutMs }
+                  : {}),
               },
             },
             runDoctor,
