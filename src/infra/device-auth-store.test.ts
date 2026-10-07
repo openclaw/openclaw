@@ -399,10 +399,12 @@ describe("infra/device-auth-store", () => {
           await tokens.loadOriginDeviceToken({ ...origin, gatewayScope: "wss://other.example" }),
         ).toBeNull();
         await closeOpenClawStateDatabaseAsync();
-        const artifacts = (await fsp.readdir(state.statePath("state"))).toSorted();
+        const databasePath = state.statePath("state", "openclaw.sqlite");
+        const bytes = await fsp.readFile(databasePath);
         expect(await tokens.loadOriginDeviceTokenReadOnly(origin)).toEqual(stored);
         await closeOpenClawStateDatabaseAsync();
-        expect((await fsp.readdir(state.statePath("state"))).toSorted()).toEqual(artifacts);
+        expect(await fsp.readFile(databasePath)).toEqual(bytes);
+        expect(fs.statSync(`${databasePath}-wal`, { throwIfNoEntry: false })?.size ?? 0).toBe(0);
         expect(await tokens.clearOriginDeviceToken(origin)).toBe(true);
         await closeOpenClawStateDatabaseAsync();
         expect(Object.values(sql.counts().data)).toEqual(Array(7).fill(0));
