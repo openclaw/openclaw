@@ -8,17 +8,15 @@
 
 import fs from "node:fs";
 import { dirname } from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { findEnvKeys, getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { withFileLock } from "../../infra/file-lock.js";
 import type {
   OAuthCredentials,
   OAuthLoginCallbacks,
   OAuthProviderId,
 } from "../../llm/utils/oauth/types.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
-import { AUTH_STORE_VERSION, OAUTH_REFRESH_LOCK_OPTIONS } from "../auth-profiles/constants.js";
+import { AUTH_STORE_VERSION } from "../auth-profiles/constants.js";
 import {
   AuthProfileMigrationRequiredError,
   AuthProfileStoreUnreadableError,
@@ -114,6 +112,8 @@ export type AuthStatus = {
   label?: string;
 };
 
+type StorageBackend = Omit<AuthStorageBackend, "withLockAsync">;
+
 function collectStateOnlyAuthProfileIds(store: AuthProfileStore): string[] {
   const referenced = new Set([
     ...Object.values(store.order ?? {}).flat(),
@@ -150,7 +150,7 @@ function loadSqliteAuthStorageStore(
   return store;
 }
 
-class SqliteAuthStorageBackend implements AuthStorageBackend {
+class SqliteAuthStorageBackend implements StorageBackend {
   private credentialSources = new Map<string, AuthProfileCredentialSource>();
 
   constructor(
@@ -211,11 +211,6 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
     return current.length > 0 ? current : [this.preparedStore];
   }
 
-  private readRaw(): AuthProfileStore {
-    assertAuthProfileMigrationReady(this.agentDir);
-    return loadSqliteAuthStorageStore(this.agentDir);
-  }
-
   private persistData(
     store: AuthProfileStore,
     next: string,
@@ -259,40 +254,6 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
     this.captureCredentialSources(selected.store, selected.databasePath);
     return selected.result;
   }
-
-  async withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T> {
-    assertAuthProfileMigrationReady(this.agentDir);
-    return await withFileLock(
-      resolveAuthProfileDatabasePath(this.agentDir),
-      OAUTH_REFRESH_LOCK_OPTIONS,
-      async () => {
-        const initialRaw = this.readRaw();
-        const initialData = projectAuthoritativeAuthStorageData(
-          initialRaw,
-          this.resolveMaterializedRuntimeStores(),
-        );
-        const { result, next } = await fn(JSON.stringify(initialData));
-        if (next === undefined) {
-          this.captureCredentialSources(initialRaw, resolveAuthProfileDatabasePath(this.agentDir));
-          return result;
-        }
-        assertAuthProfileMigrationReady(this.agentDir);
-        const selected = runAuthProfileWriteTransaction(this.agentDir, (database, owner) => {
-          const authoritative = loadSqliteAuthStorageStore(this.agentDir, database);
-          if (!isDeepStrictEqual(authoritative.profiles, initialRaw.profiles)) {
-            throw new AuthStoragePersistenceError(
-              "Cannot update auth storage because its SQLite credentials changed concurrently.",
-              undefined,
-            );
-          }
-          const nextStore = this.persistData(authoritative, next, initialData, database, owner);
-          return { store: nextStore, databasePath: owner.databasePath };
-        });
-        this.captureCredentialSources(selected.store, selected.databasePath);
-        return result;
-      },
-    );
-  }
 }
 
 function createSqliteAuthStorageBackend(
@@ -305,19 +266,11 @@ function createSqliteAuthStorageBackend(
   return new SqliteAuthStorageBackend(scope, preparedStore);
 }
 
-class InMemoryAuthStorageBackend implements AuthStorageBackend {
+class InMemoryAuthStorageBackend implements StorageBackend {
   private value: string | undefined;
 
   withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
     const { result, next } = fn(this.value);
-    if (next !== undefined) {
-      this.value = next;
-    }
-    return result;
-  }
-
-  async withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T> {
-    const { result, next } = await fn(this.value);
     if (next !== undefined) {
       this.value = next;
     }
@@ -335,8 +288,8 @@ export class AuthStorage {
   private fallbackResolver?: (provider: string) => string | undefined;
   private loadError: Error | null = null;
   private errors: Error[] = [];
-  private storage: AuthStorageBackend;
-  private constructor(storage: AuthStorageBackend) {
+  private storage: StorageBackend;
+  private constructor(storage: StorageBackend) {
     this.storage = storage;
     this.reload();
   }
@@ -369,7 +322,7 @@ export class AuthStorage {
   static inMemory(data: AuthStorageData = {}): AuthStorage {
     const storage = new InMemoryAuthStorageBackend();
     storage.withLock(() => ({ result: undefined, next: JSON.stringify(data, null, 2) }));
-    return AuthStorage.fromStorage(storage);
+    return new AuthStorage(storage);
   }
 
   /**

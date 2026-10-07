@@ -145,15 +145,17 @@ export abstract class AgentSessionBase {
       return { apiKey: result.apiKey, headers: result.headers };
     }
 
-    const isOAuth = this.sessionModelRegistry.isUsingOAuth(model);
-    if (isOAuth) {
-      throw new Error(
-        `Authentication failed for "${model.provider}". ` +
-          `Credentials may have expired or network is unavailable. ` +
-          `Run '/login ${model.provider}' to re-authenticate.`,
-      );
-    }
-    throw new Error(formatNoApiKeyFoundMessage(model.provider));
+    throw this.unavailableModelAuthError(model);
+  }
+
+  protected unavailableModelAuthError(model: Model): Error {
+    return new Error(
+      this.sessionModelRegistry.isUsingOAuth(model)
+        ? `Authentication failed for "${model.provider}". ` +
+            `Credentials may have expired or network is unavailable. ` +
+            `Run '/login ${model.provider}' to re-authenticate.`
+        : formatNoApiKeyFoundMessage(model.provider),
+    );
   }
 
   protected async getCompactionRequestAuth(model: Model): Promise<{

@@ -104,6 +104,7 @@ export async function removeWorktreeIfLossless(
       },
     );
   };
+  let claimed = false;
   // Run-end cleanup must leave a durable outcome even when safety retains the checkout.
   // QA and operators observe this product-boundary fact through worktrees.list.
   try {
@@ -119,32 +120,7 @@ export async function removeWorktreeIfLossless(
         predicates: [...(params.workerAuthority?.predicates ?? []), { kind: "binding", record }],
       },
     });
-  } catch (error) {
-    if (hasSqliteWorkerOutcomeUnknown(error)) {
-      throw error;
-    }
-    if (error instanceof WorktreeRemovalContentionError) {
-      if (error.kind === "finalized") {
-        // The winning remover owns the terminal cleanup fact; a late contender
-        // must return without replacing it with a false retained/failed outcome.
-        return false;
-      }
-      // A live run lease or a competing remover holds the worktree; a lossless
-      // auto-cleanup must not race it.
-      await recordOutcome("retained-busy");
-      return false;
-    }
-    try {
-      await recordOutcome("failed", error);
-    } catch (outcomeError) {
-      if (hasSqliteWorkerOutcomeUnknown(outcomeError)) {
-        throw outcomeError;
-      }
-      // Preserve the claim failure when the same infrastructure blocks recording it.
-    }
-    throw error;
-  }
-  try {
+    claimed = true;
     record = await params.prepareRecord(record);
     const inspectedHead = await requireManagedWorktreeHead(record, {
       signal: params.signal,
@@ -178,14 +154,22 @@ export async function removeWorktreeIfLossless(
     if (hasSqliteWorkerOutcomeUnknown(error)) {
       throw error;
     }
-    await abortWorktreeRemoval(env, id, claimToken);
+    if (claimed) {
+      await abortWorktreeRemoval(env, id, claimToken);
+    } else if (error instanceof WorktreeRemovalContentionError) {
+      // A finalized competitor owns the terminal fact; active contenders record retention.
+      if (error.kind !== "finalized") {
+        await recordOutcome("retained-busy");
+      }
+      return false;
+    }
     try {
       await recordOutcome("failed", error);
     } catch (outcomeError) {
       if (hasSqliteWorkerOutcomeUnknown(outcomeError)) {
         throw outcomeError;
       }
-      // Exact-claim cleanup survives caller revocation; new outcome writes do not.
+      // Preserve the original failure when outcome writes lose admission or infrastructure.
     }
     throw error;
   }

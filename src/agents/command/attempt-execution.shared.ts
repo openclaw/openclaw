@@ -61,16 +61,12 @@ export async function persistAgentSession(
       },
     },
   );
-  if (rejectedMissingEntry) {
+  if (rejectedMissingEntry || !persisted) {
     delete params.sessionStore[params.sessionKey];
     return undefined;
   }
-  if (persisted) {
-    if (!published) {
-      params.sessionStore[params.sessionKey] = persisted;
-    }
-  } else {
-    delete params.sessionStore[params.sessionKey];
+  if (!published) {
+    params.sessionStore[params.sessionKey] = persisted;
   }
-  return persisted ?? undefined;
+  return persisted;
 }

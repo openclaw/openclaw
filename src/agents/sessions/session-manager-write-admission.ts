@@ -180,11 +180,7 @@ export async function withSessionManagerWrite<T>(
         withOpenClawAgentDatabaseRuntime(
           options,
           (database) => {
-            const current = manager.getSessionTarget();
-            if (!sameSessionTranscriptTargetBinding(identity, current)) {
-              throw new Error("Session manager identity changed before transcript write admission");
-            }
-            assertCurrent();
+            assertManager();
             // Each native kernel or worker command still validates live authority at commit.
             return write({ database, options, assertCurrent });
           },
