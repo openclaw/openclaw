@@ -1,17 +1,35 @@
+import { AsyncResource } from "node:async_hooks";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  deleteSession,
+  getSession,
+  waitForExecSession,
+  type ProcessSession,
+} from "../../agents/bash-process-registry.js";
+import { createLazyExecTool } from "../../agents/lazy-exec-tool.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import {
+  captureExecRequestOwners,
+  withExecRequestTurn,
+  type ExecRequestIdentity,
+  type ExecRequestOwner,
+} from "../../infra/exec-request-context.js";
+import {
   getConversationSession,
   normalizeSessionDeliveryState,
   patchSessionEntry,
 } from "../../plugin-sdk/session-store-runtime.js";
+import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { tryFastAbortFromMessage } from "./abort.js";
 import { handleStopCommand } from "./commands-session-abort.js";
@@ -122,6 +140,240 @@ it("retires an idle MCP runtime on explicit Stop", async () => {
 });
 
 describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) => {
+  it.each(["completed", "running", "backend-error", "cleanup-error"] as const)(
+    "stops a %s request's command while preserving its independent service",
+    async (phase) => {
+      const state = await setupStop();
+      const runId = `channel-owned-exec-${pathKind}`;
+      const operation = createReplyOperation({
+        agentId: "main",
+        sessionKey,
+        sessionId: state.entry.sessionId,
+        resetTriggered: false,
+      });
+      const commands: ProcessSession[] = [];
+      const supervisor = getProcessSupervisor();
+      const spawn = supervisor.spawn.bind(supervisor);
+      let spawned = 0;
+      const cleanupFailure =
+        phase === "cleanup-error"
+          ? vi.spyOn(supervisor, "spawn").mockImplementation(async (input) => {
+              const managed = await spawn(input);
+              if (spawned++ > 0) {
+                return managed;
+              }
+              return {
+                ...managed,
+                waitForExtinction: async () => {
+                  await managed.wait();
+                  await managed.waitForExtinction?.();
+                  throw new Error("Synthetic command finalization failure");
+                },
+              };
+            })
+          : undefined;
+      const releaseWriter = createDeferred();
+      let writer: Promise<unknown> | undefined;
+      // Native callbacks can load the lazy tool outside its construction's async context.
+      const callback = new AsyncResource("channel-exec-callback");
+      try {
+        const [ordinary, service] = await withEnvAsync({ OPENCLAW_EXEC_SHELL_SNAPSHOT: "0" }, () =>
+          withExecRequestTurn(
+            {
+              identity: { runId, sessionKey, sessionId: state.entry.sessionId, agentId: "main" },
+              abortSignal: operation.abortSignal,
+            },
+            async () => {
+              const exec = createLazyExecTool({
+                runId,
+                sessionKey,
+                sessionId: state.entry.sessionId,
+                agentId: "main",
+                config: state.cfg,
+                cwd: state.params.workspaceDir,
+                scopeKey: sessionKey,
+                host: "gateway",
+                mode: "full",
+                ask: "off",
+                allowBackground: true,
+                notifyOnExit: false,
+                preparedStoreEnvironment: {},
+              });
+              return callback.runInAsyncScope(async () => {
+                for (const background of [false, true]) {
+                  const result = await exec.execute(
+                    background ? "independent-service" : "ordinary-command",
+                    {
+                      command: `node -e "require('fs').watch('.', () => {})"`,
+                      ...(background ? { background: true } : { yieldMs: 10 }),
+                      timeoutSeconds: 60,
+                    },
+                    operation.abortSignal,
+                  );
+                  const details = asOptionalRecord(result.details);
+                  expect(details?.status).toBe("running");
+                  if (typeof details?.sessionId !== "string") {
+                    throw new Error("Expected a running command's process handle");
+                  }
+                  commands.push(expectDefined(getSession(details.sessionId), "running command"));
+                }
+                return commands;
+              });
+            },
+          ),
+        );
+        const ordinaryCommand = expectDefined(ordinary, "ordinary command");
+        const independentService = expectDefined(service, "independent service");
+        if (phase === "completed" || phase === "cleanup-error") {
+          operation.complete();
+        } else {
+          operation.attachBackend({
+            kind: "embedded",
+            cancel: () => {
+              if (phase === "backend-error") {
+                throw new Error("Synthetic backend cancellation failure");
+              }
+            },
+            isStreaming: () => true,
+          });
+          operation.setPhase("running");
+        }
+        expect(ordinaryCommand.exited).toBe(false);
+        expect(independentService.exited).toBe(false);
+
+        // Denied and stale channel dispatch must leave the real command untouched.
+        await (pathKind === "fast"
+          ? tryFastAbortFromMessage({
+              ...state,
+              cfg: { ...state.cfg, commands: { allowFrom: { "*": [] } } },
+            })
+          : handleStopCommand(
+              { ...state.params, command: { ...state.params.command, isAuthorizedSender: false } },
+              true,
+            ));
+        expect(ordinaryCommand.cancellationRequested).not.toBe(true);
+        await expect(
+          pathKind === "fast"
+            ? tryFastAbortFromMessage({ ...state, isCommandTargetCurrent: () => false })
+            : handleStopCommand(
+                { ...state.params, opts: { isCommandTargetCurrent: () => false } },
+                true,
+              ),
+        ).rejects.toThrow("selected session changed");
+        expect(ordinaryCommand.cancellationRequested).not.toBe(true);
+        if (pathKind === "fast" && phase === "backend-error") {
+          const writerEntered = createDeferred();
+          writer = patchSessionEntry({
+            storePath: state.storePath,
+            sessionKey,
+            update: async () => {
+              writerEntered.resolve();
+              await releaseWriter.promise;
+              return { updatedAt: Date.now() };
+            },
+          });
+          await writerEntered.promise;
+        }
+        const stopping =
+          pathKind === "fast"
+            ? tryFastAbortFromMessage(state)
+            : handleStopCommand(state.params, true);
+        if (phase === "backend-error" || phase === "cleanup-error") {
+          const rejection = expect(stopping).rejects.toThrow(
+            phase === "backend-error"
+              ? "Synthetic backend cancellation failure"
+              : "command cleanup could not be confirmed",
+          );
+          if (writer) {
+            await waitForExecSession(ordinaryCommand);
+            // Rejection tracking runs between event-loop turns while metadata stays blocked.
+            await new Promise<void>((resolve) => {
+              setImmediate(resolve);
+            });
+            releaseWriter.resolve();
+            await writer;
+          }
+          await rejection;
+        } else {
+          expect(await stopping).toMatchObject(
+            pathKind === "fast"
+              ? { handled: true, aborted: true }
+              : { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } },
+          );
+        }
+        expect(ordinaryCommand).toMatchObject({ exited: true, exitReason: "manual-cancel" });
+        expect(ordinaryCommand.finalizationFailed === true).toBe(phase === "cleanup-error");
+        expect(independentService.exited).toBe(false);
+        expect(independentService.cancellationRequested).not.toBe(true);
+        expect(operation.result).toMatchObject({
+          kind: phase === "completed" || phase === "cleanup-error" ? "completed" : "aborted",
+        });
+        if (phase === "completed" || phase === "running") {
+          expect(loadSessionEntry({ storePath: state.storePath, sessionKey })).toMatchObject({
+            sessionId: state.entry.sessionId,
+            abortedLastRun: true,
+          });
+        }
+      } finally {
+        releaseWriter.resolve();
+        await writer;
+        operation.complete();
+        callback.emitDestroy();
+        cleanupFailure?.mockRestore();
+        for (const command of commands) {
+          getProcessSupervisor().cancel(command.id, "manual-cancel");
+        }
+        await Promise.all(commands.map(waitForExecSession));
+        for (const command of commands) {
+          deleteSession(command.id);
+        }
+      }
+    },
+  );
+
+  it("captures only the selected active request and preserves a later human turn", async () => {
+    const state = await setupStop();
+    const release = createDeferred();
+    const owners: ExecRequestOwner[] = [];
+    const executions: Promise<void>[] = [];
+    const start = (identity: ExecRequestIdentity) => {
+      executions.push(
+        withExecRequestTurn({ identity }, async () => {
+          owners.push(expectDefined(captureExecRequestOwners(identity)?.[0], "request owner"));
+          await release.promise;
+        }),
+      );
+    };
+    const target = {
+      runId: "selected",
+      sessionKey,
+      sessionId: state.entry.sessionId,
+      agentId: "main",
+    };
+    start(target);
+    start({ ...target, runId: "other-agent", agentId: "other" });
+    start({ ...target, runId: "other-session", sessionId: "unrelated-session" });
+    start({ ...target, runId: "other-key", sessionKey: "agent:main:other" });
+    owners[0]!.signal.addEventListener("abort", () => start({ ...target, runId: "later-human" }), {
+      once: true,
+    });
+    try {
+      await (pathKind === "fast"
+        ? tryFastAbortFromMessage(state)
+        : handleStopCommand(state.params, true));
+      expect(owners.map((owner) => [owner.identity.runId, owner.signal.aborted])).toEqual([
+        ["selected", true],
+        ["other-agent", false],
+        ["other-session", false],
+        ["other-key", false],
+        ["later-human", false],
+      ]);
+    } finally {
+      release.resolve();
+      await Promise.all(executions);
+    }
+  });
+
   it.each([
     { agentId: "selected", activeAgentId: "selected", otherAgentId: "other" },
     { agentId: "research", activeAgentId: "main", otherAgentId: "main" },

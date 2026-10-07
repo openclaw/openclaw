@@ -298,6 +298,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/system-agent/setup-apply.concurrency.test.ts",
   "src/agents/bash-tools.exec-authorization.integration.test.ts",
   "src/agents/bash-tools.exec-background-followup.test.ts",
+  "src/auto-reply/reply/abort.target-owner.test.ts",
   "src/agents/bash-tools.exec-foreground-failures.test.ts",
   "src/agents/bash-tools.exec-group-cleanup.real.test.ts",
   "src/agents/bash-tools.exec-host-gateway.integration.test.ts",

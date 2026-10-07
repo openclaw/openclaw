@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { captureExecRequestCancellation } from "../../agents/bash-process-control.js";
 import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/active-run-projections.js";
 import { abortEmbeddedAgentRun } from "../../agents/embedded-agent-runner/runs.js";
 import { killAllControlledSubagentRuns } from "../../agents/subagents/registry/subagent-control.js";
@@ -59,6 +60,14 @@ export function abortSessionRunTargetWithOutcome(params: {
   });
   const sessionIds = new Set(operations.map((operation) => operation.sessionId));
   const explicitSessionId = normalizeOptionalString(params.sessionId);
+  const commands =
+    key || explicitSessionId
+      ? captureExecRequestCancellation({
+          sessionKey: key,
+          sessionId: explicitSessionId,
+          agentId: params.agentId,
+        })
+      : undefined;
   if (explicitSessionId) {
     sessionIds.add(explicitSessionId);
   }
@@ -75,24 +84,47 @@ export function abortSessionRunTargetWithOutcome(params: {
     }
   }
 
-  let aborted = false;
+  const failures: unknown[] = [];
+  let aborted = commands?.cancel() === true;
   for (const operation of operations) {
-    aborted = operation.abortByUser() || aborted;
+    try {
+      aborted = operation.abortByUser() || aborted;
+    } catch (error) {
+      failures.push(error);
+    }
   }
   for (const sessionId of sessionIds) {
-    aborted = abortEmbeddedAgentRun(sessionId) || aborted;
+    try {
+      aborted = abortEmbeddedAgentRun(sessionId) || aborted;
+    } catch (error) {
+      failures.push(error);
+    }
   }
   // Stop owns these captured IDs; a later turn may rebind the session key.
+  // Join command cleanup even when another cancellation or retirement fails.
   const retirement =
-    !active || aborted
-      ? Promise.all(
-          [...sessionIds].map((sessionId) =>
+    !active || aborted || failures.length > 0
+      ? Promise.allSettled([
+          ...[...sessionIds].map((sessionId) =>
             retireSessionMcpRuntime({
               sessionId,
               reason: "session-stop",
             }),
           ),
-        ).then(() => undefined)
+          commands?.settle(),
+        ]).then((results) => {
+          for (const result of results) {
+            if (result.status === "rejected") {
+              failures.push(result.reason);
+            }
+          }
+          if (failures.length === 1) {
+            throw failures[0];
+          }
+          if (failures.length > 1) {
+            throw new AggregateError(failures, failures.map(formatErrorMessage).join("; "));
+          }
+        })
       : undefined;
   return { active, aborted, retirement };
 }
@@ -291,6 +323,8 @@ export async function executeFastAbortRequest(
             for (const target of targets) {
               const outcome = abortSessionRunTargetWithOutcome(target);
               if (outcome.retirement) {
+                // Child settlement may yield before the final join observes this failure.
+                void outcome.retirement.catch(() => {});
                 acpCancellations.push(outcome.retirement);
               }
               activeAbortRejected ||= outcome.active && !outcome.aborted;

@@ -91,11 +91,10 @@ async function applyAbortTarget(
     key: abortTarget.key,
     sessionId: abortTarget.sessionId,
   });
+  await abortOutcome.retirement;
   if (abortOutcome.active && !abortOutcome.aborted) {
     return abortOutcome;
   }
-
-  await abortOutcome.retirement;
   const persisted = await persistAbortTargetEntry({
     isCurrent,
     entry: abortTarget.entry,
