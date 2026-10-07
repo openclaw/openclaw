@@ -397,33 +397,20 @@ export async function rewriteSourceReplyTranscriptMirrors(params: {
 
   return await withPreparedTranscriptCorrection(params.scope, async (transcript) => {
     const events = await transcript.readEvents();
+    const findMirror = (mirror: SourceReplyTranscriptMirror) =>
+      findSourceReplyTranscriptMirrorByMetadataInEvents({ ...mirror, events });
     const allowedSourceReplyMirrorIds = new Set<string>();
     for (const candidate of params.candidates) {
-      const target = findSourceReplyTranscriptMirrorByMetadataInEvents({
-        events,
-        idempotencyKey: candidate.idempotencyKey,
-        metadata: candidate.metadata,
-      });
+      const target = findMirror(candidate);
       if (target) {
         allowedSourceReplyMirrorIds.add(target.messageId);
       }
     }
 
-    const rewriteTargets: Array<{
-      request: (typeof params.requests)[number];
-      messageId: string;
-      message: Record<string, unknown>;
-    }> = [];
-    for (const request of params.requests) {
-      const target = findSourceReplyTranscriptMirrorByMetadataInEvents({
-        events,
-        idempotencyKey: request.idempotencyKey,
-        metadata: request.metadata,
-      });
-      if (target) {
-        rewriteTargets.push({ request, ...target });
-      }
-    }
+    const rewriteTargets = params.requests.flatMap((request) => {
+      const target = findMirror(request);
+      return target ? [{ request, ...target }] : [];
+    });
     if (rewriteTargets.length === 0) {
       return [];
     }
