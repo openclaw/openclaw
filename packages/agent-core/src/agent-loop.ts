@@ -27,7 +27,7 @@ import {
   createRejectedToolCallLauncher,
   toToolBatchCalls,
 } from "./tool-batch-admission.js";
-import { combineExecutedToolBatches } from "./tool-batch-completion.js";
+import { combineExecutedToolBatches, shouldTerminateToolBatch } from "./tool-batch-completion.js";
 import {
   type AgentToolExecutionContext,
   resolveAgentAssistantTurnId,
@@ -36,6 +36,7 @@ import {
 import {
   appendInterruptedTurnMessage,
   createFailureMessage,
+  createToolBatchSignal,
   isTurnHandoffAbort,
 } from "./turn-interruption.js";
 import { isActiveTurnTainted, toolResultTaintsTurn, withAssistantTurnTaint } from "./turn-taint.js";
@@ -460,7 +461,8 @@ async function executeToolCalls(
     currentContext,
     assistantMessage,
     config,
-    signal,
+    signal: createToolBatchSignal(signal),
+    runSignal: signal,
     emit,
     resolved: new Map(),
     validated: new Map(),
@@ -470,7 +472,7 @@ async function executeToolCalls(
   };
   if (config.beforeToolBatch) {
     for (const toolCall of toolCalls) {
-      if (signal?.aborted) {
+      if (batch.signal?.aborted) {
         // Cancellation during an early async resolver must not stall behind
         // the remaining resolvers. Skipped calls stay uncached and complete
         // through the executors' normal aborted-call lifecycle.
@@ -479,7 +481,7 @@ async function executeToolCalls(
       batch.validated.set(toolCall, await validateToolCallForBatchAdmission(batch, toolCall));
     }
     const calls = toToolBatchCalls(toolCalls, batch.validated);
-    if (calls.length > 0 && !signal?.aborted) {
+    if (calls.length > 0 && !batch.signal?.aborted) {
       const admission = await config.beforeToolBatch(
         { assistantMessage, calls, context: currentContext },
         signal,
@@ -498,7 +500,7 @@ async function executeToolCalls(
   let hasSequentialToolCall = false;
   if (config.toolExecution !== "sequential") {
     for (const toolCall of toolCalls) {
-      if (signal?.aborted) {
+      if (batch.signal?.aborted) {
         break;
       }
       const resolution = await resolveToolCallTool(batch, toolCall);
@@ -519,7 +521,10 @@ type ToolBatchContext = {
   currentContext: AgentContext;
   assistantMessage: AssistantMessage;
   config: AgentLoopConfig;
+  /** Gates and runs this message's calls; a turn handoff does not abort it. */
   signal: AbortSignal | undefined;
+  /** The run's own signal, for policy hooks and steering checkpoints. */
+  runSignal: AbortSignal | undefined;
   emit: AgentEventSink;
   resolved: Map<AgentToolCall, ResolvedToolCallOutcome>;
   validated: Map<AgentToolCall, ValidatedToolCallOutcome>;
@@ -558,7 +563,7 @@ async function executeToolCallGroups(
   let fatal: ExecutedToolCallBatch["fatal"];
 
   while (cursor < toolCalls.length) {
-    if (sequential && batch.toolPlan.executionStarted && !batch.signal?.aborted) {
+    if (sequential && batch.toolPlan.executionStarted && !batch.runSignal?.aborted) {
       const steering = getSteeringAtCheckpoint(batch.config);
       steeringMessages = Array.isArray(steering) ? steering : await steering;
     }
@@ -587,7 +592,7 @@ async function executeToolCallGroups(
       }
 
       const hasReady = entries.some((entry) => "kind" in entry);
-      if (sequential && batch.toolPlan.executionStarted && hasReady && !batch.signal?.aborted) {
+      if (sequential && batch.toolPlan.executionStarted && hasReady && !batch.runSignal?.aborted) {
         const steering = getSteeringAtCheckpoint(batch.config);
         steeringMessages = Array.isArray(steering) ? steering : await steering;
       }
@@ -690,7 +695,7 @@ async function executeToolCallGroups(
   }
 
   // Steering accepted while tools ran must outrank the stop hook in either mode.
-  if (!fatal && !batch.signal?.aborted && steeringMessages.length === 0) {
+  if (!fatal && !batch.runSignal?.aborted && steeringMessages.length === 0) {
     const steering = getSteeringAtCheckpoint(batch.config);
     steeringMessages = Array.isArray(steering) ? steering : await steering;
   }
@@ -882,13 +887,6 @@ async function launchParallelToolCalls(
   return result;
 }
 
-function shouldTerminateToolBatch(finalizedCalls: FinalizedToolCallOutcome[]): boolean {
-  return (
-    finalizedCalls.length > 0 &&
-    finalizedCalls.every((finalized) => finalized.result.terminate === true)
-  );
-}
-
 async function resolveToolCallTool(
   batch: ToolBatchContext,
   toolCall: AgentToolCall,
@@ -907,7 +905,7 @@ async function resolveToolCallTool(
           toolCall,
           context: batch.currentContext,
         },
-        batch.signal,
+        batch.runSignal,
       );
       // Keep execution and lifecycle/audit identity aligned with the original model call.
       if (resolvedTool && resolvedTool.name !== toolCall.name) {
@@ -954,7 +952,7 @@ async function prepareToolCall(
           args: validatedArgs,
           context: batch.currentContext,
         },
-        batch.signal,
+        batch.runSignal,
       );
       if (batch.signal?.aborted) {
         return immediateToolCallError("Operation aborted");
@@ -1200,7 +1198,7 @@ async function finalizeExecutedToolCall(
           isError,
           context: batch.currentContext,
         },
-        batch.signal,
+        batch.runSignal,
       );
       if (afterResult) {
         result = copyInternalToolResultState(result, {
@@ -1265,7 +1263,7 @@ async function applyToolOutcomeHook(
         ...(finalized.errorKind ? { errorKind: finalized.errorKind } : {}),
         context: batch.currentContext,
       },
-      batch.signal,
+      batch.runSignal,
     );
     if (!afterResult) {
       return finalized;

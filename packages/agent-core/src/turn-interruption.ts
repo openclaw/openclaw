@@ -51,6 +51,63 @@ export function isTurnHandoffAbort(signal: AbortSignal | undefined): boolean {
   );
 }
 
+// Signals that carry agent-core's admission of a tool batch before a turn handoff.
+const toolBatchSignals = new WeakSet<AbortSignal>();
+const handoffTolerantSignals = new WeakMap<AbortSignal, AbortSignal>();
+
+/** Follows `signal`, except that a turn-handoff abort is not forwarded. */
+function ignoreTurnHandoffAbort(signal: AbortSignal): AbortSignal {
+  const cached = handoffTolerantSignals.get(signal);
+  if (cached) {
+    return cached;
+  }
+  const controller = new AbortController();
+  const forward = () => {
+    if (!isTurnHandoffAbort(signal)) {
+      controller.abort(signal.reason);
+    }
+  };
+  if (signal.aborted) {
+    forward();
+  } else {
+    signal.addEventListener("abort", forward, { once: true });
+  }
+  toolBatchSignals.add(controller.signal);
+  handoffTolerantSignals.set(signal, controller.signal);
+  return controller.signal;
+}
+
+/**
+ * Signal for the tool calls of one assistant message. A turn handoff ends the
+ * turn, but calls the model dispatched beside it belong to that turn: they keep
+ * running until they settle. Every other abort still cancels them, and a batch
+ * that starts after the handoff starts aborted.
+ */
+export function createToolBatchSignal(signal: AbortSignal | undefined): AbortSignal | undefined {
+  return signal && !signal.aborted ? ignoreTurnHandoffAbort(signal) : signal;
+}
+
+/**
+ * Combines a tool call's signal with a run-owned signal. When the call signal
+ * comes from a batch admitted before a turn handoff, the run's handoff abort is
+ * not forwarded to it; any other caller or abort reason combines as usual. The
+ * result carries the same admission, so nested tool wrappers agree.
+ */
+export function combineToolCallAbortSignal(
+  callSignal: AbortSignal | undefined,
+  runSignal: AbortSignal,
+): AbortSignal {
+  if (!callSignal) {
+    return runSignal;
+  }
+  if (!toolBatchSignals.has(callSignal)) {
+    return AbortSignal.any([callSignal, runSignal]);
+  }
+  const combined = AbortSignal.any([callSignal, ignoreTurnHandoffAbort(runSignal)]);
+  toolBatchSignals.add(combined);
+  return combined;
+}
+
 export async function appendInterruptedTurnMessage(
   messages: AgentMessage[],
   emit: (event: AgentEvent) => Promise<void> | void,

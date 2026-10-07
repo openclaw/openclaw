@@ -25,3 +25,13 @@ export function combineExecutedToolBatches(
     fatal: batches.find((batch) => batch.fatal)?.fatal,
   };
 }
+
+/** One batch ends the turn only when every finalized result asked to terminate. */
+export function shouldTerminateToolBatch(
+  finalizedCalls: readonly { result: { terminate?: boolean } }[],
+): boolean {
+  return (
+    finalizedCalls.length > 0 &&
+    finalizedCalls.every((finalized) => finalized.result.terminate === true)
+  );
+}

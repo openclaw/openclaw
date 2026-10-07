@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createToolBatchSignal } from "../../packages/agent-core/src/turn-interruption.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
@@ -63,7 +64,7 @@ describe("wrapToolWithAbortSignal", () => {
     await flushMicrotasks();
   });
 
-  it("still aborts a concurrent sibling when sessions_yield hands off the run", async () => {
+  it("still aborts a sibling no tool batch admitted when sessions_yield hands off the run", async () => {
     const runAbort = new AbortController();
     const sibling = wrapToolWithAbortSignal(
       tool(() => new Promise<never>(() => {})),
@@ -74,6 +75,69 @@ describe("wrapToolWithAbortSignal", () => {
     expect(result).toMatchObject({ details: { status: "yielded" } });
     expect(result).not.toHaveProperty("details.message");
     await aborted;
+  });
+
+  it("lets a sibling of the handed-off batch finish with a live signal", async () => {
+    const runAbort = new AbortController();
+    const agentRun = new AbortController();
+    const batchSignal = createToolBatchSignal(agentRun.signal);
+    const handedOff = deferred();
+    const delivered = vi.fn();
+    const sibling = wrapToolWithAbortSignal(
+      tool(async (_id, _args, signal) => {
+        await handedOff.promise;
+        signal?.throwIfAborted();
+        delivered();
+        return emptyResult();
+      }),
+      runAbort.signal,
+    );
+    const siblingRun = sibling.execute("sibling", {}, batchSignal);
+    const yielded = await yieldTool(runAbort, () => {
+      runAbort.abort(handoffReason);
+      agentRun.abort(handoffReason);
+    }).execute("yield", {}, batchSignal);
+    expect(yielded).toMatchObject({ details: { status: "yielded" } });
+    handedOff.resolve();
+    await expect(siblingRun).resolves.toEqual(emptyResult());
+    expect(delivered).toHaveBeenCalledOnce();
+  });
+
+  it("starts a sibling its batch admitted before the run was handed off", async () => {
+    const runAbort = new AbortController();
+    const batchSignal = createToolBatchSignal(runAbort.signal);
+    runAbort.abort(handoffReason);
+    const execute = vi.fn(async () => emptyResult());
+    await expect(
+      wrapToolWithAbortSignal(tool(execute), runAbort.signal).execute("late", {}, batchSignal),
+    ).resolves.toEqual(emptyResult());
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a call whose batch started after the handoff", async () => {
+    const runAbort = new AbortController();
+    runAbort.abort(handoffReason);
+    const execute = vi.fn(async () => emptyResult());
+    await expect(
+      wrapToolWithAbortSignal(tool(execute), runAbort.signal).execute(
+        "new-turn",
+        {},
+        createToolBatchSignal(runAbort.signal),
+      ),
+    ).rejects.toMatchObject(abortError);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("still cancels a batch sibling when the run aborts for any other reason", async () => {
+    const runAbort = new AbortController();
+    const batchSignal = createToolBatchSignal(new AbortController().signal);
+    const sibling = wrapToolWithAbortSignal(
+      tool(() => new Promise<never>(() => {})),
+      runAbort.signal,
+    );
+    const siblingRun = sibling.execute("sibling", {}, batchSignal);
+    runAbort.abort(new Error("user stopped the run"));
+    await expect(siblingRun).rejects.toMatchObject(abortError);
   });
 
   it("preserves the handoff when distinct run and per-call signals both yield", async () => {

@@ -36,6 +36,7 @@ import { projectAgentToolDefinition } from "./prepared-tool-surface.js";
 import type { AgentTool as AnyAgentTool, AgentToolResult } from "./runtime/index.js";
 import {
   attachInternalToolExecutionPreparer,
+  combineToolCallAbortSignal,
   getInternalToolExecutionPreparer,
 } from "./runtime/internal-hooks.js";
 import type { ToolDefinition } from "./sessions/index.js";
@@ -332,7 +333,7 @@ export function toToolDefinitions(
   // Adaptation installs policy hooks outside source tools. Bind their lifetime
   // here too, so revoked generations cannot leave approvals waiting upstream.
   const resolveAbortSignal = (signal?: AbortSignal) =>
-    signal && abortSignal ? AbortSignal.any([signal, abortSignal]) : (signal ?? abortSignal);
+    abortSignal ? combineToolCallAbortSignal(signal, abortSignal) : signal;
   return tools.map((tool) => {
     const name = tool.name || "tool";
     const toolOwnerPluginId = getPluginToolMeta(tool)?.pluginId;

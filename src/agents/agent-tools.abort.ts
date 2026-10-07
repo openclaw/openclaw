@@ -9,6 +9,7 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isCodeModeControlTool } from "./code-mode-control-tools.js";
 import {
   attachInternalToolExecutionPreparer,
+  combineToolCallAbortSignal,
   getInternalToolExecutionPreparer,
 } from "./runtime/internal-hooks.js";
 import { registerTrustedToolNoStartError } from "./tool-result-error.js";
@@ -84,7 +85,7 @@ export function wrapToolWithAbortSignal(
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
-      const combinedSignal = signal ? AbortSignal.any([signal, abortSignal]) : abortSignal;
+      const combinedSignal = combineToolCallAbortSignal(signal, abortSignal);
       if (combinedSignal.aborted) {
         throwAbortError();
       }
@@ -106,9 +107,7 @@ export function wrapToolWithAbortSignal(
   const sourcePreparer = getInternalToolExecutionPreparer(tool);
   if (sourcePreparer) {
     attachInternalToolExecutionPreparer(wrappedTool, async (params) => {
-      const combinedSignal = params.signal
-        ? AbortSignal.any([params.signal, abortSignal])
-        : abortSignal;
+      const combinedSignal = combineToolCallAbortSignal(params.signal, abortSignal);
       if (combinedSignal.aborted) {
         throwAbortError();
       }
