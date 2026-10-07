@@ -21,10 +21,7 @@ import { resolveDdgRegion, resolveDdgSafeSearch, type DdgSafeSearch } from "./co
 
 const require = createRequire(import.meta.url);
 const PLUGIN_VERSION = readPluginPackageVersion({ require });
-// DuckDuckGo's HTML endpoint flags the previous spoofed desktop Chrome UA as a
-// bot and returns a 202 bot-challenge page instead of results, even for a
-// single, non-parallel request. An honest, descriptive UA identifying this
-// plugin avoids that challenge entirely.
+// Identify the plugin rather than impersonating a browser; challenges can still occur.
 const DDG_USER_AGENT = `openclaw-duckduckgo/${PLUGIN_VERSION} (+https://docs.openclaw.ai)`;
 
 const DDG_HTML_ENDPOINT = "https://html.duckduckgo.com/html";
