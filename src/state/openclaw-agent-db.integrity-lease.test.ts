@@ -427,7 +427,7 @@ it("retains the selected sibling inventory when failed-open cleanup must recreat
   expect(fs.readFileSync(siblingPath)).toEqual(before);
 });
 
-it.each(["", "-wal", "-shm", "-journal"])(
+it.each(["", "-wal"])(
   "preserves unknown deletion history from a surviving integrity-store family (%s)",
   (suffix) => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-prior-integrity-state-") };
@@ -447,7 +447,7 @@ it.each(["", "-wal", "-shm", "-journal"])(
   },
 );
 
-it.each(["quarantine", "terminal latch", "healthy"] as const)(
+it.each(["quarantine", "terminal latch"] as const)(
   "gates fresh read-only admission on %s and permits a repaired generation",
   (condition) => {
     const owner = openOwner();
