@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { pathExists } from "@openclaw/fs-safe/advanced";
 import { stableHomebrewNodePathCandidates } from "@openclaw/normalization-core/stable-node-path";
 
@@ -15,4 +16,15 @@ export async function resolveStableNodePath(nodePath: string): Promise<string> {
     }
   }
   return nodePath;
+}
+
+/** For independent children only; native/V8 workers must keep the parent's exact runtime. */
+export function resolveChildNodePath(): string {
+  const nodePath = process.execPath;
+  const candidates = stableHomebrewNodePathCandidates(nodePath);
+  if (candidates.length === 0 || existsSync(nodePath)) {
+    return nodePath;
+  }
+  // Stay synchronous so launch authority and cleanup custody cannot change during resolution.
+  return candidates.find((candidate) => existsSync(candidate)) ?? nodePath;
 }

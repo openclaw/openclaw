@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { resolveStableNodePath } from "./stable-node-path.js";
+import { resolveChildNodePath, resolveStableNodePath } from "./stable-node-path.js";
 
 describe("resolveStableNodePath", () => {
   it("returns non-cellar paths unchanged", async () => {
@@ -24,6 +24,17 @@ describe("resolveStableNodePath", () => {
 
       await expect(resolveStableNodePath(defaultNode)).resolves.toBe(optDefault);
       await expect(resolveStableNodePath(versionedNode)).resolves.toBe(optVersioned);
+      const executable = process.execPath;
+      try {
+        await fs.mkdir(path.dirname(defaultNode), { recursive: true });
+        await fs.writeFile(defaultNode, "", "utf8");
+        process.execPath = defaultNode;
+        expect(resolveChildNodePath()).toBe(defaultNode);
+        await fs.rm(defaultNode);
+        expect(resolveChildNodePath()).toBe(optDefault);
+      } finally {
+        process.execPath = executable;
+      }
     });
   });
 
