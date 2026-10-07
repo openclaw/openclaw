@@ -5030,5 +5030,9 @@
   {
     "source": "Worker-local inference",
     "target": "工作器本地推理"
+  },
+  {
+    "source": "Recommended models",
+    "target": "推荐模型"
   }
 ]

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
@@ -19,6 +20,7 @@ import {
   adoptOpenClawAgentDatabaseSchema,
   adoptOpenClawAgentDatabaseValidation,
   captureOpenClawAgentDatabaseAdmissionPublication,
+  captureOpenClawAgentDatabaseAliasPublication,
   captureOpenClawAgentDatabaseValidationTransfer,
   clearOpenClawAgentDatabaseValidationCache,
   getOpenClawAgentDatabaseValidation,
@@ -172,6 +174,7 @@ describe("canonical proof on physical database validation", () => {
     // A native first opener can establish proof before the host has any receipt.
     return {
       ...receipt,
+      receiptId: randomUUID(),
       valid: receipt.valid.slice(0),
       canonicalReady: receipt.canonicalReady.slice(0),
     };
@@ -253,6 +256,9 @@ describe("canonical proof on physical database validation", () => {
             undefined,
             { ...received, agentId: "another-agent" },
             { ...received, identity: "another-file" },
+            { ...received, receiptId: undefined },
+            { ...received, receiptId: "" },
+            { ...received, receiptId: 1 },
             { ...received, valid: new SharedArrayBuffer(1) },
             { ...received, canonicalReady: new SharedArrayBuffer(1) },
             { ...received, schema: undefined },
@@ -350,6 +356,62 @@ describe("canonical proof on physical database validation", () => {
       });
     });
 
+    it.each(["superseded", "acknowledged"] as const)(
+      "replaces revoked proof without leaking a live %s alias receipt",
+      async (aliasState) => {
+        await withReceiptFixture(false, (database) => {
+          const original = getOpenClawAgentDatabaseValidation(database)!;
+          const replacement = independentWorkerReceipt(database);
+          const aliasReceipt =
+            aliasState === "superseded"
+              ? independentWorkerReceipt(database)
+              : structuredClone(replacement);
+          const alias = {
+            agentId: database.agentId,
+            path: path.join(path.dirname(database.path), "alias.sqlite"),
+          };
+          const acknowledgeAlias = captureOpenClawAgentDatabaseAdmissionPublication(alias);
+          acknowledgeAlias(aliasReceipt.identity, aliasReceipt);
+          // Worker lease cleanup revokes its transferred proof, not an independent alias.
+          Atomics.store(new Int32Array(structuredClone(original).valid), 0, 0);
+          const publish = captureOpenClawAgentDatabaseAdmissionPublication(database);
+
+          publish(replacement.identity, structuredClone(replacement));
+
+          expect(Atomics.load(new Int32Array(aliasReceipt.valid), 0)).toBe(
+            aliasState === "superseded" ? 0 : 1,
+          );
+          expect(Atomics.load(new Int32Array(replacement.valid), 0)).toBe(1);
+          for (const target of [database, alias]) {
+            expect(getOpenClawAgentDatabaseValidationForTransfer(target)).toMatchObject({
+              agentId: database.agentId,
+              identity: replacement.identity,
+            });
+          }
+
+          invalidateOpenClawAgentDatabaseValidation(alias.path);
+
+          expect(Atomics.load(new Int32Array(replacement.valid), 0)).toBe(0);
+          expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
+          expect(getOpenClawAgentDatabaseValidationForTransfer(alias)).toBeUndefined();
+        });
+      },
+    );
+
+    it("rejects malformed receipt identities on an acknowledged alias", async () => {
+      await withReceiptFixture(false, (database) => {
+        const receipt = getOpenClawAgentDatabaseValidation(database)!;
+        const publish = captureOpenClawAgentDatabaseAliasPublication(database);
+        for (const receiptId of [undefined, "", 1]) {
+          expect(() => publish(receipt.identity, { ...receipt, receiptId })).toThrow(
+            AgentDatabaseSchemaAdmissionInvalidError,
+          );
+        }
+        expect(Atomics.load(new Int32Array(receipt.valid), 0)).toBe(1);
+        expect(() => publish(receipt.identity, receipt)).not.toThrow();
+      });
+    });
+
     it("accepts only valid native receipts without a host handle and shares revocation", async () => {
       await withReceiptFixture(false, (database) => {
         const received = independentWorkerReceipt(database);
@@ -392,6 +454,7 @@ describe("canonical proof on physical database validation", () => {
         // A separate worker can retain independent proof for this same physical file.
         const transferred = {
           ...receipt,
+          receiptId: randomUUID(),
           valid: receipt.valid.slice(0),
           canonicalReady: receipt.canonicalReady.slice(0),
         };
