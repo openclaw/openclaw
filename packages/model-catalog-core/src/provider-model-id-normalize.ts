@@ -25,6 +25,21 @@ export function normalizeTogetherModelId(id: string): string {
   return id === "moonshotai/Kimi-K2.5" ? "moonshotai/Kimi-K2.6" : id;
 }
 
+/**
+ * True for OpenAI GPT-5.6 and later, which cache at message-end breakpoints and
+ * replace legacy prompt-cache retention. Expects a bare OpenAI id (`gpt-6-sol`);
+ * routing variants such as `gpt-6:nitro` count as the same generation.
+ * https://developers.openai.com/api/docs/guides/prompt-caching#cache-lifetime
+ */
+export function isOpenAIMessageEndCachedModelId(id: string): boolean {
+  const version = /^gpt-(\d+)(?:\.(\d+))?(?:[-:]|$)/i.exec(id);
+  if (!version) {
+    return false;
+  }
+  const major = Number(version[1]);
+  return major > 5 || (major === 5 && Number(version[2] ?? 0) >= 6);
+}
+
 export function normalizeAntigravityPreviewModelId(id: string): string {
   if (ANTIGRAVITY_BARE_PRO_IDS.has(id)) {
     return `${id}-low`;

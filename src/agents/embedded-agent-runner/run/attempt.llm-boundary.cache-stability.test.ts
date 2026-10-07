@@ -236,6 +236,35 @@ describe("prompt-cache boundary regressions", () => {
     expect(input).toEqual([{ role: "user", content: text, timestamp: TS }]);
   });
 
+  it("retires carriers kept by an append-only model when the session falls back to a transient one", () => {
+    // Append-only is a per-model replay policy, so one transcript can cross both policies.
+    const transcript: AgentMessage[] = [
+      carrier("context one"),
+      user("one"),
+      answer,
+      carrier("context two", TS + 2),
+      user("two", TS + 2),
+      answer,
+      carrier("context three", TS + 4),
+      user("three", TS + 4),
+    ];
+    const carriersIn = (messages: AgentMessage[]) =>
+      messages.flatMap((message) =>
+        message.role === "custom" && message.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE
+          ? [message.content]
+          : [],
+      );
+
+    expect(
+      carriersIn(
+        normalizeMessagesForLlmBoundary(transcript, { ...options, appendOnlyRuntimeContext: true }),
+      ),
+    ).toEqual(["context one", "context two", "context three"]);
+    expect(carriersIn(normalizeMessagesForLlmBoundary(transcript, options))).toEqual([
+      "context three",
+    ]);
+  });
+
   it("preserves an existing timestamp envelope when a channel turn becomes history", () => {
     const stamped = "[Sat 2026-06-05 10:30 UTC+8] Hello from Discord";
     const output = normalizeMessagesForLlmBoundary(
