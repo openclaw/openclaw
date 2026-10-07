@@ -261,7 +261,10 @@ describe("handleModelsCommand", () => {
     });
     const result = await handleModelsCommand(params, true);
     expect(result?.reply?.text).toContain("Sign-in needed");
-    expect(result?.reply?.text).toContain("Connect with /login anthropic.");
+    expect(result?.reply?.text).toContain(
+      "If Claude Code is signed out, run claude auth login on the Gateway host, or choose another model.",
+    );
+    expect(result?.reply?.text).not.toContain("/login anthropic");
   });
 
   it.each([

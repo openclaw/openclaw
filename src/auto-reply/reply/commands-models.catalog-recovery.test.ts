@@ -304,6 +304,7 @@ describe("/models browse catalog recovery", () => {
       expect(reply?.text?.includes("- anthropic/claude-sonnet-4-6 (Sign-in needed")).toBe(
         !available,
       );
+      expect(reply?.text?.includes("run claude auth login on the Gateway host")).toBe(!available);
       expect(reply?.text?.includes("- anthropic/claude-haiku-4-5")).toBe(providerKey);
       expect(reply?.text).toContain("- anthropic/claude-opus-4-5");
     },
