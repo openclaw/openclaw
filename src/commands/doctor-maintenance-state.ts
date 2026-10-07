@@ -91,6 +91,13 @@ export async function createDoctorMaintenanceState(options: {
     owner = acquired;
     try {
       acquired.assertCurrent(options.assertCurrent);
+      // Preflight can leave the ordinary shared-state WAL scheduler attached to
+      // a cached handle. Doctor owns the store exclusively now, so drain that
+      // optional runtime maintenance before opening any Doctor-scoped handles.
+      await acquired.run(() =>
+        closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(selectedEnv)),
+      );
+      acquired.assertCurrent(options.assertCurrent);
       resourcesParent = getOpenClawDatabaseMaintenanceScope();
       resources = createOpenClawDatabaseMaintenanceScope({
         schemaMaintenance: true,
