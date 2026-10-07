@@ -47,6 +47,7 @@ import { forkSessionRepositoryWorkspace } from "../worker-environments/session-r
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { prepareSessionForkFilesystemRoot } from "./session-create-root.js";
+import { waitForTerminalSessionRunSettlement } from "./session-run-settlement.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
 import {
   createUpstreamForkCurrentGuard,
@@ -284,6 +285,16 @@ async function mutateSessionAtMessage(
     initialSessionId,
     initialLifecycleRevision,
   ];
+  const terminalSettled = await waitForTerminalSessionRunSettlement({
+    context,
+    storePath: initial.storePath,
+    requestedKey: sessionKey,
+    canonicalKey: initial.canonicalKey,
+    sessionId: initialSessionId,
+    agentId: requestedAgent.agentId,
+    defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey),
+    signal: options.signal,
+  });
   let targetStillCurrent = true;
   let blockedByActiveRun = false;
   await runExclusiveSessionLifecycleMutation(action, {
@@ -304,6 +315,7 @@ async function mutateSessionAtMessage(
       // A message cut cannot disturb its source or invalidate queued work on failure.
       // Reject live work before transcript mutation instead of interrupting it.
       blockedByActiveRun =
+        !terminalSettled ||
         isCompetingSessionWorkAdmissionActive(initial.storePath, lifecycleIdentities) ||
         (getWorkerInferenceSessionControl(context.workerEnvironmentService)?.hasSession(
           initialSessionId,

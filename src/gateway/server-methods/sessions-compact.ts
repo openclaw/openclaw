@@ -38,6 +38,7 @@ import { getWorkerInferenceSessionControl } from "../worker-environments/inferen
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
+import { waitForTerminalSessionRunSettlement } from "./session-run-settlement.js";
 import {
   preflightGatewaySessionCompaction,
   runGatewaySessionCompaction,
@@ -185,6 +186,16 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         });
       let admissionError: ReturnType<typeof errorShape> | undefined;
       let compactionNoopReason: string | undefined;
+      const terminalSettled = await waitForTerminalSessionRunSettlement({
+        context,
+        storePath,
+        requestedKey: key,
+        canonicalKey: target.canonicalKey,
+        sessionId,
+        agentId: requestedAgentId,
+        defaultAgentId: compatibilityDefaultAgentId,
+        signal: abortSignal,
+      });
       await runExclusiveSessionLifecycleMutation("compact", {
         scope: storePath,
         identities: lifecycleIdentities,
@@ -214,6 +225,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             }
           }
           const blockedByActiveRun =
+            !terminalSettled ||
             isCompetingSessionWorkAdmissionActive(storePath, lifecycleIdentities) ||
             (getWorkerInferenceSessionControl(context.workerEnvironmentService)?.hasSession(
               sessionId,

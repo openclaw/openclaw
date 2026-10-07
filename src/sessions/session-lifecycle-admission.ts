@@ -432,11 +432,14 @@ function collectSessionWorkAdmissions(
 
 /** Completion of the currently active turns that own a session. */
 export function getSessionWorkAdmissionRelease(
-  params: SessionWorkAdmissionReleaseParams,
+  params: SessionWorkAdmissionReleaseParams & { excludeCurrent?: boolean },
 ): Promise<void> | undefined {
+  const currentAdmissions = params.excludeCurrent
+    ? CURRENT_SESSION_WORK_ADMISSIONS.getStore()
+    : undefined;
   const matchingAdmissions = collectSessionWorkAdmissions(
     normalizeSessionIdentities(params.scope, params.identities),
-    (admission) => admission.phase === "acquired",
+    (admission) => admission.phase === "acquired" && !currentAdmissions?.has(admission),
   );
   if (matchingAdmissions.size === 0) {
     return undefined;
