@@ -47,7 +47,11 @@ import {
   isOutboundDeliveryResultArray,
   runOutboundDeliveryCommitHooks,
 } from "./delivery-commit-hooks.js";
-import { markDurableDeliveryQueued, settleDurableDelivery } from "./delivery-completion.js";
+import {
+  completeDurableDelivery,
+  markDurableDeliveryQueued,
+  settleDurableDelivery,
+} from "./delivery-completion.js";
 import { prepareOutboundDeliveryGeneration } from "./delivery-generation.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
@@ -582,9 +586,9 @@ async function drainQueuedEntry(
       try {
         const result = buildReconciledSentResult(entry, reconciliation);
         if (entry.deliveryCompletion) {
-          await settleDurableDelivery(
+          await completeDurableDelivery(
             entry.deliveryCompletion,
-            { result },
+            result,
             opts.stateDir,
             stateContext,
           );
