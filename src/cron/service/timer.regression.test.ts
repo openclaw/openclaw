@@ -30,13 +30,16 @@ import {
   readCronRunRecordsForTests,
 } from "../run-history.test-support.js";
 import * as schedule from "../schedule.js";
+import { createRunningCronServiceState } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { getSuspensionVisibleCronTaskRunCount } from "./active-run-cancellation.js";
 import { resetActiveCronTaskRunsForTests } from "./active-run-cancellation.test-support.js";
+import { setupTimeoutErrorMessage } from "./execution-errors.js";
 import { computeJobNextRunAtMs, recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
+import { applyJobResultAndDrainNotifications } from "./notification.test-helpers.js";
 import { stop } from "./ops-lifecycle.js";
 import { run as runManualCronJob } from "./ops-run.js";
 import type { CronEvent, CronServiceDeps } from "./state.js";
@@ -100,6 +103,142 @@ function requireAdmittedRunId(storePath: string, jobId: string): string {
 }
 
 describe("cron service timer regressions", () => {
+  it("caps timer delay to 60s for far-future schedules", async () => {
+    const clock = createGatewaySchedulerClock(Date.now());
+    const store = timerRegressionFixtures.makeStorePath();
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      scheduler: createTestGatewayScheduler(clock.clock),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+
+    state.store = { version: 1, jobs: [] };
+    state.store.jobs.push({
+      id: "far-future",
+      name: "far-future",
+      enabled: true,
+      createdAtMs: Date.now(),
+      updatedAtMs: Date.now(),
+      schedule: { kind: "at", at: "2035-01-01T00:00:00.000Z" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "future" },
+      state: { nextRunAtMs: Date.parse("2035-01-01T00:00:00.000Z") },
+    });
+    await saveCronStore(store.storePath, state.store);
+
+    await onTimer(state);
+
+    expect(clock.armedAtMs).toBe(clock.clock.now() + 60_000);
+  });
+
+  it("recovers missed cron slots during a normal timer tick without restart catch-up", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const cronJob = createIsolatedRegressionJob({
+      id: "stale-future-cron",
+      name: "stale-future-cron",
+      scheduledAt: now - 86_400_000,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      payload: { kind: "agentTurn", message: "recover missed slot" },
+      state: {
+        lastRunAtMs: now - 2 * 60 * 60_000,
+        lastRunStatus: "ok",
+        nextRunAtMs: now + 30 * 60_000,
+      },
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+    const runIsolatedAgentJob = createDefaultIsolatedRunner();
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      nowMs: () => now,
+      runIsolatedAgentJob,
+    });
+
+    await onTimer(state);
+
+    expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+    const recovered = requireJob(state, "stale-future-cron");
+    expect(recovered.state.lastRunAtMs).toBe(now);
+    expect(recovered.state.nextRunAtMs).toBeGreaterThan(now);
+  });
+
+  it("#24355: one-shot job retries then succeeds", async () => {
+    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
+
+    const runRetryScenario = async (params: {
+      id: string;
+      deleteAfterRun: boolean;
+      firstError?: string;
+    }) => {
+      const store = timerRegressionFixtures.makeStorePath();
+      const cronJob = createIsolatedRegressionJob({
+        id: params.id,
+        name: "reminder",
+        scheduledAt,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        payload: { kind: "agentTurn", message: "remind me" },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      cronJob.deleteAfterRun = params.deleteAfterRun;
+      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+      let now = scheduledAt;
+      const runIsolatedAgentJob = vi
+        .fn()
+        .mockResolvedValueOnce({
+          status: "error",
+          error: params.firstError ?? "429 rate limit exceeded",
+        })
+        .mockResolvedValueOnce({ status: "ok", summary: "done", delivered: true });
+      const state = createCronServiceState({
+        storePath: store.storePath,
+        nowMs: () => now,
+        runIsolatedAgentJob,
+      });
+
+      await onTimer(state);
+      const jobAfterRetry = requireJob(state, params.id);
+      expect(jobAfterRetry.enabled).toBe(true);
+      expect(jobAfterRetry.state.lastStatus).toBe("error");
+      expect(jobAfterRetry.state.nextRunAtMs).toBeGreaterThan(scheduledAt);
+
+      now = requireTimestamp(jobAfterRetry.state.nextRunAtMs, "retry next run") + 1;
+      await onTimer(state);
+      return { state, runIsolatedAgentJob };
+    };
+
+    const keepResult = await runRetryScenario({
+      id: "oneshot-retry",
+      deleteAfterRun: false,
+    });
+    const keepJob = keepResult.state.store?.jobs.find((j) => j.id === "oneshot-retry");
+    expect(keepJob?.state.lastStatus).toBe("ok");
+    expect(keepResult.runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+
+    const deleteResult = await runRetryScenario({
+      id: "oneshot-deleteAfterRun-retry",
+      deleteAfterRun: true,
+    });
+    const deletedJob = deleteResult.state.store?.jobs.find(
+      (j) => j.id === "oneshot-deleteAfterRun-retry",
+    );
+    expect(deletedJob).toBeUndefined();
+    expect(deleteResult.runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+
+    const overloadedResult = await runRetryScenario({
+      id: "oneshot-overloaded-retry",
+      deleteAfterRun: false,
+      firstError:
+        "All models failed (2): anthropic/claude-3-5-sonnet: LLM error overloaded_error: overloaded (overloaded); openai/gpt-5.4: LLM error overloaded_error: overloaded (overloaded)",
+    });
+    const overloadedJob = overloadedResult.state.store?.jobs.find(
+      (j) => j.id === "oneshot-overloaded-retry",
+    );
+    expect(overloadedJob?.state.lastStatus).toBe("ok");
+    expect(overloadedResult.runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+  });
+
   it("#131491: retains a deleteAfterRun one-shot whose stale guard suppressed its delivery", async () => {
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
     const firedAt = scheduledAt + 18 * 60 * 60_000;
@@ -192,6 +331,120 @@ describe("cron service timer regressions", () => {
       }
     }
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(4);
+  });
+
+  it("stops accelerating recurring timeout retries after the first timeout in a streak", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-06-08T13:00:00.000Z");
+    const everySixHoursMs = 6 * 60 * 60 * 1_000;
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "recurring-timeout-retry-streak",
+      name: "Timeout retry streak guard",
+      scheduledAt,
+      schedule: { kind: "every", everyMs: everySixHoursMs, anchorMs: scheduledAt },
+      payload: { kind: "agentTurn", message: "monitor bugs" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({
+      status: "error",
+      error: setupTimeoutErrorMessage(),
+    });
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      nowMs: () => now,
+      runIsolatedAgentJob,
+    });
+
+    // First timeout in a streak still gets one accelerated transient retry.
+    await onTimer(state);
+    let job = requireJob(state, "recurring-timeout-retry-streak");
+    expect(job.state.lastStatus).toBe("error");
+    expect(job.state.nextRunAtMs).toBeGreaterThan(scheduledAt);
+    expect(job.state.nextRunAtMs).toBeLessThan(scheduledAt + everySixHoursMs);
+
+    // A second consecutive timeout falls back to the natural recurring slot.
+    now = requireTimestamp(job.state.nextRunAtMs, "recurring timeout retry") + 1;
+    await onTimer(state);
+
+    job = requireJob(state, "recurring-timeout-retry-streak");
+    expect(job.enabled).toBe(true);
+    expect(job.state.lastStatus).toBe("error");
+    expect(job.state.nextRunAtMs).toBe(scheduledAt + everySixHoursMs);
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves every cadence after a transient recurring retry succeeds", () => {
+    const scheduledAt = Date.parse("2026-05-29T02:28:00.000Z");
+    const everyTwelveHoursMs = 12 * 60 * 60 * 1_000;
+    const retryStartedAt = scheduledAt + 1_001;
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "recurring-rate-limit-edited",
+      name: "edited recurring report",
+      scheduledAt: retryStartedAt,
+      schedule: { kind: "every", everyMs: everyTwelveHoursMs, anchorMs: scheduledAt },
+      payload: { kind: "agentTurn", message: "closure report" },
+      state: {
+        nextRunAtMs: retryStartedAt,
+        consecutiveErrors: 1,
+      },
+    });
+    const state = createRunningCronServiceState({
+      storePath: "/tmp/cron-recurring-rate-limit-edited.json",
+      log: noopLogger,
+      nowMs: () => retryStartedAt,
+      jobs: [cronJob],
+    });
+
+    applyJobResultAndDrainNotifications(state, cronJob, {
+      status: "ok",
+      startedAt: retryStartedAt,
+      endedAt: retryStartedAt,
+    });
+
+    expect(cronJob.state.lastStatus).toBe("ok");
+    expect(cronJob.state.nextRunAtMs).toBe(scheduledAt + everyTwelveHoursMs);
+  });
+
+  it("prevents spin loop when cron job completes within the scheduled second (#17821)", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+    const nextDay = scheduledAt + 86_400_000;
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "spin-loop-17821",
+      name: "daily noon",
+      scheduledAt,
+      schedule: { kind: "cron", expr: "0 13 * * *", tz: "UTC" },
+      payload: { kind: "agentTurn", message: "briefing" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+    let now = scheduledAt;
+    let fireCount = 0;
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      nowMs: () => now,
+      runIsolatedAgentJob: vi.fn(async () => {
+        now += 7;
+        fireCount += 1;
+        return { status: "ok" as const, summary: "done" };
+      }),
+    });
+
+    await onTimer(state);
+    expect(fireCount).toBe(1);
+
+    const job = requireJob(state, "spin-loop-17821");
+    expect(job.state.nextRunAtMs).toBeGreaterThanOrEqual(nextDay);
+
+    await onTimer(state);
+    expect(fireCount).toBe(1);
   });
 
   it("enforces a minimum refire gap for second-granularity cron schedules (#17821)", async () => {

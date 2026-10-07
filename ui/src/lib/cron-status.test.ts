@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
-import { isCronJobActiveFailure } from "./cron-status.ts";
+import { isCronJobActiveFailure, resolveCronJobDisplayStatus } from "./cron-status.ts";
 
 function failedJob(enabled: boolean): CronJob {
   return {
@@ -24,6 +24,38 @@ describe("isCronJobActiveFailure", () => {
       ...job.state,
       autoDisabled: { reason: "consecutive-failures", atMs: 1, consecutiveErrors: 10 },
     };
+    expect(isCronJobActiveFailure(job)).toBe(true);
+  });
+
+  it("clears active failure state after a newer trigger evaluation", () => {
+    const now = Date.now();
+    const job = {
+      enabled: true,
+      trigger: { script: "json({ fire: false })" },
+      state: {
+        lastRunStatus: "error",
+        lastRunAtMs: now - 60_000,
+        lastTriggerEvalAtMs: now - 5_000,
+      },
+    } as CronJob;
+
+    expect(resolveCronJobDisplayStatus(job)).toBe("idle");
+    expect(isCronJobActiveFailure(job)).toBe(false);
+  });
+
+  it("keeps a failure active when the last run is newer than the trigger evaluation", () => {
+    const now = Date.now();
+    const job = {
+      enabled: true,
+      trigger: { script: "json({ fire: false })" },
+      state: {
+        lastRunStatus: "error",
+        lastRunAtMs: now - 5_000,
+        lastTriggerEvalAtMs: now - 60_000,
+      },
+    } as CronJob;
+
+    expect(resolveCronJobDisplayStatus(job)).toBe("error");
     expect(isCronJobActiveFailure(job)).toBe(true);
   });
 });

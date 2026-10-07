@@ -22,6 +22,8 @@ const IDENTITY_MENU_LINKS: ReadonlyArray<{
   icon: IconName;
   label: () => string;
 }> = [
+  // EDP local patch: Mission Control link (ported from the pre-9.x footer icon bar).
+  { href: "/mission-control", icon: "monitor", label: () => "Mission Control" },
   { href: "https://docs.openclaw.ai", icon: "book", label: () => t("common.docs") },
   {
     href: "https://docs.openclaw.ai/help",

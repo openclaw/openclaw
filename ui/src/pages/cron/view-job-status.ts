@@ -1,14 +1,15 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import type { CronJob } from "../../api/types.ts";
 import { icon, type IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import {
   isCronJobActiveFailure,
   isCronJobRunning,
+  resolveCronJobLastActivity,
   resolveCronJobLastRunStatus,
 } from "../../lib/cron-status.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import { runStatusLabel } from "./view-runs.ts";
 
 export function renderJobStateIndicator(job: CronJob) {
@@ -74,8 +75,22 @@ export function renderLastRunCell(job: CronJob) {
     typeof lastRunAtMs === "number" && Number.isFinite(lastRunAtMs)
       ? formatRelativeTimestamp(lastRunAtMs)
       : null;
+  // A trigger evaluation newer than the last run is the job's latest activity;
+  // without it a condition-polled job reads as stale for days between fires.
+  const lastActivity = resolveCronJobLastActivity(job);
+  const lastEval =
+    lastActivity.kind === "trigger-eval" && typeof lastActivity.atMs === "number"
+      ? html`<span
+          class="muted cron-table__last-eval"
+          data-test-id=${`cron-row-last-eval-${job.id}`}
+          title=${`${t("cron.runs.lastChecked")}: ${formatMs(lastActivity.atMs)}`}
+          >${t("cron.runs.lastChecked")} ${formatRelativeTimestamp(lastActivity.atMs)}</span
+        >`
+      : nothing;
   if (status === "unknown" || !rel) {
-    return html`<span class="muted">${t("common.na")}</span>`;
+    return lastEval === nothing
+      ? html`<span class="muted">${t("common.na")}</span>`
+      : html`<span class="cron-table__last-run">${lastEval}</span>`;
   }
   // Bare glyph + time reads calmer than a chip per row; the status word stays
   // available to hover and assistive tech via the label.
@@ -90,6 +105,7 @@ export function renderLastRunCell(job: CronJob) {
     <span class="cron-table__last-run" role="img" aria-label=${label} title=${label}>
       ${glyph}
       <span class="cron-table__last-time">${rel}</span>
+      ${lastEval}
     </span>
   `;
 }

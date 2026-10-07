@@ -29,9 +29,20 @@ const ENV_KEYS = [
   "SMS_PUBLIC_WEBHOOK_URL",
   "SMS_WEBHOOK_PATH",
   "SMS_ALLOWED_USERS",
+  "SMS_AUTOMATION_BYPASS_FROM",
   "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION",
   "SMS_TEXT_CHUNK_LIMIT",
+  "PIERCE_TWILIO_NUMBER",
+  "LINDSEY_TWILIO_NUMBER",
+  "KIMBERLY_TWILIO_NUMBER",
+  "BECKY_TWILIO_NUMBER",
+  "BRETT_TWILIO_NUMBER",
+  "SARAH_TWILIO_NUMBER",
 ] as const;
+
+for (const key of ENV_KEYS) {
+  delete process.env[key];
+}
 
 afterEach(() => {
   for (const key of ENV_KEYS) {
@@ -64,6 +75,7 @@ describe("SMS account config", () => {
       publicWebhookUrl: "https://example.com/webhooks/sms",
       dmPolicy: "pairing",
       allowFrom: [],
+      automationBypassFrom: [],
       textChunkLimit: 1500,
     });
   });
@@ -246,6 +258,7 @@ describe("SMS account config", () => {
     process.env.SMS_WEBHOOK_PATH = "/webhooks/sms/env";
     process.env.SMS_PUBLIC_WEBHOOK_URL = "https://sms.example.com/webhook";
     process.env.SMS_ALLOWED_USERS = "sms:+15552223333,+15554445555";
+    process.env.SMS_AUTOMATION_BYPASS_FROM = "sms:+18125982737,+18122026088";
     process.env.SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION = "true";
     process.env.SMS_TEXT_CHUNK_LIMIT = "800";
 
@@ -261,6 +274,7 @@ describe("SMS account config", () => {
       publicWebhookUrl: "https://sms.example.com/webhook",
       dangerouslyDisableSignatureValidation: true,
       allowFrom: ["+15552223333", "+15554445555"],
+      automationBypassFrom: ["+18125982737", "+18122026088", "+15550001111"],
       textChunkLimit: 800,
     });
     expect(resolveSmsAccount(cfg, "support")).toMatchObject({
@@ -273,6 +287,7 @@ describe("SMS account config", () => {
       publicWebhookUrl: "",
       dangerouslyDisableSignatureValidation: false,
       allowFrom: [],
+      automationBypassFrom: ["+15550001111"],
       textChunkLimit: 1500,
     });
   });

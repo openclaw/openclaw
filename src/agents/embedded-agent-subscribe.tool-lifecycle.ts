@@ -2,7 +2,11 @@ import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tool
 import { handleToolExecutionStart } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { recordEmbeddedToolTrajectoryEvent } from "./embedded-agent-subscribe.trajectory.js";
-import { buildToolLifecycleErrorResult, prepareToolResult } from "./embedded-agent-tool-results.js";
+import {
+  buildToolLifecycleErrorResult,
+  isToolArgumentValidationError,
+  prepareToolResult,
+} from "./embedded-agent-tool-results.js";
 import type { AgentEvent } from "./runtime/index.js";
 import { markToolExecutionNotStarted, type ToolEffectReceipt } from "./tool-effect-receipt.js";
 import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
@@ -47,8 +51,9 @@ export function createEmbeddedToolLifecycleRunner(
     const finishToolLifecycle = async (
       isError: boolean,
       result: unknown,
+      errorKind?: "argument-validation",
     ): Promise<ToolTerminal> => {
-      const wasExecuted = executionStarted;
+      const wasExecuted = errorKind === "argument-validation" ? false : executionStarted;
       ctx.flushAssistantStream();
       const endEvent: Extract<AgentEvent, { type: "tool_execution_end" }> = {
         type: "tool_execution_end",
@@ -56,6 +61,7 @@ export function createEmbeddedToolLifecycleRunner(
         toolCallId: toolParams.toolCallId,
         isError,
         executionStarted: wasExecuted,
+        ...(errorKind ? { errorKind } : {}),
         result,
         hideFromChannelProgress: toolParams.hideFromChannelProgress,
       };
@@ -77,11 +83,18 @@ export function createEmbeddedToolLifecycleRunner(
       });
     } catch (error) {
       const trustedNoStart = consumeTrustedToolNoStartError(error);
+      // Argument validation (e.g. the shell-command validator) rejects the call
+      // before anything runs; report it as a typed pre-execution failure.
+      const argumentValidationFailed = isToolArgumentValidationError(error);
       const result = buildToolLifecycleErrorResult(error);
-      if (trustedNoStart) {
+      if (trustedNoStart || argumentValidationFailed) {
         markToolExecutionNotStarted(result);
       }
-      const terminal = await finishToolLifecycle(true, result);
+      const terminal = await finishToolLifecycle(
+        true,
+        result,
+        argumentValidationFailed ? "argument-validation" : undefined,
+      );
       await toolParams.onTerminal?.(terminal);
       throw error;
     }

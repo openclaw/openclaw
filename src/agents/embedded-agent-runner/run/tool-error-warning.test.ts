@@ -212,6 +212,46 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     });
   });
 
+  it("prefers validation summaries over raw exec metadata in warning payloads", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        meta: 'search "$40.00|$39.99|$40/adult|$40" in src, `rg "$40.00|$39.99|$40/adult|$40" src`',
+        error:
+          'Unsupported bash command "search". Use rg, grep, find, or an OpenClaw tool instead.',
+        validationErrorSummary: "exec tool validation failed: invalid arguments",
+        mutatingAction: true,
+      },
+      toolResultFormat: "markdown",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "⚠️ exec tool validation failed: invalid arguments",
+      isError: true,
+    });
+    expect(payloads[0]?.text).not.toContain('search "$40.00|$39.99|$40/adult|$40"');
+  });
+
+  it("prefers validation summaries over raw bash metadata in warning payloads", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "bash",
+        meta: 'inspect "$40.00|$39.99|application fee" in /tmp/workspace',
+        error:
+          "Shell command must use a real executable like `rg`, `grep`, `find`, or `sed`, not a prose search wrapper like `inspect ... in /path`.",
+        validationErrorSummary: "bash tool validation failed: invalid arguments",
+        mutatingAction: true,
+      },
+      toolResultFormat: "markdown",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "⚠️ bash tool validation failed: invalid arguments",
+      isError: true,
+    });
+    expect(payloads[0]?.text).not.toContain('inspect "$40.00|$39.99|application fee"');
+  });
+
   it("keeps full-verbose exec failure labels outside markdown command text", () => {
     const payloads = buildPayloads({
       lastToolError: {

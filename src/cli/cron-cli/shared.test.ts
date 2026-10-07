@@ -67,6 +67,57 @@ function createBaseJob(overrides: Partial<CronJob>): CronJob {
 }
 
 describe("printCronList", () => {
+  it("uses the latest trigger evaluation as last activity when it is newer than the last run", () => {
+    const now = Date.now();
+    const job = createBaseJob({
+      id: "trigger-polled-job",
+      schedule: { kind: "cron", expr: "30 */3 * * *", tz: "America/Chicago" },
+      trigger: { script: "json({ fire: false })" },
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "noop" },
+      state: {
+        nextRunAtMs: now + 30 * 60_000,
+        lastRunAtMs: now - 4 * 24 * 60 * 60_000,
+        lastRunStatus: "ok",
+        lastTriggerEvalAtMs: now - 12 * 60_000,
+        triggerEvalCount: 42,
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    const dataLine = list.logs.find((line) => line.includes("trigger-polled-job")) ?? "";
+    expect(dataLine).toContain("eval 12m ago");
+    expect(dataLine).not.toContain("4d ago");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "last activity: 12m ago (trigger eval)");
+    expectLogsToInclude(show.logs, "last run: 4d ago");
+  });
+
+  it("treats a newer trigger evaluation as recovered status for display", () => {
+    const now = Date.now();
+    const job = createBaseJob({
+      id: "trigger-recovered-job",
+      trigger: { script: "json({ fire: false })" },
+      state: {
+        lastRunAtMs: now - 2 * 60 * 60_000,
+        lastRunStatus: "error",
+        lastTriggerEvalAtMs: now - 60_000,
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    const dataLine = list.logs.find((line) => line.includes("trigger-recovered-job")) ?? "";
+    expect(dataLine).toContain("idle");
+    expect(dataLine).not.toContain("error");
+
+    const enriched = enrichCronJsonWithStatus(job) as { status?: string };
+    expect(enriched.status).toBe("idle");
+  });
+
   beforeEach(() => {
     hoisted.listChannelPluginsMock.mockReset();
     hoisted.listChannelPluginsMock.mockReturnValue([]);

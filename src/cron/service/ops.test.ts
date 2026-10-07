@@ -17,6 +17,7 @@ import { cronStoreKey } from "../store/key.js";
 import * as runReceiptStore from "../store/run-receipt-store.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
+import { setupTimeoutErrorMessage } from "./execution-errors.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { add, remove, removeStaleJobFamily, update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
@@ -56,11 +57,18 @@ async function withStateDirForStorePath<T>(
 }
 
 function createTimedOutIsolatedCronState(params: { storePath: string; now: number }) {
+  return createErroredIsolatedCronState({
+    ...params,
+    error: "cron: job execution timed out",
+  });
+}
+
+function createErroredIsolatedCronState(params: { storePath: string; now: number; error: string }) {
   return createCronServiceState({
     storePath: params.storePath,
     nowMs: () => params.now,
     runIsolatedAgentJob: vi.fn(async () => {
-      throw new Error("cron: job execution timed out");
+      throw new Error(params.error);
     }),
   });
 }
@@ -818,6 +826,58 @@ describe("cron service ops seam coverage", () => {
 
     const persisted = await loadCronStore(storePath);
     expect(persisted.jobs[0]?.state.triggerState).toEqual({ revision: 2 });
+  });
+
+  it("records timed out manual runs as timed_out in the shared task registry", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+
+    await withStateDirForStorePath(storePath, async () => {
+      await writeDueIsolatedJobSnapshot(storePath, now);
+
+      const state = createTimedOutIsolatedCronState({
+        storePath,
+        now,
+      });
+
+      await run(state, "isolated-timeout");
+
+      expectCronRun({
+        runId: `cron:isolated-timeout:${now}`,
+        status: "timed_out",
+        jobId: "isolated-timeout",
+      });
+      expect(findCronTaskByBaseRunId(`cron:isolated-timeout:${now}`)?.detail).toMatchObject({
+        kind: "cron-run",
+        status: "error",
+        runAtMs: now,
+        durationMs: 0,
+      });
+    });
+  });
+
+  it("records setup-timeout manual runs as timed_out in the shared task registry", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+
+    await withStateDirForStorePath(storePath, async () => {
+      await writeDueIsolatedJobSnapshot(storePath, now);
+
+      const state = createErroredIsolatedCronState({
+        storePath,
+        now,
+        error: setupTimeoutErrorMessage(),
+      });
+
+      await run(state, "isolated-timeout");
+
+      expectTaskRun({
+        runId: `cron:isolated-timeout:${now}`,
+        runtime: "cron",
+        status: "timed_out",
+        sourceId: "isolated-timeout",
+      });
+    });
   });
 
   it("records failed manual runs with cron outcome detail", async () => {

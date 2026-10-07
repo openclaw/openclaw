@@ -29,6 +29,7 @@ export function createSmsTestAccount(
     dangerouslyDisableSignatureValidation: false,
     dmPolicy: "pairing",
     allowFrom: [],
+    automationBypassFrom: [],
     textChunkLimit: 1500,
     ...overrides,
   };

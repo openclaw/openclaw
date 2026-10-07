@@ -19,6 +19,7 @@ import {
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { createToolResultPreparation } from "./embedded-agent-tool-result-preparation.js";
+import { ToolInputError } from "./tool-input-error.js";
 import {
   isToolResultError,
   readToolResultDetails,
@@ -61,6 +62,23 @@ export function readAsyncStartedTaskIds(result: unknown): {
     ...(asyncTaskRunId ? { asyncTaskRunId } : {}),
     ...(asyncTaskId ? { asyncTaskId } : {}),
   };
+}
+
+/**
+ * Pre-execution argument validation failure raised by exec-like tools (EDP
+ * shell-command validator). The lifecycle runner reports these as
+ * `executionStarted=false` + `errorKind="argument-validation"` so they never
+ * count as attempted mutating actions.
+ */
+export class ToolArgumentValidationError extends ToolInputError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ToolArgumentValidationError";
+  }
+}
+
+export function isToolArgumentValidationError(error: unknown): boolean {
+  return error instanceof ToolArgumentValidationError;
 }
 
 function truncateToolText(

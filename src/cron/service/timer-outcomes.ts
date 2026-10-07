@@ -81,6 +81,20 @@ function assignNextRunAtMs(
   return nextRunAtMs;
 }
 
+function shouldAccelerateRecurringTransientRetry(params: {
+  previousConsecutiveErrors: number;
+  retryCategory?: string;
+}): boolean {
+  // A single quick retry helps recover from one-off timeout stalls, but once a
+  // recurring job has already timed out, keep later attempts on the natural
+  // schedule so broad gateway slowdowns do not stack more timeout runs within
+  // minutes for long-interval loops.
+  if (params.retryCategory === "timeout" && params.previousConsecutiveErrors > 0) {
+    return false;
+  }
+  return true;
+}
+
 /** Applies run outcome state, delivery state, backoff/next-run scheduling, and delete-after-run policy. */
 export function applyJobResult(
   state: CronJobPolicyContext,
@@ -413,7 +427,14 @@ export function applyJobResult(
         }
         return normalNext;
       };
-      if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
+      if (
+        retryDecision.retryable &&
+        retryDecision.backoffMs !== undefined &&
+        shouldAccelerateRecurringTransientRetry({
+          previousConsecutiveErrors,
+          retryCategory: retryDecision.retryCategory,
+        })
+      ) {
         normalNext = computeNormalNext();
         if (normalNext === undefined) {
           // Preserve the unresolved-cron guard (#66019): do not synthesize a

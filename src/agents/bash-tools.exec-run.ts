@@ -28,6 +28,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { bindAgentToolAvailability } from "./agent-tool-availability.js";
 import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
+import { validateShellCommand } from "./bash-command-validator.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
@@ -71,12 +72,14 @@ import type {
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { createExecSchema, execSchema } from "./bash-tools.schemas.js";
 import { clampWithDefault, readEnvInt, truncateMiddle } from "./bash-tools.shared.js";
+import { ToolArgumentValidationError } from "./embedded-agent-tool-results.js";
 import {
   createExecToolExecutionTimeoutResolver,
   resolveExecDefaultTimeoutSec,
 } from "./exec-tool-timeout.js";
 import { resolveStoredSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
+import { registerTrustedToolNoStartError } from "./tool-result-error.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
 import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -368,6 +371,12 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       }
       if (!params.command) {
         throw new Error("Provide a command to start.");
+      }
+      const commandValidationError = validateShellCommand(params.command);
+      if (commandValidationError) {
+        throw registerTrustedToolNoStartError(
+          new ToolArgumentValidationError(commandValidationError),
+        );
       }
       await rejectUnsafeExecControlShellCommand(params.command);
       let workdir: string | undefined;

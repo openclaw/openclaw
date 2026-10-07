@@ -27,6 +27,7 @@ export const SmsAccountConfigSchema = z
     dangerouslyDisableSignatureValidation: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: AllowFromListSchema,
+    automationBypassFrom: AllowFromListSchema,
     textChunkLimit: z.number().int().positive().optional(),
   })
   .strict();
@@ -89,9 +90,15 @@ export const SmsChannelConfigSchema = buildChannelConfigSchema(SmsConfigSchema, 
       help: "Allowed sender phone numbers in E.164 format, or * when dmPolicy is open.",
       presentation: "phone-number",
     },
+    automationBypassFrom: {
+      label: "SMS Automation Bypass From",
+      help: "Phone numbers that should be logged but never routed into SMS agent automation or auto-replies.",
+      presentation: "phone-number",
+    },
     "accounts.*.fromNumber": { presentation: "phone-number" },
     "accounts.*.defaultTo": { presentation: "phone-number" },
     "accounts.*.allowFrom.*": { presentation: "phone-number" },
+    "accounts.*.automationBypassFrom.*": { presentation: "phone-number" },
     textChunkLimit: {
       label: "SMS Text Chunk Limit",
       help: "Maximum characters per outbound SMS chunk before OpenClaw splits long replies.",

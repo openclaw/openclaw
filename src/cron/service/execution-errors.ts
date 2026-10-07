@@ -33,6 +33,15 @@ export function isSetupTimeoutErrorText(error: string): boolean {
   return error === CRON_SETUP_TIMEOUT_ERROR || error.startsWith(CRON_SETUP_TIMEOUT_ERROR + " ");
 }
 
+/** Returns true when the cron failure was caused by a gateway restart lifecycle interruption. */
+export function isGatewayRestartInterruptionErrorText(error: string): boolean {
+  const normalized = error.trim();
+  return (
+    normalized === "cron: job interrupted by gateway restart" ||
+    normalized === "Gateway restarting."
+  );
+}
+
 /** Formats timeout text for runs that stalled after setup but before execution start. */
 export function preExecutionTimeoutErrorMessage(execution?: CronAgentExecutionStarted): string {
   return formatCronTimeoutMessage(CRON_PRE_EXECUTION_TIMEOUT_ERROR, execution);

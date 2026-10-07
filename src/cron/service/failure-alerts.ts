@@ -23,6 +23,7 @@ import type {
   CronJob,
   CronMessageChannel,
 } from "../types.js";
+import { isGatewayRestartInterruptionErrorText } from "./execution-errors.js";
 import { buildCronFailureRepairBrief } from "./failure-repair-brief.js";
 import { isJobEnabled } from "./jobs-scheduling.js";
 import {
@@ -372,6 +373,15 @@ export function maybeEmitFailureAlert(
     params.status === "error" && params.job.schedule.kind === "at" && !isJobEnabled(params.job);
   const alertConfig = params.alertConfig;
   if (!alertConfig || (!terminalOneShot && params.consecutiveCount < alertConfig.after)) {
+    return;
+  }
+  // Gateway restarts interrupt in-flight runs and get recorded as errors, but
+  // they are lifecycle artifacts rather than job failures; do not page on them.
+  if (
+    params.status === "error" &&
+    typeof params.error === "string" &&
+    isGatewayRestartInterruptionErrorText(params.error)
+  ) {
     return;
   }
   // Best-effort delivery suppresses inherited alert noise, not an independently

@@ -8,7 +8,7 @@ import {
   PROGRESS_STATUS_PREAMBLE_FRESH_MS,
 } from "./progress-draft-compositor.js";
 import type { ChannelProgressDraftCompositorParams } from "./progress-draft-compositor.types.js";
-import { buildChannelProgressDraftLine } from "./streaming.js";
+import { buildChannelProgressDraftLine, mergeChannelProgressDraftLine } from "./streaming.js";
 
 function createProgress(
   config: ChannelStreamingProgressConfig = { label: "Shelling", toolProgress: true },
@@ -999,5 +999,15 @@ describe("channel progress draft compositor", () => {
     expect(await result).toBe(false);
     expect(progress.hasStarted).toBe(false);
     expect(progress.isVisible).toBe(false);
+  });
+});
+
+describe("mergeChannelProgressDraftLine (EDP)", () => {
+  it("preserves repeated plain progress lines when separated by another event", () => {
+    const lines = mergeChannelProgressDraftLine(["Starting", "Finished"], "Starting", {
+      maxLines: 4,
+    });
+
+    expect(lines).toEqual(["Starting", "Finished", "Starting"]);
   });
 });

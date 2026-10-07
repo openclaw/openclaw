@@ -28,6 +28,6 @@ describe("execution purpose display", () => {
     ).toBe("Checking");
     expect(resolveExecDetail({ code: "return 1" })).toBe("run JavaScript");
     expect(resolveExecDetail({ code: "return 1", language: "typescript" })).toBe("run TypeScript");
-    expect(resolveExecDetail({ title: " ", command: "git status" })).toContain("check git status");
+    expect(resolveExecDetail({ title: " ", command: "git status" })).toContain("git status");
   });
 });

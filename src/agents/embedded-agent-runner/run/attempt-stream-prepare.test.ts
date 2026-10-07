@@ -256,9 +256,9 @@ describe("prepareEmbeddedAttemptStream", () => {
   );
 
   it.each([
-    [undefined, "check git status"],
-    ["explain", "check git status"],
-    ["raw", "check git status, `git status`"],
+    [undefined, "git status"],
+    ["explain", "git status"],
+    ["raw", "git status"],
   ] as const)(
     "renders %s progress detail through the real subscription",
     async (toolProgressDetail, meta) => {

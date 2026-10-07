@@ -197,6 +197,159 @@ describe("agent tool definition adapter", () => {
     });
   });
 
+  it("surfaces invalid exec command prose before execution", async () => {
+    const tool = createExecTool({
+      security: "full",
+      ask: "off",
+    });
+    const [definition] = toToolDefinitions([tool]);
+
+    const result = await definition.execute(
+      "call-invalid-exec-location-note",
+      {
+        command:
+          "systemctl --user status code-backup.service --no-pager (in ~/.openclaw-edp-realty/workspace/agents/ada)",
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error:
+        "Shell command must be a literal executable command only. Move location notes like `(in /path)` into `workdir`/`cwd`, not the command string.",
+    });
+  });
+
+  it("surfaces prose-labeled exec commands before execution", async () => {
+    const tool = createExecTool({
+      security: "full",
+      ask: "off",
+    });
+    const [definition] = toToolDefinitions([tool]);
+
+    const result = await definition.execute(
+      "call-invalid-exec-command-label",
+      {
+        command: 'Command: rg "faith-task-loop" ~/.openclaw',
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error:
+        "Shell command must not include prose labels like `Command:` or `cmd:`. Pass only the literal executable command.",
+    });
+  });
+
+  it("surfaces tool-history pseudo-search commands before execution", async () => {
+    const tool = createExecTool({
+      security: "full",
+      ask: "off",
+    });
+    const [definition] = toToolDefinitions([tool]);
+
+    const result = await definition.execute(
+      "call-invalid-exec-history-search",
+      {
+        command:
+          '⚠️ 🛠️ Bash failed: search "$40.00|$39.99|application fee|screening fee" in /home/ajbowlds/.openclaw-edp-realty/workspace/edpapp/web-apps/management/src/app/(public) (in /home/ajbowlds/.openclaw-edp-realty/workspace/agents/ada)',
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: 'Unsupported bash command "search". Use rg, grep, find, or an OpenClaw tool instead.',
+    });
+  });
+
+  it("surfaces natural-language exec wrappers before execution", async () => {
+    const tool = createExecTool({
+      security: "full",
+      ask: "off",
+    });
+    const [definition] = toToolDefinitions([tool]);
+
+    const result = await definition.execute(
+      "call-invalid-exec-wrapper",
+      {
+        command: "run git status",
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error:
+        "Shell command must start with the real executable, not a prose wrapper like `run git ...` or `find files ...`.",
+    });
+  });
+
+  it("surfaces prose line-print exec commands before execution", async () => {
+    const tool = createExecTool({
+      security: "full",
+      ask: "off",
+    });
+    const [definition] = toToolDefinitions([tool]);
+
+    const result = await definition.execute(
+      "call-invalid-exec-print-lines",
+      {
+        command: "print lines 450-560 from src/gateway/server-cron.ts",
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error:
+        "Shell command must start with the real executable, not a prose wrapper like `run git ...` or `find files ...`.",
+    });
+  });
+
+  it("does not throw WeakMap errors when preparing malformed backend sandbox exec params", async () => {
+    const validateWorkdir = vi.fn(async (workdir: string) => workdir);
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      sandbox: {
+        containerName: "remote-sandbox-workdir-test",
+        workspaceDir: process.cwd(),
+        containerWorkdir: "/remote/workspace",
+        workdirValidation: "backend",
+        validateWorkdir,
+      },
+    });
+    const [definition] = toToolDefinitions([tool]);
+
+    const result = await expectDefined(definition, "definition test invariant").execute(
+      "call-malformed-backend-sandbox-exec-params",
+      "not-an-object",
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "Provide a command to start.",
+    });
+    expect(JSON.stringify(result)).not.toContain("WeakMap");
+    expect(validateWorkdir).not.toHaveBeenCalled();
+  });
+
   it("reports malformed exec params when elevated logging is enabled", async () => {
     const tool = createExecTool({
       security: "full",

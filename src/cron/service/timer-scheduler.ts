@@ -205,6 +205,12 @@ async function onAdmittedTimer(state: CronServiceState, scheduler: GatewaySchedu
     requestImmediateCronRecheck(state, scheduler),
   );
   let allowEmptyCapacityRecheck = false;
+  // Normal timer ticks should recover the same "missed cron slot" condition
+  // that restart catch-up already handles. Otherwise a stale future
+  // nextRunAtMs can strand a cron job until the next gateway restart even
+  // though the scheduler is awake. An operator opt-out of missed runs
+  // (skipMissedJobs) applies to ticks the same way it applies to catch-up.
+  const allowCronMissedRunByLastRun = state.deps.cronConfig?.skipMissedJobs !== true;
   try {
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true });
@@ -251,7 +257,7 @@ async function onAdmittedTimer(state: CronServiceState, scheduler: GatewaySchedu
       const dueCheckNow = state.deps.nowMs();
       const due = await skipCronJobsWithoutOwners(
         state,
-        collectRunnableJobs(state, dueCheckNow),
+        collectRunnableJobs(state, dueCheckNow, { allowCronMissedRunByLastRun }),
         dueCheckNow,
         { source },
       );
@@ -319,7 +325,9 @@ async function onAdmittedTimer(state: CronServiceState, scheduler: GatewaySchedu
           // when the refreshed store removed a candidate from the due set;
           // otherwise child ticks retain their parents and starve the event loop.
           const stillDue = new Set(
-            collectRunnableJobs(state, state.deps.nowMs()).map((job) => job.id),
+            collectRunnableJobs(state, state.deps.nowMs(), {
+              allowCronMissedRunByLastRun,
+            }).map((job) => job.id),
           );
           allowEmptyCapacityRecheck = admittedDue.some((job) => !stillDue.has(job.id));
         }
@@ -407,6 +415,9 @@ async function onAdmittedTimer(state: CronServiceState, scheduler: GatewaySchedu
               reservedAtMs: due.reservedAtMs,
               reservationIdentity: due.reservationIdentity,
               admissionRelease: due.releaseAdmission,
+              // Mirror the due-collection policy so a missed-slot recovery
+              // reserved above is not re-judged as "not runnable" on activation.
+              runnableOptions: { allowCronMissedRunByLastRun },
               isUnavailable: () => stopAdmittingDueJobs,
               onUnavailable: () => {
                 stopAdmittingDueJobs = true;

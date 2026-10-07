@@ -31,6 +31,22 @@ export type ShellWords = {
   unsupported: boolean;
 };
 
+/** Quotes a display arg only when needed so rendered shell examples stay copy-safe. */
+export function formatShellArgForDisplay(value: string | undefined): string | undefined {
+  if (!value) {
+    return value;
+  }
+  if (/^[A-Za-z0-9_/:=.,@%+-]+$/u.test(value)) {
+    return value;
+  }
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+/** Strips a trailing UI/workdir note like `(in /path)` from a command label. */
+export function stripTrailingLocationNote(command: string): string {
+  return command.replace(/\s+\(in\s+(?:~\/|\/|[A-Za-z]:[\\/])[^()]*\)\s*$/u, "").trimEnd();
+}
+
 /** Separates command arguments from unquoted shell redirects before quote removal. */
 export function parseShellWords(input: string | undefined, maxWords = 48): ShellWords {
   const source = input ?? "";

@@ -39,7 +39,7 @@ describe("tool detail separators", () => {
         },
       },
       expected:
-        'show /notes/Project · Notes.md (in /app), node: preview-node, `cat "/notes/Project · Notes.md"`',
+        "cat '/notes/Project · Notes.md' (in /app), node: preview-node, `cat \"/notes/Project · Notes.md\"`",
     },
     {
       input: {

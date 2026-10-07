@@ -89,6 +89,7 @@ import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";
 import {
   createToolValidationErrorSummary,
+  isExecLikeToolName,
   hasTerminalControlCharacter,
   summarizeToolValidationError,
 } from "./tool-error-summary.js";
@@ -167,7 +168,14 @@ export async function handleToolExecutionEnd(
   // custom producers use their terminal fact, while policy blocks override it.
   const executionStarted =
     (trackedExecutionStarted ?? evt.executionStarted ?? true) && !executionPrevented;
-  const meta = callSummary.meta;
+  const validationErrorSummary =
+    isToolError && evt.executionStarted === false && evt.errorKind === "argument-validation"
+      ? createToolValidationErrorSummary(toolName)
+      : undefined;
+  // A rejected exec/bash command is model input (often a pasted pseudo-command);
+  // keep it out of tool metas, diagnostics, and warning payloads.
+  const meta =
+    validationErrorSummary && isExecLikeToolName(toolName) ? undefined : callSummary.meta;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
   const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
   // A Code Mode exec that returns "waiting" parked a run the model resumes via
@@ -210,10 +218,6 @@ export async function handleToolExecutionEnd(
     terminalDiagnostic && errorMessage && hasTerminalControlCharacter(errorMessage)
       ? undefined
       : errorMessage;
-  const validationErrorSummary =
-    isToolError && evt.executionStarted === false && evt.errorKind === "argument-validation"
-      ? createToolValidationErrorSummary(toolName)
-      : undefined;
   const terminal = (ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx))({
     toolCallId,
     toolName,

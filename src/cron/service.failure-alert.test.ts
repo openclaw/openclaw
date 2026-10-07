@@ -199,6 +199,27 @@ describe("CronService failure alerts", () => {
     );
   });
 
+  it.each([
+    { name: "startup interruption", error: "cron: job interrupted by gateway restart" },
+    { name: "live restart abort", error: "Gateway restarting." },
+  ])("suppresses failure alerts for gateway restart artifacts ($name)", async (testCase) => {
+    await withFailureAlertCron(
+      {
+        failureAlert: { enabled: true, after: 1 },
+        runResult: { status: "error", error: testCase.error },
+      },
+      async ({ cron, sendCronFailureAlert, addJob }) => {
+        const job = await addJob("restart artifact job", { delivery: createTelegramDelivery() });
+
+        await cron.run(job.id, "force");
+        await cron.run(job.id, "force");
+
+        expect(sendCronFailureAlert).not.toHaveBeenCalled();
+        expect(cron.getJob(job.id)?.state.consecutiveErrors).toBe(2);
+      },
+    );
+  });
+
   it("preserves includeSkipped through failure alert updates", async () => {
     await withAlerts(
       async ({ cron, sendCronFailureAlert, addJob }) => {

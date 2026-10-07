@@ -235,11 +235,55 @@ function computeStatus(job: { enabled?: unknown; state?: unknown }): string {
   if (!job.enabled) {
     return "disabled";
   }
-  return typeof state.lastRunStatus === "string"
-    ? state.lastRunStatus
-    : typeof state.lastStatus === "string"
-      ? state.lastStatus
-      : "idle";
+  const lastRunStatus =
+    typeof state.lastRunStatus === "string"
+      ? state.lastRunStatus
+      : typeof state.lastStatus === "string"
+        ? state.lastStatus
+        : "idle";
+  // A trigger evaluation newer than the failed run means the scheduler has
+  // since polled the condition successfully; the stale error is no longer the
+  // job's current state, so status reads idle until the next fire settles.
+  if (lastRunStatus === "error" && resolveCronLastActivity(job).kind === "trigger-eval") {
+    return "idle";
+  }
+  return lastRunStatus;
+}
+
+type CronLastActivity = {
+  atMs?: number;
+  kind: "run" | "trigger-eval" | "none";
+};
+
+function toFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+// Trigger-polled jobs can go days between fires while evaluating every few
+// minutes; the newest of lastRunAtMs / lastTriggerEvalAtMs is the honest
+// "last activity" for list and show output.
+function resolveCronLastActivity(job: { state?: unknown }): CronLastActivity {
+  const state = asOptionalRecord(job.state) ?? {};
+  const lastRunAtMs = toFiniteNumber(state.lastRunAtMs);
+  const lastTriggerEvalAtMs = toFiniteNumber(state.lastTriggerEvalAtMs);
+  if (
+    typeof lastTriggerEvalAtMs === "number" &&
+    (typeof lastRunAtMs !== "number" || lastTriggerEvalAtMs > lastRunAtMs)
+  ) {
+    return { atMs: lastTriggerEvalAtMs, kind: "trigger-eval" };
+  }
+  if (typeof lastRunAtMs === "number") {
+    return { atMs: lastRunAtMs, kind: "run" };
+  }
+  return { kind: "none" };
+}
+
+function formatLastActivity(activity: CronLastActivity, nowMs: number): string {
+  const rel = formatRelative(activity.atMs, nowMs);
+  if (activity.kind === "trigger-eval") {
+    return rel === "-" ? rel : `eval ${rel}`;
+  }
+  return rel;
 }
 
 // Human-facing decoration only: enrichCronJsonWithStatus() emits computeStatus()
@@ -493,7 +537,8 @@ const CRON_COLUMNS = [
   ["name", "Name", 24],
   ["schedule", "Schedule", 32],
   ["next", "Next", 10],
-  ["last", "Last", 10],
+  // Wide enough for "eval 12m ago" so trigger-eval activity never truncates.
+  ["last", "Last", 14],
   ["status", "Status", 19],
   ["target", "Target", 9],
   ["delivery", "Delivery", 64],
@@ -619,7 +664,7 @@ export function printCronList(
       name: [job.displayName ?? job.name, theme.info],
       schedule: [formatSchedule(job.schedule, job.trigger !== undefined), theme.info],
       next: [job.enabled ? formatRelative(state.nextRunAtMs, now) : "-", theme.muted],
-      last: [formatRelative(state.lastRunAtMs, now), theme.muted],
+      last: [formatLastActivity(resolveCronLastActivity(job), now), theme.muted],
       status: [status.label, status.color],
       target: [job.sessionTarget, job.sessionTarget === "main" ? theme.accent : theme.accentBright],
       delivery: [
@@ -669,8 +714,16 @@ export function printCronShow(
     `model: ${showValue(job.payload.kind === "agentTurn" ? job.payload.model : undefined)}`,
   );
   runtime.log(`delivery: ${showValue(preview.label)} (${showValue(preview.detail)})`);
+  const lastActivity = resolveCronLastActivity(job);
+  const lastActivityKind =
+    lastActivity.kind === "trigger-eval"
+      ? " (trigger eval)"
+      : lastActivity.kind === "run"
+        ? " (run)"
+        : "";
   runtime.log(`next: ${formatRelative(job.state.nextRunAtMs, Date.now())}`);
-  runtime.log(`last: ${formatRelative(job.state.lastRunAtMs, Date.now())}`);
+  runtime.log(`last activity: ${formatRelative(lastActivity.atMs, Date.now())}${lastActivityKind}`);
+  runtime.log(`last run: ${formatRelative(job.state.lastRunAtMs, Date.now())}`);
   runtime.log(`status: ${showValue(formatCronStatusForDisplay(job).label)}`);
   // lastError is the run/schedule failure message; the diagnostic line below is
   // the run-diagnostics summary and can be empty when only lastError is set.

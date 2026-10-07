@@ -37,7 +37,7 @@ function flushDiagnosticEvents(): Promise<void> {
   });
 }
 
-function expectedCommandHook(event: string, timeout = 10, commandTimeout = 9_000) {
+function expectedCommandHook(event: string, timeout = 30, commandTimeout = 29_000) {
   return [
     {
       hooks: [
@@ -675,10 +675,10 @@ describe("Codex native hook relay config", () => {
       { enabled: boolean; trusted_hash: string }
     >;
     expect(hookState["/<session-flags>/config.toml:pre_tool_use:0:0"]?.trusted_hash).toBe(
-      "sha256:00eef2fb113075f6aa238484c41e5eac82830c98c6379611019592ad93d2e56b",
+      "sha256:d571904e8d7505f4dd3a2eaf8e28a41835a6603bd654ecc46c41916a59f9ee34",
     );
     expect(hookState["/<session-flags>/config.toml:post_tool_use:0:0"]?.trusted_hash).toBe(
-      "sha256:64b626a7cee798d42404b892982925feda7b335a9cd0ed62be905ab2e2766c1f",
+      "sha256:13b37694e20db43aab5958ad8be3e7c4e6b31940cfcb9e4bd3eaf52b0edc38f3",
     );
   });
 

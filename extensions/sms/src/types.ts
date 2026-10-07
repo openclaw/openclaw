@@ -2,12 +2,16 @@ import type { z } from "zod";
 import type { SmsAccountConfigSchema, SmsConfigSchema } from "./config-schema.js";
 
 type SmsAccountSchemaInput = z.input<typeof SmsAccountConfigSchema>;
-type SmsChannelConfigFields = Omit<SmsAccountSchemaInput, "allowFrom"> & {
+type SmsChannelConfigFields = Omit<SmsAccountSchemaInput, "allowFrom" | "automationBypassFrom"> & {
   /** Legacy scalar input normalized by the channel runtime. */
   allowFrom?: string | Array<string | number>;
+  automationBypassFrom?: string | Array<string | number>;
 };
 
-export type SmsChannelConfig = Omit<z.input<typeof SmsConfigSchema>, "accounts" | "allowFrom"> &
+export type SmsChannelConfig = Omit<
+  z.input<typeof SmsConfigSchema>,
+  "accounts" | "allowFrom" | "automationBypassFrom"
+> &
   SmsChannelConfigFields & {
     accounts?: Record<string, SmsChannelConfigFields>;
     defaultAccount?: string;
@@ -26,6 +30,7 @@ export interface ResolvedSmsAccount {
   dangerouslyDisableSignatureValidation: boolean;
   dmPolicy: "pairing" | "open" | "allowlist" | "disabled";
   allowFrom: string[];
+  automationBypassFrom?: string[];
   textChunkLimit: number;
   mediaMaxBytes?: number;
 }

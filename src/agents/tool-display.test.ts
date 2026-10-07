@@ -184,7 +184,7 @@ describe("tool display details", () => {
       },
     });
 
-    expect(detail).toContain("check git status -> show first 3 lines");
+    expect(detail).toContain("git status -> head -n 3");
     expect(detail).toContain("(agent)");
   });
 
@@ -195,7 +195,58 @@ describe("tool display details", () => {
       detailMode: "explain",
     });
 
-    expect(detail).toBe("print lines 1-80 from extensions/discord/src/draft-stream.ts");
+    expect(detail).toBe("sed -n '1,80p' extensions/discord/src/draft-stream.ts");
+  });
+
+  it("keeps rg summaries shell-safe for repo paths with parentheses", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "bash",
+        args: {
+          command:
+            "rg \"$40.00|$39.99|application fee|screening fee\" '/home/ajbowlds/.openclaw-edp-realty/workspace/edpapp/web-apps/management/src/app/(public)'",
+        },
+        detailMode: "explain",
+      }),
+    );
+
+    expect(detail).toBe(
+      "rg '$40.00|$39.99|application fee|screening fee' '/home/ajbowlds/.openclaw-edp-realty/workspace/edpapp/web-apps/management/src/app/(public)'",
+    );
+  });
+
+  it("drops trailing UI location notes from rg summaries", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "bash",
+        args: {
+          command:
+            'rg "$40.00|$39.99|application fee|screening fee" /home/ajbowlds/.openclaw-edp-realty/workspace/edpapp/web-apps/management/src/app/(public) (in /home/ajbowlds/.openclaw-edp-realty/workspace/agents/ada)',
+        },
+        detailMode: "explain",
+      }),
+    );
+
+    expect(detail).toBe(
+      "rg '$40.00|$39.99|application fee|screening fee' '/home/ajbowlds/.openclaw-edp-realty/workspace/edpapp/web-apps/management/src/app/(public)'",
+    );
+  });
+
+  it("keeps sed summaries shell-safe for repo paths with brackets", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "bash",
+        args: {
+          command:
+            "sed -n '1,80p' '/home/ajbowlds/.openclaw-edp-realty/workspace/edpapp/web-apps/management/src/app/(main)/[uid]/page.tsx'",
+        },
+        detailMode: "explain",
+      }),
+    );
+
+    expect(detail).toBe(
+      "sed -n '1,80p' '/home/ajbowlds/.openclaw-edp-realty/workspace/edpapp/web-apps/management/src/app/(main)/[uid]/page.tsx'",
+    );
   });
 
   it("keeps shell compound commands intact instead of inventing command stages", () => {
@@ -327,10 +378,10 @@ describe("tool display details", () => {
 
   it("keeps normal search patterns concise", () => {
     for (const [command, expected] of [
-      ['rg "foo|bar" src/agents', 'search "foo|bar" in src/agents'],
-      ["rg 'search engine' src/agents", 'search "search engine" in src/agents'],
-      ["rg 'search textual data' src/agents", 'search "search textual data" in src/agents'],
-      ["rg 'research text in docs' src/agents", 'search "research text in docs" in src/agents'],
+      ['rg "foo|bar" src/agents', "rg 'foo|bar' src/agents"],
+      ["rg 'search engine' src/agents", "rg 'search engine' src/agents"],
+      ["rg 'search textual data' src/agents", "rg 'search textual data' src/agents"],
+      ["rg 'research text in docs' src/agents", "rg 'research text in docs' src/agents"],
     ]) {
       expect(detailFor({ name: "exec", args: { command }, detailMode: "explain" })).toBe(expected);
     }
@@ -381,7 +432,7 @@ describe("tool display details", () => {
     [
       "moves pushd path to context suffix and appends raw command",
       "pushd /tmp && git status",
-      "check git status (in /tmp), `pushd /tmp && git status`",
+      "git status (in /tmp), `pushd /tmp && git status`",
     ],
     [
       "clears inferred cwd when popd is stripped from preamble",
@@ -391,7 +442,7 @@ describe("tool display details", () => {
     [
       "summarizes all stages and appends raw command",
       "git fetch && git rebase origin/main",
-      "fetch git changes → rebase git branch, `git fetch && git rebase origin/main`",
+      "git fetch → git rebase, `git fetch && git rebase origin/main`",
     ],
     [
       "falls back to raw command for unknown binaries",
@@ -434,7 +485,7 @@ describe("tool display details", () => {
         args: { command: "git fetch", workdir: "/Users/peter/mantis-workspace/openclaw" },
         detailMode: "explain",
       }),
-    ).toBe("fetch git changes (agent)");
+    ).toBe("git fetch (agent)");
 
     expect(
       detailFor({
@@ -442,7 +493,7 @@ describe("tool display details", () => {
         args: { command: "git status", workdir: "/Users/peter/Projects/openclaw" },
         detailMode: "explain",
       }),
-    ).toBe("check git status (repo)");
+    ).toBe("git status (repo)");
 
     expect(
       detailFor({
@@ -465,7 +516,7 @@ describe("tool display details", () => {
           detailMode: "explain",
         }),
       ),
-    ).toBe("fetch git changes (agent)");
+    ).toBe("🛠️ git fetch (agent)");
 
     expect(
       formatToolSummary(
@@ -666,7 +717,7 @@ describe("tool display details", () => {
     ].join("\n");
 
     const detail = detailFor({ name: "exec", args: { command }, detailMode: "explain" });
-    expect(detail).toBe("show output → run tests → run build");
+    expect(detail).toBe("cat → run tests → run build");
 
     expect(splitTopLevelStages("echo foo\\ #bar && npm test")).toEqual([
       "echo foo\\ #bar",
@@ -730,7 +781,7 @@ describe("tool display details", () => {
       detailMode: "explain",
     });
 
-    expect(detail).toBe("show output → run email_preview_new → run email_preview_new");
+    expect(detail).toBe("cat → run email_preview_new → run email_preview_new");
   });
 
   it("consumes same-line heredocs in declaration order before splitting later stages", () => {

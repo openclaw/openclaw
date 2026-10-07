@@ -5,6 +5,7 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import { formatInlineCodeSpan } from "../shared/markdown-code.js";
 import {
   binaryName,
+  formatShellArgForDisplay,
   hasShellCompoundCommand,
   optionValue,
   parseHeredocMarker,
@@ -14,19 +15,15 @@ import {
   type ShellWords,
   splitTopLevelPipes,
   splitTopLevelStages,
+  stripTrailingLocationNote,
   stripOuterQuotes,
   stripShellPreamble,
   trimLeadingEnv,
   unwrapShellWrapper,
 } from "./tool-display-exec-shell.js";
 
-const FILE_COMMAND_LABELS = new Map<string, readonly [prefix: string, fallback: string]>([
-  ["ls", ["list files in", "list files"]],
-  ["cat", ["show", "show output"]],
-  ["rm", ["remove", "remove files"]],
-  ["mkdir", ["create folder", "create folder"]],
-  ["touch", ["create file", "create file"]],
-]);
+// EDP: file commands display literally (`ls <path>`), not as prose labels.
+const FILE_COMMANDS = new Set(["ls", "cat", "rm", "mkdir", "touch"]);
 
 function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]): string {
   if (words.length === 0) {
@@ -68,23 +65,23 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
     }
 
     const map: Record<string, string> = {
-      status: "check git status",
-      diff: "check git diff",
-      log: "view git history",
-      show: "show git object",
-      branch: "list git branches",
-      checkout: "switch git branch",
-      switch: "switch git branch",
-      commit: "create git commit",
-      pull: "pull git changes",
-      push: "push git changes",
-      fetch: "fetch git changes",
-      merge: "merge git changes",
-      rebase: "rebase git branch",
-      add: "stage git changes",
-      restore: "restore git files",
-      reset: "reset git state",
-      stash: "stash git changes",
+      status: "git status",
+      diff: "git diff",
+      log: "git log",
+      show: "git show",
+      branch: "git branch",
+      checkout: "git checkout",
+      switch: "git switch",
+      commit: "git commit",
+      pull: "git pull",
+      push: "git push",
+      fetch: "git fetch",
+      merge: "git merge",
+      rebase: "git rebase",
+      add: "git add",
+      restore: "git restore",
+      reset: "git reset",
+      stash: "git stash",
     };
 
     const mappedSummary = sub ? map[sub] : undefined;
@@ -92,9 +89,9 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
       return mappedSummary;
     }
     if (!sub || sub.startsWith("/") || sub.startsWith("~") || sub.includes("/")) {
-      return gitCwd ? `run git command in ${gitCwd}` : "run git command";
+      return gitCwd ? `git (in ${gitCwd})` : "git";
     }
-    return `run git ${sub}`;
+    return `git ${sub}`;
   }
 
   if (bin === "grep" || bin === "rg" || bin === "ripgrep") {
@@ -163,34 +160,43 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
             "--generate",
           ]),
     ]);
+    const searchBin = bin === "ripgrep" ? "rg" : bin;
     if (bin !== "grep" && options.has("--files")) {
-      const target = positional.at(-1);
-      return target ? `list files in ${target}` : "list files";
+      const targetDisplay = formatShellArgForDisplay(positional.at(-1));
+      return targetDisplay ? `${searchBin} --files ${targetDisplay}` : `${searchBin} --files`;
     }
     const explicitPattern = ["-e", "--regexp", "-f", "--file"].some((name) => options.has(name));
     const pattern =
       options.get("-e") ?? options.get("--regexp") ?? (explicitPattern ? undefined : positional[0]);
     const target = explicitPattern || positional.length > 1 ? positional.at(-1) : undefined;
+    const targetDisplay = formatShellArgForDisplay(target);
     if (pattern) {
       if (isUnsafeSearchSummaryPattern(pattern)) {
-        return target ? `search text in ${target}` : "search text";
+        return targetDisplay ? `search text in ${targetDisplay}` : "search text";
       }
-      return target ? `search "${pattern}" in ${target}` : `search "${pattern}"`;
+      // Render the literal command so agents never copy prose back as a command;
+      // dash-leading patterns keep their explicit `-e` so the label stays runnable.
+      const quotedPattern = formatShellArgForDisplay(pattern) ?? pattern;
+      const patternDisplay = pattern.startsWith("-") ? `-e ${quotedPattern}` : quotedPattern;
+      return targetDisplay
+        ? `${searchBin} ${patternDisplay} ${targetDisplay}`
+        : `${searchBin} ${patternDisplay}`;
     }
-    return target ? `search text in ${target}` : "search text";
+    return targetDisplay ? `search text in ${targetDisplay}` : "search text";
   }
 
   if (bin === "find") {
     const path = words[1] && !words[1].startsWith("-") ? words[1] : ".";
     const name = optionValue(words, ["-name", "-iname"]);
-    return name ? `find files named "${name}" in ${path}` : `find files in ${path}`;
+    const pathDisplay = formatShellArgForDisplay(path) ?? path;
+    const nameDisplay = formatShellArgForDisplay(name);
+    return nameDisplay ? `find ${pathDisplay} -name ${nameDisplay}` : `find ${pathDisplay}`;
   }
 
-  const fileCommand = FILE_COMMAND_LABELS.get(bin);
-  if (fileCommand) {
-    const [prefix, fallback] = fileCommand;
+  if (FILE_COMMANDS.has(bin)) {
     const target = parseShellOptions(words).positional[0];
-    return target ? `${prefix} ${target}` : fallback;
+    const targetDisplay = formatShellArgForDisplay(target);
+    return targetDisplay ? `${bin} ${targetDisplay}` : bin;
   }
 
   if (bin === "head" || bin === "tail") {
@@ -205,18 +211,16 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
     if (target && /^\d+$/.test(target) && positional.length === 1) {
       target = undefined;
     }
-    const side = bin === "head" ? "first" : "last";
-    const unit = lines === "1" ? "line" : "lines";
     if (lines && target) {
-      return `show ${side} ${lines} ${unit} of ${target}`;
+      return `${bin} -n ${lines} ${formatShellArgForDisplay(target) ?? target}`;
     }
     if (lines) {
-      return `show ${side} ${lines} ${unit}`;
+      return `${bin} -n ${lines}`;
     }
     if (target) {
-      return `show ${target}`;
+      return `${bin} ${formatShellArgForDisplay(target) ?? target}`;
     }
-    return `show ${bin} output`;
+    return bin;
   }
 
   if (bin === "sed") {
@@ -230,16 +234,18 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
       const range = compact.match(/^([0-9]+),([0-9]+)p$/);
       if (range) {
         return target
-          ? `print lines ${range[1]}-${range[2]} from ${target}`
-          : `print lines ${range[1]}-${range[2]}`;
+          ? `sed -n '${range[1]},${range[2]}p' ${formatShellArgForDisplay(target) ?? target}`
+          : `sed -n '${range[1]},${range[2]}p'`;
       }
       const single = compact.match(/^([0-9]+)p$/);
       if (single) {
-        return target ? `print line ${single[1]} from ${target}` : `print line ${single[1]}`;
+        return target
+          ? `sed -n '${single[1]}p' ${formatShellArgForDisplay(target) ?? target}`
+          : `sed -n '${single[1]}p'`;
       }
     }
 
-    return target ? `run sed on ${target}` : "run sed transform";
+    return target ? `sed ${formatShellArgForDisplay(target) ?? target}` : "sed";
   }
 
   if (bin === "printf" || bin === "echo") {
@@ -481,7 +487,8 @@ function formatCwdSuffix(cwd: string): string | undefined {
 }
 
 function summarizeExecCommand(command: string): ExecSummary | undefined {
-  const { command: cleaned, chdirPath } = stripShellPreamble(command);
+  const sanitizedCommand = stripTrailingLocationNote(command);
+  const { command: cleaned, chdirPath } = stripShellPreamble(sanitizedCommand);
   if (!cleaned) {
     return chdirPath ? { text: "", chdirPath } : undefined;
   }

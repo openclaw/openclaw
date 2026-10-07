@@ -24,6 +24,16 @@ import type { ResolvedSmsAccount, SmsChannelConfig } from "./types.js";
 const CHANNEL_ID = "sms";
 const DEFAULT_WEBHOOK_PATH = "/webhooks/sms";
 const DEFAULT_TEXT_CHUNK_LIMIT = 1500;
+const INTERNAL_SMS_AUTOMATION_BYPASS_ENV_KEYS = [
+  "TWILIO_PHONE_NUMBER",
+  "TWILIO_SMS_FROM",
+  "PIERCE_TWILIO_NUMBER",
+  "LINDSEY_TWILIO_NUMBER",
+  "KIMBERLY_TWILIO_NUMBER",
+  "BECKY_TWILIO_NUMBER",
+  "BRETT_TWILIO_NUMBER",
+  "SARAH_TWILIO_NUMBER",
+] as const;
 
 function getChannelConfig(cfg: OpenClawConfig): SmsChannelConfig | undefined {
   return cfg?.channels?.[CHANNEL_ID] as SmsChannelConfig | undefined;
@@ -51,6 +61,16 @@ function parseTextChunkLimit(raw: unknown): number {
     return parseStrictPositiveInteger(raw.trim()) ?? DEFAULT_TEXT_CHUNK_LIMIT;
   }
   return DEFAULT_TEXT_CHUNK_LIMIT;
+}
+
+function mergeNormalizedLists(...lists: string[][]): string[] {
+  return [...new Set(lists.flat().filter(Boolean))];
+}
+
+function resolveInternalSmsAutomationBypassFromEnv(): string[] {
+  return mergeNormalizedLists(
+    ...INTERNAL_SMS_AUTOMATION_BYPASS_ENV_KEYS.map((key) => parseList(process.env[key])),
+  );
 }
 
 function firstNonBlankEnv(...values: Array<string | undefined>): string | undefined {
@@ -114,6 +134,9 @@ function readSmsAccount(
   const envWebhookPath = useEnvFallbacks ? process.env.SMS_WEBHOOK_PATH : undefined;
   const envPublicWebhookUrl = useEnvFallbacks ? process.env.SMS_PUBLIC_WEBHOOK_URL : undefined;
   const envAllowFrom = useEnvFallbacks ? process.env.SMS_ALLOWED_USERS : undefined;
+  const envAutomationBypassFrom = useEnvFallbacks
+    ? process.env.SMS_AUTOMATION_BYPASS_FROM
+    : undefined;
   const envTextChunkLimit = useEnvFallbacks ? process.env.SMS_TEXT_CHUNK_LIMIT : undefined;
   const envDisableSignatureValidation = useEnvFallbacks
     ? process.env.SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION
@@ -144,6 +167,10 @@ function readSmsAccount(
       envDisableSignatureValidation === "true",
     dmPolicy: merged.dmPolicy ?? "pairing",
     allowFrom: parseList(merged.allowFrom ?? envAllowFrom),
+    automationBypassFrom: mergeNormalizedLists(
+      parseList(merged.automationBypassFrom ?? envAutomationBypassFrom),
+      resolveInternalSmsAutomationBypassFromEnv(),
+    ),
     textChunkLimit: parseTextChunkLimit(merged.textChunkLimit ?? envTextChunkLimit),
     mediaMaxBytes: resolveChannelMediaMaxBytes({
       cfg,
