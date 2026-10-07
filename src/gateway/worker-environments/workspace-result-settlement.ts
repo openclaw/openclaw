@@ -1,3 +1,5 @@
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PreparedWorkerWorkspaceRecovery } from "./placement-reclaim-contract.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -5,6 +7,7 @@ import type {
 } from "./placement-store.js";
 import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
 import { sessionWorkspaceRoot, type WorkerSessionWorkspace } from "./session-workspace.js";
+import { boundedWorkerError } from "./worker-error.js";
 import {
   projectWorkspaceResultConflict,
   type WorkerWorkspaceConflictReport,
@@ -15,6 +18,32 @@ import {
   isWorkerWorkspaceResultCleanupRef,
   moveStagedWorkerWorkspaceResultToCleanup,
 } from "./workspace-result-staging.js";
+
+const log = createSubsystemLogger("gateway/worker-placement");
+
+export async function resolvePriorWorkspaceResultConflict(
+  resolve: PreparedWorkerWorkspaceRecovery["resolveConflict"],
+  placement: {
+    sessionId: string;
+    workspaceResultConflict?: WorkerWorkspaceResultConflict;
+  },
+): Promise<WorkerWorkspaceResultConflict | undefined> {
+  if (placement.workspaceResultConflict) {
+    return placement.workspaceResultConflict;
+  }
+  const lookup = await resolve();
+  if (lookup.kind === "conflict") {
+    return lookup.conflict;
+  }
+  if (lookup.kind === "unknown") {
+    log.warn(
+      `Cloud workspace conflict state unknown sessionId=${boundedWorkerError(placement.sessionId, 128)} reason=${lookup.reason}; preserving prior conflict state`,
+    );
+    // Undefined means no prior knowledge to finalizeWorkspaceResultConflicts: it cannot
+    // clear the retained report or delete its unseen staged ref. The warning signals this.
+  }
+  return undefined;
+}
 
 type OwnedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }>;
 

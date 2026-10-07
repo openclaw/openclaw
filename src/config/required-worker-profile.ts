@@ -1,3 +1,4 @@
+import type { SessionMoveTarget } from "../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 export class RequiredWorkerProfileError extends Error {
@@ -59,6 +60,24 @@ export function assertRequiredWorkerDispatch(
     request.os !== undefined
   ) {
     throw new RequiredWorkerProfileError(`Gateway policy requires worker profile "${required}".`);
+  }
+}
+
+export function assertRequiredWorkerMove(
+  config: Pick<OpenClawConfig, "cloudWorkers">,
+  target: SessionMoveTarget,
+): void {
+  const required = config.cloudWorkers?.requiredProfile;
+  if (
+    required &&
+    (target.kind !== "profile" ||
+      target.profileId !== required ||
+      target.machineClass !== undefined ||
+      target.os !== undefined)
+  ) {
+    throw new RequiredWorkerProfileError(
+      "Session placement changes are disabled by the required worker profile policy.",
+    );
   }
 }
 

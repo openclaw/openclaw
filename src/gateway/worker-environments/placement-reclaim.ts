@@ -3,7 +3,6 @@ import {
   isExactAttachedEnvironment,
   type WorkerDispatchPlacement,
 } from "./placement-dispatch-failure.js";
-import { resolvePriorWorkspaceResultConflict } from "./placement-dispatch-pending-results.js";
 import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
 import type {
   WorkerPlacementReclaimBarriers,
@@ -31,6 +30,7 @@ import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   createWorkspaceResultJournal,
   finalizeWorkspaceResultConflicts,
+  resolvePriorWorkspaceResultConflict,
   settleStagedWorkspaceResult,
 } from "./workspace-result-settlement.js";
 import {

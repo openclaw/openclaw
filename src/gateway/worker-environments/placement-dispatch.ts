@@ -551,31 +551,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         ]),
       ];
     },
-    move: async (
-      request: WorkerPlacementMoveRequest,
-      onTransition?: (placement: WorkerDispatchPlacement) => void,
-      authorize?: WorkerPlacementAuthorization,
-      signal?: AbortSignal,
-    ) => {
-      const assertCurrent = () => {
-        signal?.throwIfAborted();
-        authorize?.();
-        const required = getRuntimeConfig().cloudWorkers?.requiredProfile;
-        if (
-          required &&
-          (request.target.kind !== "profile" ||
-            request.target.profileId !== required ||
-            request.target.machineClass !== undefined ||
-            request.target.os !== undefined)
-        ) {
-          throw new RequiredWorkerProfileError(
-            "Session placement changes are disabled by the required worker profile policy.",
-          );
-        }
-      };
-      assertCurrent();
-      return await moveService.move(request, onTransition, assertCurrent, signal);
-    },
+    move: moveService.move,
     reclaim,
     reconcile: recovery.reconcile,
     reconcileActive: recovery.reconcileActive,

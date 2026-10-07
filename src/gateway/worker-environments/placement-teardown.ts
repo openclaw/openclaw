@@ -3,6 +3,7 @@ import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
+import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
 
 type PlacementTeardownStore = Pick<
   WorkerSessionPlacementStore,
@@ -16,6 +17,8 @@ export async function completeRecoveredWorkspaceTeardown(params: {
   placements: PlacementTeardownStore & Pick<WorkerSessionPlacementStore, "getPlacementMoveAsync">;
   placement: Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }>;
   turnClaim: WorkerSessionTurnClaim;
+  destination?: "reclaimed";
+  currentCheck?: PlacementTurnClaimCurrentCheck;
 }) {
   const move = await params.placements.getPlacementMoveAsync(params.placement.sessionId);
   return completeWorkerWorkspaceTeardown({
@@ -23,7 +26,8 @@ export async function completeRecoveredWorkspaceTeardown(params: {
     turnClaim: params.turnClaim,
     environmentId: params.placement.environmentId,
     ownerEpoch: params.placement.activeOwnerEpoch,
-    operationId: move?.operationId,
+    operationId: params.destination === "reclaimed" ? undefined : move?.operationId,
+    currentCheck: params.currentCheck,
   });
 }
 
@@ -34,8 +38,13 @@ export async function completeWorkerWorkspaceTeardown(params: {
   environmentId: string;
   ownerEpoch: number;
   operationId?: string;
+  currentCheck?: PlacementTurnClaimCurrentCheck;
 }): Promise<Extract<WorkerSessionPlacementRecord, { state: "local" | "reclaimed" }>> {
-  const drained = await params.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim);
+  const drained = await params.placements.completeWorkspaceResultAndReleaseTurn(
+    params.turnClaim,
+    undefined,
+    params.currentCheck,
+  );
   if (
     drained.state !== "draining" ||
     drained.environmentId !== params.environmentId ||
