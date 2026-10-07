@@ -284,6 +284,37 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("honors immediate wake overrides from mapped hook transforms", async () => {
+    await writeHookTransformModule(
+      "immediate-wake.mjs",
+      'export default () => ({ mode: "now", wakeMode: "now" });',
+    );
+    configureHooks({
+      mappings: [
+        {
+          match: { path: "immediate-wake" },
+          action: "wake",
+          textTemplate: "Immediate notification",
+          wakeMode: "next-heartbeat",
+          transform: { module: "immediate-wake.mjs" },
+        },
+        agentMapping("immediate-agent", {
+          wakeMode: "next-heartbeat",
+          transform: { module: "immediate-wake.mjs" },
+        }),
+      ],
+    });
+    await withGatewayServer(async ({ port }) => {
+      const wake = await postHook(port, "immediate-wake", {});
+      expect.soft(await wake.json()).toMatchObject({ mode: "now", eventOutcome: "queued" });
+      drainSystemEvents(resolveMainKey());
+
+      mockIsolatedRunOk();
+      await postHook(port, "immediate-agent", { subject: "Immediate completion" });
+      expect(cronRunCall().job.wakeMode).toBe("now");
+    });
+  });
+
   test("does not let mapped hook payload source claim gmail provenance", async () => {
     configureHooks({
       allowedSessionKeyPrefixes: ["hook:"],

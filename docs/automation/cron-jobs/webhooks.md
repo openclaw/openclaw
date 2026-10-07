@@ -176,6 +176,8 @@ limits, routing policy, and error responses.
   <Accordion title="Mapped hooks (POST /hooks/<name>)">
     Custom paths resolve through `hooks.mappings`. The first matching mapping wins, ahead of presets. Templates or trusted local JS/TS transforms turn the payload into `wake` or `agent` actions; a transform returning `null` produces HTTP `204` without a run. See [Mapping details](/gateway/config-hooks#mapping-details).
 
+    A transform can override the configured wake timing in either direction: return `mode: "now"` or `mode: "next-heartbeat"` for a wake action, or the corresponding `wakeMode` for an agent action.
+
     Persistent mapped hooks require a stable mapping `sessionKey` or `hooks.defaultSessionKey`. Template-derived keys require the same caller-key opt-in and prefix policy as request keys.
 
     `forEach: "<key>"` fans out over a top-level payload array. Each item sees a one-element array, so the Gmail preset's `messages[0]` means the current email. Agent fan-out admission answers after at most about 8 seconds of dispatch waiting; pending items continue in the background and a partial batch returns non-2xx. Retrying the same batch reuses pending or admitted agent items while the bounded in-memory replay cache retains them. It is not durable exactly-once delivery; mapped wake actions have no replay identity, and the queue may coalesce repeated wakes. The reference covers batch caps and response shapes.
