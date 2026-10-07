@@ -243,7 +243,17 @@ export async function runReplyAgent(
   // New steering must not reuse a terminal source claim. Compare the active
   // source identity so unrelated retained tombstones still permit steering.
   // The parked admission owner rechecks after any predecessor wait.
+  // Retain the exact guarded direct capability for both source identity and injection.
+  const capturedDirectInjectionTarget =
+    effectiveShouldSteer &&
+    isActive &&
+    !activeReplyOperation &&
+    !shouldQueueProvidedSteer &&
+    messageInjectionDisposition === "none"
+      ? (replyRunRegistry.resolveCurrentMessageInjectionTarget(queueKey) ?? null)
+      : undefined;
   const activeSourceTurnId =
+    normalizeOptionalString(capturedDirectInjectionTarget?.sourceTurnId) ??
     replyRunRegistry.getSourceTurnId(sessionKey ?? "") ??
     normalizeOptionalString(restartRecoveryEntry?.restartRecoveryDeliverySourceRunId) ??
     "";
@@ -348,6 +358,7 @@ export async function runReplyAgent(
       followupRun,
       opts,
       providedReplyOperation: activeReplyOperation,
+      providedDirectInjectionTarget: capturedDirectInjectionTarget,
       queueKey,
       releaseAdmissionTicket,
       replyOperationRunState,

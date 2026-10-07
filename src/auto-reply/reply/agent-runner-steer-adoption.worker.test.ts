@@ -118,6 +118,179 @@ it("adopts active steering through prepared policy without caller-thread SQL", a
   });
 });
 
+it("late policy rejects a changed ReplyOperation", async ({ signal }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const key = "agent:main:late-policy-owner";
+    const run = createQueueTestRun({
+      prompt: "preserve the request",
+      messageId: "late-policy-inbound",
+      originatingChannel: "webchat",
+    });
+    Object.assign(run.run, {
+      agentId: "main",
+      sessionKey: key,
+      senderIsOwner: true,
+      config: {
+        agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } },
+        tools: { sandbox: { tools: { deny: ["exec"] } } },
+      },
+    });
+    const operation = createTestReplyOperation({ sessionKey: key, sessionId: run.run.sessionId });
+    await operation.bindToolAuthoritySnapshotAsync(
+      replyToolAuthority.prepareReplyToolAuthority(run),
+    );
+    const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
+    const queueCalls: string[] = [];
+    const delivered: string[] = [];
+    const transcriptConfirmations: string[] = [];
+    operation.attachBackend({
+      kind: "embedded",
+      cancel() {},
+      toolAuthorityFingerprint: fingerprint,
+      messageInjectionV2: {
+        version: 2,
+        isAvailable: () => true,
+        async queueMessage() {
+          throw new Error("Expected prepared steering");
+        },
+        async queueMessageAsync(text, options, preparation) {
+          queueCalls.push(text);
+          const recorder = options?.userTurnTranscriptRecorder;
+          const confirm = recorder?.confirmSteerTargetRunIdForPersistence;
+          if (recorder && confirm) {
+            recorder.confirmSteerTargetRunIdForPersistence = async (targetRunId) => {
+              transcriptConfirmations.push(targetRunId);
+              await confirm(targetRunId);
+            };
+          }
+          await preparation.prepareCurrent();
+          preparation.assertCurrent();
+          delivered.push(text);
+          options?.onQueueAccepted?.(true);
+        },
+      },
+    });
+    operation.setPhase("running");
+    const authoritySelected = createDeferred();
+    const policyHeld = createDeferred();
+    const releasePolicy = createDeferred();
+    let selected = false;
+    let held = false;
+    const resolveAuthority = steeringAuthority.resolveReplySteeringAuthority;
+    vi.spyOn(steeringAuthority, "resolveReplySteeringAuthority").mockImplementation(
+      async (...args) => {
+        const result = await resolveAuthority(...args);
+        selected = true;
+        authoritySelected.resolve();
+        return result;
+      },
+    );
+    const resolveFingerprint = replyToolAuthority.resolveFollowupRunToolAuthorityFingerprintAsync;
+    vi.spyOn(
+      replyToolAuthority,
+      "resolveFollowupRunToolAuthorityFingerprintAsync",
+    ).mockImplementation(async (...args) => {
+      const result = await resolveFingerprint(...args);
+      if (selected && !held) {
+        held = true;
+        policyHeld.resolve();
+        await withinTest(releasePolicy.promise, signal);
+      }
+      return result;
+    });
+    const typing = createMockTypingController();
+    const resultState: ReplyOperationRunState = {};
+    const releaseAdmissionTicket = vi.fn();
+    const followup = vi.fn(async () => {});
+    const outcome = runActiveReplySteer({
+      followupRun: run,
+      opts: { runId: "late-policy-inbound" },
+      providedReplyOperation: operation,
+      queueKey: key,
+      releaseAdmissionTicket,
+      replyOperationRunState: resultState,
+      resolvedQueue: { mode: "steer", debounceMs: 0 },
+      restartRecoverySourceTurnId: undefined,
+      runFollowup: followup,
+      sessionCtx: {},
+      sessionKey: key,
+      touchActiveSessionEntry: async () => {},
+      typing,
+      typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+    });
+    const settlement = outcome.then(
+      () => {},
+      () => {},
+    );
+    let replacement: ReturnType<typeof createTestReplyOperation> | undefined;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(policyHeld.promise, outcome, "late policy gate was not reached"),
+        signal,
+      );
+      await withinTest(authoritySelected.promise, signal);
+      expect(replyRunRegistry.get(key)).toBe(operation);
+      operation.complete();
+      const admission = await admitReplyTurn({
+        agentId: "main",
+        sessionId: run.run.sessionId,
+        sessionKey: key,
+        kind: "queued_followup",
+        resetTriggered: false,
+      });
+      if (admission.status !== "owned") {
+        throw new Error("Replacement ReplyOperation was not admitted");
+      }
+      replacement = admission.operation;
+      await replacement.bindToolAuthoritySnapshotAsync(
+        replyToolAuthority.prepareReplyToolAuthority(run),
+      );
+      const replacementFingerprint = await replacement.bindToolAuthorityRouteAsync(run.run);
+      const replacementQueueCalls: string[] = [];
+      const replacementDelivered: string[] = [];
+      replacement.attachBackend({
+        kind: "embedded",
+        runId: "late-policy-replacement",
+        cancel() {},
+        toolAuthorityFingerprint: replacementFingerprint,
+        messageInjectionV2: {
+          version: 2,
+          isAvailable: () => true,
+          async queueMessage() {
+            throw new Error("Expected prepared replacement steering");
+          },
+          async queueMessageAsync(text, options, preparation) {
+            replacementQueueCalls.push(text);
+            await preparation.prepareCurrent();
+            preparation.assertCurrent();
+            replacementDelivered.push(text);
+            options?.onQueueAccepted?.(true);
+          },
+        },
+      });
+      replacement.setPhase("running");
+      expect(replyRunRegistry.get(key)).toBe(replacement);
+      releasePolicy.resolve();
+      await expect(outcome).rejects.toThrow("Reply owner changed during steering admission");
+      expect(queueCalls).toEqual([]);
+      expect(delivered).toEqual([]);
+      expect(replacementQueueCalls).toEqual([]);
+      expect(replacementDelivered).toEqual([]);
+      expect(transcriptConfirmations).toEqual([]);
+      expect(releaseAdmissionTicket).toHaveBeenCalledOnce();
+      expect(replyRunRegistry.get(key)).toBe(replacement);
+      replacement.complete();
+    } finally {
+      releasePolicy.resolve();
+      await settlement;
+      replacement?.complete();
+      operation.complete();
+      clearFollowupQueue(key);
+      clearFollowupDrainCallback(key);
+    }
+  });
+});
+
 it.for(
   (["initial-injection", "native-backend", "native-backend-partial"] as const).flatMap((phase) =>
     (["terminal-pending", "matching-tombstone", "unrelated-tombstone"] as const).map((change) => ({

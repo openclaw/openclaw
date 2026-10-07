@@ -30,6 +30,7 @@ import type { ReplyMessageInjectionRejectionReason } from "./reply-run-registry.
 import {
   beginReplyMessageInjectionTarget,
   finalizeReplyMessageInjectionAttempt,
+  type ReplyMessageInjectionTarget,
   type ReplyOperation,
   replyRunRegistry,
 } from "./reply-run-registry.js";
@@ -53,6 +54,7 @@ type ActiveReplySteerParams = {
   followupRun: RunReplyAgentParams["followupRun"];
   opts: RunReplyAgentParams["opts"];
   providedReplyOperation: ReplyOperation | undefined;
+  providedDirectInjectionTarget?: ReplyMessageInjectionTarget | null;
   queueKey: string;
   releaseAdmissionTicket: () => void;
   replyOperationRunState: ReplyOperationRunState | undefined;
@@ -112,6 +114,19 @@ export async function runActiveReplySteer(
   // would miss the live target run.
   const activeReplyOperation = params.providedReplyOperation;
   const activeReplyKey = activeReplyOperation?.key;
+  const isCapturedReplyOwnerCurrent = () =>
+    activeReplyOperation
+      ? activeReplyKey !== undefined &&
+        activeReplyOperation.key === activeReplyKey &&
+        replyRunRegistry.get(activeReplyKey) === activeReplyOperation
+      : replyRunRegistry.get(queueKey) === undefined;
+  // Keep the exact guarded direct target across parked admission and policy preparation.
+  const directInjectionTarget =
+    !activeReplyOperation && isCapturedReplyOwnerCurrent()
+      ? params.providedDirectInjectionTarget === undefined
+        ? replyRunRegistry.resolveCurrentMessageInjectionTarget(queueKey)
+        : (params.providedDirectInjectionTarget ?? undefined)
+      : undefined;
   const readGeneration = getAgentEventLifecycleGeneration();
   const assertReadCurrent = () => {
     assertAgentRunLifecycleGenerationCurrent(readGeneration);
@@ -183,23 +198,25 @@ export async function runActiveReplySteer(
     if (admission === "fallback") {
       return await fallback("admission-changed");
     }
-    if (
-      !activeReplyOperation ||
-      activeReplyKey === undefined ||
-      activeReplyOperation.key !== activeReplyKey ||
-      replyRunRegistry.get(activeReplyKey) !== activeReplyOperation ||
-      !(await waitForReplyOperationBackend(
-        activeReplyOperation,
-        resolveFollowupAbortSignal(followupRun),
-      )) ||
-      activeReplyOperation.key !== activeReplyKey ||
-      replyRunRegistry.get(activeReplyKey) !== activeReplyOperation
-    ) {
-      return await fallback("reply-owner-ended");
+    let injectionTarget = directInjectionTarget;
+    if (activeReplyOperation) {
+      if (
+        activeReplyKey === undefined ||
+        !isCapturedReplyOwnerCurrent() ||
+        !(await waitForReplyOperationBackend(
+          activeReplyOperation,
+          resolveFollowupAbortSignal(followupRun),
+        )) ||
+        !isCapturedReplyOwnerCurrent()
+      ) {
+        return await fallback("reply-owner-ended");
+      }
+      steerSessionId = activeReplyOperation.sessionId;
+      // Policy preparation must not retarget input to a replacement backend.
+      injectionTarget = replyRunRegistry.resolveCurrentMessageInjectionTarget(activeReplyKey);
+    } else if (!isCapturedReplyOwnerCurrent()) {
+      return await fallback("reply-owner-ended", directInjectionTarget?.runId);
     }
-    steerSessionId = activeReplyOperation.sessionId;
-    // Policy preparation must not retarget input to a replacement backend.
-    const injectionTarget = replyRunRegistry.resolveCurrentMessageInjectionTarget(activeReplyKey);
     if (!injectionTarget) {
       return await fallback("injection_unavailable");
     }
@@ -218,10 +235,7 @@ export async function runActiveReplySteer(
       assertReadCurrent,
     );
     assertReadCurrent();
-    if (
-      activeReplyOperation.key !== activeReplyKey ||
-      replyRunRegistry.get(activeReplyKey) !== activeReplyOperation
-    ) {
+    if (!isCapturedReplyOwnerCurrent()) {
       return await fallback("reply-owner-ended", injectionTarget.runId);
     }
     if (steeringAuthority.shouldQueueAuthorityMismatch) {
@@ -231,13 +245,16 @@ export async function runActiveReplySteer(
     const isCurrentFallback = () =>
       !automaticFallbackRoute ||
       (activeReplyOperation?.automaticFallbackRoute === automaticFallbackRoute &&
-        activeReplyOperation.toolAuthorityRoute?.provider === automaticFallbackRoute.provider &&
-        activeReplyOperation.toolAuthorityRoute.model === automaticFallbackRoute.model);
+        activeReplyOperation?.toolAuthorityRoute?.provider === automaticFallbackRoute.provider &&
+        activeReplyOperation?.toolAuthorityRoute?.model === automaticFallbackRoute.model);
     if (!isCurrentFallback()) {
       return await fallback("model-fallback-changed", injectionTarget.runId);
     }
     const assertSourceCurrent = () => {
       assertReadCurrent();
+      if (!isCapturedReplyOwnerCurrent()) {
+        throw new Error("Reply owner changed during steering admission");
+      }
       if (!isCurrentFallback()) {
         throw new Error("Automatic model fallback changed during steering admission");
       }

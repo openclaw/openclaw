@@ -641,16 +641,21 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
     `test/fixtures/vitest-runner-task-updates.${part}.mjs`,
     ["test/scripts/vitest-runner-task-updates.test.ts"],
   ]),
-  ...[
+  [
     "src/system-agent/setup-inference-turn.ts",
-    "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
-  ].map<[string, string[]]>((sourcePath) => [
-    sourcePath,
     [
       "src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts",
       "src/commands/onboard-guided.inference.e2e.test.ts",
     ],
-  ]),
+  ],
+  [
+    "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
+    [
+      "src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts",
+      "src/commands/onboard-guided.inference.e2e.test.ts",
+      "src/agents/embedded-agent-runner/run/run-attempt-dispatch.owner.test.ts",
+    ],
+  ],
   [
     "src/plugins/contracts/tts-contract-suites.ts",
     [
