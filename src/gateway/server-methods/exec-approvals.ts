@@ -42,14 +42,7 @@ function requireApprovalsBaseHash(
   // Approval allowlists are admin-editable state. Require the caller's last
   // observed hash before writing so stale UI tabs cannot overwrite changes.
   const baseHash = resolveBaseHashParam(params);
-  if (!snapshot.exists) {
-    if (baseHash && baseHash !== snapshot.hash) {
-      respondApprovalsChanged(respond);
-      return false;
-    }
-    return true;
-  }
-  if (!snapshot.hash || !baseHash) {
+  if (snapshot.exists && (!snapshot.hash || !baseHash)) {
     respond(
       false,
       undefined,
@@ -60,7 +53,7 @@ function requireApprovalsBaseHash(
     );
     return false;
   }
-  if (baseHash !== snapshot.hash) {
+  if (baseHash && baseHash !== snapshot.hash) {
     respondApprovalsChanged(respond);
     return false;
   }

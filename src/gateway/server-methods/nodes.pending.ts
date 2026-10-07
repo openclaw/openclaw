@@ -49,14 +49,14 @@ function resolveAllowedPendingNodeActions(params: {
     caps: connect?.caps,
     commands: declaredCommands,
   });
-  const allowed = pending.filter((entry) => {
-    const result = isNodeCommandAllowed({
-      command: entry.command,
-      declaredCommands,
-      allowlist,
-    });
-    return result.ok;
-  });
+  const allowed = pending.filter(
+    (entry) =>
+      isNodeCommandAllowed({
+        command: entry.command,
+        declaredCommands,
+        allowlist,
+      }).ok,
+  );
   if (allowed.length !== pending.length) {
     replacePendingNodeActionsForGeneration({
       nodeId: params.nodeId,

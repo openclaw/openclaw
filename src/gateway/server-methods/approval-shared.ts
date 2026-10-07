@@ -413,9 +413,7 @@ export async function handlePendingApprovalRequest<
     if (
       params.requireDeliveryRoute !== false &&
       !params.keepPendingWithoutRoute &&
-      !hasApprovalClients &&
-      !hasTurnSourceRoute &&
-      !delivered
+      deliveryRoute === "none"
     ) {
       try {
         noRouteWon = await params.manager.expire(params.record.id, "no-approval-route");
