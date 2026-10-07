@@ -33,12 +33,7 @@ export function resolveYamlOcPath(ast: YamlAst, path: OcPath): YamlOcPathMatch |
     return { kind: "root", node: ast };
   }
 
-  const root = ast.doc.contents;
-  if (root === null) {
-    return null;
-  }
-
-  return walkNode(root, segments, 0, []);
+  return walkNode(ast.doc.contents, segments, 0, []);
 }
 
 function walkNode(

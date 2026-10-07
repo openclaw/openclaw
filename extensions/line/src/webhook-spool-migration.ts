@@ -1,4 +1,3 @@
-// Line plugin module converts pre-drain spool rows to the canonical queue contract.
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";

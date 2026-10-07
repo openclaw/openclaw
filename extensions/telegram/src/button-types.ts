@@ -213,7 +213,6 @@ function chunkInteractiveButtons(
   flush();
 }
 
-/** Convert portable presentation controls to Telegram inline keyboard rows. */
 export function buildTelegramPresentationButtons(
   presentation?: MessagePresentation,
   options?: TelegramButtonBuildOptions,

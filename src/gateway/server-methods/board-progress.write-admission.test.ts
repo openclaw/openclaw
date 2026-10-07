@@ -34,7 +34,7 @@ const methods = [
   "progressCard.put",
 ] as const;
 const cases = methods.flatMap((method) =>
-  (["allow", "abort", "guard", "route"] as const).map((change) => ({
+  (["allow", "guard"] as const).map((change) => ({
     method,
     change,
     cold: false,
@@ -51,7 +51,16 @@ describe("board and progress-card database write admission", () => {
         change: "allow-worker" as const,
         cold: false,
       })),
-    ...methods.map((method) => ({ method, change: "abort" as const, cold: true })),
+    ...(["board.update", "board.widget.grant", "progressCard.put"] as const).map((method) => ({
+      method,
+      change: "abort" as const,
+      cold: true,
+    })),
+    ...(["board.widget.put", "progressCard.put"] as const).map((method) => ({
+      method,
+      change: "route" as const,
+      cold: false,
+    })),
     { method: "progressCard.put" as const, change: "lifecycle" as const, cold: false },
   ])(
     "queues registered $method behind a native reservation ($change, cold=$cold)",
@@ -93,11 +102,9 @@ describe("board and progress-card database write admission", () => {
             : undefined;
         const previousSnapshot = previous ? await boardStore.getSnapshot(target) : undefined;
         const database = openOpenClawAgentDatabase({ agentId: target.agentId });
-        // The first-use schema transaction must respect the same reservation as its data write.
-        if (!previous) {
-          database.db.exec(
-            "DROP TABLE board_widgets; DROP TABLE board_tabs; DROP TABLE session_progress_cards;",
-          );
+        // Only progress cards remain optional; their first-use DDL shares write admission.
+        if (method === "progressCard.put") {
+          database.db.exec("DROP TABLE session_progress_cards;");
         }
         if (cold) {
           await closeOpenClawAgentDatabaseByPathAsync(database.path);
@@ -113,6 +120,17 @@ describe("board and progress-card database write admission", () => {
             database,
           );
         const previousTables = tables();
+        const boardRowCounts = () =>
+          withOpenClawAgentDatabaseReadOnly(
+            ({ db }) =>
+              db
+                .prepare(
+                  "SELECT (SELECT COUNT(*) FROM board_tabs WHERE session_key = ?) AS tabs, (SELECT COUNT(*) FROM board_widgets WHERE session_key = ?) AS widgets",
+                )
+                .get(target.sessionKey, target.sessionKey),
+            database,
+          );
+        const previousBoardRowCounts = boardRowCounts();
         const board = createBoardHarness(undefined, {}, boardStore, {
           getRuntimeConfig: () => cfg,
         });
@@ -198,7 +216,8 @@ describe("board and progress-card database write admission", () => {
         try {
           await entered.promise;
           await setImmediate();
-          expect(tables()).toEqual(previous ? previousTables : { found: true, value: [] });
+          expect(tables()).toEqual(previousTables);
+          expect(boardRowCounts()).toEqual(previousBoardRowCounts);
           expect(respond).not.toHaveBeenCalled();
           expect(board.broadcast).not.toHaveBeenCalled();
           expect(mutation).toHaveBeenCalledOnce();
@@ -231,7 +250,8 @@ describe("board and progress-card database write admission", () => {
         if (change !== "allow" && change !== "allow-worker") {
           expect(respond.mock.calls.some(([ok]) => ok)).toBe(false);
           expect(board.broadcast).not.toHaveBeenCalled();
-          expect(tables()).toEqual(previous ? previousTables : { found: true, value: [] });
+          expect(tables()).toEqual(previousTables);
+          expect(boardRowCounts()).toEqual(previousBoardRowCounts);
           if (previousSnapshot) {
             const unchanged = withOpenClawAgentDatabaseReadOnly(
               ({ db }) =>

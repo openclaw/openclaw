@@ -587,9 +587,6 @@ async function main(params: GatewayCpuRunParams = {}) {
   }
 }
 
-/**
- * Test-only access to the gateway CPU scenario parser and runner helpers.
- */
 export const testing = {
   parseArgs,
   runGatewayCpuScenarios,

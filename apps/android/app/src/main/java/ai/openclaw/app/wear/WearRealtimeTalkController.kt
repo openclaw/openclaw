@@ -57,7 +57,6 @@ internal fun chunkWearRealtimeOutput(
 ): List<ByteArray> {
   require(maxFrameBytes > 0 && maxFrameBytes % PCM_16_BYTES == 0)
   require(payload.size % PCM_16_BYTES == 0)
-  if (payload.isEmpty()) return emptyList()
   return buildList {
     var offset = 0
     while (offset < payload.size) {
@@ -269,39 +268,21 @@ internal class WearRealtimeTalkController(
     attemptId: String? = null,
   ): Boolean =
     lifecycleMutex.withLock {
-      var accepted = false
       val closingSession =
         synchronized(lifecycleStateLock) {
           if (nodeId != null && attemptId != null) rememberCanceledAttemptLocked(nodeId, attemptId)
           val owner = activeOwner
           val identityMatches =
-            when {
-              owner != null -> {
-                (nodeId == null || owner.nodeId == nodeId) &&
-                  (attemptId == null || owner.attemptId == attemptId)
-              }
-
-              nodeId != null && attemptId != null -> {
-                true
-              }
-
-              nodeId == null && attemptId == null -> {
-                true
-              }
-
-              else -> {
-                false
-              }
+            if (owner != null) {
+              (nodeId == null || owner.nodeId == nodeId) &&
+                (attemptId == null || owner.attemptId == attemptId)
+            } else {
+              (nodeId == null) == (attemptId == null)
             }
-          if (!identityMatches) {
-            null
-          } else {
-            accepted = true
-            sessionId.also { resetLocked() }
-          }
+          if (!identityMatches) return@withLock false
+          sessionId.also { resetLocked() }
         }
-      if (!accepted) return@withLock false
-      if (!closingSession.isNullOrBlank()) {
+      if (closingSession != null) {
         runCatching { closeGatewaySession(closingSession) }
       }
       true
@@ -314,7 +295,7 @@ internal class WearRealtimeTalkController(
           if (activeOwner != owner) return@withLock false
           sessionId.also { resetLocked() }
         }
-      if (!closingSession.isNullOrBlank()) {
+      if (closingSession != null) {
         scope.launch { runCatching { closeGatewaySession(closingSession) } }
       }
       true
@@ -452,8 +433,6 @@ internal class WearRealtimeTalkController(
       "toolCall" -> {
         handleToolCallEvent(owner, currentSessionId, obj)
       }
-
-      "toolResult" -> {}
 
       "error" -> {
         fail(
@@ -657,9 +636,8 @@ internal class WearRealtimeTalkController(
         expectedOwner = owner,
         expectedSessionId = activeSessionId,
       )
-      return false
     }
-    return true
+    return accepted
   }
 
   private fun startAppendLoop(
@@ -847,9 +825,8 @@ internal class WearRealtimeTalkController(
         if (expectedOwner != null && activeOwner != expectedOwner) return
         if (expectedSessionId != null && sessionId != expectedSessionId) return
         Log.w(TAG, message)
-        val currentSession = sessionId
         val currentOwner = activeOwner
-        closingSession = currentSession
+        closingSession = sessionId
         realtimeAgentCoordinator.resetTransport()
         setSnapshot(
           _snapshot.value.copy(
@@ -865,7 +842,7 @@ internal class WearRealtimeTalkController(
         conversation = emptyList()
         currentOwner
       }
-    closingSession?.takeIf(String::isNotBlank)?.let { session ->
+    closingSession?.let { session ->
       scope.launch { runCatching { closeGatewaySession(session) } }
     }
     closingOwner?.let(onForceCloseWatchChannel)

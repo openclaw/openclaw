@@ -500,6 +500,28 @@
   overflow: auto;
 }
 
+.model-setup-wizard__error {
+  position: relative;
+}
+
+.model-setup-wizard__error-text {
+  max-height: min(220px, 35dvh);
+  margin: 0;
+  padding-right: 32px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.5;
+  user-select: text;
+}
+
+.model-setup-wizard__error-copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
 .model-setup-wizard__footer {
   display: flex;
   justify-content: flex-end;
@@ -514,10 +536,7 @@
   }
 
   .model-setup__loading-icon,
-  .model-setup__loading-action {
-    align-self: flex-start;
-  }
-
+  .model-setup__loading-action,
   .model-setup__row > .btn {
     align-self: flex-start;
   }

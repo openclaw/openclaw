@@ -1,4 +1,4 @@
-import { lstat, realpath } from "node:fs/promises";
+import { lstat, realpath, rm } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 import { listAgentEntries, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -18,7 +18,6 @@ import {
   lstatMigrationPathIfExists,
   packageIdentityDigest,
   removeGeneratedPackageIfUnchanged,
-  removePackagePreview,
 } from "./migrate-package.js";
 import {
   assertPackageDestinationOutsideWorkspaces,
@@ -317,17 +316,15 @@ export async function buildClawMigrationPlan(params: {
     );
   }
   const packagePreview = await createPackagePreview(projected.packageFiles);
-  let loaded: Extract<Awaited<ReturnType<typeof readClawManifestFile>>, { ok: true }>;
   try {
-    const read = await readClawManifestFile(packagePreview);
-    if (!read.ok) {
+    const loaded = await readClawManifestFile(packagePreview);
+    if (!loaded.ok) {
       throw new ClawMigrationError(
         "generated_package_invalid",
-        read.diagnostics.map((diagnostic) => diagnostic.message).join("; "),
-        read.diagnostics[0]?.path,
+        loaded.diagnostics.map((diagnostic) => diagnostic.message).join("; "),
+        loaded.diagnostics[0]?.path,
       );
     }
-    loaded = read;
     const existingWorkspacePaths = configuredAgents
       .filter((entry) => entry.id !== agentId)
       .map((entry) => resolveAgentWorkspaceDir(params.config, entry.id, options.env));
@@ -445,7 +442,7 @@ export async function buildClawMigrationPlan(params: {
       ownershipFiles,
     };
   } finally {
-    await removePackagePreview(packagePreview);
+    await rm(packagePreview, { recursive: true, force: true });
   }
 }
 

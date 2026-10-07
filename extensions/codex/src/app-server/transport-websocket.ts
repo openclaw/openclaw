@@ -267,7 +267,6 @@ function connectCodexAppServerUnixSocket(socketPath: string): net.Socket {
   return net.createConnection(socketPath);
 }
 
-/** Resolves the canonical or explicitly configured Codex control socket. */
 export function resolveCodexAppServerUnixSocketPath(
   options: Pick<CodexAppServerStartOptions, "env" | "transport" | "url">,
 ): string | undefined {

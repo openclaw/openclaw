@@ -63,16 +63,6 @@ function buildDiscordComponentConversationLabel(params: {
   });
 }
 
-function resolveDiscordComponentChatType(interactionCtx: ComponentInteractionContext) {
-  if (interactionCtx.isDirectMessage) {
-    return "direct";
-  }
-  if (interactionCtx.isGroupDm) {
-    return "group";
-  }
-  return "channel";
-}
-
 export async function dispatchDiscordComponentEvent(params: {
   ctx: AgentComponentContext;
   interaction: AgentComponentInteraction;
@@ -103,7 +93,11 @@ export async function dispatchDiscordComponentEvent(params: {
     interaction,
     channelCtx,
   });
-  const chatType = resolveDiscordComponentChatType(interactionCtx);
+  const chatType = interactionCtx.isDirectMessage
+    ? "direct"
+    : interactionCtx.isGroupDm
+      ? "group"
+      : "channel";
   const senderName = interactionCtx.user.globalName ?? interactionCtx.user.username;
   const senderUsername = interactionCtx.user.username;
   const senderTag = formatDiscordUserTag(interactionCtx.user);

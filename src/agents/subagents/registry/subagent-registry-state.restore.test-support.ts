@@ -84,26 +84,25 @@ export function registerSubagentRestoreCacheCases(params: {
       const release = createDeferredCore();
       let reads = 0;
       vi.mocked(stateReads.executeExistingOpenClawStateRead).mockImplementation(
-        async (_options, command) => {
-          expect(command).toEqual({
-            type: "subagents.runs",
-            scope: { kind: "page", after: undefined },
-          });
+        async (_options, command, options) => {
+          expect(command).toEqual({ type: "subagents.restore" });
           const snapshot = structuredClone(canonical);
           if (++reads === 1) {
             entered.resolve();
             await release.promise;
           }
+          options?.onChunk?.(
+            [...snapshot.values()].map((restored) => ({
+              entry: restored,
+              version: "fixture-version",
+              createdAt: restored.createdAt,
+            })),
+          );
           return {
             ok: true,
-            type: "subagents.runs",
+            type: "subagents.restore",
             sourceAdmitted: true,
-            runs: snapshot,
-            versions: new Map([...snapshot.keys()].map((runId) => [runId, "fixture-version"])),
-            page: {
-              order: [...snapshot].map(([runId, row]) => [runId, row.createdAt] as const),
-              nextRunId: null,
-            },
+            count: snapshot.size,
           };
         },
       );

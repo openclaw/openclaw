@@ -84,12 +84,12 @@ export function isTranscriptGlobalAlias(
   const sessionHost = props.sessionHost ?? null;
   // Global-alias routing ignores the capped session list, which may omit the
   // canonical row. The scope gate keeps per-sender main threads direct.
-  const isGlobalAliasKey =
+  return (
     parseAgentSessionKey(props.sessionKey)?.rest === "global" ||
     (sessionHost !== null &&
       isUiGlobalScopeConfigured(sessionHost) &&
-      resolveUiGlobalAliasAgentId(sessionHost, props.sessionKey) !== null);
-  return isGlobalAliasKey;
+      resolveUiGlobalAliasAgentId(sessionHost, props.sessionKey) !== null)
+  );
 }
 
 export function resolveTranscriptAvatarPlacement(
@@ -122,7 +122,6 @@ export function resolveTranscriptAvatarPlacement(
     props.userId,
   );
   const isDirectThread = defaultAvatarPlacement === "footer";
-  // Subagent sessions omit avatars; direct chats use the footer, others the gutter.
   const avatarPlacement =
     activeSession?.classification === "subagent" || isSubagentSessionKey(props.sessionKey)
       ? "none"

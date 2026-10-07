@@ -14,7 +14,6 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 
 registerSettingsEnglish();
 
-/** Manifest bounds for a numeric field; `count` is `{integer, minimum}`, `ratio` is `0..1`. */
 type DreamingNumberBounds = { integer: boolean; min: number; max?: number };
 
 const COUNT_FROM_ZERO: DreamingNumberBounds = { integer: true, min: 0 };
@@ -44,8 +43,7 @@ type DreamingFieldSpec = {
 );
 
 // Mirrors the memory-core manifest configSchema/uiHints
-// (extensions/memory-core/openclaw.plugin.json). Everything here previously
-// required hand-editing openclaw.json. `bounds` restates that manifest's
+// (extensions/memory-core/openclaw.plugin.json). `bounds` restates that manifest's
 // integer/minimum/maximum constraints so a rejected value is caught at the input
 // instead of after autosave hands it to the gateway.
 //

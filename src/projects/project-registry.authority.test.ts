@@ -149,8 +149,7 @@ type ProjectReadScope = {
   execute: (command: { type: string }) => Promise<unknown>;
 };
 
-// Storage and transport are synthetic; admission retention and lease drainage
-// use their production owners, including the real admission port cleanup.
+// mock-isolation: Use synthetic storage with real admission retention and lease drainage.
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   executeOpenClawStateWorker: () => fixture.resolveProject(),
   runOpenClawStateWorkerOperation: async <T>(
@@ -164,13 +163,20 @@ vi.mock("../state/openclaw-state-worker-store.js", () => ({
     }
     options.assertCurrent();
     fixture.captureWorkerGuard(options.assertCurrent);
-    const retained = options.createAdmission({ settled: fixture.settlement() });
+    const settled = createDeferredCore<SqliteWorkerOperationSettlement>();
+    const retained = options.createAdmission({ settled: settled.promise });
     try {
       return await operation({
-        execute: (command) =>
-          command.type === "projects.removeCheckoutReference"
+        execute: (command) => {
+          if (command.type === "worktrees.recoverPending") {
+            settled.resolve({ kind: "completed" });
+            return Promise.resolve();
+          }
+          settled.resolve(fixture.settlement());
+          return command.type === "projects.removeCheckoutReference"
             ? fixture.removeReference()
-            : fixture.resolveProject(),
+            : fixture.resolveProject();
+        },
       });
     } finally {
       retained.admission.finish();

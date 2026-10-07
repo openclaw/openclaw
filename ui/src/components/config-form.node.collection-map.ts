@@ -13,6 +13,7 @@ import {
   getSensitiveRenderState,
   isAnySchema,
   jsonValue,
+  removeCollectionRow,
   renderFieldRow,
   renderJsonTextareaControl,
   type ConfigNodeRenderer,
@@ -60,7 +61,7 @@ export function renderMapField(
     existingKeys: [...new Set([...Object.keys(value), ...reservedKeys])],
     validateKey,
   };
-  const entries = Object.entries(value ?? {}).filter(([key]) => !reservedKeys.has(key));
+  const entries = Object.entries(value).filter(([key]) => !reservedKeys.has(key));
   const visibleEntries =
     searchCriteria && hasSearchCriteria(searchCriteria)
       ? entries.filter(([key, entryValue]) =>
@@ -199,10 +200,10 @@ export function renderMapField(
                             style="width:28px;height:28px;padding:0;"
                             aria-label=${t("configForm.removeEntry")}
                             ?disabled=${disabled}
-                            @click=${() => {
+                            @click=${(event: Event) => {
                               const nextValue = { ...value };
                               delete nextValue[key];
-                              onPatch(path, nextValue);
+                              removeCollectionRow(event, () => onPatch(path, nextValue) !== false);
                             }}
                           >
                             ${icons.trash}

@@ -1,4 +1,4 @@
-import { buildControlUiPublicSessionSharePath } from "@openclaw/session-url-contract/public-share";
+import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { SessionPublicShareSetResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SessionsCompanionResetResult } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type {
@@ -268,10 +268,17 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       const linkBase = controlUiUrl ?? scope.client.gatewayUrl ?? gateway.connection.gatewayUrl;
       const url = new URL(linkBase || window.location.href);
       url.protocol = url.protocol.replace(/^ws/u, "http");
-      const path = buildControlUiPublicSessionSharePath({
+      const path = buildControlUiSessionPath({
+        namespace: "chat",
+        sessionKey: currentRow.key,
+        fallbackAgentId: this.sessionSharingAgentId(currentRow.key),
         basePath: controlUiUrl ? url.pathname : scope.context.basePath,
-        token: share.token,
+        displayName: currentRow.label || currentRow.displayName,
+        shortIdLength: 32,
       });
+      if (!path) {
+        return;
+      }
       const copied = await copyToClipboard(new URL(path, url.origin).href, isCurrent);
       if (isCurrent()) {
         showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });

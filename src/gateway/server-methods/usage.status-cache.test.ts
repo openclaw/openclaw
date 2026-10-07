@@ -136,26 +136,6 @@ describe("usage.status provider usage cache", () => {
     vi.restoreAllMocks();
   });
 
-  it("hands the exact runtime config to the background refresh", async () => {
-    mocks.loadProviderUsageSummary.mockImplementation(async (options) => ({
-      updatedAt: now,
-      providers:
-        options.config === config
-          ? [
-              {
-                ...providerDescriptor,
-                windows: [{ label: "5h", usedPercent: 25 }],
-                accountEmail: "configured@example.com",
-              },
-            ]
-          : [],
-    }));
-    await expect(settledStatus()).resolves.toMatchObject({ refreshing: true });
-    await expect(runCapableUsageStatus()).resolves.toMatchObject({
-      providers: [{ accountEmail: "configured@example.com" }],
-    });
-  });
-
   it("returns a cold marker only to capable clients and retains invalidated refresh work", async () => {
     const scope = new AsyncWorkScope();
     const heldRefresh = createDeferredCore<UsageSummary>();

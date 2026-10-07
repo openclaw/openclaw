@@ -141,7 +141,7 @@ describe("test runtime prerequisites", () => {
     ["tui-pty", ["--exclude", "tui/tui-text-wrap-pty.e2e.test.ts"], "runtime"],
     ["gateway-core", ["--exclude", "gateway-*.test.ts"], undefined],
     ["gateway", ["--exclude", "gateway-*.test.ts"], "runtime"],
-    ["tooling", ["--exclude", "**/gateway-codex-delivery-cache.test.ts"], "runtime"],
+    ["infra", ["--exclude", "**/gateway-codex-delivery-cache.test.ts"], "runtime"],
     [
       "agents-core",
       resolveVitestRuntimeConfigScopes("test/vitest/vitest.agents-core.config.ts").flatMap(
@@ -1736,7 +1736,6 @@ describe("scripts/test-projects changed-target routing", () => {
       [`${failoverRoot}/failover-classification.corpus.test.ts`, "agents-core-isolated"],
       [`${failoverRoot}/provider-structured-signals.test.ts`, "agents-core-isolated"],
       [`${runtimeRoot}/materialize-model.test.ts`, "agents-support"],
-      [`${embeddedRoot}/run.inherited-auth-owner.test.ts`, "infra"],
       [
         `${embeddedRoot}/run.incomplete-turn.classification.test.ts`,
         "agents-embedded-agent-incomplete-turn",

@@ -20,6 +20,7 @@ import {
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
   parseUsageCountedSessionIdFromFileName,
+  readBoundIncognitoMemoryCorpus,
   readSessionTranscriptCorpusInWorker,
   readTranscriptContentRevisionSync,
   resolveSessionAgentId,
@@ -508,6 +509,10 @@ export async function listSessionTranscriptCorpusEntriesForAgent(
   const capturedOptions = { ...options };
   if (source) {
     return source.memoryCorpus(scope, capturedOptions);
+  }
+  const incognito = readBoundIncognitoMemoryCorpus(scope, capturedOptions);
+  if (incognito) {
+    return incognito;
   }
   const artifactDirs = new Map<string, string>();
   for (const dir of scope.artifactDirs) {

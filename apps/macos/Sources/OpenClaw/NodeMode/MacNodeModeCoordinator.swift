@@ -22,14 +22,6 @@ struct MacNodeGatewayTLSSessionCache {
     }
 }
 
-private struct EffectiveEndpoint: Equatable {
-    let mode: AppState.ConnectionMode
-    let url: URL
-    let token: String?
-    let password: String?
-    let routeRevision: UInt64
-}
-
 private struct ConnectionAttempt {
     let endpointGeneration: UInt64
     let routeAuthorityGeneration: UInt64
@@ -1173,7 +1165,11 @@ extension MacNodeModeCoordinator {
         from previous: GatewayEndpointState,
         to next: GatewayEndpointState) -> Bool
     {
-        self.effectiveEndpoint(from: previous) != self.effectiveEndpoint(from: next)
+        switch (previous, next) {
+        case (.ready, .ready): previous != next
+        case (.ready, _), (_, .ready): true
+        default: false
+        }
     }
 
     nonisolated static func controlTransitionRequiresRouteInvalidation(
@@ -1270,16 +1266,6 @@ extension MacNodeModeCoordinator {
             lhs.routeAuthority == rhs.routeAuthority &&
             lhs.deviceAuthGatewayID == rhs.deviceAuthGatewayID &&
             lhs.revision == rhs.revision
-    }
-
-    private static func effectiveEndpoint(from state: GatewayEndpointState) -> EffectiveEndpoint? {
-        guard case let .ready(mode, url, token, password, routeRevision) = state else { return nil }
-        return EffectiveEndpoint(
-            mode: mode,
-            url: url,
-            token: token,
-            password: password,
-            routeRevision: routeRevision)
     }
 
     nonisolated static func advertisedPermissions(

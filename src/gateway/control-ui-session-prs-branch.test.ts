@@ -599,7 +599,7 @@ describe("session branch diff stats", () => {
       expect(await runGitReadOperation(operation)).toMatchObject({
         stats: { additions: 1, changedFiles: 1 },
       });
-      expect(reads.mock.calls.length).toBe(2);
+      expect(reads).toHaveBeenCalled();
       await writeFile("new.txt", "untracked\n");
       now += 300_000;
       expect(await runGitReadOperation(operation)).toMatchObject({

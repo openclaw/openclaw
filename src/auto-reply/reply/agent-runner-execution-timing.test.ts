@@ -245,7 +245,7 @@ it.each(["embedded preparation", "fallback preparation"])(
       emitAgentEvent({ runId: params.runId, sessionKey: "main", stream: "lifecycle", data });
       await params.onAgentEvent?.({ stream: "lifecycle", data, transcriptStart });
       expect(onAgentRunStart.mock.lastCall?.[3]).toEqual(transcriptStart);
-      expect(session).toMatchObject({ status: "running", startedAt: now });
+      expect(session).toMatchObject({ status: undefined, startedAt: now });
       expect(session.lastRunError).toBeUndefined();
       expect(session.runtimeMs).toBeUndefined();
       expect(session.endedAt).toBeUndefined();

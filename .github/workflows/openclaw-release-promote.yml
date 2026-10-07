@@ -204,7 +204,7 @@ jobs:
             --release-publish-run-attempt "$(jq -er '.releaseRunAttempt' <<< "$RELEASE_REQUEST")"
             --release-publish-ref "$(jq -er '.tooling.ref' <<< "$RELEASE_REQUEST")"
             --release-publish-full-ref "$(jq -er '.tooling.fullRef' <<< "$RELEASE_REQUEST")"
-            --release-publish-parent-state-policy active-or-success
+            --release-publish-parent-state-policy manual-recovery
           )
           if [[ "$expected_latest" == true ]]; then
             identity_args+=(

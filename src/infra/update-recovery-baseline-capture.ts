@@ -30,14 +30,18 @@ import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256Hex } from "./crypto-digest.js";
 import {
   pinDirectory,
-  publishFileExclusive,
   requireDirectorySync,
   sha256File,
   syncDirectory,
 } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
-import { copyFileHandle, sameFileMutationFingerprint } from "./file-descriptor.js";
+import {
+  copyFileHandle,
+  hashFileMutationSnapshotSync,
+  sameFileMutationFingerprint,
+  sameFileMutationMetadata,
+} from "./file-descriptor.js";
 import { root as safeRoot } from "./fs-safe.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
@@ -50,6 +54,7 @@ import {
 import { createUpdateDatabaseBackup } from "./update-database-backup.js";
 import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
+import { publishUpdateRecoveryCaptureFile } from "./update-recovery-capture-publication.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
 import { getUpdateRunAsync } from "./update-run-reader.js";
 
@@ -58,6 +63,19 @@ declare const SEALED_RUNTIME_BUILD: boolean;
 type Entry = UpdateRecoveryBackupManifest["entries"][number];
 type ResourceKind = "file" | "directory" | "sqlite";
 type CapturedPath = { stat?: BigIntStats; names?: string[]; target?: string };
+
+function matchesCapturedStat(
+  pathname: string,
+  before: BigIntStats,
+  current: BigIntStats,
+  sha256?: string,
+): boolean {
+  return (
+    sameFileMutationMetadata(before, current) &&
+    (sameFileMutationFingerprint(before, current) ||
+      (sha256 !== undefined && hashFileMutationSnapshotSync(pathname, before) === sha256))
+  );
+}
 
 export type UpdateRecoveryBaselineRef = {
   directory: string;
@@ -385,11 +403,11 @@ export function captureUpdateRecoveryBaseline(params: {
         assertCurrent();
         await pin.assertCurrent();
         assertCurrent();
-        const publication = await publishFileExclusive({
+        const publication = await publishUpdateRecoveryCaptureFile({
           sourcePath: file.snapshotPath,
           targetPath: payloadPath,
           expectedSourceIdentity: sourceIdentity,
-          strategy: "rename-noreplace",
+          assertCurrent,
           onSyncFailure: "preserve",
         });
         assertCurrent();
@@ -437,17 +455,25 @@ export function captureUpdateRecoveryBaseline(params: {
         const archivePath = `payload/${payloadIndex++}`;
         await using handle = source.handle;
         const opened = await handle.stat({ bigint: true });
-        if (!sameFileMutationFingerprint(before, opened)) {
+        // Before the private copy exists, no content witness can admit timestamp drift.
+        if (!matchesCapturedStat(pathname, before, opened)) {
+          throw new Error(`Original update file changed before capture: ${pathname}`);
+        }
+        const sha256 = hashFileMutationSnapshotSync(pathname, opened);
+        if (!matchesCapturedStat(pathname, opened, await handle.stat({ bigint: true }))) {
           throw new Error(`Original update file changed before capture: ${pathname}`);
         }
         assertCurrent();
         await using output = await fs.open(path.join(directory, archivePath), "wx+", 0o600);
         await copyFileHandle(handle, output, { assertBeforeMutation: assertCurrent });
-        if (!sameFileMutationFingerprint(opened, await handle.stat({ bigint: true }))) {
-          throw new Error(`Original update file changed during capture: ${pathname}`);
-        }
         await output.sync();
         const content = await sha256File(output);
+        if (
+          content.digest !== sha256 ||
+          !matchesCapturedStat(pathname, opened, await handle.stat({ bigint: true }), sha256)
+        ) {
+          throw new Error(`Original update file changed during capture: ${pathname}`);
+        }
         entries.set(pathname, {
           kind: "file",
           sourcePath: pathname,
@@ -489,11 +515,11 @@ export function captureUpdateRecoveryBaseline(params: {
           continue;
         }
         const current = await statOrMissing(pathname);
+        const entry = entries.get(pathname);
+        const sha256 = entry?.kind === "file" && !entry.sqlite ? entry.sha256 : undefined;
         if (
           before.stat
-            ? !current ||
-              !sameFileMutationFingerprint(before.stat, current) ||
-              current.mode !== before.stat.mode
+            ? !current || !matchesCapturedStat(pathname, before.stat, current, sha256)
             : current !== undefined
         ) {
           throw new Error(`Original update resource changed during capture: ${pathname}`);
@@ -568,12 +594,12 @@ export function captureUpdateRecoveryBaseline(params: {
       }
       await pin.assertCurrent();
       assertCurrent();
-      const publication = await publishFileExclusive({
+      const publication = await publishUpdateRecoveryCaptureFile({
         sourcePath: temporaryManifestPath,
         targetPath: manifestPath,
         expectedSourceIdentity: manifestIdentity,
         parentReceipt: pin.receipt,
-        strategy: "rename-noreplace",
+        assertCurrent,
         onSyncFailure: "preserve",
       });
       requireDirectorySync(publication.directorySync, "Original update capture seal");

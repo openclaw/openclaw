@@ -1,4 +1,3 @@
-// Skills inventory assembly and session-scoped response authorization.
 import {
   ErrorCodes,
   errorShape,

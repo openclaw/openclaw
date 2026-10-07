@@ -19,7 +19,7 @@ import {
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
-  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseRuntime,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
@@ -129,7 +129,7 @@ export function withSqliteSessionDatabase<T>(
       diagnostics.admissionMode = "async";
     }
     // The caller keeps its FIFO section while the existing owner joins the integrity child.
-    const result = withOpenClawAgentDatabaseAsync(options, admittedOperation, assertCurrent);
+    const result = withOpenClawAgentDatabaseRuntime(options, admittedOperation, assertCurrent);
     return finishAdmission ? result.finally(finishAdmission) : result;
   } catch (error) {
     finishAdmission?.();

@@ -14,6 +14,8 @@ export type TrustedSessionCreation = Partial<AgentRuntimeSessionSpawnContext> & 
   sandbox?: "required";
   /** Exact spawning session retained separately from the stable actor identity. */
   requesterSessionKey?: string;
+  /** Live host-only ingress intent; never accepted from wire arguments. */
+  childSessionPublication?: import("../channels/message-access/child-session-publication.js").ChildSessionPublication;
 };
 
 /**

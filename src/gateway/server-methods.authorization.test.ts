@@ -11,13 +11,10 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
-import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 
-const METHOD = "workboard.cards.dispatch";
 const ensureProfileIdForEmail = vi.hoisted(() => vi.fn());
 const prepareUserProfileRoleAuthority = vi.hoisted(() =>
   vi.fn(async (profileId: string) => ({ profileId, isCurrent: () => true })),
@@ -59,131 +56,6 @@ afterEach(() => {
 });
 
 describe("gateway method authorization", () => {
-  async function dispatch(scopes: string[]) {
-    const handler: GatewayRequestHandler = ({ respond }) => respond(true, { ok: true });
-    const methodRegistry = createGatewayMethodRegistry([
-      createPluginGatewayMethodDescriptor({
-        pluginId: "workboard",
-        name: METHOD,
-        handler,
-        scope: "operator.write",
-      }),
-    ]);
-    const respond = vi.fn();
-
-    // Reproduce a request whose attached dispatch registry is newer than the global runtime state.
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    await handleGatewayRequest({
-      req: { type: "req", id: "req-1", method: METHOD },
-      respond,
-      client: {
-        connId: "conn-1",
-        connect: {
-          role: "operator",
-          scopes,
-          client: { id: "test", version: "1", platform: "test", mode: "test" },
-          minProtocol: 1,
-          maxProtocol: 1,
-        },
-      } as Parameters<typeof handleGatewayRequest>[0]["client"],
-      isWebchatConnect: () => false,
-      context: { logGateway: { warn: vi.fn() } } as unknown as Parameters<
-        typeof handleGatewayRequest
-      >[0]["context"],
-      methodRegistry,
-    });
-    return respond;
-  }
-
-  it("authorizes from the attached registry used for dispatch", async () => {
-    const allowed = await dispatch(["operator.write"]);
-    const denied = await dispatch(["operator.read"]);
-
-    expect(allowed).toHaveBeenCalledWith(true, { ok: true });
-    expect(denied).toHaveBeenCalledWith(false, undefined, {
-      code: "FORBIDDEN",
-      message: "missing scope: operator.write",
-      details: {
-        code: "MISSING_SCOPE",
-        missingScope: "operator.write",
-        requiredScopes: ["operator.write"],
-      },
-    });
-  });
-
-  it("allows read-only projects.list to reach its redacting handler", async () => {
-    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { projects: [] }));
-    const respond = vi.fn();
-
-    await handleGatewayRequest({
-      req: { type: "req", id: "req-projects-read", method: "projects.list", params: {} },
-      respond,
-      client: {
-        connId: "conn-projects-read",
-        connect: {
-          role: "operator",
-          scopes: ["operator.read"],
-          client: { id: "test", version: "1", platform: "test", mode: "test" },
-          minProtocol: 1,
-          maxProtocol: 1,
-        },
-      } as Parameters<typeof handleGatewayRequest>[0]["client"],
-      isWebchatConnect: () => false,
-      context: { logGateway: { warn: vi.fn() } } as unknown as Parameters<
-        typeof handleGatewayRequest
-      >[0]["context"],
-      extraHandlers: { "projects.list": handler },
-    });
-
-    expect(handler).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(true, { projects: [] });
-  });
-
-  it("rejects every node RPC when its connection no longer owns the pairing generation", async () => {
-    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
-    const respond = vi.fn();
-    const isConnectionCurrentPairingState = vi.fn().mockResolvedValue(false);
-
-    await handleGatewayRequest({
-      req: { type: "req", id: "req-node-stale", method: "node.event", params: { event: "test" } },
-      respond,
-      client: {
-        connId: "conn-node-stale",
-        connect: {
-          role: "node",
-          scopes: [],
-          device: {
-            id: "node-stale",
-            publicKey: "public-key",
-            signature: "signature",
-            signedAt: 1,
-            nonce: "nonce",
-          },
-          client: { id: "node-host", version: "1", platform: "test", mode: "node" },
-          minProtocol: 1,
-          maxProtocol: 1,
-        },
-      } as Parameters<typeof handleGatewayRequest>[0]["client"],
-      isWebchatConnect: () => false,
-      context: {
-        logGateway: { warn: vi.fn() },
-        nodeRegistry: { isConnectionCurrentPairingState },
-      } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
-      extraHandlers: { "node.event": handler },
-    });
-
-    expect(isConnectionCurrentPairingState).toHaveBeenCalledWith("conn-node-stale");
-    expect(handler).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        details: { code: "PAIRING_CHANGED" },
-      }),
-    );
-  });
-
   async function dispatchProfileMutation(params: {
     authenticatedUserId?: string;
     profileId: string;

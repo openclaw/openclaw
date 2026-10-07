@@ -125,7 +125,6 @@ export async function reconcileHarnessCompletionDelivery(
     return "blocked";
   }
   if (
-    entry.status !== "running" ||
     entry.mainRestartRecovery?.tombstone ||
     entry.restartRecoveryDeliverySourceRunId !== claim.sourceRunId ||
     entry.restartRecoveryHarnessCompletion?.taskId !== claim.taskId

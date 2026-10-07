@@ -45,60 +45,54 @@ impl DesktopNodeProcess {
         }
         let (sender, output) = mpsc::sync_channel(64);
         let overflow = Arc::new(AtomicBool::new(false));
-        let readers = [
+        let pipes: [(bool, Box<dyn Read + Send>); 2] = [
             (
                 true,
-                child
-                    .stdout
-                    .take()
-                    .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+                Box::new(child.stdout.take().expect("piped desktop sharing stdout")),
             ),
             (
                 false,
-                child
-                    .stderr
-                    .take()
-                    .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+                Box::new(child.stderr.take().expect("piped desktop sharing stderr")),
             ),
-        ]
-        .into_iter()
-        .filter_map(|(stdout, pipe)| pipe.map(|pipe| (stdout, pipe)))
-        .map(|(stdout, mut pipe)| {
-            let sender = sender.clone();
-            let overflow = Arc::clone(&overflow);
-            thread::spawn(move || {
-                let mut chunk = [0; 4096];
-                let mut line = Vec::new();
-                while let Ok(size) = pipe.read(&mut chunk) {
-                    if size == 0 {
-                        break;
-                    }
-                    for byte in &chunk[..size] {
-                        if *byte == b'\n' {
-                            if sender
-                                .try_send((stdout, String::from_utf8_lossy(&line).into_owned()))
-                                .is_err()
-                            {
+        ];
+        let readers = pipes
+            .into_iter()
+            .map(|(stdout, mut pipe)| {
+                let sender = sender.clone();
+                let overflow = Arc::clone(&overflow);
+                thread::spawn(move || {
+                    let mut chunk = [0; 4096];
+                    let mut line = Vec::new();
+                    while let Ok(size) = pipe.read(&mut chunk) {
+                        if size == 0 {
+                            break;
+                        }
+                        for byte in &chunk[..size] {
+                            if *byte == b'\n' {
+                                if sender
+                                    .try_send((stdout, String::from_utf8_lossy(&line).into_owned()))
+                                    .is_err()
+                                {
+                                    overflow.store(true, Ordering::SeqCst);
+                                }
+                                line.clear();
+                            } else if line.len() < 16 * 1024 {
+                                line.push(*byte);
+                            } else {
                                 overflow.store(true, Ordering::SeqCst);
                             }
-                            line.clear();
-                        } else if line.len() < 16 * 1024 {
-                            line.push(*byte);
-                        } else {
-                            overflow.store(true, Ordering::SeqCst);
                         }
                     }
-                }
-                if !line.is_empty()
-                    && sender
-                        .try_send((stdout, String::from_utf8_lossy(&line).into_owned()))
-                        .is_err()
-                {
-                    overflow.store(true, Ordering::SeqCst);
-                }
+                    if !line.is_empty()
+                        && sender
+                            .try_send((stdout, String::from_utf8_lossy(&line).into_owned()))
+                            .is_err()
+                    {
+                        overflow.store(true, Ordering::SeqCst);
+                    }
+                })
             })
-        })
-        .collect();
+            .collect();
         Ok(Self {
             child,
             output,
@@ -172,7 +166,7 @@ impl DesktopNodeProcess {
         let mut stderr = Vec::new();
         let mut bytes = 0;
         let mut drained_after_exit = false;
-        loop {
+        let result = loop {
             for (out, line) in process.output() {
                 bytes += line.len() + 1;
                 if bytes <= 1024 * 1024 {
@@ -182,14 +176,10 @@ impl DesktopNodeProcess {
                 }
             }
             if cancelled() {
-                process.stop()?;
-                owner.take();
-                return Ok(None);
+                break Ok(None);
             }
             if bytes > 1024 * 1024 || process.overflow.load(Ordering::SeqCst) {
-                process.stop()?;
-                owner.take();
-                return Err(
+                break Err(
                     "Desktop sharing setup returned too much output; no node was started.".into(),
                 );
             }
@@ -203,9 +193,7 @@ impl DesktopNodeProcess {
                         drained_after_exit = true;
                         continue;
                     }
-                    process.stop()?;
-                    owner.take();
-                    return Ok(Some(Output {
+                    break Ok(Some(Output {
                         status,
                         stdout,
                         stderr,
@@ -213,12 +201,13 @@ impl DesktopNodeProcess {
                 }
             }
             if Instant::now() >= deadline {
-                process.stop()?;
-                owner.take();
-                return Err("The local CLI did not finish preparing desktop sharing. Update the CLI and try again.".into());
+                break Err("The local CLI did not finish preparing desktop sharing. Update the CLI and try again.".into());
             }
             thread::sleep(Duration::from_millis(25));
-        }
+        };
+        process.stop()?;
+        owner.take();
+        result
     }
 }
 

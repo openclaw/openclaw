@@ -20,7 +20,7 @@ import type { GatewayRequestHandlerOptions } from "../server-methods/shared-type
 import { formatForLog } from "../ws-log.js";
 import { prepareTalkAgentConsultTranscript } from "./agent-consult-transcript.js";
 import { resolveTalkAgentConsultAuthority } from "./client-gateway-control.js";
-import { registerTalkRealtimeRelayAgentRun } from "./relay/index.js";
+import { registerTalkRealtimeRelayAgentRun } from "./relay/operations.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
 function terminalTalkChatSendAckError(result: unknown): ErrorShape | undefined {
@@ -36,7 +36,6 @@ function terminalTalkChatSendAckError(result: unknown): ErrorShape | undefined {
   return message ? errorShape(ErrorCodes.UNAVAILABLE, message) : undefined;
 }
 
-/** Starts the chat run that backs a realtime Talk tool call. */
 export async function startTalkRealtimeAgentConsult(
   request: GatewayRequestHandlerOptions,
   params: {

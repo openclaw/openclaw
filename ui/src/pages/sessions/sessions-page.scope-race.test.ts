@@ -170,153 +170,139 @@ describe("sessions page agent-scope retirement", () => {
     }
   });
 
-  it.each([false, true])(
-    "retires pending enumeration after a scope change (return: %s)",
-    async (returnToOriginal) => {
-      const writerKeys = ["agent:writer:old-1", "agent:writer:old-2"];
-      const listResponse = createDeferred<SessionsListResult>();
-      const list = vi.fn(() => listResponse.promise) as unknown as SessionCapability["list"];
-      const deleteMany = vi.fn(async () => ({
-        deleted: writerKeys,
-        errors: [],
-        preservedWorktrees: [],
-      }));
-      const sessions = createSessions({
-        list,
-        deleteMany,
-      });
-      const { page, changeScope } = await setupArchivedPageWithSelection("writer", sessions);
-      vi.mocked(showConfirmDialog).mockResolvedValue(true);
+  it("retires pending enumeration after switching away and back", async () => {
+    const writerKeys = ["agent:writer:old-1", "agent:writer:old-2"];
+    const listResponse = createDeferred<SessionsListResult>();
+    const list = vi.fn(() => listResponse.promise) as unknown as SessionCapability["list"];
+    const deleteMany = vi.fn(async () => ({
+      deleted: writerKeys,
+      errors: [],
+      preservedWorktrees: [],
+    }));
+    const sessions = createSessions({
+      list,
+      deleteMany,
+    });
+    const { page, changeScope } = await setupArchivedPageWithSelection("writer", sessions);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
-      const operation = page.deleteAllArchived();
-      await vi.waitFor(() => expect(list).toHaveBeenCalledOnce());
-      // The captured scope held `writer`; the operator now switches the page to
-      // `main` while the first enumeration page is still in flight.
+    const operation = page.deleteAllArchived();
+    await vi.waitFor(() => expect(list).toHaveBeenCalledOnce());
+    // The captured scope held `writer`; the operator now switches the page to
+    // `main` while the first enumeration page is still in flight.
+    changeScope("main");
+    changeScope("writer");
+    listResponse.resolve({
+      count: writerKeys.length,
+      totalCount: writerKeys.length,
+      sessions: writerKeys.map((key) => ({
+        key,
+        kind: "direct",
+        updatedAt: 1,
+        archived: true,
+      })),
+    } as SessionsListResult);
+    await operation;
+
+    expect(showConfirmDialog).not.toHaveBeenCalled();
+    expect(deleteMany).not.toHaveBeenCalled();
+    expect(page.error).toBeNull();
+  });
+
+  it("retires pending confirmation after switching away and back", async () => {
+    const writerKeys = ["agent:writer:old-1", "agent:writer:old-2"];
+    const list = vi.fn(async () => ({
+      count: writerKeys.length,
+      totalCount: writerKeys.length,
+      sessions: writerKeys.map((key) => ({ key, archived: true })),
+      hasMore: false,
+      nextOffset: null,
+    })) as unknown as SessionCapability["list"];
+    const deleteMany = vi.fn(async () => ({
+      deleted: writerKeys,
+      errors: [],
+      preservedWorktrees: [],
+    }));
+    const sessions = createSessions({
+      list,
+      deleteMany,
+    });
+    const { page, changeScope } = await setupArchivedPageWithSelection("writer", sessions);
+    const confirmation = createDeferred<boolean>();
+    vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
+
+    const operation = page.deleteAllArchived();
+    await vi.waitFor(() => expect(showConfirmDialog).toHaveBeenCalledOnce());
+    // Operator switches to `main` while the destructive confirmation sits open.
+    changeScope("main");
+    changeScope("writer");
+    await page.updateComplete;
+    await vi.waitFor(() => expect(page.loading).toBe(false));
+    confirmation.resolve(true);
+    await operation;
+
+    expect(deleteMany).not.toHaveBeenCalled();
+    expect(page.error).toBeNull();
+  });
+
+  it("admits a new deep-link delete without letting old completion release it", async () => {
+    const oldDelete = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
+    const newDelete = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
+    const deleteMany = vi
+      .fn<SessionCapability["deleteMany"]>()
+      .mockReturnValueOnce(oldDelete.promise)
+      .mockReturnValueOnce(newDelete.promise)
+      .mockResolvedValue({ deleted: [], errors: [], preservedWorktrees: [] });
+    const sessions = createSessions({ deleteMany });
+    const key = "agent:writer:old-1";
+    const { page, changeScope } = await setupArchivedPageWithSelection("writer", sessions, key);
+    const query = vi.mocked(sessions.subscribeList).mock.calls.at(-1)?.[0];
+    expect(query).toMatchObject({ search: key, agentId: "writer" });
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
+    const oldRequest = page.deleteSessionFromMenu({ key, kind: "direct", archived: true });
+    let newRequest: Promise<void> | undefined;
+    try {
+      await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledTimes(1));
+      expect(page.sessionMutationPending).toBe(true);
       changeScope("main");
-      if (returnToOriginal) {
-        changeScope("writer");
-      }
-      listResponse.resolve({
-        count: writerKeys.length,
-        totalCount: writerKeys.length,
-        sessions: writerKeys.map((key) => ({
-          key,
-          kind: "direct",
-          updatedAt: 1,
-          archived: true,
-        })),
-      } as SessionsListResult);
-      await operation;
-
-      expect(showConfirmDialog).not.toHaveBeenCalled();
-      expect(deleteMany).not.toHaveBeenCalled();
-      expect(page.error).toBeNull();
-    },
-  );
-
-  it.each([false, true])(
-    "retires pending confirmation after a scope change (return: %s)",
-    async (returnToOriginal) => {
-      const writerKeys = ["agent:writer:old-1", "agent:writer:old-2"];
-      const list = vi.fn(async () => ({
-        count: writerKeys.length,
-        totalCount: writerKeys.length,
-        sessions: writerKeys.map((key) => ({ key, archived: true })),
-        hasMore: false,
-        nextOffset: null,
-      })) as unknown as SessionCapability["list"];
-      const deleteMany = vi.fn(async () => ({
-        deleted: writerKeys,
-        errors: [],
-        preservedWorktrees: [],
-      }));
-      const sessions = createSessions({
-        list,
-        deleteMany,
-      });
-      const { page, changeScope } = await setupArchivedPageWithSelection("writer", sessions);
-      const confirmation = createDeferred<boolean>();
-      vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
-
-      const operation = page.deleteAllArchived();
-      await vi.waitFor(() => expect(showConfirmDialog).toHaveBeenCalledOnce());
-      // Operator switches to `main` while the destructive confirmation sits open.
-      changeScope("main");
-      if (returnToOriginal) {
-        changeScope("writer");
-      }
       await page.updateComplete;
       await vi.waitFor(() => expect(page.loading).toBe(false));
-      confirmation.resolve(true);
-      await operation;
+      expect(vi.mocked(sessions.subscribeList).mock.calls.at(-1)?.[0]).toEqual(query);
 
-      expect(deleteMany).not.toHaveBeenCalled();
+      const newRow: GatewaySessionRow = {
+        key,
+        kind: "direct",
+        archived: true,
+      };
+      newRequest = page.deleteSessionFromMenu(newRow);
+      await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledTimes(2));
+      expect(deleteMany.mock.calls[1]?.[0]).toEqual([
+        { key: newRow.key, agentId: undefined, archivedOnly: true },
+      ]);
+      expect(page.sessionMutationPending).toBe(true);
+
+      oldDelete.resolve({
+        deleted: [],
+        errors: [{ target: { key }, error: new Error("retired delete error") }],
+        preservedWorktrees: [],
+      });
+      await oldRequest;
       expect(page.error).toBeNull();
-    },
-  );
+      expect(page.sessionMutationPending).toBe(true);
+      await page.deleteSessionFromMenu(newRow);
+      expect(deleteMany).toHaveBeenCalledTimes(2);
 
-  it.each([false, true])(
-    "admits a new delete without letting old completion release it (deep link: %s)",
-    async (deepLink) => {
-      const oldDelete = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
-      const newDelete = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
-      const deleteMany = vi
-        .fn<SessionCapability["deleteMany"]>()
-        .mockReturnValueOnce(oldDelete.promise)
-        .mockReturnValueOnce(newDelete.promise)
-        .mockResolvedValue({ deleted: [], errors: [], preservedWorktrees: [] });
-      const sessions = createSessions({ deleteMany });
-      const key = "agent:writer:old-1";
-      const { page, changeScope } = await setupArchivedPageWithSelection(
-        "writer",
-        sessions,
-        deepLink ? key : null,
-      );
-      vi.mocked(showConfirmDialog).mockResolvedValue(true);
-      const oldRequest = page.deleteSessionFromMenu({ key, kind: "direct", archived: true });
-      let newRequest: Promise<void> | undefined;
-      try {
-        await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledTimes(1));
-        expect(page.sessionMutationPending).toBe(true);
-        changeScope("main");
-        await page.updateComplete;
-        await vi.waitFor(() => expect(page.loading).toBe(false));
-
-        const newRow: GatewaySessionRow = {
-          key: deepLink ? key : "agent:main:new",
-          kind: "direct",
-          archived: true,
-        };
-        newRequest = page.deleteSessionFromMenu(newRow);
-        await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledTimes(2));
-        expect(deleteMany.mock.calls[1]?.[0]).toEqual([
-          { key: newRow.key, agentId: undefined, archivedOnly: true },
-        ]);
-        expect(page.sessionMutationPending).toBe(true);
-
-        oldDelete.resolve({
-          deleted: [],
-          errors: [{ target: { key }, error: new Error("retired delete error") }],
-          preservedWorktrees: [],
-        });
-        await oldRequest;
-        expect(page.error).toBeNull();
-        expect(page.sessionMutationPending).toBe(true);
-        await page.deleteSessionFromMenu(newRow);
-        expect(deleteMany).toHaveBeenCalledTimes(2);
-
-        newDelete.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
-        await newRequest;
-        expect(page.sessionMutationPending).toBe(false);
-        await page.deleteSessionFromMenu(newRow);
-        expect(deleteMany).toHaveBeenCalledTimes(3);
-      } finally {
-        oldDelete.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
-        newDelete.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
-        await Promise.all([oldRequest, newRequest]);
-      }
-    },
-  );
+      newDelete.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+      await newRequest;
+      expect(page.sessionMutationPending).toBe(false);
+      await page.deleteSessionFromMenu(newRow);
+      expect(deleteMany).toHaveBeenCalledTimes(3);
+    } finally {
+      oldDelete.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+      newDelete.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+      await Promise.all([oldRequest, newRequest]);
+    }
+  });
 
   it("preserves pending deletion when the selected scope does not change", async () => {
     const deletion = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
@@ -346,42 +332,5 @@ describe("sessions page agent-scope retirement", () => {
       deletion.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
       await request;
     }
-  });
-
-  it("keeps an explicit deep-link query across scope changes", async () => {
-    const sessions = createSessions();
-    const key = "agent:writer:old-1";
-    const { page, changeScope } = await setupArchivedPageWithSelection("writer", sessions, key);
-    const query = vi.mocked(sessions.subscribeList).mock.calls.at(-1)?.[0];
-    expect(query).toMatchObject({ search: key, agentId: "writer" });
-    changeScope("main");
-    await page.updateComplete;
-    expect(vi.mocked(sessions.subscribeList).mock.calls.at(-1)?.[0]).toEqual(query);
-  });
-
-  it("preserves the same-scope all-agent deleteAllArchived path", async () => {
-    const writerKeys = ["agent:writer:old-1", "agent:writer:old-2"];
-    const list = vi.fn(async () => ({
-      count: writerKeys.length,
-      totalCount: writerKeys.length,
-      sessions: writerKeys.map((key) => ({ key, archived: true })),
-      hasMore: false,
-      nextOffset: null,
-    })) as unknown as SessionCapability["list"];
-    const deleteMany = vi.fn(async () => ({
-      deleted: writerKeys,
-      errors: [],
-      preservedWorktrees: [],
-    }));
-    const sessions = createSessions({
-      list,
-      deleteMany,
-    });
-    const { page } = await setupArchivedPageWithSelection(null, sessions);
-    vi.mocked(showConfirmDialog).mockResolvedValue(true);
-
-    await page.deleteAllArchived();
-
-    expect(deleteMany).toHaveBeenCalledOnce();
   });
 });

@@ -153,6 +153,7 @@ describe("X account monitor", () => {
         cfg: guest
           ? {
               ...config,
+              messages: { queue: { mode: "collect" } },
               agents: {
                 entries: { maintainer: { skills: [], tools: { fs: { workspaceOnly: true } } } },
               },
@@ -334,8 +335,14 @@ describe("X account monitor", () => {
         mode: "poll",
       });
       expect(test.replies).toEqual([
-        { parent: "501", text: "I am on it.\nhttps://example.test/work/42" },
-        { parent: "503", text: "I am on it.\nhttps://example.test/work/42" },
+        {
+          parent: "501",
+          text: "I am on it.\nWork session (sign-in required): https://example.test/work/42",
+        },
+        {
+          parent: "503",
+          text: "I am on it.\nWork session (sign-in required): https://example.test/work/42",
+        },
       ]);
       const turn = test.dispatch.mock.calls[0]![0];
       expect(turn.route).toEqual({

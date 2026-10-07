@@ -13,9 +13,11 @@ These semantics keep selection-time and runtime auth behavior aligned. They are 
 - `openclaw models status --probe`
 - `openclaw doctor` auth checks (`doctor-auth`)
 
-## Stable probe reason codes
+<a id="stable-probe-reason-codes" />
 
-Probe results carry a `status` bucket (`ok`, `auth`, `rate_limit`, `billing`, `timeout`, `format`, `unknown`, `no_model`) plus a stable `reasonCode` when the probe never reached a model call:
+## Stable check reason codes
+
+Check results carry a `status` bucket (`ok`, `auth`, `rate_limit`, `billing`, `timeout`, `format`, `unknown`, `no_model`) plus a stable `reasonCode` when the check never reached a model call:
 
 | `reasonCode`             | Meaning                                                                      |
 | ------------------------ | ---------------------------------------------------------------------------- |
@@ -25,7 +27,7 @@ Probe results carry a `status` bucket (`ok`, `auth`, `rate_limit`, `billing`, `t
 | `invalid_expires`        | `expires` is not a valid positive Unix ms timestamp.                         |
 | `unresolved_ref`         | Configured SecretRef could not be resolved.                                  |
 | `ineligible_profile`     | Profile is incompatible with provider config (includes malformed key input). |
-| `no_model`               | Credentials exist but no probeable model candidate resolved.                 |
+| `no_model`               | Credentials exist but no model candidate that can be tested resolved.        |
 
 Eligibility checks report `ok` as the reason code for usable credentials.
 
@@ -138,7 +140,7 @@ lifecycle because external login can change without a Gateway publication.
 Repeated model resolution reuses persisted auth rows while the owning database's
 write generation and file identity remain unchanged. Committed auth writes and
 runtime snapshot reloads invalidate those rows immediately. Database, WAL, and
-journal identities are probed at most once per 100 ms on warm cache hits; the
+journal identities are checked at most once per 100 ms on warm cache hits; the
 first read at or after that interval detects changes from other processes.
 Hits do not extend this freshness window. Cache misses still check identity
 before and after reading rows. Scoped overlays, migration refusals,
@@ -234,8 +236,8 @@ OAuth re-authentication preserves an existing profile id only when the provider'
 
 ## Explicit auth order filtering
 
-- When `auth.order.<provider>` or the auth-store order override is set for a provider, `models status --probe` only probes profile ids that remain in the resolved auth order for that provider. The stored override wins over `auth.order` config.
-- A stored profile for that provider that is omitted from the explicit order is not silently tried later. Probe output reports it with `reasonCode: excluded_by_auth_order` and the detail `Excluded by auth.order for this provider.`
+- When `auth.order.<provider>` or the auth-store order override is set for a provider, `models status --probe` only checks profile ids that remain in the resolved auth order for that provider. The stored override wins over `auth.order` config.
+- A stored profile for that provider that is omitted from the explicit order is not silently tried later. Check output reports it with `reasonCode: excluded_by_auth_order` and the detail `Excluded by auth.order for this provider.`
 - A valid session user pin is an explicit per-session exception: OpenClaw tries that profile first even when it is omitted from the provider order, then uses the ordered same-provider profiles as retry candidates. A cooldown or disabled window applies only to the affected profile; it does not suppress its eligible siblings.
 
 Prepared agent requests use their selected plugin metadata, configuration, workspace, and environment for auth profile eligibility, ordering, and environment credential evidence. An empty selected plugin set remains authoritative; another request’s plugin aliases cannot add profiles or change the credential owner.
@@ -270,10 +272,12 @@ the same selection. Catalog failure and recovery preserve the
 [model inventory contract](/concepts/models#selection-source-and-fallback-strictness);
 they do not change message-execution profile rotation or session pins.
 
-## Probe target resolution
+<a id="probe-target-resolution" />
 
-- Probe targets can come from auth profiles, environment credentials, or `models.json` (result `source`: `profile`, `env`, `models.json`).
-- If a provider has credentials but OpenClaw cannot resolve a probeable model candidate for it, `models status --probe` reports `status: no_model` with `reasonCode: no_model`.
+## Check target resolution
+
+- Check targets can come from auth profiles, environment credentials, or `models.json` (result `source`: `profile`, `env`, `models.json`).
+- If a provider has credentials but OpenClaw cannot resolve a model candidate that can be tested for it, `models status --probe` reports `status: no_model` with `reasonCode: no_model`.
 
 ## External CLI credential discovery
 
@@ -352,7 +356,7 @@ an endpoint to identify its credential realm and that context is missing, any
 pending migration refusal blocks it. An explicitly configured unrelated endpoint
 remains usable.
 
-For script compatibility, probe errors keep this first line unchanged:
+For script compatibility, check errors keep this first line unchanged:
 
 `Auth profile credentials are missing or expired.`
 

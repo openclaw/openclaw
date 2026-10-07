@@ -14,12 +14,12 @@ import {
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import {
-  createTalkRealtimeRelaySession,
+  closeRelaySession,
   ensureTalkRealtimeRelayVoiceSession,
   sendTalkRealtimeRelayAudio,
   stopTalkRealtimeRelaySession,
-} from "../relay/index.js";
-import { closeRelaySession } from "../relay/operations.js";
+} from "../relay/operations.js";
+import { createTalkRealtimeRelaySession } from "../relay/session-create.js";
 import { drainingRelaySessions, relaySessions } from "../relay/state.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
 

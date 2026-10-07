@@ -234,13 +234,8 @@ function buildDreamDiaryActionSuccessMessage(
 ): string {
   switch (method) {
     case "doctor.memory.dedupeDreamDiary": {
-      const removed =
-        typeof payload?.dedupedEntries === "number"
-          ? payload.dedupedEntries
-          : typeof payload?.removedEntries === "number"
-            ? payload.removedEntries
-            : 0;
-      const kept = typeof payload?.keptEntries === "number" ? payload.keptEntries : undefined;
+      const removed = payload?.dedupedEntries ?? payload?.removedEntries ?? 0;
+      const kept = payload?.keptEntries;
       if (kept !== undefined) {
         return t(
           removed === 1
@@ -278,19 +273,15 @@ function buildDreamDiaryActionSuccessMessage(
     }
     case "doctor.memory.backfillDreamDiary":
       return t("dreaming.actions.backfillComplete", {
-        count: String(typeof payload?.written === "number" ? payload.written : 0),
+        count: String(payload?.written ?? 0),
       });
     case "doctor.memory.resetDreamDiary":
       return t("dreaming.actions.resetDiaryComplete", {
-        count: String(typeof payload?.removedEntries === "number" ? payload.removedEntries : 0),
+        count: String(payload?.removedEntries ?? 0),
       });
     default:
       return t("dreaming.actions.clearReplayedComplete", {
-        count: String(
-          typeof payload?.removedShortTermEntries === "number"
-            ? payload.removedShortTermEntries
-            : 0,
-        ),
+        count: String(payload?.removedShortTermEntries ?? 0),
       });
   }
 }

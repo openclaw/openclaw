@@ -1,4 +1,3 @@
-// Builds npm environment overrides for safe project-local installs.
 import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import os from "node:os";
@@ -10,7 +9,6 @@ import { resolveNpmCommand } from "./npm-command.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 
-/** Options that scope npm config and cache paths for project-local installs. */
 export type NpmProjectInstallEnvOptions = NpmConfigScope & {
   cacheDir?: string;
 };
@@ -136,7 +134,7 @@ function runNpmConfigProbe(params: {
     throw result.error;
   }
   if (result.status !== 0) {
-    throw new Error(`npm config probe exited with status ${result.status ?? "unknown"}`);
+    throw new Error(`npm config check exited with status ${result.status ?? "unknown"}`);
   }
   return result.stdout;
 }
@@ -321,7 +319,6 @@ export function createNpmFreshnessBypassArgs(
   return [`--before=${now.toISOString()}`];
 }
 
-/** Applies the same npm freshness bypass policy through environment variables. */
 export function applyNpmFreshnessBypassEnv(
   env: NodeJS.ProcessEnv,
   now = new Date(),
@@ -358,13 +355,24 @@ export function createNpmProjectInstallEnv(
       delete nextEnv[key];
     }
   }
+  // npm accepts every casing; a new lowercase key can shadow an explicit setting.
+  for (const [key, fallback] of Object.entries({
+    npm_config_fetch_retries: "5",
+    npm_config_fetch_retry_maxtimeout: "120000",
+    npm_config_fetch_retry_mintimeout: "10000",
+    npm_config_fetch_timeout: String(UPDATE_NETWORK_TIMEOUT_MS),
+  })) {
+    if (
+      !Object.entries(nextEnv).some(
+        ([name, value]) => name.toLowerCase() === key && value !== undefined,
+      )
+    ) {
+      nextEnv[key] = fallback;
+    }
+  }
   const installEnv: NodeJS.ProcessEnv = {
     ...nextEnv,
     npm_config_dry_run: "false",
-    npm_config_fetch_retries: nextEnv.npm_config_fetch_retries ?? "5",
-    npm_config_fetch_retry_maxtimeout: nextEnv.npm_config_fetch_retry_maxtimeout ?? "120000",
-    npm_config_fetch_retry_mintimeout: nextEnv.npm_config_fetch_retry_mintimeout ?? "10000",
-    npm_config_fetch_timeout: nextEnv.npm_config_fetch_timeout ?? String(UPDATE_NETWORK_TIMEOUT_MS),
     npm_config_global: "false",
     npm_config_location: "project",
     npm_config_package_lock: "false",

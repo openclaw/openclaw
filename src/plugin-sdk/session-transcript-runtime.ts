@@ -25,7 +25,12 @@ import {
   type SessionTranscriptRawDeltaResult,
   type SessionTranscriptVisibleMessageDeltaLimits,
 } from "../config/sessions/session-accessor.js";
-import { captureExternalSessionCommitGuard } from "../config/sessions/session-source-authority.js";
+import type { LockedTranscriptMessageAppendOptions } from "../config/sessions/session-accessor.types.js";
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import {
   resolveMirroredTranscriptText,
   type SessionTranscriptDeliveryMirror,
@@ -86,6 +91,14 @@ export type {
   SessionTranscriptMemoryHitKeyParams,
   SessionTranscriptReadParams,
 };
+
+/** Compose prepared owner assertions; unprepared SDK callbacks retain native transaction visibility. */
+export function composeSessionTranscriptWriteAssertion(
+  sources: readonly (SessionSourceAssertion | undefined)[],
+  check?: (assertSources: () => void) => void,
+): SessionSourceAssertion {
+  return composeSessionSourceAssertion(sources.map(captureExternalSessionCommitGuard), check);
+}
 
 export type SessionTranscriptEvent = unknown;
 
@@ -209,7 +222,7 @@ export type SessionTranscriptWriteLockParams = SessionTranscriptTargetParams & {
 
 export type SessionTranscriptWriteLockContext = {
   appendMessage: <TMessage>(
-    options: Omit<TranscriptMessageAppendOptions<TMessage>, "config">,
+    options: Omit<LockedTranscriptMessageAppendOptions<TMessage>, "config">,
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   publishUpdate: (update?: TranscriptUpdatePayload) => Promise<void>;
   readEvents: () => Promise<SessionTranscriptEvent[]>;

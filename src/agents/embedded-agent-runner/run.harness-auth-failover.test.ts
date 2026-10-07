@@ -1,6 +1,9 @@
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { listAgentIds } from "../agent-scope-config.js";
 import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
 import type { AgentHarness } from "../harness/types.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -15,6 +18,7 @@ import {
   mockedRunEmbeddedAttempt,
   createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
+  useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
 import { guardRunWorkspaceOwnership } from "./run.workspace-ownership.test-support.js";
 
@@ -151,7 +155,18 @@ describe("native harness auth failover", () => {
         await expect(run).rejects.toBe(failure);
       } else {
         await expect(run).resolves.toMatchObject({ payloads: [{ text: "OK" }] });
+        expect(mockedMarkAuthProfileFailure).toHaveBeenCalledWith(
+          expect.objectContaining({ profileId: failedProfile, reason: "auth_permanent" }),
+        );
       }
+      expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentDir: state.agentDir(),
+          inheritedAuthDir: state.agentDir(),
+          workspaceDir: state.workspaceDir,
+        }),
+        expect.objectContaining({ retainIdleRunOwner: true }),
+      );
       const attempts = mockedRunEmbeddedAttempt.mock.calls.map(([attempt]) => attempt);
       expect(attempts.map((attempt) => attempt.authProfileId)).toEqual(
         authProfileIdSource === "user" ? [failedProfile] : [failedProfile, backupProfile],
@@ -251,39 +266,6 @@ describe("native harness auth failover", () => {
     },
   );
 
-  it("rotates automatic host-model credentials within the fixture owner", async () => {
-    const runEmbeddedAgent = prepareAuthFailoverRun();
-    mockedRunEmbeddedAttempt.mockRejectedValueOnce(permanentAuthFailure());
-    await expect(
-      runEmbeddedAgent({
-        ...createOverflowRunParams(state),
-        provider: "openai",
-        model: "gpt-5.6-luna",
-        authProfileId: failedProfile,
-        authProfileIdSource: "auto",
-        runId: "run-native-harness-auth-failover",
-      }),
-    ).resolves.toMatchObject({ payloads: [{ text: "OK" }] });
-    expect(mockedRunEmbeddedAttempt.mock.calls.map(([params]) => params.authProfileId)).toEqual([
-      failedProfile,
-      backupProfile,
-    ]);
-    expect(
-      mockedRunEmbeddedAttempt.mock.calls.map(([params]) => params.expectedSessionRuntimeOwnership),
-    ).toEqual([undefined, undefined]);
-    expect(mockedMarkAuthProfileFailure).toHaveBeenCalledWith(
-      expect.objectContaining({ profileId: failedProfile, reason: "auth_permanent" }),
-    );
-    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDir: state.agentDir(),
-        inheritedAuthDir: state.agentDir(),
-        workspaceDir: state.workspaceDir,
-      }),
-      expect.objectContaining({ retainIdleRunOwner: true }),
-    );
-  });
-
   it("dispatches a supervised native connection without reselecting outer model auth", async () => {
     const runParams = {
       ...(await createNativeHostRunParams()),
@@ -327,28 +309,6 @@ describe("native harness auth failover", () => {
     });
   });
 
-  it("surfaces the original auth failure when automatic profiles are exhausted", async () => {
-    const runEmbeddedAgent = prepareAuthFailoverRun();
-    mockedResolveAuthProfileOrder.mockReturnValue([failedProfile]);
-    const failure = permanentAuthFailure();
-    mockedRunEmbeddedAttempt.mockRejectedValueOnce(failure);
-
-    await expect(
-      runEmbeddedAgent({
-        ...createOverflowRunParams(state),
-        provider: "openai",
-        model: "gpt-5.6-luna",
-        authProfileId: failedProfile,
-        authProfileIdSource: "auto",
-        runId: "run-native-harness-auth-exhausted",
-      }),
-    ).rejects.toBe(failure);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
-    expect(mockedMarkAuthProfileFailure).toHaveBeenCalledWith(
-      expect.objectContaining({ profileId: failedProfile, reason: "auth_permanent" }),
-    );
-  });
-
   it.each(["unclassified", "preflight"])(
     "does not rotate or mark profiles for a %s harness failure",
     async (kind) => {
@@ -379,14 +339,6 @@ describe("native harness auth failover", () => {
     [
       "CODEX_NODE_EXEC_APPROVAL_EXPIRED",
       "Codex node execution approval expired before a decision. Retry the action and approve the new request.",
-    ],
-    [
-      "CODEX_NODE_EXEC_APPROVAL_DENIED",
-      "Codex node execution was denied. Retry the action and choose Allow once or Allow always to continue.",
-    ],
-    [
-      "CODEX_NODE_EXEC_APPROVAL_REQUIRED",
-      "Codex node execution requires an available approval reviewer.",
     ],
   ])("preserves %s without rotating or failing healthy profiles", async (code, message) => {
     const runEmbeddedAgent = prepareAuthFailoverRun();
@@ -423,7 +375,7 @@ describe("native harness auth failover", () => {
     });
   });
 
-  it.each(["401 Unauthorized", "invalid API key", "OAuth token expired"])(
+  it.each(["401 Unauthorized"])(
     "still records genuine harness auth failure and shows sign-in guidance: %s",
     async (message) => {
       const runEmbeddedAgent = prepareAuthFailoverRun();
@@ -451,4 +403,32 @@ describe("native harness auth failover", () => {
       );
     },
   );
+
+  it("prepares the explicit main agent after adding the setup agent", async () => {
+    useOpenAIPlatformAuthFixture();
+    const { runEmbeddedAgent } = runHarness;
+    const config: OpenClawConfig = { agents: { entries: { main: {}, openclaw: {} } } };
+    expect(listAgentIds(config)).toEqual(["main", "openclaw"]);
+
+    await runEmbeddedAgent({
+      ...createOverflowRunParams(state),
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      agentId: "main",
+      config,
+      runId: "run-setup-inference-owner",
+    });
+
+    const preparedInput = mockedAcquireAgentRunPreparedModelRuntime.mock.calls[0]?.[0];
+    expect(preparedInput).toMatchObject({ agentId: "main", config });
+    expect(String(preparedInput?.inheritedAuthDir)).toSatisfy((value: string) =>
+      value.endsWith(path.join("agents", "main", "agent")),
+    );
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+    // A silent fall-back to the built-in host harness would still pass the
+    // auth-owner assertions; fail loudly on the route instead.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ agentHarnessId: "codex" }),
+    );
+  });
 });

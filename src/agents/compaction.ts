@@ -2,9 +2,6 @@ import {
   CompactionError,
   SummaryOutputBudgetError,
 } from "../../packages/agent-core/src/harness/types.js";
-/**
- * Summarization and fallback helpers for transcript compaction.
- */
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import { sleepWithAbort } from "../infra/backoff.js";
@@ -52,7 +49,6 @@ const IDENTIFIER_PRESERVATION_INSTRUCTIONS =
   "Preserve all opaque identifiers exactly as written (no shortening or reconstruction), " +
   "including UUIDs, hashes, IDs, hostnames, IPs, ports, URLs, and file names.";
 
-/** Optional instruction policy for preserving identifiers during compaction. */
 export type CompactionSummarizationInstructions = {
   identifierPolicy?: AgentCompactionIdentifierPolicy | "custom";
   identifierInstructions?: string;
@@ -76,7 +72,6 @@ type CompactionSummaryParams = {
   usageSink?: SessionModelUsageSink;
 };
 
-/** Combines identifier-preservation and caller-provided compaction instructions. */
 function buildCompactionSummarizationInstructions(
   customInstructions?: string,
   instructions?: CompactionSummarizationInstructions,
@@ -173,10 +168,6 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
   return summary ?? DEFAULT_SUMMARY_FALLBACK;
 }
 
-/**
- * Summarize with progressive fallback for handling oversized messages.
- * If full summarization fails, tries partial summarization excluding oversized messages.
- */
 async function summarizeWithFallback(params: CompactionSummaryParams): Promise<string> {
   const { messages, contextWindow } = params;
 
@@ -240,7 +231,6 @@ async function summarizeWithFallback(params: CompactionSummaryParams): Promise<s
   );
 }
 
-/** Extracts a compact timestamp range from a chunk of messages for merge metadata. */
 function extractChunkTimeRange(chunk: AgentMessage[]): string {
   let earliest = Number.POSITIVE_INFINITY;
   let latest = 0;
@@ -265,7 +255,6 @@ function extractChunkTimeRange(chunk: AgentMessage[]): string {
   return ` [${range} UTC]`;
 }
 
-/** Summarizes history in multiple stages when a single pass would be too large. */
 export async function summarizeInStages(
   params: CompactionSummaryParams & {
     parts?: number;
@@ -348,7 +337,6 @@ export async function summarizeInStages(
   });
 }
 
-/** Resolves a positive context-window token count from model metadata. */
 export function resolveContextWindowTokens(model?: ExtensionContext["model"]): number {
   const effective =
     (model as { contextTokens?: number } | undefined)?.contextTokens ?? model?.contextWindow;

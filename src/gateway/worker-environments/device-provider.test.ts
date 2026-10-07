@@ -17,6 +17,29 @@ import {
   reconcileDeviceWorker,
 } from "./device-provider.js";
 
+it.each([undefined, "gateway", "worker"])(
+  "accepts explicit inference %s at device allocation",
+  async (inference) => {
+    const { provider } = createDeviceWorkerRuntime({ getPairedDevice: async () => null });
+    await expect(
+      provider.resolveAllocation(
+        { device: "paired-node", ...(inference ? { inference } : {}) },
+        "allocation",
+      ),
+    ).resolves.toMatchObject({ sharedHost: true });
+  },
+);
+
+it.each(["runtime-local", "unknown"])(
+  "rejects invalid inference %s at device allocation",
+  async (inference) => {
+    const { provider } = createDeviceWorkerRuntime({ getPairedDevice: async () => null });
+    await expect(
+      provider.resolveAllocation({ device: "paired-node", inference }, "invalid"),
+    ).rejects.toBeInstanceOf(WorkerProviderError);
+  },
+);
+
 const DEVICE_ID = "device-session-host";
 const DAY_MS = 24 * 60 * 60 * 1_000;
 function pairedDevice(

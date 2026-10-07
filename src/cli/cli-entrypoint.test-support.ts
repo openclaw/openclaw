@@ -165,11 +165,6 @@ export const updateFinalizationOutputEntrypoint = {
 
 // Direct-stop children use the invocation's prepared graph before readiness starts.
 export const gatewayDirectStopEntrypoints = {
-  startupOrphanFixture: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "../gateway/startup-orphan-process.test-support",
-    distWorkerPath: "gateway/startup-orphan-process.test-support.js",
-  },
   forcedCronFixture: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "gateway-cli/run-loop.forced-cron.test-support",

@@ -1,4 +1,3 @@
-/** Command authorization helpers for owner and allowlist checks. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -243,7 +242,8 @@ function resolveCommandsAllowFromList(
 ): string[] | null {
   const commandsAllowFrom = params.cfg.commands?.allowFrom;
   if (!commandsAllowFrom || typeof commandsAllowFrom !== "object") {
-    return null; // Not configured, fall back to channel allowFrom
+    // An absent command allowlist falls back to the channel's allowFrom.
+    return null;
   }
 
   const providerKey = params.providerId ?? "";
@@ -252,7 +252,7 @@ function resolveCommandsAllowFromList(
 
   const rawList = Array.isArray(providerList) ? providerList : globalList;
   if (!Array.isArray(rawList)) {
-    return null; // No applicable list found
+    return null;
   }
 
   return formatAllowFromList({ ...params, allowFrom: rawList });
@@ -404,7 +404,6 @@ function resolveCommandAuthorizationState(params: CommandAuthorizationParams): {
     cfg.commands?.allowFrom && typeof cfg.commands.allowFrom === "object",
   );
 
-  // Check if commands.allowFrom is configured (separate command authorization)
   const commandsAllowFromList = resolveCommandsAllowFromList({
     plugin,
     cfg,

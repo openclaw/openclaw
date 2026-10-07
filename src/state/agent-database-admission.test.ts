@@ -80,7 +80,9 @@ describe("agent database admission", () => {
         operation: "gateway-startup",
         config,
       }).catch((error: unknown) => error);
-      expect(findStartupMaintenanceRequiredError(failure)).toMatchObject({ kind: "newer-schema" });
+      expect(findStartupMaintenanceRequiredError(failure), String(failure)).toMatchObject({
+        kind: "newer-schema",
+      });
       expect(failure).toBeInstanceOf(AggregateError);
       expect(String(failure)).toContain(unavailablePath);
       expect(String(failure)).toContain(newerPath);

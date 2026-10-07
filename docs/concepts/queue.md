@@ -65,12 +65,18 @@ Configure globally or per channel via `messages.queue`:
       mode: "steer",
       cap: 20,
       drop: "summarize",
-      byChannel: { discord: "collect" },
-      debounceMsByChannel: { discord: 1000 },
+      byChannel: { discord: "collect", x: "followup" },
+      debounceMsByChannel: { discord: 1000, x: 500 },
     },
   },
 }
 ```
+
+Both maps accept channel IDs from bundled and installed plugins. For example,
+`messages.queue.byChannel.x` sets the X plugin's queue mode. Config validation
+warns about IDs absent from the channel registry; install the corresponding
+plugin or correct the key. Queue modes and nonnegative integer debounce values
+are still validated.
 
 ## Queue options
 

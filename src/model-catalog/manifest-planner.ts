@@ -174,10 +174,7 @@ export function planManifestModelCatalogRows(params: {
             }),
           );
           // Both normalizers return owned sorted arrays; only a real overlay needs merging.
-          rows.sort(
-            (left, right) =>
-              left.provider.localeCompare(right.provider) || left.id.localeCompare(right.id),
-          );
+          rows.sort((left, right) => left.id.localeCompare(right.id));
         }
         if (rows.length === 0) {
           continue;

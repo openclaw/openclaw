@@ -33,7 +33,6 @@ import {
 } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
-/** `<openclaw-browser-panel>` — the dockable gateway browser surface. */
 class OpenClawBrowserPanel
   extends OpenClawLitElement
   implements BrowserPanelControllerHost, PanelHostedTabsElement

@@ -9,6 +9,7 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
+import type { SessionEntryReadScope } from "../../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
@@ -103,11 +104,13 @@ export function loadAccessorSessionEntryForGatewayTarget(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   clone?: boolean;
+  projection?: SessionEntryReadScope["projection"];
 }) {
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg: params.cfg,
     key: params.key,
     exactRead: true,
+    projection: params.projection,
     ...(params.clone === false ? { clone: false } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });

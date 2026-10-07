@@ -137,6 +137,7 @@ public actor GatewayNodeSession {
     private var computerInvokeReceiptOrder: [ComputerInvokeReceiptKey] = []
     #if DEBUG
     private var computerInvokeReceiptJoinCounts: [UUID: Int] = [:]
+    private var computerInvokeReceiptJoinWaiters: [CheckedContinuation<Void, Never>] = []
     var testBeforeChannelShutdown: (@Sendable () async -> Void)?
     #endif
 
@@ -1357,6 +1358,11 @@ extension GatewayNodeSession {
             }
             #if DEBUG
             self.computerInvokeReceiptJoinCounts[receipt.id, default: 0] += 1
+            let waiters = self.computerInvokeReceiptJoinWaiters
+            self.computerInvokeReceiptJoinWaiters.removeAll()
+            for waiter in waiters {
+                waiter.resume()
+            }
             #endif
             let response = switch receipt.state {
             case let .inFlight(task): await task.value
@@ -1453,6 +1459,22 @@ extension GatewayNodeSession {
             timeoutMs: timeoutMs,
             receiptScope: receiptScope,
             onInvoke: onInvoke)
+    }
+
+    // Waits for recorded receipt joins without a test-side deadline.
+    // periphery:ignore - package tests await receipt joining without exposing the receipt store.
+    func waitForComputerReceiptJoinsForTesting(
+        idempotencyKey: String,
+        receiptScope: String,
+        count: Int) async
+    {
+        while self
+            .computerReceiptJoinCountForTesting(idempotencyKey: idempotencyKey, receiptScope: receiptScope) < count
+        {
+            await withCheckedContinuation { continuation in
+                self.computerInvokeReceiptJoinWaiters.append(continuation)
+            }
+        }
     }
 
     // periphery:ignore - package tests assert receipt joining without exposing the receipt store.

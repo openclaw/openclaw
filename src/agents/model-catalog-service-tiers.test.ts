@@ -105,36 +105,36 @@ describe("account-bound catalog service tiers", () => {
           evaluation: selectedEvaluation,
           runtimeId: "openclaw",
           snapshot: { entries: [], routeVariants: [] },
-          accountCatalog,
         });
       const observation = {
         modelId: "synthetic-api-model",
         runtimeId: "openclaw",
         ...platformRoute,
-        serviceTiers: ["priority"],
+        requestedTier: "ultrafast",
+        responseTier: "priority",
       };
       const record = accountCatalog.prepareServiceTierObserver({ selectedCredential: credential });
       expect(record(observation)).toBe(true);
-      expect(tiers()).toEqual(["priority"]);
+      expect(tiers()).toEqual(["priority", "ultrafast"]);
       const republished = evaluate({ cfg: { ...cfg, gateway: { port: 19001 } }, env });
       expect(republished.selectedCredential?.source).toBe("direct");
-      expect(tiers(republished)).toEqual(["priority"]);
+      expect(tiers(republished)).toEqual(["priority", "ultrafast"]);
       expect(
-        accountCatalog.readServiceTiers({
+        accountCatalog.readServiceTierObservation({
           ...observation,
           identityKey: credential.identityKey,
           modelId: "other-model",
         }),
       ).toBeUndefined();
       expect(
-        accountCatalog.readServiceTiers({
+        accountCatalog.readServiceTierObservation({
           ...observation,
           identityKey: credential.identityKey,
           baseUrl: "https://other.example/v1",
         }),
       ).toBeUndefined();
       accountCatalog.reconcileAuth({ version: 1, profiles: {} }, () => true);
-      expect(tiers()).toEqual(["priority"]);
+      expect(tiers()).toEqual(["priority", "ultrafast"]);
       const originalBinding = structuredClone(provider.apiKey);
       if (typeof provider.apiKey === "string") {
         provider.apiKey = "synthetic-key-b";
@@ -144,7 +144,10 @@ describe("account-bound catalog service tiers", () => {
       const replacementBinding = provider.apiKey;
       if (eviction === "read") {
         expect(
-          accountCatalog.readServiceTiers({ ...observation, identityKey: credential.identityKey }),
+          accountCatalog.readServiceTierObservation({
+            ...observation,
+            identityKey: credential.identityKey,
+          }),
         ).toBeUndefined();
       } else if (eviction === "record") {
         expect(record(observation)).toBe(false);
@@ -156,7 +159,10 @@ describe("account-bound catalog service tiers", () => {
       expect(record(observation)).toBe(false);
       provider.apiKey = replacementBinding;
       expect(
-        accountCatalog.readServiceTiers({ ...observation, identityKey: credential.identityKey }),
+        accountCatalog.readServiceTierObservation({
+          ...observation,
+          identityKey: credential.identityKey,
+        }),
       ).toBeUndefined();
       expect(record(observation)).toBe(false);
       const next = selected();
@@ -173,7 +179,10 @@ describe("account-bound catalog service tiers", () => {
       retirement.abort();
       expect(replacement(observation)).toBe(false);
       expect(
-        accountCatalog.readServiceTiers({ ...observation, identityKey: credential.identityKey }),
+        accountCatalog.readServiceTierObservation({
+          ...observation,
+          identityKey: credential.identityKey,
+        }),
       ).toBeUndefined();
     },
   );

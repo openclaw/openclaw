@@ -1,6 +1,5 @@
 import { formatByteSize } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
@@ -31,6 +30,7 @@ import type { GatewayDiscoverOpts } from "./discover.js";
 import { isGatewayMachineOutput } from "./output-mode.js";
 import { addGatewayRestartHandoffCommands } from "./register-restart-handoff.js";
 import { addGatewayRunCommand } from "./run-command.js";
+import { normalizeStabilityBundleTarget } from "./stability-bundle-target.js";
 import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
 
 type GatewayRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
@@ -239,13 +239,6 @@ function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boo
   return lines;
 }
 
-function normalizeStabilityBundleTarget(raw: unknown): string | null {
-  if (raw === undefined || raw === false) {
-    return null;
-  }
-  return normalizeOptionalString(raw) ?? "latest";
-}
-
 function renderStabilityBundleSummary(params: {
   bundle: DiagnosticStabilityBundle;
   path: string;
@@ -407,7 +400,7 @@ export function registerGatewayCli(program: Command) {
   );
 
   addGatewayServiceCommands(gateway, {
-    statusDescription: "Show gateway service status + probe connectivity/capability",
+    statusDescription: "Show gateway service status + check connectivity/capability",
   });
   addGatewayRestartHandoffCommands(gateway);
   setCommandJsonMode(gateway, "output", ({ argv }) => isGatewayMachineOutput(argv));
@@ -720,16 +713,16 @@ export function registerGatewayCli(program: Command) {
   gateway
     .command("probe")
     .description(
-      "Show gateway reachability, auth capability, and read-probe summary (local + remote)",
+      "Show gateway reachability, auth capability, and read-check summary (local + remote)",
     )
-    .option("--url <url>", "Explicit Gateway WebSocket URL (still probes localhost)")
+    .option("--url <url>", "Explicit Gateway WebSocket URL (still checks localhost)")
     .option("--port <port>", "Local Gateway port")
     .option("--ssh <target>", "SSH target for remote gateway tunnel (user@host or user@host:port)")
     .option("--ssh-identity <path>", "SSH identity file path")
     .option("--ssh-auto", "Try to derive an SSH target from Bonjour discovery", false)
-    .option("--token <token>", "Gateway token (applies to all probes)")
-    .option("--password <password>", "Gateway password (applies to all probes)")
-    .option("--timeout <ms>", "Overall probe budget in ms", "3000")
+    .option("--token <token>", "Gateway token (applies to all checks)")
+    .option("--password <password>", "Gateway password (applies to all checks)")
+    .option("--timeout <ms>", "Overall check budget in ms", "3000")
     .option("--json", "Output JSON", false)
     .action(
       gatewayAction(async (opts, command) => {

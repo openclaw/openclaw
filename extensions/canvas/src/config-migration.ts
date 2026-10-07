@@ -1,4 +1,3 @@
-/** Canvas config migration to the single surviving route-enable switch. */
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

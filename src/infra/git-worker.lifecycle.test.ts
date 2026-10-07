@@ -7,7 +7,6 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeGitWorktreeOperation } from "../agents/worktrees/git-worktree-operations.runtime.js";
 import * as worktreeGit from "../agents/worktrees/git.js";
@@ -25,7 +24,6 @@ import {
 import * as gitExec from "./git-exec.js";
 import { installUnknownDirentFixture } from "./git-worker-dir.test-support.js";
 import { runGitWorkerOperation, type GitWorkerOperationOptions } from "./git-worker.js";
-import { WorkerTaskPool } from "./worker-task-pool.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -167,106 +165,50 @@ function waitForLifecyclePoint(
 }
 
 describe("Git operation host lifecycle", () => {
-  it("bounds content Git batches through cancellation while metadata remains responsive", async ({
-    signal,
-  }) => {
-    const release = createDeferredCore();
-    const started: string[] = [];
-    let active = 0;
-    let maximum = 0;
-    const result = {
-      stdout: Buffer.alloc(0),
-      stderr: Buffer.alloc(0),
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit" as const,
-      timeoutMs: 120_000,
-      windowsEncoding: null,
-    } satisfies Awaited<ReturnType<typeof worktreeGit.runGitBytes>>;
-    const run = async (cwd: string) => {
-      if (cwd === "metadata") {
-        return result;
-      }
-      started.push(cwd);
-      maximum = Math.max(maximum, ++active);
-      try {
-        await release.promise;
-        return result;
-      } finally {
-        active--;
-      }
-    };
-    // Exercise host batch admission without starting a worker or child process.
-    vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async (command, options) => {
-      const input = asOptionalRecord(asOptionalRecord(command)?.input);
-      const cwd = input?.cwd ?? input?.root ?? input?.repoRoot;
-      const taskSignal = options.signal ?? new AbortController().signal;
-      await options.onRequest!(
-        {
-          type: "git.batch",
-          input: {
-            requests: ["git.text", "git.buffer"].map((type) => ({
-              type,
-              input: { cwd, args: ["diff", "--shortstat"], options: {} },
-            })),
-          },
-        },
-        { signal: taskSignal, yieldSignal: taskSignal },
-      );
-      return { ok: true, value: undefined };
-    });
-    const gitCommands = { text: run, buffered: run };
-    const abortRunning = new AbortController();
-    const abortQueued = new AbortController();
-    let firstSettled = false;
-    const first = settle(
-      runGitWorkerOperation(
-        { type: "checkout.diff", input: { cwd: "diff", scope: "uncommitted" } },
-        { git: gitCommands, signal: abortRunning.signal },
-      ),
-    ).then((value) => {
-      firstSettled = true;
-      return value;
-    });
-    const second = settle(
-      runGitWorkerOperation(
-        { type: "checkout.baseline", input: { cwd: "baseline" } },
-        { git: gitCommands },
-      ),
+  it("uses local PR statistics when Git supports disabling lazy fetches", async () => {
+    const root = tempDirs.make("openclaw-pr-facts-partial-clone-");
+    const localOnly = (await gitResult(root, ["--no-lazy-fetch", "version"])).code === 0;
+    const { clone, commit } = await partialClone(root);
+    const blob = await git(clone, "rev-parse", `${commit}:README.md`);
+    await git(clone, "read-tree", commit);
+    const feature = await git(
+      clone,
+      "commit-tree",
+      `${commit}^{tree}`,
+      "-p",
+      commit,
+      "-m",
+      "feature",
     );
-    const queued = settle(
-      runGitWorkerOperation(
-        {
-          type: "pull-request.branch-facts",
-          input: { root: "canceled", branch: "main", mergedHeads: [] },
+    await git(clone, "update-ref", "refs/heads/feature", feature);
+    await git(clone, "symbolic-ref", "HEAD", "refs/heads/feature");
+    await git(clone, "update-ref", "refs/remotes/origin/feature", feature);
+    // Same-size dirty content also exercises Git's stat-unmatch refresh path.
+    await fs.writeFile(path.join(clone, "README.md"), "work\n");
+    const trace = path.join(root, "git-trace.jsonl");
+    vi.stubEnv("GIT_TRACE2_EVENT", trace);
+    const readFacts = () =>
+      runGitWorkerOperation({
+        type: "pull-request.branch-facts",
+        input: {
+          root: clone,
+          branch: "feature",
+          defaultBranch: "main",
+          mergedHeads: [],
+          refreshIndex: true,
         },
-        { git: gitCommands, signal: abortQueued.signal },
-      ),
-    );
-    try {
-      await withinTest(
-        runGitWorkerOperation(
-          { type: "repository.branches", input: { repoRoot: "metadata" } },
-          { git: gitCommands },
-        ),
-        signal,
-      );
-      expect(started).toEqual(["diff", "diff"]);
-      abortQueued.abort();
-      expect((await withinTest(queued, signal)).rejected).toBe(true);
-      abortRunning.abort();
-      expect(firstSettled).toBe(false);
-      expect(active).toBe(2);
-    } finally {
-      release.resolve();
-      await Promise.all([first, second, queued]);
-    }
-    expect((await first).rejected).toBe(true);
-    expect((await second).rejected).toBe(false);
-    expect(started).toEqual(["diff", "diff", "baseline", "baseline"]);
-    expect(maximum).toBe(2);
-    expect(active).toBe(0);
+      });
+
+    const stats = { additions: 1, deletions: 1, changedFiles: 1 };
+    expect(await readFacts()).toEqual({ creatable: true, stats: localOnly ? null : stats });
+    expect(await traceStarts(trace, "fetch")).toHaveLength(localOnly ? 0 : 1);
+
+    await git(clone, "fetch", "--no-tags", "--no-write-fetch-head", "origin", blob);
+    expect(await readFacts()).toEqual({
+      creatable: true,
+      stats,
+    });
+    expect(await traceStarts(trace, "fetch")).toHaveLength(localOnly ? 0 : 1);
   });
 
   it("bounds ignored dependency output during snapshot without losing private staged inputs", async () => {

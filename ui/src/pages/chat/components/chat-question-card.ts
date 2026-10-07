@@ -119,13 +119,10 @@ function terminalAnswer(prompt: QuestionPrompt, question: QuestionPanelQuestion)
     return t("chat.questions.answered");
   }
   const answer = prompt.answers?.answers[question.questionId]?.join(", ");
-  if (answer) {
-    return answer;
-  }
-  if (prompt.answeredElsewhere) {
-    return t("chat.questions.answeredElsewhere");
-  }
-  return t("chat.questions.answered");
+  return (
+    answer ||
+    t(prompt.answeredElsewhere ? "chat.questions.answeredElsewhere" : "chat.questions.answered")
+  );
 }
 
 export function renderChatQuestionSummary(prompt: QuestionPrompt) {

@@ -3,6 +3,7 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import type { QualifiedSessionEntryAccessTarget } from "../config/sessions/session-accessor.types.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
+import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { listSessionMembers } from "../config/sessions/session-sharing-store.js";
 import type { SessionMember } from "../config/sessions/session-sharing-store.kernel.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -140,7 +141,65 @@ export function withIncognitoGatewaySessionStoreTarget<T>(params: {
     membership: ReadonlyMap<string, readonly SessionMember[]>,
     assertCurrent: () => void,
   ) => T;
-}): T {
+}): T | Promise<T> {
+  const binding = captureIncognitoSessionBinding({
+    agentId: params.identity.agentId,
+    sessionKey: params.identity.canonicalKey,
+    env: params.env,
+  });
+  if (binding) {
+    const { actor, admissionSignal } = binding;
+    const sessionKey = params.identity.canonicalKey;
+    const authority = { assertCurrent: () => admissionSignal?.throwIfAborted() };
+    return actor.sessions
+      .withSharedState(async () => {
+        const read = await actor.sessions.read(authority, { sessionKey });
+        const members = params.includeMembership
+          ? await actor.sessions.sideData(authority, {
+              type: "session.members.read",
+              input: { sessionKey },
+            })
+          : [];
+        let consuming = true;
+        const assertCurrent = () => {
+          if (!consuming) {
+            throw new Error("Incognito session source is no longer retained");
+          }
+          authority.assertCurrent();
+          actor.assertReadable();
+          read.snapshot.assertCurrent();
+        };
+        try {
+          assertCurrent();
+          const result = params.consume(
+            {
+              agentId: actor.agentId,
+              canonicalKey: sessionKey,
+              storePath: actor.path,
+              storeKeys: [sessionKey],
+              store: read.entry ? { [sessionKey]: read.entry } : {},
+              readSource: { agentId: actor.agentId, path: actor.path },
+            },
+            params.includeMembership ? new Map([[sessionKey, members]]) : new Map(),
+            assertCurrent,
+          );
+          if (isPromiseLike(result)) {
+            void Promise.resolve(result).catch(() => undefined);
+            throw new Error("Session entry consumers must remain synchronous");
+          }
+          assertCurrent();
+          return { result, snapshot: read.snapshot };
+        } finally {
+          consuming = false;
+        }
+      })
+      .then(({ result, snapshot }) => {
+        authority.assertCurrent();
+        actor.assertReadable();
+        snapshot.assertCurrent();
+        return result;
+      });
+  }
   let active = true;
   let changed = false;
   const storePath = resolveIncognitoOpenClawAgentSqlitePath({

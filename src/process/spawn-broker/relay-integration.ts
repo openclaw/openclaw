@@ -1,6 +1,7 @@
 import type { ChildProcess, Serializable, SpawnOptions } from "node:child_process";
 import type { Duplex } from "node:stream";
 import { resolveRuntimeWorkerArgv } from "../../infra/runtime-worker-url.js";
+import { resolveLaunchableNodePath } from "../../infra/stable-node-path.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 import { spawnProcess } from "../spawn-utils.js";
 import { createServiceChildCleanup } from "../supervisor/service-child-cleanup.js";
@@ -88,12 +89,16 @@ export function spawnServiceChildRelay(params: {
   cleanup: ReturnType<typeof createServiceChildCleanup>;
   transportReady: Promise<void> | undefined;
 } {
-  const child = spawnProcess(process.execPath, resolveRuntimeWorkerArgv(params.workerUrl), {
-    stdio: params.stdio,
-    detached: params.detached,
-    windowsHide: true,
-    env: params.env,
-  });
+  const child = spawnProcess(
+    resolveLaunchableNodePath(),
+    resolveRuntimeWorkerArgv(params.workerUrl),
+    {
+      stdio: params.stdio,
+      detached: params.detached,
+      windowsHide: true,
+      env: params.env,
+    },
+  );
   const cleanup = createServiceChildCleanup();
   params.onSpawnCleanup?.(cleanup.promise);
   let transportReady: Promise<void> | undefined;

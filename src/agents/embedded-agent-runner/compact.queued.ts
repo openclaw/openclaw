@@ -34,7 +34,7 @@ import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-mod
 import type { SandboxContext } from "../sandbox/types.js";
 import { beginForegroundSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { prepareSessionPlacementSandbox } from "../session-placement-admission.js";
-import { deferOwningContextEngineBudgetCompaction } from "./compact.deferred-context-engine.js";
+import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
 import { runForegroundCompactionWork } from "./compact.foreground-work.js";
 import { compactNativeCliSession } from "./compact.js";
 import {
@@ -58,6 +58,7 @@ import {
 import type { acceptCompactionSuccessor } from "./compaction-successor.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import type { ContextEngineMaintenanceResources } from "./context-engine-maintenance-work.js";
+import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { log } from "./logger.js";
 import { resolveTieredModel } from "./model-resolution.js";
 import { resolveModelAsync } from "./model.js";
@@ -650,15 +651,58 @@ async function compactResolvedContextEngine(
     contextEngine.info.turnMaintenanceMode === "background" &&
     typeof contextEngine.maintain === "function"
   ) {
-    return await deferOwningContextEngineBudgetCompaction({
-      compactParams: preparedParams,
-      contextEngineSessionKey,
-      contextEngine,
-      contextEngineRuntimeContext,
-      contextEngineRuntimeSettings,
-      onDeferredMaintenance: transferContextEngineOwnership,
-      factoryResources,
-    });
+    let deferredScheduled = false;
+    let deferredScheduleFailure: unknown;
+    try {
+      await runContextEngineMaintenance({
+        contextEngine,
+        sessionId: preparedParams.sessionId,
+        sessionKey: contextEngineSessionKey ?? preparedParams.sessionKey,
+        sessionTarget: projectQueuedCompactionSessionTarget(preparedParams),
+        sessionFile: preparedParams.sessionFile,
+        reason: "turn",
+        runtimeContext: contextEngineRuntimeContext,
+        runtimeSettings: contextEngineRuntimeSettings,
+        config: preparedParams.config,
+        contextEngineAgentId: preparedParams.contextEngineAgentId,
+        disposeDeferredContextEngineAfterMaintenance: true,
+        factoryResources,
+        onDeferredMaintenance: (completion) => {
+          deferredScheduled = true;
+          transferContextEngineOwnership(completion);
+        },
+        onDeferredMaintenanceFailure: (error) => {
+          deferredScheduleFailure = error;
+        },
+      });
+    } catch (err) {
+      log.warn("failed to defer context-engine budget compaction", {
+        errorMessage: formatErrorMessage(err),
+      });
+    }
+    if (!deferredScheduled || deferredScheduleFailure) {
+      log.warn(
+        `[compaction] failed to schedule context-engine-owned budget compaction background maintenance ` +
+          `(sessionKey=${preparedParams.sessionKey ?? preparedParams.sessionId}` +
+          `${deferredScheduleFailure ? ` error=${formatErrorMessage(deferredScheduleFailure)}` : ""})`,
+      );
+      return {
+        ok: false,
+        compacted: false,
+        reason: "failed to schedule background context-engine maintenance",
+        failure: { reason: "deferred_compaction_not_scheduled" },
+      };
+    }
+    log.info(
+      `[compaction] deferred context-engine-owned budget compaction to background maintenance ` +
+        `(sessionKey=${preparedParams.sessionKey ?? preparedParams.sessionId} ` +
+        `scheduled=${String(deferredScheduled)})`,
+    );
+    return {
+      ok: true,
+      compacted: false,
+      reason: DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON,
+    };
   }
   return await executeQueuedContextEngineCompaction({
     params,

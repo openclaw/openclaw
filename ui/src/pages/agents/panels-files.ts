@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import type { AgentFileEntry, AgentsFilesListResult } from "../../api/types.ts";
+import type { AgentFileEntry } from "../../api/types.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
@@ -21,7 +21,7 @@ import {
 } from "./agent-file-preview-state.ts";
 import { agentFilePreview } from "./agent-file-preview.ts";
 import { renderAgentFileError } from "./file-conflict-callout.ts";
-import { hasAgentFileContent } from "./files.ts";
+import { hasAgentFileContent, type AgentFilesViewState } from "./files.ts";
 
 function getExtensionLabel(fileName: string) {
   const ext = fileName.split(".").pop()?.trim().toLowerCase();
@@ -72,25 +72,19 @@ function closeAgentFilePreview(event: Event, focusEditor = false) {
   resetAgentFilePreview(modal);
 }
 
-export function renderAgentFiles(params: {
-  agentId: string;
-  agentFilesList: AgentsFilesListResult | null;
-  agentFilesLoading: boolean;
-  agentFilesError: string | null;
-  agentFileActive: string | null;
-  agentFileContents: Record<string, string>;
-  agentFileDrafts: Record<string, string>;
-  agentFileSaving: boolean;
-  agentFileConflict: string | null;
-  canWrite: boolean;
-  onLoadFiles: (agentId: string) => void;
-  onSelectFile: (name: string) => void;
-  onFileDraftChange: (name: string, content: string) => void;
-  onFileReset: (name: string) => void;
-  onFileSave: (name: string) => void;
-  onFileReload: (name: string) => void;
-  onFileOverwrite: (name: string) => void;
-}) {
+export function renderAgentFiles(
+  params: AgentFilesViewState & {
+    agentId: string;
+    canWrite: boolean;
+    onLoadFiles: (agentId: string) => void;
+    onSelectFile: (name: string) => void;
+    onFileDraftChange: (name: string, content: string) => void;
+    onFileReset: (name: string) => void;
+    onFileSave: (name: string) => void;
+    onFileReload: (name: string) => void;
+    onFileOverwrite: (name: string) => void;
+  },
+) {
   const list = params.agentFilesList?.agentId === params.agentId ? params.agentFilesList : null;
   const files = list?.files ?? [];
   const active = params.agentFileActive ?? null;

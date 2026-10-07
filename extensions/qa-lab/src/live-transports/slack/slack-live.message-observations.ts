@@ -279,8 +279,5 @@ function resolveSlackChannelReadySince(params: {
 
 function resolveSlackQaReadyTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
   const raw = env.OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS;
-  if (!raw) {
-    return SLACK_QA_DEFAULT_READY_TIMEOUT_MS;
-  }
   return parseStrictPositiveInteger(raw) ?? SLACK_QA_DEFAULT_READY_TIMEOUT_MS;
 }

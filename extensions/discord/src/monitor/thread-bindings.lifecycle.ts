@@ -1,5 +1,6 @@
 import {
   readAcpSessionEntry,
+  prepareAcpSessionEntryRead,
   rethrowIncognitoSessionError,
   type AcpSessionEntryPreparer,
   type AcpSessionStoreEntry,
@@ -268,7 +269,7 @@ async function reconcileAcpThreadBindings(
       sessionKey,
       agentId: binding.agentId,
     };
-    const preparation = params.prepareSession?.(input);
+    const preparation = (params.prepareSession ?? prepareAcpSessionEntryRead)(input);
     const prepared = preparation ? await preparation : undefined;
     if (prepared) {
       preparations.set(binding, prepared);

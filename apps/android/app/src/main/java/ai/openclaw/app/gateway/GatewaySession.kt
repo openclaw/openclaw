@@ -343,7 +343,7 @@ class GatewaySession(
   private val onDisconnected: (message: String) -> Unit,
   private val onConnectFailure: (error: ErrorShape, pauseReconnect: Boolean) -> Unit = { _, _ -> },
   private val onEvent: (event: String, payloadJson: String?) -> Unit,
-  private val onInvoke: (suspend (InvokeRequest) -> InvokeResult)? = null,
+  private val onInvoke: (suspend (GatewayNodeInvokeRequest) -> InvokeResult)? = null,
   private val onTlsFingerprint: ((stableId: String, fingerprint: String) -> Unit)? = null,
   private val customHeadersProvider: ((stableId: String) -> Map<String, String>)? = null,
   private val connectTimeoutMs: Long = GATEWAY_CONNECT_TIMEOUT_MS,
@@ -355,17 +355,6 @@ class GatewaySession(
     // Keep connect timeout above observed gateway unauthorized close on lower-end devices.
     private const val CONNECT_RPC_TIMEOUT_MS = 12_000L
   }
-
-  /**
-   * Gateway node.invoke request routed to Android command handlers.
-   */
-  data class InvokeRequest(
-    val id: String,
-    val nodeId: String,
-    val command: String,
-    val paramsJson: String?,
-    val timeoutMs: Long?,
-  )
 
   data class InvokeResult(
     val ok: Boolean,
@@ -790,12 +779,12 @@ class GatewaySession(
   private fun buildNodeEventParams(
     event: String,
     payloadJson: String?,
-  ): JsonObject =
+  ): JsonElement =
     json
       .encodeToJsonElement(
         GatewayNodeEventParams.serializer(),
         GatewayNodeEventParams(event = event, payloadJson = payloadJson ?: "{}"),
-      ).asObjectOrNull() ?: error("GatewayNodeEventParams must encode as an object")
+      )
 
   /** Sends an RPC request and throws a code-prefixed exception when the gateway returns an error. */
   suspend fun request(
@@ -1242,7 +1231,6 @@ class GatewaySession(
       playbackRendition: Boolean,
     ): GatewayLoadedMedia.Buffered? =
       withContext(Dispatchers.IO) {
-        if (kind == GatewayMediaKind.Video) return@withContext null
         val resolved = resolveTicketedMediaRequest(ticketedPath, playbackRendition) ?: return@withContext null
         val request = Request.Builder().url(resolved.url).header("Accept", "${kind.wireValue}/*")
         for ((name, value) in resolved.headers) {
@@ -1383,7 +1371,7 @@ class GatewaySession(
     }
 
     suspend fun sendJson(
-      obj: JsonObject,
+      obj: JsonElement,
       withEnqueue: (() -> Unit) -> Unit = { it() },
     ) {
       val jsonString = obj.toString()
@@ -1402,12 +1390,12 @@ class GatewaySession(
       id: String,
       method: String,
       params: JsonElement?,
-    ): JsonObject =
+    ): JsonElement =
       json
         .encodeToJsonElement(
           GatewayRequestFrame.serializer(),
           GatewayRequestFrame(id = id, method = method, params = params),
-        ).asObjectOrNull() ?: error("GatewayRequestFrame must encode as an object")
+        )
 
     suspend fun awaitClose() = closedDeferred.await()
 
@@ -1438,9 +1426,7 @@ class GatewaySession(
         if (state.getAndSet(ConnectionState.CLOSED) != ConnectionState.CLOSED) {
           retireIngressRequests()
           incomingMessages.close()
-          if (!connectDeferred.isCompleted) {
-            connectDeferred.completeExceptionally(IllegalStateException("Gateway closed"))
-          }
+          connectDeferred.completeExceptionally(IllegalStateException("Gateway closed"))
         }
         if (socket == null && !socketCreationPending) closedDeferred.complete(Unit)
         socket
@@ -1504,7 +1490,7 @@ class GatewaySession(
     }
 
     private fun finalizeTransport(connectError: Throwable) {
-      if (!connectDeferred.isCompleted) connectDeferred.completeExceptionally(connectError)
+      connectDeferred.completeExceptionally(connectError)
       synchronized(lifecycleLock) {
         transportFinished = true
         socket = null
@@ -1705,7 +1691,7 @@ class GatewaySession(
           target.deviceTokenRetryBudgetUsed = true
         } else if (
           selectedAuth.attemptedDeviceTokenRetry &&
-          shouldClearStoredDeviceTokenAfterRetry(error)
+          error.details?.code == "AUTH_DEVICE_TOKEN_MISMATCH"
         ) {
           deviceAuthStore.clearToken(target.endpoint.stableId, identity.deviceId, target.options.role, onlyIfToken = storedToken)
         }
@@ -2159,20 +2145,12 @@ class GatewaySession(
           json.decodeFromString(GatewayNodeInvokeRequest.serializer(), payloadJson)
         }.getOrNull() ?: return
       connectionScope.launch {
-        val request =
-          InvokeRequest(
-            id = payload.id,
-            nodeId = payload.nodeId,
-            command = payload.command,
-            paramsJson = payload.paramsJson,
-            timeoutMs = payload.timeoutMs,
-          )
-        val result = executeInvokeRequest(request)
+        val result = executeInvokeRequest(payload)
         sendInvokeResult(payload.id, payload.nodeId, result, payload.timeoutMs)
       }
     }
 
-    private suspend fun executeInvokeRequest(request: InvokeRequest): InvokeResult {
+    private suspend fun executeInvokeRequest(request: GatewayNodeInvokeRequest): InvokeResult {
       val handler = onInvoke ?: return InvokeResult.error("UNAVAILABLE", "invoke handler missing")
       return try {
         val timeoutMs = resolveInvokeExecutionTimeoutMs(request.timeoutMs)
@@ -2225,7 +2203,7 @@ class GatewaySession(
                   GatewayNodeInvokeResultParamsError(code = err.code, message = err.message)
                 },
             ),
-          ).asObjectOrNull() ?: error("GatewayNodeInvokeResultParams must encode as an object")
+          )
       val ackTimeoutMs = resolveInvokeResultAckTimeoutMs(invokeTimeoutMs)
       try {
         request(GatewayMethod.NodeInvokeResult.rawValue, params, timeoutMs = ackTimeoutMs)
@@ -2528,8 +2506,6 @@ class GatewaySession(
             pendingDeviceTokenRetry = target.pendingDeviceTokenRetry,
           )
       )
-
-  private fun shouldClearStoredDeviceTokenAfterRetry(error: ErrorShape): Boolean = error.details?.code == "AUTH_DEVICE_TOKEN_MISMATCH"
 
   private fun isTrustedDeviceRetryEndpoint(
     endpoint: GatewayEndpoint,

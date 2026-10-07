@@ -1,4 +1,3 @@
-// Runs lightweight get-reply fast-path commands before full agent setup.
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";

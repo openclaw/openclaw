@@ -32,10 +32,12 @@ import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
   DEFAULT_SOUL_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
   isWorkspaceBootstrapPending,
+  loadWorkspaceBootstrapFiles,
   resolveWorkspaceBootstrapStatus,
   resolveDefaultAgentWorkspaceDir,
   WORKSPACE_VANISHED_ERROR_CODE,
@@ -619,3 +621,94 @@ it("settles admitted Git work through success, failure, and caller retirement", 
     }
   }
 });
+
+describe.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+  "workspace permission failures",
+  () => {
+    afterEach(async () => {
+      await fs.chmod(tempDir, 0o700);
+    });
+
+    it.each([0o300, 0o000])(
+      "retains optional bootstrap entries when root mode is %s",
+      async (mode) => {
+        const names = [
+          DEFAULT_AGENTS_FILENAME,
+          DEFAULT_MEMORY_FILENAME,
+          DEFAULT_USER_FILENAME,
+        ] as const;
+        for (const name of names) {
+          await fs.writeFile(path.join(tempDir, name), `content:${name}`);
+        }
+        await fs.chmod(tempDir, mode);
+        await expect(fs.readdir(tempDir)).rejects.toMatchObject({ code: "EACCES" });
+        const files = await loadWorkspaceBootstrapFiles(tempDir, names);
+        expect(files.map((file) => file.name).toSorted()).toEqual([...names].toSorted());
+        for (const file of files) {
+          expect(file.missing).toBe(false);
+          if (mode === 0o300) {
+            expect(file.content).toBe(`content:${file.name}`);
+          } else {
+            expect(file.content).toContain("[UNREADABLE:");
+          }
+        }
+      },
+    );
+
+    it("omits absent optional bootstrap files when the root cannot be listed", async () => {
+      await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "instructions");
+      await fs.chmod(tempDir, 0o300);
+      await expect(fs.readdir(tempDir)).rejects.toMatchObject({ code: "EACCES" });
+
+      const files = await loadWorkspaceBootstrapFiles(tempDir, [
+        DEFAULT_AGENTS_FILENAME,
+        DEFAULT_MEMORY_FILENAME,
+        DEFAULT_USER_FILENAME,
+      ]);
+
+      expect(files.map((file) => file.name)).toEqual([DEFAULT_AGENTS_FILENAME]);
+      expect(files[0]?.content).toBe("instructions");
+    });
+
+    it("rejects skip-bootstrap setup under an unlistable root without changing content", async () => {
+      await fs.writeFile(path.join(tempDir, DEFAULT_MEMORY_FILENAME), "user memory");
+      await ensureWorkspace(false);
+      const before = await fs.readdir(tempDir);
+      const beforeState = await readWorkspaceStateSnapshot(tempDir);
+      await fs.chmod(tempDir, 0o100);
+      await expect(ensureWorkspace(false)).rejects.toMatchObject({ code: "EACCES" });
+      await fs.chmod(tempDir, 0o700);
+      expect((await fs.readdir(tempDir)).toSorted()).toEqual(before.toSorted());
+      expect(await fs.readFile(path.join(tempDir, DEFAULT_MEMORY_FILENAME), "utf8")).toBe(
+        "user memory",
+      );
+      expect((await readWorkspaceStateSnapshot(tempDir)).setup).toEqual(beforeState.setup);
+    });
+
+    it("rejects setup under an unlistable root without completing onboarding", async () => {
+      await ensureWorkspace();
+      const before = (await readWorkspaceStateSnapshot(tempDir)).setup;
+      expect(before.setupCompletedAt).toBeUndefined();
+      const bootstrap = await fs.readFile(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME), "utf8");
+      await fs.chmod(tempDir, 0o300);
+      await expect(ensureWorkspace()).rejects.toMatchObject({ code: "EACCES" });
+      expect(await fs.readFile(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME), "utf8")).toBe(
+        bootstrap,
+      );
+      expect((await readWorkspaceStateSnapshot(tempDir)).setup).toEqual(before);
+    });
+
+    it("rejects setup under an unlistable root without changing surviving skills", async () => {
+      await ensureWorkspace();
+      const before = (await readWorkspaceStateSnapshot(tempDir)).setup;
+      await fs.rm(tempDir, { recursive: true });
+      const skill = path.join(tempDir, "skills", "local-skill", "SKILL.md");
+      await fs.mkdir(path.dirname(skill), { recursive: true });
+      await fs.writeFile(skill, "custom skill");
+      await fs.chmod(tempDir, 0o300);
+      await expect(ensureWorkspace()).rejects.toMatchObject({ code: "EACCES" });
+      expect(await fs.readFile(skill, "utf8")).toBe("custom skill");
+      expect((await readWorkspaceStateSnapshot(tempDir)).setup).toEqual(before);
+    });
+  },
+);

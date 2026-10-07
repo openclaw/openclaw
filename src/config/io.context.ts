@@ -331,18 +331,6 @@ export function createConfigIoContext(
     }
   }
 
-  function prepareRecoveryBackupCandidate(
-    candidate: ConfigRecoveryCandidate,
-  ): ConfigRecoveryCandidatePreparation {
-    return runConfigIoSync(prepareRecoveryBackupCandidateSteps(candidate));
-  }
-
-  async function prepareRecoveryBackupCandidateAsync(
-    candidate: ConfigRecoveryCandidate,
-  ): Promise<ConfigRecoveryCandidatePreparation> {
-    return await runConfigIoAsync(prepareRecoveryBackupCandidateSteps(candidate));
-  }
-
   return {
     deps,
     pathResolution,
@@ -357,7 +345,9 @@ export function createConfigIoContext(
     finalizeLoadedRuntimeConfigAsync,
     createValidationPluginMetadataSnapshotLoader,
     resolveRuntimePreflightSourceConfig,
-    prepareRecoveryBackupCandidate,
-    prepareRecoveryBackupCandidateAsync,
+    prepareRecoveryBackupCandidate: (candidate: ConfigRecoveryCandidate) =>
+      runConfigIoSync(prepareRecoveryBackupCandidateSteps(candidate)),
+    prepareRecoveryBackupCandidateAsync: async (candidate: ConfigRecoveryCandidate) =>
+      await runConfigIoAsync(prepareRecoveryBackupCandidateSteps(candidate)),
   };
 }

@@ -69,10 +69,6 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
   let persistInFlight = false;
   let persistTargetUpdateId: number | null = null;
 
-  const skip = (key: string) => {
-    options.onSkip?.(key);
-  };
-
   // One prune rule: drop accepted ids at or below max(persisted offset,
   // highestAccepted - retention) unless still pending or failed. Persisted
   // floor is safe (getUpdates cannot redeliver below it); retention bounds
@@ -172,14 +168,6 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     return safeCompletedUpdateId;
   }
 
-  const persistUpdateIdAfterAck = async (updateId: number) => {
-    const persistUpdateId =
-      ackPolicy === "after_agent_dispatch" ? resolveSafeCompletedUpdateId() : updateId;
-    if (persistUpdateId !== null) {
-      requestPersistAcceptedUpdateId(persistUpdateId);
-    }
-  };
-
   const ackUpdateAfterStage = (
     receiveContext: MessageReceiveContext<TelegramUpdateKeyContext> | undefined,
     stage: "receive_record" | "agent_dispatch",
@@ -200,17 +188,17 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
         failedUpdateIds.delete(updateId);
       } else if (initialUpdateId !== null && updateId <= initialUpdateId) {
         // Restored Bot API offset: suppress redelivery of already-persisted ids.
-        skip(`update:${updateId}`);
+        options.onSkip?.(`update:${updateId}`);
         return { accepted: false, reason: "accepted-watermark" };
       } else if (acceptedUpdateIds.has(updateId)) {
         // Same process already accepted this exact id (completed or in-flight).
-        skip(`update:${updateId}`);
+        options.onSkip?.(`update:${updateId}`);
         return { accepted: false, reason: "accepted-watermark" };
       }
     }
     if (updateKey) {
       if (activeHandledUpdateKeys.has(updateKey) || recentUpdates.peek(updateKey)) {
-        skip(updateKey);
+        options.onSkip?.(updateKey);
         return { accepted: false, reason: "semantic-dedupe" };
       }
       activeHandledUpdateKeys.set(updateKey, false);
@@ -224,7 +212,13 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
         channel: "telegram",
         message: ctx,
         ackPolicy,
-        onAck: () => persistUpdateIdAfterAck(updateId),
+        onAck: async () => {
+          const persistUpdateId =
+            ackPolicy === "after_agent_dispatch" ? resolveSafeCompletedUpdateId() : updateId;
+          if (persistUpdateId !== null) {
+            requestPersistAcceptedUpdateId(persistUpdateId);
+          }
+        },
       });
       ackUpdateAfterStage(receiveContext, "receive_record");
     }
@@ -277,7 +271,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     const handled = activeHandledUpdateKeys.get(key);
     if (handled != null) {
       if (handled) {
-        skip(key);
+        options.onSkip?.(key);
         return true;
       }
       activeHandledUpdateKeys.set(key, true);
@@ -285,7 +279,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     }
     const skipped = recentUpdates.peek(key);
     if (skipped) {
-      skip(key);
+      options.onSkip?.(key);
     }
     return skipped;
   };

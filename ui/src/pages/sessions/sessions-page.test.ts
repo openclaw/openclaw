@@ -675,6 +675,10 @@ describe("sessions page new group", () => {
     await page.requestNewCategory(key);
     expect(sessions.patch).not.toHaveBeenCalled();
     expect(messages).toEqual(["Group name rejected"]);
+    await page.updateComplete;
+    const alert = page.querySelector('[role="alert"]');
+    expect(alert?.classList.contains("sessions-error")).toBe(true);
+    expect(alert?.textContent).toContain("Group name rejected");
   });
 
   it("requires a refresh before starting an unbound move", async () => {

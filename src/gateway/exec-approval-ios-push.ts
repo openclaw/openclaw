@@ -1,5 +1,3 @@
-// Gateway iOS approval push delivery.
-// Sends APNs request/resolution wakes to paired operator devices.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
@@ -330,7 +328,6 @@ function createApprovalIosPushDelivery<TRequest extends ApprovalRequestLike>(par
   };
 }
 
-/** Creates iOS push delivery for exec approval requests. */
 export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogger }) {
   return createApprovalIosPushDelivery<ExecApprovalRequest>({
     log: params.log,
@@ -342,7 +339,6 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
   });
 }
 
-/** Creates iOS push delivery for plugin approval requests. */
 export function createPluginApprovalIosPushDelivery(params: { log: GatewayLikeLogger }) {
   return createApprovalIosPushDelivery<PluginApprovalRequest>({
     log: params.log,

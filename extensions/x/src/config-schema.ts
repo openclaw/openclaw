@@ -8,6 +8,7 @@ const XAccountSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
   configWrites: z.boolean().optional(),
+  autoPublishWorkSessions: z.boolean().optional(),
   userId: z.string().regex(/^\d+$/).optional(),
   username: z
     .string()

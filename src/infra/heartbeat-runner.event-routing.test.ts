@@ -447,7 +447,9 @@ describe("Heartbeat event routing", () => {
           messageThreadId: 47,
         });
       } else {
-        expect(getFirstReplyContext(replySpy).Body).toContain("no command output was found");
+        expect(getFirstReplyContext(replySpy).Body).toContain(
+          "Exec completed (review-run, code 0) without captured stdout/stderr.",
+        );
         expect(sendTelegram).not.toHaveBeenCalled();
       }
     }, false);
@@ -462,6 +464,14 @@ describe("Heartbeat event routing", () => {
       trigger: "user",
       reply: "NO_REPLY",
       sends: false,
+    },
+    {
+      name: "report redirected to a file",
+      isolatedSession: true,
+      trigger: "user",
+      reply: "printed",
+      sends: true,
+      redirected: true,
     },
     {
       name: "heartbeat-started command",
@@ -559,7 +569,17 @@ describe("Heartbeat event routing", () => {
     },
   ])(
     "answers a forum topic's own background command under quiet heartbeats ($name)",
-    async ({ name, isolatedSession, trigger, reply, sends, stored, accountId, target }) => {
+    async ({
+      name,
+      isolatedSession,
+      trigger,
+      reply,
+      sends,
+      stored,
+      accountId,
+      target,
+      redirected,
+    }) => {
       await withRouting(
         async ({ cfg, storePath, replySpy, sendTelegram }) => {
           const sessionKey =
@@ -664,8 +684,14 @@ describe("Heartbeat event routing", () => {
             currentThreadTs: "42",
             accountId,
           });
-          // An empty success still wakes Telegram turns; the model's NO_REPLY must stay silent.
-          const command = reply === "NO_REPLY" ? "true" : "echo RESULT-7F3A";
+          // Empty successes still wake Telegram turns: the model may continue its own work
+          // (here, read the file it redirected to), and its NO_REPLY must stay silent.
+          const captured = reply !== "NO_REPLY" && !redirected;
+          const command = captured
+            ? "echo RESULT-7F3A"
+            : redirected
+              ? "echo RESULT-7F3A > /dev/null"
+              : "true";
           await exec.execute("call-background", { command, background: true });
           await expect(completionRun.promise).resolves.toMatchObject({
             status: reply === "failed" ? "failed" : "ran",
@@ -681,7 +707,11 @@ describe("Heartbeat event routing", () => {
             return;
           }
           expect(ctx).toMatchObject({ SessionKey: sessionKey, InternalTurnSource: "exec" });
-          expect(ctx.Body?.includes("RESULT-7F3A")).toBe(reply !== "NO_REPLY");
+          expect(ctx.Body?.includes("RESULT-7F3A")).toBe(captured);
+          if (!captured) {
+            expect(ctx.Body).toMatch(/Exec completed \(\S+, code 0\) without captured stdout/);
+            expect(ctx.Body).toContain("continue any outstanding authorized work");
+          }
           expect(options.bootstrapContextMode).toBeUndefined();
           const sent =
             reply === "failed"

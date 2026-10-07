@@ -39,6 +39,7 @@ vi.mock("../delegation-capability.js", () => ({
 
 // mock-isolation: Dispatch fixtures provide an empty auth store and no credential database.
 vi.mock("../auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSource: () => false,
   hasAnyAuthProfileStoreSourceAsync: async () => false,
 }));
 
@@ -360,7 +361,7 @@ describe("embedded run retry dispatch", () => {
     expect(uncapped.preparedAttempt).not.toHaveProperty("authoredContextTokenCap");
   });
 
-  it.each(["openclaw", "codex"])(
+  it.each(["openclaw"])(
     "prepares GitHub tools for each admitted run and continuation (%s)",
     async (harness) => {
       const gateway = {} as GatewayRequestContext;

@@ -1,5 +1,9 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
-import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeStringEntriesLower,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyToolEvidence } from "../policy-state-types.js";
 import type { PolicyEvidence, PolicyToolPostureEvidence } from "../policy-state.js";
 import { expandPolicyToolRequirement, toolListCoversTool } from "../tool-policy-conformance.js";
@@ -156,10 +160,10 @@ function toolAlsoAllowExpectedFindings(
   if (alsoAllowPolicy.expected === undefined) {
     return [];
   }
-  const expected = normalizedStringSet(readStringList(toolsPolicy, ["alsoAllow", "expected"]));
+  const expected = new Set(readStringList(toolsPolicy, ["alsoAllow", "expected"]).toSorted());
   const findings: HealthFinding[] = [];
   for (const entry of entries.filter((candidate) => candidate.kind === "alsoAllow")) {
-    const actual = normalizedStringSet(entry.entries ?? []);
+    const actual = new Set(normalizeStringEntriesLower(entry.entries).toSorted());
     for (const expectedTool of expected) {
       if (actual.has(expectedTool)) {
         continue;
@@ -188,15 +192,6 @@ function toolAlsoAllowExpectedFindings(
     }
   }
   return findings;
-}
-
-function normalizedStringSet(entries: readonly string[]): ReadonlySet<string> {
-  return new Set(
-    entries
-      .map((entry) => entry.trim().toLowerCase())
-      .filter(Boolean)
-      .toSorted(),
-  );
 }
 
 function toolRequiredDenyFindings(

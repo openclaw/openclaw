@@ -438,6 +438,8 @@ const rootEntries = [
   // packages/worker-runtime/README.md invokes the benchmark; its worker is loaded by URL.
   "scripts/bench-worker-runtime.ts!",
   "scripts/bench-worker-runtime.worker.ts!",
+  // docs/help/testing/control-ui-load.md invokes this opt-in Linux process/protocol proof.
+  "scripts/bench-gateway-control-ui-proof.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",

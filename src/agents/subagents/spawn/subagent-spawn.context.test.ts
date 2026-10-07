@@ -5,7 +5,7 @@ import {
   setupAcceptedSubagentGatewayMock,
 } from "./subagent-spawn.test-helpers.js";
 
-describe("sessions_spawn context preparation", () => {
+describe("sessions_spawn context preparation and session diagnostics", () => {
   const callGatewayMock = vi.fn();
   const forkSessionFromParentMock = vi.fn();
   const ensureContextEnginesInitializedMock = vi.fn();
@@ -42,7 +42,10 @@ describe("sessions_spawn context preparation", () => {
     expect(callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "agent",
-        params: expect.objectContaining({ bootstrapContextMode: "lightweight" }),
+        params: expect.objectContaining({
+          bootstrapContextMode: "lightweight",
+          bootstrapContextRunKind: "default",
+        }),
       }),
     );
   });
@@ -63,5 +66,47 @@ describe("sessions_spawn context preparation", () => {
     expect(prepareSubagentSpawn).toHaveBeenCalledWith(
       expect.objectContaining({ ttlMs: MAX_TIMER_TIMEOUT_MS }),
     );
+  });
+
+  it("names usable alternatives before a thread retry", async () => {
+    const result = await spawnSubagentDirect(
+      {
+        task: "persistent planning session",
+        mode: "session",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "webchat",
+      },
+    );
+
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.error).toContain("thread: true");
+      expect(result.error).toContain('mode="run"');
+      expect(result.error).not.toContain("sessions_send");
+    }
+  });
+
+  it("rejects thread=true with actionable guidance when no hook is registered", async () => {
+    const result = await spawnSubagentDirect(
+      {
+        task: "persistent planning session",
+        mode: "session",
+        thread: true,
+        context: "isolated",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "webchat",
+      },
+    );
+
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.error).toContain("not running on a channel");
+      expect(result.error).toContain('mode="run"');
+      expect(result.error).not.toContain("sessions_send");
+    }
   });
 });

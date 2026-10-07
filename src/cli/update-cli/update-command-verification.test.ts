@@ -92,6 +92,90 @@ afterEach(async () => {
 });
 
 describe("update readiness generation", () => {
+  it.each(["timeout", "legacy-timeout", "transient-timeout", "negative", "mixed"])(
+    "records collection warnings without accepting definitive channel failures (%s)",
+    async (kind) => {
+      mockProcessPlatform("linux");
+      const service = makeGatewayService({ status: "running", pid: 8000 });
+      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+      inspectPortUsage.mockImplementation(async (port) => ({
+        port,
+        status: "busy",
+        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+        hints: [],
+      }));
+      let probes = 0;
+      callGateway.mockImplementation((opts) =>
+        gatewayHealthResponse({
+          server: { version: "2026.9.8", buildId: "candidate", bootId: "candidate-boot" },
+          health: {
+            channels: {
+              telegram: {
+                probe:
+                  kind === "transient-timeout" && probes++ > 0
+                    ? { ok: true }
+                    : {
+                        ...(kind === "timeout" ? {} : { ok: false }),
+                        ...(kind === "negative" ? {} : { timedOut: true }),
+                        error: "health collection timed out after 7000ms",
+                      },
+              },
+              ...(kind === "mixed"
+                ? { discord: { probe: { ok: false, error: "invalid credentials" } } }
+                : {}),
+            },
+          },
+        })(opts),
+      );
+      const result: UpdateRunResult = { status: "ok", mode: "npm", steps: [], durationMs: 0 };
+      const onVerified = vi.fn();
+      const verification = await verifyUpdatedGateway({
+        result,
+        opts: { json: true, run: { runId: "collection-timeout", env: {} } },
+        serviceEnv: { HOME: "/synthetic-home" },
+        gatewayPort: await listen(),
+        expectedVersion: "2026.9.8",
+        expectedBuildId: "candidate",
+        requireRunningService: true,
+        settle: { probes: 2 },
+        onVerified,
+      });
+      const failed = kind === "negative" || kind === "mixed";
+      expect(verification.ok).toBe(!failed);
+      expect(onVerified).toHaveBeenCalledTimes(failed ? 0 : 1);
+      expect(result.steps[0]?.exitCode).toBe(failed ? 1 : 0);
+      if (failed) {
+        expect(result.steps[0]?.failureFacts).toContainEqual(
+          expect.objectContaining({ code: "channel-errors" }),
+        );
+      } else {
+        expect(recordUpdateRunVerification).toHaveBeenCalledWith(
+          "collection-timeout",
+          expect.objectContaining({
+            serviceRunning: true,
+            versionMatch: true,
+            readyz: true,
+            settled: true,
+          }),
+          expect.anything(),
+        );
+      }
+      if (kind !== "negative") {
+        expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
+          "telegram: health collection timed out after 7000ms",
+        );
+        expect(result.steps[0]?.warnings?.join("\n")).toContain(
+          "telegram: health collection timed out after 7000ms",
+        );
+        expect(recordUpdateRunStep).toHaveBeenCalledWith(
+          "collection-timeout",
+          expect.objectContaining({ step: "warning:gateway verification", status: "completed" }),
+          expect.anything(),
+        );
+      }
+    },
+  );
+
   it.each<{
     readyzStatus: number;
     replaced: boolean;

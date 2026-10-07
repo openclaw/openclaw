@@ -115,7 +115,11 @@ export function removeChatAbortControllerEntry(
   } catch {
     // Removal owns state cleanup even if a caller-provided release hook fails.
   } finally {
-    notifyChatAbortControllerRemoved(entry);
+    const waiters = removalWaitersByEntry.get(entry);
+    removalWaitersByEntry.delete(entry);
+    for (const resolve of waiters ?? []) {
+      resolve();
+    }
   }
   return true;
 }
@@ -156,14 +160,6 @@ export function markChatAbortTerminalPersistenceError(entry: object, error: unkn
     return;
   }
   terminalPersistenceErrorByEntry.set(entry, error);
-}
-
-function notifyChatAbortControllerRemoved(entry: object): void {
-  const waiters = removalWaitersByEntry.get(entry);
-  removalWaitersByEntry.delete(entry);
-  for (const resolve of waiters ?? []) {
-    resolve();
-  }
 }
 
 /** Cancellation joins terminal dispatch before inspecting its write or intentional no-write. */

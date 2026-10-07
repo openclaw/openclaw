@@ -358,10 +358,7 @@ export async function readCompactSubagentRuns(context: OpenClawStateWorkerContex
 
 export async function readFullSubagentRuns(
   context: OpenClawStateWorkerContext,
-  scope: Exclude<
-    Extract<OpenClawStateReadCommand, { type: "subagents.runs" }>["scope"],
-    { kind: "page" }
-  >,
+  scope: Extract<OpenClawStateReadCommand, { type: "subagents.runs" }>["scope"],
   options: { current?: boolean } = {},
 ) {
   if (scope.kind === "ids" && scope.runIds.length === 0) {

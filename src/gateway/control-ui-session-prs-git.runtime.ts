@@ -2,6 +2,7 @@ import fs from "node:fs";
 import nodePath from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { runGit } from "../agents/worktrees/git.js";
+import { requireGitCommandOutput } from "../infra/git-exec.js";
 import type { GitReadOperations } from "../infra/git-read-operations.js";
 import { readGitHead, readGitMetadataPrefix, readGitRefs } from "../infra/git-root.js";
 import { canReadGitFilesystemRefs } from "../infra/git-worker-context.js";
@@ -238,10 +239,59 @@ async function diffStatsAgainst(
   refreshIndex: boolean,
 ): Promise<{ additions: number; deletions: number; changedFiles: number } | null> {
   try {
+    // Keep statistics working on supported distributions whose Git predates
+    // --no-lazy-fetch. Those versions retain their native hydration behavior.
+    const localOnly = (await runGit(root, ["--no-lazy-fetch", "version"])).code === 0;
+    const prefix = localOnly ? ["--no-lazy-fetch"] : [];
+    if (localOnly) {
+      // Git's shortstat prefetch scans every promisor pack on a missing blob, even
+      // with lazy fetching disabled. Admit only locally available diff inputs.
+      const inventory = await runGit(root, [
+        ...prefix,
+        "-c",
+        "diff.autoRefreshIndex=false",
+        "diff",
+        "--raw",
+        "--no-abbrev",
+        "--no-renames",
+        "--no-ext-diff",
+        "--no-textconv",
+        "-z",
+        base,
+        "--",
+      ]);
+      const objects = new Set<string>();
+      const fields = requireGitCommandOutput("git diff --raw", inventory).split("\0");
+      for (let i = 0; i < fields.length - 1; i += 2) {
+        const [oldMode, newMode, oldObject, newObject] = fields[i]!.slice(1).split(" ");
+        for (const [mode, object] of [
+          [oldMode, oldObject],
+          [newMode, newObject],
+        ]) {
+          if (mode !== "160000" && object && !/^0+$/u.test(object)) {
+            objects.add(object);
+          }
+        }
+      }
+      if (objects.size > 0) {
+        const input = `${[...objects].join("\n")}\n`;
+        const available = await runGit(
+          root,
+          [...prefix, "cat-file", "--batch-check=%(objectname)"],
+          {
+            input,
+          },
+        );
+        if (requireGitCommandOutput("git cat-file", available) !== input) {
+          return null;
+        }
+      }
+    }
     // Checkout-configurable diff drivers must never execute in the Gateway
     // process (same guard as sessions-diff).
     // Managed checkouts own their index; user checkouts keep read-only stat data.
     const result = await runGit(root, [
+      ...prefix,
       "-c",
       `diff.autoRefreshIndex=${refreshIndex}`,
       "diff",

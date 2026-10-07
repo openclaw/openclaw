@@ -11,7 +11,7 @@ export function sessionParticipantsSchemaSql(): string {
   });
 }
 
-export const {
-  ensure: ensureSessionParticipantsSchema,
-  recordCommitted: confirmSessionParticipantsSchemaEnsured,
-} = createSqliteSchemaEnsurer(sessionParticipantsSchemaSql);
+export const ensureSessionParticipantsSchema = createSqliteSchemaEnsurer(
+  sessionParticipantsSchemaSql,
+  { tables: [SESSION_PARTICIPANTS_TABLE] },
+);

@@ -3,9 +3,6 @@
 if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
   exec /bin/bash "$0" "$@"
 fi
-# Installs the packed OpenClaw tarball over dirty old-user state. When
-# OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC is set, installs that published
-# baseline first and upgrades it to the selected candidate.
 set -euo pipefail
 
 PACKAGE_TGZ=""
@@ -346,9 +343,6 @@ fi
 normalize_npm_candidate() {
   local raw="$1"
   case "$raw" in
-    latest | beta)
-      printf 'openclaw@%s\n' "$raw"
-      ;;
     openclaw@*)
       printf '%s\n' "$raw"
       ;;
@@ -383,12 +377,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
   CANDIDATE_IS_CURRENT=0
   CANDIDATE_SPEC=""
 
-  if [ -n "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
-    PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor "$OPENCLAW_CURRENT_PACKAGE_TGZ")"
-    CANDIDATE_KIND="tarball"
-    CANDIDATE_IS_CURRENT=1
-    CANDIDATE_SPEC="/tmp/openclaw-current.tgz"
-  elif [ "$CANDIDATE_RAW" = "current" ]; then
+  if [ -n "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ] || [ "$CANDIDATE_RAW" = "current" ]; then
     PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor)"
     CANDIDATE_KIND="tarball"
     CANDIDATE_IS_CURRENT=1
@@ -402,7 +391,6 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     CANDIDATE_KIND="tarball"
     CANDIDATE_SPEC="/tmp/openclaw-current.tgz"
   else
-    CANDIDATE_KIND="npm"
     CANDIDATE_SPEC="$(normalize_npm_candidate "$CANDIDATE_RAW")"
   fi
 

@@ -307,11 +307,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
           )
         : command.scope.kind === "session"
           ? Buffer.byteLength(command.scope.sessionKey, "utf8")
-          : command.scope.kind === "page"
-            ? Buffer.byteLength(command.scope.after ?? "", "utf8")
-            : command.scope.kind === "ids"
-              ? stringBytes(command.scope.runIds)
-              : 0)
+          : command.scope.kind === "ids"
+            ? stringBytes(command.scope.runIds)
+            : 0)
     );
   }
   if (command.type === "mcpOAuth.statuses") {
@@ -483,7 +481,12 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     );
   }
   if (command.type === "userProfiles.githubIdentity.cached") {
-    return bytes + Buffer.byteLength(command.email, "utf8") + 8;
+    return (
+      bytes +
+      ("login" in command
+        ? Buffer.byteLength(command.login, "utf8")
+        : Buffer.byteLength(command.email, "utf8") + 8)
+    );
   }
   if (
     command.type === "userProfiles.githubAttribution.resolve" ||

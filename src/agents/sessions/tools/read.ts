@@ -117,7 +117,6 @@ interface ReadOperations {
   resolvePath?: (filePath: string, cwd: string) => string | Promise<string>;
   /** Decode text bytes for this backend. Custom backends default to UTF-8. */
   decodeText?: (params: { buffer: Buffer; absolutePath: string }) => string;
-  /** Read file contents as a Buffer */
   readFile: (absolutePath: string) => Promise<Buffer>;
   /** Check if file is readable (throw if not) */
   access: (absolutePath: string) => Promise<void>;

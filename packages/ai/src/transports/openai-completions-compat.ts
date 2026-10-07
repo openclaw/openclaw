@@ -39,11 +39,6 @@ type OpenAICompletionsCompatDefaults = {
   supportsLongCacheRetention: boolean;
 };
 
-type DetectedOpenAICompletionsCompat = {
-  capabilities: AiProviderRequestCapabilities;
-  defaults: OpenAICompletionsCompatDefaults;
-};
-
 export type ResolvedOpenAICompletionsCompat = Omit<
   Required<OpenAICompletionsCompat>,
   | "cacheControlFormat"
@@ -257,7 +252,7 @@ export function detectOpenAICompletionsCompat(
     compat?: { supportsStore?: boolean } | null;
   },
   resolveCapabilities?: (input: AiProviderRequestPolicyInput) => AiProviderRequestCapabilities,
-): DetectedOpenAICompletionsCompat {
+) {
   const capabilities = (
     resolveCapabilities ?? ((input) => resolveModelProviderRequestCapabilities(input, model))
   )({

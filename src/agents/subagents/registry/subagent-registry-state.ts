@@ -12,9 +12,9 @@ import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-w
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import {
-  freezeSubagentRunReadRecord,
   getSubagentRunsForChildSession,
   immutableSubagentRun,
+  immutableSubagentRunSessionList,
   subagentRuns,
 } from "./subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
@@ -54,7 +54,7 @@ const persistedSubagentRunsReadCache: SubagentRunsCache<SubagentRunRecord> = {
 };
 const persistedSubagentSessionListRunsReadCache: SubagentRunsCache<SubagentRunReadRecord> = {
   state: {},
-  copy: (entry) => freezeSubagentRunReadRecord(projectSubagentRunForSessionList(entry)),
+  copy: immutableSubagentRunSessionList,
   project: projectSubagentRunForSessionList,
 };
 

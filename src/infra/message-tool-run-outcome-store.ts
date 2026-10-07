@@ -4,6 +4,7 @@ import {
   resolveSqliteWriteAdmissionScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
 import { captureSessionStoreReadCandidates } from "../config/sessions/session-store-target-inventory.js";
 import { withSessionStoreTarget } from "../config/sessions/session-store-target-runtime.js";
 import { withSessionHistoryWorkerReadCandidates } from "../config/sessions/session-transcript-worker-resources.js";
@@ -70,6 +71,28 @@ export async function recordMessageToolRunOutcome(params: {
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const scope = { ...params, env };
+  const incognito = captureIncognitoSessionOperation(scope);
+  if (incognito) {
+    const { actor, authority } = incognito;
+    const expected = actor.sessions.readSharing(params.sessionKey)?.entry;
+    await actor.sessions.withSharedState(() =>
+      actor.sessions.sideData(
+        {
+          assertCurrent: () => authority.assertCurrent(),
+          authorize(_stage, facts) {
+            if (
+              facts.sharing?.entry?.sessionId !== expected?.sessionId ||
+              facts.sharing?.entry?.lifecycleRevision !== expected?.lifecycleRevision
+            ) {
+              throw new Error("Message-tool outcome session generation changed");
+            }
+          },
+        },
+        { type: "session.messageToolOutcome.record", input: values },
+      ),
+    );
+    return;
+  }
   if (
     isIncognitoSessionKey(scope.sessionKey) ||
     (scope.storePath && isIncognitoOpenClawAgentSqlitePath(scope.storePath, scope))

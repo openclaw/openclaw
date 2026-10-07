@@ -354,11 +354,11 @@ export type LatestTranscriptAssistantText = {
 
 export type SessionTranscriptWriteLockAccessorContext = {
   appendMessage: <TMessage>(
-    options: TranscriptMessageAppendOptions<TMessage>,
+    options: LockedTranscriptMessageAppendOptions<TMessage>,
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   /** Appends with commit-time idempotency and returns the committed visible sequence. */
   appendMessageWithMessageSequence: <TMessage>(
-    options: TranscriptMessageAppendOptions<TMessage>,
+    options: LockedTranscriptMessageAppendOptions<TMessage>,
   ) => Promise<{
     /** Unfenced imports omit ownership and retain canonical-history refresh. */
     lifecycleRevision?: string;
@@ -373,6 +373,16 @@ export type SessionTranscriptWriteLockAccessorContext = {
   }>;
   readEvents: () => Promise<TranscriptEvent[]>;
   replaceEvents: (events: readonly TranscriptEvent[]) => Promise<void>;
+};
+
+export type LockedTranscriptMessageAppendOptions<TMessage> = Omit<
+  TranscriptMessageAppendOptions<TMessage>,
+  "prepareMessageAfterIdempotencyCheck"
+> & {
+  /** @deprecated Use prepareMessageAfterIdempotencyCheckAsync outside the transaction. */
+  prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
+  /** Awaited after duplicate detection; undefined suppresses a fresh append. */
+  prepareMessageAfterIdempotencyCheckAsync?: (message: TMessage) => Promise<TMessage | undefined>;
 };
 
 /** Canonical transcript identity owned by the transaction. */

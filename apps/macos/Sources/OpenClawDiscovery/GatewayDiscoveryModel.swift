@@ -17,7 +17,7 @@ public final class GatewayDiscoveryModel {
         }
     }
 
-    public struct DiscoveredGateway: Identifiable, Equatable, Sendable {
+    public struct DiscoveredGateway: Identifiable, Equatable, Encodable, Sendable {
         public var id: String {
             self.stableID
         }
@@ -36,6 +36,11 @@ public final class GatewayDiscoveryModel {
         public var stableID: String
         public var debugID: String
         public var isLocal: Bool
+
+        private enum CodingKeys: String, CodingKey {
+            case displayName, lanHost, tailnetDns, sshPort, gatewayPort, gatewayTls
+            case gatewayDirectReachable, cliPath, stableID, debugID, isLocal
+        }
 
         public init(
             displayName: String,
@@ -113,7 +118,7 @@ public final class GatewayDiscoveryModel {
             onResults: { [weak self] domain, results in
                 guard let self else { return }
                 self.resultsByDomain[domain] = results
-                self.updateGateways(for: domain)
+                self.updateGateways(for: domain, results: results)
                 self.recomputeGateways()
             })
 
@@ -237,12 +242,7 @@ public final class GatewayDiscoveryModel {
         self.gateways = self.filterLocalGateways ? combined.filter { !$0.isLocal } : combined
     }
 
-    private func updateGateways(for domain: String) {
-        guard let results = self.resultsByDomain[domain] else {
-            self.gatewaysByDomain[domain] = []
-            return
-        }
-
+    private func updateGateways(for domain: String, results: Set<NWBrowser.Result>) {
         self.gatewaysByDomain[domain] = results.compactMap { result -> DiscoveredGateway? in
             guard case let .service(name, type, resultDomain, _) = result.endpoint else { return nil }
 
@@ -421,8 +421,8 @@ public final class GatewayDiscoveryModel {
     }
 
     private func updateGatewaysForAllDomains() {
-        for domain in self.resultsByDomain.keys {
-            self.updateGateways(for: domain)
+        for (domain, results) in self.resultsByDomain {
+            self.updateGateways(for: domain, results: results)
         }
     }
 
@@ -481,7 +481,6 @@ public final class GatewayDiscoveryModel {
         type: String,
         domain: String)
     {
-        guard self.resolvedServiceByID[stableID] == nil else { return }
         guard self.pendingServiceResolvers[stableID] == nil else { return }
         let generation = self.generation
 
@@ -533,8 +532,7 @@ public final class GatewayDiscoveryModel {
         let words = cleaned.split(separator: " ")
         let titled = words.map { word -> String in
             let lower = word.lowercased()
-            guard let first = lower.first else { return "" }
-            return String(first).uppercased() + lower.dropFirst()
+            return lower.prefix(1).uppercased() + lower.dropFirst()
         }.joined(separator: " ")
         return titled.isEmpty ? normalized : titled
     }

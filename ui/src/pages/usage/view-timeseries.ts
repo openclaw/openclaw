@@ -355,7 +355,6 @@ export function renderTimeSeriesCompact(
               return Math.min(Math.floor(x * points.length), points.length - 1);
             };
 
-            // Compute click offset: where on the handle the user grabbed
             const handleSvgX = side === "left" ? leftHandleX : rightHandleX;
             const handleClientX = rect.left + (handleSvgX / width) * svgWidth;
             const grabOffset = e.clientX - handleClientX;

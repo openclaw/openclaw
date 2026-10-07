@@ -387,7 +387,7 @@ export async function prepareEmbeddedRunRuntime(input: {
         }
         didTransientCooldownProbe = true;
         log.warn(
-          `probing cooldowned auth profile for ${provider}/${modelId} due to ${cooldownProbePolicy.unavailableReason ?? "transient"} unavailability`,
+          `checking cooldowned auth profile for ${provider}/${modelId} due to ${cooldownProbePolicy.unavailableReason ?? "transient"} unavailability`,
         );
       }
       if (
@@ -451,7 +451,7 @@ export async function prepareEmbeddedRunRuntime(input: {
       if (initialProfileInCooldown) {
         didTransientCooldownProbe = true;
         log.warn(
-          `probing cooldowned auth profile for ${provider}/${modelId} due to ${cooldownProbePolicy.unavailableReason ?? "transient"} unavailability`,
+          `checking cooldowned auth profile for ${provider}/${modelId} due to ${cooldownProbePolicy.unavailableReason ?? "transient"} unavailability`,
         );
       }
       preparedProfileAttempted = initialAttempt?.kind === "profile";
