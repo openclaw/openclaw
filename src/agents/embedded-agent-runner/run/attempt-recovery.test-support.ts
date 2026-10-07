@@ -23,6 +23,7 @@ export type TransportDropScenario = {
   errorCode?: string;
   errorType?: string;
   completedAssistant?: AssistantMessage;
+  codexAppServerFailure?: Parameters<typeof makeEmbeddedRunnerAttempt>[0]["codexAppServerFailure"];
   compactionEnabled?: boolean;
   content?: AssistantMessage["content"];
   diagnostics?: AssistantMessage["diagnostics"];
@@ -112,6 +113,9 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
     currentAttemptAssistant: erroredAssistant,
     ...(scenario.completedAssistant
       ? { currentAttemptCompletedAssistant: scenario.completedAssistant }
+      : {}),
+    ...(scenario.codexAppServerFailure
+      ? { codexAppServerFailure: scenario.codexAppServerFailure }
       : {}),
     lastToolError: scenario.lastToolError,
     didSendDeterministicApprovalPrompt: scenario.didSendDeterministicApprovalPrompt,

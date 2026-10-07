@@ -140,6 +140,57 @@ function recoveryCases(
 }
 
 describe("recoverEmbeddedRunAttempt", () => {
+  it("records replay-safe turn/start overload recovery and carries its failover reason", async () => {
+    const path = join(tempDirs.make("openclaw-codex-overload-recovery-"), "timeline.jsonl");
+    let recovery: Awaited<ReturnType<typeof recoverAfterTransportDrop>>["recovery"] | undefined;
+    await withEnvAsync(
+      {
+        OPENCLAW_DIAGNOSTICS: undefined,
+        OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: path,
+      },
+      async () => {
+        ({ recovery } = await recoverAfterTransportDrop({
+          config: { diagnostics: { flags: ["timeline"] } },
+          noTools: true,
+          content: [],
+          diagnostics: [],
+          replaySafe: true,
+          errorMessage: "Server overloaded; retry later.",
+          terminal: {
+            kind: "failed",
+            source: "prompt",
+            error: new Error("Server overloaded; retry later."),
+          },
+          codexAppServerFailure: {
+            kind: "turn_start_overloaded",
+            transport: "stdio",
+            threadId: "thread-1",
+            replaySafe: true,
+          },
+        }));
+        flushDiagnosticsTimeline();
+      },
+    );
+
+    expect(recovery).toMatchObject({
+      action: "retry",
+      lastRetryFailoverReason: "overloaded",
+    });
+    const written = readFileSync(path, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => requireRecord(JSON.parse(line), "recovery timeline event"));
+    expect(written.filter((event) => event.name === "model.recovery.decision")).toEqual([
+      expect.objectContaining({
+        attributes: expect.objectContaining({
+          decision: "accepted",
+          reason: "transient_retry",
+          replaySafe: true,
+        }),
+      }),
+    ]);
+  });
+
   it.each([
     { retryAvailable: true, decision: "accepted", reason: "transient_retry" },
     { retryAvailable: false, decision: "rejected", reason: "replay_unsafe" },

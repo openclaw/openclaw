@@ -399,7 +399,10 @@ export async function recoverEmbeddedRunAttempt(input: {
         (currentAttemptReplaySafe || canContinueSettledIdleTimeout))) &&
     !attempt.yieldDetected &&
     !attempt.clientToolCalls &&
-    !attempt.codexAppServerFailure &&
+    (!attempt.codexAppServerFailure ||
+      (attempt.codexAppServerFailure.kind === "turn_start_overloaded" &&
+        attempt.codexAppServerFailure.replaySafe &&
+        currentAttemptReplaySafe)) &&
     !findCliTerminalStopError(promptError) &&
     (!promptError || promptErrorSource === "prompt") &&
     !isTerminalAssistantError(attemptAssistant) &&
@@ -440,6 +443,10 @@ export async function recoverEmbeddedRunAttempt(input: {
     }))
   ) {
     runInput.laneController.throwIfAborted();
+    if (attempt.codexAppServerFailure?.kind === "turn_start_overloaded") {
+      recordRecoveryDecision("accepted", "transient_retry");
+      return retry({ lastRetryFailoverReason: failureReason });
+    }
     if (outputLimitFailure) {
       sessionPromptState.markOwnedTranscriptRetry();
       await sessionPromptState.settleOwnedTranscriptProjection(

@@ -310,6 +310,7 @@ export type EmbeddedRunAttemptResult = {
   };
   codexAppServerFailure?: {
     kind:
+      | "turn_start_overloaded"
       | "client_closed_before_turn_completed"
       | "turn_settlement_timeout"
       // Published harness result contract: older plugins may still report idle-watch failures.

@@ -10,6 +10,7 @@ import {
   isInvalidCodexImagePayloadError,
 } from "./attempt-results.js";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { isCodexAppServerOverloadError } from "./rpc-error.js";
 import { emitCodexAppServerEvent, runCodexAgentEndHook } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
@@ -229,6 +230,24 @@ export async function startCodexAttemptTurn(
             }),
             codexAppServerFailure: {
               kind: "client_closed_before_turn_completed" as const,
+              transport: appServer.start.transport,
+              threadId: resourceState.thread.threadId,
+              replaySafe: true,
+            },
+          },
+        };
+      }
+      if (isCodexAppServerOverloadError(turnStartError) && turnStartError.method === "turn/start") {
+        return {
+          result: {
+            ...buildCodexTurnStartFailureResult({
+              params,
+              message,
+              messagesSnapshot,
+              systemPromptReport,
+            }),
+            codexAppServerFailure: {
+              kind: "turn_start_overloaded" as const,
               transport: appServer.start.transport,
               threadId: resourceState.thread.threadId,
               replaySafe: true,

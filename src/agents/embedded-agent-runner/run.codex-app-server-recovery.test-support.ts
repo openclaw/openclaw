@@ -92,6 +92,26 @@ function ordinaryPromptFailureAttempt(): EmbeddedRunAttemptResult {
   });
 }
 
+function codexTurnStartRejectedAttempt(
+  overrides: Partial<EmbeddedRunAttemptResult> = {},
+): EmbeddedRunAttemptResult {
+  return makeAttemptResult({
+    assistantTexts: [],
+    terminal: {
+      kind: "failed",
+      source: "prompt",
+      error: new Error("Server overloaded; retry later."),
+    },
+    codexAppServerFailure: {
+      kind: "turn_start_overloaded",
+      transport: "stdio",
+      threadId: "thread-1",
+      replaySafe: true,
+    },
+    ...overrides,
+  });
+}
+
 function asAttemptParams(value: unknown): EmbeddedRunAttemptParams {
   return value as EmbeddedRunAttemptParams;
 }
@@ -424,6 +444,58 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
         }
       ).suppressNextUserMessagePersistence,
     ).toBe(true);
+  });
+
+  it.each([false, true])(
+    "replays the original prompt after overloaded turn/start rejection (already persisted: %s)",
+    async (suppressNextUserMessagePersistence) => {
+      mockedClassifyFailoverReason.mockReturnValue("overloaded");
+      mockedRunEmbeddedAttempt
+        .mockResolvedValueOnce(codexTurnStartRejectedAttempt())
+        .mockResolvedValueOnce(successAttempt());
+
+      await runEmbeddedAgent({
+        ...createOverflowRunParams(state),
+        provider: "codex",
+        model: "gpt-5.5",
+        runId: "run-codex-turn-start-overload-retry",
+        suppressNextUserMessagePersistence,
+      });
+
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+      const retry = expectDefined(
+        mockedRunEmbeddedAttempt.mock.calls[1],
+        "mockedRunEmbeddedAttempt.mock.calls[1] test invariant",
+      )[0];
+      expect(retry.prompt).toBe("hello");
+      expect(retry.suppressNextUserMessagePersistence).toBe(suppressNextUserMessagePersistence);
+    },
+  );
+
+  it("does not replay overloaded turn/start rejection when failure-local evidence is unsafe", async () => {
+    mockedClassifyFailoverReason.mockReturnValue("overloaded");
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      codexTurnStartRejectedAttempt({
+        replayMetadata: { replaySafe: true, hadPotentialSideEffects: false },
+        codexAppServerFailure: {
+          kind: "turn_start_overloaded",
+          transport: "stdio",
+          threadId: "thread-1",
+          replaySafe: false,
+          replayBlockedReason: "potential_side_effect",
+        },
+      }),
+    );
+
+    await expect(
+      runEmbeddedAgent({
+        ...createOverflowRunParams(state),
+        provider: "codex",
+        model: "gpt-5.5",
+        runId: "run-codex-turn-start-overload-replay-unsafe",
+      }),
+    ).rejects.toThrow("Server overloaded; retry later.");
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
   });
 
   it("returns a timeout payload after a replay-safe turn/completed idle timeout retry is exhausted", async () => {

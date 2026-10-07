@@ -18,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { CodexAppServerRpcError } from "./rpc-error.js";
 import {
   assistantMessage,
   createCodexRuntimePlanFixture,
@@ -31,6 +32,11 @@ import {
   tempDir,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
+import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
+import {
+  attachSqliteSessionTarget,
+  readTranscriptMessagesByIdentity,
+} from "./sqlite-session.test-helpers.js";
 
 type ReplyBackend = Parameters<
   NonNullable<ReturnType<typeof createParams>["replyOperation"]>["attachBackend"]
@@ -423,6 +429,122 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     releaseAgentEnd();
     await expect(run).rejects.toThrow("turn start exploded");
     expect(settled).toBe(true);
+  });
+
+  it("reports overloaded turn/start rejection as replay-safe before acceptance", async () => {
+    createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        throw new CodexAppServerRpcError(
+          { code: -32_001, message: "Server overloaded; retry later." },
+          method,
+        );
+      }
+      return undefined;
+    });
+
+    const result = await runCodexAppServerAttempt(createTestParams());
+
+    expect(readAttemptTerminal(result)).toMatchObject({
+      promptError: "Server overloaded; retry later.",
+    });
+    expect(result.codexAppServerFailure).toMatchObject({
+      kind: "turn_start_overloaded",
+      transport: "stdio",
+      replaySafe: true,
+    });
+    expect(result.replayMetadata.replaySafe).toBe(true);
+  });
+
+  it("does not classify an overloaded preparatory RPC as turn/start rejection", async () => {
+    const params = createTestParams();
+    params.providerReviewAcknowledgment = {
+      read: () => ({
+        phase: "pending",
+        review: {
+          id: "review-1",
+          sessionId: params.sessionId,
+          runId: "failed-run",
+          provider: params.provider,
+          model: params.modelId,
+          runtimeId: "codex",
+          api: params.model.api,
+          nativeThreadId: "thread-1",
+          nativeTurnId: "failed-turn",
+          review: {
+            explanation: "Review the intended operation.",
+            continuation: { message: "continue after review" },
+          },
+        },
+      }),
+      assertRuntime: async ({ assertCurrent }) => assertCurrent(),
+      acceptNativeTurn: async () => {},
+    } as NonNullable<typeof params.providerReviewAcknowledgment>;
+    createStartedThreadHarness(async (method) => {
+      if (method === "thread/turns/list") {
+        throw new CodexAppServerRpcError(
+          { code: -32_001, message: "Server overloaded; retry later." },
+          method,
+        );
+      }
+      return undefined;
+    });
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toMatchObject({
+      code: -32_001,
+      method: "thread/turns/list",
+    });
+  });
+
+  it("persists one user row before the assistant after replaying an overloaded turn/start", async () => {
+    const params = createTestParams();
+    await attachSqliteSessionTarget(
+      params,
+      path.join(tempDir, "turn-start-overload-retry.sqlite"),
+      "turn-start-overload-retry",
+    );
+    let turnStartAttempts = 0;
+    createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        turnStartAttempts += 1;
+        if (turnStartAttempts === 1) {
+          throw new CodexAppServerRpcError(
+            { code: -32_001, message: "Server overloaded; retry later." },
+            method,
+          );
+        }
+        return {
+          turn: {
+            ...turnStartResult("turn-2", "completed").turn,
+            items: [
+              {
+                id: "answer-2",
+                type: "agentMessage",
+                text: "Recovered response.",
+                status: "completed",
+              },
+            ],
+          },
+        };
+      }
+      return undefined;
+    });
+
+    const rejected = await runCodexAppServerAttempt(params);
+    expect(rejected.codexAppServerFailure).toMatchObject({
+      kind: "turn_start_overloaded",
+      replaySafe: true,
+    });
+    expect(await readTranscriptMessagesByIdentity(params)).toEqual([]);
+
+    resetCodexTestBindingStore();
+    params.suppressNextUserMessagePersistence = false;
+    await runCodexAppServerAttempt(params);
+
+    const messages = await readTranscriptMessagesByIdentity(params);
+    expect(turnStartAttempts).toBe(2);
+    expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(messages[0]).toMatchObject({ role: "user", content: "hello" });
+    expect(JSON.stringify(messages[1])).toContain("Recovered response.");
   });
 
   it("fires llm_output and agent_end when turn/start fails", async () => {
