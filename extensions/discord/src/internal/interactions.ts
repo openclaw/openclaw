@@ -275,10 +275,10 @@ export class BaseComponentInteraction extends BaseInteraction {
 
 export class ButtonInteraction extends BaseComponentInteraction {}
 export class StringSelectMenuInteraction extends BaseComponentInteraction {}
-export class UserSelectMenuInteraction extends BaseComponentInteraction {}
-export class RoleSelectMenuInteraction extends BaseComponentInteraction {}
-export class MentionableSelectMenuInteraction extends BaseComponentInteraction {}
-export class ChannelSelectMenuInteraction extends BaseComponentInteraction {}
+class UserSelectMenuInteraction extends BaseComponentInteraction {}
+class RoleSelectMenuInteraction extends BaseComponentInteraction {}
+class MentionableSelectMenuInteraction extends BaseComponentInteraction {}
+class ChannelSelectMenuInteraction extends BaseComponentInteraction {}
 
 export class ModalInteraction extends BaseInteraction {
   readonly fields: ModalFields;

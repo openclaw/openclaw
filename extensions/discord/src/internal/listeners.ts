@@ -51,10 +51,6 @@ export abstract class ReadyListener extends BaseListener {
   readonly type = GatewayDispatchEvents.Ready;
 }
 
-export abstract class ResumedListener extends BaseListener {
-  readonly type = GatewayDispatchEvents.Resumed;
-}
-
 export abstract class GuildCreateListener extends BaseListener<
   GatewayGuildCreateDispatchData | APIUnavailableGuild
 > {

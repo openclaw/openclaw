@@ -1,5 +1,4 @@
 import type {
-  APIGuild,
   APIGuildMember,
   APIGuildScheduledEvent,
   APIRole,
@@ -12,10 +11,13 @@ import {
   timestampMsToIsoString,
 } from "openclaw/plugin-sdk/number-runtime";
 import {
+  getChannel,
+  getGuild,
   getGuildMember,
   getGuildVoiceState,
   isUnknownDiscordVoiceStateError,
   type APIChannel,
+  type RequestClient,
 } from "./internal/discord.js";
 import { DISCORD_IMAGE_UPLOAD_TYPES, loadDiscordMediaForUpload } from "./send.emojis-stickers.js";
 import { resolveDiscordRest } from "./send.shared.js";
@@ -36,12 +38,9 @@ type DiscordAbsentVoiceState = Pick<APIVoiceState, "guild_id" | "user_id" | "cha
 
 type DiscordVoiceStatus = APIVoiceState | DiscordAbsentVoiceState;
 
-function readDiscordResource<T extends object>(route: (id: string) => string) {
-  return async (id: string, opts: DiscordReactOpts): Promise<T> => {
-    const rest = resolveDiscordRest(opts);
-    // The REST client parses unknown JSON; each binding selects Discord's response type.
-    return (await rest.get(route(id))) as T;
-  };
+function readDiscordResource<T>(read: (rest: RequestClient, id: string) => Promise<T>) {
+  return async (id: string, opts: DiscordReactOpts): Promise<T> =>
+    await read(resolveDiscordRest(opts), id);
 }
 
 function auditReasonHeaders(reason?: string) {
@@ -57,7 +56,10 @@ export async function fetchMemberInfoDiscord(
   return await getGuildMember(rest, guildId, userId);
 }
 
-export const fetchRoleInfoDiscord = readDiscordResource<APIRole[]>(Routes.guildRoles);
+export const fetchRoleInfoDiscord = readDiscordResource(async (rest, guildId) => {
+  // SAFETY: Discord's Get Guild Roles route returns an array of API roles.
+  return (await rest.get(Routes.guildRoles(guildId))) as APIRole[];
+});
 
 function roleMutation(method: "put" | "delete") {
   return async (payload: DiscordRoleChange, opts: DiscordReactOpts) => {
@@ -70,11 +72,14 @@ function roleMutation(method: "put" | "delete") {
 export const addRoleDiscord = roleMutation("put");
 export const removeRoleDiscord = roleMutation("delete");
 
-export const fetchChannelInfoDiscord = readDiscordResource<APIChannel>(Routes.channel);
+export const fetchChannelInfoDiscord = readDiscordResource(getChannel);
 
-export const fetchGuildInfoDiscord = readDiscordResource<APIGuild>(Routes.guild);
+export const fetchGuildInfoDiscord = readDiscordResource(getGuild);
 
-export const listGuildChannelsDiscord = readDiscordResource<APIChannel[]>(Routes.guildChannels);
+export const listGuildChannelsDiscord = readDiscordResource(async (rest, guildId) => {
+  // SAFETY: Discord's Get Guild Channels route returns an array of API channels.
+  return (await rest.get(Routes.guildChannels(guildId))) as APIChannel[];
+});
 
 export async function fetchVoiceStatusDiscord(
   guildId: string,
@@ -99,9 +104,10 @@ export async function fetchVoiceStatusDiscord(
   }
 }
 
-export const listScheduledEventsDiscord = readDiscordResource<APIGuildScheduledEvent[]>(
-  Routes.guildScheduledEvents,
-);
+export const listScheduledEventsDiscord = readDiscordResource(async (rest, guildId) => {
+  // SAFETY: Discord's List Scheduled Events route returns API scheduled events.
+  return (await rest.get(Routes.guildScheduledEvents(guildId))) as APIGuildScheduledEvent[];
+});
 
 export async function resolveEventCoverImage(
   imageUrl: string,
