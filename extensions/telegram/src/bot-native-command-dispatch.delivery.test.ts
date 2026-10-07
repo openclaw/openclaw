@@ -262,12 +262,12 @@ describe("Telegram native argument menus", () => {
     expect(latest?.text).toContain(sentMenu().text);
   });
 
-  it.each(["parent", "off"] as const)(
+  it.each(["unpinned", "explicit parent", "off"] as const)(
     "uses the %s model settings for a DM-topic keyboard",
     async (thinking) => {
-      const inherited = thinking === "parent";
+      const pinned = thinking !== "off";
       const cfg = commandConfig(
-        inherited
+        pinned
           ? {
               agents: {
                 defaults: {
@@ -295,10 +295,12 @@ describe("Telegram native argument menus", () => {
               ],
             },
       );
-      if (inherited) {
+      const pinnedSessionKey =
+        thinking === "explicit parent" ? "agent:main:spawner" : "agent:main:main";
+      if (pinned) {
         await upsertSessionEntry({
           storePath: cfg.session!.store!,
-          sessionKey: "agent:main:main",
+          sessionKey: pinnedSessionKey,
           entry: {
             sessionId: "parent",
             updatedAt: 1,
@@ -308,19 +310,26 @@ describe("Telegram native argument menus", () => {
           },
         });
       }
+      if (thinking === "explicit parent") {
+        await upsertSessionEntry({
+          storePath: cfg.session!.store!,
+          sessionKey: "agent:main:main:thread:42001:77",
+          entry: { sessionId: "forked-topic", updatedAt: 1, parentSessionKey: pinnedSessionKey },
+        });
+      }
       await (
         await createBot(true, true, cfg, true)
       ).handleUpdate({
         update_id: 3101,
         message: { ...commandMessage("/think"), message_thread_id: 77 },
       });
-      if (inherited) {
-        expect(sentMenu().reply_markup.inline_keyboard.flat()).toContainEqual({
-          text: "max",
-          callback_data: "tgcmd:/think max",
-        });
-      } else {
+      const choices = sentMenu().reply_markup.inline_keyboard.flat();
+      if (thinking === "off") {
         expect(sentMenu().text).toContain(`Current thinking level: ${thinking}.\n`);
+      } else if (thinking === "explicit parent") {
+        expect(choices).toContainEqual({ text: "max", callback_data: "tgcmd:/think max" });
+      } else {
+        expect(choices.map((choice) => choice.text)).toEqual(["default", "off", "ultra"]);
       }
       expect(apiCalls).toHaveBeenCalledWith(
         "sendMessage",
