@@ -219,12 +219,12 @@ export function acceptContextEngineTurnIntent(params: OutboxKernelParams<"accept
   });
 }
 
-export function enqueueContextEngineTurnCommit(
-  params: ContextEngineTurnOutboxFilter & {
-    database: ContextEngineTurnOutboxConnection;
-    payload: Omit<ReadyContextEngineTurnOutboxPayload, "state">;
-  },
-): void {
+export function enqueueContextEngineTurnCommit(params: {
+  database: ContextEngineTurnOutboxConnection;
+  engineId: string;
+  ownerPluginId?: string;
+  payload: Omit<ReadyContextEngineTurnOutboxPayload, "state">;
+}): void {
   writeContextEngineTurnOutboxPayload({
     ...params,
     payload: { ...params.payload, state: "ready" },
@@ -329,13 +329,13 @@ function advanceAcceptedContextEngineTurn(
   return closedTurn.kind;
 }
 
-export function recoverContextEngineTurnOutbox(
-  params: ContextEngineTurnOutboxFilter & {
-    database: ContextEngineTurnOutboxConnection;
-    sessionId: string;
-    warn: (message: string) => void;
-  },
-): void {
+export function recoverContextEngineTurnOutbox(params: {
+  database: ContextEngineTurnOutboxConnection;
+  engineId: string;
+  ownerPluginId?: string;
+  sessionId: string;
+  warn: (message: string) => void;
+}): void {
   const db = outboxDb(params.database);
   const rows = executeSqliteQuerySync(
     params.database.db,

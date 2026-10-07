@@ -320,11 +320,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     this.reloadPersistedTranscriptSync();
   }
 
-  protected reloadPersistedTranscriptSync(prepared?: PreparedSessionTranscriptReload): void {
-    if (prepared) {
-      this.adoptPreparedTranscriptReload(prepared);
-      return;
-    }
+  protected reloadPersistedTranscriptSync(): void {
     this.assertTranscriptViewAvailable();
     if (this.persistenceTarget) {
       const runtimeCwd = this.cwd;
@@ -338,13 +334,12 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     expectedMutationAt: number | null,
     expectedEntryId: string,
     admittedUserId: string,
-    prepared?: PreparedSessionTranscriptReload,
   ): void {
     if (!this.persistenceTarget) {
       return;
     }
     this.adoptPreparedTranscriptReload(
-      prepared ?? readSessionManagerReload(this.persistenceTarget, this.boundedContextLimits, true),
+      readSessionManagerReload(this.persistenceTarget, this.boundedContextLimits, true),
       { expectedMutationAt, expectedEntryId, admittedUserId },
     );
   }
