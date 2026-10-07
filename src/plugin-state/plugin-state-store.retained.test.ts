@@ -176,6 +176,49 @@ describe("plugin-state-store.retained", () => {
       });
     });
 
+    it("keeps historical retained.* logical namespaces bounded and separate from retained storage", async () => {
+      await withOpenClawTestState(
+        { label: "retained-storage-namespace-compatibility" },
+        async () => {
+          const namespace = "retained.history";
+          seedPluginStateEntriesForTests([
+            { pluginId, namespace, key: "legacy", value: 1, createdAt: 1 },
+          ]);
+          const options = { namespace, maxEntries: 1 };
+          const sync = createPluginStateSyncKeyedStore<number>(pluginId, options);
+          expect(sync.lookup("legacy")).toBe(1);
+          const bounded = createPluginStateKeyedStore<number>(pluginId, options);
+          const retained = createPluginStateKeyedStore<number>(pluginId, {
+            namespace,
+            retention: "retained",
+          });
+          await retained.register("fresh", 3);
+          await bounded.register("fresh", 2);
+          expect(sync.lookup("legacy")).toBeUndefined();
+          expect(sync.lookup("fresh")).toBe(2);
+          expect(await retained.lookup("fresh")).toBe(3);
+        },
+      );
+    });
+
+    it("preserves the full 128-byte logical namespace limit in retained mode", async () => {
+      await withOpenClawTestState({ label: "retained-storage-namespace-length" }, async () => {
+        const options = { namespace: "n".repeat(128), retention: "retained" as const };
+        const retained = createPluginStateKeyedStore<number>(pluginId, options);
+        await retained.register("last-byte", 128);
+        await closePluginStateDatabaseAsync();
+        resetPluginStateStoreForTests();
+        const reopened = createPluginStateKeyedStore<number>(pluginId, options);
+        expect(await reopened.lookup("last-byte")).toBe(128);
+        expect(() =>
+          createPluginStateKeyedStore(pluginId, {
+            ...options,
+            namespace: `${options.namespace}n`,
+          }),
+        ).toThrow(expect.objectContaining({ code: "PLUGIN_STATE_INVALID_INPUT" }));
+      });
+    });
+
     it("rejects retention collisions, TTLs, and invalid move batches before mutation", async () => {
       await withOpenClawTestState({ label: "retained-storage-validation" }, async () => {
         expect(() =>
