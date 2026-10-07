@@ -22,7 +22,8 @@ const fixture = vi.hoisted(() => ({
   onStop: undefined as (() => void) | undefined,
 }));
 
-vi.mock("../../packages/gateway-client/src/index.js", () => ({
+// mock-isolation: Observe SSH transport ownership without opening a real WebSocket.
+vi.mock("../../packages/gateway-client/src/client.js", () => ({
   GatewayClient: class {
     connected = false;
 
