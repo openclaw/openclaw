@@ -638,12 +638,14 @@ JSON examples inside double-quoted banner text are not treated as response or er
 For JSONL, banner scanning starts fresh on each line.
 
 Claude streaming limits discount recognized partial-message envelopes while
-counting their text, thinking, and tool-input payloads. Cumulative snapshots and
-tool results still count toward the output budget. Forwarded subagent assistant
-messages and tool-result messages that the parser discards are charged a fixed
-allowance for their parent progress id. Child attribution alone does not earn
-that discount: retained stream-event text still counts toward the same 8 MiB
-output limit. Single-line limits and bounded frame counts remain active.
+counting their text, thinking, and tool-input payloads. Tool-result payloads are
+handed to consumers without being retained, so they do not count toward the output
+budget; their IDs, metadata, and frame still do. Cumulative snapshots still count.
+Forwarded subagent assistant messages and tool-result messages that the parser
+discards are charged a fixed allowance for their parent progress id. Child
+attribution alone does not earn that discount: retained stream-event text still
+counts toward the same 8 MiB output limit. Single-line limits and bounded frame
+counts remain active.
 
 Input modes:
 
