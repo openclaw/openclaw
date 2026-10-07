@@ -1,39 +1,48 @@
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { isChannelStartupSuppressedByEnvironment } from "./server-sidecar-startup-mode.js";
 
 export function createChannelAutostartRecovery(params: {
   getSuppression: () => object | null;
   clearSuppression: () => void;
-  tryRecover?: () => Promise<boolean>;
+  tryRecover?: (signal: AbortSignal) => Promise<number | undefined>;
+  signal: AbortSignal;
   isClosing?: () => boolean;
   startChannels: () => Promise<void>;
-}): () => Promise<boolean> {
-  let recovery: Promise<boolean> | undefined;
-  return async () => {
+}): (signal?: AbortSignal) => Promise<number | undefined> | undefined {
+  let recovery: Promise<number | undefined> | undefined;
+  return (signal) => {
+    params.signal.throwIfAborted();
+    signal?.throwIfAborted();
+    if (params.isClosing?.()) {
+      throw new Error("Gateway crash-loop recovery is closing");
+    }
     if (recovery) {
-      return await recovery;
+      return racePromiseWithAbortSignal(recovery, signal);
     }
     const suppression = params.getSuppression();
-    if (!suppression || params.isClosing?.()) {
-      return false;
+    if (!suppression) {
+      return undefined;
     }
     recovery = (async () => {
-      if (
-        !(await params.tryRecover?.()) ||
-        params.isClosing?.() ||
-        params.getSuppression() !== suppression
-      ) {
-        return false;
+      if (!params.tryRecover) {
+        throw new Error("Gateway crash-loop recovery has no boot owner");
+      }
+      const pausedUntilMs = await params.tryRecover(params.signal);
+      params.signal.throwIfAborted();
+      if (params.isClosing?.() || params.getSuppression() !== suppression) {
+        throw new Error("Gateway crash-loop recovery owner changed");
+      }
+      if (pausedUntilMs !== undefined) {
+        return pausedUntilMs;
       }
       params.clearSuppression();
       if (!isChannelStartupSuppressedByEnvironment()) {
         await params.startChannels();
       }
-      return true;
-    })();
-    try {
-      return await recovery;
-    } finally {
+      return undefined;
+    })().finally(() => {
       recovery = undefined;
-    }
+    });
+    return racePromiseWithAbortSignal(recovery, signal);
   };
 }

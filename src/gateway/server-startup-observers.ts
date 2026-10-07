@@ -1,6 +1,5 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { inspectGatewayCrashLoopBreakerAsync } from "../infra/gateway-boot-lifecycle.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
 import type { createHookRunner } from "../plugins/hooks.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -19,15 +18,19 @@ const loadMainSessionRestartRecoveryMarkingModule = createLazyRuntimeModule(
 );
 
 /** Mark predecessors before channels admit work, independently of plugin registration. */
-export async function markGatewayStartupMainSessionOrphans(params: {
-  cfg: OpenClawConfig;
-  startupCheckedStorePaths: Set<string>;
-  startupTrace?: GatewayStartupTrace;
-  log: { warn: (message: string) => void };
-}): Promise<void> {
+export async function markGatewayStartupMainSessionOrphans(
+  params: {
+    gatewayPluginConfigAtStart: OpenClawConfig;
+    isRestartRecoverySuppressed: () => boolean;
+    scheduler: { signal: AbortSignal };
+    startupTrace?: GatewayStartupTrace;
+    log: { warn: (message: string) => void };
+  },
+  startupCheckedStorePaths: Set<string>,
+): Promise<void> {
   await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
     try {
-      if ((await inspectGatewayCrashLoopBreakerAsync()).recoveryPausedUntilMs !== undefined) {
+      if (params.scheduler.signal.aborted || params.isRestartRecoverySuppressed()) {
         return;
       }
       const { markStartupOrphanedMainSessionsForRecovery } = await measureStartup(
@@ -35,10 +38,13 @@ export async function markGatewayStartupMainSessionOrphans(params: {
         "sidecars.main-session-recovery-load",
         loadMainSessionRestartRecoveryMarkingModule,
       );
+      if (params.scheduler.signal.aborted || params.isRestartRecoverySuppressed()) {
+        return;
+      }
       await measureStartup(params.startupTrace, "sidecars.main-session-recovery-scan", () =>
         markStartupOrphanedMainSessionsForRecovery({
-          cfg: params.cfg,
-          startupCheckedStorePaths: params.startupCheckedStorePaths,
+          cfg: params.gatewayPluginConfigAtStart,
+          startupCheckedStorePaths,
         }),
       );
     } catch (err) {

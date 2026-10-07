@@ -7,35 +7,39 @@ export function createGatewayCrashLoopRecovery(params: {
   bootId: string | undefined;
   getActiveBootId: () => string | undefined;
   onRecovered: (bootId: string) => void;
-}): () => Promise<boolean> {
-  return async () => {
+}): (signal?: AbortSignal) => Promise<number | undefined> {
+  return async (signal) => {
     const suppressedBootId = params.bootId;
-    if (!suppressedBootId || params.getActiveBootId() !== suppressedBootId) {
-      return false;
+    const assertBootCurrent = () => {
+      if (!suppressedBootId || params.getActiveBootId() !== suppressedBootId) {
+        throw new Error("Gateway crash-loop recovery belongs to a replaced boot");
+      }
+    };
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      assertBootCurrent();
+    };
+    assertCurrent();
+    const decision = await inspectGatewayCrashLoopBreakerAsync(process.env, Date.now(), signal);
+    assertCurrent();
+    if (decision.recoveryPausedUntilMs !== undefined) {
+      return decision.recoveryPausedUntilMs;
     }
-    const decision = await inspectGatewayCrashLoopBreakerAsync(process.env);
-    // The open safe-mode boot must prove stable for the full unclean window.
-    if (
-      params.getActiveBootId() !== suppressedBootId ||
-      !decision.recovered ||
-      decision.uncleanBoots !== 0
-    ) {
-      return false;
+    if (!decision.recovered || decision.uncleanBoots !== 0) {
+      throw new Error("Gateway crash-loop recovery has no cleared breaker window");
     }
     const recoveredBootId = await recordGatewayCrashLoopRecovery(
       suppressedBootId,
       process.env,
       undefined,
-      () => {
-        if (params.getActiveBootId() !== suppressedBootId) {
-          throw new Error("Gateway crash-loop recovery belongs to a replaced boot");
-        }
-      },
+      assertCurrent,
     );
-    if (!recoveredBootId || params.getActiveBootId() !== suppressedBootId) {
-      return false;
+    assertBootCurrent();
+    if (!recoveredBootId) {
+      throw new Error("Gateway crash-loop recovery did not commit");
     }
+    // Adopt a committed boot identity even if close overtook the worker's reply.
     params.onRecovered(recoveredBootId);
-    return true;
+    return undefined;
   };
 }

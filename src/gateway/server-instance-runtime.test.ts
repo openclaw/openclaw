@@ -93,7 +93,7 @@ describe("createGatewayInstanceRuntime", () => {
     });
     const registry = createRegistry({ agent: rawAgent });
     const context = createContext();
-    const preparing = createDeferred();
+    const preparing = createDeferred<number | undefined>();
     const runtime = createGatewayInstanceRuntime({
       getContext: () => context,
       getMethodRegistry: () => registry,
@@ -153,7 +153,7 @@ describe("createGatewayInstanceRuntime", () => {
     });
     const preparation = runtime.recovery.prepareRestartRecovery();
     runtime.close();
-    preparing.resolve();
+    preparing.resolve(undefined);
     await expect(preparation).rejects.toThrow("Gateway instance dispatch unavailable");
     expect(getGatewayRecoveryRuntime()).toBeUndefined();
     await expect(runtime.recovery.waitForAgent({ runId: "run-1" })).rejects.toThrow(

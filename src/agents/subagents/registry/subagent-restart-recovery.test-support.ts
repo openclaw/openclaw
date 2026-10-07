@@ -65,7 +65,7 @@ export function makeRestartRecoveryRun(
 export function useSubagentRestartRecoveryFixture() {
   const dispatchAgent = vi.fn();
   const gatewayRuntime: GatewayRecoveryRuntime = {
-    prepareRestartRecovery: async () => {},
+    prepareRestartRecovery: () => undefined,
     dispatchSessionMethod: vi.fn(),
     dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
     waitForAgent: vi.fn(async () => ({

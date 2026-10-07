@@ -10,7 +10,6 @@ import {
   registerAgentEventLifecycleRotationHandler,
 } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
-import { inspectGatewayCrashLoopBreakerAsync } from "../../infra/gateway-boot-lifecycle.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import {
   isSessionStoreTopologyChange,
@@ -44,18 +43,15 @@ import {
 
 type RecoveryCounts = { started: number; settled: number; failed: number; skipped: number };
 
-async function readRecoveryPause(stateDir?: string, signal?: AbortSignal) {
-  const { recoveryPausedUntilMs: pausedUntilMs } = await inspectGatewayCrashLoopBreakerAsync(
-    { ...process.env, OPENCLAW_STATE_DIR: stateDir ?? resolveStateDir(process.env) },
-    Date.now(),
-    signal,
-  );
-  if (pausedUntilMs !== undefined) {
-    mainSessionRecoveryLog.info(
-      `restart-loop breaker tripped; automatic main-session restart recovery paused until ${new Date(pausedUntilMs).toISOString()}`,
-    );
-  }
-  return pausedUntilMs;
+function prepareRestartRecovery(gatewayRuntime: GatewayRecoveryRuntime, signal?: AbortSignal) {
+  return gatewayRuntime.prepareRestartRecovery(signal)?.then((pausedUntilMs) => {
+    if (pausedUntilMs !== undefined) {
+      mainSessionRecoveryLog.info(
+        `restart-loop breaker tripped; automatic main-session restart recovery paused until ${new Date(pausedUntilMs).toISOString()}`,
+      );
+    }
+    return pausedUntilMs;
+  });
 }
 
 async function runRecoveryRetries(params: {
@@ -93,6 +89,7 @@ async function runRecoveryRetries(params: {
   }
 }
 
+/** The startup owner admits this store sweep before marking or dispatching sessions. */
 export async function recoverRestartAbortedMainSessions(params: {
   cfg?: OpenClawConfig;
   agentIds?: ReadonlySet<string>;
@@ -107,10 +104,9 @@ export async function recoverRestartAbortedMainSessions(params: {
   gatewayRuntime: GatewayRecoveryRuntime;
 }): Promise<RecoveryCounts> {
   const result = { started: 0, settled: 0, failed: 0, skipped: 0 };
-  if (await readRecoveryPause(params.stateDir)) {
+  if (params.shouldContinue?.() === false) {
     return result;
   }
-  await params.gatewayRuntime.prepareRestartRecovery();
   const passId = randomUUID();
   const skipReasons = new Map<MainSessionRecoverySkipReason, number>();
   const handledSessionKeys = params.handledSessionKeys ?? new Set<string>();
@@ -187,14 +183,15 @@ async function recoverExpectedRestartRecovery(
     lifecycleGeneration?: string;
     observationOnly?: boolean;
     shouldContinue?: () => boolean;
+    signal?: AbortSignal;
     stateDir?: string;
     gatewayRuntime: GatewayRecoveryRuntime;
   },
 ): Promise<RecoveryCounts> {
-  if (await readRecoveryPause(params.stateDir)) {
+  const preparation = prepareRestartRecovery(params.gatewayRuntime, params.signal);
+  if (preparation && (await preparation) !== undefined) {
     return { started: 0, settled: 0, failed: 0, skipped: 0 };
   }
-  await params.gatewayRuntime.prepareRestartRecovery();
   const expected = params.expectedTarget;
   const loadExpected = () =>
     loadExpectedRestartRecoveryTarget({ expected, storePath: params.storePath });
@@ -304,10 +301,14 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
   const runRecoveryAttempt = async (
     exhaustedTargets: Map<string, ExhaustedRestartRecoveryTarget>,
     agentIds?: ReadonlySet<string>,
-  ): Promise<RecoveryCounts> => {
+  ): Promise<RecoveryCounts | number> => {
     return await runWithGatewayIndependentRootWorkAdmission(
       async () => {
-        await params.gatewayRuntime.prepareRestartRecovery();
+        const preparation = prepareRestartRecovery(params.gatewayRuntime, abortController.signal);
+        const pausedUntilMs = preparation ? await preparation : undefined;
+        if (pausedUntilMs !== undefined) {
+          return pausedUntilMs;
+        }
         if (!shouldContinue()) {
           return { started: 0, settled: 0, failed: 0, skipped: 0 };
         }
@@ -358,6 +359,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
               lifecycleGeneration,
               observationOnly: true,
               shouldContinue,
+              signal: abortController.signal,
               stateDir: params.stateDir,
               gatewayRuntime: params.gatewayRuntime,
             }),
@@ -393,27 +395,24 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
       shouldContinue,
       signal: abortController.signal,
       attempt: async (finalAttempt) => {
-        while (shouldContinue()) {
-          const pausedUntilMs = await readRecoveryPause(params.stateDir, abortController.signal);
-          if (pausedUntilMs === undefined) {
-            break;
-          }
-          await sleepWithAbort(Math.max(1, pausedUntilMs - Date.now()), abortController.signal, {
-            ref: false,
-          });
-        }
-        if (!shouldContinue()) {
-          return true;
-        }
         exhaustedTargets = new Map();
-        const result = await runRecoveryAttempt(exhaustedTargets, agentIds);
-        if (result.failed === 0) {
-          return true;
+        while (shouldContinue()) {
+          const result = await runRecoveryAttempt(exhaustedTargets, agentIds);
+          if (typeof result === "number") {
+            await sleepWithAbort(Math.max(1, result - Date.now()), abortController.signal, {
+              ref: false,
+            });
+            continue;
+          }
+          if (result.failed === 0) {
+            return true;
+          }
+          if (finalAttempt && exhaustedTargets.size > 0) {
+            await reconcileExhaustedTargets(exhaustedTargets.values());
+          }
+          return false;
         }
-        if (finalAttempt && exhaustedTargets.size > 0) {
-          await reconcileExhaustedTargets(exhaustedTargets.values());
-        }
-        return false;
+        return true;
       },
       onError: async (err, finalAttempt) => {
         if (finalAttempt) {

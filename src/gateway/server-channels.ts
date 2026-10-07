@@ -156,7 +156,7 @@ type ChannelManagerOptions = {
   deferStartupAccountStartsUntil?: Promise<void>;
   getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
   ambientAutostartSuppressedChannelIds?: ReadonlySet<string>;
-  tryRecoverAutostartSuppression?: () => Promise<boolean>;
+  tryRecoverAutostartSuppression?: (signal: AbortSignal) => Promise<number | undefined>;
   isClosing?: () => boolean;
 };
 
@@ -206,7 +206,7 @@ export type ChannelManager = {
   releaseChannelRouteHandoffs: (channel: ChannelId, accountId?: string) => void;
   setAutostartSuppression: (suppression: ChannelAutostartSuppression | null) => void;
   getAutostartSuppression: () => ChannelAutostartSuppression | null;
-  recoverAutostartSuppression: () => Promise<boolean>;
+  recoverAutostartSuppression: (signal?: AbortSignal) => Promise<number | undefined> | undefined;
   setAmbientAutostartSuppressedChannelIds: (channelIds: ReadonlySet<string>) => void;
   isAmbientAutostartSuppressed: (channelId: string) => boolean;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
@@ -1459,6 +1459,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       autostartSuppression = null;
     },
     tryRecover: opts.tryRecoverAutostartSuppression,
+    signal: opts.scheduler.signal,
     isClosing: opts.isClosing,
     // Resuming deferred autostart preserves explicit operator stops.
     startChannels: () => startChannelsWithOptions({ preserveManualStop: true }),

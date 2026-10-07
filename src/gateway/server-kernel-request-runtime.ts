@@ -138,12 +138,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     getMethodRegistry: () => getAttachedGatewayMethodRegistry(),
     isDispatchAvailable: () => startupState.dispatchReady && !lifecycle.closePreludeStarted,
     logError: (message) => log.error(message),
-    prepareRestartRecovery: async () => {
-      await runtime.channelManager.recoverAutostartSuppression();
-      if (runtime.channelManager.getAutostartSuppression()) {
-        throw new Error("Gateway crash-loop recovery has not committed");
-      }
-    },
+    prepareRestartRecovery: runtime.channelManager.recoverAutostartSuppression,
   });
   gatewayInstanceRuntimeRef.current = gatewayInstanceRuntime;
   gatewayRequestContext.resolveGatewayContext = () =>

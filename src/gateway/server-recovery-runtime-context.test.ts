@@ -19,7 +19,7 @@ function createRecoveryRuntime(result: string) {
     ) => result,
   );
   const runtime: GatewayRecoveryRuntime = {
-    prepareRestartRecovery: async () => {},
+    prepareRestartRecovery: () => undefined,
     dispatchSessionMethod: vi.fn(),
     dispatchAgent: async <T = unknown>(
       params: AgentRunRequest,

@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
+import type { GatewayServerOptions } from "../../gateway/server-public.js";
 import { createNewerSqliteSchemaVersionError } from "../../infra/sqlite-user-version.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
 import { OpenClawDatabaseSchemaPreflightError } from "../../state/openclaw-database-preflight.js";
@@ -467,15 +468,7 @@ describe("gateway run option collisions", () => {
 
   function gatewayStartOptions(index = 0) {
     expect(startGatewayServer.mock.calls[index]?.[0]).toBe(18789);
-    return callArg(startGatewayServer, index, 1) as {
-      auth?: { mode?: string; token?: string; password?: string };
-      bind?: string;
-      channelAutostartSuppression?: { reason?: string; message?: string };
-      tryRecoverChannelAutostartSuppression?: () => Promise<boolean>;
-      ambientEnvTriggers?: "allow" | "suppress";
-      startupConfigSnapshotRead?: { snapshot?: Record<string, unknown> };
-      startupStartedAt?: number;
-    };
+    return callArg(startGatewayServer, index, 1) as GatewayServerOptions;
   }
 
   it("rejects invalid gateway ports before startup", async () => {
@@ -1294,7 +1287,7 @@ describe("gateway run option collisions", () => {
   });
 
   it("refreshes config and crash-loop state for each boot iteration", async () => {
-    let firstBootRecovery: (() => Promise<boolean>) | undefined;
+    let firstBootRecovery: GatewayServerOptions["tryRecoverChannelAutostartSuppression"];
     bootLifecycle.record.mockReturnValueOnce("boot-1").mockReturnValueOnce("boot-2");
     runGatewayLoop.mockImplementationOnce(async ({ beginBoot, start }: GatewayLoopParams) => {
       await beginBoot?.(1000);
@@ -1350,7 +1343,9 @@ describe("gateway run option collisions", () => {
       shouldWriteStabilityBundle: false,
       recovered: true,
     });
-    expect(await firstBootRecovery?.()).toBe(false);
+    await expect(firstBootRecovery?.(new AbortController().signal)).rejects.toThrow(
+      "replaced boot",
+    );
     expect(bootLifecycle.inspect).toHaveBeenCalledTimes(2);
     expect(bootLifecycle.recover).not.toHaveBeenCalled();
     expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);

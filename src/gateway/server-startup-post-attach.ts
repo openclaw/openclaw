@@ -590,6 +590,7 @@ export async function startGatewayPostAttachRuntime(
     startChannels: () => Promise<void>;
     refreshChatMetadata?: () => Promise<void>;
     recoveryRuntime: GatewayRecoveryRuntime;
+    isRestartRecoverySuppressed: () => boolean;
     resolveGatewayContext: GatewayContextResolver;
     logHooks: {
       info: (msg: string) => void;
@@ -797,12 +798,10 @@ export async function startGatewayPostAttachRuntime(
           const prepared = await Promise.allSettled([
             candidateCanary
               ? Promise.resolve()
-              : markGatewayStartupMainSessionOrphans({
-                  cfg: params.gatewayPluginConfigAtStart,
-                  startupCheckedStorePaths: mainSessionRecoveryStartupCheckedStorePaths,
-                  startupTrace: params.startupTrace,
-                  log: params.log,
-                }),
+              : markGatewayStartupMainSessionOrphans(
+                  params,
+                  mainSessionRecoveryStartupCheckedStorePaths,
+                ),
             loadStartupPluginsIfNeeded(),
           ]);
           const failed = prepared.find((outcome) => outcome.status === "rejected");

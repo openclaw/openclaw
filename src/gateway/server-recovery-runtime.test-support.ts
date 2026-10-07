@@ -5,7 +5,7 @@ export function createMockGatewayRecoveryRuntime(
   overrides: Partial<GatewayRecoveryRuntime> = {},
 ): GatewayRecoveryRuntime {
   return {
-    prepareRestartRecovery: vi.fn(async () => {}),
+    prepareRestartRecovery: vi.fn(() => undefined),
     dispatchSessionMethod: vi.fn(),
     dispatchAgent: vi.fn(),
     waitForAgent: vi.fn(),

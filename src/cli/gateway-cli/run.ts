@@ -857,7 +857,9 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   const envSidecarStartupMode = isChannelStartupSuppressedByEnvironment() ? "defer" : "start";
   let crashLoopDecision: GatewayCrashLoopBreakerDecision | undefined;
   let channelAutostartSuppression: { reason: "crash-loop-breaker"; message: string } | undefined;
-  let tryRecoverChannelAutostartSuppression: (() => Promise<boolean>) | undefined;
+  let tryRecoverChannelAutostartSuppression:
+    | ((signal: AbortSignal) => Promise<number | undefined>)
+    | undefined;
   let activeBootId: string | undefined;
   let bootRecorded = false;
   let triageAttempted = false;

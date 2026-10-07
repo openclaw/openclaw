@@ -60,6 +60,7 @@ export async function startTranscriptReloadFixtureSidecars(
       defaultWorkspaceDir: workspaceDir,
       deps: {},
       startChannels: async () => {},
+      isRestartRecoverySuppressed: () => false,
       recoveryRuntime: {
         prepareRestartRecovery: unusedRecovery,
         dispatchSessionMethod: unusedRecovery,

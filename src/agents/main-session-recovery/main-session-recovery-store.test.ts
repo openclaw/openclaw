@@ -824,7 +824,7 @@ describe("main session recovery store", () => {
           session: { scope: "global", store: opsStorePath },
         },
         gatewayRuntime: {
-          prepareRestartRecovery: async () => {},
+          prepareRestartRecovery: () => undefined,
           dispatchSessionMethod: dispatch,
           dispatchAgent: dispatch,
           waitForAgent: dispatch,
