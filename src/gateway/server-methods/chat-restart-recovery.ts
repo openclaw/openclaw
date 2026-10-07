@@ -8,6 +8,7 @@ import {
   resolveChannelResetConfig,
   resolveSessionResetType,
   type SessionEntry,
+  type InternalSessionEntry,
 } from "../../config/sessions.js";
 import {
   resolvePreparedSessionEntryResetFreshness,
@@ -392,6 +393,7 @@ export function buildRestartSafeChatTranscriptState(params: {
   clientRunId: string;
   startedAt: number;
   sourceIngress: "control-ui" | "internal";
+  operatorSource?: InternalSessionEntry["restartRecoveryOperatorSource"];
 }): {
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch: SessionTranscriptTurnLifecyclePatch;
@@ -419,6 +421,9 @@ export function buildRestartSafeChatTranscriptState(params: {
       restartRecoveryRequesterSenderId: undefined,
       restartRecoverySameChannelThreadRequired: undefined,
       restartRecoverySourceIngress: params.sourceIngress,
+      restartRecoveryOperatorSource: params.admission.retryExpectedState
+        ? params.admission.retryExpectedState.restartRecoveryOperatorSource
+        : params.operatorSource,
       restartRecoverySourceReplyDeliveryMode: undefined,
       ...(params.admission.priorTerminalSourceRunId
         ? { restartRecoveryTerminalRunIds: [params.admission.priorTerminalSourceRunId] }

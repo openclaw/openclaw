@@ -21,6 +21,10 @@ export const sqliteTestSingletonPublications: ReadonlyMap<string, symbol> = new 
     Symbol.for("openclaw.sharedStateWorkerOwner"),
   ],
   [source("src/infra/sqlite-worker-store.ts"), brokerKey],
+  [
+    source("src/infra/device-pairing-publication.ts"),
+    Symbol.for("openclaw.devicePairingPublications"),
+  ],
   [source("src/state/openclaw-state-db-cache.ts"), Symbol.for("openclaw.stateDatabaseLifecycle")],
   [
     source("src/state/openclaw-state-db-snapshot-owner.ts"),

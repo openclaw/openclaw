@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import {
   buildRestartRecoveryClaimCleanupPatch,
   hasRestartRecoverySourceClaim,
@@ -33,6 +35,7 @@ import {
   createRestartRecoveryClaimChangedError,
   isAgentRunStaleLifecycleError,
 } from "../../infra/agent-lifecycle-error.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type {
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,
@@ -112,6 +115,8 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
 
 export function createReplyRestartRecoveryClaimController(params: {
   agentId: string;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  inputProvenance?: InputProvenance;
   admissionRunId?: unknown;
   executionRunId?: string;
   lifecycleGeneration: string | undefined;
@@ -219,6 +224,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       },
       {
         workerGuard: {
+          source: params.operatorAuthority?.assertCurrent,
           assertCurrent: () => {
             assertReadCurrent();
             if (params.getSessionId() !== options.sessionId) {
@@ -359,10 +365,22 @@ export function createReplyRestartRecoveryClaimController(params: {
         throw new Error("channel restart recovery requires source-keyed user-turn admission");
       }
     }
+    const operatorSource =
+      !recoverableDeliveryContext && !sourceTurnId
+        ? createRestartRecoveryOperatorSource({
+            authority: params.operatorAuthority,
+            entry,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            sourceRunId: recoveryRunId,
+            inputProvenance: params.inputProvenance,
+          })
+        : undefined;
     if (
       !recoverableDeliveryContext &&
       !activeClaimRunId &&
-      (!recorder || recorder.hasPersisted())
+      (!recorder || recorder.hasPersisted()) &&
+      !operatorSource
     ) {
       // These turns have no admission write to extend; lifecycle start owns their claim.
       return "admitted";
@@ -397,7 +415,9 @@ export function createReplyRestartRecoveryClaimController(params: {
         })
       : {};
     const transfersControlUiClaim = canTransferAbortedControlUiClaim && !recoverableDeliveryContext;
-    const hasDeliveryClaim = Boolean(recoverableDeliveryContext || transfersControlUiClaim);
+    const hasDeliveryClaim = Boolean(
+      recoverableDeliveryContext || transfersControlUiClaim || operatorSource,
+    );
     const patch: SessionTranscriptTurnLifecyclePatch = {
       ...retiredClaim,
       abortedLastRun: false,
@@ -408,11 +428,13 @@ export function createReplyRestartRecoveryClaimController(params: {
       restartRecoveryDeliveryContext: recoverableDeliveryContext,
       restartRecoveryDeliveryRequestFingerprint: undefined,
       restartRecoveryDeliveryRunId: hasDeliveryClaim ? recoveryRunId : undefined,
-      restartRecoveryDeliverySourceRunId: transfersControlUiClaim
-        ? recoveryRunId
-        : recoverableDeliveryContext
-          ? sourceTurnId
-          : undefined,
+      restartRecoveryOperatorSource: operatorSource,
+      restartRecoveryDeliverySourceRunId:
+        transfersControlUiClaim || operatorSource
+          ? recoveryRunId
+          : recoverableDeliveryContext
+            ? sourceTurnId
+            : undefined,
       restartRecoveryRequesterAccountId: transfersControlUiClaim
         ? undefined
         : normalizeOptionalString(params.requesterAccountId),
@@ -425,7 +447,7 @@ export function createReplyRestartRecoveryClaimController(params: {
         ? "channel"
         : transfersControlUiClaim
           ? "control-ui"
-          : undefined,
+          : operatorSource?.snapshot.sourceIngress,
       restartRecoverySourceReplyDeliveryMode: transfersControlUiClaim
         ? undefined
         : params.sourceReplyDeliveryMode,

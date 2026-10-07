@@ -24,6 +24,7 @@ import {
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
 /** Operational lifecycle correlation. This is never identity or authorization evidence. */
@@ -42,6 +43,8 @@ export type AdmittedRunContext = Readonly<{
 
 export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
+  /** Host-captured original authenticated input, consumed only by restart-claim admission. */
+  recoverySnapshot?: import("../gateway/operator-run-recovery.types.js").OperatorRunRecoverySnapshot;
   scopes: readonly string[];
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
@@ -97,6 +100,9 @@ export function createAdmittedRunOperatorAuthority(
   const readCurrentGithubLogin = source.readCurrentGithubLogin;
   const authority = Object.freeze({
     profileId: source.profileId,
+    recoverySnapshot: source.recoverySnapshot
+      ? freezeJsonSnapshot(structuredClone(source.recoverySnapshot))
+      : undefined,
     scopes: Object.freeze([...source.scopes]),
     gatewayAccessGrant: source.gatewayAccessGrant
       ? Object.freeze({ ...source.gatewayAccessGrant })
