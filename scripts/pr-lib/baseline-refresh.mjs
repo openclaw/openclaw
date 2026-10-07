@@ -398,8 +398,55 @@ const retiredNames = [
   "prepare-sync-result.env",
 ];
 
-function retainedAuthority(binding) {
+function contextBinding(context) {
+  const pairs = decoder
+    .decode(context)
+    .split("\n")
+    .filter((line) => /^PREP_BASELINE_REFRESH_(?:HEAD|OID)=/u.test(line))
+    .map((line) => line.split("="));
+  if (!pairs.length) {
+    return undefined;
+  }
+  if (
+    pairs.length !== 2 ||
+    new Set(pairs.map(([key]) => key)).size !== 2 ||
+    pairs.some((pair) => pair.length !== 2 || !oidPattern.test(pair[1]))
+  ) {
+    throw new Error("Invalid predecessor baseline context.");
+  }
+  const values = Object.fromEntries(pairs);
+  return { anchor: values.PREP_BASELINE_REFRESH_HEAD, oid: values.PREP_BASELINE_REFRESH_OID };
+}
+
+function bindContext(binding, context) {
+  if (contextBinding(context)) {
+    return Buffer.from(
+      decoder
+        .decode(context)
+        .replace(
+          /^PREP_BASELINE_REFRESH_OID=[a-f0-9]{40}$/mu,
+          `PREP_BASELINE_REFRESH_OID=${binding.oid}`,
+        )
+        .replace(
+          /^PREP_BASELINE_REFRESH_HEAD=[a-f0-9]{40}$/mu,
+          `PREP_BASELINE_REFRESH_HEAD=${binding.anchor}`,
+        ),
+    );
+  }
+  return Buffer.concat([
+    context,
+    Buffer.from(
+      `\nPREP_BASELINE_REFRESH_OID=${binding.oid}\nPREP_BASELINE_REFRESH_HEAD=${binding.anchor}\n`,
+    ),
+  ]);
+}
+
+function retainedAuthority(binding, seen = new Set()) {
   const { record, oid } = binding;
+  if (seen.has(oid)) {
+    throw new Error("Cyclic predecessor baseline authority.");
+  }
+  seen.add(oid);
   exactKeys(record.authority, authorityPaths);
   if (!fs.lstatSync(record.archive).isDirectory()) {
     throw new Error("Invalid retained preparation directory.");
@@ -407,12 +454,6 @@ function retainedAuthority(binding) {
   const retained = (path) => readRegular(join(record.archive, path.slice(".local/".length)));
   for (const path of authorityPaths) {
     const expected = record.authority[path];
-    if (path === bindingPath) {
-      if (expected !== "absent") {
-        throw new Error("Nested baseline refresh requires separate source admission.");
-      }
-      continue;
-    }
     if (!["absent"].includes(expected) && !oidPattern.test(expected)) {
       throw new Error("Invalid retained authority object ID.");
     }
@@ -427,13 +468,40 @@ function retainedAuthority(binding) {
   const meta = JSON.parse(readRegular(".local/pr-meta.json"));
   const review = JSON.parse(retained(".local/correction-review.json"));
   const incoming = JSON.parse(readRegular(".local/review.json"));
+  const context = retained(".local/prep-context.env");
+  const predecessor = contextBinding(context);
+  let previousBytes;
+  let sourcePaths;
+  if (record.authority[bindingPath] === "absent") {
+    if (predecessor) {
+      throw new Error("Predecessor baseline binding is missing.");
+    }
+    sourcePaths = paths(record.incomingHead, record.sourceHead);
+  } else {
+    if (!predecessor || predecessor.oid !== record.authority[bindingPath]) {
+      throw new Error("Predecessor baseline context does not bind retained authority.");
+    }
+    previousBytes = retained(bindingPath);
+    const prior = { ...bindingAt(predecessor.anchor, previousBytes), anchor: predecessor.anchor };
+    if (
+      prior.record.pr !== record.pr ||
+      prior.record.incomingHead !== record.incomingHead ||
+      prior.record.incomingReviewOid !== record.incomingReviewOid
+    ) {
+      throw new Error("Predecessor baseline changed incoming authority.");
+    }
+    git(["merge-base", "--is-ancestor", prior.anchor, record.sourceHead]);
+    git(["merge-base", "--is-ancestor", prior.record.baselineHead, record.baselineHead]);
+    const authority = retainedAuthority(prior, seen);
+    if (!context.equals(bindContext(prior, authority.context))) {
+      throw new Error("Predecessor preparation context changed.");
+    }
+    sourcePaths = [...authority.scope, ...paths(prior.anchor, record.sourceHead)];
+  }
   const required = incoming.findings.filter((finding) =>
     ["BLOCKER", "IMPORTANT"].includes(finding.severity),
   );
-  const scope = new Set([
-    ...meta.files.map((file) => file.path),
-    ...paths(record.incomingHead, record.sourceHead),
-  ]);
+  const scope = new Set([...meta.files.map((file) => file.path), ...sourcePaths]);
   const violations = validateReviewArtifacts({
     review,
     prMeta: { ...meta, headRefOid: record.sourceHead, files: [...scope].map((path) => ({ path })) },
@@ -458,18 +526,10 @@ function retainedAuthority(binding) {
       `Retained correction review does not authorize its source. ${violations.join("; ")}`,
     );
   }
-  const context = retained(".local/prep-context.env");
-  if (/^PREP_BASELINE_REFRESH_(?:HEAD|OID)=/mu.test(decoder.decode(context))) {
-    throw new Error("Source context is already baseline-bound.");
-  }
   return {
     context,
-    boundContext: Buffer.concat([
-      context,
-      Buffer.from(
-        `\nPREP_BASELINE_REFRESH_OID=${oid}\nPREP_BASELINE_REFRESH_HEAD=${binding.anchor}\n`,
-      ),
-    ]),
+    previousBytes,
+    scope: [...new Set([...scope, ...binding.paths])],
   };
 }
 
@@ -508,12 +568,18 @@ function transition(command, pr, source, anchor, branch, root, lockRef, lockOid)
   ) {
     throw new Error("Baseline transition source or preparation branch changed.");
   }
-  const { context, boundContext } = retainedAuthority(binding);
+  const { context, previousBytes } = retainedAuthority(binding);
+  const boundContext = bindContext(binding, context);
   const currentContext = readRegular(".local/prep-context.env");
   if (!currentContext.equals(context) && !currentContext.equals(boundContext)) {
     throw new Error("Preparation context changed during baseline transition.");
   }
-  if (present(bindingPath) && !readRegular(bindingPath).equals(binding.bytes)) {
+  const currentBinding = present(bindingPath) ? readRegular(bindingPath) : undefined;
+  if (
+    currentBinding
+      ? !currentBinding.equals(binding.bytes) && !previousBytes?.equals(currentBinding)
+      : previousBytes !== undefined
+  ) {
     throw new Error("Baseline transition binding changed.");
   }
   for (const name of retiredNames) {
@@ -540,7 +606,7 @@ function transition(command, pr, source, anchor, branch, root, lockRef, lockOid)
       lockRef,
       lockOid,
     ]);
-    if (!present(bindingPath)) {
+    if (!currentBinding?.equals(binding.bytes)) {
       atomicWrite(bindingPath, binding.bytes);
     }
     if (!currentContext.equals(boundContext)) {
@@ -576,14 +642,14 @@ export function baselineRefreshScope({
   ) {
     throw new Error("Baseline refresh authority changed.");
   }
-  retainedAuthority({ ...binding, anchor });
+  const authority = retainedAuthority({ ...binding, anchor });
   git(["merge-base", "--is-ancestor", anchor, head]);
-  return [...binding.paths, ...paths(anchor, head)];
+  return [...authority.scope, ...paths(anchor, head)];
 }
 
 function create(pr, source, baseline, main, archive, snapshot, manifestPath) {
-  if (![source, baseline, main].every((value) => oidPattern.test(value)) || present(bindingPath)) {
-    throw new Error("Invalid or already bound baseline refresh source.");
+  if (![source, baseline, main].every((value) => oidPattern.test(value))) {
+    throw new Error("Invalid baseline refresh source.");
   }
   git(["verify-commit", source]);
   git(["merge-base", "--is-ancestor", baseline, main]);
@@ -624,6 +690,12 @@ function create(pr, source, baseline, main, archive, snapshot, manifestPath) {
   };
   const bytes = Buffer.from(`${JSON.stringify(record, null, 2)}\n`);
   const oid = hash(bytes);
+  if (
+    (present(bindingPath) ? hash(readRegular(bindingPath)) : "absent") !== authority[bindingPath]
+  ) {
+    throw new Error("Current baseline binding changed.");
+  }
+  retainedAuthority({ record, oid, paths: replay.paths });
   const anchor = decoder
     .decode(
       git(["commit-tree", "-S", replay.tree, "-p", source, "-p", baseline], {

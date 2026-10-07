@@ -167,6 +167,34 @@ function fixture(
   return { ...f, run, refresh, manifest, source, baseline, review, incomingReview };
 }
 
+function chainedFixture() {
+  const f = fixture();
+  expect(f.refresh().status).toBe(0);
+  const first = f.git("rev-parse", "HEAD");
+  const firstBinding = readFileSync(join(f.root, ".local/prepare-baseline.json"));
+  expect(f.run("prepare_correction_review_init 42").status).toBe(0);
+  f.approve();
+  const firstReview = readFileSync(join(f.root, ".local/correction-review.json"));
+  writeFileSync(join(f.root, ".local/gates-build.log"), "first refreshed build\n");
+  writeFileSync(
+    join(f.root, ".local/gates.env"),
+    `PR_NUMBER=42\nGATES_MODE=full\nLAST_VERIFIED_HEAD_SHA=${first}\nFULL_GATES_HEAD_SHA=${first}\n`,
+  );
+  f.git("checkout", "-q", "baseline");
+  writeFileSync(join(f.root, "upstream.txt"), "later upstream repair\n");
+  f.git("add", "upstream.txt");
+  f.git("commit", "-qm", "fix: later baseline");
+  const nextBaseline = f.git("rev-parse", "HEAD");
+  f.git("checkout", "-q", "pr-42-prep");
+  const refreshAgain = (setup = "", env: NodeJS.ProcessEnv = {}, baseline = nextBaseline) =>
+    f.run(
+      `PR_MAIN_SHA=${nextBaseline}; prepare_baseline_refresh 42 --expected-head ${first} --baseline ${baseline}`,
+      setup,
+      env,
+    );
+  return { ...f, first, firstBinding, firstReview, nextBaseline, refreshAgain };
+}
+
 describePosix("native correction baseline refresh", () => {
   beforeAll(() => {
     const root = keys.make("openclaw-pr-baseline-key-");
@@ -206,6 +234,178 @@ describePosix("native correction baseline refresh", () => {
     f.approve();
     expect(f.run("require_prepared_review 42").status).toBe(0);
   });
+
+  it("refreshes a bound correction again while retaining ancestry, proof and incoming authority", () => {
+    const f = chainedFixture();
+    const bindingPath = join(f.root, ".local/prepare-baseline.json");
+    const result = f.refreshAgain();
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const second = f.git("rev-parse", "HEAD");
+    expect(f.git("show", "-s", "--format=%P", second)).toBe(`${f.first} ${f.nextBaseline}`);
+    f.git("verify-commit", second);
+    f.git("merge-base", "--is-ancestor", f.source, second);
+    expect(f.git("show", "HEAD:docs/fix.md")).toBe("corrected");
+    expect(f.git("show", "HEAD:fixup.txt")).toBe("complete correction scope");
+    expect(f.git("show", "HEAD:upstream.txt")).toBe("later upstream repair");
+    const binding = JSON.parse(readFileSync(bindingPath, "utf8"));
+    const archive = join(f.root, binding.archive);
+    expect(readFileSync(join(archive, "prepare-baseline.json"))).toEqual(f.firstBinding);
+    expect(readFileSync(join(archive, "correction-review.json"))).toEqual(f.firstReview);
+    expect(readFileSync(join(archive, "gates-build.log"), "utf8")).toBe("first refreshed build\n");
+    expect(readFileSync(join(f.root, ".local/review.json"))).toEqual(f.incomingReview);
+    expect(existsSync(join(f.root, ".local/gates.env"))).toBe(false);
+    expect(f.run("require_prepared_review 42").status).not.toBe(0);
+    expect(f.run("prepare_correction_review_init 42").status).toBe(0);
+    f.approve();
+    expect(f.run("require_prepared_review 42").status).toBe(0);
+    writeFileSync(join(f.root, ".local/gates.env"), readFileSync(join(archive, "gates.env")));
+    const stale = f.run(`require_correction_publication_gates 42 ${second}`);
+    expect(stale.status).not.toBe(0);
+    expect(stale.stderr).toContain("gates for the exact reviewed candidate");
+  });
+
+  it.each([
+    "partial context",
+    "duplicate context",
+    "missing binding",
+    "retained review",
+    "older baseline",
+  ])("refuses a chained refresh with %s without changing active authority", (change) => {
+    const f = chainedFixture();
+    const context = join(f.root, ".local/prep-context.env");
+    const bindingPath = join(f.root, ".local/prepare-baseline.json");
+    if (change === "partial context") {
+      writeFileSync(
+        context,
+        readFileSync(context, "utf8").replace(/^PREP_BASELINE_REFRESH_HEAD=.*\n/gmu, ""),
+      );
+    } else if (change === "duplicate context") {
+      appendFileSync(context, `PREP_BASELINE_REFRESH_HEAD=${f.first}\n`);
+    } else if (change === "missing binding") {
+      rmSync(bindingPath);
+    } else if (change === "retained review") {
+      const binding = JSON.parse(f.firstBinding.toString());
+      appendFileSync(join(f.root, binding.archive, "correction-review.json"), "\n");
+    }
+    const result = f.refreshAgain(
+      "",
+      {},
+      change === "older baseline" ? f.incoming : f.nextBaseline,
+    );
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(f.git("rev-parse", "HEAD")).toBe(f.first);
+    expect(readFileSync(join(f.root, ".local/correction-review.json"))).toEqual(f.firstReview);
+    expect(readFileSync(join(f.root, ".local/review.json"))).toEqual(f.incomingReview);
+    expect(existsSync(join(f.root, ".local/gates.env"))).toBe(true);
+    expect(existsSync(join(f.root, ".local/review-transition.json"))).toBe(false);
+  });
+
+  it("retains prior runtime review scope when later source and baseline subsume its net delta", () => {
+    const f = fixture();
+    mkdirSync(join(f.root, "src"));
+    writeFileSync(join(f.root, "src/runtime.ts"), "export const fixed = true;\n");
+    f.git("add", "src/runtime.ts");
+    f.git("commit", "-S", "-qm", "fix: include the runtime correction");
+    const source = f.git("rev-parse", "HEAD");
+    const approveRuntime = () => {
+      expect(f.run("prepare_correction_review_init 42").status).toBe(0);
+      f.approve();
+      const path = join(f.root, ".local/correction-review.json");
+      const review = JSON.parse(readFileSync(path, "utf8"));
+      review.behavioralSweep.status = "pass";
+      review.behavioralSweep.branches = [
+        { path: "src/runtime.ts", decision: "complete runtime scope", outcome: "reviewed" },
+      ];
+      writeFileSync(path, JSON.stringify(review));
+    };
+    approveRuntime();
+    const first = f.run(
+      `prepare_baseline_refresh 42 --expected-head ${source} --baseline ${f.baseline}`,
+    );
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    f.git("rm", "src/runtime.ts");
+    f.git("commit", "-S", "-qm", "fix: retire the runtime correction");
+    const corrected = f.git("rev-parse", "HEAD");
+    approveRuntime();
+    f.git("checkout", "-q", "baseline");
+    writeFileSync(join(f.root, "docs/fix.md"), "corrected\n");
+    f.git("add", "docs/fix.md");
+    f.git("commit", "-qm", "fix: subsume the original documentation correction");
+    const baseline = f.git("rev-parse", "HEAD");
+    f.git("checkout", "-q", "pr-42-prep");
+    const result = f.run(
+      `PR_MAIN_SHA=${baseline}; prepare_baseline_refresh 42 --expected-head ${corrected} --baseline ${baseline}`,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(f.git("diff", "--name-only", baseline, "HEAD")).toBe("fixup.txt");
+    expect(f.run("prepare_correction_review_init 42").status).toBe(0);
+    f.approve();
+    const unreviewed = f.run("require_prepared_review 42");
+    expect(unreviewed.status).not.toBe(0);
+    expect(unreviewed.stderr).toContain("runtime file changes require");
+    approveRuntime();
+    expect(f.run("require_prepared_review 42").status).toBe(0);
+  });
+
+  it.each(["unchanged", "missing binding", "foreign binding", "foreign context", "foreign ref"])(
+    "settles an interrupted chained binding/context write only with %s authority",
+    (change) => {
+      const f = chainedFixture();
+      const hook = join(f.root, ".local/chained-write-fault.mjs");
+      writeFileSync(
+        hook,
+        `import fs from 'node:fs';
+const rename = fs.renameSync;
+fs.renameSync = (from, to) => {
+  if (to === '.local/prep-context.env') throw new Error('injected chained context failure');
+  return rename(from, to);
+};\n`,
+      );
+      const interrupted = f.refreshAgain("", { NODE_OPTIONS: `--import=${hook}` });
+      expect(interrupted.status).not.toBe(0);
+      expect(interrupted.stderr).toContain("injected chained context failure");
+      const journalPath = join(f.root, ".local/review-transition.json");
+      const journal = readFileSync(journalPath);
+      const target = JSON.parse(journal.toString()).target;
+      const bindingPath = join(f.root, ".local/prepare-baseline.json");
+      let head = f.first;
+      if (change === "missing binding") {
+        rmSync(bindingPath);
+      } else if (change === "foreign binding") {
+        appendFileSync(bindingPath, "\n");
+      } else if (change === "foreign context") {
+        appendFileSync(join(f.root, ".local/prep-context.env"), "FOREIGN=1\n");
+      } else if (change === "foreign ref") {
+        head = f.git(
+          "commit-tree",
+          "-S",
+          `${f.first}^{tree}`,
+          "-p",
+          f.first,
+          "-m",
+          "foreign preparation",
+        );
+        f.git("update-ref", "refs/heads/pr-42-prep", head, f.first);
+      }
+      const source = readFileSync(join(f.root, "upstream.txt"));
+      expect(f.run("require_prepared_review 42").status).not.toBe(0);
+      const resumed = f.run("recover_review_transition 42");
+      if (change === "unchanged") {
+        expect(resumed.status, resumed.stdout + resumed.stderr).toBe(0);
+        expect(f.git("rev-parse", "HEAD")).toBe(target);
+        expect(f.git("status", "--porcelain")).toBe("");
+        expect(existsSync(journalPath)).toBe(false);
+        expect(existsSync(join(f.root, ".local/gates.env"))).toBe(false);
+      } else {
+        expect(resumed.status, resumed.stdout + resumed.stderr).not.toBe(0);
+        expect(f.git("rev-parse", "HEAD")).toBe(head);
+        expect(readFileSync(join(f.root, "upstream.txt"))).toEqual(source);
+        expect(readFileSync(journalPath)).toEqual(journal);
+        expect(readFileSync(join(f.root, ".local/correction-review.json"))).toEqual(f.firstReview);
+      }
+      expect(readFileSync(join(f.root, ".local/review.json"))).toEqual(f.incomingReview);
+    },
+  );
 
   it.each(["delete", "content", "binary"] as const)(
     "requires exact native conflict identities for %s/edit and preserves the reviewed resolution",
@@ -311,29 +511,48 @@ describePosix("native correction baseline refresh", () => {
     },
   );
 
-  it("includes later fixups outside the original scope and refuses changed binding bytes", () => {
-    const f = fixture();
-    expect(f.refresh().status).toBe(0);
-    mkdirSync(join(f.root, "src"));
-    writeFileSync(join(f.root, "src/runtime.ts"), "export const fixed = true;\n");
-    f.git("add", "src/runtime.ts");
-    f.git("commit", "-S", "-qm", "fix: complete the runtime correction");
-    expect(f.run("prepare_correction_review_init 42").status).toBe(0);
-    f.approve();
-    const invalid = f.run("require_prepared_review 42");
-    expect(invalid.status).not.toBe(0);
-    expect(invalid.stderr).toContain("runtime file changes require");
-    const path = join(f.root, ".local/correction-review.json");
-    const review = JSON.parse(readFileSync(path, "utf8"));
-    review.behavioralSweep.status = "pass";
-    review.behavioralSweep.branches = [
-      { path: "src/runtime.ts", decision: "later fixup", outcome: "reviewed" },
-    ];
-    writeFileSync(path, JSON.stringify(review));
-    expect(f.run("require_prepared_review 42").status).toBe(0);
-    appendFileSync(join(f.root, ".local/prepare-baseline.json"), "\n");
-    expect(f.run("require_prepared_review 42").status).not.toBe(0);
-  });
+  it.each([
+    {
+      kind: "initial",
+      prepare: () => {
+        const f = fixture();
+        expect(f.refresh().status).toBe(0);
+        return f;
+      },
+    },
+    {
+      kind: "chained",
+      prepare: () => {
+        const f = chainedFixture();
+        expect(f.refreshAgain().status).toBe(0);
+        return f;
+      },
+    },
+  ])(
+    "includes later fixups outside the $kind scope and refuses changed binding bytes",
+    ({ prepare }) => {
+      const f = prepare();
+      mkdirSync(join(f.root, "src"));
+      writeFileSync(join(f.root, "src/runtime.ts"), "export const fixed = true;\n");
+      f.git("add", "src/runtime.ts");
+      f.git("commit", "-S", "-qm", "fix: complete the runtime correction");
+      expect(f.run("prepare_correction_review_init 42").status).toBe(0);
+      f.approve();
+      const invalid = f.run("require_prepared_review 42");
+      expect(invalid.status).not.toBe(0);
+      expect(invalid.stderr).toContain("runtime file changes require");
+      const path = join(f.root, ".local/correction-review.json");
+      const review = JSON.parse(readFileSync(path, "utf8"));
+      review.behavioralSweep.status = "pass";
+      review.behavioralSweep.branches = [
+        { path: "src/runtime.ts", decision: "later fixup", outcome: "reviewed" },
+      ];
+      writeFileSync(path, JSON.stringify(review));
+      expect(f.run("require_prepared_review 42").status).toBe(0);
+      appendFileSync(join(f.root, ".local/prepare-baseline.json"), "\n");
+      expect(f.run("require_prepared_review 42").status).not.toBe(0);
+    },
+  );
 
   it.each(["binding", "restore", "CAS"])(
     "retains and replays the same owned transition after %s failure",
