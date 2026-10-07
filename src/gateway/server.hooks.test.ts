@@ -184,6 +184,19 @@ describe("gateway server hooks", () => {
       expect(wakeEvents.join("\n")).toContain("Ping");
       drainSystemEvents(resolveMainKey());
 
+      for (const sessionKey of [null, 42, false, {}, [], "", "   "]) {
+        const invalidSession = await postHook(
+          port,
+          "agent",
+          { message: "Do not redirect malformed routing", sessionKey },
+          { status: 400 },
+        );
+        await expect(invalidSession.json()).resolves.toMatchObject({
+          error: "sessionKey must be a non-empty string",
+        });
+      }
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
+
       setTestPluginRegistry(
         createTestRegistry([
           {

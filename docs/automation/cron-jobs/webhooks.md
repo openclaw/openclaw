@@ -166,6 +166,8 @@ limits, routing policy, and error responses.
 
     Keep `sessionMode: "isolated"` for fresh context. Set `"persistent"` only when repeated events should reuse prior context: direct requests then require an explicit `sessionKey`, `hooks.allowRequestSessionKey: true`, and nonempty `hooks.allowedSessionKeyPrefixes`.
 
+    When supplied, `sessionKey` must be a nonempty string. Malformed or blank keys return `400` instead of silently selecting a default or generated session key.
+
     For direct channel delivery, supply both a concrete `channel` and `to`; add `accountId` to select an enabled channel account. Supplying only part of a destination, using `channel: "last"`, or selecting an invalid account returns `400` before dispatch. Direct hooks do not inherit the main session's last recipient.
 
     With no destination, the default `deliver: true` allows a completion system event on the target agent's main session. Set `deliver: false` to suppress successful announcements and ignore destination fields; completion is logged instead. Non-ok outcomes still produce a failure event. Disabling announcement is not a tool restriction: restrict the agent's tools separately if it must not send messages.
