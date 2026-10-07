@@ -16,6 +16,12 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+Session target discovery and exact entry reads use the existing projection worker
+so chat authority and run admission do not queue behind unrelated transcript
+history. Ordered reads still retain the database writer FIFO and revalidate their
+physical source and current permissions. Transcript payloads keep their history
+worker; schemas, stored data, configuration, and update behavior are unchanged.
+
 Reply initialization, agent-turn preparation, and status rendering recover missing
 lifecycle timestamps through the transcript reader. Header reads retain their
 physical database owner and accept results under the existing writer FIFO with a

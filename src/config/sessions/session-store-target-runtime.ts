@@ -15,6 +15,7 @@ import {
   type SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
 import {
+  projectionLane,
   withSessionHistoryWorkerReadCandidates,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
@@ -95,7 +96,6 @@ function prepareSessionStoreRegistryRead(
 export function prepareSessionStoreTargetInventoryRead(
   request: Omit<SessionStoreTargetInventoryRequest, "registeredDatabases">,
   unchangedBy?: Parameters<typeof prepareOpenClawAgentDatabaseRegistrySnapshotRead>[1],
-  lane?: SessionHistoryWorkerLane,
 ) {
   const { candidates, ...prepared } = request;
   const captureRegistry = () =>
@@ -159,7 +159,7 @@ export function prepareSessionStoreTargetInventoryRead(
           }
           return operation(inventory, assertCurrent);
         },
-        lane,
+        projectionLane,
       );
     },
   };
