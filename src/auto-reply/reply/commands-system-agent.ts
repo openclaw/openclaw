@@ -32,6 +32,7 @@ export const handleSystemAgentCommand: CommandHandler = async (params, allowText
           commandBody: params.command.commandBodyNormalized,
           agentId: params.agentId,
           isGroup: params.isGroup,
+          assertCurrent: () => params.commandInvocationSignal?.throwIfAborted(),
           deps: {
             setupSurface: "gateway",
             gatewayHostLifecycle: host && {

@@ -15,6 +15,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/auth-profiles.sqlite-store.test.ts",
   "src/agents/auth-profiles.provider-refresh-lifecycle.test.ts",
   "src/agents/embedded-agent-runner/model.auth-read-race.test.ts",
+  "src/agents/embedded-agent-runner/openrouter-model-capabilities.test.ts",
+  "src/auto-reply/reply/commands-system-agent.provider.test.ts",
   "src/cli/capability-cli/model.account-secrets.provenance.test.ts",
   "src/cli/capability-cli/local-runners.account-secrets.test.ts",
   "src/cli/models-cli.auth-login.integration.test.ts",
