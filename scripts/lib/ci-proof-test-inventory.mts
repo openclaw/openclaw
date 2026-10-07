@@ -1275,7 +1275,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/provider-session-affinity.test.ts",
   "src/agents/provider-stream.lifecycle.test.ts",
   "src/agents/provider-transport-fetch.capture.test.ts",
-  "src/agents/provider-transport-fetch.headers.test.ts",
+  "src/agents/provider-transport-fetch.test.ts",
   "src/agents/run-termination.test.ts",
   "src/agents/runtime-facts-prompt.test.ts",
   "src/agents/runtime-plan/build.test.ts",
