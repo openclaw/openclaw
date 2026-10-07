@@ -33,14 +33,23 @@ import {
 import type { SubagentRunRecord, SwarmStructuredOutputState } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
+export type SubagentDeliveryDismissReason = "dismissed" | "expired";
+export type SubagentDeliveryDismissResult = {
+  status: "ok" | "not_found" | "not_terminal";
+  runId: string;
+  reason: SubagentDeliveryDismissReason;
+};
+
 export function createSubagentRegistryPublicApi(config: {
   runs: Map<string, SubagentRunRecord>;
   restoreOnce: (context?: OpenClawStateWorkerContext) => Promise<void>;
   startAnnounceCleanup: (entry: SubagentRunRecord) => boolean;
   settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
   markRequesterYielded: SubagentLifecycleController["markRequesterTurnYielded"];
+  discardTerminalDelivery: typeof SubagentLifecycleController.discardTerminalDelivery;
 }) {
-  const { runs, restoreOnce, startAnnounceCleanup, settleRequesterTurn } = config;
+  const { runs, restoreOnce, startAnnounceCleanup, settleRequesterTurn, discardTerminalDelivery } =
+    config;
   const readRuns = () => getSubagentRunsSnapshotForRead(runs);
   const findRunById = (records: Map<string, SubagentRunRecord>, runId: string) =>
     records.get(runId) ?? [...records.values()].find((entry) => entry.swarmRunId === runId);
@@ -353,6 +362,51 @@ export function createSubagentRegistryPublicApi(config: {
     return listUnsettledRequesterChildrenInRuns({ ...params, runs });
   }
 
+  /**
+   * Operator recovery for a stuck completion (#154834): a terminal run whose result
+   * can never be delivered keeps re-rendering into the requester's "awaiting delivery"
+   * context on every later turn. Dismissing it records an intentional non-delivery and
+   * stamps cleanup, which drains the outstanding obligation so it stops re-appearing.
+   */
+  async function dismissSubagentRunDelivery(params: {
+    runId: string;
+    reason?: SubagentDeliveryDismissReason;
+  }): Promise<SubagentDeliveryDismissResult> {
+    const runId = params.runId.trim();
+    const reason = params.reason ?? "dismissed";
+    if (!runId) {
+      return { status: "not_found", runId: params.runId, reason };
+    }
+    const stateContext = captureOpenClawStateWorkerContext();
+    await restoreOnce(stateContext);
+    return mutateSubagentRuns(
+      [runId],
+      (rows) => {
+        const entry = rows.get(runId);
+        if (!entry) {
+          return { value: { status: "not_found" as const, runId, reason } };
+        }
+        if (entry.execution.status !== "terminal") {
+          return { value: { status: "not_terminal" as const, runId, reason } };
+        }
+        // discardTerminalDelivery mutates in place, so hand it an isolated draft whose
+        // mutable delivery/completion objects are copied; the live row is untouched
+        // until the committed postimage is published.
+        const draft: SubagentRunRecord = {
+          ...entry,
+          ...(entry.delivery ? { delivery: { ...entry.delivery } } : {}),
+          ...(entry.completion ? { completion: { ...entry.completion } } : {}),
+        };
+        discardTerminalDelivery(draft, Date.now(), reason);
+        return {
+          value: { status: "ok" as const, runId, reason },
+          postimages: new Map([[runId, draft]]),
+        };
+      },
+      { runs, context: stateContext },
+    );
+  }
+
   return {
     claimSubagentYield: async (params: {
       runId: string;
@@ -390,5 +444,6 @@ export function createSubagentRegistryPublicApi(config: {
     settleRequesterAfterSessionSpawns: settleRequesterTurn,
     markRequesterTurnYielded,
     listUnsettledRequesterChildren,
+    dismissSubagentRunDelivery,
   };
 }

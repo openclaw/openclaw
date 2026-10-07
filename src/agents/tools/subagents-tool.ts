@@ -25,6 +25,7 @@ import {
   buildSubagentList,
   readSubagentListSessionEntries,
 } from "../subagents/registry/subagent-list.js";
+import { dismissSubagentRunDelivery } from "../subagents/registry/subagent-registry.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "../subagents/registry/subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "../subagents/registry/subagent-registry-publication.js";
@@ -46,7 +47,7 @@ import {
   type AnyAgentTool,
 } from "./common.js";
 
-const SUBAGENT_ACTIONS = ["list", "wait", "cancel"] as const;
+const SUBAGENT_ACTIONS = ["list", "wait", "cancel", "dismiss"] as const;
 const SubagentsToolSchema = Type.Object({
   action: optionalStringEnum(SUBAGENT_ACTIONS),
   recentMinutes: optionalPositiveIntegerSchema(),
@@ -276,12 +277,14 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
     name: "subagents",
     parameters: SubagentsToolSchema,
     description:
-      "List native subagents, wait for selected runIds, or cancel a runId and its descendants. A wait timeout never cancels execution or consumes completion delivery.",
+      "List native subagents, wait for selected runIds, cancel a runId and its descendants, or dismiss a terminal run's undeliverable completion so it stops re-rendering as outstanding. A wait timeout never cancels execution or consumes completion delivery.",
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action") ?? "list";
       const requestedRunId =
-        action === "cancel" ? readToolStringParam(params, "runId", { required: true }) : undefined;
+        action === "cancel" || action === "dismiss"
+          ? readToolStringParam(params, "runId", { required: true })
+          : undefined;
       const source = action === "cancel" ? captureOpenClawStateWorkerContext() : undefined;
       let selection:
         | {
@@ -432,6 +435,24 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
               },
             },
           );
+          return jsonResult({ ...result, action, runId });
+        }
+        if (action === "dismiss") {
+          const runId = requestedRunId;
+          if (!runId) {
+            throw new ToolInputError("Subagent runId required");
+          }
+          const target = readable.find((run) => run.runId === runId);
+          if (!target || !controlled.has(runId)) {
+            return jsonResult({
+              status: "forbidden",
+              error: "Run outside the controlled session tree.",
+            });
+          }
+          signal?.throwIfAborted();
+          // A terminal run whose result can never be delivered must be clearable, else
+          // its dead result re-renders as outstanding on every later requester turn.
+          const result = await dismissSubagentRunDelivery({ runId });
           return jsonResult({ ...result, action, runId });
         }
         throw new ToolInputError("Unsupported subagents action");
