@@ -300,6 +300,7 @@ export async function executePluginOwnedProcess(params: {
   noOutputTimeoutMs: number;
   consumeStdout: (chunk: string) => void;
   onOutstandingWorkChange?: (active: boolean) => void;
+  onContinuationHoldChange?: (deadlineAtMs: number | undefined) => void;
   activeToolCount?: () => number;
   compactionActive?: () => boolean;
   setOnCompactionActiveChange?: (listener: (() => void) | undefined) => void;
@@ -360,6 +361,10 @@ export async function executePluginOwnedProcess(params: {
     background: 0,
     observed: false,
     replayUnsafe: false,
+    // The plugin marks a successful result interim when it holds the turn for a
+    // native continuation; that answer is already committed for delivery.
+    answered: false,
+    awaitingContinuation: false,
   };
   const reportOutstandingWork = () => {
     // Parsed tools are deliberately absent here: diagnostics tracks them itself via
@@ -407,6 +412,7 @@ export async function executePluginOwnedProcess(params: {
   let iterator: AsyncIterator<Record<string, unknown>> | undefined;
   let liveSession: ReturnType<typeof createCliLiveSessionCapability> | undefined;
   let terminalResult: "none" | "success" | "error" = "none";
+  const subagentTaskIds = new Set<string>();
   try {
     const requestToolPermission = createPluginToolPermissionHandler({
       context: params.context,
@@ -424,6 +430,7 @@ export async function executePluginOwnedProcess(params: {
       activeToolCount: () => Math.max(params.activeToolCount?.() ?? 0, outstanding.approvals),
       backgroundTaskCount: () => outstanding.background,
       compactionActive: () => params.compactionActive?.() ?? false,
+      awaitingContinuation: () => outstanding.awaitingContinuation,
       hasObservedActivity: () => outstanding.observed,
       hasReplayUnsafeActivity: () => outstanding.replayUnsafe,
       onNoOutputTimeout: (error) => {
@@ -558,6 +565,32 @@ export async function executePluginOwnedProcess(params: {
         outstanding.background = next.value.tasks.filter(isRecord).length;
         reportOutstandingWork();
       }
+      // Native names a task's owner only on its start record.
+      if (
+        next.value.type === "system" &&
+        next.value.subtype === "task_started" &&
+        next.value.owned_by_subagent === true &&
+        typeof next.value.task_id === "string"
+      ) {
+        subagentTaskIds.add(next.value.task_id);
+      }
+      // Task bookkeeping keeps the hold; a parent task notification or model output
+      // starts the continuation, which the ordinary watchdog and tool tracking cover
+      // again. A subagent's own task notifications have no parent continuation.
+      const awaitingContinuation =
+        next.value.type === "result"
+          ? next.value.openclaw_interim_result === true
+          : outstanding.awaitingContinuation &&
+            next.value.type === "system" &&
+            (next.value.subtype !== "task_notification" ||
+              (typeof next.value.task_id === "string" && subagentTaskIds.has(next.value.task_id)));
+      outstanding.answered ||= awaitingContinuation;
+      if (awaitingContinuation !== outstanding.awaitingContinuation) {
+        outstanding.awaitingContinuation = awaitingContinuation;
+        params.onContinuationHoldChange?.(
+          awaitingContinuation ? watchdog.overallDeadlineAtMs() : undefined,
+        );
+      }
       params.consumeStdout(`${JSON.stringify(next.value)}\n`);
       outstanding.observed = true;
       if (
@@ -581,6 +614,14 @@ export async function executePluginOwnedProcess(params: {
         throw createCliAbortError();
       }
       termination.reason = "manual-cancel";
+    }
+    if (
+      outstanding.answered &&
+      (termination.reason === "no-output-timeout" || termination.reason === "overall-timeout")
+    ) {
+      // A deadline after a committed answer ends the wait for its continuation,
+      // not the answer itself.
+      params.onInterrupted?.("timeout");
     }
     if (termination.reason === "exit" && terminalResult !== "error") {
       if (
@@ -609,6 +650,7 @@ export async function executePluginOwnedProcess(params: {
     params.setOnActiveLoopbackAskUserDeadlineChange?.(undefined);
     params.setOnCompactionActiveChange?.(undefined);
     params.onOutstandingWorkChange?.(false);
+    params.onContinuationHoldChange?.(undefined);
     // Permission callbacks can be retained by the plugin or its subprocess.
     // Closing the turn fences those capabilities before any outer cleanup runs.
     controller.abort(new Error("CLI plugin runtime turn is no longer active."));
