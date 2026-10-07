@@ -1,5 +1,6 @@
 // Share the native service observations and scoped state with the other maintenance suites.
 import "./update-command-service-maintenance.test-support.js";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
@@ -120,6 +121,42 @@ it("retains the inspected systemd manager route during preparation", () =>
 
     expect(stop).toHaveBeenCalledOnce();
     expect(new Set(seenRoutes.slice(readsBeforePreparation))).toEqual(new Set([admittedRoute]));
+  }));
+
+it("names both installations when the admitted Gateway command moves to another install", () =>
+  withServiceHome(async (home) => {
+    const otherRoot = path.join(home, "other-openclaw");
+    await fs.mkdir(otherRoot);
+    await fs.writeFile(path.join(otherRoot, "package.json"), '{"name":"openclaw"}');
+    await fs.writeFile(path.join(otherRoot, "openclaw.mjs"), "");
+    const service = mockService(home, () => 2001);
+    const before = await maybeStopManagedServiceBeforeMutableUpdate(params);
+    expect(before.serviceUpdateVerdict?.kind).toBe("owned");
+    service.readCommand = async () => ({
+      programArguments: [process.execPath, path.join(otherRoot, "openclaw.mjs"), "gateway"],
+      environment: { HOME: home },
+    });
+    const failure = await maybeStopManagedServiceBeforeMutableUpdate({
+      ...params,
+      phase: "prepare",
+      expectedService: before,
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    if (!(failure instanceof Error)) {
+      throw new Error("Expected installation ownership refusal");
+    }
+    expect(failure.message).toContain(
+      "Failing check managed-service-ownership (service-ownership-changed)",
+    );
+    expect(failure.message).toContain(
+      "Required: admitted service ownership owned; manager UID 2001; detected: foreign; runtime running; manager UID 2001",
+    );
+    expect(failure.message).toContain(`Update install root: ${process.cwd()}`);
+    expect(failure.message).toContain(`Gateway install root: ${otherRoot}`);
+    expect(failure.message).toContain(`Update binary: ${path.join(process.cwd(), "openclaw.mjs")}`);
+    expect(failure.message).toContain("Different installations: align PATH");
+    expect(failure.message).toContain("openclaw gateway status --deep");
+    expect(service.stop).not.toHaveBeenCalled();
   }));
 
 it("loads a collected systemd unit from a shipped stopped handoff", () =>

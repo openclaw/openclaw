@@ -260,3 +260,47 @@ it("keeps warm executors through unrelated configuration publication", async () 
   expect(opened).toHaveLength(2);
   expect(closedAgents()).toEqual([]);
 });
+
+it("admits a fresh borrower after config publication while fencing the old borrower and native close", async () => {
+  const config: OpenClawConfig = { agents: { entries: { first: {} } } };
+  setRuntimeConfigSnapshot(config);
+  const previous = capture("first");
+  await previous.prepare(source);
+  const first = opened[0];
+  assert(first);
+  const closing = createDeferredCore();
+  first.close.mockImplementation(() => closing.promise);
+  let next: ReturnType<typeof capture> | undefined;
+  try {
+    setRuntimeConfigSnapshot({
+      ...config,
+      session: { store: path.join(env.OPENCLAW_STATE_DIR!, "relocated", "{agentId}.sqlite") },
+    });
+    expect(() => previous.assertCurrent()).toThrow("admission is closed");
+    next = capture("first");
+    let prepared = false;
+    const preparing = next.prepare(source).then(() => {
+      prepared = true;
+    });
+    await Promise.resolve();
+    expect(prepared).toBe(false);
+    expect(opened).toHaveLength(1);
+    closing.resolve();
+    await preparing;
+    expect(opened).toHaveLength(2);
+    expect(() => previous.assertCurrent()).toThrow("admission is closed");
+    const staleCleanup = vi.fn(async () => undefined);
+    await expect(
+      previous.runExisting(source, staleCleanup, { retireNativeOnFailure: true }),
+    ).rejects.toThrow("admission is closed");
+    expect(staleCleanup).not.toHaveBeenCalled();
+    expect(opened[1]?.close).not.toHaveBeenCalled();
+    next.assertCurrent();
+    setRuntimeConfigSnapshot(config);
+    expect(() => next?.assertCurrent()).toThrow("admission is closed");
+  } finally {
+    closing.resolve();
+    await previous.release();
+    await next?.release();
+  }
+});

@@ -432,6 +432,8 @@ export const ChatDeltaEventSchema = closedObject({
   state: Type.Literal("delta"),
   message: Type.Optional(Type.Unknown()),
   deltaText: Type.String(),
+  itemId: Type.Optional(Type.String()),
+  itemStartOffset: Type.Optional(Type.Integer({ minimum: 0 })),
   replace: Type.Optional(Type.Boolean()),
   usage: Type.Optional(Type.Unknown()),
 });

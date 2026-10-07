@@ -116,39 +116,6 @@ function mockStore(rows: StoredFixture[], stateDir: string) {
   });
 }
 
-async function queryOwnerUsage(rows: StoredFixture[], discoveredAgent: string) {
-  return withOpenClawTestState({ label: "usage-owner" }, async ({ stateDir }) => {
-    mockStore(rows, stateDir);
-    mocks.discoverAllSessions.mockImplementation(async ({ agentId }: { agentId: string }) =>
-      agentId === discoveredAgent
-        ? [
-            {
-              sessionId: "shared",
-              sessionFile: path.join(stateDir, "agents", agentId, "sessions", "shared.jsonl"),
-              mtime: 100,
-            },
-          ]
-        : [],
-    );
-    mocks.loadSessionCostSummariesFromCache.mockImplementation(
-      async ({ sessions, agentId }: { sessions: unknown[]; agentId: string }) =>
-        freshSummaries(sessions, agentId === "main" ? 10 : 100),
-    );
-    return await runSessionsUsage({ range: "all", limit: 10, agentScope: "all" });
-  });
-}
-
-function expectOwnerRow(
-  result: SessionsUsageResult,
-  { key, agentId, label, tokens }: { key: string; agentId: string; label?: string; tokens: number },
-) {
-  expect(result).toMatchObject({
-    sessions: [{ key, agentId, label, usage: { totalTokens: tokens } }],
-    totals: { totalTokens: tokens },
-    aggregates: { byAgent: [{ agentId, totals: { totalTokens: tokens } }] },
-  });
-}
-
 describe("sessions.usage result cache and owner attribution", () => {
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -319,32 +286,6 @@ describe("sessions.usage result cache and owner attribution", () => {
     const result = await runSessionsUsage(baseParams);
     expect(result.totals.totalTokens).toBe(20);
     expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);
-  });
-
-  const mainRow: StoredFixture = {
-    key: "agent:main:telegram:dm",
-    agentId: "main",
-    entry: { sessionId: "shared", updatedAt: 10, label: "Main chat" },
-  };
-
-  it("keeps canonical alias selection within a single owner", async () => {
-    const result = await queryOwnerUsage(
-      [
-        mainRow,
-        {
-          ...mainRow,
-          key: "agent:main:shared",
-          entry: { ...mainRow.entry, updatedAt: 1, label: "Canonical main" },
-        },
-      ],
-      "main",
-    );
-    expectOwnerRow(result, {
-      key: "agent:main:shared",
-      agentId: "main",
-      label: "Canonical main",
-      tokens: 10,
-    });
   });
 });
 

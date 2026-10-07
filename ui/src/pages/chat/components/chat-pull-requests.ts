@@ -32,6 +32,12 @@ export function chatPullRequestId(pullRequest: ControlUiSessionPullRequest): str
   return `${pullRequest.owner}/${pullRequest.repo}#${pullRequest.number}`.toLowerCase();
 }
 
+// Shares the per-session dismissal store with PR ids; `@` keeps the namespaces apart.
+// GitHub owner/repo names are case-insensitive, but Git branch names are not.
+export function chatBranchId(branch: ControlUiSessionBranch): string {
+  return `${branch.owner}/${branch.repo}`.toLowerCase() + `@${branch.branch}`;
+}
+
 function readDismissedStore(storage: Storage): Record<string, string[]> {
   try {
     const parsed: unknown = JSON.parse(storage.getItem(DISMISSED_STORAGE_KEY) ?? "{}");
@@ -58,17 +64,15 @@ export function listDismissedChatPullRequests(sessionKey: string): ReadonlySet<s
   return new Set(readDismissedStore(storage)[sessionKey] ?? []);
 }
 
-export function dismissChatPullRequest(
-  sessionKey: string,
-  pullRequest: ControlUiSessionPullRequest,
-): ReadonlySet<string> {
+/** Records a PR (`chatPullRequestId`) or branch (`chatBranchId`) dismissal. */
+export function dismissChatPullRequest(sessionKey: string, id: string): ReadonlySet<string> {
   const storage = getSafeLocalStorage();
   if (!storage || !sessionKey) {
-    return new Set([chatPullRequestId(pullRequest)]);
+    return new Set([id]);
   }
   const store = readDismissedStore(storage);
   const ids = new Set(store[sessionKey] ?? []);
-  ids.add(chatPullRequestId(pullRequest));
+  ids.add(id);
   delete store[sessionKey];
   store[sessionKey] = [...ids];
   const staleSessions = Object.keys(store).slice(0, -DISMISSED_SESSION_LIMIT);
@@ -266,6 +270,7 @@ function renderWorkRow(
   status: ControlUiSessionPullRequestSnapshot["status"],
   onOpenSessionDiff?: () => void,
   publication?: GitHubPublicationView,
+  onDismissBranch?: (branch: ControlUiSessionBranch) => void,
 ) {
   const published =
     !branch && publication?.result?.status === "published" ? publication.result : undefined;
@@ -295,6 +300,19 @@ function renderWorkRow(
               ? renderCreatePullRequestLink(branch)
               : nothing
         }
+        ${
+          branch && !published && onDismissBranch
+            ? html`<button
+                class="chat-pr__dismiss"
+                type="button"
+                ?disabled=${publication?.activity != null}
+                aria-label=${t("chat.pullRequests.dismissBranch", { branch: branch.branch })}
+                @click=${() => onDismissBranch(branch)}
+              >
+                ${icons.x}
+              </button>`
+            : nothing
+        }
       </span>
       ${publication ? renderGitHubPublicationDetails(publication) : nothing}
     </article>
@@ -309,8 +327,11 @@ export function renderChatPullRequests(props: {
   basePath?: string;
   presented?: PresentationValue;
   branch?: ControlUiSessionBranch;
+  /** Hides the branch row and its idle publish offer; retained publication outcomes stay visible. */
+  branchDismissed?: boolean;
   status: ControlUiSessionPullRequestSnapshot["status"];
   onDismiss: (pullRequest: ControlUiSessionPullRequest) => void;
+  onDismissBranch?: (branch: ControlUiSessionBranch) => void;
   onOpenSessionDiff?: () => void;
   publication?: GitHubPublicationView;
 }) {
@@ -319,12 +340,22 @@ export function renderChatPullRequests(props: {
   const retainedPublication = publication?.result || publication?.locked || publication?.error;
   // Session-only publishers cannot read the broader PR subscription's branch facts.
   const sharedAction =
-    publication?.canPublishShared && !publication.canPublishPersonal && publication.options?.shared;
+    !props.branchDismissed &&
+    publication?.canPublishShared &&
+    !publication.canPublishPersonal &&
+    publication.options?.shared;
+  const branch = props.branchDismissed ? undefined : props.branch;
   // Gateway branch facts describe unpublished work, including changes after a merge.
   // PR metadata takes precedence over retained publication history.
-  if (props.branch || (props.pullRequests.length === 0 && (retainedPublication || sharedAction))) {
+  if (branch || (props.pullRequests.length === 0 && (retainedPublication || sharedAction))) {
     return html`<div class="chat-prs" aria-live="polite">
-      ${renderWorkRow(props.branch, props.status, props.onOpenSessionDiff, publication)}
+      ${renderWorkRow(
+        branch,
+        props.status,
+        props.onOpenSessionDiff,
+        publication,
+        props.onDismissBranch,
+      )}
     </div>`;
   }
   if (props.pullRequests.length === 0) {

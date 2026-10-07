@@ -17,6 +17,7 @@ import {
   assertMemoryAudienceSession,
   delegateMemoryAudience,
   isHostMemoryAudience,
+  type MemoryAudienceResolution,
   resolveMemoryAudienceFromEntry,
 } from "./memory-audience.js";
 import { fakeSessionOwner, type FakeSessionRow } from "./memory-audience.test-support.js";
@@ -149,11 +150,14 @@ describe("memory audience resolution", () => {
         },
         child,
       ),
-    ).resolves.toMatchObject({ status: "denied" });
+    ).resolves.toMatchObject({ status: "denied", kind: "stale-lineage" });
     await expect(
       resolveAt(ROOT_KEY, { ...root, chatType: undefined }, true),
-    ).resolves.toMatchObject({ status: "denied" });
-    for (const sessionId of [undefined, randomUUID()]) {
+    ).resolves.toMatchObject({ status: "denied", kind: "ineligible" });
+    for (const [sessionId, kind] of [
+      [undefined, "ineligible"],
+      [randomUUID(), "unverified"],
+    ] as const) {
       await expect(
         resolveMemoryAudienceFromEntry(
           {
@@ -165,7 +169,7 @@ describe("memory audience resolution", () => {
           },
           root,
         ),
-      ).resolves.toMatchObject({ status: "denied" });
+      ).resolves.toMatchObject({ status: "denied", kind });
     }
     expect(fakeSessionOwner.activeLeases).toBe(0);
   });
@@ -191,36 +195,62 @@ describe("memory audience resolution", () => {
   );
 
   it("denies malformed, stale, cyclic, and cross-agent lineage", async () => {
-    const mutations: Array<(parent: FakeSessionRow, child: FakeSessionRow) => void> = [
-      (_parent, child) => {
-        child.spawnedBySessionId = undefined;
-      },
-      (_parent, child) => {
-        child.spawnedBySessionId = randomUUID();
-      },
-      (parent) => {
-        parent.lifecycleRevision = randomUUID();
-      },
-      (_parent, child) => {
-        child.parentSessionLifecycleRevision = undefined;
-      },
-      (_parent, child) => {
-        child.parentSessionKey = "agent:main:other";
-      },
-      (_parent, child) => {
-        child.spawnedBy = child.parentSessionKey = "agent:foreign:root";
-      },
-      (_parent, child) => {
-        child.spawnedBy = child.parentSessionKey = CHILD_KEY;
-        child.spawnedBySessionId = child.sessionId;
-        child.parentSessionLifecycleRevision = child.lifecycleRevision;
-      },
+    const mutations: Array<
+      [
+        Extract<MemoryAudienceResolution, { status: "denied" }>["kind"],
+        (parent: FakeSessionRow, child: FakeSessionRow) => void,
+      ]
+    > = [
+      [
+        "ineligible",
+        (_parent, child) => {
+          child.spawnedBySessionId = undefined;
+        },
+      ],
+      [
+        "stale-lineage",
+        (_parent, child) => {
+          child.spawnedBySessionId = randomUUID();
+        },
+      ],
+      [
+        "stale-lineage",
+        (parent) => {
+          parent.lifecycleRevision = randomUUID();
+        },
+      ],
+      [
+        "stale-lineage",
+        (_parent, child) => {
+          child.parentSessionLifecycleRevision = undefined;
+        },
+      ],
+      [
+        "ineligible",
+        (_parent, child) => {
+          child.parentSessionKey = "agent:main:other";
+        },
+      ],
+      [
+        "ineligible",
+        (_parent, child) => {
+          child.spawnedBy = child.parentSessionKey = "agent:foreign:root";
+        },
+      ],
+      [
+        "ineligible",
+        (_parent, child) => {
+          child.spawnedBy = child.parentSessionKey = CHILD_KEY;
+          child.spawnedBySessionId = child.sessionId;
+          child.parentSessionLifecycleRevision = child.lifecycleRevision;
+        },
+      ],
     ];
-    for (const mutate of mutations) {
+    for (const [kind, mutate] of mutations) {
       const parent = rootEntry();
       const child = childEntry(parent);
       mutate(parent, child);
-      await expect(resolveChild(parent, child)).resolves.toMatchObject({ status: "denied" });
+      await expect(resolveChild(parent, child)).resolves.toMatchObject({ status: "denied", kind });
     }
     expect(fakeSessionOwner.activeLeases).toBe(0);
   });
@@ -256,7 +286,7 @@ describe("memory audience resolution", () => {
       const resolution = await resolveChild(parent, { ...childEntry(parent), ...legacy });
       expect(resolution).toEqual({
         status: "denied",
-        legacyLineage: true,
+        kind: "stale-lineage",
         reason: expect.stringContaining(
           `spawned session ${CHILD_KEY} predates memory lineage receipts`,
         ),

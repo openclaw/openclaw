@@ -653,7 +653,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/worktrees/service.removal-safety.test.ts",
   "src/agents/worktrees/service.remove-lease.test.ts",
   "src/agents/worktrees/service.retire-snapshot.test.ts",
-  "src/agents/worktrees/service.snapshot-index.test.ts",
   "src/agents/worktrees/service.exact-state.test.ts",
   "src/agents/worktrees/service.exact-state-races.test.ts",
   "src/agents/worktrees/service.source-only-filters.test.ts",

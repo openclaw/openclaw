@@ -22,6 +22,15 @@ import { readCachedNativeGitHubToken } from "../../agents/github-read-identity.j
 import { listRegistryWorktrees } from "../../agents/worktrees/registry.js";
 import { managedWorktrees, type ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway-read.js";
+import {
+  mergeCombinedSessionStore,
+  prepareCombinedSessionStore,
+  type GatewaySessionStoreOptions,
+} from "../../config/sessions/combined-store-gateway.js";
+import {
+  captureIncognitoSessionBinding,
+  withIncognitoSessionStoreEntries,
+} from "../../config/sessions/session-incognito-binding.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { ProjectCloneError } from "../../projects/project-clone-runtime.js";
@@ -67,6 +76,29 @@ type ProjectWorktreeService = Pick<
   ManagedWorktreeService,
   "listRegistryRecords" | "resolveRepositoryIdentities"
 >;
+
+type IncognitoStores = Parameters<Parameters<typeof withIncognitoSessionStoreEntries>[0]>[0];
+
+function loadProjectSessionStore(
+  cfg: Parameters<typeof loadCombinedSessionStoreForGatewayCore>[0],
+  options: GatewaySessionStoreOptions & {
+    loadEntries: NonNullable<GatewaySessionStoreOptions["loadEntries"]>;
+  },
+  incognitoStores?: IncognitoStores,
+) {
+  if (!incognitoStores) {
+    return loadCombinedSessionStoreForGatewayCore(cfg, options);
+  }
+  const prepared = prepareCombinedSessionStore(cfg, { ...options, includeIncognito: false });
+  prepared.targets = { ...prepared.targets, incognitoTargets: incognitoStores };
+  return mergeCombinedSessionStore(
+    cfg,
+    options,
+    prepared,
+    (target) => options.loadEntries(target, prepared.projection),
+    (target) => incognitoStores.find((store) => store.storePath === target.storePath)!.entries,
+  );
+}
 
 type ProjectCandidate = {
   checkoutPath: string;
@@ -319,6 +351,7 @@ async function listObservedProjects(
 function findProjectCheckoutReference(
   cfg: Parameters<typeof listProjectRegistry>[0],
   repoRoot: string,
+  incognitoStores?: IncognitoStores,
 ): string | undefined {
   const normalizedRoot = path.resolve(repoRoot);
   const workspaceReference = listWorkspaceProjects(cfg).find(
@@ -327,9 +360,17 @@ function findProjectCheckoutReference(
   const worktreeReference = listRegistryWorktrees(process.env).find(
     (worktree) => !worktree.removedAt && path.resolve(worktree.repoRoot) === normalizedRoot,
   );
-  const sessionReference = Object.entries(
-    loadCombinedSessionStoreForGatewayCore(cfg, { projection: "list" }).store,
-  ).find(([, entry]) => {
+  const sessionReference = [
+    ...Object.entries(
+      loadCombinedSessionStoreForGatewayCore(cfg, {
+        projection: "list",
+        ...(incognitoStores && { includeIncognito: false }),
+      }).store,
+    ),
+    ...(incognitoStores?.flatMap((store) =>
+      store.entries.map(({ sessionKey, entry }) => [sessionKey, entry] as const),
+    ) ?? []),
+  ].find(([, entry]) => {
     if (entry.archivedAt) {
       return false;
     }
@@ -374,7 +415,10 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           throw new Error("Project access changed while preparing the listing. Retry the request.");
         }
       };
-      try {
+      const list = async (
+        incognitoStores?: IncognitoStores,
+        assertIncognitoCurrent?: () => void,
+      ) => {
         const registryProjects = await listProjectRegistry(cfg);
         assertCurrent();
         diagnostics?.mark("sessions");
@@ -406,20 +450,24 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
                 "Session projection changed while preparing the listing. Retry the request.",
               );
             }
-            store = loadCombinedSessionStoreForGatewayCore(cfg, {
-              projection: "list",
-              // Federation and process-local incognito stores retain the existing loader.
-              loadEntries: (target) =>
-                projection
-                  .selectEntries({ storePath: target.storePath, sortBy: null })
-                  .map((row) => ({
-                    sessionKey: row.key,
-                    entry: row.storedEntry ?? row.entry,
-                    keyBytes: Buffer.from(row.key),
-                  }))
-                  // SQLite's binary key order breaks locale-equal recency ties.
-                  .toSorted((left, right) => Buffer.compare(left.keyBytes, right.keyBytes)),
-            }).store;
+            store = loadProjectSessionStore(
+              cfg,
+              {
+                projection: "list",
+                // Federation and process-local incognito stores retain the existing loader.
+                loadEntries: (target) =>
+                  projection
+                    .selectEntries({ storePath: target.storePath, sortBy: null })
+                    .map((row) => ({
+                      sessionKey: row.key,
+                      entry: row.storedEntry ?? row.entry,
+                      keyBytes: Buffer.from(row.key),
+                    }))
+                    // SQLite's binary key order breaks locale-equal recency ties.
+                    .toSorted((left, right) => Buffer.compare(left.keyBytes, right.keyBytes)),
+              },
+              incognitoStores,
+            ).store;
           }
           assertCurrent();
         }
@@ -444,6 +492,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         assertCurrent();
         const writable = canWrite();
         const canCreate = canCreateSession();
+        assertIncognitoCurrent?.();
         // Project identity is read-safe; host paths, origins, folders, and observed checkouts are
         // placement details reserved for clients that can create sessions.
         respond(
@@ -467,6 +516,13 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           },
           undefined,
         );
+      };
+      try {
+        if (captureIncognitoSessionBinding()) {
+          await withIncognitoSessionStoreEntries(list);
+        } else {
+          await list();
+        }
       } catch (error) {
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
       } finally {
@@ -613,17 +669,27 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           return;
         }
         try {
-          removed = await removeClonedProjectCheckout(project, () => {
-            const reference = findProjectCheckoutReference(
-              context.getRuntimeConfig(),
-              project.repoRoot,
+          const remove = (incognitoStores?: IncognitoStores, assertIncognitoCurrent?: () => void) =>
+            removeClonedProjectCheckout(
+              project,
+              () => {
+                assertIncognitoCurrent?.();
+                const reference = findProjectCheckoutReference(
+                  context.getRuntimeConfig(),
+                  project.repoRoot,
+                  incognitoStores,
+                );
+                if (reference) {
+                  throw new ProjectCheckoutError(
+                    `Project checkout is still referenced by ${reference}. Remove that reference before deleting the checkout.`,
+                  );
+                }
+              },
+              { assertCurrent: assertIncognitoCurrent },
             );
-            if (reference) {
-              throw new ProjectCheckoutError(
-                `Project checkout is still referenced by ${reference}. Remove that reference before deleting the checkout.`,
-              );
-            }
-          });
+          removed = captureIncognitoSessionBinding()
+            ? await withIncognitoSessionStoreEntries(remove)
+            : await remove();
         } catch (error) {
           respond(false, undefined, projectCheckoutError(error));
           return;

@@ -87,6 +87,8 @@ export type ToolStreamHost = {
   chatMessages?: unknown[];
   chatRunUsageById?: Map<string, RunOutputUsage>;
   chatStream: string | null;
+  chatStreamItemId?: string;
+  chatStreamItemStartOffset?: number;
   chatStreamStartedAt: number | null;
   chatRunStartup?: ChatRunStartupState | null;
   chatStreamSegments: ChatStreamSegment[];

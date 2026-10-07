@@ -6,7 +6,6 @@ import { SessionManager } from "../agents/sessions/session-manager.js";
 import { listSessionBranches } from "../config/sessions/session-accessor.sqlite-branch-list.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
-import type { IncognitoHistoryTarget } from "../config/sessions/session-incognito-history-contract.js";
 import type { IncognitoLifecycleEntry } from "../config/sessions/session-incognito-lifecycle-contract.js";
 import { readSessionPendingInputReceiptsInWorker } from "../config/sessions/session-pending-input-receipts.js";
 import { readSessionTranscriptModelContextAsync } from "../config/sessions/session-transcript-context-read.js";
@@ -42,17 +41,11 @@ import {
 } from "../gateway/session-transcript-readers.js";
 import { readSessionTitleFieldsFromTranscriptAsync } from "../gateway/session-transcript-title-reader.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
+import {
+  registerIncognitoHistoryVisibilityTests,
+  type HistoryWiringFixture,
+} from "./openclaw-agent-execution-incognito.history-visibility.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
-
-type HistoryWiringFixture = {
-  readonly actor: IncognitoAgentDatabaseExecution;
-  readonly env: NodeJS.ProcessEnv;
-  authority: IncognitoSessionAuthority;
-  create(this: void, name: string): Promise<IncognitoLifecycleEntry>;
-  append(this: void, target: IncognitoLifecycleEntry, content: string): Promise<unknown>;
-  targetInput(this: void, target: IncognitoLifecycleEntry): IncognitoHistoryTarget;
-};
 
 export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixture) {
   const { authority, create, append, targetInput } = fixture;
@@ -419,7 +412,10 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
         kind: "delta",
         messages: [{ message: { content: [{ text: "second wired answer" }] } }],
       });
-      expect(await readChatHistoryDelta(deltaRequest)).toEqual({ kind: "reset" });
+      expect(await readChatHistoryDelta(deltaRequest)).toMatchObject({
+        kind: "delta",
+        messages: [{ message: { content: [{ text: "second wired answer" }] } }],
+      });
       expect(await sse.refreshAsync()).toMatchObject({
         messages: [
           { content: [{ text: "wired history proof" }] },
@@ -466,6 +462,8 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
       expect(() => guarded.assertCurrent()).toThrow("visitor grant revoked");
     });
   });
+
+  registerIncognitoHistoryVisibilityTests(fixture);
 
   it("projects named cron labels before encoding actor-backed history", async () => {
     const { actor } = fixture;

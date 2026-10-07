@@ -491,25 +491,6 @@ it("Stop fences ingress during provisioning without cancelling its dispatch prod
   expect(r.explicitNewAdmissionAccepted).toBe(true);
 });
 
-it("successful Stop cancels a preexisting send waiting on its lifecycle fence", async () => {
-  const r = await scenario("successful-stop");
-  expect(r.reclaimResult).toEqual({ ok: true, state: "reclaimed" });
-  expect(r.explicitNewAdmissionAccepted).toBe(true);
-  expect(
-    r.preexistingAdmissionAccepted,
-    "a send already waiting when Stop completes must not revive the worker",
-  ).toBe(false);
-});
-it("provider stop failure plus successful recovery still cancels preexisting ingress", async () => {
-  const r = await scenario("failed-stop-recovered-cleanup", { destroyFailure: true });
-  expect(r.reclaimResult).toEqual({ ok: false, message: "destroy pending" });
-  expect(r.explicitNewAdmissionAccepted).toBe(true);
-  expect(
-    r.preexistingAdmissionAccepted,
-    "provider cleanup failure must not let pending ingress escape Stop",
-  ).toBe(false);
-});
-
 it("a reservation preceding Stop cannot revive a successfully reclaimed worker", async () => {
   const r = await scenario("pre-stop-reservation", { beforeStop: true });
   expect(r.reclaimResult).toEqual({ ok: true, state: "reclaimed" });

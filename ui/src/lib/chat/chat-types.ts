@@ -283,6 +283,8 @@ export type ChatStreamSegment = {
   retiredItemId?: string;
   /** In-flight handoff owned by the retired cumulative prefix, not its live display. */
   pendingCommentary?: { text: string; prefixLength: number };
+  /** Visible cumulative prefix that must stay before this persisted commentary item. */
+  pendingCommentaryPrefixFor?: string;
   toolCallId?: string;
   itemId?: string;
 };

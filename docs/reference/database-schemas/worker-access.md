@@ -865,6 +865,37 @@ kernels remain until the single cutover. This preparation changes no schema,
 retention, durability, permissions, configuration, or update behavior and retires
 no T1 sites.
 
+### Incognito steering, visibility, trajectory, and project authority (P7n, inactive)
+
+Explicit actor bindings carry terminal steering facts through the existing
+committed session projection. History prepares subagent visibility through the
+actor and shared ACP metadata owner before disclosure; Memory selectors and
+conversation-binding reads use that same captured actor. Missing context reads
+retain their absence claims and return the existing empty results only while
+their rows stay absent. A closed or replaced actor still ends its retained handles with
+`INCOGNITO_SESSION_ENDED`.
+
+Trajectory persistence uses the existing side-data command owner and synchronous
+transaction kernel. Confirmed commits settle their accepted batches even when
+the reply is lost; unknown outcomes never replay. Project listing and checkout
+deletion retain the actor roster and snapshots through their consuming work,
+including the final synchronous deletion guard.
+
+Durable and synchronous native retention paths request a refresh before opening
+an empty writer transaction when selection already found an invalid plan.
+Valid batches still revalidate under the writer lock, and actor commands retain
+their commit-receipt transaction.
+Trajectory append derives its next sequence and retained byte window from one
+descending read under the existing writer lock. Retention uses the native
+connection's mutation witness for local changes when available, keeps its
+counter kind for the sweep's lifetime, and still checks foreign commits through
+`data_version`.
+
+Production acquisition remains host-owned, and every native selection arm stays
+in place until the atomic activation. These conditional compositions add no
+schema, persistent cache, worker service, retention, durability, permission,
+configuration, or update change and retire no T1 sites.
+
 ### Existing worker flows
 
 Remote model catalog refreshes capture the shared store before downloading and

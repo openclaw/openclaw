@@ -186,76 +186,84 @@ it("skips unchanged cold serialization and preserves snapshot bytes and revision
   });
 });
 
-it("evaluates the active-leaf predicate on the patch transaction's uncommitted transcript", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
-    const options = { agentId: f.database.agentId, path: f.database.path };
-    const scope = { ...f.scope, sessionId: "original" };
-    const event = (id: string, parentId: string | null) => ({
-      type: "message",
-      id,
-      parentId,
-      message: { role: "user", content: id },
-    });
-    runOpenClawAgentWriteTransaction(
-      (database) => appendTranscriptEventsInTransaction(database, scope, [event("root", null)]),
-      options,
-    );
-    const prepared = readSessionEntrySelectionSnapshot(f.database, f.scope.sessionKey, false);
-    const writeBase = prepared[0]!.entry;
-    const { generation } = readSessionTranscriptWatermarkInDatabase(f.database, scope.sessionId);
-    expect(generation).not.toBeNull();
-    const observer = new (requireNodeSqlite().DatabaseSync)(f.database.path, { readOnly: true });
-    const { port1, port2 } = new MessageChannel();
-    try {
-      admission.withSqliteWorkerOperationAdmission({ port: port1 }, () =>
-        commitSessionEntryPatch(
-          {
-            selection: { kind: "entry", sessionKey: f.scope.sessionKey, exact: false },
-            prepared,
-            sessionKey: f.scope.sessionKey,
-            writeBase,
-            next: { ...writeBase, label: "transaction leaf accepted" },
-            operationLabel: "session-entry.patch",
-            validateCanonicalKeys: false,
-            shouldCommitIf: {
-              kind: "transcript",
-              sessionId: scope.sessionId,
-              generation,
-              leafEntryId: "pending",
-            },
-          },
-          {
-            options,
-            open: () => f.database,
-            admit() {},
-            writeTransaction: (operationLabel, _owner, write) =>
-              runOpenClawAgentWriteTransaction(
-                (database) => {
-                  appendTranscriptEventsInTransaction(database, scope, [event("pending", "root")]);
-                  expect(
-                    observer
-                      .prepare(
-                        "SELECT leaf_event_id FROM session_transcript_index_state WHERE session_id = ?",
-                      )
-                      .get(scope.sessionId),
-                  ).toMatchObject({ leaf_event_id: "root" });
-                  return write(database);
-                },
-                options,
-                { operationLabel },
-              ),
-          },
-        ),
+it.each([false, true])(
+  "evaluates the active-leaf predicate on the patch transaction's uncommitted transcript (dirty=%s)",
+  async (dirty) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      const options = { agentId: f.database.agentId, path: f.database.path };
+      const scope = { ...f.scope, sessionId: "original" };
+      const event = (id: string, parentId: string | null) => ({
+        type: "message",
+        id,
+        parentId,
+        message: { role: "user", content: id },
+      });
+      runOpenClawAgentWriteTransaction(
+        (database) => appendTranscriptEventsInTransaction(database, scope, [event("root", null)]),
+        options,
       );
-      expect(f.read()?.label).toBe("transaction leaf accepted");
-    } finally {
-      observer.close();
-      port1.close();
-      port2.close();
-    }
-  });
-});
+      const prepared = readSessionEntrySelectionSnapshot(f.database, f.scope.sessionKey, false);
+      const writeBase = prepared[0]!.entry;
+      const { generation } = readSessionTranscriptWatermarkInDatabase(f.database, scope.sessionId);
+      expect(generation).not.toBeNull();
+      const observer = new (requireNodeSqlite().DatabaseSync)(f.database.path, { readOnly: true });
+      const { port1, port2 } = new MessageChannel();
+      try {
+        admission.withSqliteWorkerOperationAdmission({ port: port1 }, () =>
+          commitSessionEntryPatch(
+            {
+              selection: { kind: "entry", sessionKey: f.scope.sessionKey, exact: false },
+              prepared,
+              sessionKey: f.scope.sessionKey,
+              writeBase,
+              next: { ...writeBase, label: "transaction leaf accepted" },
+              operationLabel: "session-entry.patch",
+              validateCanonicalKeys: false,
+              shouldCommitIf: {
+                kind: "transcript",
+                sessionId: scope.sessionId,
+                generation,
+                leafEntryId: "pending",
+              },
+            },
+            {
+              options,
+              open: () => f.database,
+              admit() {},
+              writeTransaction: (operationLabel, _owner, write) =>
+                runOpenClawAgentWriteTransaction(
+                  (database) => {
+                    appendTranscriptEventsInTransaction(database, scope, [
+                      event("pending", "root"),
+                    ]);
+                    if (dirty) {
+                      markSessionTranscriptIndexDirtyInTransaction(database.db, scope.sessionId);
+                    }
+                    expect(
+                      observer
+                        .prepare(
+                          "SELECT leaf_event_id FROM session_transcript_index_state WHERE session_id = ?",
+                        )
+                        .get(scope.sessionId),
+                    ).toMatchObject({ leaf_event_id: "root" });
+                    return write(database);
+                  },
+                  options,
+                  { operationLabel },
+                ),
+            },
+          ),
+        );
+        expect(f.read()?.label).toBe(dirty ? "initial" : "transaction leaf accepted");
+      } finally {
+        observer.close();
+        port1.close();
+        port2.close();
+      }
+    });
+  },
+);
 
 it("compares transported snapshot columns without rehydrating unchanged entries", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

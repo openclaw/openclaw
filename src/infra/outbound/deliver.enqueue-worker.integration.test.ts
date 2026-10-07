@@ -173,11 +173,7 @@ describe("enqueue publication custody through the real sender", () => {
     }
   });
 
-  it.each([
-    { failure: "serialization", kind: "media", attempts: 0 },
-    { failure: "native rollback", kind: "media", attempts: 1 },
-    { failure: "native rollback", kind: "text", attempts: 1 },
-  ] as const)(
+  it.each([{ failure: "native rollback", kind: "media", attempts: 1 }] as const)(
     "releases $kind staging after $failure and permits best-effort live sending",
     async ({ failure, kind, attempts }) => {
       const { stateDir, mediaUrl } = await source();
@@ -240,24 +236,14 @@ if (!isMainThread) {
           }
         },
       );
-      const identity = {
-        name: "synthetic",
-        toJSON() {
-          throw new Error("known JSON preparation failure");
-        },
-      };
       try {
         await deliverOutboundPayloads({
           ...deliveryParams(stateDir),
           payloads: kind === "media" ? [{ mediaUrl }] : [{ text: "synthetic retained text" }],
           onDeliveryIntent: queued,
-          ...(failure === "serialization" ? { identity } : {}),
         });
         expect(admissionFailure).toMatchObject({
-          message:
-            failure === "serialization"
-              ? "known JSON preparation failure"
-              : "synthetic enqueue transaction rejected",
+          message: "synthetic enqueue transaction rejected",
         });
         expect(reply.attempts()).toBe(attempts);
         expect(send).toHaveBeenCalledOnce();

@@ -680,6 +680,61 @@ describe("runIsolatedCompletion", () => {
     },
   );
 
+  it.each([
+    {
+      description: "ordered managed profile",
+      requestedProfile: undefined,
+      selectedProfile: "anthropic:ordered",
+    },
+    {
+      description: "native-login control",
+      requestedProfile: undefined,
+      selectedProfile: undefined,
+    },
+    {
+      description: "explicit managed profile",
+      requestedProfile: "anthropic:locked",
+      selectedProfile: "anthropic:locked",
+    },
+    {
+      description: "explicit native login",
+      requestedProfile: "anthropic:claude-cli",
+      selectedProfile: undefined,
+    },
+  ])(
+    "forwards the shared CLI auth selection for $description",
+    async ({ requestedProfile, selectedProfile }) => {
+      mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+      mocks.cliBackendAcceptsAuthProfileForwarding.mockReturnValue(true);
+      mocks.resolveCliExecutionAuthProfileId.mockReturnValue(selectedProfile);
+      mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "isolated result" }] });
+
+      await expect(
+        runIsolatedCompletion({
+          ...isolatedRequest(),
+          provider: "anthropic",
+          model: "claude-test",
+          agentHarnessRuntimeOverride: "claude-cli",
+          authProfileId: requestedProfile,
+        }),
+      ).resolves.toMatchObject({
+        text: "isolated result",
+        owner: { kind: "cli", id: "claude-cli" },
+      });
+
+      expect(mocks.resolveCliExecutionAuthProfileId).toHaveBeenCalledWith({
+        cliExecutionProvider: "claude-cli",
+        authProfileProvider: "anthropic",
+        config: expect.any(Object),
+        agentDir: "/tmp/agent",
+        selected: { authProfileId: requestedProfile },
+      });
+      expect(mocks.runCliAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ authProfileId: selectedProfile }),
+      );
+    },
+  );
+
   it("keeps concurrent CLI isolated completions independently admitted", async () => {
     mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);

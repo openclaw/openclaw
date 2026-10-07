@@ -2,10 +2,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { lstatSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
+import {
+  createSqliteLifecycleAggregateError,
+  throwSqliteLifecycleErrors,
+} from "../infra/sqlite-lifecycle-errors.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { inspectDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
@@ -179,6 +183,41 @@ export function recordOpenClawAgentDatabaseRegistryMutation(
   ) {
     throw new Error("Registry mutation requires its canonical transaction publication scope");
   }
+}
+
+export type AgentDatabaseRegistration = ReturnType<
+  typeof captureOpenClawAgentDatabaseRegistration
+> & {
+  nativeSettlement?: Promise<SqliteWorkerOperationSettlement>;
+};
+
+export async function settleAgentRegistration<T>(
+  registration: AgentDatabaseRegistration,
+  operation: () => Promise<T>,
+): Promise<T> {
+  let result: Result<T, unknown>;
+  try {
+    result = { ok: true, value: await operation() };
+  } catch (error) {
+    result = { ok: false, error };
+  }
+  try {
+    // Native exit and queued receipts settle before registration publication.
+    registration.finish(await registration.nativeSettlement);
+  } catch (error) {
+    if (!result.ok) {
+      throw createSqliteLifecycleAggregateError(
+        [result.error, error],
+        "Agent open and registration publication failed",
+        result.error,
+      );
+    }
+    throw error;
+  }
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value;
 }
 
 /** Fence native registry settlement under its original shared generation. */

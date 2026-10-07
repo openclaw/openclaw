@@ -5,6 +5,7 @@ import {
   deferSqliteWorkerCommitReceipt,
   takeSqliteWorkerOperationAdmissionAttachment,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { readTrajectoryRuntimeRetentionLease } from "../trajectory/runtime-retention.contract.js";
 import type { AgentDatabaseMaintenanceOperations } from "./openclaw-agent-execution-maintenance.js";
 import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
 import type { WorkerOperationHandlers, WorkerOperations } from "./worker-operation-registry.js";
@@ -202,26 +203,20 @@ export async function loadAgentTrajectoryOperations() {
       );
     },
     "trajectory.retention.begin": (_input: undefined, { open }) => {
-      const attachment = takeSqliteWorkerOperationAdmissionAttachment();
-      if (
-        typeof attachment !== "object" ||
-        attachment === null ||
-        !("trajectoryRetentionLease" in attachment) ||
-        !(attachment.trajectoryRetentionLease instanceof SharedArrayBuffer) ||
-        attachment.trajectoryRetentionLease.byteLength !== 4
-      ) {
-        throw new Error("Trajectory retention lease is unavailable");
-      }
       return retention.beginTrajectoryRuntimeRetention(
         open().db,
-        new Int32Array(attachment.trajectoryRetentionLease),
+        readTrajectoryRuntimeRetentionLease(takeSqliteWorkerOperationAdmissionAttachment()),
       );
     },
     "trajectory.retention.delete": (
       input: Parameters<typeof retention.selectTrajectoryRuntimeRetentionBatch>[1],
       { open, writeTransaction, admit },
     ) => {
-      const batch = retention.selectTrajectoryRuntimeRetentionBatch(open().db, input);
+      const database = open();
+      const batch = retention.selectTrajectoryRuntimeRetentionBatch(database.db, input);
+      if (batch.refresh) {
+        return retention.deleteTrajectoryRuntimeRetention(database, batch);
+      }
       return writeTransaction(
         "trajectory.runtime.retention.delete",
         "Trajectory retention",

@@ -252,10 +252,6 @@ function resolveAllowedParentRoots(
   return [...roots];
 }
 
-function isWithinRoot(candidate: string, root: string): boolean {
-  return isPathInside(root, normalizePathForBoundary(candidate));
-}
-
 function resolveAliasTargetForParentUrl(
   request: string,
   parentUrl: string | undefined,
@@ -278,10 +274,36 @@ export function resolvePluginNativeAliasForParent(
   parentFilename: string | undefined,
 ): string | undefined {
   const native = getPluginCache().sdk.native;
-  if (parentFilename && isPluginSdkAliasSpecifier(request)) {
+  const sdkRequest = isPluginSdkAliasSpecifier(request);
+  const entries = native.aliases.get(request);
+  if (!parentFilename || (!sdkRequest && !entries)) {
+    return undefined;
+  }
+  let parent = native.parents.get(parentFilename);
+  if (!parent) {
+    const filename = normalizePathForBoundary(parentFilename);
+    const roots = new Set(native.sdkProviders.keys());
+    for (const candidates of native.aliases.values()) {
+      for (const { parentRoot } of candidates) {
+        roots.add(parentRoot);
+      }
+    }
+    for (const root of roots) {
+      if (!isPathInside(root, filename)) {
+        roots.delete(root);
+      }
+    }
+    parent = { roots, targets: new Map() };
+    native.parents.set(parentFilename, parent);
+  }
+  if (parent.targets.has(request)) {
+    return parent.targets.get(request);
+  }
+  let resolvedTarget: string | undefined;
+  if (sdkRequest) {
     let first: { target: string; order: number } | undefined;
     for (const [root, provider] of native.sdkProviders) {
-      if (!isWithinRoot(parentFilename, root)) {
+      if (!parent.roots.has(root)) {
         continue;
       }
       // Eager registration used the first SDK demand, not installation order,
@@ -294,13 +316,12 @@ export function resolvePluginNativeAliasForParent(
         first = { target, order: provider.order };
       }
     }
-    return first ? path.normalize(first.target) : undefined;
+    resolvedTarget = first ? path.normalize(first.target) : undefined;
+  } else {
+    resolvedTarget = entries?.find((entry) => parent.roots.has(entry.parentRoot))?.target;
   }
-  const entries = native.aliases.get(request);
-  if (!entries || !parentFilename) {
-    return undefined;
-  }
-  return entries.find((entry) => isWithinRoot(parentFilename, entry.parentRoot))?.target;
+  parent.targets.set(request, resolvedTarget);
+  return resolvedTarget;
 }
 
 function listInternalCorePackageNativeAliases(packageRoot: string): Array<{
@@ -413,6 +434,7 @@ function registerNativeAlias(params: {
   parentRoots: readonly string[];
 }): void {
   const pluginSdkNativeAliases = getPluginCache().sdk.native.aliases;
+  getPluginCache().sdk.native.parents.clear();
   const entries = pluginSdkNativeAliases.get(params.request) ?? [];
   for (const parentRoot of params.parentRoots) {
     const existingIndex = entries.findIndex((entry) => entry.parentRoot === parentRoot);
@@ -432,6 +454,7 @@ function clearNativeAliasesForParentRoots(parentRoots: readonly string[]): void 
     return;
   }
   const parentRootSet = new Set(parentRoots);
+  getPluginCache().sdk.native.parents.clear();
   for (const root of parentRoots) {
     getPluginCache().sdk.native.sdkProviders.delete(root);
   }
