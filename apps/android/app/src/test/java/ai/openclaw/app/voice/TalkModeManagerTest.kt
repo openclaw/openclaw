@@ -30,6 +30,7 @@ import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.speech.RecognitionListener
 import android.speech.RecognitionService
+import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.util.Base64
@@ -330,13 +331,13 @@ class TalkModeManagerTest {
       val completion = CompletableDeferred<TalkPttStopPayload>()
       setPrivateField(manager, "activePttCaptureId", "capture-new")
       setPrivateField(manager, "pttCompletion", completion)
-      setPrivateField(manager, "lastTranscript", "new partial transcript")
+      setPrivateField(manager, "pttLivePartial", "new partial transcript")
       withMain {
         val payload = manager.endPushToTalk("capture-old")
 
         assertEquals("idle", payload.status)
         assertEquals("capture-new", readPrivateField(manager, "activePttCaptureId"))
-        assertEquals("new partial transcript", readPrivateField(manager, "lastTranscript"))
+        assertEquals("new partial transcript", readPrivateField(manager, "pttLivePartial"))
         assertFalse(completion.isCompleted)
       }
     }
@@ -1201,6 +1202,77 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun nativeTalkSegmentsOfOneUtteranceBecomeOneTurn() =
+    runBlocking {
+      withNativeTalk { proof, sends ->
+        val listener = recognitionListener(proof.manager, null)
+        listener.onSegmentResults(recognitionResults("Synthetic first segment"))
+        listener.onPartialResults(recognitionResults("synthetic second"))
+        listener.onSegmentResults(recognitionResults("synthetic second segment"))
+        advanceTalkSilence(proof)
+        awaitTalkWork(proof) { sends.isNotEmpty() }
+
+        assertEquals(
+          "Synthetic first segment. synthetic second segment",
+          sends
+            .single()
+            .getValue("message")
+            .jsonPrimitive.content,
+        )
+        awaitTalkWork(proof) { proof.synthesizer.requested.isCompleted }
+        assertNull("Reply speech must not start while the app-owned microphone is open", readPrivateField(proof.manager, "pttRecognitionRung"))
+      }
+    }
+
+  @Test
+  fun nativeTalkOnApi33OpensOneSegmentedSessionAndDemotesItWhenItClosesUnheard() =
+    runBlocking {
+      withNativeTalk { proof, _ ->
+        val recognizer = currentRecognizer()
+
+        fun segmentedMode() = recognizer.lastRecognizerIntent?.getStringExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION)
+        assertEquals(
+          "Idle native Talk must not rely on the service's no-speech timeout and restart earcon",
+          RecognizerIntent.EXTRA_AUDIO_SOURCE,
+          segmentedMode(),
+        )
+
+        recognitionListener(proof.manager, null).onEndOfSegmentedSession()
+        advanceTalkSilence(proof, steps = 7)
+        assertEquals(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, segmentedMode())
+
+        recognizer.triggerOnError(SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
+        advanceTalkSilence(proof, steps = 7)
+        val plain = checkNotNull(recognizer.lastRecognizerIntent)
+        assertNull(segmentedMode())
+
+        recognizer.triggerOnError(SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
+        advanceTalkSilence(proof, steps = 7)
+        assertTrue("The plain rung keeps restarting", plain !== recognizer.lastRecognizerIntent)
+        assertNull(segmentedMode())
+      }
+    }
+
+  @Test
+  @Config(sdk = [32])
+  fun nativeTalkBelowApi33KeepsRestartingPlainSessions() =
+    runBlocking {
+      withNativeTalk { proof, _ ->
+        val recognizer = currentRecognizer()
+        val first = checkNotNull(recognizer.lastRecognizerIntent)
+        assertFalse(first.hasExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION))
+
+        recognizer.triggerOnError(SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
+        advanceTalkSilence(proof)
+
+        val restarted = checkNotNull(recognizer.lastRecognizerIntent)
+        assertTrue("Without segmented sessions a no-speech end must restart listening", restarted !== first)
+        assertFalse(restarted.hasExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION))
+        assertTrue(proof.manager.isListening.value)
+      }
+    }
+
+  @Test
   fun nativeStopThenStartKeepsReplacementAndRejectsRetiredResults() =
     runBlocking {
       withNativeTalk { proof, sends ->
@@ -1441,8 +1513,11 @@ class TalkModeManagerTest {
 
   private fun recognitionResults(text: String) = Bundle().apply { putStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION, arrayListOf(text)) }
 
-  private fun advanceTalkSilence(proof: RealtimePlaybackProof) {
-    repeat(12) {
+  private fun advanceTalkSilence(
+    proof: RealtimePlaybackProof,
+    steps: Int = 12,
+  ) {
+    repeat(steps) {
       ShadowSystemClock.advanceBy(Duration.ofMillis(100))
       proof.scheduler.advanceTimeBy(100)
       shadowOf(Looper.getMainLooper()).idle()
