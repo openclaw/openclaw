@@ -67,16 +67,7 @@ function beginCodexAppServerTransportClose(
   let forced = false;
   const forceKill = () => {
     forced = true;
-    if (child.pid && process.platform !== "win32") {
-      try {
-        process.kill(-child.pid, "SIGKILL");
-        return;
-      } catch {
-        // Fall back to the child handle. The process may already be gone or not
-        // be a process-group leader on older call sites.
-      }
-    }
-    child.kill?.("SIGKILL");
+    signalCodexAppServerTransport(child, "SIGKILL");
   };
   const closing: TransportClose["closing"] = (async () => {
     if (hasCodexAppServerTransportExited(child)) {
@@ -214,4 +205,20 @@ async function waitForCodexAppServerTransportExit(
       onExit();
     }
   });
+}
+
+function signalCodexAppServerTransport(
+  child: CodexAppServerTransport,
+  signal: NodeJS.Signals,
+): void {
+  if (child.pid && process.platform !== "win32") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // Fall back to the child handle. The process may already be gone or not
+      // be a process-group leader on older call sites.
+    }
+  }
+  child.kill?.(signal);
 }
