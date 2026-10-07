@@ -33,6 +33,7 @@ import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
+  type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
 import {
   createMemoryCoreTestHarness,
@@ -1151,6 +1152,103 @@ describe("memory-core dreaming phases", () => {
     expect(corpus).not.toContain("Read HEARTBEAT.md");
     expect(corpus).not.toContain("HEARTBEAT_OK");
     expect(corpus).not.toContain("Run the memory sync");
+  });
+
+  it("keeps command listings and reconciliation findings out of REM and deep ranking", async () => {
+    const workspaceDir = await createWorkspace();
+    const nowMs = BASE_TIME.getTime();
+    const validSnippet = "User prefers short status updates.";
+    const statusSnippet =
+      "User: loops/cron-self-heal/runs/sample-id/\\n?? loops/cron-self-heal/runs/other-id/";
+    const auditSnippet = "Broken Links: `missing-page` in `[[Index]]`";
+    const sources = [
+      { key: "valid", path: `memory/${DAY}-preference.md`, snippet: validSnippet },
+      {
+        key: "status",
+        path: `memory/.dreams/session-corpus/${DAY}.txt`,
+        snippet: statusSnippet,
+      },
+      { key: "audit", path: `memory/${DAY}-reconcile-report.md`, snippet: auditSnippet },
+    ];
+    for (const source of sources) {
+      const absolutePath = path.join(workspaceDir, source.path);
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fs.writeFile(absolutePath, `${source.snippet}\n`, "utf-8");
+    }
+    const entries = Object.fromEntries(
+      sources.map((source): [string, ShortTermRecallEntry] => [
+        source.key,
+        {
+          ...source,
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          recallCount: 3,
+          dailyCount: 0,
+          groundedCount: 0,
+          totalScore: 2.7,
+          maxScore: 0.9,
+          firstRecalledAt: new Date(nowMs).toISOString(),
+          lastRecalledAt: new Date(nowMs).toISOString(),
+          queryHashes: ["q1", "q2", "q3"],
+          userQueryHashes: ["q1", "q2", "q3"],
+          recallDays: [DAY],
+          conceptTags: ["preference"],
+        },
+      ]),
+    );
+    await shortTermTesting.writeRawRecallStore(workspaceDir, {
+      version: 1,
+      updatedAt: new Date(nowMs).toISOString(),
+      entries,
+    });
+
+    const preview = previewRemDreaming({
+      entries: Object.values(entries),
+      limit: 10,
+      minPatternStrength: 0,
+    });
+    expect(preview.candidateKeys).toEqual(["valid"]);
+    expect(preview.sourceEntryCount).toBe(1);
+    expect(preview.bodyLines.join("\n")).not.toMatch(/Broken Links|cron-self-heal/);
+    expect((await rankCandidates(workspaceDir, nowMs)).map((entry) => entry.key)).toEqual([
+      "valid",
+    ]);
+
+    await withClock(async () => {
+      setTime(5);
+      await runDreamingSweepPhases({
+        agentId: "main",
+        workspaceDir,
+        pluginConfig: {
+          dreaming: {
+            enabled: true,
+            timezone: "UTC",
+            storage: { mode: "separate" },
+            phases: {
+              light: { enabled: false },
+              rem: { enabled: true, lookbackDays: 7, limit: 10, minPatternStrength: 0 },
+            },
+          },
+        },
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        detachNarratives: false,
+      });
+    });
+    const phaseSignals = await shortTermTesting.readPhaseSignalStore(
+      workspaceDir,
+      new Date(nowMs + 5 * 60_000).toISOString(),
+    );
+    const recallStore = await shortTermTesting.readRecallStore(
+      workspaceDir,
+      new Date(nowMs + 5 * 60_000).toISOString(),
+    );
+    const signalEntries = Object.values(phaseSignals.entries);
+    expect(signalEntries).toHaveLength(1);
+    expect(signalEntries.map((signal) => recallStore.entries[signal.key]?.snippet)).toEqual([
+      validSnippet,
+    ]);
+    expect(signalEntries[0]?.remHits).toBe(1);
   });
 
   it("normalizes and deduplicates stored concept tags before REM reflections", () => {
