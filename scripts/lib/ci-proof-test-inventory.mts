@@ -4528,7 +4528,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/pages/config/updates.test.ts",
   "ui/src/pages/cron/cron-page.delivery-conversations.test.ts",
   "ui/src/pages/cron/cron-page.lifecycle.test.ts",
-  "ui/src/pages/cron/cron-page.visibility.test.ts",
   "ui/src/pages/custodian/custodian-page.test.ts",
   "ui/src/pages/custodian/route.test.ts",
   "ui/src/pages/debug/view.test.ts",
