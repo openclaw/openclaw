@@ -239,6 +239,22 @@ export function createWorktreeGcRemoval(context: {
         assertOwnerPolicyAllowsCleanup(record, policy, retiredOwner);
       },
     });
+  const ownerGuard = (
+    record: ManagedWorktreeRecord,
+    retiredOwner: boolean,
+    commitGuard: () => void,
+  ) => ({
+    id: record.id,
+    signal,
+    workerAuthority: {
+      assertCurrent: () => {
+        assertCurrent?.();
+        assertOwnerPolicyAllowsCleanup(record, policy, retiredOwner);
+      },
+      predicates: [{ kind: "activity", id: record.id, lastActiveAt: record.lastActiveAt }],
+    } satisfies WorktreeWorkerAuthority,
+    commitGuard,
+  });
   const handleError = async (
     record: ManagedWorktreeRecord,
     initialError: unknown,
@@ -264,19 +280,7 @@ export function createWorktreeGcRemoval(context: {
         if (await hasMissingManagedWorktreeGitdir(record)) {
           const token = randomUUID();
           const assertOwnerCurrent = await prepareOwnerCurrent(record, retiredOwner);
-          const custody = {
-            env,
-            id: record.id,
-            signal,
-            workerAuthority: {
-              assertCurrent: () => {
-                assertCurrent?.();
-                assertOwnerPolicyAllowsCleanup(record, policy, retiredOwner);
-              },
-              predicates: [{ kind: "activity", id: record.id, lastActiveAt: record.lastActiveAt }],
-            } satisfies WorktreeWorkerAuthority,
-            commitGuard: assertOwnerCurrent,
-          };
+          const custody = { env, ...ownerGuard(record, retiredOwner, assertOwnerCurrent) };
           await withOwnerMutation(() =>
             claimWorktreeRemoval(env, {
               worktreeId: record.id,
@@ -356,18 +360,9 @@ export function createWorktreeGcRemoval(context: {
       return withOwnerCleanup(record, async (withOwnerMutation) => {
         const assertOwnerCurrent = await prepareOwnerCurrent(record, retiredOwner);
         return context.remove({
-          id: record.id,
+          ...ownerGuard(record, retiredOwner, assertOwnerCurrent),
           reason,
-          signal,
           withOwnerMutation,
-          workerAuthority: {
-            assertCurrent: () => {
-              assertCurrent?.();
-              assertOwnerPolicyAllowsCleanup(record, policy, retiredOwner);
-            },
-            predicates: [{ kind: "activity", id: record.id, lastActiveAt: record.lastActiveAt }],
-          },
-          commitGuard: assertOwnerCurrent,
         });
       });
     },

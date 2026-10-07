@@ -320,7 +320,11 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     this.reloadPersistedTranscriptSync();
   }
 
-  protected reloadPersistedTranscriptSync(): void {
+  protected reloadPersistedTranscriptSync(prepared?: PreparedSessionTranscriptReload): void {
+    if (prepared) {
+      this.adoptPreparedTranscriptReload(prepared);
+      return;
+    }
     this.assertTranscriptViewAvailable();
     if (this.persistenceTarget) {
       const runtimeCwd = this.cwd;
@@ -334,12 +338,13 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     expectedMutationAt: number | null,
     expectedEntryId: string,
     admittedUserId: string,
+    prepared?: PreparedSessionTranscriptReload,
   ): void {
     if (!this.persistenceTarget) {
       return;
     }
     this.adoptPreparedTranscriptReload(
-      readSessionManagerReload(this.persistenceTarget, this.boundedContextLimits, true),
+      prepared ?? readSessionManagerReload(this.persistenceTarget, this.boundedContextLimits, true),
       { expectedMutationAt, expectedEntryId, admittedUserId },
     );
   }
@@ -580,14 +585,11 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
         roots.push(node);
       }
     }
-    const stack = [...roots];
-    while (stack.length > 0) {
-      const node = stack.pop()!;
+    for (const node of nodeMap.values()) {
       node.children.sort(
         (left, right) =>
           new Date(left.entry.timestamp).getTime() - new Date(right.entry.timestamp).getTime(),
       );
-      stack.push(...node.children);
     }
     return roots;
   }

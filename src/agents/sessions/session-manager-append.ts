@@ -230,10 +230,10 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     try {
       persistenceResult = this.persistRecord(canonicalEntry, attemptOptions, preparedMessage);
     } catch (error) {
-      const deliberateBranchAppend = this.pendingDeliberateAppend;
-      const sideBranchAppend =
-        this.appendMode === "side" || isSessionTranscriptSideAppendEntry(canonicalEntry);
-      const retryableExplicitParentAppend = deliberateBranchAppend || sideBranchAppend;
+      const retryableExplicitParentAppend =
+        this.pendingDeliberateAppend ||
+        this.appendMode === "side" ||
+        isSessionTranscriptSideAppendEntry(canonicalEntry);
       if (
         (!activeBranchAppend && !retryableExplicitParentAppend) ||
         !(error instanceof SqliteTranscriptMutationConflictError)
@@ -251,30 +251,27 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       // Preserve the prepared parent so storage can distinguish a descendant tail from an
       // unrelated branch. Turn-bound assistant and tool-result messages may follow only a
       // descendant tail with no newer user turn; compatible reset and reentrant writes remain.
-      const retryOptions: AppendPersistenceOptions & { expectedMutationAt?: number | null } =
-        preparedTurnAppend
-          ? (() => {
-              const validatedMutationAt = this.persistenceTarget
-                ? validatePreparedAssistantAppendSync(
-                    this.persistenceTarget,
-                    canonicalEntry.parentId,
-                    admittedUserId,
-                  )
-                : undefined;
-              if (validatedMutationAt === undefined) {
-                throw error;
-              }
-              return copyCodeModeSourceAppendOptions(persistenceOptions, {
-                ...persistenceOptions,
-                expectedMutationAt: validatedMutationAt,
-              });
-            })()
-          : copyCodeModeSourceAppendOptions(persistenceOptions, {
-              ...persistenceOptions,
-              expectedMutationAt: this.persistenceTarget
-                ? readTranscriptMutationAtSync(this.persistenceTarget)
-                : null,
-            });
+      let expectedMutationAt: number | null | undefined;
+      if (preparedTurnAppend) {
+        expectedMutationAt = this.persistenceTarget
+          ? validatePreparedAssistantAppendSync(
+              this.persistenceTarget,
+              canonicalEntry.parentId,
+              admittedUserId,
+            )
+          : undefined;
+        if (expectedMutationAt === undefined) {
+          throw error;
+        }
+      } else {
+        expectedMutationAt = this.persistenceTarget
+          ? readTranscriptMutationAtSync(this.persistenceTarget)
+          : null;
+      }
+      const retryOptions = copyCodeModeSourceAppendOptions(persistenceOptions, {
+        ...persistenceOptions,
+        expectedMutationAt,
+      });
       persistenceResult = this.persistRecord(canonicalEntry, retryOptions, preparedMessage);
     }
     return this.adoptPersistedEntry(canonicalEntry, persistenceResult, admittedUserId);
@@ -336,11 +333,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     preparedReload?: PreparedSessionTranscriptReload,
   ): { entry: T; anchor?: TranscriptEntryAnchor; lifecycleRevision?: string; appended: boolean } {
     if (persistenceResult?.adoptedMessageId) {
-      if (preparedReload) {
-        this.adoptPreparedTranscriptReload(preparedReload);
-      } else {
-        this.reloadPersistedTranscriptSync();
-      }
+      this.reloadPersistedTranscriptSync(preparedReload);
       // Context-excluded users have no payload in byId. The exact SQLite replay
       // anchors their identity; physical ancestry still closes older turns.
       // Final Talk speech records history without consuming the consult's keyed input.
@@ -362,23 +355,14 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
         if (this.transcriptMutationAt === undefined) {
           throw new Error("Session transcript append mutation fence was not returned");
         }
-        if (preparedReload) {
-          this.adoptPreparedTranscriptReload(preparedReload, {
-            expectedMutationAt: this.transcriptMutationAt,
-            expectedEntryId: canonicalEntry.id,
-            admittedUserId,
-          });
-        } else {
-          this.reloadPersistedTranscriptAfterAppend(
-            this.transcriptMutationAt,
-            canonicalEntry.id,
-            admittedUserId,
-          );
-        }
-      } else if (preparedReload) {
-        this.adoptPreparedTranscriptReload(preparedReload);
+        this.reloadPersistedTranscriptAfterAppend(
+          this.transcriptMutationAt,
+          canonicalEntry.id,
+          admittedUserId,
+          preparedReload,
+        );
       } else {
-        this.reloadPersistedTranscriptSync();
+        this.reloadPersistedTranscriptSync(preparedReload);
       }
     } else if (
       this.boundedContextIncomplete &&

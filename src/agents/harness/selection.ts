@@ -312,7 +312,11 @@ export async function runAgentHarnessAttempt(
   if (nativeSessionRuntime) {
     await nativeSessionRuntime.assertCurrent();
   }
-  const attemptParams = withoutHarnessSetupAuthority(internalParams);
+  const {
+    contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
+    systemAgentTool: _systemAgentTool,
+    ...attemptParams
+  } = internalParams;
   const pluginAttempt = withoutInternalHarnessAuthority(
     attemptParams,
     harness,
@@ -514,17 +518,6 @@ async function runAgentHarnessOperation<T>(
 
 function isSystemAgentOnlyAllowlist(toolsAllow: readonly string[] | undefined): boolean {
   return toolsAllow?.length === 1 && normalizeToolPolicyName(toolsAllow[0] ?? "") === "openclaw";
-}
-
-function withoutHarnessSetupAuthority(
-  params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
-): EmbeddedRunAttemptParams {
-  const {
-    contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
-    systemAgentTool: _systemAgentTool,
-    ...attemptParams
-  } = params;
-  return attemptParams;
 }
 
 function withoutInternalHarnessAuthority(
