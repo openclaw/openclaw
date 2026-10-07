@@ -26,6 +26,8 @@ type ManagedSystemdPostExitState = {
 
 export type ManagedServiceManagerBoundaryOptions = {
   ledger?: boolean;
+  ledgerBusyTimeoutMs?: number;
+  observeLedgerBudget?: true;
   rollbackRestoration?: boolean;
   cancelAfterPark?: boolean;
   parentExitTimeoutMs?: number;
@@ -75,6 +77,7 @@ export type ManagedServiceCommandTiming = {
 
 export type ManagedServiceManagerBoundaryResult = {
   run?: UpdateRunRecord;
+  ledgerWriteBudgets?: (number | null)[];
   commands: string[];
   parentSignal: NodeJS.Signals | null;
   state: Record<string, unknown>;

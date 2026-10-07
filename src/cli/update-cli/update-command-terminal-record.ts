@@ -10,6 +10,7 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { openClawStateDatabaseCache } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import { updateRunLedgerOptions } from "./update-command-ledger.js";
 
 type Params = Pick<FinishUpdateParams, "opts" | "ownedManagedUpdateEnv">;
 
@@ -78,7 +79,7 @@ export async function captureUpdateCommandTerminalRecord(
   assertCurrent();
   const identity = readDatabasePathIdentitySync(pathname).key;
   const record = captureCompletedUpdateRun(run.runId, assertCurrent, {
-    env: run.env,
+    ...updateRunLedgerOptions(run),
     path: pathname,
   });
   assertCurrent();

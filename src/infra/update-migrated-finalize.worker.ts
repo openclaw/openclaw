@@ -7,6 +7,7 @@ import {
   withDelegatedUpdateCommandExecutor,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
+import { updateRunLedgerOptions } from "../cli/update-cli/update-command-ledger.js";
 import type {
   UpdateDoctorInput,
   UpdatePostCoreInput,
@@ -336,6 +337,7 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
       assertCurrent();
       await stopSupervisedPredecessorGateway(input, {
         root: input.root,
+        ledgerBusyTimeoutMs: input.ledgerBusyTimeoutMs,
         assertCurrent,
         warn: (message) => process.stderr.write(`${message}\n`),
       });
@@ -389,8 +391,10 @@ async function finalizeInput(
     throw new Error("Update finalization requires its migrated update run.");
   }
   const { requesterAuthority: descriptor, ...runIdentity } = transferredRun;
+  // Shipped drivers lack this field but already carry their parsed step budget.
+  runIdentity.ledgerBusyTimeoutMs ??= input.params.updateStepTimeoutMs;
   executorFence.assertCurrent();
-  adoptUpdateRun(runIdentity.runId, { env: runIdentity.env });
+  adoptUpdateRun(runIdentity.runId, updateRunLedgerOptions(runIdentity));
   // Parent closures cannot cross JSON. The fresh runtime retains identity checks
   // under its validated original native update lineage.
   const run: NonNullable<UpdateCommandOptions["run"]> = {
@@ -421,7 +425,12 @@ async function finalizeInput(
       }
     };
     for (const step of input.bufferedSteps) {
-      await recordUpdateRunStepAsync(run.runId, step, { env, context, assertCurrent });
+      await recordUpdateRunStepAsync(run.runId, step, {
+        ...updateRunLedgerOptions(run),
+        env,
+        context,
+        assertCurrent,
+      });
     }
   }
   const stopped = input.params.preManagedServiceStop;

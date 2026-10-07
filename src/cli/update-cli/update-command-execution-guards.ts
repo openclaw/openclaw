@@ -95,6 +95,7 @@ export function createUpdateCommandExecutionGuards(
     const context = captureOpenClawStateWorkerContext({ env: capturedEnv });
     return {
       env: capturedEnv,
+      busyTimeoutMs: run?.ledgerBusyTimeoutMs,
       context,
       assertCurrent,
       assertAccepting,

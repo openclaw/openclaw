@@ -44,6 +44,7 @@ import {
   formatManagedServiceUpdateCommand,
   resolveManagedServiceCliArgv,
   resolveUpdateCliArgv,
+  serializeManagedHandoffLedgerContext,
 } from "./update-managed-service-handoff-command.js";
 import {
   createHandoffLineReader,
@@ -142,7 +143,7 @@ function recordRunWarnings(ledger) {
   if (!params.runId) return;
   for (const [step, detail] of runWarnings) {
     try {
-      ledger.recordUpdateRunStep(params.runId, { step, status: "completed", detail, endedAtMs: Date.now() });
+      ledger.recordUpdateRunStep(params.runId, { step, status: "completed", detail, endedAtMs: Date.now() }, ledgerOptions);
       runWarnings.delete(step);
     } catch { /* The candidate runtime records warnings after state migration. */ }
   }
@@ -433,7 +434,7 @@ function recordServiceStop() {
   pendingServiceStop?.then((stopped) => {
     runLedger?.recordUpdateRunStep(params.runId, {
       step: "service-stop", status: stopped.code === 0 || (params.serviceRecovery?.kind === "launchd" && isLaunchdNotLoaded(stopped)) ? "completed" : "failed", endedAtMs: Date.now(),
-    });
+    }, ledgerOptions);
   }).catch((error) => appendLog("could not record service stop completion: " + String(error)));
   try {
     const metaFile = JSON.parse(fs.readFileSync(params.metaPath, "utf-8"));
@@ -441,7 +442,7 @@ function recordServiceStop() {
     fs.writeFileSync(params.metaPath, JSON.stringify(metaFile), { mode: 0o600 });
     runLedger?.recordUpdateRunStep(params.runId, {
       step: "service-stop", status: "in_progress", startedAtMs: metaFile.meta.serviceStoppedAtMs,
-    });
+    }, ledgerOptions);
   } catch (error) {
     appendLog("could not record service stop time: " + String(error));
   }
@@ -665,7 +666,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
   runLedger?.recordUpdateRunVerification(params.runId, {
     serviceRunning, pid: servicePid, runningVersion: undefined, runningBuildId: undefined, versionMatch: undefined,
     readyz: undefined, settled: undefined, channelsReady: undefined, pluginErrors: undefined,
-  });
+  }, ledgerOptions);
   if (restored) {
     try {
       const { waitForGatewayUpdateRecovery } = await import(pathToFileURL(params.recoveryModulePath).href);
@@ -684,7 +685,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
         settled: health.healthy === true,
         channelsReady: health.healthy === true && !health.channelProbeErrors?.length,
         pluginErrors: health.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? [],
-      });
+      }, ledgerOptions);
     } catch (error) {
       appendLog("Gateway recovery readiness failed: " + String(error));
       restored = false;
@@ -753,7 +754,7 @@ async function finishGatewayServicePark() {
       await sleep(Math.min(500, Math.max(0, deadline - Date.now())));
     }
   }
-  runLedger?.recordUpdateRunVerification(params.runId, { serviceRunning: false });
+  runLedger?.recordUpdateRunVerification(params.runId, { serviceRunning: false }, ledgerOptions);
 }
 
 let transferPrepared = false;
@@ -953,8 +954,7 @@ let automaticRequested = false;
       }
       if (!ownsManagedUpdateLease()) throw new Error("managed update lease no longer owns the helper");
       // Retain prior drivers while recording this helper's independent lifetime.
-      runLedger.adoptUpdateRun(params.runId);
-      recordRunWarnings(runLedger);
+      adoptManagedUpdateRunAndRecordWarnings(runLedger);
       if (params.foregroundOrigin) await assertForegroundOrigin();
     }
     if (params.action === "triage") {
@@ -1290,7 +1290,7 @@ async function spawnManagedServiceUpdateHandoff(
               detail: message,
               endedAtMs: Date.now(),
             },
-            { env: serviceEnv },
+            { env: serviceEnv, busyTimeoutMs: params.ledgerBusyTimeoutMs },
           );
         } catch {
           /* Identity warnings must not abort an update. */
@@ -1395,7 +1395,7 @@ async function spawnManagedServiceUpdateHandoff(
 
   const helperParams = {
     operatorRestartWarning: owner.operatorRestartWarning,
-    runId: metaFile.meta.runId,
+    ...serializeManagedHandoffLedgerContext(metaFile.meta.runId, params.ledgerBusyTimeoutMs),
     beforePark: Boolean(params.beforePark),
     requester: resolveManagedUpdateRequester(params.requester),
     serviceManagerEnv: resolveServiceManagerEnv(serviceEnv),

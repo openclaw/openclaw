@@ -1,4 +1,3 @@
-// Update failures and control-plane results share one reporting boundary.
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
@@ -60,6 +59,8 @@ import { printResult } from "./progress.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
+// Update failures and control-plane results share one reporting boundary.
+import { updateRunLedgerOptions } from "./update-command-ledger.js";
 import type { OwnedManagedUpdateContext } from "./update-command-managed-context.js";
 import type {
   OriginalManagedServiceRuntime,
@@ -73,7 +74,7 @@ export function failUpdateCommandRun(
   error: unknown,
   run: NonNullable<UpdateCommandOptions["run"]>,
 ): ReturnType<typeof createUpdateErrorFact> | undefined {
-  const options = { env: run.env };
+  const options = updateRunLedgerOptions(run);
   // Recovery owns failure/outcome publication; outer unwind must not rewrite a
   // database whose exact contents may still be needed to reconcile restoration.
   if (loadUpdateRecovery(run.runId, options)) {
@@ -167,7 +168,11 @@ export function recordServiceReconciliationWarnings(
   if (run) {
     try {
       for (const row of updateRunStepsFromResultStep(step)) {
-        recordUpdateRunStep(run.runId, { ...row, endedAtMs: Date.now() }, { env: run.env });
+        recordUpdateRunStep(
+          run.runId,
+          { ...row, endedAtMs: Date.now() },
+          updateRunLedgerOptions(run),
+        );
       }
     } catch {
       assertCurrent();
@@ -653,7 +658,7 @@ export function recordUpdateResultNextAction(
         record.origin.nextAction = nextAction;
       }
     },
-    { env: run.env },
+    updateRunLedgerOptions(run),
   );
   return nextAction;
 }

@@ -78,6 +78,21 @@ const overrides = new Map<string, string>([
     export async function tryWriteCompletionCache() { return false; }`,
   ],
 ]);
+if (process.env.OPENCLAW_TEST_LEDGER_WAIT_PROBE === "1") {
+  overrides.set(
+    source("../../state/openclaw-state-db-existing-write.ts"),
+    `import {runExistingOpenClawStateWriteTransaction as actual} from ${JSON.stringify(source("../../state/openclaw-state-db-existing-write.ts") + "?fixture-original")};
+     import fs from "node:fs";
+     export function runExistingOpenClawStateWriteTransaction(operation, options, contract) {
+       return actual(database => {
+         if(contract.operationLabel === "update.run") {
+           fs.appendFileSync(${JSON.stringify(scratch + "/ledger-wait-probe")}, String(database.db.prepare("PRAGMA busy_timeout").get().timeout) + "\\n");
+         }
+         return operation(database);
+       }, options, contract);
+     }`,
+  );
+}
 if (process.env.OPENCLAW_TEST_COMPLETED_TERMINAL === "1") {
   overrides.set(
     source("./update-command-terminal.ts"),

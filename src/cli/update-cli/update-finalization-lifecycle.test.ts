@@ -16,6 +16,7 @@ import {
 import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as existingStateWrite from "../../state/openclaw-state-db-existing-write.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
@@ -132,6 +133,41 @@ it.each([
   ledger.finishUpdateRun(inherited.runId, { status: "failed", reason: "parent-failure" });
   expect(getUpdateRun(inherited.runId)?.reason).toBe("parent-failure");
 });
+
+it.each([false, true])(
+  "retains its SQLite writer budget after admission (inherited=%s)",
+  async (inherited) => {
+    const parent = inherited ? ledger.createUpdateRun({ trigger: "cli" }) : undefined;
+    if (parent) {
+      vi.stubEnv(UPDATE_RUN_ID_ENV, parent.runId);
+    }
+    const actual = existingStateWrite.runExistingOpenClawStateWriteTransaction;
+    const observed: number[] = [];
+    vi.spyOn(existingStateWrite, "runExistingOpenClawStateWriteTransaction").mockImplementation(
+      (operation, options, contract) =>
+        actual(
+          (database) => {
+            if (contract.operationLabel === "update.run") {
+              observed.push(Number(database.db.prepare("PRAGMA busy_timeout").get()?.timeout));
+            }
+            return operation(database);
+          },
+          options,
+          contract,
+        ),
+    );
+    const lifecycle = new UpdateFinalizationLifecycle(false, 71_000, () => {});
+    const runId = lifecycle.attachLedger();
+    await lifecycle.run("plugins", async () => undefined);
+    lifecycle.complete(0);
+    expect(getUpdateRun(runId)?.status).toBe(inherited ? "running" : "succeeded");
+    expect(observed.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(observed)).toEqual(new Set([71_000]));
+    if (parent) {
+      ledger.finishUpdateRun(parent.runId, { status: "succeeded" });
+    }
+  },
+);
 
 it("records a returned failed outcome without requiring an exception", async () => {
   const lifecycle = new UpdateFinalizationLifecycle(false, 5_000, () => {});

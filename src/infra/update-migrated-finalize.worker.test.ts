@@ -262,7 +262,11 @@ it.each([false, true])(
         ...input.params,
         opts: {
           ...input.params.opts,
-          run: { ...input.params.opts.run, executorFence: fixture.fence },
+          run: {
+            ...input.params.opts.run,
+            ledgerBusyTimeoutMs: input.params.updateStepTimeoutMs,
+            executorFence: fixture.fence,
+          },
         },
       },
       { candidateRuntime: true, onGatewayStartAttempted: expect.any(Function) },

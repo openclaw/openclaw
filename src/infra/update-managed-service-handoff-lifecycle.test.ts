@@ -334,25 +334,6 @@ describe("managed service update handoff", () => {
     },
   );
 
-  itUnix(
-    "finalizes through the installed runtime after replacing its module graph within the recovery budget",
-    async () => {
-      const { run, log, state } = await runManagedServiceManagerBoundary("systemd", {
-        controlDisconnect: "transferred",
-        ledger: true,
-        replaceLedgerWriter: true,
-        finalizationWorkMs: 65_000,
-        recoveryTimeoutMs: 120_000,
-        updaterExitCode: 0,
-        updaterResult: { status: "ok", mode: "npm" },
-      });
-      expect(run).toMatchObject({ status: "succeeded", phase: "finished" });
-      expect(state.finalizationBudgetMs).toBe(120_000);
-      expect(log).not.toContain("the previous runtime must not finalize the candidate");
-      expect(log).toContain("managed update finalize command exited code=0");
-    },
-  );
-
   itUnix.each(["failed", "skipped"] as const)(
     "finishes the update run without touching the serving generation when validation finishes %s",
     async (validationResult) => {

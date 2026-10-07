@@ -23,7 +23,9 @@ type CapturedWriteOptions = Required<
     "env" | "context" | "assertCurrent" | "assertAccepting" | "retainSettlement"
   >
 > &
-  Pick<UpdateRunWriteOptions, "requireNoRecovery">;
+  Pick<UpdateRunWriteOptions, "requireNoRecovery"> & {
+    busyTimeoutMs: number | undefined;
+  };
 
 export type UpdateCommandExecutionGuards = {
   recordPhase: (phase: UpdateRunPhase, patch?: UpdateRunPhasePatch) => Promise<void>;

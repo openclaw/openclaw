@@ -26,6 +26,6 @@ export function captureCompletedUpdateRun(
       return record?.status === "succeeded" && record.phase === "finished" ? record : undefined;
     },
     options,
-    { schemaSql: schema, operationLabel: "update.run" },
+    { schemaSql: schema, operationLabel: "update.run", busyTimeoutMs: options.busyTimeoutMs },
   );
 }

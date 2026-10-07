@@ -23,6 +23,7 @@ import { printResult } from "./progress.js";
 import { parseUpdateTimeoutMs, type UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import { updateRunLedgerOptions } from "./update-command-ledger.js";
 import {
   recordMutableUpdateInterruption,
   withMutableUpdateTerminalSettlement,
@@ -664,7 +665,7 @@ async function publishPreMutationUpdateOutcome(
         origin: { nextAction },
         ...(params.installKind !== "unknown" ? { target: { kind: params.installKind } } : {}),
       },
-      { env: run.env },
+      updateRunLedgerOptions(run),
     );
   }
   const outcome = await prepareOutcome();

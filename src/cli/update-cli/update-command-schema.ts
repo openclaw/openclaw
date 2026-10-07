@@ -39,6 +39,7 @@ import {
   printUpdateDryRun,
   type UpdateDryRunFailure,
 } from "./update-command-dry-run.js";
+import { updateRunLedgerOptions } from "./update-command-ledger.js";
 import type { RefuseUpdate } from "./update-command-result.js";
 import type { prepareUpdateCommand } from "./update-command-run.js";
 import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
@@ -170,7 +171,7 @@ export async function preflightUpdateCommandSchemas(params: {
       ? (params.candidateAdmissionChecks ?? run?.candidateAdmissionChecks)
       : undefined;
   if (run) {
-    recordUpdateRunPhase(run.runId, "validating", undefined, { env: run.env });
+    recordUpdateRunPhase(run.runId, "validating", undefined, updateRunLedgerOptions(run));
   }
   let packageSchemaPreflight: OpenClawDatabaseSchemaPreflight = {
     incompatible: [],

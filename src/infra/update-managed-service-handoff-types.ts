@@ -14,6 +14,8 @@ import type {
 
 export type ManagedServiceUpdateHandoffParams = Parameters<typeof resolveUpdateCliArgv>[0] & {
   runId?: string;
+  /** SQLite writer budget captured by the admitted update, when available. */
+  ledgerBusyTimeoutMs?: number;
   beforePark?: () => Promise<void>;
   /** Local original admission; never serialized to the detached helper. */
   requesterAuthority?: Readonly<{ assertCurrent: () => void; signal?: AbortSignal }>;

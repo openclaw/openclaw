@@ -28,6 +28,17 @@ export function resolveUpdateCliArgv(params: {
   ]);
 }
 
+/** Preserve the optional ledger budget when crossing into the sealed helper payload. */
+export function serializeManagedHandoffLedgerContext(
+  runId: string | undefined,
+  busyTimeoutMs?: number,
+) {
+  return {
+    runId,
+    ...(busyTimeoutMs === undefined ? {} : { ledgerBusyTimeoutMs: busyTimeoutMs }),
+  };
+}
+
 export function resolveManagedServiceCliArgv(
   params: { execPath?: string; argv1?: string },
   args: string[],

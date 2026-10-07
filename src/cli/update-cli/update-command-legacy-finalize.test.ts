@@ -66,6 +66,8 @@ function assertLegacyCommandJoined(
 }
 
 const scenarios = [
+  "ledger-timeout-legacy",
+  "ledger-timeout-explicit",
   "rollback-state-unverified",
   "revoked",
   "retargeted",
@@ -197,6 +199,7 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_UPDATE_IN_PROGRESS: "1",
       OPENCLAW_TEST_RUNTIME_LOG: "1",
+      ...(scenario.startsWith("ledger-timeout-") ? { OPENCLAW_TEST_LEDGER_WAIT_PROBE: "1" } : {}),
       ...(completedByGateway ? { OPENCLAW_TEST_COMPLETED_TERMINAL: "1" } : {}),
       ...(scratchEnvironment
         ? {
@@ -371,7 +374,15 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
           channel: "stable",
           downgradeRisk: false,
           shouldRestart: true,
-          opts: { json: true, yes: true, run: { runId, env } },
+          opts: {
+            json: true,
+            yes: true,
+            run: {
+              runId,
+              env,
+              ...(scenario === "ledger-timeout-explicit" ? { ledgerBusyTimeoutMs: 71_000 } : {}),
+            },
+          },
           result: {
             status: "ok",
             ...(completedByGateway
@@ -485,6 +496,19 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
         );
         expect(receiver.pid).not.toBe(receiver.parent);
         expect(getUpdateRun(runId, { env })).toMatchObject({ status: "succeeded" });
+        if (scenario.startsWith("ledger-timeout-")) {
+          const timeouts = fs
+            .readFileSync(path.join(scratch, "ledger-wait-probe"), "utf8")
+            .trim()
+            .split("\n")
+            .map(Number);
+          expect(timeouts.length).toBeGreaterThanOrEqual(3);
+          expect(new Set(timeouts), details).toEqual(
+            new Set([
+              scenario === "ledger-timeout-explicit" ? 71_000 : input.params.updateStepTimeoutMs,
+            ]),
+          );
+        }
         if (legacyParent) {
           expect(store.current(acquired.lease)).toBe(true);
           expect(store.hasUnsettledChildren(acquired.lease)).toBe(false);

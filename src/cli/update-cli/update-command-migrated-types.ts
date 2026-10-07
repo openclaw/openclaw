@@ -28,6 +28,7 @@ export type UpdateDoctorInput = Omit<UpdatePostCoreInput, "opts"> & {
   yes?: boolean;
   workspaceSuggestions?: boolean;
   postCoreSchemaRepair?: true;
+  ledgerBusyTimeoutMs?: number;
   databaseGenerations?: UpdateDatabaseGenerations;
 };
 

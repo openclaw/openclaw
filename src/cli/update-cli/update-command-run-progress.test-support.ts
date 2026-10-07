@@ -40,7 +40,11 @@ async function withProgressRun(
   const control = path.join(root, "control");
   fs.mkdirSync(control);
   vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-  const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+  const run = {
+    runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+    env,
+    ledgerBusyTimeoutMs: 71_000,
+  };
   const guards = createUpdateCommandExecutionGuards({ run }, root);
   try {
     await withUpdateCommandExecutor(run.runId, async (executor) => {
@@ -134,6 +138,8 @@ export function registerUpdateRunReceiptTests(dirs: ProgressDirectories) {
             expect(
               (await updateRunLedger.getUpdateRunAsync(run.runId, { env }))?.steps,
             ).toContainEqual(expect.objectContaining({ step: "fetch", status: "in_progress" }));
+            expect(writer.mock.calls.length).toBeGreaterThan(0);
+            expect(writer.mock.calls.every((call) => call[2]?.busyTimeoutMs === 71_000)).toBe(true);
             if (custody === "replaced") {
               run.runId = `${originalRunId}-replaced`;
             }

@@ -274,7 +274,10 @@ async function resumePostCoreUpdateInternal(
       defaultRuntime.error(`[update resume] ${JSON.stringify(diagnostic)}`);
       if (runId) {
         try {
-          recordUpdateRunStep(runId, diagnostic, { env: params.opts.run?.env ?? process.env });
+          recordUpdateRunStep(runId, diagnostic, {
+            env: params.opts.run?.env ?? process.env,
+            busyTimeoutMs: params.opts.run?.ledgerBusyTimeoutMs,
+          });
         } catch (error) {
           defaultRuntime.error(
             `Post-core Doctor evidence could not be saved: ${formatErrorMessage(error)}`,

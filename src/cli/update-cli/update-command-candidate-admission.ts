@@ -26,6 +26,7 @@ import { readUpdateChannelConfig } from "./update-command-config.js";
 import { inspectUpdateManagedServices } from "./update-command-database-context.js";
 import { handoffUpdateFromGateway } from "./update-command-handoff.js";
 import type { StagedUpdateCandidateAdmission } from "./update-command-initialization-types.js";
+import { updateRunLedgerOptions } from "./update-command-ledger.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
 import type { prepareUpdateCommand } from "./update-command-run.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
@@ -212,7 +213,7 @@ export function applyUpdateCandidateAdmission(params: {
             }
           : {}),
       },
-      { env: run.env },
+      updateRunLedgerOptions(run),
     );
     for (const warning of [
       ...(result.warning ? [result.warning] : []),
@@ -221,7 +222,7 @@ export function applyUpdateCandidateAdmission(params: {
       recordUpdateRunStep(
         run.runId,
         { step: `warning:${warning.code}`, status: "completed", detail: warning.message },
-        { env: run.env },
+        updateRunLedgerOptions(run),
       );
       defaultRuntime.error(`Warning: ${warning.message}`);
     }

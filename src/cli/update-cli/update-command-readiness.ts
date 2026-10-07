@@ -31,6 +31,7 @@ import {
 } from "../daemon-cli/restart-health.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import type { PostUpdateLaunchAgentRecoveryResult } from "./update-command-launch-agent-recovery.js";
+import { updateRunLedgerOptions } from "./update-command-ledger.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   gatewayServiceCommandUsesRoot,
@@ -87,7 +88,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
       detail,
     };
     if (run) {
-      recordUpdateRunStep(run.runId, fact, { env: run.env });
+      recordUpdateRunStep(run.runId, fact, updateRunLedgerOptions(run));
     }
     defaultRuntime[params.opts.json ? "error" : "log"](`${fact.step}: ${detail}`);
   };

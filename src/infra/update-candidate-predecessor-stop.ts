@@ -107,6 +107,7 @@ export async function stopSupervisedPredecessorGateway(
   input: { runId: string; repair: boolean },
   params: {
     root: string;
+    ledgerBusyTimeoutMs?: number;
     assertCurrent: () => void;
     warn: (message: string) => void;
   },
@@ -145,6 +146,7 @@ export async function stopSupervisedPredecessorGateway(
       {
         env,
         context,
+        busyTimeoutMs: params.ledgerBusyTimeoutMs,
         assertCurrent: params.assertCurrent,
         retainSettlement(completion) {
           const release = registerSignalExitGate(completion);

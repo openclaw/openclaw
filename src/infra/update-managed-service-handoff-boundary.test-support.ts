@@ -15,6 +15,7 @@ import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { writeRestartSentinel } from "./restart-sentinel.js";
 import { writeTriageUpdateFailure } from "./update-failure-report-artifact.js";
 import type { ManagedServiceBoundaryOptions } from "./update-managed-service-handoff-boundary-contract.test-support.js";
+import { serializeManagedHandoffLedgerContext } from "./update-managed-service-handoff-command.js";
 import {
   awaitEmulatedRecoveryHandoffExit,
   createManagedServiceCommandFixture,
@@ -43,6 +44,7 @@ import {
 import {
   prepareManagedServiceBoundaryFiles,
   prepareManagedServiceRuntimeFixture,
+  readObservedLedgerWriteBudgetResult,
   prepareManagedServiceSpawn,
 } from "./update-managed-service-handoff-runtime.test-support.js";
 import {
@@ -142,16 +144,17 @@ export function createManagedServiceManagerBoundary({
           { env },
         )
       : undefined;
-    const { sourceRuntimeImport, ledgerRuntimeImport } = await prepareManagedServiceRuntimeFixture({
-      recoveryModulePath,
-      statePath,
-      configPath: env.OPENCLAW_CONFIG_PATH,
-      validationReleasePath,
-      activationGatePath,
-      activationReleasePath,
-      ledger: Boolean(run),
-      options,
-    });
+    const { sourceRuntimeImport, ledgerRuntimeImport, installObservedLedgerWriter } =
+      await prepareManagedServiceRuntimeFixture({
+        recoveryModulePath,
+        statePath,
+        configPath: env.OPENCLAW_CONFIG_PATH,
+        validationReleasePath,
+        activationGatePath,
+        activationReleasePath,
+        ledger: Boolean(run),
+        options,
+      });
     let helper: import("node:child_process").ChildProcess | undefined;
     let helperCompletion: Promise<number | null> | undefined;
     let helperLogPath: string | undefined;
@@ -160,7 +163,7 @@ export function createManagedServiceManagerBoundary({
     try {
       await startManagedServiceUpdateHandoff({
         ...(options?.systemScope ? { supervisor: "systemd" as const } : {}),
-        runId: run?.runId,
+        ...serializeManagedHandoffLedgerContext(run?.runId, options?.ledgerBusyTimeoutMs),
         ...(options?.beforeParkNotice ? { beforePark: async () => {} } : {}),
         ...(options?.profileRequester ? { requesterAuthority: { assertCurrent() {} } } : {}),
         root,
@@ -234,14 +237,7 @@ export function createManagedServiceManagerBoundary({
           ${updaterScript}
         })().catch((error) => { console.error(error); process.exit(18); });`;
       }
-      if (options?.replaceLedgerWriter) {
-        const installedLedgerModule = `${ledgerRuntimeImport}
-        export const { finishUpdateRun, recordUpdateRunDiagnostic } = ledger;
-      `;
-        updaterScript =
-          `require("node:fs").writeFileSync(${JSON.stringify(recoveryModulePath)}, ${JSON.stringify(installedLedgerModule)});` +
-          updaterScript;
-      }
+      updaterScript = installObservedLedgerWriter(updaterScript, recoveryModulePath);
       if (invocationCwd) {
         // Consuming a relative input then removing cwd forces recovery and triage
         // to launch from the durable helper directory, not the vanished caller cwd.
@@ -660,6 +656,7 @@ export function createManagedServiceManagerBoundary({
       }
       return {
         ...(run ? { run: getUpdateRun(run.runId, { env }) } : {}),
+        ...(await readObservedLedgerWriteBudgetResult(statePath, options?.observeLedgerBudget)),
         ...(options?.expireParentWhileStopPending
           ? { stopSettlement: JSON.parse(await fs.readFile(stopSettlementPath, "utf8")) }
           : {}),

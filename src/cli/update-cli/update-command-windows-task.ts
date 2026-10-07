@@ -11,6 +11,7 @@ import {
   waitForSignalExitBarriers,
 } from "../signal-exit-barrier.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { updateRunLedgerOptions } from "./update-command-ledger.js";
 
 export class UpdateCommandAbort extends Error {
   constructor() {
@@ -150,7 +151,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
                   ? "update-failed"
                   : "cancelled",
             },
-            { env: params.updateRun.env },
+            updateRunLedgerOptions(params.updateRun),
           );
         }
       } catch (cause) {

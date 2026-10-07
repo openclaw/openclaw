@@ -210,6 +210,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
           input: {
             configInputHash: snapshot.hash,
             originalRecoveryCapture: run?.originalRecoveryCapture,
+            ledgerBusyTimeoutMs: run?.ledgerBusyTimeoutMs,
             repair: true,
             databaseGenerations:
               params.databaseBackup?.migration?.to ?? params.databaseBackup?.sourceGenerations,

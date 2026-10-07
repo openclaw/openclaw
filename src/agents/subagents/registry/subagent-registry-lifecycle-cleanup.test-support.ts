@@ -463,8 +463,11 @@ export function registerDeliveryRetryOwnerTests({
         await waitForLifecycleState(() =>
           expect(readLifecycleRun(entry).cleanupHandled).toBe(false),
         );
+        // Join detached cleanup before advancing only its scheduled retry.
+        await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
         for (let retry = 0; retry < 3; retry += 1) {
           await vi.runOnlyPendingTimersAsync();
+          await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
         }
         expect(countPendingDescendantRuns).toHaveBeenCalledTimes(4);
         expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
