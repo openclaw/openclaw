@@ -1,3 +1,4 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, test, vi } from "vitest";
 import { getRuntimeConfig } from "../config/io.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -52,6 +53,42 @@ function route(
   match: "exact" | "prefix" = "exact",
 ): PluginHttpRouteRegistration {
   return { pluginId, path, auth: "gateway", match, handler };
+}
+
+function createRuntimeScopeRecorderHandler(params: {
+  pluginId: string;
+  path: string;
+  method: string;
+  observedRuntimeScopes: string[][];
+  allowedResults: boolean[];
+  match?: "exact" | "prefix";
+}) {
+  return createGatewayPluginRequestHandler({
+    registry: createGatewayTestRegistry({
+      httpRoutes: [
+        {
+          pluginId: params.pluginId,
+          source: params.pluginId,
+          path: params.path,
+          auth: "gateway",
+          match: params.match ?? "exact",
+          handler: async (_req: IncomingMessage, res: ServerResponse) => {
+            const runtimeScopes =
+              getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes?.slice() ?? [];
+            params.observedRuntimeScopes.push(runtimeScopes);
+            const auth = authorizeOperatorScopesForMethod(params.method, runtimeScopes);
+            params.allowedResults.push(auth.allowed);
+            res.statusCode = 200;
+            res.end("ok");
+            return true;
+          },
+        },
+      ],
+    }),
+    log: { warn: vi.fn() } as unknown as Parameters<
+      typeof createGatewayPluginRequestHandler
+    >[0]["log"],
+  });
 }
 
 function withRoutes(
@@ -262,5 +299,89 @@ describe("control ui plugin frame auth route boundaries", () => {
     );
     expect(nested).toHaveBeenCalledOnce();
     expect(outer).not.toHaveBeenCalled();
+  });
+
+  test("rejects cookie auth from a cross-site Origin (#116241)", async () => {
+    const handlePluginRequest = createRuntimeScopeRecorderHandler({
+      pluginId: "csrf-origin-cookie",
+      path: "/csrf-hook",
+      method: "assistant.media.get",
+      observedRuntimeScopes: [],
+      allowedResults: [],
+    });
+    await withGatewayServer({
+      prefix: "openclaw-plugin-cookie-csrf-origin-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: () => true,
+      },
+      run: async (server) => {
+        // Cross-site Origin → cookie must NOT authorize even with a valid cookie.
+        const cookieHeader = cookie("csrf-origin-cookie", "/csrf-hook");
+        const blocked = await sendRequest(server, {
+          path: "/csrf-hook",
+          headers: { cookie: cookieHeader, origin: "https://attacker.example.test" },
+        });
+        expect(blocked.res.statusCode).toBe(401);
+      },
+    });
+  });
+
+  test("allows cookie auth from null Origin (sandbox opaque iframe) regardless of Fetch Metadata", async () => {
+    const handlePluginRequest = createRuntimeScopeRecorderHandler({
+      pluginId: "sandbox-origin-cookie",
+      path: "/sandbox-hook",
+      method: "assistant.media.get",
+      observedRuntimeScopes: [],
+      allowedResults: [],
+    });
+    await withGatewayServer({
+      prefix: "openclaw-plugin-cookie-sandbox-origin-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: () => true,
+      },
+      run: async (server) => {
+        const cookieHeader = cookie("sandbox-origin-cookie", "/sandbox-hook");
+        // Null Origin + same-origin → sandbox iframe, allowed.
+        const sameOrigin = await sendRequest(server, {
+          path: "/sandbox-hook",
+          headers: { cookie: cookieHeader, origin: "null", "sec-fetch-site": "same-origin" },
+        });
+        expect(sameOrigin.res.statusCode).toBe(200);
+
+        // Null Origin + cross-site → sandbox iframe default mode, also allowed
+        // (opaque origin is cross-site by spec; blocking it breaks the tab).
+        const crossSite = await sendRequest(server, {
+          path: "/sandbox-hook",
+          headers: { cookie: cookieHeader, origin: "null", "sec-fetch-site": "cross-site" },
+        });
+        expect(crossSite.res.statusCode).toBe(200);
+
+        // Null Origin + no Fetch Metadata → allowed.
+        const noFetch = await sendRequest(server, {
+          path: "/sandbox-hook",
+          headers: { cookie: cookieHeader, origin: "null" },
+        });
+        expect(noFetch.res.statusCode).toBe(200);
+      },
+    });
+  });
+
+  test("allows cookie auth without Origin header (non-browser client)", async () => {
+    const handler = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.end("ok");
+      return true;
+    });
+    await withRoutes([route("no-origin-cookie", "/no-origin-hook", handler)], async (server) => {
+      const response = await sendRequest(server, {
+        path: "/no-origin-hook",
+        headers: { cookie: cookie("no-origin-cookie", "/no-origin-hook") },
+      });
+      expect(response.res.statusCode).toBe(200);
+    });
+    expect(handler).toHaveBeenCalledOnce();
   });
 });
