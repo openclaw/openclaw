@@ -76,16 +76,15 @@ async function createAgentMainSessionForSend(
     "sessions.create handler",
   )(createOptions);
 
-  if (!createResult) {
+  if (!createResult?.ok) {
     return {
       ok: false,
-      error: errorShape(ErrorCodes.UNAVAILABLE, "sessions.create did not respond"),
-    };
-  }
-  if (!createResult.ok) {
-    return {
-      ok: false,
-      error: createResult.error ?? errorShape(ErrorCodes.UNAVAILABLE, "failed to create session"),
+      error:
+        createResult?.error ??
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          createResult ? "failed to create session" : "sessions.create did not respond",
+        ),
     };
   }
 

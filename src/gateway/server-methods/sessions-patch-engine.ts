@@ -100,6 +100,9 @@ export async function executeSessionPatchMutations(params: {
   if (!discovery.ok) {
     return discovery;
   }
+  const targetAccessError = (entry: SessionEntry | undefined, agentId: string, key: string) =>
+    (!entry && authorizeGatewaySessionCreation({ cfg, client, agentId })) ||
+    resolvePluginSessionOwnershipError({ action: "patch", entry, key, pluginOwnerId });
 
   const outcomes = Array.from<MutationOutcome | undefined>({ length: params.targets.length });
   const permissionErrors = new Map<number, ErrorShape>();
@@ -131,20 +134,9 @@ export async function executeSessionPatchMutations(params: {
       outcomes[index] = { ok: false, error: unexpectedPatchError(key, error) };
       continue;
     }
-    const creationError =
-      !initialEntry && authorizeGatewaySessionCreation({ cfg, client, agentId: resolved.agentId });
-    if (creationError) {
-      outcomes[index] = { ok: false, error: creationError };
-      continue;
-    }
-    const ownershipError = resolvePluginSessionOwnershipError({
-      action: "patch",
-      entry: initialEntry,
-      key: canonicalKey,
-      pluginOwnerId,
-    });
-    if (ownershipError) {
-      outcomes[index] = { ok: false, error: ownershipError };
+    const accessError = targetAccessError(initialEntry, resolved.agentId, canonicalKey);
+    if (accessError) {
+      outcomes[index] = { ok: false, error: accessError };
       continue;
     }
     const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
@@ -372,28 +364,16 @@ export async function executeSessionPatchMutations(params: {
                           store: workingStore,
                           ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
                         });
-                        const creationError =
-                          !existingEntry &&
-                          authorizeGatewaySessionCreation({
-                            cfg,
-                            client,
-                            agentId: target.targetAgentId,
-                          });
-                        if (creationError) {
-                          projectedOutcomes.push({ ok: false, error: creationError });
+                        const accessError = targetAccessError(
+                          existingEntry,
+                          target.targetAgentId,
+                          primaryKey,
+                        );
+                        if (accessError) {
+                          projectedOutcomes.push({ ok: false, error: accessError });
                           continue;
                         }
                         const candidateKeys = currentTarget.storeKeys;
-                        const ownershipError = resolvePluginSessionOwnershipError({
-                          action: "patch",
-                          entry: existingEntry,
-                          key: primaryKey,
-                          pluginOwnerId,
-                        });
-                        if (ownershipError) {
-                          projectedOutcomes.push({ ok: false, error: ownershipError });
-                          continue;
-                        }
                         // Compare tool policy against the captured snapshot; the final
                         // commit rejects a selection changed during preparation.
                         const expectationError =
