@@ -57,66 +57,85 @@ it("reuses a clean closed-WAL receipt without copying the agent database", async
   expect(readOpenClawAgentIntegrityVerification(agentPath, env)?.clean_close).toBe(1);
 });
 
-it("freshly checks startup integrity off the main thread and preserves source artifacts", async () => {
-  const stateDir = tempDirs.make("openclaw-startup-integrity-");
-  const env = { OPENCLAW_STATE_DIR: stateDir };
-  const agentPath = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
-  openOpenClawAgentDatabase({ agentId: "main", path: agentPath, env });
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  // These raw writers model unclean external mutation, outside the lease owner.
-  clearOpenClawAgentIntegrityVerification(agentPath, env);
-  const { DatabaseSync } = requireNodeSqlite();
-  const writer = new DatabaseSync(agentPath);
-  writer.exec("PRAGMA journal_mode=DELETE; PRAGMA wal_autocheckpoint=0;");
-  const prepare = snapshots.prepareSqliteReadOnlyLocation;
-  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation((pathname, options) => {
-    if (pathname === agentPath) {
-      throw new Error("No space for a full agent database snapshot");
-    }
-    return prepare(pathname, options);
-  });
-  const check = integrity.assertSqliteIntegrity;
-  const mainThreadAgentChecks: string[] = [];
-  vi.spyOn(integrity, "assertSqliteIntegrity").mockImplementation((database, label) => {
-    if (label === agentPath) {
-      mainThreadAgentChecks.push(label);
-    }
-    return check(database, label);
-  });
-  try {
-    for (const damaged of [false, true]) {
-      if (damaged) {
-        writer.exec(
-          "PRAGMA foreign_keys = OFF; CREATE TABLE integrity_probe_parent(id INTEGER); CREATE TABLE integrity_probe_child(parent_id INTEGER REFERENCES integrity_probe_parent(id)); INSERT INTO integrity_probe_child VALUES (42);",
+it.each(["DELETE", "WAL", "closed WAL"])(
+  "freshly checks startup integrity off the main thread and preserves %s source artifacts",
+  async (mode) => {
+    const stateDir = tempDirs.make("openclaw-startup-integrity-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentPath = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
+    openOpenClawAgentDatabase({ agentId: "main", path: agentPath, env });
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    // These raw writers model unclean external mutation, outside the lease owner.
+    clearOpenClawAgentIntegrityVerification(agentPath, env);
+    const { DatabaseSync } = requireNodeSqlite();
+    const writer = mode === "closed WAL" ? undefined : new DatabaseSync(agentPath);
+    writer?.exec(`PRAGMA journal_mode=${mode}; PRAGMA wal_autocheckpoint=0;`);
+    const prepare = snapshots.prepareSqliteReadOnlyLocation;
+    vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation((pathname, options) => {
+      if (pathname === agentPath && mode !== "closed WAL") {
+        throw new Error("No space for a full agent database snapshot");
+      }
+      return prepare(pathname, options);
+    });
+    const check = integrity.assertSqliteIntegrity;
+    const mainThreadAgentChecks: string[] = [];
+    vi.spyOn(integrity, "assertSqliteIntegrity").mockImplementation((database, label) => {
+      if (label === agentPath) {
+        mainThreadAgentChecks.push(label);
+      }
+      return check(database, label);
+    });
+    try {
+      for (const damaged of [false, true]) {
+        if (damaged) {
+          const mutation = writer ?? new DatabaseSync(agentPath);
+          try {
+            mutation.exec(
+              `PRAGMA foreign_keys = OFF; CREATE TABLE integrity_probe_parent(id INTEGER ${mode === "DELETE" ? "" : "PRIMARY KEY"}); CREATE TABLE integrity_probe_child(parent_id INTEGER REFERENCES integrity_probe_parent(id)); INSERT INTO integrity_probe_child VALUES (42);`,
+            );
+          } finally {
+            if (!writer) {
+              mutation.close();
+            }
+          }
+        }
+        const before = snapshotPreflightSourceManifest(
+          stateDir,
+          mode === "WAL" ? agentPath : undefined,
         );
-      }
-      const before = snapshotPreflightSourceManifest(stateDir);
-      const readiness = assertOpenClawDatabasesReady({
-        env,
-        operation: "gateway-startup",
-        config: {},
-      });
-      if (damaged) {
-        await expect(readiness).rejects.toMatchObject({
-          name: "SqliteIntegrityError",
-          message: expect.stringContaining(`foreign_key_check failed for ${agentPath}`),
-          cause: {
-            code: "ERR_SQLITE_ERROR",
-            errcode: 1,
-            message: expect.stringContaining("foreign key mismatch"),
-          },
+        const readiness = assertOpenClawDatabasesReady({
+          env,
+          operation: "gateway-startup",
+          config: {},
         });
-      } else {
-        await expect(readiness).resolves.toBeUndefined();
+        if (damaged) {
+          await expect(readiness).rejects.toMatchObject({
+            name: "SqliteIntegrityError",
+            message: expect.stringContaining(`foreign_key_check failed for ${agentPath}`),
+            ...(mode === "DELETE"
+              ? {
+                  cause: {
+                    code: "ERR_SQLITE_ERROR",
+                    errcode: 1,
+                    message: expect.stringContaining("foreign key mismatch"),
+                  },
+                }
+              : {}),
+          });
+        } else {
+          await expect(readiness).resolves.toBeUndefined();
+        }
+        expect(mainThreadAgentChecks).toEqual([]);
+        expect(
+          snapshotPreflightSourceManifest(stateDir, mode === "WAL" ? agentPath : undefined),
+        ).toEqual(before);
       }
-      expect(mainThreadAgentChecks).toEqual([]);
-      expect(snapshotPreflightSourceManifest(stateDir)).toEqual(before);
+    } finally {
+      writer?.close();
     }
-  } finally {
-    writer.close();
-  }
-});
+  },
+);
 
 it("isolates a corrupt foreign secondary before reporting its integrity failure", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-startup-foreign-") };

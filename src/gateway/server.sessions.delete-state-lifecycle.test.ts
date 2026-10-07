@@ -133,6 +133,62 @@ test.each(["sessions.reset", "sessions.delete"] as const)(
   },
 );
 
+test("repository ownership survives reset and archive, then permanent deletion releases it", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:dashboard:repository-lifecycle";
+  const repositories = repositoryWorkspaces.getSessionRepositoryWorkspaceStore();
+  const repository = await repositories.create({
+    agentId: "main",
+    sessionKey,
+    url: "https://github.com/openclaw/fixture.git",
+    runSetupScript: false,
+    assertCurrent: () => {},
+  });
+  await writeSessionStore({
+    entries: {
+      [sessionKey]: sessionStoreEntry("repository-lifecycle-session", {
+        repositoryWorkspaceId: repository.workspaceId,
+      }),
+    },
+  });
+  const artifactRoot = repositories.artifactPath(repository.workspaceId);
+  await fs.mkdir(artifactRoot, { recursive: true });
+  await fs.writeFile(path.join(artifactRoot, "retained-checkpoint"), "accepted checkpoint");
+
+  for (const [method, params] of [
+    ["sessions.reset", { key: sessionKey }],
+    ["sessions.patch", { key: sessionKey, archived: true }],
+    ["sessions.patch", { key: sessionKey, archived: false }],
+  ] as const) {
+    const result = await directSessionReq(
+      method,
+      method === "sessions.patch"
+        ? { ...params, expectedSessionId: loadSessionEntry({ sessionKey, storePath })!.sessionId }
+        : params,
+    );
+    expect(result.ok, JSON.stringify(result.error)).toBe(true);
+    const entry = loadSessionEntry({ sessionKey, storePath });
+    expect(entry?.repositoryWorkspaceId).toBe(repository.workspaceId);
+    expect(entry?.worktree).toBeUndefined();
+    expect(entry?.spawnedCwd).toBeUndefined();
+    expect(await repositories.get(repository.workspaceId)).toEqual(repository);
+  }
+  const denied = await directSessionReq("sessions.delete", {
+    key: sessionKey,
+    expectedSessionId: "replaced-session",
+  });
+  expect(denied.ok).toBe(false);
+  expect(await repositories.get(repository.workspaceId)).toEqual(repository);
+  expect(await fs.readFile(path.join(artifactRoot, "retained-checkpoint"), "utf8")).toBe(
+    "accepted checkpoint",
+  );
+  const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
+  expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+  expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+  expect(await repositories.get(repository.workspaceId)).toBeUndefined();
+  await expect(fs.stat(artifactRoot)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
 test.each(["foreign grant", "retained placeholder", "folded sibling", "malformed row"] as const)(
   "repository cleanup preserves full logical absence checks for %s",
   async (boundary) => {

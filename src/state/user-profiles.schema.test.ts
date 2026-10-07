@@ -94,27 +94,34 @@ function readUserProfileEmailBindingIds(
 }
 
 describe("user profile email binding schema", () => {
-  it("retries alias initialization after a savepoint migration rollback", () => {
-    const options = stateOptions();
-    const database = createLegacyEmailDatabase(options);
-    let rolledBackBindings: string[] | undefined;
-    const rollBackBindings = () =>
-      runOpenClawStateWriteTransaction(() => {
-        rolledBackBindings = readUserProfileEmailBindingIds("legacy-one", options);
-        expect(rolledBackBindings).toEqual([expect.any(String)]);
-        throw new Error("roll back alias bindings");
-      }, options);
-    runOpenClawStateWriteTransaction(() => {
-      expect(rollBackBindings).toThrow("roll back alias bindings");
+  it.each(["outer", "savepoint"] as const)(
+    "retries alias initialization after a %s migration rollback",
+    (scope) => {
+      const options = stateOptions();
+      const database = createLegacyEmailDatabase(options);
+      let rolledBackBindings: string[] | undefined;
+      const rollBackBindings = () =>
+        runOpenClawStateWriteTransaction(() => {
+          rolledBackBindings = readUserProfileEmailBindingIds("legacy-one", options);
+          expect(rolledBackBindings).toEqual([expect.any(String)]);
+          throw new Error("roll back alias bindings");
+        }, options);
+      if (scope === "outer") {
+        expect(rollBackBindings).toThrow("roll back alias bindings");
+      } else {
+        runOpenClawStateWriteTransaction(() => {
+          expect(rollBackBindings).toThrow("roll back alias bindings");
+          expect(tableHasColumn(database, "user_profile_emails", "binding_id")).toBe(false);
+        }, options);
+      }
       expect(tableHasColumn(database, "user_profile_emails", "binding_id")).toBe(false);
-    }, options);
-    expect(tableHasColumn(database, "user_profile_emails", "binding_id")).toBe(false);
-    const bindings = readUserProfileEmailBindingIds("legacy-one", options);
-    expect(bindings).toEqual([expect.any(String)]);
-    expect(bindings).not.toEqual(rolledBackBindings);
-    closeOpenClawStateDatabaseForTest();
-    expect(readUserProfileEmailBindingIds("legacy-one", options)).toEqual(bindings);
-  });
+      const bindings = readUserProfileEmailBindingIds("legacy-one", options);
+      expect(bindings).toEqual([expect.any(String)]);
+      expect(bindings).not.toEqual(rolledBackBindings);
+      closeOpenClawStateDatabaseForTest();
+      expect(readUserProfileEmailBindingIds("legacy-one", options)).toEqual(bindings);
+    },
+  );
 });
 
 describe("user profile role schema", () => {
@@ -168,34 +175,41 @@ describe("user profile role schema", () => {
     }
   });
 
-  it("keeps legacy profile reads working after a savepoint role migration rollback", () => {
-    const options = stateOptions();
-    const database = createLegacyProfileDatabase(options);
-    const profile = ensureProfileForEmail("rollback@example.test", options);
-    const assertRestored = () => {
-      expect(tableHasColumn(database, "user_profiles", "role")).toBe(false);
-      expect(resolveUserProfileId(profile.id, options)).toBe(profile.id);
-      expect(getUserProfileListItem(profile.id, options)).not.toHaveProperty("role");
-      expect(readUserProfileSnapshotSync(options).profiles[0]).not.toHaveProperty("role");
-    };
-    const rollBackRole = () =>
-      runOpenClawStateWriteTransaction(() => {
-        expect(setUserProfileRole(profile.id, "maintainer", options)).toMatchObject({
-          id: profile.id,
-          role: "maintainer",
-        });
-        throw new Error("roll back role migration");
-      }, options);
-    runOpenClawStateWriteTransaction(() => {
-      expect(rollBackRole).toThrow("roll back role migration");
+  it.each(["outer", "savepoint"] as const)(
+    "keeps legacy profile reads working after a %s role migration rollback",
+    (scope) => {
+      const options = stateOptions();
+      const database = createLegacyProfileDatabase(options);
+      const profile = ensureProfileForEmail("rollback@example.test", options);
+      const assertRestored = () => {
+        expect(tableHasColumn(database, "user_profiles", "role")).toBe(false);
+        expect(resolveUserProfileId(profile.id, options)).toBe(profile.id);
+        expect(getUserProfileListItem(profile.id, options)).not.toHaveProperty("role");
+        expect(readUserProfileSnapshotSync(options).profiles[0]).not.toHaveProperty("role");
+      };
+      const rollBackRole = () =>
+        runOpenClawStateWriteTransaction(() => {
+          expect(setUserProfileRole(profile.id, "maintainer", options)).toMatchObject({
+            id: profile.id,
+            role: "maintainer",
+          });
+          throw new Error("roll back role migration");
+        }, options);
+      if (scope === "outer") {
+        expect(rollBackRole).toThrow("roll back role migration");
+      } else {
+        runOpenClawStateWriteTransaction(() => {
+          expect(rollBackRole).toThrow("roll back role migration");
+          assertRestored();
+        }, options);
+      }
       assertRestored();
-    }, options);
-    assertRestored();
-    expect(setUserProfileRole(profile.id, "maintainer", options)).toMatchObject({
-      id: profile.id,
-      role: "maintainer",
-    });
-  });
+      expect(setUserProfileRole(profile.id, "maintainer", options)).toMatchObject({
+        id: profile.id,
+        role: "maintainer",
+      });
+    },
+  );
 });
 
 it("upgrades deferred channel links without granting legacy recovery custody", async () => {

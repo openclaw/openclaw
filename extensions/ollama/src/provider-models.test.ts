@@ -381,12 +381,15 @@ describe("ollama provider models", () => {
 
 describe("Ollama model discovery failures", () => {
   afterEach(() => vi.unstubAllGlobals());
-  it.each([503, "invalid-json", "missing-models"])(
+  it.each([503, "offline", "invalid-json", "missing-models"])(
     "preserves advisory discovery while strict catalogs reject %s",
     async (failure) => {
       vi.stubGlobal(
         "fetch",
         vi.fn(async () => {
+          if (failure === "offline") {
+            throw new Error("Ollama endpoint unavailable");
+          }
           return new Response(failure === "invalid-json" ? "{" : "{}", {
             status: typeof failure === "number" ? failure : 200,
           });

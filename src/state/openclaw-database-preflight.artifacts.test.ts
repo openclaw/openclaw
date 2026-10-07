@@ -11,6 +11,7 @@ import {
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { startSqliteConcurrentWriter } from "../infra/sqlite-concurrent-writer.test-support.js";
 import { readMainDatabasePosixLocks } from "../infra/sqlite-posix-locks.test-support.js";
+import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   registerOpenClawAgentDatabase,
@@ -268,4 +269,36 @@ describe("schema preflight source artifacts", () => {
       }
     }
   });
+  it.each(["state", "main"] as const)(
+    "fails closed when the %s snapshot cannot be prepared",
+    async (kind) => {
+      const fixture = createFixture();
+      fixture.close();
+      const before = sourceArtifacts(fixture.paths);
+      const prepare = snapshots.prepareSqliteReadOnlyLocation;
+      vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
+        async (pathname, options) => {
+          if (pathname === fixture[kind].path) {
+            throw new Error("inert snapshot admission failure");
+          }
+          return await prepare(pathname, options);
+        },
+      );
+      const result = await preflightOpenClawDatabaseSchemas({
+        env: fixture.env,
+        supportedVersions,
+        verifyCurrentSchemaShape: true,
+        preserveSourceArtifacts: true,
+      });
+      expect(result.incompatible).toEqual([]);
+      expect(result.indeterminate).toEqual([
+        {
+          kind: kind === "state" ? "state" : "agent",
+          path: fixture[kind].path,
+          reason: "inert snapshot admission failure",
+        },
+      ]);
+      expect(sourceArtifacts(fixture.paths)).toEqual(before);
+    },
+  );
 });

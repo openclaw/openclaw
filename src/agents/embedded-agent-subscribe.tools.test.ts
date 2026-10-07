@@ -379,6 +379,15 @@ describe("extractToolResultMediaArtifact", () => {
     ).toEqual({ mediaUrls: ["/tmp/screenshot.png"] });
   });
 
+  it("ignores details.path and media-looking text without an image", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        content: [null, undefined, { type: "text", text: "MEDIA:/tmp/ok.png" }],
+        details: { path: "/tmp/data.json" },
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not deliver empty structured media or image content without a fallback path", () => {
     expect(
       extractToolResultMediaArtifact({

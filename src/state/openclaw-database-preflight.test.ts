@@ -3,6 +3,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import packageJson from "../../package.json" with { type: "json" };
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
@@ -56,6 +57,13 @@ function createState() {
 }
 
 describe("OpenClaw database schema preflight", () => {
+  it("keeps package schema support metadata aligned", () => {
+    expect(packageJson.openclaw.schemaVersions).toEqual({
+      state: OPENCLAW_STATE_SCHEMA_VERSION,
+      agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+    });
+  });
+
   function createReleasedStateDatabase() {
     const stateDir = tempDirs.make("openclaw-startup-database-admission-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
