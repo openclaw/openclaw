@@ -498,4 +498,33 @@ describe("CLI memory-flush re-arm bucket", () => {
     expect(hasAlreadyFlushedForCliRearmBucket(undefined, 0)).toBe(false);
     expect(hasAlreadyFlushedForCliRearmBucket({}, 0)).toBe(false);
   });
+
+  it("runs the first post-upgrade CLI flush, then suppresses and re-arms by bucket", () => {
+    // Runtime sequence for a session row written before cliRearmBucket
+    // existed: resolve the byte bucket from the CLI transcript size, consult
+    // the dedup before each turn, record the bucket when the flush succeeds.
+    const rearmBytes = 256 * 1024;
+    const bucket = resolveCliMemoryFlushRearmBucket({
+      isCli: true,
+      transcriptByteSize: rearmBytes * 3 + 10,
+    });
+    expect(bucket).toBe(3);
+    // No bucket on the old row: the first post-upgrade flush is not suppressed.
+    const upgradedRow = {
+      memoryFlush: { kind: "succeeded" as const, compactionCount: 2 },
+    };
+    expect(hasAlreadyFlushedForCliRearmBucket(upgradedRow, bucket)).toBe(false);
+    // After the flush the row carries the bucket; same-bucket turns suppress.
+    const flushedRow = {
+      memoryFlush: { kind: "succeeded" as const, compactionCount: 2, cliRearmBucket: bucket },
+    };
+    expect(hasAlreadyFlushedForCliRearmBucket(flushedRow, bucket)).toBe(true);
+    // Transcript growth into the next bucket re-arms the flush.
+    const nextBucket = resolveCliMemoryFlushRearmBucket({
+      isCli: true,
+      transcriptByteSize: rearmBytes * 4,
+    });
+    expect(nextBucket).toBe(4);
+    expect(hasAlreadyFlushedForCliRearmBucket(flushedRow, nextBucket)).toBe(false);
+  });
 });

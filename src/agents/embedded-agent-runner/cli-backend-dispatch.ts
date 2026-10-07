@@ -133,7 +133,10 @@ async function runEmbeddedAgentViaCliBackend(
           storePath,
           sessionFile: dispatch.sessionFile,
           runId: params.runId,
-          prompt: params.prompt,
+          // Mirror the transcript-visible prompt, not the raw maintenance
+          // text: the flush keeps its private prompt out of the transcript
+          // with transcriptPrompt "".
+          prompt: params.transcriptPrompt ?? params.prompt,
           provider: dispatch.provider,
           model: params.model,
           cwd: params.cwd ?? params.workspaceDir,
@@ -221,6 +224,17 @@ async function runEmbeddedAgentViaCliBackend(
       agentId: params.agentId,
       storePath,
       trigger: params.trigger,
+      // Memory-flush runs prepare a single append-only write target; the
+      // loopback grant and final tool construction below confine the writer
+      // to it. The trigger alone must never carry `write` without this.
+      ...(params.memoryFlushWritePath ? { memoryFlushWritePath: params.memoryFlushWritePath } : {}),
+      // The runner defaults an absent transcriptPrompt to the run prompt,
+      // which would record private maintenance text. Forward the caller's
+      // explicit value ("" for memory flushes) so it stays out of the
+      // transcript.
+      ...(params.transcriptPrompt !== undefined
+        ? { transcriptPrompt: params.transcriptPrompt }
+        : {}),
       sessionFile: dispatch.sessionFile,
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,

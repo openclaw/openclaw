@@ -196,3 +196,21 @@ describe("buildCliMcpGrantContext delegationCapability", () => {
     expect(buildGrant({}, "full")).not.toHaveProperty("delegationCapability");
   });
 });
+
+describe("buildCliMcpGrantContext memory-flush write target", () => {
+  it("carries the prepared append-only write target into the loopback grant", () => {
+    const grant = buildGrant({
+      trigger: "memory",
+      memoryFlushWritePath: "memory/2026-09-24.md",
+    });
+
+    expect(grant.trigger).toBe("memory");
+    expect(grant.memoryFlushWritePath).toBe("memory/2026-09-24.md");
+  });
+
+  it("omits the write target when the run carries none", () => {
+    // Ordinary runs and non-flush triggers must not change the grant shape.
+    expect(buildGrant({ trigger: "memory" })).not.toHaveProperty("memoryFlushWritePath");
+    expect(buildGrant()).not.toHaveProperty("memoryFlushWritePath");
+  });
+});

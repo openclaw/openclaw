@@ -507,6 +507,11 @@ export function resolveGatewayScopedTools(
           senderE164: params.senderE164,
           senderIsOwner: params.senderIsOwner,
           trigger: params.trigger,
+          // Memory-triggered loopback runs carry their prepared append-only
+          // write target in the host-minted grant. createOpenClawCodingTools
+          // throws when the target is absent, so a memory trigger can never
+          // widen into an unrestricted writer on this surface.
+          memoryFlushWritePath: params.memoryFlushWritePath,
           approvalReviewerDeviceId: params.approvalReviewerDeviceId,
           sourceReplyDeliveryMode,
           taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,

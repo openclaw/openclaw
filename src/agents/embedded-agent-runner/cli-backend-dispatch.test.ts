@@ -472,6 +472,46 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(cliParams).not.toHaveProperty("toolsAllow");
   });
 
+  it("carries the memory-flush write target and private transcript prompt into CLI dispatch", async () => {
+    runCliAgent.mockResolvedValue(cliRunResult());
+    await runEmbeddedAgentViaCliBackendIfEligible(
+      baseRunParams({
+        trigger: "memory",
+        memoryFlushWritePath: "memory/2026-09-24.md",
+        transcriptPrompt: "",
+        toolsAllow: ["read", "write"],
+      }),
+    );
+
+    expect(runCliAgent).toHaveBeenCalledTimes(1);
+    const cliParams = runCliAgent.mock.calls[0]?.[0];
+    // The loopback write tool enforces this target at final construction;
+    // the CLI runner must see the same path the embedded run prepared.
+    expect(cliParams?.memoryFlushWritePath).toBe("memory/2026-09-24.md");
+    // The runner defaults an absent transcriptPrompt to the maintenance
+    // prompt; forwarding the explicit "" keeps flush text out of the
+    // transcript.
+    expect(cliParams?.transcriptPrompt).toBe("");
+    // The bridge's own transcript mirror must not record the private
+    // maintenance prompt either.
+    expect(createCliDispatchTranscriptRecorder).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "" }),
+    );
+  });
+
+  it("omits the memory-flush fields on non-flush dispatch", async () => {
+    runCliAgent.mockResolvedValue(cliRunResult());
+    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams());
+
+    expect(runCliAgent).toHaveBeenCalledTimes(1);
+    const cliParams = runCliAgent.mock.calls[0]?.[0];
+    expect(cliParams).not.toHaveProperty("memoryFlushWritePath");
+    expect(cliParams).not.toHaveProperty("transcriptPrompt");
+    expect(createCliDispatchTranscriptRecorder).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "recall prompt" }),
+    );
+  });
+
   it.each(["group", "channel"] as const)(
     "forwards authoritative %s type through embedded-to-CLI dispatch for opaque keys",
     async (chatType) => {

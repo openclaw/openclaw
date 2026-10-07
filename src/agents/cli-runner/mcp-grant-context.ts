@@ -238,6 +238,12 @@ export function buildCliMcpGrantContext(params: {
     ...(execOverrides ? { execOverrides } : {}),
     ...(bashElevated ? { bashElevated } : {}),
     ...(params.run.trigger ? { trigger: params.run.trigger } : {}),
+    // Host-minted append-only write target for memory-triggered loopback
+    // runs; never sourced from MCP request headers. The Gateway fails closed
+    // (throws) when a memory trigger arrives without one.
+    ...(normalizeOptionalMcpContextValue(params.run.memoryFlushWritePath)
+      ? { memoryFlushWritePath: params.run.memoryFlushWritePath?.trim() }
+      : {}),
     ...(normalizeOptionalMcpContextValue(params.run.approvalReviewerDeviceId)
       ? { approvalReviewerDeviceId: params.run.approvalReviewerDeviceId?.trim() }
       : {}),

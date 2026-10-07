@@ -72,6 +72,12 @@ export type RunCliAgentParams = {
   runtimePolicySessionKey?: string;
   sessionEntry?: SessionEntry;
   trigger?: EmbeddedRunTrigger;
+  /**
+   * Relative workspace path that memory-triggered writes are allowed to append
+   * to. Carried host-side only: the loopback grant and final tool construction
+   * confine the memory-flush writer to this one prepared target.
+   */
+  memoryFlushWritePath?: string;
   sessionFile: string;
   /** Host-owned task root; preparation must mediate all tools through its filesystem policy. */
   rootedExecution?: RootedExecutionRequest;

@@ -91,3 +91,78 @@ describe("memory flush writer availability", () => {
     }
   });
 });
+
+describe("memory flush CLI write boundary", () => {
+  function flushTools(workspaceDir: string) {
+    const tools = createOpenClawCodingTools({
+      workspaceDir,
+      trigger: "memory",
+      memoryFlushWritePath: MEMORY_PATH,
+      senderIsOwner: true,
+    });
+    const write = tools.find((tool) => tool.name === "write");
+    expect(write).toBeDefined();
+    return write!;
+  }
+
+  it("appends to the prepared memory target", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-flush-append-"));
+    try {
+      const write = flushTools(workspaceDir);
+      const controller = new AbortController();
+      await write.execute(
+        "call-1",
+        { path: MEMORY_PATH, content: "first note\n" },
+        controller.signal,
+      );
+      await write.execute(
+        "call-2",
+        { path: MEMORY_PATH, content: "second note\n" },
+        controller.signal,
+      );
+
+      const written = await fs.readFile(path.join(workspaceDir, MEMORY_PATH), "utf8");
+      expect(written).toBe("first note\nsecond note\n");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a different-path write before filesystem I/O", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-flush-deny-path-"));
+    try {
+      const write = flushTools(workspaceDir);
+      const controller = new AbortController();
+      await expect(
+        write.execute(
+          "call-1",
+          { path: "memory/other.md", content: "sneaky\n" },
+          controller.signal,
+        ),
+      ).rejects.toThrow(`Memory flush writes are restricted to ${MEMORY_PATH}`);
+      // The rejection happens before any filesystem I/O: neither the
+      // forbidden path nor the prepared target may exist.
+      await expect(fs.stat(path.join(workspaceDir, "memory/other.md"))).rejects.toThrow();
+      await expect(fs.stat(path.join(workspaceDir, MEMORY_PATH))).rejects.toThrow();
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when a memory trigger carries no write target", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-flush-no-target-"));
+    try {
+      // This is the Gateway loopback invariant: a memory trigger without the
+      // host-minted target must never produce an unrestricted writer.
+      expect(() =>
+        createOpenClawCodingTools({
+          workspaceDir,
+          trigger: "memory",
+          senderIsOwner: true,
+        }),
+      ).toThrow("memoryFlushWritePath required for memory-triggered tool runs");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+});

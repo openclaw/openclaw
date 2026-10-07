@@ -89,6 +89,12 @@ export type McpLoopbackRequestContext = {
   execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
   bashElevated?: ExecElevatedDefaults;
   trigger?: string;
+  /**
+   * Host-minted append-only write target for memory-triggered loopback runs.
+   * Never sourced from MCP request headers; the loopback tool builder fails
+   * closed when a memory trigger carries no target.
+   */
+  memoryFlushWritePath?: string;
   approvalReviewerDeviceId?: string;
   channelContext?: PluginHookChannelContext;
   senderName?: string;
