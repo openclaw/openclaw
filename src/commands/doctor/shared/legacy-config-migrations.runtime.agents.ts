@@ -230,30 +230,23 @@ function readOwnToolPolicyGrantList(
     : undefined;
 }
 
-function resolveToolProfileForMigration(
-  tools: Record<string, unknown>,
-  inheritedProfile?: string,
-): string | undefined {
-  return typeof tools.profile === "string" ? tools.profile : inheritedProfile;
-}
-
-function collectProfileConfiguredSectionRepairGrants(params: {
+function prepareProfileConfiguredSectionRepair(params: {
   value: unknown;
   inheritedProfile?: string;
   inheritedAlsoAllow?: string[];
   configuredGrants: string[];
-}): string[] {
+}) {
   const tools = getRecord(params.value);
   if (!tools) {
-    return [];
+    return undefined;
   }
-  const profile = resolveToolProfileForMigration(tools, params.inheritedProfile);
+  const profile = typeof tools.profile === "string" ? tools.profile : params.inheritedProfile;
   if (!profile || profile === "full") {
-    return [];
+    return undefined;
   }
   const ownAllow = readToolPolicyGrantList(tools, "allow");
   if (ownAllow.length === 0) {
-    return [];
+    return undefined;
   }
   const explicitAlsoAllow = readOwnToolPolicyGrantList(tools, "alsoAllow");
   const explicitPolicy = {
@@ -263,7 +256,7 @@ function collectProfileConfiguredSectionRepairGrants(params: {
     resolveToolProfilePolicy(profile),
     explicitAlsoAllow ?? params.inheritedAlsoAllow ?? [],
   );
-  return uniqueStrings(
+  const repairGrants = uniqueStrings(
     params.configuredGrants.filter(
       (toolName) =>
         isToolAllowedByPolicyName(toolName, explicitPolicy) &&
@@ -273,6 +266,9 @@ function collectProfileConfiguredSectionRepairGrants(params: {
             : false)),
     ),
   );
+  return repairGrants.length > 0
+    ? { profile, explicitAlsoAllow, explicitPolicy, profilePolicy, repairGrants }
+    : undefined;
 }
 
 function toolProfileConfiguredSectionsNeedExplicitRepair(
@@ -288,12 +284,12 @@ function toolProfileConfiguredSectionsNeedExplicitRepair(
   }
   const configuredGrants = configuredGrantsOverride ?? collectConfiguredToolSectionGrants(tools);
   return (
-    collectProfileConfiguredSectionRepairGrants({
+    prepareProfileConfiguredSectionRepair({
       value,
       inheritedProfile,
       inheritedAlsoAllow,
       configuredGrants,
-    }).length > 0 ||
+    }) !== undefined ||
     byProviderToolProfilesNeedConfiguredSectionMigration(
       tools,
       configuredGrants,
@@ -326,33 +322,22 @@ function collectEffectiveConfiguredToolSectionGrants(
   ]);
 }
 
-function resolveProfileBoundAllowGrants(params: {
-  tools: Record<string, unknown>;
-  profile: string;
-  allow: string[];
-  inheritedAlsoAllow?: string[];
-  configuredGrants: string[];
-}): string[] {
-  const explicitAlsoAllow = readOwnToolPolicyGrantList(params.tools, "alsoAllow");
-  const profilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(params.profile),
-    explicitAlsoAllow ?? params.inheritedAlsoAllow ?? [],
-  );
-  const profileAllow = expandToolGroups(profilePolicy?.allow);
-  const coreAllow = profileAllow.includes("*")
-    ? expandToolGroups(params.allow)
-    : profileAllow.filter((toolName) =>
-        isToolAllowedByPolicyName(toolName, { allow: params.allow }),
-      );
-  const pluginAllow = expandToolGroups(params.allow).filter((entry) => {
-    if (entry === "*" || isKnownCoreToolId(entry)) {
-      return false;
+function* providerToolProfileScopes(
+  tools: Record<string, unknown>,
+  inheritedByProvider?: Record<string, unknown> | null,
+) {
+  for (const [key, value] of Object.entries(getRecord(tools.byProvider) ?? {})) {
+    const inherited = resolveInheritedProviderPolicy(inheritedByProvider, key);
+    const inheritedProfile = typeof inherited?.profile === "string" ? inherited.profile : undefined;
+    if (typeof getRecord(value)?.profile === "string" || inheritedProfile) {
+      yield {
+        key,
+        value,
+        inheritedProfile,
+        inheritedAlsoAllow: readOwnToolPolicyGrantList(inherited, "alsoAllow"),
+      };
     }
-    return !profileAllow.some((toolName) =>
-      isToolAllowedByPolicyName(toolName, { allow: [entry] }),
-    );
-  });
-  return uniqueStrings([...coreAllow, ...pluginAllow, ...params.configuredGrants]);
+  }
 }
 
 function byProviderToolProfilesNeedConfiguredSectionMigration(
@@ -361,34 +346,18 @@ function byProviderToolProfilesNeedConfiguredSectionMigration(
   inheritedAlsoAllow?: string[],
   inheritedByProvider?: Record<string, unknown> | null,
 ): boolean {
-  const byProvider = getRecord(tools.byProvider);
-  return Boolean(
-    byProvider &&
-    Object.entries(byProvider).some(([providerKey, policy]) => {
-      const inheritedProviderPolicy = resolveInheritedProviderPolicy(
-        inheritedByProvider,
-        providerKey,
-      );
-      const inheritedProviderProfile =
-        typeof inheritedProviderPolicy?.profile === "string"
-          ? inheritedProviderPolicy.profile
-          : undefined;
-      const hasProviderProfile =
-        typeof getRecord(policy)?.profile === "string" || Boolean(inheritedProviderProfile);
-      if (!hasProviderProfile) {
-        return false;
-      }
-      return (
-        collectProfileConfiguredSectionRepairGrants({
-          value: policy,
-          inheritedProfile: inheritedProviderProfile,
-          inheritedAlsoAllow:
-            readOwnToolPolicyGrantList(inheritedProviderPolicy, "alsoAllow") ?? inheritedAlsoAllow,
-          configuredGrants,
-        }).length > 0
-      );
-    }),
-  );
+  for (const scope of providerToolProfileScopes(tools, inheritedByProvider)) {
+    if (
+      prepareProfileConfiguredSectionRepair({
+        ...scope,
+        inheritedAlsoAllow: scope.inheritedAlsoAllow ?? inheritedAlsoAllow,
+        configuredGrants,
+      })
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function addProfileConfiguredSectionGrants(
@@ -403,33 +372,34 @@ function addProfileConfiguredSectionGrants(
   if (!tools) {
     return;
   }
-  const profile = resolveToolProfileForMigration(tools, inheritedProfile);
-  if (!profile) {
-    return;
-  }
-  const configuredGrants = configuredGrantsOverride ?? collectConfiguredToolSectionGrants(tools);
-  const repairGrants = collectProfileConfiguredSectionRepairGrants({
+  const repair = prepareProfileConfiguredSectionRepair({
     value: tools,
     inheritedProfile,
     inheritedAlsoAllow,
-    configuredGrants,
+    configuredGrants: configuredGrantsOverride ?? collectConfiguredToolSectionGrants(tools),
   });
-  const allow = readToolPolicyGrantList(tools, "allow");
-  if (repairGrants.length === 0) {
+  if (!repair) {
     return;
   }
-  const ownAlsoAllow = readOwnToolPolicyGrantList(tools, "alsoAllow");
-  tools.allow = resolveProfileBoundAllowGrants({
-    tools,
-    profile,
-    allow: uniqueStrings([...allow, ...(ownAlsoAllow ?? [])]),
-    inheritedAlsoAllow,
-    configuredGrants: repairGrants,
+  const { profile, explicitAlsoAllow, explicitPolicy, profilePolicy, repairGrants } = repair;
+  const profileAllow = expandToolGroups(profilePolicy?.allow);
+  const explicitAllow = expandToolGroups(explicitPolicy.allow);
+  const coreAllow = profileAllow.includes("*")
+    ? explicitAllow
+    : profileAllow.filter((toolName) => isToolAllowedByPolicyName(toolName, explicitPolicy));
+  const pluginAllow = explicitAllow.filter((entry) => {
+    if (entry === "*" || isKnownCoreToolId(entry)) {
+      return false;
+    }
+    return !profileAllow.some((toolName) =>
+      isToolAllowedByPolicyName(toolName, { allow: [entry] }),
+    );
   });
+  tools.allow = uniqueStrings([...coreAllow, ...pluginAllow, ...repairGrants]);
   changes.push(
     `Replaced ${pathLabel}.allow entries with profile "${profile}" grants plus explicit configured-section grants.`,
   );
-  if (ownAlsoAllow) {
+  if (explicitAlsoAllow) {
     delete tools.alsoAllow;
     changes.push(`Merged ${pathLabel}.alsoAllow into ${pathLabel}.allow.`);
   }
@@ -454,33 +424,16 @@ function addByProviderProfileConfiguredSectionGrants(
   if (configuredGrants.length === 0) {
     return;
   }
-  const byProvider = getRecord(tools.byProvider);
-  for (const [providerKey, providerPolicy] of Object.entries(byProvider ?? {})) {
-    if (isBlockedObjectKey(providerKey)) {
+  for (const scope of providerToolProfileScopes(tools, inheritedByProvider)) {
+    if (isBlockedObjectKey(scope.key)) {
       continue;
     }
-    const inheritedProviderPolicy = resolveInheritedProviderPolicy(
-      inheritedByProvider,
-      providerKey,
-    );
-    const ownsProviderProfile = typeof getRecord(providerPolicy)?.profile === "string";
-    const inheritedProviderProfile =
-      typeof inheritedProviderPolicy?.profile === "string"
-        ? inheritedProviderPolicy.profile
-        : undefined;
-    if (!ownsProviderProfile && !inheritedProviderProfile) {
-      continue;
-    }
-    const providerInheritedAlsoAllow = readOwnToolPolicyGrantList(
-      inheritedProviderPolicy,
-      "alsoAllow",
-    );
     addProfileConfiguredSectionGrants(
-      providerPolicy,
-      `${pathLabel}.byProvider.${providerKey}`,
+      scope.value,
+      `${pathLabel}.byProvider.${scope.key}`,
       changes,
-      inheritedProviderProfile,
-      providerInheritedAlsoAllow,
+      scope.inheritedProfile,
+      scope.inheritedAlsoAllow,
       configuredGrants,
     );
   }

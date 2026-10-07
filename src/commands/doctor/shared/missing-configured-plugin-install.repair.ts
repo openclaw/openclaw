@@ -49,11 +49,7 @@ import {
 } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
 import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "./configured-runtime-plugin-installs.js";
-import {
-  collectDownloadableInstallCandidates,
-  collectUpdateDeferredPluginIds,
-  resolveConfiguredPluginInstallContext,
-} from "./missing-configured-plugin-install.candidates.js";
+import { resolveConfiguredPluginInstallContext } from "./missing-configured-plugin-install.candidates.js";
 import {
   collectBlockedPluginIds,
   collectConfiguredChannelIds,
@@ -73,7 +69,6 @@ import {
   resolveConfiguredPluginCandidateRepair,
   resolveConfiguredPluginRepairVersions,
 } from "./missing-configured-plugin-install.targets.js";
-import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
 
 type PluginInstallRepairWarning = {
   message: string;
@@ -230,7 +225,6 @@ async function repairMissingPluginInstallsWithLease(
   });
   const {
     knownIds,
-    configuredChannelOwnerPluginIds,
     bundledPluginsById,
     configuredPluginIdsWithStaleDescriptors,
     operatorManagedPluginIds,
@@ -240,9 +234,7 @@ async function repairMissingPluginInstallsWithLease(
     updateChannel,
     installedPluginIdsWithRepairablePackageDiagnostics,
     installedPluginIdsWithStaleVersionBoundRuntimePackages,
-    installedPluginIdsWithRepairablePackages,
     installedPluginMissingRequiredDependencies,
-    officialReplacementPluginIds,
   } = installContext;
   const changes: string[] = [];
   const notices: string[] = [];
@@ -263,7 +255,6 @@ async function repairMissingPluginInstallsWithLease(
       repairVersionDrift: params.repairVersionDrift,
       onWarning: warn,
     });
-  const deferredPluginIds = new Set<string>();
   let nextRecords = records;
   const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
   const recordFailure = (pluginId: string, messages: string[], code?: string) => {
@@ -332,46 +323,18 @@ async function repairMissingPluginInstallsWithLease(
     );
   }
 
-  if (shouldDeferConfiguredPluginInstallRepair(env)) {
-    const updateDeferredPluginIds = collectUpdateDeferredPluginIds({
-      cfg: params.cfg,
-      env,
-      configuredPluginIds: params.pluginIds,
-      configuredChannelIds: params.channelIds,
-      configuredChannelOwnerPluginIds,
-      blockedPluginIds: params.blockedPluginIds,
-    });
-    for (const pluginId of updateDeferredPluginIds) {
-      if (operatorManagedPluginIds.has(pluginId)) {
-        continue;
-      }
-      deferredPluginIds.add(pluginId);
-      const record = nextRecords[pluginId];
-      if (
-        !record ||
-        (!isPayloadMissing(env, record.installPath) &&
-          !installedPluginMissingRequiredDependencies.has(pluginId))
-      ) {
-        continue;
-      }
-      const detail = `Skipped package-manager repair for configured plugin "${pluginId}" during package update; rerun "openclaw doctor --fix" after the update completes.`;
-      changes.push(detail);
-      deferredRepairDetails.push(detail);
-    }
+  const { pluginIds: deferredPluginIds, repairPluginIds } =
+    installContext.collectDeferredRepairs(nextRecords);
+  for (const pluginId of repairPluginIds) {
+    const detail = `Skipped package-manager repair for configured plugin "${pluginId}" during package update; rerun "openclaw doctor --fix" after the update completes.`;
+    changes.push(detail);
+    deferredRepairDetails.push(detail);
   }
 
-  const missingRecordedPlugins = Object.entries(records).filter(
-    ([pluginId]) =>
-      !operatorManagedPluginIds.has(pluginId) &&
-      !deferredPluginIds.has(pluginId) &&
-      !officialReplacementPluginIds.has(pluginId) &&
-      Object.hasOwn(nextRecords, pluginId) &&
-      !bundledPluginsById.has(pluginId) &&
-      ((params.pluginIds.has(pluginId) &&
-        (!knownIds.has(pluginId) || isPayloadMissing(env, nextRecords[pluginId]?.installPath))) ||
-        configuredPluginIdsWithStaleDescriptors.has(pluginId) ||
-        installedPluginIdsWithRepairablePackages.has(pluginId) ||
-        driftedPluginIds.has(pluginId)),
+  const missingRecordedPlugins = installContext.collectRecordedRepairs(
+    nextRecords,
+    deferredPluginIds,
+    driftedPluginIds,
   );
   const missingRecordedPluginIds = missingRecordedPlugins.map(([pluginId]) => pluginId);
 
@@ -502,34 +465,7 @@ async function repairMissingPluginInstallsWithLease(
     }
   }
 
-  const missingPluginIds = new Set(
-    [...params.pluginIds].filter((pluginId) => {
-      if (operatorManagedPluginIds.has(pluginId) || deferredPluginIds.has(pluginId)) {
-        return false;
-      }
-      const hasRecord = Object.hasOwn(nextRecords, pluginId);
-      return (
-        (!knownIds.has(pluginId) && !hasRecord && !bundledPluginsById.has(pluginId)) ||
-        (hasRecord &&
-          !bundledPluginsById.has(pluginId) &&
-          isPayloadMissing(env, nextRecords[pluginId]?.installPath))
-      );
-    }),
-  );
-  const installCandidatePluginIds = new Set([...missingPluginIds, ...officialReplacementPluginIds]);
-  for (const candidate of collectDownloadableInstallCandidates({
-    cfg: params.cfg,
-    env,
-    missingPluginIds: installCandidatePluginIds,
-    configuredPluginIds: params.pluginIds,
-    configuredChannelIds: params.channelIds,
-    configuredChannelOwnerPluginIds,
-    blockedPluginIds: new Set([
-      ...(params.blockedPluginIds ?? []),
-      ...deferredPluginIds,
-      ...operatorManagedPluginIds,
-    ]),
-  })) {
+  for (const candidate of installContext.collectInstallCandidates(nextRecords, deferredPluginIds)) {
     const repair = resolveConfiguredPluginCandidateRepair({
       candidate,
       records: nextRecords,

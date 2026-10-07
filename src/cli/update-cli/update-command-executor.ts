@@ -128,6 +128,15 @@ export async function withUpdateCommandExecutor<T>(
         children.assertIdle();
       };
       const fence = { assertCurrent };
+      const retireFence = () => {
+        originalFence = undefined;
+        originalCancellations.delete(fence);
+        active = false;
+        preflightReleases.delete(fence);
+        childOwners.delete(fence);
+        slotReservations.delete(fence);
+        admittedAuthorities.delete(fence);
+      };
       const children = createChildOwner({
         runId,
         assertBase,
@@ -241,15 +250,7 @@ export async function withUpdateCommandExecutor<T>(
             key,
             Boolean(options?.existingAuthority),
           );
-          if (lease) {
-            assertCurrent();
-            identityWarnings.flush();
-            if (
-              ((legacyTarget ?? lease).key !== key && slotLease?.key !== key) ||
-              serviceKey !== distinctServiceKey
-            ) {
-              throw new UpdateCommandRecoveryPendingError("Update executor installation changed.");
-            }
+          const finishAdmission = () => {
             if (!enterOptions?.preflight) {
               preflightReleases.delete(fence);
               reserveUpdateCommandExecutorSlot(fence, root);
@@ -261,6 +262,17 @@ export async function withUpdateCommandExecutor<T>(
               );
             }
             return fence;
+          };
+          if (lease) {
+            assertCurrent();
+            identityWarnings.flush();
+            if (
+              ((legacyTarget ?? lease).key !== key && slotLease?.key !== key) ||
+              serviceKey !== distinctServiceKey
+            ) {
+              throw new UpdateCommandRecoveryPendingError("Update executor installation changed.");
+            }
+            return finishAdmission();
           }
           entering = true;
           try {
@@ -411,14 +423,8 @@ export async function withUpdateCommandExecutor<T>(
                 if (!store || !lease || children.pending || slotLease) {
                   throw new UpdateCommandRecoveryPendingError("Preflight executor release failed.");
                 }
-                originalFence = undefined;
-                originalCancellations.delete(fence);
-                active = false;
+                retireFence();
                 children.close();
-                childOwners.delete(fence);
-                slotReservations.delete(fence);
-                admittedAuthorities.delete(fence);
-                preflightReleases.delete(fence);
                 if (serviceLease) {
                   if (!store.release(serviceLease)) {
                     throw new UpdateCommandRecoveryPendingError(
@@ -434,16 +440,7 @@ export async function withUpdateCommandExecutor<T>(
                 readConnections.dispose();
               });
             }
-            if (!enterOptions?.preflight) {
-              reserveUpdateCommandExecutorSlot(fence, root);
-            }
-            if (enterOptions?.activationTimeoutMs !== undefined) {
-              activation.start(
-                new UpdateActivationTimeoutError(key, enterOptions.activationTimeoutMs),
-                enterOptions.activationTimeoutMs,
-              );
-            }
-            return fence;
+            return finishAdmission();
           } finally {
             entering = false;
           }
@@ -460,13 +457,7 @@ export async function withUpdateCommandExecutor<T>(
         },
       });
       const outcome = cancellation.mergeOutcome(operationOutcome);
-      originalFence = undefined;
-      originalCancellations.delete(fence);
-      active = false;
-      preflightReleases.delete(fence);
-      childOwners.delete(fence);
-      slotReservations.delete(fence);
-      admittedAuthorities.delete(fence);
+      retireFence();
       if ("error" in outcome && hasCommandProcessCleanupError(outcome.error)) {
         throw new UpdateCommandRecoveryPendingError(
           "Command cleanup is unconfirmed; update ownership remains retained.",

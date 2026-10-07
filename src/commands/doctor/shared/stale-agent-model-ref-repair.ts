@@ -201,32 +201,6 @@ function repairModelMap(params: {
   }
 }
 
-function filterFallbacks(params: {
-  model: Record<string, unknown>;
-  path: string;
-  isStale: (ref: string) => string | undefined;
-  changes: string[];
-}): void {
-  if (!Array.isArray(params.model.fallbacks)) {
-    return;
-  }
-  // An empty array disables inherited fallbacks, including after stale refs are removed.
-  const fallbacks: unknown[] = params.model.fallbacks;
-  params.model.fallbacks = fallbacks.filter((ref) => {
-    if (typeof ref !== "string") {
-      return true;
-    }
-    const provider = params.isStale(ref);
-    if (!provider) {
-      return true;
-    }
-    params.changes.push(
-      `Removed stale ${params.path} fallback "${ref}" (provider "${provider}" is unavailable).`,
-    );
-    return false;
-  });
-}
-
 function firstExplicitModelRef(cfg: OpenClawConfig): string | undefined {
   if (!isRecord(cfg.models?.providers)) {
     return undefined;
@@ -300,24 +274,40 @@ export function repairStaleAgentModelRefs(
     }
     return persisted.providerIds;
   };
-  const availabilityForAgent = (agentId: string): Set<string> | undefined => {
+  const availabilityForAgents = (
+    agentIds: string[],
+    aggregation: "union" | "intersection",
+  ): Set<string> | undefined => {
     const available = new Set(baseAvailableProviders);
     if (replaceMode) {
       return available;
     }
-    const persisted = persistedForAgent(agentId);
-    if (!persisted) {
-      return undefined;
+    if (agentIds.length === 0) {
+      const defaultAgentId = tryResolveDefaultAgentId(cfg);
+      if (defaultAgentId) {
+        agentIds.push(defaultAgentId);
+      }
     }
-    for (const providerId of persisted) {
+    let combined: Set<string> | undefined;
+    for (const agentId of agentIds) {
+      const persisted = persistedForAgent(agentId);
+      if (!persisted) {
+        return undefined;
+      }
+      combined =
+        combined && aggregation === "intersection"
+          ? new Set([...combined].filter((providerId) => persisted.has(providerId)))
+          : new Set([...(combined ?? []), ...persisted]);
+    }
+    for (const providerId of combined ?? []) {
       available.add(providerId);
     }
     return available;
   };
+  const availabilityForAgent = (agentId: string) => availabilityForAgents([agentId], "union");
   const availabilityForDefaults = (): Set<string> | undefined => {
-    const available = new Set(baseAvailableProviders);
     if (replaceMode) {
-      return available;
+      return new Set(baseAvailableProviders);
     }
     const inheritingAgentIds: string[] = [];
     for (const agent of listAgentEntries(cfg)) {
@@ -336,51 +326,16 @@ export function repairStaleAgentModelRefs(
         inheritingAgentIds.push(agent.id);
       }
     }
-    if (inheritingAgentIds.length === 0) {
-      const defaultAgentId = tryResolveDefaultAgentId(cfg);
-      if (defaultAgentId) {
-        inheritingAgentIds.push(defaultAgentId);
-      }
-    }
-    let commonPersisted: Set<string> | undefined;
-    for (const agentId of inheritingAgentIds) {
-      const persisted = persistedForAgent(agentId);
-      if (!persisted) {
-        return undefined;
-      }
-      commonPersisted = commonPersisted
-        ? new Set([...commonPersisted].filter((providerId) => persisted.has(providerId)))
-        : new Set(persisted);
-    }
-    for (const providerId of commonPersisted ?? []) {
-      available.add(providerId);
-    }
-    return available;
+    return availabilityForAgents(inheritingAgentIds, "intersection");
   };
   const availabilityForDefaultModelMap = (): Set<string> | undefined => {
-    const available = new Set(baseAvailableProviders);
     if (replaceMode) {
-      return available;
+      return new Set(baseAvailableProviders);
     }
     const inheritingAgentIds = listAgentEntries(cfg)
       .filter((agent) => isRecord(agent) && typeof agent.id === "string" && !isRecord(agent.models))
       .map((agent) => agent.id as string);
-    if (inheritingAgentIds.length === 0) {
-      const defaultAgentId = tryResolveDefaultAgentId(cfg);
-      if (defaultAgentId) {
-        inheritingAgentIds.push(defaultAgentId);
-      }
-    }
-    for (const agentId of inheritingAgentIds) {
-      const persisted = persistedForAgent(agentId);
-      if (!persisted) {
-        return undefined;
-      }
-      for (const providerId of persisted) {
-        available.add(providerId);
-      }
-    }
-    return available;
+    return availabilityForAgents(inheritingAgentIds, "union");
   };
   const makeStaleChecker = (available: ReadonlySet<string>) => (ref: string) => {
     const provider = providerFromModelRef(ref);
@@ -392,61 +347,114 @@ export function repairStaleAgentModelRefs(
   const configuredDefaultPrimary = modelPrimaryRef(defaults?.model);
   let repairedDefaultPrimary =
     configuredDefaultPrimary ?? (replaceMode ? firstExplicitModelRef(cfg) : DEFAULT_MODEL_REF);
-  let defaultPrimaryChanged = false;
-  if (defaults && defaultAvailability) {
-    const isStale = makeStaleChecker(defaultAvailability);
-    const configuredReplacement = replaceMode ? firstExplicitModelRef(cfg) : DEFAULT_MODEL_REF;
-    const model = defaults.model;
+  const repairModel = (
+    owner: Record<string, unknown>,
+    modelPath: string,
+    isStale: (ref: string) => string | undefined,
+    agentId?: string,
+  ): boolean => {
+    const isDefault = agentId === undefined;
+    const model = owner.model;
+    const selector = asOptionalRecord(model);
     const primary = modelPrimaryRef(model);
     const provider = primary === undefined ? undefined : isStale(primary);
     let replacement: string | undefined;
+    let changed = false;
     if (provider && primary !== undefined) {
-      const modelPath = `agents.defaults.model${typeof model === "string" ? "" : " primary"}`;
-      const fallbacks: unknown[] =
-        isRecord(model) && Array.isArray(model.fallbacks) ? model.fallbacks : [];
-      replacement = replaceMode
-        ? (fallbacks.find(
-            (fallback): fallback is string => typeof fallback === "string" && !isStale(fallback),
-          ) ?? configuredReplacement)
-        : configuredReplacement;
-      if (replacement) {
-        if (typeof model === "string") {
-          defaults.model = replacement;
-        } else if (isRecord(model)) {
-          model.primary = replacement;
-        }
+      const primaryPath = `${modelPath}${selector ? " primary" : ""}`;
+      const container = selector ?? owner;
+      const key = selector ? "primary" : "model";
+      const availableDefault =
+        repairedDefaultPrimary && !isStale(repairedDefaultPrimary)
+          ? repairedDefaultPrimary
+          : undefined;
+      if (
+        !isDefault &&
+        defaultAvailability &&
+        availableDefault &&
+        (!replaceMode || modelPrimaryRef(defaults?.model))
+      ) {
+        delete container[key];
+        replacement = selector ? repairedDefaultPrimary : undefined;
+        changed = true;
         changes.push(
-          `Replaced stale ${modelPath} "${primary}" with default "${replacement}" (provider "${provider}" is unavailable).`,
+          `Removed stale ${primaryPath} "${primary}" so agent "${agentId}" inherits the default model (provider "${provider}" is unavailable).`,
         );
       } else {
-        if (typeof model === "string") {
-          delete defaults.model;
-        } else if (isRecord(model)) {
-          delete model.primary;
+        const configuredReplacement = isDefault
+          ? replaceMode
+            ? firstExplicitModelRef(cfg)
+            : DEFAULT_MODEL_REF
+          : availableDefault;
+        const fallbacks: unknown[] = Array.isArray(selector?.fallbacks) ? selector.fallbacks : [];
+        replacement =
+          isDefault && !replaceMode
+            ? configuredReplacement
+            : (fallbacks.find(
+                (fallback): fallback is string =>
+                  typeof fallback === "string" && !isStale(fallback),
+              ) ?? configuredReplacement);
+        if (replacement) {
+          container[key] = replacement;
+          changed = true;
+          changes.push(
+            `Replaced stale ${primaryPath} "${primary}" with ${isDefault ? "default " : ""}"${replacement}" (provider "${provider}" is unavailable).`,
+          );
+        } else if (isDefault) {
+          delete container[key];
+          changed = true;
+          changes.push(
+            `Removed stale ${primaryPath} "${primary}" because provider "${provider}" is unavailable and no replacement model is configured.`,
+          );
+        } else {
+          warnings.push(
+            `Skipped stale ${primaryPath} repair because no available inherited or replacement model is configured.`,
+          );
         }
-        changes.push(
-          `Removed stale ${modelPath} "${primary}" because provider "${provider}" is unavailable and no replacement model is configured.`,
-        );
       }
-      defaultPrimaryChanged = true;
     }
-    if (isRecord(model)) {
-      filterFallbacks({ model, path: "agents.defaults.model", isStale, changes });
-      if (replacement && Array.isArray(model.fallbacks) && model.fallbacks.includes(replacement)) {
-        const fallbacks: unknown[] = model.fallbacks;
-        const filteredFallbacks = fallbacks.filter((fallback) => fallback !== replacement);
-        model.fallbacks = filteredFallbacks;
-        changes.push(
-          `Removed duplicate agents.defaults.model fallback "${replacement}" after selecting it as the default primary.`,
-        );
-        if (filteredFallbacks.length === 0) {
-          delete model.fallbacks;
+    if (selector) {
+      if (Array.isArray(selector.fallbacks)) {
+        // An empty array disables inherited fallbacks, including after stale refs are removed.
+        const fallbacks: unknown[] = selector.fallbacks;
+        const filtered = fallbacks.filter((ref) => {
+          if (typeof ref !== "string") {
+            return true;
+          }
+          const fallbackProvider = isStale(ref);
+          if (!fallbackProvider) {
+            return true;
+          }
+          changes.push(
+            `Removed stale ${modelPath} fallback "${ref}" (provider "${fallbackProvider}" is unavailable).`,
+          );
+          return false;
+        });
+        selector.fallbacks = filtered;
+        if (replacement && filtered.includes(replacement)) {
+          const remaining = filtered.filter((ref) => ref !== replacement);
+          selector.fallbacks = remaining;
+          changes.push(
+            `Removed duplicate ${modelPath} fallback "${replacement}" after selecting it as the ${isDefault ? "default primary" : "primary"}.`,
+          );
+          if (remaining.length === 0) {
+            delete selector.fallbacks;
+          }
         }
       }
-      if (!model.primary && !model.fallbacks) {
-        delete defaults.model;
+      if (!selector.primary && !selector.fallbacks) {
+        delete owner.model;
       }
     }
+    return changed;
+  };
+  let defaultPrimaryChanged = false;
+  if (defaults && defaultAvailability) {
+    defaultPrimaryChanged = repairModel(
+      defaults,
+      "agents.defaults.model",
+      makeStaleChecker(defaultAvailability),
+    );
     repairedDefaultPrimary =
       modelPrimaryRef(defaults.model) ??
       (replaceMode ? firstExplicitModelRef(cfg) : DEFAULT_MODEL_REF);
@@ -471,79 +479,7 @@ export function repairStaleAgentModelRefs(
       continue;
     }
     const isStale = makeStaleChecker(available);
-    const modelPath = `${entry.path}.model`;
-    const canInheritDefault = Boolean(
-      defaultAvailability &&
-      repairedDefaultPrimary &&
-      (!replaceMode || modelPrimaryRef(defaults?.model)) &&
-      !isStale(repairedDefaultPrimary),
-    );
-    let agentPrimaryChanged = false;
-    const model = agent.model;
-    const primary = modelPrimaryRef(model);
-    const provider = primary === undefined ? undefined : isStale(primary);
-    let agentReplacement: string | undefined;
-    if (provider && primary !== undefined) {
-      const primaryPath = `${modelPath}${typeof model === "string" ? "" : " primary"}`;
-      if (canInheritDefault) {
-        if (typeof model === "string") {
-          delete agent.model;
-        } else if (isRecord(model)) {
-          delete model.primary;
-          agentReplacement = repairedDefaultPrimary;
-        }
-        agentPrimaryChanged = true;
-        changes.push(
-          `Removed stale ${primaryPath} "${primary}" so agent "${entry.agentId}" inherits the default model (provider "${provider}" is unavailable).`,
-        );
-      } else {
-        const fallbacks: unknown[] =
-          isRecord(model) && Array.isArray(model.fallbacks) ? model.fallbacks : [];
-        agentReplacement =
-          fallbacks.find(
-            (fallback): fallback is string => typeof fallback === "string" && !isStale(fallback),
-          ) ??
-          (repairedDefaultPrimary && !isStale(repairedDefaultPrimary)
-            ? repairedDefaultPrimary
-            : undefined);
-        if (agentReplacement) {
-          if (typeof model === "string") {
-            agent.model = agentReplacement;
-          } else if (isRecord(model)) {
-            model.primary = agentReplacement;
-          }
-          agentPrimaryChanged = true;
-          changes.push(
-            `Replaced stale ${primaryPath} "${primary}" with "${agentReplacement}" (provider "${provider}" is unavailable).`,
-          );
-        } else {
-          warnings.push(
-            `Skipped stale ${primaryPath} repair because no available inherited or replacement model is configured.`,
-          );
-        }
-      }
-    }
-    if (isRecord(model)) {
-      filterFallbacks({ model, path: modelPath, isStale, changes });
-      if (
-        agentReplacement &&
-        Array.isArray(model.fallbacks) &&
-        model.fallbacks.includes(agentReplacement)
-      ) {
-        const fallbacks: unknown[] = model.fallbacks;
-        const filteredFallbacks = fallbacks.filter((fallback) => fallback !== agentReplacement);
-        model.fallbacks = filteredFallbacks;
-        changes.push(
-          `Removed duplicate ${modelPath} fallback "${agentReplacement}" after selecting it as the primary.`,
-        );
-        if (filteredFallbacks.length === 0) {
-          delete model.fallbacks;
-        }
-      }
-      if (!model.primary && !model.fallbacks) {
-        delete agent.model;
-      }
-    }
+    const agentPrimaryChanged = repairModel(agent, `${entry.path}.model`, isStale, entry.agentId);
     const effectiveAgentPrimary = modelPrimaryRef(agent.model) ?? repairedDefaultPrimary;
     repairModelMap({
       models: isRecord(agent.models) ? agent.models : undefined,

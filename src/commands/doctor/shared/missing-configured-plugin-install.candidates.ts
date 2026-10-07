@@ -36,6 +36,7 @@ import {
 } from "./configured-runtime-plugin-installs.js";
 import { collectInstalledPluginMissingRequiredDependencies } from "./missing-configured-plugin-install.dependency-health.js";
 import { collectEffectiveConfiguredChannelOwnerPluginIds } from "./missing-configured-plugin-install.ids.js";
+import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
 
 export type DownloadableInstallCandidate = Pick<
   PluginPackageInstall,
@@ -241,6 +242,71 @@ export async function resolveConfiguredPluginInstallContext(params: {
     installedPluginIdsWithRepairablePackages,
     installedPluginMissingRequiredDependencies,
     officialReplacementPluginIds,
+    collectDeferredRepairs(currentRecords: Record<string, PluginInstallRecord>) {
+      const pluginIds = new Set(
+        shouldDeferConfiguredPluginInstallRepair(params.env)
+          ? [
+              ...collectUpdateDeferredPluginIds({ ...params, configuredChannelOwnerPluginIds }),
+            ].filter((pluginId) => !operatorManagedPluginIds.has(pluginId))
+          : [],
+      );
+      const repairPluginIds = [...pluginIds].filter((pluginId) => {
+        const record = currentRecords[pluginId];
+        return (
+          record &&
+          (isPayloadMissing(params.env, record.installPath) ||
+            installedPluginMissingRequiredDependencies.has(pluginId))
+        );
+      });
+      return { pluginIds, repairPluginIds };
+    },
+    collectRecordedRepairs(
+      currentRecords: Record<string, PluginInstallRecord>,
+      deferredPluginIds: ReadonlySet<string>,
+      driftedPluginIds?: ReadonlySet<string>,
+    ) {
+      return Object.entries(effectiveRecords).filter(
+        ([pluginId]) =>
+          !operatorManagedPluginIds.has(pluginId) &&
+          !deferredPluginIds.has(pluginId) &&
+          !officialReplacementPluginIds.has(pluginId) &&
+          Object.hasOwn(currentRecords, pluginId) &&
+          !bundledPluginsById.has(pluginId) &&
+          ((params.configuredPluginIds.has(pluginId) &&
+            (!knownIds.has(pluginId) ||
+              isPayloadMissing(params.env, currentRecords[pluginId]?.installPath))) ||
+            configuredPluginIdsWithStaleDescriptors.has(pluginId) ||
+            installedPluginIdsWithRepairablePackages.has(pluginId) ||
+            driftedPluginIds?.has(pluginId)),
+      );
+    },
+    collectInstallCandidates(
+      currentRecords: Record<string, PluginInstallRecord>,
+      deferredPluginIds: ReadonlySet<string>,
+    ) {
+      const missingPluginIds = [...params.configuredPluginIds].filter((pluginId) => {
+        if (operatorManagedPluginIds.has(pluginId) || deferredPluginIds.has(pluginId)) {
+          return false;
+        }
+        const hasRecord = Object.hasOwn(currentRecords, pluginId);
+        return (
+          !bundledPluginsById.has(pluginId) &&
+          (hasRecord
+            ? isPayloadMissing(params.env, currentRecords[pluginId]?.installPath)
+            : !knownIds.has(pluginId))
+        );
+      });
+      return collectDownloadableInstallCandidates({
+        ...params,
+        configuredChannelOwnerPluginIds,
+        missingPluginIds: new Set([...missingPluginIds, ...officialReplacementPluginIds]),
+        blockedPluginIds: new Set([
+          ...(params.blockedPluginIds ?? []),
+          ...deferredPluginIds,
+          ...operatorManagedPluginIds,
+        ]),
+      });
+    },
   };
 }
 
