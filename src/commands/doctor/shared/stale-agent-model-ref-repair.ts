@@ -76,20 +76,14 @@ function collectPluginProviderIds(
       };
     }
 
-    providerIds = new Set<string>();
-    for (const owners of [
-      snapshot.owners.providers,
-      snapshot.owners.modelCatalogProviders,
-      snapshot.owners.setupProviders,
-      snapshot.owners.cliBackends,
-    ]) {
-      for (const providerId of owners.keys()) {
-        const normalized = normalizeProviderId(providerId);
-        if (normalized) {
-          providerIds.add(normalized);
-        }
-      }
-    }
+    providerIds = new Set(
+      [
+        snapshot.owners.providers,
+        snapshot.owners.modelCatalogProviders,
+        snapshot.owners.setupProviders,
+        snapshot.owners.cliBackends,
+      ].flatMap((owners) => [...owners.keys()].map(normalizeProviderId).filter(Boolean)),
+    );
   }
   const selectedProviderIds = collectConfiguredProviderSelectionIds(cfg);
   for (const entry of resolveProviderInstallCatalogEntries({
@@ -101,11 +95,8 @@ function collectPluginProviderIds(
     if (!entryProviderIds.some((providerId) => selectedProviderIds.has(providerId.toLowerCase()))) {
       continue;
     }
-    for (const providerId of entryProviderIds) {
-      const normalized = normalizeProviderId(providerId);
-      if (normalized) {
-        providerIds.add(normalized);
-      }
+    for (const providerId of entryProviderIds.map(normalizeProviderId).filter(Boolean)) {
+      providerIds.add(providerId);
     }
   }
   return { providerIds, warnings: [] };
@@ -117,14 +108,11 @@ function collectPersistedProviderIds(params: {
   env: NodeJS.ProcessEnv;
   injected?: ReadonlyMap<string, ReadonlySet<string>>;
 }): { providerIds?: Set<string>; warning?: string } {
-  const injected = params.injected?.get(params.agentId);
-  if (injected) {
+  if (params.injected) {
+    const injected = params.injected.get(params.agentId) ?? [];
     return {
       providerIds: new Set([...injected].map(normalizeProviderId).filter(Boolean)),
     };
-  }
-  if (params.injected) {
-    return { providerIds: new Set() };
   }
 
   const modelsPath = path.join(
@@ -144,11 +132,7 @@ function collectPersistedProviderIds(params: {
   }
   try {
     const parsed = JSON.parse(raw) as { providers?: unknown };
-    if (
-      !parsed.providers ||
-      typeof parsed.providers !== "object" ||
-      Array.isArray(parsed.providers)
-    ) {
+    if (!isRecord(parsed.providers)) {
       return { providerIds: new Set() };
     }
     return {
@@ -249,31 +233,15 @@ export function repairStaleAgentModelRefs(
   if (!replaceMode) {
     baseAvailableProviders.add(normalizeProviderId(DEFAULT_PROVIDER));
   }
-  for (const providerId of Object.keys(asOptionalRecord(configuredModels?.providers) ?? {})) {
-    const normalized = normalizeProviderId(providerId);
-    if (normalized) {
-      baseAvailableProviders.add(normalized);
-    }
+  for (const providerId of Object.keys(asOptionalRecord(configuredModels?.providers) ?? {})
+    .map(normalizeProviderId)
+    .filter(Boolean)) {
+    baseAvailableProviders.add(providerId);
   }
   const config = structuredClone(cfg);
   const changes: string[] = [];
   const warnings = [...pluginProviders.warnings];
   const env = options.env ?? process.env;
-  const persistedForAgent = (agentId: string): Set<string> | undefined => {
-    const persisted = collectPersistedProviderIds({
-      cfg,
-      agentId,
-      env,
-      injected: options.persistedProviderIdsByAgentId,
-    });
-    if (!persisted.providerIds) {
-      if (persisted.warning) {
-        warnings.push(persisted.warning);
-      }
-      return undefined;
-    }
-    return persisted.providerIds;
-  };
   const availabilityForAgents = (
     agentIds: string[],
     aggregation: "union" | "intersection",
@@ -290,14 +258,22 @@ export function repairStaleAgentModelRefs(
     }
     let combined: Set<string> | undefined;
     for (const agentId of agentIds) {
-      const persisted = persistedForAgent(agentId);
-      if (!persisted) {
+      const { providerIds, warning } = collectPersistedProviderIds({
+        cfg,
+        agentId,
+        env,
+        injected: options.persistedProviderIdsByAgentId,
+      });
+      if (!providerIds) {
+        if (warning) {
+          warnings.push(warning);
+        }
         return undefined;
       }
       combined =
         combined && aggregation === "intersection"
-          ? new Set([...combined].filter((providerId) => persisted.has(providerId)))
-          : new Set([...(combined ?? []), ...persisted]);
+          ? new Set([...combined].filter((providerId) => providerIds.has(providerId)))
+          : new Set([...(combined ?? []), ...providerIds]);
     }
     for (const providerId of combined ?? []) {
       available.add(providerId);
@@ -305,37 +281,19 @@ export function repairStaleAgentModelRefs(
     return available;
   };
   const availabilityForAgent = (agentId: string) => availabilityForAgents([agentId], "union");
-  const availabilityForDefaults = (): Set<string> | undefined => {
+  const availabilityForDefaults = (
+    aggregation: "union" | "intersection",
+    select: (agent: ReturnType<typeof listAgentEntries>[number]) => string | undefined,
+  ): Set<string> | undefined => {
     if (replaceMode) {
       return new Set(baseAvailableProviders);
     }
-    const inheritingAgentIds: string[] = [];
-    for (const agent of listAgentEntries(cfg)) {
-      if (typeof agent.id !== "string") {
-        continue;
-      }
-      const explicitPrimary = modelPrimaryRef(agent.model);
-      if (!explicitPrimary) {
-        inheritingAgentIds.push(agent.id);
-        continue;
-      }
-      const agentAvailability = availabilityForAgent(agent.id);
-      const provider = providerFromModelRef(explicitPrimary);
-      if (agentAvailability && provider && !agentAvailability.has(provider)) {
-        // This stale override will be removed or replaced later in the same repair.
-        inheritingAgentIds.push(agent.id);
-      }
-    }
-    return availabilityForAgents(inheritingAgentIds, "intersection");
-  };
-  const availabilityForDefaultModelMap = (): Set<string> | undefined => {
-    if (replaceMode) {
-      return new Set(baseAvailableProviders);
-    }
-    const inheritingAgentIds = listAgentEntries(cfg)
-      .filter((agent) => isRecord(agent) && typeof agent.id === "string" && !isRecord(agent.models))
-      .map((agent) => agent.id as string);
-    return availabilityForAgents(inheritingAgentIds, "union");
+    return availabilityForAgents(
+      listAgentEntries(cfg)
+        .map(select)
+        .filter((agentId): agentId is string => agentId !== undefined),
+      aggregation,
+    );
   };
   const makeStaleChecker = (available: ReadonlySet<string>) => (ref: string) => {
     const provider = providerFromModelRef(ref);
@@ -343,7 +301,19 @@ export function repairStaleAgentModelRefs(
   };
 
   const defaults = asOptionalRecord(asOptionalRecord(config.agents)?.defaults);
-  const defaultAvailability = availabilityForDefaults();
+  const defaultAvailability = availabilityForDefaults("intersection", (agent) => {
+    if (typeof agent.id !== "string") {
+      return undefined;
+    }
+    const explicitPrimary = modelPrimaryRef(agent.model);
+    if (!explicitPrimary) {
+      return agent.id;
+    }
+    const agentAvailability = availabilityForAgent(agent.id);
+    const provider = providerFromModelRef(explicitPrimary);
+    // This stale override will be removed or replaced later in the same repair.
+    return agentAvailability && provider && !agentAvailability.has(provider) ? agent.id : undefined;
+  });
   const configuredDefaultPrimary = modelPrimaryRef(defaults?.model);
   let repairedDefaultPrimary =
     configuredDefaultPrimary ?? (replaceMode ? firstExplicitModelRef(cfg) : DEFAULT_MODEL_REF);
@@ -458,7 +428,11 @@ export function repairStaleAgentModelRefs(
     repairedDefaultPrimary =
       modelPrimaryRef(defaults.model) ??
       (replaceMode ? firstExplicitModelRef(cfg) : DEFAULT_MODEL_REF);
-    const modelMapAvailability = availabilityForDefaultModelMap();
+    const modelMapAvailability = availabilityForDefaults("union", (agent) =>
+      isRecord(agent) && typeof agent.id === "string" && !isRecord(agent.models)
+        ? agent.id
+        : undefined,
+    );
     if (modelMapAvailability) {
       repairModelMap({
         models: asOptionalRecord(defaults.models),

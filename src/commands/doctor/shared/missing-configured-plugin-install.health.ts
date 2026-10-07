@@ -38,12 +38,7 @@ type ConfiguredPluginInstallHealthIssue =
       missingRequired: string[];
     }
   | {
-      kind: "stale-channel-config-descriptor";
-      pluginId: string;
-      installPath?: string;
-    }
-  | {
-      kind: "deferred-package-manager-repair";
+      kind: "stale-channel-config-descriptor" | "deferred-package-manager-repair";
       pluginId: string;
       installPath?: string;
     };
@@ -80,7 +75,6 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     installedPluginIdsWithStaleVersionBoundRuntimePackages: staleVersionBoundRuntimePluginIds,
     installedPluginMissingRequiredDependencies,
   } = context;
-  const reportedPluginIds = new Set<string>();
   const issues: ConfiguredPluginInstallHealthIssue[] = [];
 
   const { pluginIds: deferredPluginIds, repairPluginIds } = context.collectDeferredRepairs(records);
@@ -91,7 +85,6 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
       pluginId,
       ...(installPath ? { installPath } : {}),
     });
-    reportedPluginIds.add(pluginId);
   }
 
   for (const [pluginId] of context.collectRecordedRepairs(records, deferredPluginIds)) {
@@ -105,7 +98,6 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
         ...recordedInstallIdentity(record),
         missingRequired: missingDependencies.missingRequired,
       });
-      reportedPluginIds.add(pluginId);
       continue;
     }
     const kind = staleVersionBoundRuntimePluginIds.has(pluginId)
@@ -122,9 +114,9 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
       ...(installPath ? { installPath } : {}),
       ...(kind === "stale-channel-config-descriptor" ? {} : recordedInstallIdentity(record)),
     });
-    reportedPluginIds.add(pluginId);
   }
 
+  const reportedPluginIds = new Set(issues.map((issue) => issue.pluginId));
   for (const candidate of context.collectInstallCandidates(records, deferredPluginIds)) {
     if (reportedPluginIds.has(candidate.pluginId)) {
       continue;
@@ -161,43 +153,37 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
 
 const CONFIGURED_PLUGIN_INSTALL_ISSUE_DETAILS = {
   "missing-install-record": {
-    message: (pluginId: string) => `Configured plugin ${pluginId} is not installed.`,
+    message: "is not installed.",
     fixHint: "",
     action: "would-install-configured-plugin",
   },
   "missing-installed-payload": {
-    message: (pluginId: string) =>
-      `Configured plugin ${pluginId} has an install record but its package payload is missing.`,
+    message: "has an install record but its package payload is missing.",
     fixHint: null,
     action: "would-reinstall-configured-plugin",
   },
   "missing-required-dependencies": {
-    message: (pluginId: string) =>
-      `Configured plugin ${pluginId} is missing required dependencies:`,
+    message: "is missing required dependencies:",
     fixHint: null,
     action: "would-repair-configured-plugin-dependencies",
   },
   "repairable-installed-plugin": {
-    message: (pluginId: string) =>
-      `Configured plugin ${pluginId} has a repairable package install problem.`,
+    message: "has a repairable package install problem.",
     fixHint: null,
     action: "would-repair-configured-plugin-install",
   },
   "stale-version-bound-runtime": {
-    message: (pluginId: string) =>
-      `Configured runtime plugin ${pluginId} is older than this OpenClaw version.`,
+    message: "is older than this OpenClaw version.",
     fixHint: "Run `openclaw doctor --fix` to refresh the configured runtime plugin.",
     action: "would-refresh-configured-runtime-plugin",
   },
   "stale-channel-config-descriptor": {
-    message: (pluginId: string) =>
-      `Configured plugin ${pluginId} has stale channel config metadata.`,
+    message: "has stale channel config metadata.",
     fixHint: "Run `openclaw doctor --fix` to repair the configured plugin install metadata.",
     action: "would-repair-configured-plugin-install",
   },
   "deferred-package-manager-repair": {
-    message: (pluginId: string) =>
-      `Configured plugin ${pluginId} package repair is deferred until the package update finishes.`,
+    message: "package repair is deferred until the package update finishes.",
     fixHint: "Rerun `openclaw doctor --fix` after the package update completes.",
     action: "would-defer-configured-plugin-install-repair",
   },
@@ -208,13 +194,15 @@ export function configuredPluginInstallIssueToHealthFinding(
 ): HealthFinding {
   const detail = CONFIGURED_PLUGIN_INSTALL_ISSUE_DETAILS[issue.kind];
   const installSpec = "installSpec" in issue ? issue.installSpec : undefined;
+  const subject = issue.kind === "stale-version-bound-runtime" ? "runtime plugin" : "plugin";
+  const message = `Configured ${subject} ${issue.pluginId} ${detail.message}`;
   return {
     checkId: CONFIGURED_PLUGIN_INSTALLS_CHECK_ID,
     severity: "warning",
     message:
       issue.kind === "missing-required-dependencies"
-        ? `${detail.message(issue.pluginId)} ${issue.missingRequired.join(", ")}.`
-        : detail.message(issue.pluginId),
+        ? `${message} ${issue.missingRequired.join(", ")}.`
+        : message,
     target: issue.pluginId,
     ...("installSource" in issue ? { source: issue.installSource } : {}),
     ...("installPath" in issue && issue.installPath ? { path: issue.installPath } : {}),

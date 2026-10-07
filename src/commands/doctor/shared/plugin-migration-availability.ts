@@ -152,19 +152,13 @@ export async function inspectPluginMigrationAvailability(params: {
                 rehearsalRoot !== undefined &&
                 isPathInside(rehearsalRoot, plugin.rootDir) &&
                 !unavailable);
-            if (
-              (availableWithoutPackageConvergence || (!params.deferInstallation && !unavailable)) &&
-              plugin &&
-              statelessCandidates.has(pluginId)
-            ) {
+            const available =
+              availableWithoutPackageConvergence || (!params.deferInstallation && !unavailable);
+            if (available && plugin && statelessCandidates.has(pluginId)) {
               // Installation-only confirmation reads metadata; it need not activate a channel.
               statelessPluginIds.push(pluginId);
             }
-            if (
-              !selected.has(pluginId) ||
-              availableWithoutPackageConvergence ||
-              (!params.deferInstallation && !unavailable)
-            ) {
+            if (!selected.has(pluginId) || available) {
               return [];
             }
             return [

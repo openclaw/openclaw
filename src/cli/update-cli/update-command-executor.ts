@@ -17,6 +17,7 @@ import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import { createUpdateCommandOriginalCancellation } from "./update-command-executor-cancellation.js";
 import {
   requestUpdateCommandExecutorCancellation,
+  requireUpdateCommandAcquisition,
   reserveUpdateCommandExecutorSlot,
 } from "./update-command-executor-capabilities.js";
 import { createChildOwner } from "./update-command-executor-children.js";
@@ -211,20 +212,10 @@ export async function withUpdateCommandExecutor<T>(
             "Occupied slot does not resolve to its original installation.",
           );
         }
-        const acquired = store.acquire(
-          key,
-          lease.owner,
-          { kind: "update" },
-          false,
-          undefined,
-          lease,
-        );
-        if (acquired.kind !== "acquired") {
-          throw new UpdateCommandRecoveryPendingError(
-            "Another update executor owns the occupied slot.",
-          );
-        }
-        slotLease = acquired.lease;
+        slotLease = requireUpdateCommandAcquisition(
+          store.acquire(key, lease.owner, { kind: "update" }, false, undefined, lease),
+          "Another update executor owns the occupied slot.",
+        ).lease;
         preflightReleases.delete(fence);
         assertCurrent();
       });
@@ -284,14 +275,19 @@ export async function withUpdateCommandExecutor<T>(
                 ? captureManagedUpdateLeaseDatabaseIdentity(databasePath)
                 : undefined);
             databasePath = existingIdentity?.databasePath ?? databasePath;
-            store = createManagedHandoffLeaseStore({
-              databasePath,
-              serviceManagerEnv: resolveServiceManagerEnv(),
+            const initialDatabasePath = databasePath;
+            const openStore = (identity: typeof existingIdentity, originalUpdateKey?: string) =>
+              createManagedHandoffLeaseStore({
+                databasePath: identity?.databasePath ?? initialDatabasePath,
+                serviceManagerEnv: resolveServiceManagerEnv(),
+                existingIdentity: identity,
+                originalUpdateKey,
+                onProcessIdentityWarning: identityWarnings.warn,
+              });
+            store = openStore(
               existingIdentity,
-              originalUpdateKey:
-                !options?.legacyManagedParent && !options?.legacyPackageParent ? key : undefined,
-              onProcessIdentityWarning: identityWarnings.warn,
-            });
+              !options?.legacyManagedParent && !options?.legacyPackageParent ? key : undefined,
+            );
             const found = store.read(key);
             if (found.kind === "unreadable" && !options?.legacyPackageParent) {
               throw new UpdateCommandRecoveryPendingError("Update executor state is unreadable.");
@@ -345,33 +341,23 @@ export async function withUpdateCommandExecutor<T>(
               borrowed = true;
               managedHandoff = true;
             } else {
-              const acquired = store.acquire(key, randomUUID(), { kind: "update" });
-              if (acquired.kind !== "acquired") {
-                throw new UpdateCommandRecoveryPendingError(
-                  "Another update executor owns this installation.",
-                );
-              }
+              const acquired = requireUpdateCommandAcquisition(
+                store.acquire(key, randomUUID(), { kind: "update" }),
+                "Another update executor owns this installation.",
+              );
               lease = acquired.lease;
               if (acquired.originalDatabaseIdentity) {
                 existingIdentity = acquired.originalDatabaseIdentity;
                 databasePath = existingIdentity.databasePath;
-                store = createManagedHandoffLeaseStore({
-                  databasePath,
-                  existingIdentity,
-                  serviceManagerEnv: resolveServiceManagerEnv(),
-                  onProcessIdentityWarning: identityWarnings.warn,
-                });
+                store = openStore(existingIdentity);
               }
             }
             serviceKey = distinctServiceKey;
             if (serviceKey) {
-              const acquired = store.acquire(serviceKey, randomUUID(), { kind: "update" });
-              if (acquired.kind !== "acquired") {
-                throw new UpdateCommandRecoveryPendingError(
-                  "Another update executor owns the managed service installation.",
-                );
-              }
-              serviceLease = acquired.lease;
+              serviceLease = requireUpdateCommandAcquisition(
+                store.acquire(serviceKey, randomUUID(), { kind: "update" }),
+                "Another update executor owns the managed service installation.",
+              ).lease;
             }
             admissionComplete = true;
             assertCurrent();
@@ -383,12 +369,7 @@ export async function withUpdateCommandExecutor<T>(
             // Switch the live owner too: capture, later child admission and final
             // release must not recreate a database lost after initial admission.
             databasePath = authority.databasePath;
-            store = createManagedHandoffLeaseStore({
-              databasePath,
-              serviceManagerEnv: resolveServiceManagerEnv(),
-              existingIdentity: authority,
-              onProcessIdentityWarning: identityWarnings.warn,
-            });
+            store = openStore(authority);
             readConnections.use(store.retainReadConnection());
             if (
               borrowed &&

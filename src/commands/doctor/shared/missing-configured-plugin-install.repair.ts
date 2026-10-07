@@ -89,15 +89,8 @@ type RepairMissingPluginInstallsResult = {
   deferredRepairDetails?: string[];
   /** Plugin ids whose install repair failed and should be preserved from cleanup passes. */
   failedPluginIds?: string[];
-  /**
-   * The full install-record map after repair. Equal to the input
-   * `baselineRecords` (or the disk-loaded records when no baseline was
-   * provided) plus any mutations (newly-installed payloads, removed stale
-   * bundled records). Callers that need to subsequently overwrite the
-   * persisted index MUST seed their write from this map — the disk has
-   * already been written to with the same set, but the in-memory caller
-   * state is stale otherwise.
-   */
+  /** Complete post-repair records, including baseline mutations. Subsequent
+   * index writes must use this map instead of the caller's stale snapshot. */
   records: Record<string, PluginInstallRecord>;
 };
 
@@ -109,13 +102,8 @@ type PluginInstallRepairOptions = {
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   onWarning?: (warning: PluginInstallRepairWarning) => void;
   beforePersistentEffect?: () => void | Promise<void>;
-  /**
-   * Optional pre-seeded records. When provided, this map is used instead of
-   * the disk-loaded install-record snapshot. Pass the in-memory records
-   * from earlier post-core steps (sync/npm) so this repair pass can layer
-   * its mutations on top of them rather than reading a stale disk
-   * snapshot. The merged result is persisted before this function returns.
-   */
+  /** Earlier post-core sync/npm records replace the disk snapshot so their
+   * pending changes survive this repair's merged index write. */
   baselineRecords?: Record<string, PluginInstallRecord>;
 };
 
@@ -514,9 +502,8 @@ async function repairMissingPluginInstallsWithLease(
     );
     if (shouldReplaceBrokenOfficialInstall) {
       const installedRecord = installed.records[candidate.pluginId];
-      const replacementSucceeded = installed.records !== previousRecords;
       if (
-        replacementSucceeded &&
+        installed.records !== previousRecords &&
         removalPath &&
         assertRemovalPath &&
         removalParent &&
