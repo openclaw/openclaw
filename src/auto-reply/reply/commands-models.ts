@@ -125,12 +125,16 @@ function resolveProviderLabel(params: {
   return `${params.provider} · 🔑 ${authLabel}`;
 }
 
-export function formatModelsAvailableHeader(
-  params: Parameters<typeof resolveProviderLabel>[0] & {
-    total: number;
-    availability?: ModelsProviderMenu;
-  },
-): string {
+export function formatModelsAvailableHeader(params: {
+  provider: string;
+  total: number;
+  cfg: OpenClawConfig;
+  agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  sessionEntry?: ModelsCommandSessionEntry;
+  availability?: ModelsProviderMenu;
+}): string {
   const providerLabel = resolveProviderLabel(params);
   const count =
     params.availability && params.availability.available !== params.total
