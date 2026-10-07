@@ -733,4 +733,21 @@ describe("publish model catalog v2", () => {
       "gpt-6-sol",
     ]);
   });
+
+  it("projects only served rows", () => {
+    expect(
+      projectRecommendedModels(
+        ["claude-opus-5.5", "claude-opus-5", "gpt-6.1-sol", "kimi-k3"],
+        [
+          // A retired newer family member does not hide its served predecessor.
+          { id: "claude-opus-5-5", status: "deprecated" },
+          { id: "claude-opus-5" },
+          // A retired shorter alias does not win over a served dated id.
+          { id: "gpt-6.1-sol", status: "disabled" },
+          { id: "gpt-6.1-sol-20261001" },
+          { id: "kimi-k3", replacedBy: "kimi-k3.1" },
+        ],
+      ),
+    ).toEqual(["claude-opus-5", "gpt-6.1-sol-20261001"]);
+  });
 });

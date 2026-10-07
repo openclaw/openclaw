@@ -19,7 +19,8 @@ and change it through reviewed pull requests. Automated suggestions are a
 starting point; the reviewer's edit is the source of truth.
 
 When the [hosted catalog](/concepts/models#hosted-catalog-updates) is published,
-each provider's model ids are matched against the list. Catalog v2 lists the
+each provider's served model ids are matched against the list; deprecated,
+disabled, and replaced rows never match. Catalog v2 lists the
 matches as that provider's `recommendedModels`, in list order and under the
 provider's own ids. When a provider serves several listed models of one family,
 only the newest appears. Providers without matching catalog rows get no list,

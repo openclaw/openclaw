@@ -1054,16 +1054,20 @@ export function readRecommendedModels(rootDir: string): string[] {
 }
 
 /**
- * Projects the global list onto one provider's model rows, in list order. A listed
- * model is hidden when the provider also serves a newer listed member of its family.
+ * Projects the global list onto one provider's served model rows, in list order. A
+ * listed model is hidden when the provider also serves a newer listed member of its
+ * family. Deprecated, disabled and replaced rows are not served.
  */
 export function projectRecommendedModels(
   recommendedModels: readonly string[],
-  models: readonly Pick<ModelCatalogModel, "id" | "name">[],
+  models: readonly Pick<ModelCatalogModel, "id" | "name" | "status" | "replacedBy">[],
 ): string[] {
   // The shortest id is the base alias, ahead of dated, tagged, or -fast variants.
   const idByKey = new Map<string, string>();
-  for (const { id, name } of models) {
+  for (const { id, name, status, replacedBy } of models) {
+    if (replacedBy || status === "deprecated" || status === "disabled") {
+      continue;
+    }
     const key = canonicalModelKey(id, name);
     const current = idByKey.get(key);
     if (!current || id.length < current.length || (id.length === current.length && id < current)) {
