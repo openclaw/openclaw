@@ -104,7 +104,6 @@ describe("session observer completion", () => {
 
     await vi.advanceTimersByTimeAsync(12_000);
     expect(completeModel).toHaveBeenCalledOnce();
-    expect(completeModel.mock.calls[0]?.[0].timeoutMs).toBe(30_000);
     await vi.advanceTimersByTimeAsync(15_000);
     await flushObserver();
 
@@ -115,6 +114,33 @@ describe("session observer completion", () => {
       expect.any(Set),
       expect.anything(),
     );
+    harness.observer.dispose();
+  });
+
+  it("aborts stuck completions at the cap and disables the run after two failures", async () => {
+    vi.setSystemTime(0);
+    const signals: AbortSignal[] = [];
+    const completeModel = vi.fn(
+      (params: { abortSignal?: AbortSignal }) =>
+        new Promise<never>((_resolve, reject) => {
+          const signal = params.abortSignal!;
+          signals.push(signal);
+          signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        }),
+    );
+    const harness = createHarness({ completeModel });
+    startAndAddToolNotes(harness.observer);
+    await vi.advanceTimersByTimeAsync(12_000);
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(signals[0]?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(completeModel).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(signals[1]?.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(completeModel).toHaveBeenCalledTimes(2);
+    expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
     harness.observer.dispose();
   });
 });
