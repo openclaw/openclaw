@@ -45,6 +45,19 @@ function createRuntimeRegistryRelease(held: PluginRegistry[]) {
   };
 }
 
+/** One namespace projection belongs to its runtime source, not the invocation reading it. */
+function createRuntimeFacade<T>() {
+  let cached: { source: T; value: T } | undefined;
+  return (source: T, project: (source: T) => T): T => {
+    if (cached && cached.source === source) {
+      return cached.value;
+    }
+    const value = project(source);
+    cached = { source, value };
+    return value;
+  };
+}
+
 export function createPluginRuntimeResolver(state: PluginRegistryState) {
   const { registry, registryParams } = state;
   const pluginRuntimes = new WeakMap<PluginRecord, PluginRuntime>();
@@ -221,45 +234,59 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       () => import("./registry-runtime-session-ownership.js"),
       (module) => module.createPluginSessionOwnership(state, pluginId, currentRegistry),
     );
-    let scopedAgentRuntime: PluginRuntime["agent"] | undefined;
+    const runWithPluginScope = <T>(
+      run: () => T,
+      requireActive = true,
+      selectedRegistry?: PluginRegistry,
+    ): T => {
+      if (requireActive) {
+        assertRuntimeCurrent();
+      }
+      const scopedRegistry = selectedRegistry ?? currentRegistry();
+      return withPluginRuntimePluginScope(
+        {
+          pluginId,
+          pluginSource: record.source,
+          pluginOrigin: record.origin,
+          pluginTrustedOfficialInstall: record.trustedOfficialInstall,
+        },
+        () => {
+          const result = run();
+          if (!isPromiseLike(result)) {
+            return result;
+          }
+          // Lazy runtime imports can suspend before the operation acquires its own custody.
+          return Promise.resolve(result).finally(
+            createRuntimeRegistryRelease([scopedRegistry]),
+          ) as T; // SAFETY: Preserve the host operation's resolved value and rejection reason.
+        },
+        scopedRegistry,
+      );
+    };
+    const invokeSelectedRuntime = <T>(run: () => T): T => {
+      assertRuntimeCurrent();
+      return runWithPluginScope(run, false, currentInvocationRegistry());
+    };
+    const facades = {
+      media: createRuntimeFacade<PluginRuntime["media"]>(),
+      imageGeneration: createRuntimeFacade<PluginRuntime["imageGeneration"]>(),
+      videoGeneration: createRuntimeFacade<PluginRuntime["videoGeneration"]>(),
+      musicGeneration: createRuntimeFacade<PluginRuntime["musicGeneration"]>(),
+      webSearch: createRuntimeFacade<PluginRuntime["webSearch"]>(),
+      tts: createRuntimeFacade<PluginRuntime["tts"]>(),
+      mediaUnderstanding: createRuntimeFacade<PluginRuntime["mediaUnderstanding"]>(),
+      modelAuth: createRuntimeFacade<PluginRuntime["modelAuth"]>(),
+      modelConfig: createRuntimeFacade<PluginRuntime["modelConfig"]>(),
+      sandbox: createRuntimeFacade<PluginRuntime["sandbox"]>(),
+    };
+    let scopedAgentRuntime:
+      | { source: PluginRuntime["agent"]; value: PluginRuntime["agent"] }
+      | undefined;
     let scopedChannelRuntime:
       | { source: PluginRuntime["channel"]; value: PluginRuntime["channel"] }
       | undefined;
     const runtime = new Proxy(registryParams.runtime, {
       get(target, prop, receiver) {
-        const runWithPluginScope = <T>(
-          run: () => T,
-          requireActive = true,
-          selectedRegistry?: PluginRegistry,
-        ): T => {
-          if (requireActive) {
-            assertRuntimeCurrent();
-          }
-          const scopedRegistry = selectedRegistry ?? currentRegistry();
-          return withPluginRuntimePluginScope(
-            {
-              pluginId,
-              pluginSource: record.source,
-              pluginOrigin: record.origin,
-              pluginTrustedOfficialInstall: record.trustedOfficialInstall,
-            },
-            () => {
-              const result = run();
-              if (!isPromiseLike(result)) {
-                return result;
-              }
-              // Lazy runtime imports can suspend before the operation acquires its own custody.
-              return Promise.resolve(result).finally(
-                createRuntimeRegistryRelease([scopedRegistry]),
-              ) as T; // SAFETY: Preserve the host operation's resolved value and rejection reason.
-            },
-            scopedRegistry,
-          );
-        };
-        const invokeSelectedRuntime = <T>(run: () => T): T => {
-          assertRuntimeCurrent();
-          return runWithPluginScope(run, false, currentInvocationRegistry());
-        };
         const getRuntimeProperty = () => {
           try {
             return Reflect.get(target, prop, receiver);
@@ -447,48 +474,42 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           } satisfies PluginRuntime["llm"];
         }
         if (prop === "media") {
-          const media: PluginRuntime["media"] = getRuntimeProperty();
-          return {
+          return facades.media(getRuntimeProperty(), (media) => ({
             ...media,
             loadWebMedia: (...args) => invokeSelectedRuntime(() => media.loadWebMedia(...args)),
-          } satisfies PluginRuntime["media"];
+          }));
         }
         if (prop === "imageGeneration") {
-          const image: PluginRuntime["imageGeneration"] = getRuntimeProperty();
-          return {
+          return facades.imageGeneration(getRuntimeProperty(), (image) => ({
             ...image,
             generate: (...args) => invokeSelectedRuntime(() => image.generate(...args)),
             listProviders: (...args) => invokeSelectedRuntime(() => image.listProviders(...args)),
-          } satisfies PluginRuntime["imageGeneration"];
+          }));
         }
         if (prop === "videoGeneration") {
-          const video: PluginRuntime["videoGeneration"] = getRuntimeProperty();
-          return {
+          return facades.videoGeneration(getRuntimeProperty(), (video) => ({
             ...video,
             generate: (...args) => invokeSelectedRuntime(() => video.generate(...args)),
             listProviders: (...args) => invokeSelectedRuntime(() => video.listProviders(...args)),
-          } satisfies PluginRuntime["videoGeneration"];
+          }));
         }
         if (prop === "musicGeneration") {
-          const music: PluginRuntime["musicGeneration"] = getRuntimeProperty();
-          return {
+          return facades.musicGeneration(getRuntimeProperty(), (music) => ({
             ...music,
             generate: (...args) => invokeSelectedRuntime(() => music.generate(...args)),
             listProviders: (...args) => invokeSelectedRuntime(() => music.listProviders(...args)),
-          } satisfies PluginRuntime["musicGeneration"];
+          }));
         }
         if (prop === "webSearch") {
-          const webSearch: PluginRuntime["webSearch"] = getRuntimeProperty();
-          return {
+          return facades.webSearch(getRuntimeProperty(), (webSearch) => ({
             ...webSearch,
             listProviders: (...args) =>
               invokeSelectedRuntime(() => webSearch.listProviders(...args)),
             search: (...args) => invokeSelectedRuntime(() => webSearch.search(...args)),
-          } satisfies PluginRuntime["webSearch"];
+          }));
         }
         if (prop === "tts") {
-          const tts: PluginRuntime["tts"] = getRuntimeProperty();
-          return {
+          return facades.tts(getRuntimeProperty(), (tts) => ({
             ...tts,
             prepareTtsRequest: (...args) =>
               invokeSelectedRuntime(() => tts.prepareTtsRequest(...args)),
@@ -498,11 +519,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             textToSpeechTelephony: (...args) =>
               invokeSelectedRuntime(() => tts.textToSpeechTelephony(...args)),
             listVoices: (...args) => invokeSelectedRuntime(() => tts.listVoices(...args)),
-          } satisfies PluginRuntime["tts"];
+          }));
         }
         if (prop === "mediaUnderstanding") {
-          const media: PluginRuntime["mediaUnderstanding"] = getRuntimeProperty();
-          return {
+          return facades.mediaUnderstanding(getRuntimeProperty(), (media) => ({
             ...media,
             resolveAudioInputBudget: (...args) =>
               invokeSelectedRuntime(() => media.resolveAudioInputBudget(...args)),
@@ -517,11 +537,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               invokeSelectedRuntime(() => media.describeVideoFile(...args)),
             transcribeAudioFile: (...args) =>
               invokeSelectedRuntime(() => media.transcribeAudioFile(...args)),
-          } satisfies PluginRuntime["mediaUnderstanding"];
+          }));
         }
         if (prop === "modelAuth") {
-          const auth: PluginRuntime["modelAuth"] = getRuntimeProperty();
-          return {
+          return facades.modelAuth(getRuntimeProperty(), (auth) => ({
             ...auth,
             ensureAuthProfileStore: (...args) =>
               invokeSelectedRuntime(() => auth.ensureAuthProfileStore(...args)),
@@ -533,27 +552,25 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               invokeSelectedRuntime(() => auth.getRuntimeAuthForModel(...args)),
             resolveApiKeyForProvider: (...args) =>
               invokeSelectedRuntime(() => auth.resolveApiKeyForProvider(...args)),
-          } satisfies PluginRuntime["modelAuth"];
+          }));
         }
         if (prop === "modelConfig") {
-          const models: PluginRuntime["modelConfig"] = getRuntimeProperty();
-          return {
+          return facades.modelConfig(getRuntimeProperty(), (models) => ({
             ...models,
             resolveDefaultModelForAgent: (...args) =>
               invokeSelectedRuntime(() => models.resolveDefaultModelForAgent(...args)),
             resolveAllowedModelRef: (...args) =>
               invokeSelectedRuntime(() => models.resolveAllowedModelRef(...args)),
-          } satisfies PluginRuntime["modelConfig"];
+          }));
         }
         if (prop === "sandbox") {
-          const sandbox: PluginRuntime["sandbox"] = getRuntimeProperty();
-          return {
+          return facades.sandbox(getRuntimeProperty(), (sandbox) => ({
             ...sandbox,
             resolveWorkspaceAuthority: (...args) =>
               invokeSelectedRuntime(() => sandbox.resolveWorkspaceAuthority(...args)),
             prepareWorkspaceAuthority: (...args) =>
               invokeSelectedRuntime(() => sandbox.prepareWorkspaceAuthority(...args)),
-          } satisfies PluginRuntime["sandbox"];
+          }));
         }
         if (prop === "gateway") {
           const gateway: PluginRuntime["gateway"] = getRuntimeProperty();
@@ -645,10 +662,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           } satisfies PluginRuntime["nodes"];
         }
         if (prop === "agent") {
-          if (scopedAgentRuntime) {
-            return scopedAgentRuntime;
-          }
           const agent: PluginRuntime["agent"] = getRuntimeProperty();
+          if (scopedAgentRuntime?.source === agent) {
+            return scopedAgentRuntime.value;
+          }
           const session = agent.session;
           const scopedSession = {
             resolveStorePath: session.resolveStorePath,
@@ -898,8 +915,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               value: scopedSession,
             },
           });
-          scopedAgentRuntime = scopedAgent;
-          return scopedAgentRuntime;
+          scopedAgentRuntime = { source: agent, value: scopedAgent };
+          return scopedAgent;
         }
         if (prop !== "subagent") {
           return getRuntimeProperty();

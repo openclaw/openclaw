@@ -11,6 +11,7 @@ import {
 } from "../plugin-instance-invocation.js";
 import type { PluginInstanceInvocation } from "../plugin-instance-invocation.types.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
+import { mapPluginReturnPromise, resolvePluginReturnPromise } from "../plugin-return-value.js";
 import type { DeclaredProviderOwnerIndex } from "../provider-owner-index.js";
 import type { PluginRegistry } from "../registry-types.js";
 import { getPluginRegistryState } from "../runtime-state.js";
@@ -57,6 +58,21 @@ function runWithPluginGatewayScope<T>(
 }
 
 const isNotWebchatConnect = () => false;
+
+// Settled reactions may outlive the call; capture only its emptied custody holder.
+function settleRegistryScope(completion: Promise<unknown>, held: PluginRegistry[]) {
+  return mapPluginReturnPromise(
+    completion,
+    (value) => {
+      held.length = 0;
+      return value;
+    },
+    (error) => {
+      held.length = 0;
+      throw error;
+    },
+  ).value;
+}
 
 export const ExpiredPluginRegistryScopeError = resolveGlobalSingleton(
   Symbol.for("openclaw.expiredPluginRegistryScopeError"),
@@ -173,7 +189,12 @@ export function withPluginRuntimeRegistryScope<T>(
   const current = getPluginRuntimeGatewayRequestScope();
   return runWithPluginGatewayScope(
     createRegistryScope(registry, current, declaredProviderOwners),
-    run,
+    () => {
+      const value = run();
+      const completion = resolvePluginReturnPromise(value);
+      // SAFETY: Awaiting the callback preserves its value and rejection reason.
+      return completion ? (settleRegistryScope(completion, [registry]) as T) : value;
+    },
   );
 }
 

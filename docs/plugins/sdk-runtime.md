@@ -155,10 +155,11 @@ Registered callables retain their instance scope, receiver binding, and lifecycl
 fencing. Plugin code runs inside a Gateway request scope established for its
 invocation.
 
-Host-created request scopes borrow their plugin registry; retaining an async
-callback does not extend the registry's lifetime. Access to a released registry
-fails instead of silently selecting the current generation. Admitted turns and
-explicitly retained consumers keep their selected generation until they settle.
+Host-created request scopes borrow their plugin registry. A direct registry-scope
+callback keeps its registry until its returned operation settles; detached async
+resources do not extend that lifetime. Access to a released registry fails instead
+of silently selecting the current generation. Admitted turns and explicitly
+retained consumers keep their selected generation until they settle.
 Registry-dependent runtime APIs re-enter their live plugin owner after adoption
 and preserve an explicitly prepared registry, including an empty selection.
 

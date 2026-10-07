@@ -1,8 +1,10 @@
 // Gateway request scope tests cover request-local plugin runtime context propagation.
+import assert from "node:assert/strict";
 import { AsyncResource } from "node:async_hooks";
 import { setImmediate } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { createPluginMetadataSnapshotFixture } from "../plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { markPluginRegistryRetired } from "../registry-lifecycle.js";
@@ -255,6 +257,89 @@ describe("gateway request scope", () => {
       },
     );
   });
+
+  it.each(["fulfilled", "rejected", "thenable"] as const)(
+    "owns the registry only until a direct async callback settles: %s",
+    async (outcome) => {
+      const runtimeScope = await importGatewayRequestScopeModule();
+      class PendingService {
+        id = "pending-scope";
+        start() {}
+      }
+      const gate = createDeferredCore();
+      const failure = new Error("scope callback failed");
+      const resources: AsyncResource[] = [];
+      let thenReads = 0;
+      let thenCalls = 0;
+      const run = async () => {
+        const resource = new AsyncResource("pending-plugin-scope");
+        resources.push(resource);
+        await gate.promise;
+        expect(requireActivePluginRegistry().services[0]?.id).toBe("pending-scope");
+        if (outcome === "rejected") {
+          throw failure;
+        }
+        return resource;
+      };
+      const pending = (() => {
+        const registry = createEmptyPluginRegistry();
+        registry.services.push({
+          id: "pending-scope",
+          pluginId: "pending-scope",
+          source: "pending-scope",
+          origin: "config",
+          service: new PendingService(),
+        });
+        return runtimeScope.withPluginRuntimeRegistryScope(registry, () => {
+          if (outcome !== "thenable") {
+            return run();
+          }
+          return {
+            // oxlint-disable-next-line unicorn/no-thenable -- Verify one-shot foreign thenable assimilation.
+            get then() {
+              thenReads += 1;
+              return (
+                resolve: (value: AsyncResource) => void,
+                reject: (error: unknown) => void,
+              ) => {
+                thenCalls += 1;
+                void run().then(resolve, reject);
+              };
+            },
+          };
+        });
+      })();
+      try {
+        await setImmediate();
+        expect(queryObjects(PendingService)).toBe(1);
+        gate.resolve();
+        if (outcome === "rejected") {
+          await expect(pending).rejects.toBe(failure);
+        } else {
+          expect(await pending).toBe(resources[0]);
+        }
+        expect(thenReads).toBe(outcome === "thenable" ? 1 : 0);
+        expect(thenCalls).toBe(outcome === "thenable" ? 1 : 0);
+        await setImmediate();
+        expect(queryObjects(PendingService)).toBe(0);
+        const resource = resources[0];
+        assert.ok(resource);
+        resource.runInAsyncScope(() => {
+          expect(() => requireActivePluginRegistry()).toThrow(
+            "Plugin registry scope is no longer available",
+          );
+        });
+        // Keep the settled completion reachable through the post-settlement collection.
+        expect(pending).toBeDefined();
+      } finally {
+        gate.resolve();
+        await Promise.allSettled([pending]);
+        for (const resource of resources) {
+          resource.emitDestroy();
+        }
+      }
+    },
+  );
 
   it.each(["registry", "resolver-copy", "plugin-copy"] as const)(
     "releases retired registries inherited by native async resources through %s",

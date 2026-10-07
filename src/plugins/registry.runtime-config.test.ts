@@ -308,6 +308,75 @@ describe("plugin registration runtime admission", () => {
 });
 
 describe("plugin registry runtime config scope", () => {
+  it("keeps STT interception on its runtime source while resolving each call's registry", async () => {
+    const runtime = createPluginRuntime();
+    const source = runtime.mediaUnderstanding;
+    source.transcribeAudioFile = async () => ({
+      text: getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.coreGatewayMethodNames[0],
+    });
+    const { builder, record, api } = registered("stable-media", {}, runtime);
+    const instance = expectDefined(getPluginInstance(record), "media instance");
+    builder.registry.coreGatewayMethodNames.push("original");
+    markPluginRegistryActive(builder.registry);
+    const facade = api.runtime.mediaUnderstanding;
+    const transcribe = facade.transcribeAudioFile.bind(facade);
+    const intercept = vi.spyOn(facade, "transcribeAudioFile").mockImplementation(async (params) => {
+      const result = await transcribe(params);
+      return { ...result, text: `intercepted:${result.text}` };
+    });
+    const request = { cfg: {}, filePath: "/synthetic/voice.wav" };
+    const successor = { ...builder.registry, coreGatewayMethodNames: ["successor"] };
+    try {
+      await expect(
+        api.runtime.mediaUnderstanding.transcribeAudioFile(request),
+      ).resolves.toMatchObject({
+        text: "intercepted:original",
+      });
+      markPluginRegistryActive(successor);
+      markPluginRegistryRetired(builder.registry);
+      await expect(
+        api.runtime.mediaUnderstanding.transcribeAudioFile(request),
+      ).resolves.toMatchObject({
+        text: "intercepted:successor",
+      });
+      const selected = createEmptyPluginRegistry();
+      selected.coreGatewayMethodNames.push("prepared");
+      await expect(
+        withPluginRuntimeRegistryScope(selected, () =>
+          api.runtime.mediaUnderstanding.transcribeAudioFile(request),
+        ),
+      ).resolves.toMatchObject({ text: "intercepted:prepared" });
+      expect(intercept).toHaveBeenCalledTimes(3);
+
+      const replacement: PluginRuntime["mediaUnderstanding"] = {
+        ...source,
+        transcribeAudioFile: async () => ({
+          text: `replacement:${getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.coreGatewayMethodNames[0]}`,
+        }),
+      };
+      Object.defineProperty(runtime, "mediaUnderstanding", {
+        value: replacement,
+        configurable: true,
+      });
+      await expect(
+        api.runtime.mediaUnderstanding.transcribeAudioFile(request),
+      ).resolves.toMatchObject({
+        text: "replacement:successor",
+      });
+      expect(intercept).toHaveBeenCalledTimes(3);
+      intercept.mockRestore();
+      revokePluginRecord(successor, record);
+      expect(() => facade.transcribeAudioFile(request)).toThrow("runtime is no longer active");
+      expect(() => api.runtime.mediaUnderstanding.transcribeAudioFile(request)).toThrow(
+        "runtime is no longer active",
+      );
+    } finally {
+      intercept.mockRestore();
+      await instance.dispose();
+      markPluginRegistryRetired(successor);
+    }
+  });
+
   it("keeps adopted hosted-media resolution scoped without changing pure media helpers", async () => {
     class RetiredRegistry {
       readonly fixtureLabel = "RetiredRegistry";
