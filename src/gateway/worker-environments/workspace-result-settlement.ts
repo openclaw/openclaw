@@ -174,7 +174,6 @@ type StagedWorkspaceResultSettlement = {
   beforeComplete: () => Promise<void>;
   complete?: () => Promise<WorkerSessionPlacementRecord>;
   afterComplete?: (completed: WorkerSessionPlacementRecord) => Promise<void>;
-  validateCompleted?: (completed: WorkerSessionPlacementRecord) => void;
 };
 export async function settleStagedWorkspaceResult(
   params: StagedWorkspaceResultSettlement,
@@ -206,7 +205,6 @@ export async function settleStagedWorkspaceResult(
         params.turnClaim,
         params.assertCurrent,
       );
-  params.validateCompleted?.(completed);
   await params.afterComplete?.(completed);
   if (cleanupRef) {
     // Cleanup refs remain discoverable after the SQLite fence disappears.

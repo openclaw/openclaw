@@ -65,9 +65,28 @@ const git = async (root: string, args: string[]) =>
 
 // Release-only composition: the normal PR lane does not pay for node transfer,
 // Git cloning, checkpoint restoration, managed worktrees, and session writers.
-it("enforces destination authority before real clone, worktree, and session-binding effects", async ({
-  signal,
-}) => {
+const authorityCases = [
+  {
+    contract: "destination preparation",
+    modes: [
+      "allowed",
+      "policy-activated",
+      "source-reassigned",
+      "accepted-stop",
+      "accepted-attached-stop",
+    ],
+  },
+  {
+    contract: "pending-result settlement",
+    modes: [
+      "accepted-allowed",
+      "accepted-policy-destroy",
+      "accepted-policy-transaction",
+      "accepted-policy-commit",
+    ],
+  },
+] as const;
+it.for(authorityCases)("enforces $contract", async ({ contract, modes }, { signal }) => {
   await withOpenClawTestState(
     {
       label: "destination-authority",
@@ -180,7 +199,10 @@ process.stdin.pipe(child.stdin);
               adapter.listCurrentNodes = async () => {
                 const nodes = await listNodes();
                 for (const current of nodes) {
-                  Object.assign(current.workerHost, { capturedExecPolicy: true, promptContext: 1 });
+                  Object.assign(current.workerHost, {
+                    capturedExecPolicy: true,
+                    promptContext: 1,
+                  });
                 }
                 return nodes;
               };
@@ -292,17 +314,7 @@ process.stdin.pipe(child.stdin);
               runtime.bindNodeWorkerSupervisorTransport(adapter);
               await fs.mkdir(state.statePath("projects"), { recursive: true });
               const lateSettlements: string[] = [];
-              for (const mode of [
-                "allowed",
-                "policy-activated",
-                "source-reassigned",
-                "accepted-stop",
-                "accepted-attached-stop",
-                "accepted-allowed",
-                "accepted-policy-destroy",
-                "accepted-policy-transaction",
-                "accepted-policy-commit",
-              ] as const) {
+              for (const mode of modes) {
                 publishConfig("development");
                 const url = `https://github.com/openclaw/destination-${mode}.git`;
                 await exec("git", [
@@ -467,7 +479,8 @@ process.stdin.pipe(child.stdin);
                   if (mode === "accepted-stop") {
                     await environments.destroy(active.environmentId);
                   }
-                  const originalComplete = placements.completePlacementMoveSourceToLocal;
+                  const originalComplete =
+                    placements.completePlacementMoveSourceToLocal.bind(placements);
                   const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
                   let policyActivated = false;
                   const admission = vi.spyOn(
@@ -593,7 +606,10 @@ process.stdin.pipe(child.stdin);
                         expectedGeneration: reconciling.generation,
                         recoveryError: "Source reassigned",
                       });
-                      await placements.startDispatch({ ...identity, executionMode: "worker-turn" });
+                      await placements.startDispatch({
+                        ...identity,
+                        executionMode: "worker-turn",
+                      });
                     }
                   } finally {
                     release.resolve();
@@ -692,11 +708,15 @@ process.stdin.pipe(child.stdin);
                   });
                 }
               }
-              expect(lateSettlements).toEqual([
-                "accepted-policy-destroy:reclaimed",
-                "accepted-policy-transaction:reclaimed",
-                "accepted-policy-commit:reclaimed",
-              ]);
+              expect(lateSettlements).toEqual(
+                contract === "pending-result settlement"
+                  ? [
+                      "accepted-policy-destroy:reclaimed",
+                      "accepted-policy-transaction:reclaimed",
+                      "accepted-policy-commit:reclaimed",
+                    ]
+                  : [],
+              );
             },
             () => vi.restoreAllMocks(),
             () => ownedEnvironments?.stop(),
