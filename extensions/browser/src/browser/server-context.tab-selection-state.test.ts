@@ -238,7 +238,10 @@ describe("browser tab selection and ownership", () => {
     });
     expect(runtime.lastTargetId).toBe("NEW");
     await cleanup.promise;
-    expect(closed).toEqual(["http://127.0.0.1:18800/json/close/OLD2"]);
+    // Chrome lists targets most-recently-activated first, so the eviction
+    // walks from the stale end: OLD1 is dashboard-retained, OLD8 is the
+    // least recently used of the rest, and the fresh NEW tab is kept.
+    expect(closed).toEqual(["http://127.0.0.1:18800/json/close/OLD8"]);
   });
 
   it("does not block opening on an ordinary managed-tab cleanup close", async () => {
@@ -250,7 +253,7 @@ describe("browser tab selection and ownership", () => {
       if (url.includes("/json/list")) {
         return Response.json(makeManagedTabsWithNew());
       }
-      if (url.includes("/json/close/OLD1")) {
+      if (url.includes("/json/close/OLD8")) {
         requests.push(url);
         started.resolve();
         return closed.promise;
@@ -261,7 +264,7 @@ describe("browser tab selection and ownership", () => {
     try {
       expect((await openclaw.openTab("http://127.0.0.1:3009")).targetId).toBe("NEW");
       await started.promise;
-      expect(requests).toEqual(["http://127.0.0.1:18800/json/close/OLD1"]);
+      expect(requests).toEqual(["http://127.0.0.1:18800/json/close/OLD8"]);
     } finally {
       closed.resolve(new Response());
     }
