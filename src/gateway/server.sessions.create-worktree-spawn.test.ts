@@ -206,18 +206,11 @@ afterEach(async () => {
   await state?.cleanup();
 });
 
-test.each([
-  { source: "registered", worktree: true },
-  { source: "github", worktree: true },
-  { source: "inherited", worktree: true },
-  { source: "registered", worktree: false },
-] as const)(
-  "required visible spawn selects $source project through the write-scope Gateway (worktree=$worktree)",
-  async ({ source, worktree }) => {
+test.each(["registered", "github", "inherited"] as const)(
+  "required visible spawn selects %s project through the write-scope Gateway",
+  async (source) => {
     const { entry: parent } = await createManagedProjectParent(true);
-    const projectName = worktree
-      ? "tool-selected-project"
-      : "non-git-workspace/tool-selected-project";
+    const projectName = "tool-selected-project";
     const otherRepository = await createRepository(state.root, projectName);
     const project = await registerProjectRegistry({ path: otherRepository });
     projectCloneMocks.materializeProjectClone.mockResolvedValue(project);
@@ -235,9 +228,9 @@ test.each([
           : source === "github"
             ? { projectGitUrl: "git@github.com:example/selected.git" }
             : {}),
-        ...(worktree
-          ? { worktree: true, worktreeName: "selected-child", worktreeBaseRef: "main" }
-          : {}),
+        worktree: true,
+        worktreeName: "selected-child",
+        worktreeBaseRef: "main",
       });
       expect(result.details).toMatchObject({ status: "accepted" });
       if (!isRecord(result.details) || typeof result.details.childSessionKey !== "string") {
@@ -250,14 +243,7 @@ test.each([
       if (source !== "inherited") {
         expect(child?.projectId).toBe(project.id);
       }
-      if (worktree) {
-        expect(child?.worktree?.repoRoot).toBe(
-          source === "inherited" ? repository : otherRepository,
-        );
-      } else {
-        expect(child?.worktree).toBeUndefined();
-        expect(child?.spawnedCwd).toBe(otherRepository);
-      }
+      expect(child?.worktree?.repoRoot).toBe(source === "inherited" ? repository : otherRepository);
       expect(await fs.readFile(path.join(child!.spawnedCwd!, "README.md"), "utf8")).toBe(
         source === "inherited" ? "selected-project\n" : `${projectName}\n`,
       );

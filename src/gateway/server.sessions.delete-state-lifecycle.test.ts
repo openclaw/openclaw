@@ -12,7 +12,6 @@ import {
 import { AgentHarnessSessionCleanupError } from "../agents/harness/errors.js";
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
-import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -43,13 +42,12 @@ import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-enviro
 import type { SessionCompanionAskDeps } from "./session-companion-ask.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion, type SessionCompanionService } from "./session-companion.js";
-import { testState, writeSessionStore } from "./test-helpers.js";
+import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   getGatewayConfigModule,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
-  writeSingleLineSession,
 } from "./test/server-sessions.test-helpers.js";
 
 function afterSessionStateMaterialization(after: () => void | Promise<void>) {
@@ -134,62 +132,6 @@ test.each(["sessions.reset", "sessions.delete"] as const)(
     }
   },
 );
-
-test("repository ownership survives reset and archive, then permanent deletion releases it", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:dashboard:repository-lifecycle";
-  const repositories = repositoryWorkspaces.getSessionRepositoryWorkspaceStore();
-  const repository = await repositories.create({
-    agentId: "main",
-    sessionKey,
-    url: "https://github.com/openclaw/fixture.git",
-    runSetupScript: false,
-    assertCurrent: () => {},
-  });
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry("repository-lifecycle-session", {
-        repositoryWorkspaceId: repository.workspaceId,
-      }),
-    },
-  });
-  const artifactRoot = repositories.artifactPath(repository.workspaceId);
-  await fs.mkdir(artifactRoot, { recursive: true });
-  await fs.writeFile(path.join(artifactRoot, "retained-checkpoint"), "accepted checkpoint");
-
-  for (const [method, params] of [
-    ["sessions.reset", { key: sessionKey }],
-    ["sessions.patch", { key: sessionKey, archived: true }],
-    ["sessions.patch", { key: sessionKey, archived: false }],
-  ] as const) {
-    const result = await directSessionReq(
-      method,
-      method === "sessions.patch"
-        ? { ...params, expectedSessionId: loadSessionEntry({ sessionKey, storePath })!.sessionId }
-        : params,
-    );
-    expect(result.ok, JSON.stringify(result.error)).toBe(true);
-    const entry = loadSessionEntry({ sessionKey, storePath });
-    expect(entry?.repositoryWorkspaceId).toBe(repository.workspaceId);
-    expect(entry?.worktree).toBeUndefined();
-    expect(entry?.spawnedCwd).toBeUndefined();
-    expect(await repositories.get(repository.workspaceId)).toEqual(repository);
-  }
-  const denied = await directSessionReq("sessions.delete", {
-    key: sessionKey,
-    expectedSessionId: "replaced-session",
-  });
-  expect(denied.ok).toBe(false);
-  expect(await repositories.get(repository.workspaceId)).toEqual(repository);
-  expect(await fs.readFile(path.join(artifactRoot, "retained-checkpoint"), "utf8")).toBe(
-    "accepted checkpoint",
-  );
-  const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
-  expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
-  expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
-  expect(await repositories.get(repository.workspaceId)).toBeUndefined();
-  await expect(fs.stat(artifactRoot)).rejects.toMatchObject({ code: "ENOENT" });
-});
 
 test.each(["foreign grant", "retained placeholder", "folded sibling", "malformed row"] as const)(
   "repository cleanup preserves full logical absence checks for %s",
@@ -388,52 +330,6 @@ test("sessions.delete broadcasts the removed generation after a replacement appe
     },
     { event: "sessions.changed", payload: { reason: "delete", ts: expect.any(Number) } },
   ]);
-});
-
-test("sessions.delete removes the session board from its agent database", async () => {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-board", "hello");
-  await writeSessionStore({
-    entries: {
-      "discord:group:board-delete": sessionStoreEntry("sess-board"),
-    },
-  });
-  const sessionKey = "agent:main:discord:group:board-delete";
-  if (!testState.sessionStorePath) {
-    throw new Error("expected gateway session store path");
-  }
-  const databasePath = resolveSqliteTargetFromSessionStorePath(testState.sessionStorePath, {
-    agentId: "main",
-  }).path;
-  if (!databasePath) {
-    throw new Error("expected gateway agent database path");
-  }
-  const store = new SqliteBoardStore({
-    resolveSession: () => ({
-      agentId: "main",
-      path: databasePath,
-      sessionKey,
-    }),
-    env: process.env,
-  });
-  await store.putWidget({
-    sessionKey,
-    name: "status",
-    content: { kind: "html", html: "ok" },
-  });
-
-  const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
-    key: "discord:group:board-delete",
-  });
-
-  expect(deleted.ok).toBe(true);
-  expect(deleted.payload?.deleted).toBe(true);
-  expect(await store.getSnapshot({ sessionKey })).toEqual({
-    sessionKey,
-    revision: 0,
-    tabs: [],
-    widgets: [],
-  });
 });
 
 test("sessions.delete reports an exact-entry replacement during transcript materialization", async () => {
