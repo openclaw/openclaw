@@ -316,13 +316,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       }
     }
 
-    // Fetch thread context when entering a thread for the first time
     if (isThreadReply && parentId && channelNest) {
       try {
         const threadHistory = await fetchThreadHistory(api, channelNest, parentId, 20, runtime);
         if (threadHistory.length > 0) {
           const threadContext = threadHistory
-            .slice(-10) // Last 10 messages for context
+            .slice(-10)
             .map((msg) => `${msg.author}: ${msg.content}`)
             .join("\n");
 
@@ -924,7 +923,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       const partnerShip = extractDmPartnerShip(whom);
       const senderShip = partnerShip || authorShip;
 
-      // Ignore the bot's own outbound DM events.
       if (authorShip === botShipName) {
         return;
       }

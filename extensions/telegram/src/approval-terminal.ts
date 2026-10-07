@@ -1,4 +1,3 @@
-// Telegram plugin module renders terminal operator approval receipts.
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type {
   ExpiredApprovalView,

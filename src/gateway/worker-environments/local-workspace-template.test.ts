@@ -156,8 +156,19 @@ it("shares one installed generation across independent checkouts and replaces it
   const clone = await fixture(signal);
   const first = await clone("first");
   expect(await read(first, "node_modules/dependency/index.js")).toBe(firstLock);
+  const template = (await listTemplatesAsync(env)).find(
+    (record) => record.worktreeRoot === path.join(path.dirname(first), "templates"),
+  );
+  if (!template) {
+    throw new Error("Template was not reserved");
+  }
+  const indexPath = path.join(template.path, ".git", "index");
+  const originalIndex = await fs.readFile(indexPath);
+  // Warm validation must not refresh an index that another reader can be cloning.
+  await fs.utimes(path.join(template.path, "source.ts"), 1, 1);
   await write(first, "node_modules/dependency/index.js", "consumer edit\n");
   const second = await clone("second");
+  expect((await fs.readFile(indexPath)).equals(originalIndex)).toBe(true);
   expect(await read(second, "node_modules/dependency/index.js")).toBe(firstLock);
   expect(await read(first, "node_modules/dependency/index.js")).toBe("consumer edit\n");
   expect(await git(second, "branch", "--show-current")).toBe("openclaw/second");

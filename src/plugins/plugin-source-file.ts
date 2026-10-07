@@ -4,6 +4,12 @@ import path from "node:path";
 import { copyRootFileSync } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatErrorMessage,
+  readErrorCauses,
+} from "../infra/errors.js";
 import { isGitRuntimeStagingName } from "../infra/update-runtime-staging.js";
 
 // Git rollback trees retain links relative to their final location. Only explicit
@@ -93,6 +99,18 @@ export function copyPluginSourceFile(
           }
         : undefined;
     } catch (error) {
+      // fs-safe wraps native failures; retain the disk-full code and detail that
+      // plugin-load diagnostics use to explain how to recover.
+      if (
+        error instanceof FsSafeError &&
+        collectErrorGraphCandidates(error, readErrorCauses).some(
+          (cause) => extractErrorCode(cause) === "ENOSPC",
+        )
+      ) {
+        throw Object.assign(new Error(formatErrorMessage(error), { cause: error }), {
+          code: "ENOSPC",
+        });
+      }
       if (error instanceof FsSafeError && error.code === "too-large") {
         throw new Error(
           "Plugin source changed while preparing its reload; retry after the edit finishes.",

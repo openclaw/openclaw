@@ -77,6 +77,12 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
   // through the whole projection so per-model normalization cannot rediscover it.
   const metadataSnapshot = params.metadataSnapshot;
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  // Runtime choices are read after preparation; CLI backends belong to the owner's registry.
+  const cliRuntimeBindings = params.pluginRegistry
+    ? withPluginRuntimeRegistryScope(params.pluginRegistry, () =>
+        listCliRuntimeModelBackendBindings(),
+      )
+    : listCliRuntimeModelBackendBindings();
   let authStore = params.preparedAuthStore;
   const preferredProfilesByProvider = new Map<string, string>();
   const personalProviders = new Set<string>();
@@ -468,7 +474,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
               (route) => route.runtimePolicy?.compatibleIds ?? [],
             )
           : []),
-        ...listCliRuntimeModelBackendBindings()
+        ...cliRuntimeBindings
           .filter(
             (binding) =>
               normalizeProviderId(binding.provider) === normalizeProviderId(entry.provider),
@@ -508,7 +514,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
         }
         if (
           runtimeId !== "openclaw" &&
-          !listCliRuntimeModelBackendBindings().some(
+          !cliRuntimeBindings.some(
             (binding) =>
               binding.runtime === runtimeId &&
               normalizeProviderId(binding.provider) === normalizeProviderId(entry.provider),

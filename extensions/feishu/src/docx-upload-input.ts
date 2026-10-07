@@ -126,12 +126,7 @@ export async function resolveDocxUploadInput(
     };
   }
   if (input.filePath) {
-    return await resolveLocalUpload(
-      input.filePath,
-      input.maxBytes,
-      input.localRoots,
-      input.fileName,
-    );
+    return resolveLocalUpload(input.filePath, input.maxBytes, input.localRoots, input.fileName);
   }
 
   const image = input.image;
@@ -143,7 +138,7 @@ export async function resolveDocxUploadInput(
   }
   const localPath = resolveImageLocalPath(image);
   if (localPath) {
-    return await resolveLocalUpload(localPath, input.maxBytes, input.localRoots, input.fileName);
+    return resolveLocalUpload(localPath, input.maxBytes, input.localRoots, input.fileName);
   }
 
   const buffer = decodeBase64Image({

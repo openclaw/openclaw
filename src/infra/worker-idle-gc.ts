@@ -1,5 +1,4 @@
 import { Session } from "node:inspector/promises";
-import { getHeapStatistics } from "node:v8";
 import { isMainThread } from "node:worker_threads";
 
 const IDLE_GC_GROWTH_BYTES = 32 * 1024 * 1024;
@@ -12,7 +11,8 @@ let generation = 0;
 
 async function collectWorkerIdleGarbage(): Promise<void> {
   pending = undefined;
-  if (getHeapStatistics().used_heap_size <= collectedHeap + IDLE_GC_GROWTH_BYTES) {
+  // Detailed heap statistics can walk live objects; this check only needs the byte counter.
+  if (process.memoryUsage().heapUsed <= collectedHeap + IDLE_GC_GROWTH_BYTES) {
     return;
   }
   const collectingGeneration = generation;
@@ -28,7 +28,7 @@ async function collectWorkerIdleGarbage(): Promise<void> {
     await session.post("HeapProfiler.collectGarbage");
     collecting = false;
     if (collectingGeneration === generation) {
-      collectedHeap = getHeapStatistics().used_heap_size;
+      collectedHeap = process.memoryUsage().heapUsed;
     } else if (idle) {
       // A successor finished while GC was pending; its released heap needs a new sample.
       scheduleWorkerIdleGc();

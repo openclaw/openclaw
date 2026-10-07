@@ -8,7 +8,6 @@ import { findGraphUsersByExactIdentity } from "./graph-users.js";
 import {
   listChannelsForTeamWithPageInfo,
   listTeamsByNameWithPageInfo,
-  normalizeQuery,
   resolveGraphToken,
   type GraphChannel,
   type GraphGroup,
@@ -522,7 +521,7 @@ export async function resolveMSTeamsUserAllowlist(params: {
   return await mapAllowlistResolutionInputs({
     inputs: params.entries,
     mapInput: async (input): Promise<BasicAllowlistResolutionEntry> => {
-      const query = normalizeQuery(normalizeMSTeamsUserInput(input));
+      const query = normalizeMSTeamsUserInput(input);
       if (!query) {
         return { input, resolved: false };
       }

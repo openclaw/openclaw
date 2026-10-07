@@ -605,8 +605,7 @@ export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendCont
         replyToMode: ctx.replyToMode,
         onDeliveryResult,
       };
-      // Scheme A compatibility shim:
-      // when upstream accidentally returns a local image path as plain text,
+      // When upstream accidentally returns a local image path as plain text,
       // auto-upload and send as Feishu image message instead of leaking path text.
       const localImagePath = normalizePossibleLocalImagePath(text);
       if (localImagePath) {

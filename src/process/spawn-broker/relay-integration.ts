@@ -2,7 +2,7 @@ import type { ChildProcess, Serializable, SpawnOptions } from "node:child_proces
 import type { Duplex } from "node:stream";
 import { formatChildRuntimeSpawnWarning } from "../../infra/child-runtime-viability.js";
 import { resolveRuntimeWorkerArgv } from "../../infra/runtime-worker-url.js";
-import { resolveChildNodePath } from "../../infra/stable-node-path.js";
+import { resolveLaunchableNodePath } from "../../infra/stable-node-path.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 import { spawnProcess } from "../spawn-utils.js";
 import { createServiceChildCleanup } from "../supervisor/service-child-cleanup.js";
@@ -90,7 +90,7 @@ export function spawnServiceChildRelay(params: {
   cleanup: ReturnType<typeof createServiceChildCleanup>;
   transportReady: Promise<void> | undefined;
 } {
-  const executable = resolveChildNodePath();
+  const executable = resolveLaunchableNodePath();
   const child = spawnProcess(executable, resolveRuntimeWorkerArgv(params.workerUrl, executable), {
     stdio: params.stdio,
     detached: params.detached,

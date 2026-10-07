@@ -99,6 +99,10 @@ memory-flush fields to their current structured state. Published
 `v2026.7.2-beta.5` wrote these fields directly into schema-v16 session rows;
 stable `v2026.8.1` upgrades retain those stored values. This durable upgrade
 path needs a migration even though current writers already emit structured state.
+Legacy `sessions.json` imports apply the same conversion before writing SQLite,
+preserving exact session IDs and archiving the original JSON bytes. This also
+runs during update-time Doctor, so flat pending-delivery fields no longer block
+the import with a repeated request to run `doctor --fix`.
 Before rewriting an
 existing database, it saves and reports a verified SQLite backup, including the
 original row values. Pending reply text, destinations, intent IDs, timestamps,

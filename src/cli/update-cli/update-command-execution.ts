@@ -51,6 +51,10 @@ import {
   readUpdateCandidateSource,
   type OwnedManagedUpdateContext,
 } from "./update-command-managed-context.js";
+import {
+  recordMutableUpdateInterruption,
+  withMutableUpdateForwardScope,
+} from "./update-command-mutable-signals.js";
 import { observeOriginalManagedServiceRuntime } from "./update-command-original-service.js";
 import { createPackageUpdateActivationOptions } from "./update-command-package-activation.js";
 import {
@@ -614,14 +618,16 @@ export async function executeMutableUpdate(
         onTransaction,
       };
       await recheckSchemas(params.packageTargetSchemaVersions);
-      result = params.stagedPackage
-        ? await params.stagedPackage.run(packageUpdate)
-        : await runPackageInstallUpdate(packageUpdate);
+      result = await withMutableUpdateForwardScope(opts, async () =>
+        params.stagedPackage
+          ? await params.stagedPackage.run(packageUpdate)
+          : await runPackageInstallUpdate(packageUpdate),
+      );
     } else {
       const sourceRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
       const sourceRuntimePrepared = await admitSourceUpdateArtifacts(sourceRoot, opts.run);
       assertExecutionCurrent();
-      result = await updateGitInstall({
+      const gitUpdate: Parameters<typeof updateGitInstall>[0] = {
         ...installOptions,
         sourceRuntimePrepared,
         switchToGit: params.switchToGit,
@@ -661,7 +667,8 @@ export async function executeMutableUpdate(
           admittedTargetSchemaVersions = target.schemaVersions;
           await beforeActivate(gitMutationRoots ?? [params.root]);
         },
-      });
+      };
+      result = await withMutableUpdateForwardScope(opts, () => updateGitInstall(gitUpdate));
     }
   } catch (err) {
     params.stop();
@@ -678,6 +685,7 @@ export async function executeMutableUpdate(
     }));
   }
 
+  result = recordMutableUpdateInterruption(opts, result);
   if (candidateFailureReason && result.status === "error") {
     result.reason = candidateFailureReason;
   }

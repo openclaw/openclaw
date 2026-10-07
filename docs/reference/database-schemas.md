@@ -41,6 +41,8 @@ discard their facts when that snapshot ends.
 
 Progress-card writes reuse the transaction's admitted table facts. The schema owner creates the lazy table only when it is absent, so warm writes preserve schema facts for that handle and its local siblings. First use after rollback or a foreign schema change still creates missing storage through normal write admission. Stored cards, revision tombstones, schema versions, and upgrade or downgrade behavior are unchanged.
 
+The agent-database execution owner retains up to four idle physical-agent executors in least-recently-used order. Borrowing an executor refreshes its independent 30-minute idle timeout; a fifth idle executor evicts the least recently used one. Agent removal, rename, database-path changes, and Gateway shutdown drain the existing lifecycle resources, including warm executors. This changes no schema, stored bytes, or update behavior.
+
 Retaining an already-open agent handle holds its lifetime without querying SQLite. Its read or transaction owner refreshes schema facts when consuming data; canonical readiness owns the freshness check before reusing its clean-store decision.
 
 Agent ownership metadata follows that admitted read revision as well. Unchanged

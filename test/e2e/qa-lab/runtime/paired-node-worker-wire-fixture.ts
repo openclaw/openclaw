@@ -23,6 +23,7 @@ import {
   NODE_WORKER_BUNDLE_STATUS_VERSION,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_NATIVE_INFERENCE_VERSION,
+  NODE_WORKER_PROMPT_CONTEXT_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../../../src/infra/node-runner-inventory.js";
 import type { NodeInvokeRequestPayload } from "../../../../src/node-host/invoke.js";
@@ -359,6 +360,7 @@ export async function createPairedNodeWorkerHost(
     workerHost: {
       enabled: true as const,
       capturedExecPolicy: true as const,
+      promptContext: NODE_WORKER_PROMPT_CONTEXT_VERSION,
       ...(environmentSession
         ? { environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION }
         : {}),

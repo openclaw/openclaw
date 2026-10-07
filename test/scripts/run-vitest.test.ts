@@ -53,6 +53,7 @@ const jsdomFile = "ui/src/components/form-controls.browser.test.ts";
 const agentDir = "src/agents/embedded-agent-runner/run";
 const modulesDir = "/runner/openclaw-pnpm-node-modules";
 const baseEnv = { PATH: "/usr/bin" };
+const PINNED_LOCALE = { LANG: "C.UTF-8", LC_ALL: "C.UTF-8" };
 const watchdogEnv = (timeout: number) => ({
   ...baseEnv,
   OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
@@ -746,7 +747,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
       expect(resolveRunVitestSpawnEnv(env, argv)).toEqual({ ...watchdogEnv(120000), ...env });
     }
     expect(resolveRunVitestSpawnEnv(env, ["--watch"])).toEqual(env);
-    expect(resolveVitestSpawnParams(env, "linux").env).toEqual(env);
+    expect(resolveVitestSpawnParams(env, "linux").env).toEqual({ ...env, ...PINNED_LOCALE });
   });
 
   describe("native config option ownership", () => {
@@ -777,7 +778,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
   it("detaches process groups only on Unix", () => {
     for (const platform of ["darwin", "win32"] as const) {
       expect(resolveVitestSpawnParams(baseEnv, platform)).toEqual({
-        env: baseEnv,
+        env: { ...baseEnv, ...PINNED_LOCALE },
         detached: platform === "darwin",
         stdio: ["inherit", "pipe", "pipe"],
       });
@@ -929,6 +930,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
   );
 
   it.each<{ env: NodeJS.ProcessEnv; expected: NodeJS.ProcessEnv }>([
+    { env: { LANG: "de_DE.UTF-8", LC_ALL: "de_DE.UTF-8" }, expected: {} },
     { env: { OPENCLAW_LOCAL_CHECK: "0" }, expected: { OPENCLAW_LOCAL_CHECK: "1" } },
     { env: { CI: "true", OPENCLAW_LOCAL_CHECK: "0" }, expected: {} },
     {
@@ -948,6 +950,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
       ...baseEnv,
       ...env,
       ...expected,
+      ...PINNED_LOCALE,
     });
   });
 

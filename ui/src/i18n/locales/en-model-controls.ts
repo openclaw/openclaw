@@ -87,6 +87,7 @@ const enModelControls = {
       modelsRefreshFailed: "Some models could not be refreshed. Open Models to try again.",
       checkingProviderModels: "{providers}: checking models…",
       noModelsAvailable: "No models available",
+      claudeCliNotReady: "Claude Code isn't ready. If signed out, run claude auth login.",
       noPermittedModels: "No models are permitted by your administrator.",
       selectionRequired: "Choose a model",
       restrictedModelsHelp: "Your administrator centrally configures the models available here.",

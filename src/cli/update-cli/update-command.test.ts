@@ -222,25 +222,54 @@ describe("resolveUpdateTargetEnv", () => {
 });
 
 describe("resolveUpdatedInstallCommandEnv", () => {
-  it("keeps runtime SecretRef inputs while applying managed service overrides", () => {
+  it("keeps operator scratch and SecretRef inputs while applying managed service selectors", () => {
     const env = resolveUpdatedInstallCommandEnv({
       invocationCwd: "/srv/openclaw",
       processEnv: {
         OPENCLAW_GATEWAY_AUTH_TOKEN: "runtime-token",
         OPENCLAW_STATE_DIR: "/wrong/state",
+        OPENCLAW_HOME: "/wrong/home",
+        OPENCLAW_PROFILE: "caller",
         PATH: "/caller/bin",
+        TMPDIR: "/caller/cache",
+        TMP: "/caller/tmp",
+        TEMP: "/caller/temp",
       },
       serviceEnv: {
         OPENCLAW_STATE_DIR: "daemon-state",
+        OPENCLAW_HOME: "/daemon/home",
+        OPENCLAW_PROFILE: "work",
         PATH: "/daemon/bin",
+        TMPDIR: "/tmp",
+        TMP: "/service/tmp",
+        TEMP: "/service/temp",
       },
     });
 
     expect(env.OPENCLAW_GATEWAY_AUTH_TOKEN).toBe("runtime-token");
     expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw", "daemon-state"));
     expect(env.PATH).toBe("/daemon/bin");
+    expect(env.OPENCLAW_HOME).toBe("/daemon/home");
+    expect(env.OPENCLAW_PROFILE).toBe("work");
+    expect(env).toMatchObject({
+      TMPDIR: "/caller/cache",
+      TMP: "/caller/tmp",
+      TEMP: "/caller/temp",
+    });
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
     expect(resolveUpdatedInstallCommandEnv({ processEnv: env })).toEqual(env);
+  });
+
+  it.each([undefined, ""])("preserves scratch defaults with an operator value of %j", (value) => {
+    const env = resolveUpdatedInstallCommandEnv({
+      processEnv: { TMPDIR: value, TMP: value, TEMP: value },
+      serviceEnv: { TMPDIR: "/service/tmp", TMP: "/service/tmp", TEMP: "/service/tmp" },
+    });
+    expect(env).toMatchObject({
+      TMPDIR: value ?? "/service/tmp",
+      TMP: value ?? "/service/tmp",
+      TEMP: value ?? "/service/tmp",
+    });
   });
 
   it("preserves effective base-owned selectors while clearing unowned caller selectors", () => {

@@ -85,7 +85,7 @@ async function appendDiscordThreadRenameResult(
     threadName?: string;
   },
 ) {
-  const threadName = params.threadName?.trim();
+  const threadName = params.threadName;
   if (!threadName) {
     return params.payload;
   }

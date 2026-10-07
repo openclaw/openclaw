@@ -23,6 +23,7 @@ import {
   resolveCanonicalSessionEntryFromStoreKeys,
 } from "../session-utils.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
+import { createSessionModelCatalogWait } from "./session-model-catalog-wait.js";
 import * as sessionUnreadAck from "./session-unread-ack.js";
 import {
   prepareSessionPatchArchive,
@@ -71,6 +72,7 @@ type ArchiveTransition = Awaited<ReturnType<typeof prepareSessionPatchArchiveTra
 export async function executeSessionPatchMutations(params: {
   client: GatewayClient | null;
   context: GatewayRequestContext;
+  signal?: AbortSignal;
   diagnostics?: SessionPatchDiagnostics;
   operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
   onCreatedSessionCommitted?: SessionMutationAuthorization["recordCreatedSession"];
@@ -222,8 +224,18 @@ export async function executeSessionPatchMutations(params: {
       ? await import("./sessions-patch-sandbox.runtime.js")
       : undefined;
 
+  const catalogWait = createSessionModelCatalogWait(
+    [
+      params.signal,
+      client?.connectionSignal,
+      operatorAuthority?.signal,
+      client?.internal?.operatorRunAuthority?.signal,
+      client?.internal?.operatorAccessAuthority?.signal,
+    ],
+    "The session was not changed",
+  );
   const catalogs = createSessionPatchCatalogPreparation(
-    (agentId) => params.context.loadGatewayModelCatalogSnapshot({ agentId }),
+    (agentId) => catalogWait.run(() => params.context.loadGatewayModelCatalogSnapshot({ agentId })),
     params.diagnostics,
   );
 

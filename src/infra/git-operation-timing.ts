@@ -146,7 +146,7 @@ export function startGitOperationTiming(
           };
           runWithDiagnosticTraceContext(trace, () =>
             log.info(
-              kind === "worktree-removal"
+              kind !== "ref-mutation"
                 ? `${operation.message} ${JSON.stringify(fields)}`
                 : operation.message,
               fields,

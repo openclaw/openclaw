@@ -1754,6 +1754,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         CI: "1",
         RUNNER_ENVIRONMENT: "self-hosted",
         FROZEN_TARGET: "false",
+        LANG: "C.UTF-8",
+        LC_ALL: "C.UTF-8",
         OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-compatible",
         RAYON_NUM_THREADS: "1",
         TOKIO_WORKER_THREADS: "1",
