@@ -401,11 +401,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                 cleanupError ?? "Failed cloud worker environment cleanup is still pending",
               );
             }
-            if (request.recoverToGateway) {
-              const assertCurrent = () => {
-                reauthorize?.();
-                beforeDrain?.();
-              };
+            const assertCurrent = request.recoverToGateway
+              ? composePlacementAuthorization(reauthorize, () => beforeDrain?.())
+              : undefined;
+            if (assertCurrent) {
               assertCurrent();
               if (options.prepareGatewayMove) {
                 await options.prepareGatewayMove({ ...request, assertCurrent });
@@ -422,7 +421,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                 to: "local",
                 expectedGeneration: failed.generation,
               },
-              request.recoverToGateway ? reauthorize : undefined,
+              assertCurrent,
             );
             if (local.state !== "local") {
               throw new Error("Failed cloud worker reclaim did not produce a local placement");

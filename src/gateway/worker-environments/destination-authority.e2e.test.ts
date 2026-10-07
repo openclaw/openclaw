@@ -85,6 +85,10 @@ const authorityCases = [
       "accepted-policy-commit",
     ],
   },
+  {
+    contract: "failed-placement recovery",
+    modes: ["failed-allowed", "failed-policy-transaction", "failed-policy-commit"],
+  },
 ] as const;
 it.for(authorityCases)("enforces $contract", async ({ contract, modes }, { signal }) => {
   await withOpenClawTestState(
@@ -314,6 +318,7 @@ process.stdin.pipe(child.stdin);
               runtime.bindNodeWorkerSupervisorTransport(adapter);
               await fs.mkdir(state.statePath("projects"), { recursive: true });
               const lateSettlements: string[] = [];
+              const failedRecoveries: string[] = [];
               for (const mode of modes) {
                 publishConfig("development");
                 const url = `https://github.com/openclaw/destination-${mode}.git`;
@@ -426,6 +431,106 @@ process.stdin.pipe(child.stdin);
                   await fs.readFile(path.join(active.remoteWorkspaceDir, "result.txt"), "utf8"),
                 ).toBe("accepted\n");
                 publishConfig();
+                if (mode.startsWith("failed-")) {
+                  const draining = await placements.startDrain({
+                    sessionId: identity.sessionId,
+                    environmentId: active.environmentId,
+                    ownerEpoch: active.activeOwnerEpoch,
+                    expectedGeneration: active.generation,
+                  });
+                  await environments.destroy(active.environmentId);
+                  const reconciling = await placements.startReconcile({
+                    sessionId: identity.sessionId,
+                    environmentId: active.environmentId,
+                    ownerEpoch: active.activeOwnerEpoch,
+                    expectedGeneration: draining.generation,
+                  });
+                  const failed = await placements.fail({
+                    sessionId: identity.sessionId,
+                    expectedGeneration: reconciling.generation,
+                    recoveryError: "Production proof worker disappeared",
+                  });
+                  const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+                  let policyActivated = false;
+                  const admission = vi.spyOn(
+                    operationAdmission,
+                    "createSqliteWorkerOperationAdmission",
+                  );
+                  const transition = placements.transition.bind(placements);
+                  const observation = vi
+                    .spyOn(placements, "transition")
+                    .mockImplementation((...args) => {
+                      if (
+                        args[0].sessionId === identity.sessionId &&
+                        args[0].from === "failed" &&
+                        args[0].to === "local" &&
+                        mode !== "failed-allowed"
+                      ) {
+                        const stage =
+                          mode === "failed-policy-transaction" ? "transaction" : "commit";
+                        admission.mockImplementationOnce((admit, attachment) =>
+                          createAdmission((request, grant) => {
+                            if (request.stage === stage) {
+                              publishConfig("development");
+                              policyActivated = true;
+                            }
+                            admit(request, grant);
+                          }, attachment),
+                        );
+                      }
+                      return transition(...args);
+                    });
+                  let refused = false;
+                  try {
+                    await runtime.dispatchService.reclaim({
+                      ...identity,
+                      recoverToGateway: { expectedGeneration: failed.generation },
+                    });
+                  } catch (error) {
+                    expect(String(error)).toContain("required worker profile policy");
+                    refused = true;
+                  } finally {
+                    observation.mockRestore();
+                    admission.mockRestore();
+                  }
+                  expect(policyActivated).toBe(mode !== "failed-allowed");
+                  const placement = placements.get(identity.sessionId);
+                  failedRecoveries.push(
+                    `${mode}:${refused ? "refused" : "allowed"}:${placement?.state}`,
+                  );
+                  const worktree = await managedWorktrees.findLiveByOwner(
+                    "session",
+                    identity.sessionKey,
+                  );
+                  if (!worktree) {
+                    throw new Error("Gateway recovery did not restore its managed worktree");
+                  }
+                  expect(await fs.readFile(path.join(worktree.path, "result.txt"), "utf8")).toBe(
+                    "accepted\n",
+                  );
+                  expect(await repositories.get(repository.workspaceId)).toMatchObject({
+                    manifestHash: current.manifestRef,
+                  });
+                  if (refused) {
+                    expect(placement).toMatchObject({
+                      state: "failed",
+                      generation: failed.generation,
+                    });
+                    await expect(
+                      placements.claimTurn({
+                        ...identity,
+                        owner: { kind: "local" },
+                        claimId: `failed-${mode}`,
+                        runId: `failed-${mode}`,
+                      }),
+                    ).rejects.toThrow();
+                  }
+                  expect(environments.get(active.environmentId)?.state).toBe("destroyed");
+                  console.info(
+                    `failed-recovery-boundary ${mode}: policy-activated=${policyActivated} refused=${refused} placement=${placement?.state} accepted-file=retained source=destroyed`,
+                  );
+                  continue;
+                }
                 const begun = await placements.beginPlacementMove({
                   sessionId: active.sessionId,
                   source: {
@@ -714,6 +819,15 @@ process.stdin.pipe(child.stdin);
                       "accepted-policy-destroy:reclaimed",
                       "accepted-policy-transaction:reclaimed",
                       "accepted-policy-commit:reclaimed",
+                    ]
+                  : [],
+              );
+              expect(failedRecoveries).toEqual(
+                contract === "failed-placement recovery"
+                  ? [
+                      "failed-allowed:allowed:local",
+                      "failed-policy-transaction:refused:failed",
+                      "failed-policy-commit:refused:failed",
                     ]
                   : [],
               );
