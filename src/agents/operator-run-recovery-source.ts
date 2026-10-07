@@ -1,5 +1,5 @@
 import type { InternalSessionEntry } from "../config/sessions/types.js";
-import type { RestartRecoveryOperatorSource } from "../gateway/operator-run-recovery.types.js";
+import type { RestartRecoveryOperatorSource } from "../gateway/operator-run-recovery-source.js";
 import { isAcpSessionKey, isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { isAgentHarnessSessionKey } from "../sessions/agent-harness-session-key.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
