@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 
 const processMocks = vi.hoisted(() => ({ runCommandWithTimeout: vi.fn() }));
+// mock-isolation: the capture command must never spawn a real PowerShell process in unit tests.
 vi.mock("openclaw/plugin-sdk/process-runtime", () => processMocks);
 
 type ToolDescriptor = {
@@ -28,10 +29,18 @@ function registerTool() {
   return { descriptor, options };
 }
 
+const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+
+function setPlatform(platform: NodeJS.Platform) {
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
+}
+
 describe("screenshot plugin", () => {
   let workspaceDir: string;
 
   beforeEach(async () => {
+    // The tool is Windows-only; pin the platform so the suite behaves the same on every CI host.
+    setPlatform("win32");
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-screenshot-"));
     processMocks.runCommandWithTimeout.mockReset();
     processMocks.runCommandWithTimeout.mockImplementation(
@@ -47,6 +56,9 @@ describe("screenshot plugin", () => {
   });
 
   afterEach(async () => {
+    if (originalPlatform) {
+      Object.defineProperty(process, "platform", originalPlatform);
+    }
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
@@ -84,6 +96,11 @@ describe("screenshot plugin", () => {
     expect(descriptor.create(context({ senderIsOwner: undefined }))).toBeNull();
     expect(descriptor.create(context({ sandboxed: true }))).toBeNull();
     expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it.each(["linux", "darwin"] as const)("is unavailable on %s", (platform) => {
+    setPlatform(platform);
+    expect(registerTool().descriptor.create(context())).toBeNull();
   });
 
   it("saves the capture in the workspace and sends it to the current conversation", async () => {
