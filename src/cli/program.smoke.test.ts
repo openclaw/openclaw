@@ -1,4 +1,5 @@
 // Program smoke tests cover core CLI command registration and startup behavior.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   programGatewayCallMock,
