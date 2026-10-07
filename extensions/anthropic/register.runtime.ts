@@ -151,7 +151,9 @@ function resolveAnthropicModelCost(modelId: string) {
   // their discovered cost instead of inheriting a different version's pricing.
   const normalized = resolveClaudeModelIdentity({ id: modelId }).replace(/-\d{8}$/, "");
   const id = CLAUDE_MODEL_ID_ALIASES.get(normalized) ?? normalized;
-  return manifest.modelCatalog.providers.anthropic.models.find((model) => model.id === id)?.cost;
+  return manifest.modelCatalog.providers.anthropic.models.find((model) => model.id === id)?.cost
+    ? resolveAnthropicManifestModel(id)?.cost
+    : undefined;
 }
 
 function resolveAnthropic4xForwardCompatModel(
