@@ -5,6 +5,10 @@ import type {
 } from "../../agents/sessions/tools/read-file-page.js";
 import type { BrokerExecaOptions, BrokerExecaResult } from "./execa-protocol.js";
 
+// Startup backpressure is separate from custody of already running children.
+export const MAX_PENDING_SPAWNS = 256;
+export const MAX_NATIVE_RESOURCES = 256;
+
 export type BrokerSpawnOptions = Pick<
   SpawnOptions,
   | "cwd"

@@ -23,8 +23,9 @@ vi.mock("execa", () => ({
     throw new Error("Native command execution is outside this transport fixture");
   },
 }));
+// mock-isolation: The synthetic transport must never resolve or launch a native worker.
 vi.mock("../../infra/runtime-worker-url.js", () => ({
-  resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/spawn-broker.js"),
+  resolveRuntimeWorkerUrl: () => new URL("./synthetic-spawn-broker.js", import.meta.url),
   resolveRuntimeWorkerArgv: () => ["synthetic-spawn-broker"],
 }));
 vi.mock("./cleanup.js", () => ({
@@ -280,6 +281,64 @@ describe("broker host scope settlement", () => {
     expect(await ready).toMatchObject({ code: refusal.code });
     expect(child.notStarted).toBe(true);
     expect(native.lostChildCleanup).not.toHaveBeenCalled();
+  });
+
+  it("keeps commands available with retained children and recovers startup capacity", async () => {
+    const fixture = brokerFixture();
+    const children = [];
+    for (let index = 0; index < 260; index++) {
+      const command = fixture.host.spawnExeca(["synthetic-command"], {
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      void command.result.catch(() => {});
+      const id = command.child.requestId;
+      fixture.receive({ type: "owned", id, pid: 42000 + index });
+      fixture.receive({
+        type: "spawned",
+        id,
+        pid: 42000 + index,
+        spawnfile: "synthetic-command",
+        spawnargs: ["synthetic-command"],
+        connected: false,
+        stdioLength: 3,
+      });
+      await command.child.ready();
+      children.push(command.child);
+    }
+    expect(children.every((child) => child.exitCode === null)).toBe(true);
+
+    const pending = Array.from({ length: 256 }, () =>
+      fixture.host.spawn("synthetic-command", [], { stdio: "ignore" }),
+    );
+    const refused = fixture.host.spawn("synthetic-command", [], { stdio: "ignore" });
+    await expect(refused.ready()).rejects.toThrow("startup capacity exceeded");
+    expect(refused.notStarted).toBe(true);
+    const released = pending[0]!;
+    fixture.receive({
+      type: "error",
+      id: released.requestId,
+      error: { message: "synthetic startup failure" },
+    });
+    await expect(released.ready()).rejects.toThrow("synthetic startup failure");
+    const recovered = fixture.host.spawn("synthetic-command", [], { stdio: "ignore" });
+    fixture.receive({ type: "owned", id: recovered.requestId, pid: 43000 });
+    fixture.receive({
+      type: "spawned",
+      id: recovered.requestId,
+      pid: 43000,
+      spawnfile: "synthetic-command",
+      spawnargs: ["synthetic-command"],
+      connected: false,
+      stdioLength: 3,
+    });
+    await recovered.ready();
+    expect(recovered.pid).toBe(43000);
+    // Startup admission must not relinquish cleanup custody of retained children.
+    fixture.worker.emit("disconnect");
+    await fixture.host.close();
+    expect(native.lostChildCleanup).toHaveBeenCalledTimes(261);
   });
 
   it("retires undelivered guarded preparations and refuses a late orphan", async () => {

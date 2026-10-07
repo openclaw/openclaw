@@ -1,4 +1,4 @@
-import type { spawn } from "node:child_process";
+import { ChildProcess, type spawn } from "node:child_process";
 import { setImmediate } from "node:timers/promises";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { killProcessTree } from "../kill-tree.js";
@@ -46,8 +46,8 @@ beforeEach(() => {
   boundary.killTree.mockImplementation(unexpectedEffect);
 });
 
-it.each(["spawn", "spawn-execa"] as const)(
-  "reports authoritative no-start before the %s capacity refusal",
+it.each(["spawn", "spawn-execa", "retained-spawn"] as const)(
+  "handles %s startup admission without losing custody",
   async (type) => {
     let receive: ((message: BrokerBootstrap | BrokerRequest) => void) | undefined;
     const connected = Object.getOwnPropertyDescriptor(process, "connected");
@@ -76,6 +76,43 @@ it.each(["spawn", "spawn-execa"] as const)(
       receive({ type: "bootstrap" });
       await setImmediate();
       expect(boundary.send).toHaveBeenCalledWith({ type: "ready", pid: process.pid }, undefined);
+      if (type === "retained-spawn") {
+        const children: ChildProcess[] = [];
+        const killed = vi.fn<(pid: number, signal?: NodeJS.Signals | number) => boolean>(
+          () => true,
+        );
+        boundary.reserve.mockImplementation(async (run) => await run(async () => {}));
+        boundary.spawn.mockImplementation(() => {
+          const child = new ChildProcess();
+          Object.defineProperties(child, {
+            pid: { value: 42000 + children.length },
+            stdio: { value: [null, null, null] },
+            spawnfile: { value: "synthetic-command" },
+            spawnargs: { value: ["synthetic-command"] },
+            kill: { value: (signal?: NodeJS.Signals | number) => killed(child.pid!, signal) },
+          });
+          children.push(child);
+          queueMicrotask(() => child.emit("spawn"));
+          return child;
+        });
+        for (let id = 1; id <= 260; id++) {
+          receive({
+            type: "spawn",
+            id,
+            argv: ["synthetic-command"],
+            options: { stdio: ["ignore", "ignore", "ignore"] },
+          });
+          await setImmediate();
+        }
+        const responses = boundary.send.mock.calls.map(([message]) => message);
+        expect(responses.filter((message) => message.type === "spawned")).toHaveLength(260);
+        expect(responses.filter((message) => message.type === "error")).toEqual([]);
+        expect(children.every((child) => child.exitCode === null)).toBe(true);
+        receive({ type: "kill", id: 260, signal: "SIGTERM" });
+        expect(killed).toHaveBeenCalledWith(children[259]!.pid, "SIGTERM");
+        expect(boundary.close).not.toHaveBeenCalled();
+        return;
+      }
       // Reservations reject on the next microtask. Synchronous delivery fills
       // the real admission count without invoking either native launch path.
       for (let id = 1; id <= 257; id += 1) {

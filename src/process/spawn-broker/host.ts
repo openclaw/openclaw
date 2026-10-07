@@ -30,7 +30,13 @@ import {
 import { BrokerFileReads } from "./file-reads.js";
 import { createBrokerReceiver, createBrokerSender } from "./ipc.js";
 import { holdPipe, restoreStdinPipe } from "./pipe.js";
-import { SpawnBrokerError, type BrokerRequest, type BrokerResponse } from "./protocol.js";
+import {
+  MAX_NATIVE_RESOURCES,
+  MAX_PENDING_SPAWNS,
+  SpawnBrokerError,
+  type BrokerRequest,
+  type BrokerResponse,
+} from "./protocol.js";
 import { createNativeResourceAuthority } from "./resource-authority.js";
 import {
   BrokerResourceClaims,
@@ -48,7 +54,6 @@ import {
 
 export type { BrokerNativeResourceLease } from "./resource-host.js";
 
-const MAX_REQUESTS = 256;
 const RESTART_DELAYS = [100, 250, 500, 1000, 2000];
 const MAX_BOOTSTRAP_BYTES = 1024;
 
@@ -69,13 +74,14 @@ export class SpawnBrokerHost {
   private consecutiveFailures = 0;
   private sequence = 0;
   private requests = new Map<number, Request>();
+  private readonly pendingSpawns = new Set<number>();
   private readonly fileReads = new BrokerFileReads({
     ready: () => this.ready(),
     send: (message) => this.transmit(message),
     canAdmit: () =>
       !this.resourceClaims &&
       !this.closing &&
-      this.requests.size + this.fileReads.size < MAX_REQUESTS,
+      this.pendingSpawns.size + this.fileReads.size < MAX_PENDING_SPAWNS,
   });
   private readonly cleanups = new Set<ReturnType<typeof terminateLostBrokerChild>>();
   private readonly cleanupErrors: Error[] = [];
@@ -160,7 +166,7 @@ export class SpawnBrokerHost {
       !this.resourceClaims ||
       !this.resourceAuthority ||
       this.closing ||
-      this.requests.size + this.resourceClaims.size >= MAX_REQUESTS
+      this.resourceClaims.size >= MAX_NATIVE_RESOURCES
     ) {
       throw new SpawnBrokerError("Native resource broker is unavailable or at capacity");
     }
@@ -235,22 +241,28 @@ export class SpawnBrokerHost {
       child.settleFileOutput();
       child.fail(error);
     };
-    if (
-      !this.available ||
-      this.closing ||
-      this.requests.size + this.fileReads.size + (this.resourceClaims?.size ?? 0) >= MAX_REQUESTS
-    ) {
+    if (!this.available || this.closing || this.pendingSpawns.size + this.fileReads.size >= MAX_PENDING_SPAWNS) {
       child.markNotStarted();
-      queueMicrotask(() => fail(new SpawnBrokerError("Spawn broker is unavailable")));
+      queueMicrotask(() =>
+        fail(
+          new SpawnBrokerError(
+            this.available && !this.closing
+              ? "Spawn broker startup capacity exceeded"
+              : "Spawn broker is unavailable",
+          ),
+        ),
+      );
       return request;
     }
     this.requests.set(message.id, request);
+    this.pendingSpawns.add(message.id);
     this.refreshNativeReference();
     void child.waitForClose().then(() => {
       request.childClosed = true;
       this.retire(message.id, request);
     });
     void this.transmit(message).catch((error: unknown) => {
+      this.pendingSpawns.delete(message.id);
       if (request.output) {
         // Delivery may have opened the destination. Transport retirement joins its writer.
         if (this.process?.connected) {
@@ -410,6 +422,7 @@ export class SpawnBrokerHost {
         request.child.fail(error);
       }
       this.requests.clear();
+      this.pendingSpawns.clear();
       this.refreshNativeReference();
       if (child.pid && process.platform !== "win32") {
         const pgid = child.pid;
@@ -547,6 +560,9 @@ export class SpawnBrokerHost {
       }
       if (this.fileReads.receive(message)) {
         return;
+      }
+      if (message.type === "spawned" || message.type === "error") {
+        this.pendingSpawns.delete(message.id);
       }
       const request = this.requests.get(message.id);
       if (!request) {
